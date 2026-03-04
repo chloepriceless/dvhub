@@ -1,0 +1,27 @@
+{
+  "name": "plexlite",
+  "version": "0.1.0",
+  "description": "Direktvermarktungs-Schnittstelle fuer Victron ESS — Modbus-Proxy und Control-Dashboard",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN ../LICENSE.md",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/plexlite/plexlite"
+  },
+  "keywords": [
+    "victron",
+    "modbus",
+    "direktvermarktung",
+    "solar",
+    "energy",
+    "ess",
+    "epex"
+  ]
+}

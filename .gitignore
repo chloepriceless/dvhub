@@ -1,0 +1,23 @@
+# Runtime / Secrets
+dv-control-webapp/config.json
+dv-control-webapp/energy_state.json
+
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Tools
+.claude/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temp
+tmp/
+*.tmp
