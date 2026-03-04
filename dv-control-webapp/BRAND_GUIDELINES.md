@@ -1,0 +1,70 @@
+# PlexLite Corporate Identity
+
+Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die Website (`public/index.html`, `public/tools.html`) sowie die zentralen Styles (`public/styles.css`) gemappt.
+
+## 1. Brand Positioning
+- Claim: `The unofficial DV interface`
+- Kampagnenline: `Hack the Grid`
+- Markencharakter: technisch, energisch, handlungsorientiert, high-visibility UI
+- Visuelle Leitidee: Energiefluss (Solar + Netz) als spannungsreiche, kontrastreiche Leitgrafik
+
+## 2. Logo System
+- Primarlogo: `public/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png`
+- Logoaufbau: Badge + Ribbon + Bolt als zentrales Erkennungszeichen
+- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `P` im Wort `PLEXLITE`
+- Nicht erlaubt:
+  - Logo verzerren
+  - Farben austauschen ausserhalb der definierten Palette
+  - Bolt entfernen oder durch andere Symbole ersetzen
+
+## 3. Color Palette
+### Core
+- `--ink-950`: `#050c14`
+- `--ink-900`: `#0a1522`
+- `--ink-850`: `#112335`
+- `--ink-800`: `#17344f`
+
+### Brand Akzente
+- `--blue`: `#1f8dff`
+- `--blue-deep`: `#0f4fb9`
+- `--cyan`: `#34dbff`
+- `--yellow`: `#ffd421`
+- `--yellow-deep`: `#ffab08`
+- `--green`: `#46d344`
+
+### Statusfarben
+- `--ok`: `#4ce36c`
+- `--off`: `#ff6868`
+- `--danger`: `#ff6c63`
+
+## 4. Typografie
+- Titel / Headlines: `Saira Condensed` (Fette 500/700/800)
+- Body / UI: `Manrope` (Fette 400/500/600/700)
+- Monospace (Logs/JSON): `JetBrains Mono` (Fallback: `Consolas`)
+
+## 5. UI Prinzipien
+- Panels: dunkle, glashafte Flaechen mit gelbem/zyanem Kantenakzent
+- Buttons: klare Funktionshierarchie
+  - Primary = gelb/orange Verlauf
+  - Secondary = dunkles Ghost-Pattern
+  - Danger = roter Verlauf
+- Datenvisualisierung:
+  - Positive Preisbalken blau
+  - Negative Preisbalken rot
+  - Zeitmarker gelb
+
+## 6. Motion
+- Page-Load: gestaffelte `riseIn`-Animation auf Panel-Ebene
+- Logo: subtile `logoPulse` Bewegung fuer lebendige Markenpraesenz
+- Hover: leichte Lift-Interaktion auf Buttons
+
+## 7. Voice & Copy
+- Kurz, direkt, operator-orientiert
+- Begriffe aus dem Kontext der Energie-/Grid-Steuerung
+- Keine Marketing-Floskeln ohne technische Aussage
+
+## 8. Implementierungsorte
+- Design Tokens + Komponenten: `public/styles.css`
+- Dashboard-Anwendung: `public/index.html`
+- Tools-Anwendung: `public/tools.html`
+- Chart-Branding: `public/app.js` (Farbvariablen fuer SVG)
