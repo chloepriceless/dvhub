@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="160" />
+  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="640" />
 </p>
 
 ```
@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.1 |
+| **Status** | WIP -- Version 0.1 by agentic engineering |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -274,15 +274,13 @@ npm start
 - Integrationen
   - Home Assistant: `GET /api/integration/home-assistant` (JSON)
   - Loxone: `GET /api/integration/loxone` (Text Key=Value)
+  - EOS (Akkudoktor): `GET /api/integration/eos` (Messwerte + EPEX-Preise im EOS-Format)
+  - EMHASS: `GET /api/integration/emhass` (Messwerte + Preisarrays im EMHASS-Format)
+  - Optimierung anwenden: `POST /api/integration/eos/apply` bzw. `/emhass/apply`
 
 ### Dashboard
 
 Dashboard: `http://<host>:8080/`
-
-<p align="center">
-  <img src="docs/dashboard-mobile.png" alt="PlexLite Dashboard — iPhone" width="320" />
-  <br/><em>Mobile-Ansicht (iPhone 17 Pro)</em>
-</p>
 
 Karten-Uebersicht:
 - **DV Schaltstatus**: EIN/AUS, Control Value, Lease-Ablauf, letzte Modbus-Abfrage, DC-PV Einspeisung, AC-PV Blockierung
@@ -317,6 +315,10 @@ Tools: `http://<host>:8080/tools.html`
 | `POST` | `/api/control/write` | Manueller Write (target: gridSetpointW/chargeCurrentA/minSocPct) |
 | `GET` | `/api/integration/home-assistant` | Home Assistant kompatibles JSON |
 | `GET` | `/api/integration/loxone` | Loxone kompatibles Text-Format |
+| `GET` | `/api/integration/eos` | EOS (Akkudoktor) Messwerte + EPEX-Preise |
+| `POST` | `/api/integration/eos/apply` | EOS Optimierung anwenden (gridSetpointW, chargeCurrentA, minSocPct) |
+| `GET` | `/api/integration/emhass` | EMHASS Messwerte + Preisarrays |
+| `POST` | `/api/integration/emhass/apply` | EMHASS Optimierung anwenden (gridSetpointW, chargeCurrentA, minSocPct) |
 | `GET` | `/api/keepalive/modbus` | Letzte Modbus-Abfrage Info |
 | `GET` | `/api/keepalive/pulse` | 60s Uptime-Pulse |
 
@@ -345,6 +347,8 @@ Die Konfiguration erfolgt ueber `config.json`. Wichtige Sektionen:
 - DV-Victron-Steuerung (`dvControl`) ist per Default deaktiviert (`enabled: false`). In `config.json` auf `true` setzen um die automatische Ansteuerung bei DV-Signal und negativen Preisen zu aktivieren.
 - Kosten-Daten werden in `energy_state.json` gespeichert und ueberleben Neustarts (solange der Tag gleich bleibt).
 - Alle Victron-Register (points, controlWrite, dvControl) erben automatisch `host`, `port`, `unitId` und `timeoutMs` von der `victron`-Sektion, koennen aber pro Register ueberschrieben werden.
+- **EOS-Anbindung (Akkudoktor)**: Messwerte via `GET /api/integration/eos` abrufen und an EOS weiterleiten (`PUT /v1/measurement/data`). Optimierungsergebnisse via `POST /api/integration/eos/apply` zurueckschreiben. Enthaelt EPEX-Preise, SOC, PV, Grid und Batterie-Werte.
+- **EMHASS-Anbindung**: Messwerte + Preisarrays via `GET /api/integration/emhass` abrufen. `load_cost_forecast` und `prod_price_forecast` koennen direkt an EMHASS uebergeben werden. Ergebnisse via `POST /api/integration/emhass/apply` anwenden.
 - **MQTT-Modus**: In `config.json` unter `victron.transport` auf `"mqtt"` setzen und `victron.mqtt.portalId` mit der VRM Portal ID befuellen (zu finden auf dem GX-Geraet unter Settings -> VRM Online Portal). Der DV-Modbus-Server (Port 1502) laeuft unabhaengig vom Transport immer ueber Modbus.
 - **MQTT-Paket installieren**: `npm install mqtt` -- wird nur benoetigt wenn `transport: "mqtt"` konfiguriert ist. Bei Modbus-Betrieb (Default) ist keine Installation noetig.
 
