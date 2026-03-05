@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="160" />
+  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="640" />
 </p>
 
 ```
@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.1 |
+| **Status** | WIP -- Version 0.1 by agentic engineering.|
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
