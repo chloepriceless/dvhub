@@ -1105,6 +1105,85 @@ function integrationState() {
   };
 }
 
+// ── EOS (Akkudoktor) Integration ─────────────────────────────────────
+function eosState() {
+  const now = new Date();
+  const soc = Number(state.victron.soc ?? 0);
+  const gridTotal = Number(state.meter.grid_total_w ?? 0);
+  const posImport = cfg.gridPositiveMeans === 'grid_import';
+  const gridImportW = Math.max(0, posImport ? gridTotal : -gridTotal);
+  const gridExportW = Math.max(0, posImport ? -gridTotal : gridTotal);
+
+  return {
+    // Messwerte im EOS-Format (PUT /v1/measurement/data)
+    measurement: {
+      start_datetime: now.toISOString(),
+      interval: `${cfg.meterPollMs / 1000} seconds`,
+      battery_soc: [soc / 100],
+      battery_power: [Number(state.victron.batteryPowerW ?? 0)],
+      grid_import_w: [gridImportW],
+      grid_export_w: [gridExportW],
+      pv_power: [Number(state.victron.pvTotalW ?? 0)],
+      load_power: [Number(state.victron.selfConsumptionW ?? 0)],
+      power_l1_w: [Number(state.meter.grid_l1_w ?? 0)],
+      power_l2_w: [Number(state.meter.grid_l2_w ?? 0)],
+      power_l3_w: [Number(state.meter.grid_l3_w ?? 0)]
+    },
+    // Aktuelle Systeminfo
+    system: {
+      timestamp: now.toISOString(),
+      soc_pct: soc,
+      battery_power_w: Number(state.victron.batteryPowerW ?? 0),
+      pv_total_w: Number(state.victron.pvTotalW ?? 0),
+      grid_total_w: gridTotal,
+      grid_import_w: gridImportW,
+      grid_export_w: gridExportW,
+      grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
+      min_soc_pct: Number(state.victron.minSocPct ?? 0),
+      self_consumption_w: Number(state.victron.selfConsumptionW ?? 0)
+    },
+    // EPEX-Preise (fuer EOS prediction import)
+    prices: epexPriceArray()
+  };
+}
+
+// ── EMHASS Integration ───────────────────────────────────────────────
+function emhassState() {
+  const soc = Number(state.victron.soc ?? 0);
+  const prices = epexPriceArray();
+
+  return {
+    // Aktuelle Werte fuer soc_init
+    soc_init: soc / 100,
+    battery_power_w: Number(state.victron.batteryPowerW ?? 0),
+    pv_power_w: Number(state.victron.pvTotalW ?? 0),
+    load_power_w: Number(state.victron.selfConsumptionW ?? 0),
+    grid_power_w: Number(state.meter.grid_total_w ?? 0),
+    // EPEX-Preise als Array (EUR/kWh) fuer load_cost_forecast
+    load_cost_forecast: prices.map((p) => p.eur_kwh),
+    // Timestamps dazu
+    price_timestamps: prices.map((p) => p.ts_iso),
+    // Preise als prod_price_forecast (Einspeiseverguetung, hier identisch)
+    prod_price_forecast: prices.map((p) => p.eur_kwh),
+    // System-Metadaten
+    timestamp: new Date().toISOString(),
+    grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
+    min_soc_pct: Number(state.victron.minSocPct ?? 0)
+  };
+}
+
+// ── EPEX-Preise als Array (fuer EOS + EMHASS) ───────────────────────
+function epexPriceArray() {
+  if (!state.epex.ok || !Array.isArray(state.epex.data)) return [];
+  return state.epex.data.map((row) => ({
+    ts: row.ts,
+    ts_iso: new Date(row.ts).toISOString(),
+    eur_mwh: Number(row.eur_mwh ?? 0),
+    eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
+    ct_kwh: Number(row.ct_kwh ?? 0)
+  }));
+}
+
 function checkAuth(req, res) {
   if (!cfg.apiToken) return true;
   const auth = req.headers.authorization || '';
@@ -1198,6 +1277,46 @@ const web = http.createServer(async (req, res) => {
     const s = integrationState();
     const lines = Object.entries(s).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
     return text(res, 200, lines.join('\n'));
+  }
+
+  // EOS (Akkudoktor) — Messwerte + Preise abrufen
+  if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
+
+  // EOS — Optimierungsergebnis empfangen und als Schedule-Regeln anwenden
+  if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const results = [];
+    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+      results.push(await applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
+    }
+    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+      results.push(await applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'eos_optimization'));
+    }
+    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+      results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
+    }
+    pushLog('eos_apply', { targets: results.length, body });
+    return json(res, 200, { ok: true, results });
+  }
+
+  // EMHASS — Messwerte + Preise abrufen
+  if (url.pathname === '/api/integration/emhass' && req.method === 'GET') return json(res, 200, emhassState());
+
+  // EMHASS — Optimierungsergebnis empfangen und anwenden
+  if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const results = [];
+    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+      results.push(await applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
+    }
+    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+      results.push(await applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'emhass_optimization'));
+    }
+    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+      results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
+    }
+    pushLog('emhass_apply', { targets: results.length, body });
+    return json(res, 200, { ok: true, results });
   }
 
   if (url.pathname === '/api/log' && req.method === 'GET') return json(res, 200, { rows: state.log.slice(-300) });
