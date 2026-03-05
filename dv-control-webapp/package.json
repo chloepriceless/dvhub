@@ -18,10 +18,14 @@
   "keywords": [
     "victron",
     "modbus",
+    "mqtt",
     "direktvermarktung",
     "solar",
     "energy",
     "ess",
     "epex"
-  ]
+  ],
+  "optionalDependencies": {
+    "mqtt": "^5.10.0"
+  }
 }
