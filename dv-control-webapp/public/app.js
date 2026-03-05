@@ -319,18 +319,45 @@ async function manualWriteMinSoc() {
 
 let scheduleCache = { rules: [], config: {} };
 
-function addScheduleRow(start = '06:45', end = '07:15', gridVal = -40, chargeVal = '', gridEnabled = true, chargeEnabled = false) {
+function addScheduleRow(opts = {}) {
+  const {
+    start = '06:45', end = '07:15',
+    gridVal = -40, chargeVal = '',
+    gridEnabled = true, chargeEnabled = false,
+    days = [0, 1, 2, 3, 4, 5, 6],
+    oneTime = false, rowEnabled = true
+  } = opts;
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
   const tr = document.createElement('tr');
+
+  const dayLabels = [
+    { idx: 1, lbl: 'Mo' }, { idx: 2, lbl: 'Di' }, { idx: 3, lbl: 'Mi' },
+    { idx: 4, lbl: 'Do' }, { idx: 5, lbl: 'Fr' }, { idx: 6, lbl: 'Sa' },
+    { idx: 0, lbl: 'So' }
+  ];
+  const dayHtml = dayLabels.map((d) =>
+    `<label class="day-btn"><input type="checkbox" data-day="${d.idx}" ${days.includes(d.idx) ? 'checked' : ''} /><span>${d.lbl}</span></label>`
+  ).join('');
+
   tr.innerHTML = `
+    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} title="Aktiv" /></td>
     <td><input type="time" class="sched-start" value="${start}" /></td>
     <td><input type="time" class="sched-end" value="${end}" /></td>
+    <td class="sched-days">${dayHtml}</td>
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} /> <input type="number" class="sched-grid-val" value="${gridVal}" /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} /> <input type="number" class="sched-charge-val" value="${chargeVal}" /></label></td>
+    <td><input type="checkbox" class="sched-onetime" ${oneTime ? 'checked' : ''} title="Einmalig" /></td>
     <td><button class="icon-btn sched-remove" title="Zeile entfernen">-</button></td>
   `;
   tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
+
+  // Visuelles Dimmen bei deaktivierter Regel
+  const enableCb = tr.querySelector('.sched-row-enabled');
+  const applyDisabledStyle = () => { tr.style.opacity = enableCb.checked ? '1' : '0.4'; };
+  enableCb.addEventListener('change', applyDisabledStyle);
+  applyDisabledStyle();
+
   tbody.appendChild(tr);
 }
 
@@ -349,6 +376,16 @@ function collectScheduleRows() {
     const end = tr.querySelector('.sched-end')?.value;
     if (!start || !end) continue;
 
+    const rowEnabled = tr.querySelector('.sched-row-enabled')?.checked ?? true;
+    const oneTime = tr.querySelector('.sched-onetime')?.checked ?? false;
+
+    // Ausgewählte Tage sammeln
+    const dayCheckboxes = tr.querySelectorAll('.sched-days input[data-day]');
+    const days = [];
+    for (const cb of dayCheckboxes) {
+      if (cb.checked) days.push(Number(cb.dataset.day));
+    }
+
     const gridEn = tr.querySelector('.sched-grid-en')?.checked;
     const gridVal = Number(tr.querySelector('.sched-grid-val')?.value);
     const chargeEn = tr.querySelector('.sched-charge-en')?.checked;
@@ -357,21 +394,21 @@ function collectScheduleRows() {
     if (gridEn && Number.isFinite(gridVal)) {
       rules.push({
         id: `grid_${idx}`,
-        enabled: true,
+        enabled: rowEnabled,
         target: 'gridSetpointW',
-        days: [0, 1, 2, 3, 4, 5, 6],
-        start, end,
-        value: gridVal
+        days, start, end,
+        value: gridVal,
+        oneTime
       });
     }
     if (chargeEn && Number.isFinite(chargeVal)) {
       rules.push({
         id: `charge_${idx}`,
-        enabled: true,
+        enabled: rowEnabled,
         target: 'chargeCurrentA',
-        days: [0, 1, 2, 3, 4, 5, 6],
-        start, end,
-        value: chargeVal
+        days, start, end,
+        value: chargeVal,
+        oneTime
       });
     }
     idx++;
@@ -390,24 +427,36 @@ async function loadScheduleDash() {
   const timeSlots = new Map();
   for (const r of rules) {
     const key = `${r.start}|${r.end}`;
-    if (!timeSlots.has(key)) timeSlots.set(key, { start: r.start, end: r.end, grid: null, charge: null });
+    if (!timeSlots.has(key)) timeSlots.set(key, {
+      start: r.start, end: r.end, grid: null, charge: null,
+      days: r.days || [0, 1, 2, 3, 4, 5, 6],
+      oneTime: r.oneTime || false,
+      enabled: r.enabled !== false
+    });
     const slot = timeSlots.get(key);
     if (r.target === 'gridSetpointW') slot.grid = r.value;
     if (r.target === 'chargeCurrentA') slot.charge = r.value;
+    // Merge: Tage vereinen, oneTime OR, enabled AND
+    if (Array.isArray(r.days)) slot.days = [...new Set([...slot.days, ...r.days])];
+    if (r.oneTime) slot.oneTime = true;
+    if (r.enabled === false) slot.enabled = false;
   }
 
   if (!timeSlots.size) {
     addScheduleRow();
   } else {
     for (const slot of timeSlots.values()) {
-      addScheduleRow(
-        slot.start || '06:45',
-        slot.end || '07:15',
-        slot.grid ?? -40,
-        slot.charge ?? '',
-        slot.grid != null,
-        slot.charge != null
-      );
+      addScheduleRow({
+        start: slot.start || '06:45',
+        end: slot.end || '07:15',
+        gridVal: slot.grid ?? -40,
+        chargeVal: slot.charge ?? '',
+        gridEnabled: slot.grid != null,
+        chargeEnabled: slot.charge != null,
+        days: slot.days,
+        oneTime: slot.oneTime,
+        rowEnabled: slot.enabled
+      });
     }
   }
 

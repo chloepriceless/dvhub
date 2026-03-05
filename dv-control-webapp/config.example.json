@@ -7,10 +7,16 @@
   "keepalivePulseSec": 60,
   "gridPositiveMeans": "feed_in",
   "victron": {
+    "transport": "modbus",
     "host": "192.168.x.x",
     "port": 502,
     "unitId": 100,
-    "timeoutMs": 1000
+    "timeoutMs": 1000,
+    "mqtt": {
+      "broker": "mqtt://192.168.x.x:1883",
+      "portalId": "",
+      "keepaliveIntervalMs": 30000
+    }
   },
   "meter": {
     "fc": 4,
@@ -46,7 +52,7 @@
     "defaultGridSetpointW": -40,
     "defaultChargeCurrentA": null,
     "rules": [
-      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "days": [1,2,3,4,5,6,0], "start": "18:00", "end": "23:59", "value": -40 }
+      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "days": [1,2,3,4,5,6,0], "start": "18:00", "end": "23:59", "value": -40, "oneTime": false }
     ]
   },
   "scan": {

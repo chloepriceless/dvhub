@@ -3,6 +3,8 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { createModbusTransport } from './transport-modbus.js';
+import { createMqttTransport } from './transport-mqtt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -178,7 +180,13 @@ const state = {
   log: []
 };
 
-let tidCounter = 1;
+// ── Transport erstellen (Modbus oder MQTT) ──────────────────────────
+const transport = cfg.victron?.transport === 'mqtt'
+  ? createMqttTransport(cfg.victron)
+  : createModbusTransport();
+
+// Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
+const scanTransport = createModbusTransport();
 
 function persistConfig() {
   try {
@@ -355,14 +363,15 @@ async function applyDvVictronControl(feedIn) {
   if (dc.feedExcessDcPv?.enabled) {
     const val = feedIn ? 1 : 0;
     try {
-      await mbWriteSingle({
-        host: dc.feedExcessDcPv.host,
-        port: dc.feedExcessDcPv.port,
-        unitId: dc.feedExcessDcPv.unitId,
-        address: dc.feedExcessDcPv.address,
-        value: val,
-        timeoutMs: dc.feedExcessDcPv.timeoutMs
-      });
+      if (transport.type === 'mqtt') {
+        await transport.mqttWrite('feedExcessDcPv', val);
+      } else {
+        await transport.mbWriteSingle({
+          host: dc.feedExcessDcPv.host, port: dc.feedExcessDcPv.port,
+          unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
+          value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
+        });
+      }
       results.feedExcessDcPv = { ok: true, value: val };
       pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
     } catch (e) {
@@ -375,14 +384,15 @@ async function applyDvVictronControl(feedIn) {
   if (dc.dontFeedExcessAcPv?.enabled) {
     const val = feedIn ? 0 : 1;
     try {
-      await mbWriteSingle({
-        host: dc.dontFeedExcessAcPv.host,
-        port: dc.dontFeedExcessAcPv.port,
-        unitId: dc.dontFeedExcessAcPv.unitId,
-        address: dc.dontFeedExcessAcPv.address,
-        value: val,
-        timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
-      });
+      if (transport.type === 'mqtt') {
+        await transport.mqttWrite('dontFeedExcessAcPv', val);
+      } else {
+        await transport.mbWriteSingle({
+          host: dc.dontFeedExcessAcPv.host, port: dc.dontFeedExcessAcPv.port,
+          unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
+          value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
+        });
+      }
       results.dontFeedExcessAcPv = { ok: true, value: val };
       pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
     } catch (e) {
@@ -543,190 +553,7 @@ function startModbusServer() {
   mbServer = server;
 }
 
-const mbPool = new Map();
-const MB_IDLE_MS = 30000;
-
-function getMbConn(host, port) {
-  const key = `${host}:${port}`;
-  let c = mbPool.get(key);
-  if (c && !c.destroyed) return c;
-
-  c = {
-    key,
-    sock: null,
-    destroyed: false,
-    buf: Buffer.alloc(0),
-    pending: null,
-    queue: [],
-    idleTimer: null,
-    connect() {
-      if (this.sock && !this.sock.destroyed) return;
-      this.sock = new net.Socket();
-      this.sock.setKeepAlive(true, 10000);
-      this.sock.connect(port, host);
-      this.sock.on('data', (chunk) => {
-        this.buf = Buffer.concat([this.buf, chunk]);
-        this._drain();
-      });
-      this.sock.on('error', (e) => this._fail(e));
-      this.sock.on('close', () => this._fail(new Error('connection closed')));
-    },
-    _resetIdle() {
-      if (this.idleTimer) clearTimeout(this.idleTimer);
-      this.idleTimer = setTimeout(() => this.destroy(), MB_IDLE_MS);
-    },
-    _drain() {
-      while (this.pending && this.buf.length >= 7) {
-        const len = this.buf.readUInt16BE(4);
-        const total = 6 + len;
-        if (this.buf.length < total) break;
-        const frame = this.buf.subarray(0, total);
-        this.buf = this.buf.subarray(total);
-        const p = this.pending;
-        this.pending = null;
-        if (p.timer) clearTimeout(p.timer);
-        p.resolve(frame);
-        this._resetIdle();
-        this._next();
-      }
-    },
-    _fail(err) {
-      const p = this.pending;
-      if (p) {
-        this.pending = null;
-        if (p.timer) clearTimeout(p.timer);
-        p.reject(err);
-      }
-      for (const q of this.queue) {
-        if (q.timer) clearTimeout(q.timer);
-        q.reject(err);
-      }
-      this.queue = [];
-      this.buf = Buffer.alloc(0);
-      if (this.sock && !this.sock.destroyed) this.sock.destroy();
-      this.sock = null;
-    },
-    destroy() {
-      this.destroyed = true;
-      this._fail(new Error('pool cleanup'));
-      mbPool.delete(this.key);
-    },
-    send(reqBuf, timeoutMs) {
-      return new Promise((resolve, reject) => {
-        const entry = { reqBuf, resolve, reject, timer: null, timeoutMs };
-        this.queue.push(entry);
-        this._next();
-      });
-    },
-    _next() {
-      if (this.pending || !this.queue.length) return;
-      if (!this.sock || this.sock.destroyed) {
-        this.connect();
-        this.sock.once('connect', () => this._next());
-        return;
-      }
-      if (!this.sock.writable) {
-        this.connect();
-        this.sock.once('connect', () => this._next());
-        return;
-      }
-      const entry = this.queue.shift();
-      this.pending = entry;
-      entry.timer = setTimeout(() => {
-        if (this.pending === entry) {
-          this.pending = null;
-          entry.reject(new Error('modbus timeout'));
-          if (this.sock && !this.sock.destroyed) this.sock.destroy();
-          this.sock = null;
-          this._next();
-        }
-      }, entry.timeoutMs || 1000);
-      this.sock.write(entry.reqBuf);
-    }
-  };
-  mbPool.set(key, c);
-  return c;
-}
-
-function mbRequest({ host, port, unitId, fc, address, quantity, timeoutMs }) {
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const req = Buffer.alloc(12);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(6, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(fc, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(quantity, 10);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const rFc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid modbus response');
-    if ((rFc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
-    if (rFc !== fc) throw new Error(`unexpected fc ${rFc}`);
-    const byteCount = frame.readUInt8(8);
-    const data = frame.subarray(9, 9 + byteCount);
-    const regs = [];
-    for (let i = 0; i + 1 < data.length; i += 2) regs.push(data.readUInt16BE(i));
-    return regs;
-  });
-}
-
-function mbWriteSingle({ host, port, unitId, address, value, timeoutMs }) {
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const req = Buffer.alloc(12);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(6, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(6, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(value & 0xffff, 10);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const fc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 6) throw new Error('invalid write ack');
-    return { addr: frame.readUInt16BE(8), value: frame.readUInt16BE(10) };
-  });
-}
-
-function mbWriteMultiple({ host, port, unitId, address, values, timeoutMs }) {
-  const words = Array.isArray(values) ? values.map((v) => Number(v) & 0xffff) : [];
-  if (!words.length) return Promise.reject(new Error('modbus write multiple: empty values'));
-  if (words.length > 123) return Promise.reject(new Error('modbus write multiple: too many values'));
-
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const qty = words.length;
-  const byteCount = qty * 2;
-  const req = Buffer.alloc(13 + byteCount);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(7 + byteCount, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(16, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(qty, 10);
-  req.writeUInt8(byteCount, 12);
-  for (let i = 0; i < qty; i += 1) req.writeUInt16BE(words[i], 13 + i * 2);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const fc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 16) throw new Error('invalid write ack');
-    return { addr: frame.readUInt16BE(8), quantity: frame.readUInt16BE(10) };
-  });
-}
+// Modbus-Client-Funktionen sind jetzt in transport-modbus.js / transport-mqtt.js
 
 function pointFromRegs(regs, conf) {
   if (!regs || !regs.length) return null;
@@ -799,8 +626,13 @@ function toRawForWrite(value, conf) {
 async function pollPoint(name, conf) {
   if (!conf?.enabled) return;
   try {
-    const regs = await mbRequest(conf);
-    state.victron[name] = pointFromRegs(regs, conf);
+    if (transport.type === 'mqtt') {
+      const result = await transport.readPoint(name);
+      state.victron[name] = result.mqttValue;
+    } else {
+      const regs = await transport.mbRequest(conf);
+      state.victron[name] = pointFromRegs(regs, conf);
+    }
     delete state.victron.errors[name];
     state.victron.updatedAt = Date.now();
   } catch (e) {
@@ -895,29 +727,44 @@ function buildInfluxLines(nowSec) {
 
 async function pollMeter() {
   try {
-    const regs = await mbRequest(cfg.meter);
-    const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
-    const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
-    const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
-    const rawTotal = rawL1 + rawL2 + rawL3;
+    let l1, l2, l3, total;
+    if (transport.type === 'mqtt') {
+      // MQTT: Werte aus Cache lesen (Venus OS: positiv = Import, negativ = Export)
+      const ml1 = transport.getCached('meter_l1') ?? 0;
+      const ml2 = transport.getCached('meter_l2') ?? 0;
+      const ml3 = transport.getCached('meter_l3') ?? 0;
+      const posImport = cfg.gridPositiveMeans === 'grid_import';
+      // Venus MQTT: positiv = Import → bei feed_in-Konvention invertieren
+      const sign = posImport ? 1 : -1;
+      l1 = ml1 * sign;
+      l2 = ml2 * sign;
+      l3 = ml3 * sign;
+      total = (ml1 + ml2 + ml3) * sign;
+      state.meter = {
+        ok: true, updatedAt: Date.now(), raw: [ml1, ml2, ml3],
+        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+        error: null
+      };
+    } else {
+      // Modbus: Register lesen und signed interpretieren
+      const regs = await transport.mbRequest(cfg.meter);
+      const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
+      const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
+      const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
+      const rawTotal = rawL1 + rawL2 + rawL3;
 
-    const posImport = cfg.gridPositiveMeans === 'grid_import';
-    const sign = posImport ? 1 : -1;
-    const l1 = rawL1 * sign;
-    const l2 = rawL2 * sign;
-    const l3 = rawL3 * sign;
-    const total = rawTotal * sign;
-
-    state.meter = {
-      ok: true,
-      updatedAt: Date.now(),
-      raw: regs,
-      grid_l1_w: l1,
-      grid_l2_w: l2,
-      grid_l3_w: l3,
-      grid_total_w: total,
-      error: null
-    };
+      const posImport = cfg.gridPositiveMeans === 'grid_import';
+      const sign = posImport ? 1 : -1;
+      l1 = rawL1 * sign;
+      l2 = rawL2 * sign;
+      l3 = rawL3 * sign;
+      total = rawTotal * sign;
+      state.meter = {
+        ok: true, updatedAt: Date.now(), raw: regs,
+        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+        error: null
+      };
+    }
 
     setReg(0, u16(total));
     setReg(1, total < 0 ? 0xffff : 0x0000);
@@ -1042,7 +889,7 @@ async function runMeterScan(params = {}) {
   try {
     for (let addr = p.start; addr <= p.end; addr += p.step) {
       try {
-        const regs = await mbRequest({
+        const regs = await scanTransport.mbRequest({
           host: p.host,
           port: p.port,
           unitId: p.unitId,
@@ -1085,11 +932,11 @@ function effectiveTargetValue(target) {
   const mod = localMinutesOfDay(new Date(now));
 
   const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, day, mod));
-  if (hit) return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}` };
+  if (hit) return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit };
 
-  if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default' };
-  if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default' };
-  return { value: null, source: 'none' };
+  if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
+  if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
+  return { value: null, source: 'none', rule: null };
 }
 
 async function applyControlTarget(target, value, source) {
@@ -1104,17 +951,27 @@ async function applyControlTarget(target, value, source) {
   }
 
   try {
-    const encoded = toRawForWrite(value, conf);
-    const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
-    const fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
-
-    if (fc === 6) {
-      if (words.length !== 1) throw new Error(`fc6 only supports one register, got ${words.length}`);
-      await mbWriteSingle({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs });
-    } else if (fc === 16) {
-      await mbWriteMultiple({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs });
+    let encoded, words, fc;
+    if (transport.type === 'mqtt') {
+      // MQTT: Engineering-Wert direkt schreiben (kein Register-Encoding)
+      await transport.mqttWrite(target, value);
+      encoded = { raw: value, scaled: value, writeType: 'mqtt', wordOrder: 'n/a' };
+      words = [value];
+      fc = 0;
     } else {
-      throw new Error(`unsupported write fc: ${fc}`);
+      // Modbus: Wert in Register-Format kodieren
+      encoded = toRawForWrite(value, conf);
+      words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
+      fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
+
+      if (fc === 6) {
+        if (words.length !== 1) throw new Error(`fc6 only supports one register, got ${words.length}`);
+        await transport.mbWriteSingle({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs });
+      } else if (fc === 16) {
+        await transport.mbWriteMultiple({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs });
+      } else {
+        throw new Error(`unsupported write fc: ${fc}`);
+      }
     }
 
     state.schedule.lastWrite[target] = {
@@ -1177,6 +1034,13 @@ async function evaluateSchedule() {
     }
 
     await applyControlTarget(target, eff.value, eff.source);
+
+    // One-Time Regeln nach Ausführung automatisch deaktivieren
+    if (eff.rule?.oneTime && eff.rule.enabled !== false) {
+      eff.rule.enabled = false;
+      pushLog('schedule_onetime_disabled', { id: eff.rule.id, target });
+      persistConfig();
+    }
   }
 
   // Negative-Preis-Schutz aufheben wenn Preis wieder positiv
@@ -1414,18 +1278,26 @@ web.listen(cfg.httpPort, () => {
 loadEnergy();
 startModbusServer();
 setInterval(expireLeaseIfNeeded, 1000);
-pollMeter().catch((e) => console.error('Initial pollMeter error:', e));
-setInterval(() => {
-  pollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
-}, Math.max(500, cfg.meterPollMs));
+
+// Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
+transport.init().then(() => {
+  console.log(`Transport initialisiert: ${transport.type}`);
+  pollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+  setInterval(() => {
+    pollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+  }, Math.max(500, cfg.meterPollMs));
+  setInterval(() => {
+    evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
+  }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
+}).catch((e) => {
+  console.error('Transport init fehlgeschlagen:', e.message);
+  console.error('Polling/Schedule starten ohne Transport...');
+});
 fetchEpexDay();
 setInterval(() => {
   const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
   if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
 }, 5 * 60 * 1000);
-setInterval(() => {
-  evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
-}, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
 setInterval(() => {
   flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
 }, INFLUX_FLUSH_MS);
@@ -1434,9 +1306,10 @@ setInterval(persistEnergy, 60000);
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
+  transport.destroy();
+  scanTransport.destroy();
   if (mbServer) mbServer.close();
   web.close();
-  for (const c of mbPool.values()) c.destroy();
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

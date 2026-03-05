@@ -146,6 +146,8 @@ sudo chown -R plexlite:plexlite /opt/dv-control-webapp
 cd /opt/dv-control-webapp
 cp config.example.json config.json
 nano config.json  # Konfiguration anpassen
+# Optional: Nur bei MQTT-Nutzung (victron.transport: "mqtt")
+npm install mqtt
 ```
 
 ### Systemd Service einrichten
@@ -206,7 +208,14 @@ npm start
   - `GET /api/keepalive/modbus`: letzte Modbus-Abfrage (Zeit, Quelle, Request)
   - `GET /api/keepalive/pulse`: 60s-Pulse fuer Uptime-Kuma/Monitoring
 
-- Meter + Victron Polling
+- Victron Kommunikation (Modbus TCP oder MQTT)
+  - **Transport waehlbar** in config: `victron.transport: "modbus"` (Default) oder `"mqtt"`
+  - **Modbus TCP**: Direkte Register-Kommunikation mit dem GX-Geraet (Default Port 502, unitId 100)
+  - **MQTT**: Verbindung ueber Venus OS MQTT-Broker (Port 1883, keine Auth auf LAN)
+    - Automatisches Subscribe auf System-Topics (Grid, SOC, PV, Batterie)
+    - Writes ueber `W/`-Topics mit Engineering-Werten
+    - Keepalive alle 30s fuer Settings-Refresh
+    - Benoetigtes Paket: `npm install mqtt` (nur bei MQTT-Nutzung)
   - Hauptmeterblock (Default unitId 100, addr 820, 3 Phasen)
   - Zusatzpunkte (SOC, Batterie, PV, Grid Setpoint, Min SOC, Self Consumption)
   - AC-PV Fronius Phasen 808/809/810 (konfigurierbar) + Summe zu PV Gesamt
@@ -231,6 +240,9 @@ npm start
   - Zeitplanregeln fuer:
     - `gridSetpointW` (Grid Setpoint in Watt)
     - `chargeCurrentA` (Ladestrom in Ampere)
+  - **Tage-Auswahl**: Regeln koennen auf bestimmte Wochentage beschraenkt werden (Mo-So)
+  - **Einmalig (One-Time)**: Regeln feuern einmal und deaktivieren sich automatisch
+  - **Aktivierbar/Deaktivierbar**: Jede Regel kann einzeln ein-/ausgeschaltet werden
   - Default-Werte wenn keine Regel greift
   - Manuelle Writes per API fuer: `gridSetpointW`, `chargeCurrentA`, `minSocPct`
   - Persistierung der Schedule-Regeln in `config.json`
@@ -287,7 +299,6 @@ Karten-Uebersicht:
 Tools: `http://<host>:8080/tools.html`
 - Register Scan (Modbus Register Discovery)
 - Schedule JSON editieren
-- Override setzen/loeschen
 
 ### API Endpoints
 
@@ -315,7 +326,7 @@ Die Konfiguration erfolgt ueber `config.json`. Wichtige Sektionen:
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `victron` | Victron GX Verbindung (host, port, unitId) |
+| `victron` | Victron GX Verbindung (host, port, unitId, transport, mqtt) |
 | `meter` | Grid-Meter Register (Default addr 820, 3 Phasen) |
 | `points` | Victron Datenpunkte zum Lesen (SOC, Batterie, PV, etc.) |
 | `controlWrite` | Schreibbare Register (gridSetpointW, chargeCurrentA, minSocPct) |
@@ -334,6 +345,8 @@ Die Konfiguration erfolgt ueber `config.json`. Wichtige Sektionen:
 - DV-Victron-Steuerung (`dvControl`) ist per Default deaktiviert (`enabled: false`). In `config.json` auf `true` setzen um die automatische Ansteuerung bei DV-Signal und negativen Preisen zu aktivieren.
 - Kosten-Daten werden in `energy_state.json` gespeichert und ueberleben Neustarts (solange der Tag gleich bleibt).
 - Alle Victron-Register (points, controlWrite, dvControl) erben automatisch `host`, `port`, `unitId` und `timeoutMs` von der `victron`-Sektion, koennen aber pro Register ueberschrieben werden.
+- **MQTT-Modus**: In `config.json` unter `victron.transport` auf `"mqtt"` setzen und `victron.mqtt.portalId` mit der VRM Portal ID befuellen (zu finden auf dem GX-Geraet unter Settings -> VRM Online Portal). Der DV-Modbus-Server (Port 1502) laeuft unabhaengig vom Transport immer ueber Modbus.
+- **MQTT-Paket installieren**: `npm install mqtt` -- wird nur benoetigt wenn `transport: "mqtt"` konfiguriert ist. Bei Modbus-Betrieb (Default) ist keine Installation noetig.
 
 ---
 
