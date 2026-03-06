@@ -265,7 +265,10 @@ npm start
   - Tagesabschluss-Log mit Zusammenfassung
 
 - InfluxDB (optional)
+  - **InfluxDB v3** (Default) und v2 unterstützt (`influx.apiVersion`: `"v3"` oder `"v2"`)
   - Schreiben von Livewerten als Line Protocol
+  - v3: `/api/v3/write_lp?db=...&precision=second` mit Bearer-Token
+  - v2: `/api/v2/write?org=...&bucket=...&precision=s` mit Token-Auth
   - Measurements: meter, ctrl, victron, energy
   - Flush-Intervall: 10 Sekunden
   - Aktivierung via `influx.enabled=true` in config
@@ -342,7 +345,7 @@ Die Konfiguration erfolgt über `config.json`. Wichtige Sektionen:
 - Für Schreibregister kann `controlWrite.<target>.writeType` auf `int16`, `uint16`, `int32` oder `uint32` gesetzt werden.
 - ESS Mode 2/3 Empfehlung: Grid-Setpoint über `unitId 100`, `address 2700`, `fc 16`, `writeType int16` schreiben (nicht auf `address 0`) -> Nicht auf Register 2716/2717 - sind only on memory und nicht persistent wie 2700.
 - Legacy-Fallback für Grid-Setpoint bleibt möglich: `fc 6`, `address 2700`, `writeType int16`.
-- Influx schreibt nur wenn `influx.enabled=true` und URL/Org/Bucket/Token gesetzt sind.
+- **InfluxDB v3** (Default): `influx.apiVersion: "v3"`, `influx.url: "http://host:8086"`, `influx.db: "datenbankname"`, `influx.token: "bearer-token"`. Für v2: `apiVersion: "v2"` setzen und `org`/`bucket` statt `db` verwenden.
 - DV-Victron-Steuerung (`dvControl`) ist per Default deaktiviert (`enabled: false`). In `config.json` auf `true` setzen um die automatische Ansteuerung bei DV-Signal und negativen Preisen zu aktivieren.
 - Kosten-Daten werden in `energy_state.json` gespeichert und überleben Neustarts (solange der Tag gleich bleibt).
 - Alle Victron-Register (points, controlWrite, dvControl) erben automatisch `host`, `port`, `unitId` und `timeoutMs` von der `victron`-Sektion, können aber pro Register überschrieben werden.
