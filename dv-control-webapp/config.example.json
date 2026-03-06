@@ -69,9 +69,9 @@
   },
   "influx": {
     "enabled": false,
-    "url": "http://127.0.0.1:8086/api/v2/write",
-    "org": "my-org",
-    "bucket": "dv-data",
+    "apiVersion": "v3",
+    "url": "http://127.0.0.1:8086",
+    "db": "plexlite",
     "token": "",
     "measurement": "dv"
   },

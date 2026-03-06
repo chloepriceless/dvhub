@@ -87,7 +87,9 @@ function loadConfig() {
     },
     influx: {
       enabled: false,
-      url: 'http://127.0.0.1:8086/api/v2/write',
+      apiVersion: 'v3',
+      url: 'http://127.0.0.1:8086',
+      db: '',
       org: '',
       bucket: '',
       token: '',
@@ -690,11 +692,23 @@ async function flushInflux() {
   if (!cfg.influx.enabled || !influxBuffer.length) return;
   const lines = influxBuffer.splice(0);
   try {
-    const qp = new URLSearchParams({ org: cfg.influx.org, bucket: cfg.influx.bucket, precision: 's' });
-    const url = `${cfg.influx.url}?${qp.toString()}`;
+    const base = cfg.influx.url.replace(/\/+$/, '');
     const body = lines.join('\n');
     const headers = { 'content-type': 'text/plain; charset=utf-8' };
-    if (cfg.influx.token) headers.Authorization = `Token ${cfg.influx.token}`;
+    let url;
+
+    if (cfg.influx.apiVersion === 'v2') {
+      // InfluxDB v2: /api/v2/write?org=...&bucket=...&precision=s
+      const qp = new URLSearchParams({ org: cfg.influx.org || '', bucket: cfg.influx.bucket || cfg.influx.db || '', precision: 's' });
+      url = `${base}/api/v2/write?${qp.toString()}`;
+      if (cfg.influx.token) headers.Authorization = `Token ${cfg.influx.token}`;
+    } else {
+      // InfluxDB v3 (Default): /api/v3/write_lp?db=...&precision=second
+      const qp = new URLSearchParams({ db: cfg.influx.db || cfg.influx.bucket || '', precision: 'second' });
+      url = `${base}/api/v3/write_lp?${qp.toString()}`;
+      if (cfg.influx.token) headers.Authorization = `Bearer ${cfg.influx.token}`;
+    }
+
     const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   } catch (e) {
@@ -1449,6 +1463,7 @@ console.log('Config loaded:', {
   meterAddress: `${cfg.meter.host}:${cfg.meter.port} uid=${cfg.meter.unitId} reg=${cfg.meter.address}`,
   apiTokenSet: !!cfg.apiToken,
   influxEnabled: cfg.influx.enabled,
+  influxApiVersion: cfg.influx.apiVersion || 'v3',
   epexEnabled: cfg.epex.enabled,
   scheduleRules: cfg.schedule.rules.length
 });
