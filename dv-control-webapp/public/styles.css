@@ -481,32 +481,6 @@ table th {
   width: 96px;
 }
 
-.sched-days {
-  display: flex;
-  gap: 2px;
-  flex-wrap: nowrap;
-}
-
-.day-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  font-size: 0.72rem;
-  padding: 0;
-  cursor: pointer;
-}
-
-.day-btn input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-}
-
-.day-btn span {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  margin-left: 1px;
-}
 
 .icon-btn {
   border-radius: 50%;
@@ -797,9 +771,6 @@ table th {
     width: 72px;
   }
 
-  .sched-days {
-    flex-wrap: wrap;
-  }
 
   .sched-table {
     font-size: 0.72rem;

@@ -192,7 +192,7 @@ function persistConfig() {
   try {
     const current = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {};
     current.schedule = current.schedule || {};
-    current.schedule.rules = state.schedule.rules;
+    current.schedule.rules = state.schedule.rules.map(({ _wasActive, days, oneTime, ...rest }) => rest);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8');
@@ -918,7 +918,6 @@ async function runMeterScan(params = {}) {
 
 function scheduleMatch(rule, nowDay, nowMin) {
   if (!rule || rule.enabled === false) return false;
-  if (Array.isArray(rule.days) && rule.days.length && !rule.days.includes(nowDay)) return false;
   const s = parseHHMM(rule.start);
   const e = parseHHMM(rule.end);
   if (s == null || e == null) return false;
@@ -932,7 +931,7 @@ function effectiveTargetValue(target) {
   const mod = localMinutesOfDay(new Date(now));
 
   const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, day, mod));
-  if (hit) return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit };
+  if (hit) { hit._wasActive = true; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
 
   if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
   if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
@@ -1034,14 +1033,23 @@ async function evaluateSchedule() {
     }
 
     await applyControlTarget(target, eff.value, eff.source);
+  }
 
-    // One-Time Regeln nach Ausführung automatisch deaktivieren
-    if (eff.rule?.oneTime && eff.rule.enabled !== false) {
-      eff.rule.enabled = false;
-      pushLog('schedule_onetime_disabled', { id: eff.rule.id, target });
-      persistConfig();
+  // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
+  let needPersist = false;
+  for (const rule of state.schedule.rules) {
+    if (rule._wasActive && rule.enabled !== false) {
+      const nowDay = localWeekdayIndex(new Date());
+      const nowMin = localMinutesOfDay(new Date());
+      if (!scheduleMatch(rule, nowDay, nowMin)) {
+        rule.enabled = false;
+        delete rule._wasActive;
+        pushLog('schedule_auto_disabled', { id: rule.id, target: rule.target });
+        needPersist = true;
+      }
     }
   }
+  if (needPersist) persistConfig();
 
   // Negative-Preis-Schutz aufheben wenn Preis wieder positiv
   if (state.ctrl.negativePriceActive && !priceNegative) {
