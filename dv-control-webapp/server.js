@@ -2,137 +2,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import {
+  collectChangedPaths,
+  detectRestartRequired,
+  getConfigDefinition,
+  loadConfigFile,
+  saveConfigFile
+} from './config-model.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const CONFIG_PATH = process.env.DV_APP_CONFIG || path.join(__dirname, 'config.json');
+const execFileAsync = promisify(execFile);
+const CONFIG_DEFINITION = getConfigDefinition();
+let loadedConfig = loadConfigFile(CONFIG_PATH);
+let rawCfg = loadedConfig.rawConfig;
+let cfg = loadedConfig.effectiveConfig;
+const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
+const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'plexlite.service';
+const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 
-function deepMerge(base, override) {
-  if (!override || typeof override !== 'object') return base;
-  const out = { ...base };
-  for (const [k, v] of Object.entries(override)) {
-    if (Array.isArray(v)) out[k] = v;
-    else if (v && typeof v === 'object' && !Array.isArray(v) && typeof out[k] === 'object' && out[k] !== null) {
-      out[k] = deepMerge(out[k], v);
-    } else out[k] = v;
-  }
-  return out;
-}
-
-function loadConfig() {
-  const defaults = {
-    httpPort: 8080,
-    apiToken: '',
-    modbusListenHost: '0.0.0.0',
-    modbusListenPort: 1502,
-    offLeaseMs: 8 * 60 * 1000,
-    meterPollMs: 2000,
-    keepalivePulseSec: 60,
-    gridPositiveMeans: 'feed_in',
-    victron: {
-      host: '192.168.1.19',
-      port: 502,
-      unitId: 100,
-      timeoutMs: 1000
-    },
-    meter: {
-      fc: 4,
-      address: 820,
-      quantity: 3,
-      timeoutMs: 1200
-    },
-    points: {
-      soc: { enabled: true, fc: 4, address: 843, quantity: 1, signed: false, scale: 1, offset: 0 },
-      batteryPowerW: { enabled: true, fc: 4, address: 842, quantity: 1, signed: true, scale: 1, offset: 0 },
-      pvPowerW: { enabled: true, fc: 4, address: 850, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL1W: { enabled: true, fc: 4, address: 808, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL2W: { enabled: true, fc: 4, address: 809, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
-      gridSetpointW: { enabled: true, fc: 4, address: 2700, quantity: 1, signed: true, scale: 1, offset: 0 },
-      minSocPct: { enabled: true, fc: 4, address: 2901, quantity: 1, signed: false, scale: 0.1, offset: 0 },
-      selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
-    },
-    controlWrite: {
-      gridSetpointW: { enabled: true, fc: 6, address: 2700, writeType: 'int16', signed: true, scale: 1, offset: 0 },
-      chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0 },
-      minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0 }
-    },
-    dvControl: {
-      enabled: false,
-      feedExcessDcPv: { enabled: true, fc: 6, address: 2848, writeType: 'uint16', signed: false, scale: 1, offset: 0 },
-      dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2850, writeType: 'uint16', signed: false, scale: 1, offset: 0 },
-      negativePriceProtection: { enabled: true, gridSetpointW: -40 }
-    },
-    schedule: {
-      timezone: 'Europe/Berlin',
-      evaluateMs: 15000,
-      defaultGridSetpointW: null,
-      defaultChargeCurrentA: null,
-      rules: []
-    },
-    scan: {
-      host: '192.168.1.19',
-      port: 502,
-      unitId: 0,
-      fc: 4,
-      start: 2500,
-      end: 2700,
-      step: 10,
-      quantity: 10,
-      timeoutMs: 700,
-      onlyNonZero: true
-    },
-    influx: {
-      enabled: false,
-      apiVersion: 'v3',
-      url: 'http://127.0.0.1:8086',
-      db: '',
-      org: '',
-      bucket: '',
-      token: '',
-      measurement: 'dv'
-    },
-    epex: {
-      enabled: true,
-      bzn: 'DE-LU',
-      timezone: 'Europe/Berlin'
-    }
-  };
-
-  if (!fs.existsSync(CONFIG_PATH)) return applyVictronDefaults(defaults);
-  try {
-    const fileCfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    return applyVictronDefaults(deepMerge(defaults, fileCfg));
-  } catch (e) {
-    console.error('Config parse error, using defaults:', e.message);
-    return applyVictronDefaults(defaults);
-  }
-}
-
-function applyVictronDefaults(c) {
-  const v = c.victron || {};
-  const fill = (obj) => {
-    if (!obj || typeof obj !== 'object') return;
-    obj.host = obj.host ?? v.host;
-    obj.port = obj.port ?? v.port;
-    obj.unitId = obj.unitId ?? v.unitId;
-    obj.timeoutMs = obj.timeoutMs ?? v.timeoutMs;
-  };
-  fill(c.meter);
-  for (const p of Object.values(c.points || {})) fill(p);
-  for (const w of Object.values(c.controlWrite || {})) fill(w);
-  if (c.dvControl) {
-    for (const [k, v] of Object.entries(c.dvControl)) {
-      if (v && typeof v === 'object' && k !== 'enabled') fill(v);
-    }
-  }
-  return c;
-}
-
-const cfg = loadConfig();
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
   ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now() },
@@ -190,14 +84,39 @@ const transport = cfg.victron?.transport === 'mqtt'
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport();
 
+function applyLoadedConfig(nextLoadedConfig) {
+  loadedConfig = nextLoadedConfig;
+  rawCfg = nextLoadedConfig.rawConfig;
+  cfg = nextLoadedConfig.effectiveConfig;
+  state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
+  state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
+  state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
+  state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
+}
+
+function saveAndApplyConfig(nextRawConfig) {
+  const previousRaw = rawCfg;
+  const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
+  applyLoadedConfig(saved);
+  const changedPaths = collectChangedPaths(previousRaw, rawCfg);
+  const restart = detectRestartRequired(changedPaths);
+  return {
+    ok: true,
+    changedPaths,
+    restartRequired: restart.required,
+    restartRequiredPaths: restart.paths,
+    loadedConfig: saved
+  };
+}
+
 function persistConfig() {
   try {
-    const current = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {};
+    const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
     current.schedule.rules = state.schedule.rules.map(({ _wasActive, days, oneTime, ...rest }) => rest);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    saveAndApplyConfig(current);
   } catch (e) {
     pushLog('config_persist_error', { error: e.message });
   }
@@ -244,6 +163,7 @@ function loadEnergy() {
 }
 
 function nowIso() { return new Date().toISOString(); }
+function fmtTs(ts) { return ts ? new Date(ts).toISOString() : '-'; }
 function pushLog(event, details = {}) {
   const row = { ts: nowIso(), event, ...details };
   state.log.push(row);
@@ -1233,6 +1153,161 @@ function text(res, code, payload) {
   res.end(String(payload));
 }
 
+function downloadJson(res, filename, payload) {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    'content-disposition': `attachment; filename="${filename}"`
+  });
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function configMetaPayload() {
+  return {
+    path: CONFIG_PATH,
+    exists: loadedConfig.exists,
+    valid: loadedConfig.valid,
+    parseError: loadedConfig.parseError,
+    needsSetup: loadedConfig.needsSetup,
+    warnings: loadedConfig.warnings || []
+  };
+}
+
+function configApiPayload() {
+  return {
+    ok: true,
+    meta: configMetaPayload(),
+    config: rawCfg,
+    effectiveConfig: cfg,
+    definition: CONFIG_DEFINITION
+  };
+}
+
+function serviceCommandParts(args) {
+  if (SERVICE_USE_SUDO) return { command: 'sudo', args: ['-n', 'systemctl', ...args] };
+  return { command: 'systemctl', args };
+}
+
+async function runServiceCommand(args) {
+  const parts = serviceCommandParts(args);
+  try {
+    const result = await execFileAsync(parts.command, parts.args, { timeout: 8000 });
+    return {
+      ok: true,
+      command: `${parts.command} ${parts.args.join(' ')}`,
+      stdout: String(result.stdout || '').trim(),
+      stderr: String(result.stderr || '').trim()
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      command: `${parts.command} ${parts.args.join(' ')}`,
+      error: String(error.stderr || error.stdout || error.message || 'command failed').trim()
+    };
+  }
+}
+
+async function adminHealthPayload() {
+  const service = {
+    enabled: SERVICE_ACTIONS_ENABLED,
+    name: SERVICE_NAME,
+    useSudo: SERVICE_USE_SUDO,
+    status: 'disabled',
+    detail: 'Service-Aktionen sind per ENV deaktiviert.'
+  };
+
+  if (SERVICE_ACTIONS_ENABLED) {
+    const activeCheck = await runServiceCommand(['is-active', SERVICE_NAME]);
+    const showCheck = await runServiceCommand(['show', SERVICE_NAME, '--property=ActiveState,SubState,UnitFileState', '--value']);
+    service.status = activeCheck.ok ? (activeCheck.stdout || 'unknown') : 'unavailable';
+    service.detail = activeCheck.ok ? 'systemctl erreichbar' : activeCheck.error;
+    service.show = showCheck.ok ? showCheck.stdout : showCheck.error;
+  }
+
+  return {
+    ok: true,
+    checkedAt: Date.now(),
+    service,
+    runtime: {
+      node: process.version,
+      platform: `${process.platform}/${process.arch}`,
+      pid: process.pid,
+      transport: transport.type,
+      uptimeSec: Math.round(process.uptime())
+    },
+    checks: [
+      {
+        id: 'config',
+        label: 'Config Datei',
+        ok: loadedConfig.exists && loadedConfig.valid,
+        detail: loadedConfig.exists
+          ? (loadedConfig.valid ? `gueltig unter ${CONFIG_PATH}` : `ungueltig: ${loadedConfig.parseError}`)
+          : `fehlt: ${CONFIG_PATH}`
+      },
+      {
+        id: 'setup',
+        label: 'Setup Status',
+        ok: !loadedConfig.needsSetup,
+        detail: loadedConfig.needsSetup ? 'Setup noch nicht abgeschlossen' : 'Setup abgeschlossen'
+      },
+      {
+        id: 'meter',
+        label: 'Live Meter Daten',
+        ok: state.meter.ok,
+        detail: state.meter.ok
+          ? `letztes Update ${fmtTs(state.meter.updatedAt)}`
+          : (state.meter.error || 'noch keine erfolgreichen Meter-Daten')
+      },
+      {
+        id: 'epex',
+        label: 'EPEX Feed',
+        ok: !cfg.epex.enabled || state.epex.ok,
+        detail: !cfg.epex.enabled
+          ? 'deaktiviert'
+          : state.epex.ok
+            ? `letztes Update ${fmtTs(state.epex.updatedAt)}`
+            : (state.epex.error || 'noch keine Preisdaten')
+      },
+      {
+        id: 'service_actions',
+        label: 'Restart Aktion',
+        ok: SERVICE_ACTIONS_ENABLED && service.status !== 'unavailable',
+        detail: SERVICE_ACTIONS_ENABLED
+          ? `Service ${SERVICE_NAME}: ${service.status}`
+          : 'per ENV deaktiviert'
+      }
+    ]
+  };
+}
+
+function scheduleServiceRestart() {
+  const parts = serviceCommandParts(['restart', SERVICE_NAME]);
+  const helperScript = `
+    const { spawn } = require('node:child_process');
+    setTimeout(() => {
+      const child = spawn(${JSON.stringify(parts.command)}, ${JSON.stringify(parts.args)}, {
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+    }, 1200);
+  `;
+  const helper = spawn(process.execPath, ['-e', helperScript], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  helper.unref();
+}
+
+function servePage(res, filename) {
+  const publicDir = path.resolve(__dirname, 'public');
+  const file = path.resolve(publicDir, filename);
+  if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
+  if (!fs.existsSync(file)) return text(res, 404, 'not found');
+  res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+  fs.createReadStream(file).pipe(res);
+}
+
 function serveStatic(req, res) {
   const urlPath = new URL(req.url, 'http://localhost').pathname;
   const reqPath = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
@@ -1258,6 +1333,10 @@ const web = http.createServer(async (req, res) => {
   try {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if (url.pathname === '/' && req.method === 'GET') {
+    return servePage(res, loadedConfig.needsSetup ? 'setup.html' : 'index.html');
+  }
+
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
     if (!checkAuth(req, res)) return;
   }
@@ -1266,6 +1345,57 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/keepalive/modbus' && req.method === 'GET') return json(res, 200, keepaliveModbusPayload());
   if (url.pathname === '/api/keepalive/pulse' && req.method === 'GET') return json(res, 200, keepalivePulsePayload());
+  if (url.pathname === '/api/setup/status' && req.method === 'GET') return json(res, 200, configMetaPayload());
+
+  if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
+
+  if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
+    const body = await parseBody(req);
+    if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
+      return json(res, 400, { ok: false, error: 'config object required' });
+    }
+    const result = saveAndApplyConfig(body.config);
+    pushLog('config_saved', {
+      changedPaths: result.changedPaths.length,
+      restartRequired: result.restartRequired,
+      source: url.pathname.endsWith('/import') ? 'import' : 'settings'
+    });
+    return json(res, 200, {
+      ok: true,
+      meta: configMetaPayload(),
+      config: rawCfg,
+      effectiveConfig: cfg,
+      changedPaths: result.changedPaths,
+      restartRequired: result.restartRequired,
+      restartRequiredPaths: result.restartRequiredPaths
+    });
+  }
+
+  if (url.pathname === '/api/config/export' && req.method === 'GET') {
+    return downloadJson(res, 'plexlite-config.json', rawCfg);
+  }
+
+  if (url.pathname === '/api/admin/health' && req.method === 'GET') {
+    return json(res, 200, await adminHealthPayload());
+  }
+
+  if (url.pathname === '/api/admin/service/restart' && req.method === 'POST') {
+    if (!SERVICE_ACTIONS_ENABLED) {
+      return json(res, 403, { ok: false, error: 'service actions disabled' });
+    }
+    const check = await runServiceCommand(['show', SERVICE_NAME, '--property=Id', '--value']);
+    if (!check.ok) {
+      return json(res, 500, { ok: false, error: check.error, command: check.command });
+    }
+    scheduleServiceRestart();
+    pushLog('service_restart_scheduled', { service: SERVICE_NAME });
+    return json(res, 202, {
+      ok: true,
+      accepted: true,
+      service: SERVICE_NAME,
+      message: 'Service restart scheduled'
+    });
+  }
 
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
@@ -1286,6 +1416,7 @@ const web = http.createServer(async (req, res) => {
       victron: state.victron,
       scan: state.scan,
       schedule: state.schedule,
+      setup: configMetaPayload(),
       costs: costSummary(),
       epex: { ...state.epex, summary: epexNowNext() }
     });
@@ -1465,5 +1596,16 @@ console.log('Config loaded:', {
   influxEnabled: cfg.influx.enabled,
   influxApiVersion: cfg.influx.apiVersion || 'v3',
   epexEnabled: cfg.epex.enabled,
-  scheduleRules: cfg.schedule.rules.length
+  scheduleRules: cfg.schedule.rules.length,
+  configPath: CONFIG_PATH,
+  configExists: loadedConfig.exists,
+  configValid: loadedConfig.valid,
+  needsSetup: loadedConfig.needsSetup
 });
+
+if (loadedConfig.parseError) {
+  console.error(`Config parse error in ${CONFIG_PATH}: ${loadedConfig.parseError}`);
+}
+if (loadedConfig.needsSetup) {
+  console.log(`No valid config available at ${CONFIG_PATH}. Root URL will open the setup wizard.`);
+}

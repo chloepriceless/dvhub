@@ -126,10 +126,32 @@ Die [LUOX Testseite](https://www.luox-energy.de/verbindungsstatus) sollte grün 
 
 Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 
+### Neue Weboberflächen
+
+- **Dashboard** fuer Live-Werte, DV-Status und Schedule-Steuerung
+- **Einstellungsseite** fuer die komplette Konfiguration als Menue/Formular statt als rohe `config.json`
+- **First-Run-Setup** als gefuehrter Assistent, sobald noch keine gueltige Config vorhanden ist
+- **Import/Export** vorhandener Config-Dateien direkt ueber die Weboberflaeche
+- **Health & Service** mit Install-/Status-Checks und optionalem Restart-Button fuer den systemd-Dienst
+
 ### Getestet auf
 - Debian 12 Bookworm LXC Container (Community Scripts)
 
 ### Installation
+
+Einfachste Variante:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/plexlite/plexlite/main/install.sh | sudo bash
+```
+
+Das Skript installiert Node.js, klont das Repo nach `/opt/plexlite`, richtet einen systemd-Service ein
+und verwendet bewusst eine **externe Config-Datei** unter `/etc/plexlite/config.json`.
+Wenn diese Datei noch nicht existiert, oeffnet die Weboberflaeche automatisch den neuen Setup-Assistenten.
+Ausserdem aktiviert das Skript die neuen **Service-Aktionen** in der GUI
+(Health-Check + Restart-Button) ueber eine passende `sudoers`-Regel.
+
+Manuelle Installation:
 
 ```bash
 sudo apt update
@@ -191,6 +213,30 @@ cd /opt/dv-control-webapp
 cp config.example.json config.json
 npm start
 ```
+
+### Setup-Flow nach der Installation
+
+- Wenn die Config-Datei fehlt oder ungueltig ist, zeigt `/` automatisch den **Setup-Assistenten**
+- Der Assistent fuehrt durch:
+  - HTTP-Port und API-Token
+  - Victron-Verbindung per Modbus TCP oder MQTT
+  - Basiswerte fuer Meter / DV-Proxy
+  - EPEX- und Influx-Grunddaten
+- Danach kann in der **Einstellungsseite** jedes Detail weiter verfeinert werden
+- Bestehende `config.json`-Dateien koennen importiert und exportiert werden
+
+### Admin / Health
+
+Unter **Einstellungen -> Health & Service** zeigt PlexLite jetzt:
+
+- Status der Config-Datei und ob das Setup abgeschlossen ist
+- Live-Status von Meter und EPEX
+- Laufzeitdaten des aktuellen Prozesses
+- systemd-Service-Status
+- optional einen **Restart-Button**
+
+> Der Restart-Button ist aus Sicherheitsgruenden nur aktiv, wenn die Service-Aktionen per
+> `DV_ENABLE_SERVICE_ACTIONS=1` freigeschaltet wurden. `install.sh` richtet das automatisch ein.
 
 ---
 

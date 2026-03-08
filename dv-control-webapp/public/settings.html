@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlexLite Einstellungen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Saira+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-settings">
+  <div class="app-shell">
+    <header class="panel hero reveal">
+      <div class="brand-lockup">
+        <img src="/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png" alt="PlexLite Logo" class="hero-logo" />
+        <div>
+          <p class="eyebrow">PlexLite Config Center</p>
+          <h1 class="hero-title">Einstellungen</h1>
+          <p class="hero-sub">Alle relevanten Konfigurationswerte als strukturierte Menues statt als rohe JSON-Datei.</p>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <a class="btn btn-ghost" href="/">Dashboard</a>
+        <a class="btn btn-ghost" href="/tools.html">Tools</a>
+      </div>
+    </header>
+
+    <main class="settings-grid">
+      <section class="panel reveal span-12">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Status</p>
+            <h2 class="section-title">Config Verwaltung</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
+            <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
+          </div>
+        </div>
+        <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
+        <div class="settings-toolbar">
+          <button id="exportConfigBtn" type="button">Config exportieren</button>
+          <button id="importConfigBtn" type="button">Config importieren</button>
+          <a class="btn btn-ghost" href="/setup.html">Setup-Assistent</a>
+        </div>
+        <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
+        <div id="configMeta" class="meta">-</div>
+      </section>
+
+      <section class="panel reveal span-12">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Hinweis</p>
+            <h2 class="section-title">Was hier bearbeitet wird</h2>
+          </div>
+        </div>
+        <div class="settings-summary">
+          <div class="summary-card">
+            <strong>Einfach</strong>
+            <span>Victron, Meter, EPEX, Influx und DV-Funktionen sind direkt als Formulare editierbar.</span>
+          </div>
+          <div class="summary-card">
+            <strong>Sicher</strong>
+            <span>Import und Export laufen ueber dieselbe Validierung wie das Setup und der Dashboard-Zeitplan.</span>
+          </div>
+          <div class="summary-card">
+            <strong>Wichtig</strong>
+            <span>Einige Server- oder MQTT-Aenderungen werden gespeichert, brauchen aber einen Neustart des Dienstes.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel reveal span-12">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Admin</p>
+            <h2 class="section-title">Health & Service</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="refreshHealthBtn" class="btn btn-ghost" type="button">Health neu laden</button>
+            <button id="restartServiceBtn" class="btn btn-danger" type="button">Dienst neu starten</button>
+          </div>
+        </div>
+        <div id="healthBanner" class="status-banner">Health-Status wird geladen...</div>
+        <div id="healthChecks" class="settings-summary"></div>
+        <div id="serviceMeta" class="meta">-</div>
+      </section>
+
+      <section id="settingsSections" class="settings-sections span-12"></section>
+    </main>
+  </div>
+
+  <script src="/common.js"></script>
+  <script src="/settings.js"></script>
+</body>
+</html>

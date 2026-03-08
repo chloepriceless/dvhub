@@ -531,6 +531,192 @@ table th {
   color: var(--text-soft);
 }
 
+.status-banner {
+  margin-top: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(137, 166, 195, 0.35);
+  background: rgba(10, 24, 38, 0.82);
+  padding: 12px 14px;
+  color: var(--text-main);
+  font-size: 0.92rem;
+}
+
+.status-banner.success {
+  border-color: rgba(76, 227, 108, 0.45);
+  background: rgba(8, 36, 18, 0.72);
+}
+
+.status-banner.warn {
+  border-color: rgba(255, 212, 33, 0.5);
+  background: rgba(50, 34, 4, 0.78);
+}
+
+.status-banner.error {
+  border-color: rgba(255, 104, 104, 0.5);
+  background: rgba(53, 11, 11, 0.8);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-sections {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-panel {
+  grid-column: span 12;
+}
+
+.settings-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(126, 156, 183, 0.28);
+  background: rgba(6, 16, 28, 0.72);
+}
+
+.summary-card strong {
+  font-family: var(--font-title);
+  color: var(--yellow);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.summary-card span {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.settings-group {
+  margin-top: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(123, 151, 178, 0.24);
+  background: rgba(7, 18, 30, 0.55);
+}
+
+.settings-group summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 16px;
+  font-family: var(--font-title);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-group summary span {
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.settings-group summary small {
+  color: var(--text-soft);
+  font-family: var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 0.84rem;
+}
+
+.settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.settings-fields.compact {
+  padding: 0;
+}
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(122, 150, 176, 0.22);
+  background: rgba(8, 18, 28, 0.6);
+}
+
+.settings-field input,
+.settings-field select {
+  width: 100%;
+}
+
+.settings-field-title {
+  color: var(--text-main);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.checkbox-field {
+  grid-template-columns: 1fr auto;
+}
+
+.checkbox-field .settings-field-title {
+  align-self: center;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+}
+
+.checkbox-field .field-help {
+  grid-column: 1 / -1;
+}
+
+.field-help {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.wizard-step {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(121, 149, 174, 0.24);
+  background: rgba(7, 18, 29, 0.56);
+}
+
 .reveal {
   animation: riseIn 0.65s ease both;
 }
@@ -692,6 +878,12 @@ table th {
     gap: 10px;
   }
 
+  .settings-summary,
+  .wizard-grid,
+  .settings-fields {
+    grid-template-columns: 1fr;
+  }
+
   .controls > label {
     width: 100%;
     justify-content: space-between;
@@ -788,6 +980,16 @@ table th {
 
   .dashboard-grid {
     gap: 8px;
+  }
+
+  .settings-grid,
+  .settings-sections {
+    gap: 8px;
+  }
+
+  .settings-group summary {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .btn {

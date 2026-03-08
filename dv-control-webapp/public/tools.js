@@ -1,3 +1,5 @@
+const { apiFetch } = window.PlexLiteCommon;
+
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
 
@@ -29,7 +31,7 @@ function renderScan(scan) {
 }
 
 async function refreshScan() {
-  const res = await fetch('/api/meter/scan');
+  const res = await apiFetch('/api/meter/scan');
   const scan = await res.json();
   renderScan(scan);
 }
@@ -42,7 +44,7 @@ async function startScan() {
     step: Number(document.getElementById('scanStep').value),
     quantity: Number(document.getElementById('scanQty').value)
   };
-  await fetch('/api/meter/scan', {
+  await apiFetch('/api/meter/scan', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body)
@@ -51,7 +53,7 @@ async function startScan() {
 }
 
 async function loadSchedule() {
-  const res = await fetch('/api/schedule');
+  const res = await apiFetch('/api/schedule');
   const data = await res.json();
   document.getElementById('scheduleJson').value = JSON.stringify({ rules: data.rules || [] }, null, 2);
   setText('scheduleMeta', `geladen: ${fmtTs(Date.now())}`);
@@ -60,7 +62,7 @@ async function loadSchedule() {
 async function saveSchedule() {
   try {
     const payload = JSON.parse(document.getElementById('scheduleJson').value || '{}');
-    const res = await fetch('/api/schedule/rules', {
+    const res = await apiFetch('/api/schedule/rules', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload)
@@ -75,6 +77,11 @@ async function saveSchedule() {
 document.getElementById('startScan').addEventListener('click', startScan);
 document.getElementById('loadSchedule').addEventListener('click', loadSchedule);
 document.getElementById('saveSchedule').addEventListener('click', saveSchedule);
+
+window.addEventListener('plexlite:unauthorized', () => {
+  setText('scanMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN oeffnen.');
+  setText('scheduleMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN oeffnen.');
+});
 
 loadSchedule();
 refreshScan();

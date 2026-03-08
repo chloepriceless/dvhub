@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlexLite Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Saira+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-setup">
+  <div class="app-shell">
+    <header class="panel hero reveal">
+      <div class="brand-lockup">
+        <img src="/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png" alt="PlexLite Logo" class="hero-logo" />
+        <div>
+          <p class="eyebrow">PlexLite First Run</p>
+          <h1 class="hero-title">Gefuehrtes Setup</h1>
+          <p class="hero-sub">Wenn noch keine gueltige Config existiert, fuehrt dich dieser Assistent durch die wichtigsten Einstellungen fuer Victron, DV und Monitoring.</p>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <a class="btn btn-ghost" href="/settings.html">Experten-Menue</a>
+        <a class="btn btn-ghost" href="/">Dashboard</a>
+      </div>
+    </header>
+
+    <main class="settings-grid">
+      <section class="panel reveal span-12">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Setup Status</p>
+            <h2 class="section-title">Ersteinrichtung</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="setupSaveBtn" class="btn btn-primary" type="button">Setup speichern</button>
+            <button id="setupImportBtn" class="btn btn-ghost" type="button">Vorhandene Config importieren</button>
+          </div>
+        </div>
+        <div id="setupBanner" class="status-banner">Setup wird geladen...</div>
+        <div id="setupMeta" class="meta">-</div>
+        <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
+      </section>
+
+      <section class="panel reveal span-12">
+        <div class="wizard-grid">
+          <article class="wizard-step">
+            <p class="card-title">Schritt 1</p>
+            <h2 class="section-title">Webserver & Sicherheit</h2>
+            <div class="settings-fields compact">
+              <label class="settings-field">
+                <span class="settings-field-title">HTTP Port</span>
+                <input id="httpPort" type="number" min="1" max="65535" />
+                <small class="field-help">Port der Weboberflaeche. Standard ist 8080.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">API Token</span>
+                <input id="apiToken" type="text" />
+                <small class="field-help">Optional. Wenn gesetzt, wird es nach dem Speichern fuer diese Browser-Session hinterlegt.</small>
+              </label>
+            </div>
+          </article>
+
+          <article class="wizard-step">
+            <p class="card-title">Schritt 2</p>
+            <h2 class="section-title">Victron Verbindung</h2>
+            <div class="settings-fields compact">
+              <label class="settings-field">
+                <span class="settings-field-title">Transport</span>
+                <select id="victronTransport">
+                  <option value="modbus">Modbus TCP</option>
+                  <option value="mqtt">MQTT</option>
+                </select>
+                <small class="field-help">Modbus ist der Standard fuer GX und Ekrano. MQTT ist fuer Venus OS Push-Daten.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">GX Host</span>
+                <input id="victronHost" type="text" />
+                <small class="field-help">IP-Adresse oder DNS-Name des GX.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">GX Port</span>
+                <input id="victronPort" type="number" min="1" max="65535" />
+                <small class="field-help">Standard fuer Modbus TCP ist 502.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Unit ID</span>
+                <input id="victronUnitId" type="number" min="0" max="255" />
+                <small class="field-help">Typischerweise 100 beim Victron GX.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Timeout (ms)</span>
+                <input id="victronTimeoutMs" type="number" min="100" max="60000" step="100" />
+                <small class="field-help">Timeout fuer Register-Requests.</small>
+              </label>
+            </div>
+            <div id="mqttFields" class="settings-fields compact">
+              <label class="settings-field">
+                <span class="settings-field-title">MQTT Broker URL</span>
+                <input id="mqttBroker" type="text" />
+                <small class="field-help">Zum Beispiel mqtt://192.168.1.10:1883</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Portal ID</span>
+                <input id="mqttPortalId" type="text" />
+                <small class="field-help">Victron Portal ID fuer die MQTT Topics.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Keepalive (ms)</span>
+                <input id="mqttKeepalive" type="number" min="1000" max="600000" step="1000" />
+                <small class="field-help">Intervall fuer MQTT Keepalive-Pakete.</small>
+              </label>
+            </div>
+          </article>
+
+          <article class="wizard-step">
+            <p class="card-title">Schritt 3</p>
+            <h2 class="section-title">DV & Meter</h2>
+            <div class="settings-fields compact">
+              <label class="settings-field">
+                <span class="settings-field-title">Modbus Listen Host</span>
+                <input id="modbusListenHost" type="text" />
+                <small class="field-help">Normalerweise 0.0.0.0 fuer alle Interfaces.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Modbus Listen Port</span>
+                <input id="modbusListenPort" type="number" min="1" max="65535" />
+                <small class="field-help">LUOX / Direktvermarkter verbinden sich spaeter auf diesen Proxy-Port.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Grid Vorzeichen</span>
+                <select id="gridPositiveMeans">
+                  <option value="feed_in">Positiv bedeutet Einspeisung</option>
+                  <option value="grid_import">Positiv bedeutet Netzbezug</option>
+                </select>
+                <small class="field-help">Abhaengig davon, wie dein Meter die Phasenleistung meldet.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Meter FC</span>
+                <select id="meterFc">
+                  <option value="4">4 - Input Register</option>
+                  <option value="3">3 - Holding Register</option>
+                </select>
+                <small class="field-help">Typischerweise 4 fuer Victron Meterbloeke.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Meter Startadresse</span>
+                <input id="meterAddress" type="number" min="0" max="65535" />
+                <small class="field-help">Standardblock fuer Grid L1/L2/L3 ist 820.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Meter Registeranzahl</span>
+                <input id="meterQuantity" type="number" min="1" max="125" />
+                <small class="field-help">Standard ist 3 Register fuer L1/L2/L3.</small>
+              </label>
+              <label class="settings-field checkbox-field">
+                <span class="settings-field-title">DV Control aktivieren</span>
+                <input id="dvControlEnabled" type="checkbox" />
+                <small class="field-help">Schreibt bei DV-Signalen automatisch in die Victron Register 2848 und 2850.</small>
+              </label>
+            </div>
+          </article>
+
+          <article class="wizard-step">
+            <p class="card-title">Schritt 4</p>
+            <h2 class="section-title">Preise & Zusatzdienste</h2>
+            <div class="settings-fields compact">
+              <label class="settings-field">
+                <span class="settings-field-title">Zeitzone</span>
+                <input id="scheduleTimezone" type="text" />
+                <small class="field-help">Wird fuer Schedule und Darstellung genutzt. Standard ist Europe/Berlin.</small>
+              </label>
+              <label class="settings-field checkbox-field">
+                <span class="settings-field-title">EPEX aktiv</span>
+                <input id="epexEnabled" type="checkbox" />
+                <small class="field-help">Aktiviert Day-Ahead-Preise und Negativpreis-Schutz.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">BZN</span>
+                <input id="epexBzn" type="text" />
+                <small class="field-help">Beispiel: DE-LU.</small>
+              </label>
+              <label class="settings-field checkbox-field">
+                <span class="settings-field-title">Influx aktiv</span>
+                <input id="influxEnabled" type="checkbox" />
+                <small class="field-help">Optional fuer Langzeit-Logging.</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Influx URL</span>
+                <input id="influxUrl" type="text" />
+                <small class="field-help">Zum Beispiel http://127.0.0.1:8086</small>
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Influx DB</span>
+                <input id="influxDb" type="text" />
+                <small class="field-help">Datenbankname fuer Influx.</small>
+              </label>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/common.js"></script>
+  <script src="/setup.js"></script>
+</body>
+</html>

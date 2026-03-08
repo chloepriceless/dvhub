@@ -1,3 +1,5 @@
+const { apiFetch } = window.PlexLiteCommon;
+
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
 function fmtDmHm(ts) { return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
@@ -186,7 +188,7 @@ function drawPriceChart(data, nowTs) {
 }
 
 async function refresh() {
-  const [statusRes, logRes] = await Promise.all([fetch('/api/status'), fetch('/api/log')]);
+  const [statusRes, logRes] = await Promise.all([apiFetch('/api/status'), apiFetch('/api/log')]);
   const status = await statusRes.json();
   const logs = await logRes.json();
 
@@ -267,7 +269,7 @@ async function refresh() {
 }
 
 async function refreshEpex() {
-  await fetch('/api/epex/refresh', { method: 'POST' });
+  await apiFetch('/api/epex/refresh', { method: 'POST' });
   await refresh();
 }
 
@@ -276,7 +278,7 @@ async function refreshEpex() {
 async function manualWriteGrid() {
   const value = Number(document.getElementById('manualGridValue')?.value);
   if (!Number.isFinite(value)) return setControlMsg('Grid Setpoint: Ungültiger Wert', true);
-  const res = await fetch('/api/control/write', {
+  const res = await apiFetch('/api/control/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ target: 'gridSetpointW', value })
@@ -290,7 +292,7 @@ async function manualWriteGrid() {
 async function manualWriteCharge() {
   const value = Number(document.getElementById('manualChargeValue')?.value);
   if (!Number.isFinite(value)) return setControlMsg('Charge Current: Ungültiger Wert', true);
-  const res = await fetch('/api/control/write', {
+  const res = await apiFetch('/api/control/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ target: 'chargeCurrentA', value })
@@ -304,7 +306,7 @@ async function manualWriteCharge() {
 async function manualWriteMinSoc() {
   const value = Number(document.getElementById('manualMinSocValue')?.value);
   if (!Number.isFinite(value)) return setControlMsg('Min SOC: Ungültiger Wert', true);
-  const res = await fetch('/api/control/write', {
+  const res = await apiFetch('/api/control/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ target: 'minSocPct', value })
@@ -395,7 +397,7 @@ function collectScheduleRows() {
 }
 
 async function loadScheduleDash() {
-  const res = await fetch('/api/schedule');
+  const res = await apiFetch('/api/schedule');
   const data = await res.json();
   scheduleCache = data || { rules: [], config: {} };
   clearScheduleRows();
@@ -448,7 +450,7 @@ async function loadScheduleDash() {
 async function saveScheduleDash() {
   const rules = collectScheduleRows();
 
-  const r1 = await fetch('/api/schedule/rules', {
+  const r1 = await apiFetch('/api/schedule/rules', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ rules })
@@ -463,7 +465,7 @@ async function saveScheduleDash() {
   if (Number.isFinite(defChargeVal)) configBody.defaultChargeCurrentA = defChargeVal;
 
   if (Object.keys(configBody).length) {
-    const r2 = await fetch('/api/schedule/config', {
+    const r2 = await apiFetch('/api/schedule/config', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(configBody)
@@ -487,6 +489,10 @@ document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => ad
 document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
 document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
 document.getElementById('manualMinSocBtn')?.addEventListener('click', manualWriteMinSoc);
+
+window.addEventListener('plexlite:unauthorized', () => {
+  setControlMsg('API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN oeffnen.', true);
+});
 
 loadScheduleDash().catch(() => {});
 refresh();
