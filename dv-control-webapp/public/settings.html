@@ -28,7 +28,7 @@
 
     <main class="settings-grid">
       <div class="settings-header span-12">
-        <section class="panel reveal settings-header-panel">
+        <section class="panel reveal settings-header-panel settings-actions-panel">
           <div class="panel-head">
             <div>
               <p class="card-title">Status</p>
@@ -49,7 +49,7 @@
           <div id="configMeta" class="meta">-</div>
         </section>
 
-        <section class="panel reveal settings-header-panel">
+        <section class="panel reveal settings-header-panel settings-orientation-panel">
           <div class="panel-head">
             <div>
               <p class="card-title">Hinweis</p>
@@ -72,7 +72,7 @@
           </div>
         </section>
 
-        <section class="panel reveal settings-header-panel">
+        <section class="panel reveal settings-header-panel settings-service-panel">
           <div class="panel-head">
             <div>
               <p class="card-title">Admin</p>
@@ -95,7 +95,7 @@
             <div class="settings-sidebar-head">
               <p class="card-title">Navigation</p>
               <h2 class="section-title">Bereiche</h2>
-              <p class="tools-note">Die linke Spalte bleibt als Orientierung erhalten, waehrend rechts nur ein Arbeitsbereich sichtbar ist.</p>
+              <p class="tools-note">Links bleibt die Orientierung sichtbar. Rechts ist immer nur ein kompakter Arbeitsbereich aktiv.</p>
             </div>
             <nav id="settingsSidebar" class="settings-sidebar-nav">
               <button
@@ -117,20 +117,20 @@
             <div class="settings-overview-head">
               <p class="card-title">Start</p>
               <h2 class="section-title">Womit moechtest du beginnen?</h2>
-              <p class="tools-note">Die Detailansicht rechts wird spaeter pro Bereich umgeschaltet. Diese Shell trennt jetzt bereits Navigation und Arbeitsflaeche.</p>
+              <p class="tools-note">Die Uebersicht fasst die wichtigsten Wege zusammen, bevor du links in genau einen Bereich wechselst.</p>
             </div>
             <div class="settings-summary">
               <div class="summary-card">
-                <strong>Verbindung</strong>
-                <span>Victron, Meter und weitere Integrationen liegen kuenftig als eigene Ziele in der Seitenleiste.</span>
+                <strong>Komprimiert</strong>
+                <span>Desktop-Ansichten nutzen dichtere Karten und Feldraster, damit Kernbereiche mit weniger Scrollen erreichbar bleiben.</span>
               </div>
               <div class="summary-card">
                 <strong>Fokus</strong>
-                <span>Der rechte Bereich ist fuer genau einen Bereich oder eine Uebersicht reserviert, nicht mehr fuer die ganze Seite am Stueck.</span>
+                <span>Der rechte Bereich zeigt immer nur eine Uebersicht oder genau ein Ziel aus der Seitenleiste, nicht mehr die ganze Seite am Stueck.</span>
               </div>
               <div class="summary-card">
-                <strong>Naechster Schritt</strong>
-                <span>Plan 01 setzt zuerst das Shell-Grundgeruest, danach werden Inhalt und Umschalten auf den aktiven Bereich verdrahtet.</span>
+                <strong>Stabil</strong>
+                <span>Aktionen und Navigation bleiben beim Scrollen greifbar, waehrend schmalere Breiten sauber auf eine Spalte zurueckfallen.</span>
               </div>
             </div>
           </div>
@@ -139,6 +139,7 @@
             <div class="settings-workspace-head">
               <p class="card-title">Arbeitsbereich</p>
               <h2 class="section-title">Aktiver Bereich</h2>
+              <p class="tools-note">Jeder Bereich startet mit einer kurzen Orientierung und zeigt anschliessend nur die dafuer relevanten Gruppen.</p>
             </div>
             <section id="settingsSections" class="settings-sections"></section>
           </div>
