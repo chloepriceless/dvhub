@@ -62,6 +62,7 @@ const state = {
     },
     active: { gridSetpointW: null, chargeCurrentA: null },
     lastWrite: { gridSetpointW: null, chargeCurrentA: null },
+    manualOverride: {},
     lastEvalAt: 0
   },
   energy: {
@@ -865,7 +866,13 @@ function effectiveTargetValue(target) {
   const mod = localMinutesOfDay(new Date(now));
 
   const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, day, mod));
-  if (hit) { hit._wasActive = true; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
+  if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
+
+  const mo = state.schedule.manualOverride[target];
+  if (mo && (Date.now() - mo.at) < (cfg.schedule.manualOverrideTtlMs || 300000)) {
+    return { value: Number(mo.value), source: 'manual_override', rule: null };
+  }
+  delete state.schedule.manualOverride[target];
 
   if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
   if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
@@ -1532,6 +1539,7 @@ const web = http.createServer(async (req, res) => {
     if (!['gridSetpointW', 'chargeCurrentA', 'minSocPct'].includes(target) || !Number.isFinite(value)) {
       return json(res, 400, { ok: false, error: 'target/value invalid' });
     }
+    state.schedule.manualOverride[target] = { value, at: Date.now() };
     const result = await applyControlTarget(target, value, 'api_manual_write');
     return json(res, result.ok ? 200 : 500, result);
   }
