@@ -7,62 +7,58 @@ const SETUP_STEP_DEFINITIONS = [
     index: 0,
     label: 'Schritt 1',
     title: 'Webserver & Sicherheit',
-    description: 'Grundlegende Einstellungen fuer Webzugriff und API-Schutz.',
-    fields: ['httpPort', 'apiToken']
+    description: 'Grundlegende Einstellungen fuer Webzugriff und API-Schutz.'
   },
   {
     id: 'transport',
     index: 1,
     label: 'Schritt 2',
     title: 'Victron Verbindung',
-    description: 'Transport, GX-Verbindung und MQTT-Basisdaten.',
-    fields: [
-      'victron.transport',
-      'victron.host',
-      'victron.port',
-      'victron.unitId',
-      'victron.timeoutMs',
-      'victron.mqtt.broker',
-      'victron.mqtt.portalId',
-      'victron.mqtt.keepaliveIntervalMs'
-    ]
+    description: 'Transport, GX-Verbindung und MQTT-Basisdaten.'
   },
   {
     id: 'dv',
     index: 2,
     label: 'Schritt 3',
     title: 'DV & Meter',
-    description: 'Proxy-Port, Meterblock und Vorzeichenlogik fuer Netzwerte.',
-    fields: [
-      'modbusListenHost',
-      'modbusListenPort',
-      'gridPositiveMeans',
-      'meter.fc',
-      'meter.address',
-      'meter.quantity',
-      'dvControl.enabled'
-    ]
+    description: 'Proxy-Port, Meterblock und Vorzeichenlogik fuer Netzwerte.'
   },
   {
     id: 'services',
     index: 3,
     label: 'Schritt 4',
     title: 'Preise & Zusatzdienste',
-    description: 'Zeitzone sowie optionale Preis- und Logging-Dienste.',
-    fields: [
-      'schedule.timezone',
-      'epex.enabled',
-      'epex.bzn',
-      'influx.enabled',
-      'influx.url',
-      'influx.db'
-    ]
+    description: 'Zeitzone sowie optionale Preis- und Logging-Dienste.'
   }
 ];
 
-let currentConfig = {};
-let currentEffectiveConfig = {};
-let currentMeta = {};
+const SETUP_FIELD_DEFINITIONS = [
+  { stepId: 'basics', legacyId: 'httpPort', path: 'httpPort', label: 'HTTP Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
+  { stepId: 'basics', legacyId: 'apiToken', path: 'apiToken', label: 'API Token', type: 'text', valueType: 'string' },
+  { stepId: 'transport', legacyId: 'victronTransport', path: 'victron.transport', label: 'Transport', type: 'select', valueType: 'string', options: ['modbus', 'mqtt'] },
+  { stepId: 'transport', legacyId: 'victronHost', path: 'victron.host', label: 'GX Host', type: 'text', valueType: 'string' },
+  { stepId: 'transport', legacyId: 'victronPort', path: 'victron.port', label: 'GX Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
+  { stepId: 'transport', legacyId: 'victronUnitId', path: 'victron.unitId', label: 'Unit ID', type: 'number', valueType: 'number', min: 0, max: 255 },
+  { stepId: 'transport', legacyId: 'victronTimeoutMs', path: 'victron.timeoutMs', label: 'Timeout (ms)', type: 'number', valueType: 'number', min: 100, max: 60000 },
+  { stepId: 'transport', legacyId: 'mqttBroker', path: 'victron.mqtt.broker', label: 'MQTT Broker URL', type: 'text', valueType: 'string' },
+  { stepId: 'transport', legacyId: 'mqttPortalId', path: 'victron.mqtt.portalId', label: 'Portal ID', type: 'text', valueType: 'string' },
+  { stepId: 'transport', legacyId: 'mqttKeepalive', path: 'victron.mqtt.keepaliveIntervalMs', label: 'Keepalive (ms)', type: 'number', valueType: 'number', min: 1000, max: 600000 },
+  { stepId: 'dv', legacyId: 'modbusListenHost', path: 'modbusListenHost', label: 'Modbus Listen Host', type: 'text', valueType: 'string' },
+  { stepId: 'dv', legacyId: 'modbusListenPort', path: 'modbusListenPort', label: 'Modbus Listen Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
+  { stepId: 'dv', legacyId: 'gridPositiveMeans', path: 'gridPositiveMeans', label: 'Grid Vorzeichen', type: 'select', valueType: 'string', options: ['feed_in', 'grid_import'] },
+  { stepId: 'dv', legacyId: 'meterFc', path: 'meter.fc', label: 'Meter FC', type: 'select', valueType: 'number', options: [4, 3] },
+  { stepId: 'dv', legacyId: 'meterAddress', path: 'meter.address', label: 'Meter Startadresse', type: 'number', valueType: 'number', min: 0, max: 65535 },
+  { stepId: 'dv', legacyId: 'meterQuantity', path: 'meter.quantity', label: 'Meter Registeranzahl', type: 'number', valueType: 'number', min: 1, max: 125 },
+  { stepId: 'dv', legacyId: 'dvControlEnabled', path: 'dvControl.enabled', label: 'DV Control aktivieren', type: 'boolean', valueType: 'boolean' },
+  { stepId: 'services', legacyId: 'scheduleTimezone', path: 'schedule.timezone', label: 'Zeitzone', type: 'text', valueType: 'string' },
+  { stepId: 'services', legacyId: 'epexEnabled', path: 'epex.enabled', label: 'EPEX aktiv', type: 'boolean', valueType: 'boolean' },
+  { stepId: 'services', legacyId: 'epexBzn', path: 'epex.bzn', label: 'BZN', type: 'text', valueType: 'string' },
+  { stepId: 'services', legacyId: 'influxEnabled', path: 'influx.enabled', label: 'Influx aktiv', type: 'boolean', valueType: 'boolean' },
+  { stepId: 'services', legacyId: 'influxUrl', path: 'influx.url', label: 'Influx URL', type: 'text', valueType: 'string' },
+  { stepId: 'services', legacyId: 'influxDb', path: 'influx.db', label: 'Influx DB', type: 'text', valueType: 'string' }
+];
+
+let setupWizardState = createSetupWizardState();
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -102,15 +98,23 @@ function setPath(obj, path, value) {
 }
 
 function resolveSetupStepId(stepId) {
-  const ids = new Set(SETUP_STEP_DEFINITIONS.map((step) => step.id));
-  return ids.has(stepId) ? stepId : SETUP_STEP_DEFINITIONS[0].id;
+  const validIds = new Set(SETUP_STEP_DEFINITIONS.map((step) => step.id));
+  return validIds.has(stepId) ? stepId : SETUP_STEP_DEFINITIONS[0].id;
+}
+
+function getSetupFieldsForStep(stepId) {
+  return SETUP_FIELD_DEFINITIONS.filter((field) => field.stepId === stepId);
 }
 
 function buildSetupSteps() {
-  return SETUP_STEP_DEFINITIONS.map((step) => ({
-    ...step,
-    fields: Array.from(step.fields)
-  }));
+  return SETUP_STEP_DEFINITIONS.map((step) => {
+    const fields = getSetupFieldsForStep(step.id);
+    return {
+      ...step,
+      fields: fields.map((field) => field.path),
+      fieldCount: fields.length
+    };
+  });
 }
 
 function resolveWizardValue(state, path, fallback = undefined) {
@@ -124,23 +128,20 @@ function getSetupTransportMode(state) {
 }
 
 function buildValidationResult(summary) {
-  const byField = {};
-  const byStep = {};
-
+  const fields = {};
+  const steps = {};
   for (const step of SETUP_STEP_DEFINITIONS) {
-    byStep[step.id] = { valid: true, errors: [] };
+    steps[step.id] = { valid: true, errors: [] };
   }
-
   for (const entry of summary) {
-    byStep[entry.stepId].valid = false;
-    byStep[entry.stepId].errors.push(entry.message);
-    if (!byField[entry.path]) byField[entry.path] = [];
-    byField[entry.path].push(entry.message);
+    steps[entry.stepId].valid = false;
+    steps[entry.stepId].errors.push(entry.message);
+    if (!fields[entry.path]) fields[entry.path] = [];
+    fields[entry.path].push(entry.message);
   }
-
   return {
-    fields: byField,
-    steps: byStep,
+    fields,
+    steps,
     summary,
     isBlocking: summary.length > 0
   };
@@ -208,14 +209,15 @@ function validateSetupWizardState(state) {
 
 function createSetupWizardState(payload = {}) {
   const steps = buildSetupSteps();
+  const initialStepId = resolveSetupStepId(payload.activeStepId);
   const state = {
     draftConfig: clone(payload.config || {}),
     effectiveConfig: clone(payload.effectiveConfig || {}),
     meta: clone(payload.meta || {}),
     steps,
     stepOrder: steps.map((step) => step.id),
-    activeStepId: resolveSetupStepId(payload.activeStepId),
-    visitedStepIds: Array.from(new Set([resolveSetupStepId(payload.activeStepId)])),
+    activeStepId: initialStepId,
+    visitedStepIds: Array.from(new Set([initialStepId])),
     completedStepIds: [],
     transportMode: 'modbus',
     validation: buildValidationResult([])
@@ -226,9 +228,7 @@ function createSetupWizardState(payload = {}) {
 function updateSetupDraftValue(state, path, value) {
   const nextDraft = clone(state?.draftConfig || {});
   setPath(nextDraft, path, value);
-  if (path === 'schedule.timezone') {
-    setPath(nextDraft, 'epex.timezone', value);
-  }
+  if (path === 'schedule.timezone') setPath(nextDraft, 'epex.timezone', value);
   return validateSetupWizardState({
     ...state,
     draftConfig: nextDraft
@@ -267,11 +267,14 @@ function goToPreviousSetupStep(state) {
 }
 
 const setupWizardHelpers = {
+  SETUP_FIELD_DEFINITIONS,
   SETUP_STEP_DEFINITIONS,
   createSetupWizardState,
+  getSetupFieldsForStep,
   getSetupTransportMode,
   goToNextSetupStep,
   goToPreviousSetupStep,
+  resolveWizardValue,
   setActiveSetupStep,
   updateSetupDraftValue,
   validateSetupWizardState
@@ -281,6 +284,22 @@ if (typeof globalThis !== 'undefined') {
   globalThis.PlexLiteSetupWizard = setupWizardHelpers;
 }
 
+function setSetupWizardState(nextState) {
+  setupWizardState = validateSetupWizardState(nextState);
+  return setupWizardState;
+}
+
+function buildMetaText(meta) {
+  const parts = [
+    `Datei: ${meta.path || '-'}`,
+    `Vorhanden: ${meta.exists ? 'Ja' : 'Nein'}`,
+    `Gueltig: ${meta.valid ? 'Ja' : 'Nein'}`
+  ];
+  if (meta.parseError) parts.push(`Parse Fehler: ${meta.parseError}`);
+  if (Array.isArray(meta.warnings) && meta.warnings.length) parts.push(`Warnungen: ${meta.warnings.length}`);
+  return parts.join(' | ');
+}
+
 function setBanner(message, kind = 'info') {
   const element = document.getElementById('setupBanner');
   if (!element) return;
@@ -288,112 +307,84 @@ function setBanner(message, kind = 'info') {
   element.className = `status-banner ${kind}`;
 }
 
-function setValue(id, value) {
-  const element = document.getElementById(id);
-  if (!element) return;
-  if (element.type === 'checkbox') element.checked = Boolean(value);
-  else element.value = value ?? '';
-}
-
-function getValue(id) {
-  const element = document.getElementById(id);
-  if (!element) return '';
-  if (element.type === 'checkbox') return element.checked;
-  return element.value;
-}
-
 function updateMeta() {
   const element = document.getElementById('setupMeta');
   if (!element) return;
-  const parts = [
-    `Datei: ${currentMeta.path || '-'}`,
-    `Vorhanden: ${currentMeta.exists ? 'Ja' : 'Nein'}`,
-    `Gueltig: ${currentMeta.valid ? 'Ja' : 'Nein'}`
-  ];
-  if (currentMeta.parseError) parts.push(`Parse Fehler: ${currentMeta.parseError}`);
-  if (Array.isArray(currentMeta.warnings) && currentMeta.warnings.length) parts.push(`Warnungen: ${currentMeta.warnings.length}`);
-  element.textContent = parts.join(' | ');
+  element.textContent = buildMetaText(setupWizardState.meta || {});
 }
 
-function updateTransportVisibility() {
-  const transport = getValue('victronTransport');
-  const mqttFields = document.getElementById('mqttFields');
-  if (mqttFields) mqttFields.style.display = transport === 'mqtt' ? 'grid' : 'none';
+function getFieldElement(field) {
+  return document.getElementById(field.legacyId);
 }
 
-function applyConfigToForm(config, payload) {
-  currentConfig = config || {};
-  currentEffectiveConfig = payload?.effectiveConfig || {};
-  currentMeta = payload?.meta || {};
+function setFieldElementValue(field, value) {
+  const element = getFieldElement(field);
+  if (!element) return;
+  if (field.type === 'boolean') {
+    element.checked = Boolean(value);
+    return;
+  }
+  element.value = value ?? '';
+}
 
-  setValue('httpPort', currentEffectiveConfig.httpPort);
-  setValue('apiToken', currentEffectiveConfig.apiToken);
-  setValue('victronTransport', currentEffectiveConfig.victron?.transport || 'modbus');
-  setValue('victronHost', currentEffectiveConfig.victron?.host);
-  setValue('victronPort', currentEffectiveConfig.victron?.port);
-  setValue('victronUnitId', currentEffectiveConfig.victron?.unitId);
-  setValue('victronTimeoutMs', currentEffectiveConfig.victron?.timeoutMs);
-  setValue('mqttBroker', currentEffectiveConfig.victron?.mqtt?.broker);
-  setValue('mqttPortalId', currentEffectiveConfig.victron?.mqtt?.portalId);
-  setValue('mqttKeepalive', currentEffectiveConfig.victron?.mqtt?.keepaliveIntervalMs);
-  setValue('modbusListenHost', currentEffectiveConfig.modbusListenHost);
-  setValue('modbusListenPort', currentEffectiveConfig.modbusListenPort);
-  setValue('gridPositiveMeans', currentEffectiveConfig.gridPositiveMeans);
-  setValue('meterFc', currentEffectiveConfig.meter?.fc);
-  setValue('meterAddress', currentEffectiveConfig.meter?.address);
-  setValue('meterQuantity', currentEffectiveConfig.meter?.quantity);
-  setValue('dvControlEnabled', currentEffectiveConfig.dvControl?.enabled);
-  setValue('scheduleTimezone', currentEffectiveConfig.schedule?.timezone);
-  setValue('epexEnabled', currentEffectiveConfig.epex?.enabled);
-  setValue('epexBzn', currentEffectiveConfig.epex?.bzn);
-  setValue('influxEnabled', currentEffectiveConfig.influx?.enabled);
-  setValue('influxUrl', currentEffectiveConfig.influx?.url);
-  setValue('influxDb', currentEffectiveConfig.influx?.db);
+function parseFieldElementValue(field, element) {
+  if (!element) return undefined;
+  if (field.type === 'boolean') return element.checked;
+  if (field.valueType === 'number') return element.value === '' ? '' : Number(element.value);
+  return String(element.value ?? '');
+}
 
+function applySetupWizardStateToForm() {
+  for (const field of SETUP_FIELD_DEFINITIONS) {
+    setFieldElementValue(field, resolveWizardValue(setupWizardState, field.path));
+  }
   updateTransportVisibility();
   updateMeta();
 }
 
+function syncRenderedFieldsToDraft() {
+  const nextDraft = clone(setupWizardState.draftConfig || {});
+  for (const field of SETUP_FIELD_DEFINITIONS) {
+    const element = getFieldElement(field);
+    if (!element) continue;
+    setPath(nextDraft, field.path, parseFieldElementValue(field, element));
+  }
+  if (hasPath(nextDraft, 'schedule.timezone')) {
+    setPath(nextDraft, 'epex.timezone', getPath(nextDraft, 'schedule.timezone'));
+  }
+  return setSetupWizardState({
+    ...setupWizardState,
+    draftConfig: nextDraft
+  });
+}
+
+function updateTransportVisibility() {
+  const mqttFields = document.getElementById('mqttFields');
+  if (!mqttFields) return;
+  mqttFields.style.display = setupWizardState.transportMode === 'mqtt' ? 'grid' : 'none';
+}
+
+function hydrateSetupWizardState(payload) {
+  setSetupWizardState(createSetupWizardState({
+    config: payload?.config || {},
+    effectiveConfig: payload?.effectiveConfig || {},
+    meta: payload?.meta || {},
+    activeStepId: setupWizardState.activeStepId
+  }));
+  applySetupWizardStateToForm();
+  return setupWizardState;
+}
+
 function collectConfig() {
-  const next = clone(currentConfig || {});
-  next.httpPort = Number(getValue('httpPort'));
-  next.apiToken = String(getValue('apiToken') || '');
-  next.modbusListenHost = String(getValue('modbusListenHost') || '0.0.0.0');
-  next.modbusListenPort = Number(getValue('modbusListenPort'));
-  next.gridPositiveMeans = String(getValue('gridPositiveMeans') || 'feed_in');
-  next.schedule = next.schedule || {};
-  next.schedule.timezone = String(getValue('scheduleTimezone') || 'Europe/Berlin');
+  syncRenderedFieldsToDraft();
+  return clone(setupWizardState.draftConfig || {});
+}
 
-  next.victron = next.victron || {};
-  next.victron.transport = String(getValue('victronTransport') || 'modbus');
-  next.victron.host = String(getValue('victronHost') || '');
-  next.victron.port = Number(getValue('victronPort'));
-  next.victron.unitId = Number(getValue('victronUnitId'));
-  next.victron.timeoutMs = Number(getValue('victronTimeoutMs'));
-  next.victron.mqtt = next.victron.mqtt || {};
-  next.victron.mqtt.broker = String(getValue('mqttBroker') || '');
-  next.victron.mqtt.portalId = String(getValue('mqttPortalId') || '');
-  next.victron.mqtt.keepaliveIntervalMs = Number(getValue('mqttKeepalive'));
-
-  next.meter = next.meter || {};
-  next.meter.fc = Number(getValue('meterFc'));
-  next.meter.address = Number(getValue('meterAddress'));
-  next.meter.quantity = Number(getValue('meterQuantity'));
-
-  next.dvControl = next.dvControl || {};
-  next.dvControl.enabled = Boolean(getValue('dvControlEnabled'));
-
-  next.epex = next.epex || {};
-  next.epex.enabled = Boolean(getValue('epexEnabled'));
-  next.epex.bzn = String(getValue('epexBzn') || 'DE-LU');
-  next.epex.timezone = String(getValue('scheduleTimezone') || 'Europe/Berlin');
-
-  next.influx = next.influx || {};
-  next.influx.enabled = Boolean(getValue('influxEnabled'));
-  next.influx.url = String(getValue('influxUrl') || '');
-  next.influx.db = String(getValue('influxDb') || '');
-
-  return next;
+function summarizeBlockingErrors(state) {
+  return state.validation.summary
+    .slice(0, 2)
+    .map((entry) => entry.message)
+    .join(' ');
 }
 
 async function saveSetup(config, source = 'setup') {
@@ -409,7 +400,11 @@ async function saveSetup(config, source = 'setup') {
   }
 
   setStoredApiToken(payload.effectiveConfig?.apiToken || '');
-  applyConfigToForm(payload.config, { meta: payload.meta, effectiveConfig: payload.effectiveConfig });
+  hydrateSetupWizardState({
+    config: payload.config,
+    effectiveConfig: payload.effectiveConfig,
+    meta: payload.meta
+  });
   const restartNote = payload.restartRequired ? ' Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.' : '';
   setBanner(`Setup gespeichert.${restartNote} Weiterleitung zu den Einstellungen...`, payload.restartRequired ? 'warn' : 'success');
   window.setTimeout(() => {
@@ -425,7 +420,7 @@ async function loadSetup() {
     setBanner(`Setup konnte nicht geladen werden: ${payload.error || response.status}`, 'error');
     return;
   }
-  applyConfigToForm(payload.config, payload);
+  hydrateSetupWizardState(payload);
   if (payload.meta.needsSetup) setBanner('Noch keine gueltige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
   else setBanner('Es existiert bereits eine gueltige Config. Der Assistent kann trotzdem zum schnellen Ueberschreiben genutzt werden.', 'success');
 }
@@ -440,9 +435,22 @@ async function importSetupFile(file) {
   }
 }
 
+function handleFieldMutation() {
+  const nextState = syncRenderedFieldsToDraft();
+  if (!nextState.validation.summary.length) return;
+  setBanner(`Es fehlen noch Pflichtangaben. ${summarizeBlockingErrors(nextState)}`, 'warn');
+}
+
 if (typeof document !== 'undefined') {
   document.getElementById('setupSaveBtn')?.addEventListener('click', () => {
-    saveSetup(collectConfig()).catch((error) => setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error'));
+    const nextState = syncRenderedFieldsToDraft();
+    if (nextState.validation.isBlocking) {
+      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(nextState)}`, 'error');
+      return;
+    }
+    saveSetup(clone(nextState.draftConfig)).catch((error) => {
+      setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
+    });
   });
 
   document.getElementById('setupImportBtn')?.addEventListener('click', () => {
@@ -455,7 +463,11 @@ if (typeof document !== 'undefined') {
     event.target.value = '';
   });
 
-  document.getElementById('victronTransport')?.addEventListener('change', updateTransportVisibility);
+  for (const field of SETUP_FIELD_DEFINITIONS) {
+    const element = getFieldElement(field);
+    const eventName = field.type === 'text' || field.type === 'number' ? 'input' : 'change';
+    element?.addEventListener(eventName, handleFieldMutation);
+  }
 
   window.addEventListener('plexlite:unauthorized', () => {
     setBanner('API-Zugriff abgelehnt. Wenn ein Token aktiv ist, die Seite mit ?token=DEIN_TOKEN oeffnen.', 'error');
