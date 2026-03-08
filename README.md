@@ -21,13 +21,35 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.2 by agentic engineering.|
+| **Status** | WIP -- Version 0.2.1 by agentic engineering.|
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
 <p align="center">
   <img src="docs/dashboard-desktop.png" alt="PlexLite Dashboard — Desktop" width="900" />
 </p>
+
+---
+
+## Änderungen seit `main` (v0.1.0 -> v0.2.1)
+
+Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
+
+- **MQTT-Transport fuer Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive fuer Settings-Topics
+- **Erweiterte Schedule-Steuerung** fuer Grid Setpoint, Charge Current und Min SOC, spaeter vereinfacht auf einen alltagstauglicheren Ablauf ohne Tage-/Einmalig-Logik in der GUI
+- **Auto-Deaktivierung von Schedule-Regeln** nach Ablauf sowie vereinfachtes Persistieren der Default-Werte
+- **EOS- und EMHASS-Integrations-Endpunkte** zum Abrufen von Messwerten/Preisen und Anwenden von Optimierungsergebnissen
+- **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung fuer Influx v2/v3
+- **Vollstaendige Config-Verwaltung ueber die Web-GUI** statt nur per direkter Bearbeitung der `config.json`
+- **Neue Einstellungsseite** mit Formularen fuer Victron, Meter, Register, EPEX, Influx, DV-Control und globale Systemwerte
+- **First-Run-Setup-Assistent**, der automatisch erscheint wenn noch keine gueltige Config vorhanden ist
+- **Config-Import/Export** direkt ueber die Weboberflaeche
+- **Health- und Service-Bereich** mit Statuspruefungen fuer Config, Setup, Meter, EPEX und systemd-Service
+- **Optionaler Restart-Button** fuer den PlexLite-Dienst bei Installationen mit freigeschalteten Service-Aktionen
+- **Neues `install.sh`** fuer einfache Github-Installation inkl. systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
+- **Dokumentation erweitert und sprachlich vereinheitlicht**, inklusive deutscher Umlaute und Beschreibung der neuen GUI-/Setup-/Installationspfade
+
+Damit ist PlexLite jetzt nicht mehr nur ein Dashboard plus Proxy, sondern eine deutlich besser installier- und wartbare Anwendung mit gefuehrter Inbetriebnahme.
 
 ---
 
