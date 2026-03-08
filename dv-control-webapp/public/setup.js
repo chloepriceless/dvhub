@@ -365,6 +365,7 @@ function goToNextSetupStep(state) {
   if (!validatedState.validation.steps[currentStepId]?.valid) return validatedState;
   const currentIndex = getCurrentStepIndex(validatedState);
   const nextStepId = validatedState.stepOrder[currentIndex + 1] || currentStepId;
+  if (nextStepId === REVIEW_STEP_ID && validatedState.validation.isBlocking) return validatedState;
   return {
     ...setActiveSetupStep(validatedState, nextStepId),
     completedStepIds: Array.from(new Set([...(validatedState.completedStepIds || []), currentStepId]))
@@ -491,6 +492,17 @@ function buildSetupReviewSnapshot(state) {
   ];
 }
 
+function validateSetupSubmissionConfig(config, state = setupWizardState) {
+  const baseState = state || setupWizardState || {};
+  return createSetupWizardState({
+    definition: baseState.definition || setupDefinition,
+    config: clone(config || {}),
+    effectiveConfig: clone(config || {}),
+    meta: clone(baseState.meta || {}),
+    activeStepId: baseState.activeStepId
+  });
+}
+
 const setupWizardHelpers = {
   buildSetupReviewSnapshot,
   buildSetupSteps,
@@ -506,6 +518,7 @@ const setupWizardHelpers = {
   resolveWizardValue,
   setActiveSetupStep,
   updateSetupDraftValue,
+  validateSetupSubmissionConfig,
   validateSetupWizardState
 };
 
@@ -952,6 +965,14 @@ async function importSetupFile(file) {
   if (!file) return;
   try {
     const parsed = JSON.parse(await file.text());
+    const submissionState = validateSetupSubmissionConfig(parsed);
+    setSetupWizardState(submissionState);
+    if (submissionState.validation.isBlocking) {
+      moveToFirstInvalidStep(submissionState);
+      renderSetupWizard();
+      setBanner(`Import enthaelt noch fehlende Pflichtangaben. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
+      return;
+    }
     await saveSetup(parsed, 'import');
   } catch (error) {
     setBanner(`Import fehlgeschlagen: ${error.message}`, 'error');
@@ -990,6 +1011,8 @@ function handleWizardNav(action) {
   const nextState = goToNextSetupStep(syncedState);
   setSetupWizardState(nextState);
   if (nextState.activeStepId === syncedState.activeStepId) {
+    const requestedStepId = syncedState.stepOrder[getCurrentStepIndex(syncedState) + 1];
+    if (requestedStepId === REVIEW_STEP_ID && nextState.validation.isBlocking) moveToFirstInvalidStep(nextState);
     renderSetupWizard();
     setBanner(`Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(nextState)}`, 'error');
     return;
@@ -1006,7 +1029,8 @@ function collectConfig() {
 
 if (typeof document !== 'undefined') {
   document.getElementById('setupSaveBtn')?.addEventListener('click', () => {
-    const nextState = validateSetupWizardState(syncActiveWorkspaceFieldsToDraft());
+    const syncedState = syncActiveWorkspaceFieldsToDraft();
+    const nextState = validateSetupWizardState(syncedState);
     setSetupWizardState(nextState);
     if (nextState.validation.isBlocking) {
       moveToFirstInvalidStep(nextState);
@@ -1015,7 +1039,14 @@ if (typeof document !== 'undefined') {
       return;
     }
 
-    saveSetup(collectConfig()).catch((error) => {
+    if (nextState.activeStepId !== REVIEW_STEP_ID) {
+      setSetupWizardState(setActiveSetupStep(nextState, REVIEW_STEP_ID));
+      renderSetupWizard();
+      setBanner('Alle Pflichtangaben sind bereit. Bitte pruefe jetzt die Zusammenfassung vor dem Speichern.', 'info');
+      return;
+    }
+
+    saveSetup(clone(nextState.draftConfig || {})).catch((error) => {
       setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
     });
   });
