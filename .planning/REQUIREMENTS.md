@@ -65,28 +65,28 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| NAV-01 | TBD | Pending |
-| NAV-02 | TBD | Pending |
-| NAV-03 | TBD | Pending |
-| SET-01 | TBD | Pending |
-| SET-02 | TBD | Pending |
-| SET-03 | TBD | Pending |
-| SET-04 | TBD | Pending |
-| DISC-01 | TBD | Pending |
-| DISC-02 | TBD | Pending |
-| DISC-03 | TBD | Pending |
-| UX-01 | TBD | Pending |
-| UX-02 | TBD | Pending |
-| UX-03 | TBD | Pending |
-| SAFE-01 | TBD | Pending |
-| SAFE-02 | TBD | Pending |
-| SAFE-03 | TBD | Pending |
-| SAFE-04 | TBD | Pending |
+| NAV-01 | Phase 1 | Pending |
+| NAV-02 | Phase 1 | Pending |
+| NAV-03 | Phase 1 | Pending |
+| SET-01 | Phase 2 | Pending |
+| SET-02 | Phase 2 | Pending |
+| SET-03 | Phase 2 | Pending |
+| SET-04 | Phase 2 | Pending |
+| DISC-01 | Phase 3 | Pending |
+| DISC-02 | Phase 3 | Pending |
+| DISC-03 | Phase 3 | Pending |
+| UX-01 | Phase 1 | Pending |
+| UX-02 | Phase 1 | Pending |
+| UX-03 | Phase 3 | Pending |
+| SAFE-01 | Phase 4 | Pending |
+| SAFE-02 | Phase 4 | Pending |
+| SAFE-03 | Phase 4 | Pending |
+| SAFE-04 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 17 total
-- Mapped to phases: 0
-- Unmapped: 17 ⚠️
+- Mapped to phases: 17
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-08*
