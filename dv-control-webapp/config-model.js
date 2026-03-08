@@ -24,56 +24,105 @@ const DV_CONTROL_META = {
   dontFeedExcessAcPv: { label: 'AC PV Block Flag', description: 'Steuert, ob AC-PV-Einspeisung blockiert wird.' }
 };
 
-const SECTIONS = [
+const SETTINGS_DESTINATIONS = [
   {
-    id: 'system',
-    label: 'System',
-    description: 'Allgemeine Laufzeit- und Webserver-Einstellungen.'
+    id: 'basics',
+    label: 'Grundsystem',
+    description: 'Die wichtigsten Laufzeit- und Zugriffsoptionen fuer PlexLite.',
+    intro: 'Hier richtest du die Grundfunktionen, Netzwerkbasis und das Verhalten der App ein.'
   },
   {
-    id: 'victron',
-    label: 'Victron Verbindung',
-    description: 'Basisverbindung zum GX-System per Modbus TCP oder MQTT.'
+    id: 'connection',
+    label: 'Verbindung zur Anlage',
+    description: 'Alles fuer die Verbindung zu Victron-System und Netzzaehler.',
+    intro: 'Waehle hier, wie PlexLite mit deiner Anlage spricht und wo Messwerte herkommen.'
   },
   {
-    id: 'meter',
-    label: 'Netzzaehler',
-    description: 'Register- und Verbindungsdaten fuer den Netzleistungsblock.'
-  },
-  {
-    id: 'points',
-    label: 'Lese-Register',
-    description: 'Alle Lesepunkte fuer SOC, PV, Batterie, Setpoints und Hausverbrauch.'
-  },
-  {
-    id: 'controlWrite',
-    label: 'Schreib-Register',
-    description: 'Register fuer Grid Setpoint, Charge Current und Minimum SOC.'
-  },
-  {
-    id: 'dvControl',
-    label: 'DV Steuerung',
-    description: 'Victron-Register fuer DC/AC-PV-Freigabe und Negativpreis-Schutz.'
+    id: 'control',
+    label: 'Direktvermarktung',
+    description: 'Steuerlogik und Schreibwerte fuer die aktive Regelung.',
+    intro: 'Diese Einstellungen bestimmen, wie PlexLite Sollwerte schreibt und DV-Logik anwendet.'
   },
   {
     id: 'schedule',
     label: 'Zeitplan',
-    description: 'Globale Parameter fuer Zeitplan und Default-Werte. Die Regeln selbst bleiben im Dashboard editierbar.'
+    description: 'Globale Regeln und Standardwerte fuer die zeitgesteuerte Steuerung.',
+    intro: 'Passe hier an, wie der Zeitplan bewertet wird und welche Standardwerte gelten.'
+  },
+  {
+    id: 'services',
+    label: 'Preise & Dienste',
+    description: 'Optionale Preis- und Datendienste fuer Monitoring und Day-Ahead-Daten.',
+    intro: 'Verbinde optionale Dienste, damit Preise und Verlaufsdaten sauber eingebunden werden.'
+  },
+  {
+    id: 'advanced',
+    label: 'Erweitert',
+    description: 'Register-nahe und technische Bereiche fuer Spezialfaelle.',
+    intro: 'Hier liegen tiefergehende Register- und Scan-Einstellungen, die meist nur bei Sonderfaellen noetig sind.'
+  }
+];
+
+const SECTIONS = [
+  {
+    id: 'system',
+    label: 'System',
+    description: 'Allgemeine Laufzeit- und Webserver-Einstellungen.',
+    destination: 'basics'
+  },
+  {
+    id: 'victron',
+    label: 'Victron Verbindung',
+    description: 'Basisverbindung zum GX-System per Modbus TCP oder MQTT.',
+    destination: 'connection'
+  },
+  {
+    id: 'meter',
+    label: 'Netzzaehler',
+    description: 'Register- und Verbindungsdaten fuer den Netzleistungsblock.',
+    destination: 'connection'
+  },
+  {
+    id: 'points',
+    label: 'Lese-Register',
+    description: 'Alle Lesepunkte fuer SOC, PV, Batterie, Setpoints und Hausverbrauch.',
+    destination: 'advanced'
+  },
+  {
+    id: 'controlWrite',
+    label: 'Schreib-Register',
+    description: 'Register fuer Grid Setpoint, Charge Current und Minimum SOC.',
+    destination: 'control'
+  },
+  {
+    id: 'dvControl',
+    label: 'DV Steuerung',
+    description: 'Victron-Register fuer DC/AC-PV-Freigabe und Negativpreis-Schutz.',
+    destination: 'control'
+  },
+  {
+    id: 'schedule',
+    label: 'Zeitplan',
+    description: 'Globale Parameter fuer Zeitplan und Default-Werte. Die Regeln selbst bleiben im Dashboard editierbar.',
+    destination: 'schedule'
   },
   {
     id: 'scan',
     label: 'Scan Tool',
-    description: 'Voreinstellungen fuer den Modbus-Scanner.'
+    description: 'Voreinstellungen fuer den Modbus-Scanner.',
+    destination: 'advanced'
   },
   {
     id: 'influx',
     label: 'InfluxDB',
-    description: 'Optionale Speicherung der Messdaten in InfluxDB.'
+    description: 'Optionale Speicherung der Messdaten in InfluxDB.',
+    destination: 'services'
   },
   {
     id: 'epex',
     label: 'EPEX',
-    description: 'Boersenpreis-Abruf fuer Day-Ahead-Preise.'
+    description: 'Boersenpreis-Abruf fuer Day-Ahead-Preise.',
+    destination: 'services'
   }
 ];
 
@@ -1261,6 +1310,7 @@ export function saveConfigFile(configPath, rawInput) {
 
 export function getConfigDefinition() {
   return {
+    destinations: clone(SETTINGS_DESTINATIONS),
     sections: clone(SECTIONS),
     fields: clone(FIELD_DEFINITIONS),
     restartSensitivePrefixes: clone(restartSensitivePrefixes)
