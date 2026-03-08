@@ -27,67 +27,123 @@
     </header>
 
     <main class="settings-grid">
-      <section class="panel reveal span-12">
-        <div class="panel-head">
-          <div>
-            <p class="card-title">Status</p>
-            <h2 class="section-title">Config Verwaltung</h2>
+      <div class="settings-header span-12">
+        <section class="panel reveal settings-header-panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Status</p>
+              <h2 class="section-title">Config Verwaltung</h2>
+            </div>
+            <div class="hero-actions">
+              <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
+              <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
+            </div>
           </div>
-          <div class="hero-actions">
-            <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
-            <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
+          <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
+          <div class="settings-toolbar">
+            <button id="exportConfigBtn" type="button">Config exportieren</button>
+            <button id="importConfigBtn" type="button">Config importieren</button>
+            <a class="btn btn-ghost" href="/setup.html">Setup-Assistent</a>
           </div>
-        </div>
-        <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
-        <div class="settings-toolbar">
-          <button id="exportConfigBtn" type="button">Config exportieren</button>
-          <button id="importConfigBtn" type="button">Config importieren</button>
-          <a class="btn btn-ghost" href="/setup.html">Setup-Assistent</a>
-        </div>
-        <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
-        <div id="configMeta" class="meta">-</div>
-      </section>
+          <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
+          <div id="configMeta" class="meta">-</div>
+        </section>
 
-      <section class="panel reveal span-12">
-        <div class="panel-head">
-          <div>
-            <p class="card-title">Hinweis</p>
-            <h2 class="section-title">Was hier bearbeitet wird</h2>
+        <section class="panel reveal settings-header-panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Hinweis</p>
+              <h2 class="section-title">Was hier bearbeitet wird</h2>
+            </div>
           </div>
-        </div>
-        <div class="settings-summary">
-          <div class="summary-card">
-            <strong>Einfach</strong>
-            <span>Victron, Meter, EPEX, Influx und DV-Funktionen sind direkt als Formulare editierbar.</span>
+          <div class="settings-summary">
+            <div class="summary-card">
+              <strong>Einfach</strong>
+              <span>Victron, Meter, EPEX, Influx und DV-Funktionen sind direkt als Formulare editierbar.</span>
+            </div>
+            <div class="summary-card">
+              <strong>Sicher</strong>
+              <span>Import und Export laufen ueber dieselbe Validierung wie das Setup und der Dashboard-Zeitplan.</span>
+            </div>
+            <div class="summary-card">
+              <strong>Wichtig</strong>
+              <span>Einige Server- oder MQTT-Aenderungen werden gespeichert, brauchen aber einen Neustart des Dienstes.</span>
+            </div>
           </div>
-          <div class="summary-card">
-            <strong>Sicher</strong>
-            <span>Import und Export laufen ueber dieselbe Validierung wie das Setup und der Dashboard-Zeitplan.</span>
-          </div>
-          <div class="summary-card">
-            <strong>Wichtig</strong>
-            <span>Einige Server- oder MQTT-Aenderungen werden gespeichert, brauchen aber einen Neustart des Dienstes.</span>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="panel reveal span-12">
-        <div class="panel-head">
-          <div>
-            <p class="card-title">Admin</p>
-            <h2 class="section-title">Health & Service</h2>
+        <section class="panel reveal settings-header-panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Admin</p>
+              <h2 class="section-title">Health &amp; Service</h2>
+            </div>
+            <div class="hero-actions">
+              <button id="refreshHealthBtn" class="btn btn-ghost" type="button">Health neu laden</button>
+              <button id="restartServiceBtn" class="btn btn-danger" type="button">Dienst neu starten</button>
+            </div>
           </div>
-          <div class="hero-actions">
-            <button id="refreshHealthBtn" class="btn btn-ghost" type="button">Health neu laden</button>
-            <button id="restartServiceBtn" class="btn btn-danger" type="button">Dienst neu starten</button>
-          </div>
-        </div>
-        <div id="healthBanner" class="status-banner">Health-Status wird geladen...</div>
-        <div id="healthChecks" class="settings-summary"></div>
-        <div id="serviceMeta" class="meta">-</div>
-      </section>
+          <div id="healthBanner" class="status-banner">Health-Status wird geladen...</div>
+          <div id="healthChecks" class="settings-summary"></div>
+          <div id="serviceMeta" class="meta">-</div>
+        </section>
+      </div>
 
-      <section id="settingsSections" class="settings-sections span-12"></section>
+      <section class="panel reveal settings-shell span-12">
+        <aside class="settings-sidebar" aria-label="Einstellungsbereiche">
+          <div class="settings-sidebar-sticky">
+            <div class="settings-sidebar-head">
+              <p class="card-title">Navigation</p>
+              <h2 class="section-title">Bereiche</h2>
+              <p class="tools-note">Die linke Spalte bleibt als Orientierung erhalten, waehrend rechts nur ein Arbeitsbereich sichtbar ist.</p>
+            </div>
+            <nav id="settingsSidebar" class="settings-sidebar-nav">
+              <button
+                type="button"
+                class="settings-sidebar-item is-active"
+                data-settings-target="overview"
+                aria-current="page"
+              >
+                <span class="settings-sidebar-label">Uebersicht</span>
+                <small class="settings-sidebar-copy">Start mit Orientierung und den wichtigsten Bereichen.</small>
+              </button>
+              <div id="settingsNavItems" class="settings-sidebar-list"></div>
+            </nav>
+          </div>
+        </aside>
+
+        <section class="settings-workspace">
+          <div id="settingsOverview" class="settings-overview">
+            <div class="settings-overview-head">
+              <p class="card-title">Start</p>
+              <h2 class="section-title">Womit moechtest du beginnen?</h2>
+              <p class="tools-note">Die Detailansicht rechts wird spaeter pro Bereich umgeschaltet. Diese Shell trennt jetzt bereits Navigation und Arbeitsflaeche.</p>
+            </div>
+            <div class="settings-summary">
+              <div class="summary-card">
+                <strong>Verbindung</strong>
+                <span>Victron, Meter und weitere Integrationen liegen kuenftig als eigene Ziele in der Seitenleiste.</span>
+              </div>
+              <div class="summary-card">
+                <strong>Fokus</strong>
+                <span>Der rechte Bereich ist fuer genau einen Bereich oder eine Uebersicht reserviert, nicht mehr fuer die ganze Seite am Stueck.</span>
+              </div>
+              <div class="summary-card">
+                <strong>Naechster Schritt</strong>
+                <span>Plan 01 setzt zuerst das Shell-Grundgeruest, danach werden Inhalt und Umschalten auf den aktiven Bereich verdrahtet.</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="settingsWorkspace" class="settings-workspace-panel">
+            <div class="settings-workspace-head">
+              <p class="card-title">Arbeitsbereich</p>
+              <h2 class="section-title">Aktiver Bereich</h2>
+            </div>
+            <section id="settingsSections" class="settings-sections"></section>
+          </div>
+        </section>
+      </section>
     </main>
   </div>
 

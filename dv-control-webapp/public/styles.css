@@ -562,6 +562,94 @@ table th {
   gap: 14px;
 }
 
+.settings-header {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-header-panel {
+  min-width: 0;
+}
+
+.settings-shell {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settings-sidebar {
+  min-width: 0;
+}
+
+.settings-sidebar-sticky {
+  position: sticky;
+  top: 14px;
+  display: grid;
+  gap: 14px;
+}
+
+.settings-sidebar-head,
+.settings-workspace-head,
+.settings-overview-head {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-sidebar-nav,
+.settings-sidebar-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-sidebar-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(123, 151, 178, 0.24);
+  background: rgba(7, 18, 30, 0.58);
+  text-align: left;
+}
+
+.settings-sidebar-item.is-active,
+.settings-sidebar-item[aria-current="page"] {
+  border-color: rgba(255, 211, 46, 0.54);
+  background: linear-gradient(145deg, rgba(18, 45, 72, 0.88), rgba(11, 26, 41, 0.84));
+  box-shadow: 0 12px 24px rgba(12, 29, 46, 0.35);
+}
+
+.settings-sidebar-label {
+  font-family: var(--font-title);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-sidebar-copy {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.settings-workspace {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-workspace-panel,
+.settings-overview {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(123, 151, 178, 0.24);
+  background: rgba(7, 18, 30, 0.5);
+}
+
 .settings-sections {
   display: grid;
   gap: 14px;
@@ -878,6 +966,8 @@ table th {
     gap: 10px;
   }
 
+  .settings-header,
+  .settings-shell,
   .settings-summary,
   .wizard-grid,
   .settings-fields {
@@ -982,9 +1072,23 @@ table th {
     gap: 8px;
   }
 
+  .settings-header {
+    gap: 8px;
+  }
+
   .settings-grid,
   .settings-sections {
     gap: 8px;
+  }
+
+  .settings-shell {
+    gap: 10px;
+  }
+
+  .settings-workspace-panel,
+  .settings-overview,
+  .settings-sidebar-item {
+    padding: 12px;
   }
 
   .settings-group summary {
