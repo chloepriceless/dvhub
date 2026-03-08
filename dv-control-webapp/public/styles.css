@@ -1055,6 +1055,63 @@ table th {
   line-height: 1.45;
 }
 
+.setup-save-outcome {
+  display: grid;
+  gap: 12px;
+}
+
+.setup-save-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(121, 149, 174, 0.2);
+  background: rgba(7, 18, 29, 0.66);
+}
+
+.setup-save-outcome.is-success .setup-save-card {
+  border-color: rgba(76, 227, 108, 0.36);
+}
+
+.setup-save-outcome.is-warn .setup-save-card {
+  border-color: rgba(255, 211, 46, 0.42);
+}
+
+.setup-save-title {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 1.15rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.setup-save-summary {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.setup-save-subtitle {
+  font-family: var(--font-title);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.92rem;
+}
+
+.setup-save-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-main);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.setup-save-list-warnings {
+  color: #ffe9b0;
+}
+
 .wizard-steps {
   display: grid;
   gap: 10px;

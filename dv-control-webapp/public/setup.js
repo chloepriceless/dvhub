@@ -503,8 +503,48 @@ function validateSetupSubmissionConfig(config, state = setupWizardState) {
   });
 }
 
+function describeRestartPath(path) {
+  if (path === 'httpPort') return 'Webserver-Port';
+  if (path === 'modbusListenHost' || path === 'modbusListenPort') return 'DV Modbus Proxy';
+  if (path === 'victron.transport') return 'Victron-Transport';
+  if (path.startsWith('victron.mqtt.broker')) return 'MQTT Broker';
+  if (path.startsWith('victron.mqtt.portalId')) return 'MQTT Portal ID';
+  if (path.startsWith('victron.mqtt.keepaliveIntervalMs')) return 'MQTT Keepalive';
+  if (path.startsWith('victron.mqtt.qos')) return 'MQTT QoS';
+  return path;
+}
+
+function buildSetupSaveOutcome(payload, source = 'setup') {
+  const warnings = Array.isArray(payload?.meta?.warnings) ? payload.meta.warnings : [];
+  const restartItems = Array.from(new Set((Array.isArray(payload?.restartRequiredPaths) ? payload.restartRequiredPaths : []).map(describeRestartPath)));
+  const title = source === 'import' ? 'Config importiert' : 'Setup gespeichert';
+  const kind = payload?.restartRequired || warnings.length ? 'warn' : 'success';
+  const summary = payload?.restartRequired
+    ? 'Ein Teil der Aenderungen ist gespeichert, wird aber erst nach einem Dienst-Neustart oder einer neuen Verbindung wirksam.'
+    : 'Die Kernkonfiguration ist gespeichert und die naechsten Schritte liegen jetzt in den Einstellungen.';
+  const bannerParts = [title];
+  if (payload?.restartRequired) bannerParts.push('Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.');
+  if (warnings.length) bannerParts.push(`Bitte ${warnings.length === 1 ? 'die Warnung' : 'die Warnungen'} unten pruefen.`);
+  bannerParts.push('Weiterleitung zu den Einstellungen...');
+  const nextSteps = payload?.restartRequired
+    ? ['In den Einstellungen pruefen, welche Verbindungswerte aktiv sind.', 'Danach den PlexLite-Dienst oder die betroffene Verbindung neu starten.']
+    : ['In den Einstellungen die vollstaendige Config pruefen und bei Bedarf weiter verfeinern.'];
+  return {
+    title,
+    kind,
+    summary,
+    banner: bannerParts.join(' '),
+    warnings,
+    restartItems,
+    nextSteps,
+    redirectUrl: '/settings.html?setup=done',
+    redirectDelayMs: payload?.restartRequired || warnings.length ? 2600 : 1800
+  };
+}
+
 const setupWizardHelpers = {
   buildSetupReviewSnapshot,
+  buildSetupSaveOutcome,
   buildSetupSteps,
   createSetupWizardState,
   describeSetupStep,
@@ -518,6 +558,7 @@ const setupWizardHelpers = {
   resolveWizardValue,
   setActiveSetupStep,
   updateSetupDraftValue,
+  buildSetupSaveOutcome,
   validateSetupSubmissionConfig,
   validateSetupWizardState
 };
@@ -843,6 +884,77 @@ function renderSetupErrors() {
   container.append(headline, intro, list);
 }
 
+function renderSetupOutcome() {
+  const container = document.getElementById('setup-save-outcome');
+  if (!container) return;
+  container.replaceChildren();
+  container.hidden = true;
+  container.className = 'setup-save-outcome';
+
+  const outcome = setupWizardState.lastSaveOutcome;
+  if (!outcome) return;
+
+  container.hidden = false;
+  container.classList.add(outcome.kind === 'warn' ? 'is-warn' : 'is-success');
+
+  const card = document.createElement('section');
+  card.className = 'setup-save-card';
+
+  const title = document.createElement('h3');
+  title.className = 'setup-save-title';
+  title.textContent = outcome.title;
+
+  const summary = document.createElement('p');
+  summary.className = 'setup-save-summary';
+  summary.textContent = outcome.summary;
+
+  card.append(title, summary);
+
+  if (Array.isArray(outcome.restartItems) && outcome.restartItems.length) {
+    const restartTitle = document.createElement('strong');
+    restartTitle.className = 'setup-save-subtitle';
+    restartTitle.textContent = 'Neustart oder Neuverbindung noetig fuer:';
+    const restartList = document.createElement('ul');
+    restartList.className = 'setup-save-list';
+    for (const item of outcome.restartItems) {
+      const entry = document.createElement('li');
+      entry.textContent = item;
+      restartList.appendChild(entry);
+    }
+    card.append(restartTitle, restartList);
+  }
+
+  if (Array.isArray(outcome.warnings) && outcome.warnings.length) {
+    const warningTitle = document.createElement('strong');
+    warningTitle.className = 'setup-save-subtitle';
+    warningTitle.textContent = 'Backend-Warnungen';
+    const warningList = document.createElement('ul');
+    warningList.className = 'setup-save-list setup-save-list-warnings';
+    for (const warning of outcome.warnings) {
+      const entry = document.createElement('li');
+      entry.textContent = warning;
+      warningList.appendChild(entry);
+    }
+    card.append(warningTitle, warningList);
+  }
+
+  if (Array.isArray(outcome.nextSteps) && outcome.nextSteps.length) {
+    const nextTitle = document.createElement('strong');
+    nextTitle.className = 'setup-save-subtitle';
+    nextTitle.textContent = 'Als Naechstes';
+    const nextList = document.createElement('ul');
+    nextList.className = 'setup-save-list';
+    for (const step of outcome.nextSteps) {
+      const entry = document.createElement('li');
+      entry.textContent = step;
+      nextList.appendChild(entry);
+    }
+    card.append(nextTitle, nextList);
+  }
+
+  container.appendChild(card);
+}
+
 function renderSetupNav() {
   const container = document.getElementById('setup-nav');
   if (!container) return;
@@ -885,6 +997,7 @@ function renderSetupWizard() {
   renderSetupSteps();
   renderSetupWorkspace();
   renderSetupErrors();
+  renderSetupOutcome();
   renderSetupNav();
   updateMeta();
 }
@@ -941,11 +1054,16 @@ async function saveSetup(config, source = 'setup') {
     effectiveConfig: payload.effectiveConfig,
     meta: payload.meta
   });
-  const restartNote = payload.restartRequired ? ' Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.' : '';
-  setBanner(`Setup gespeichert.${restartNote} Weiterleitung zu den Einstellungen...`, payload.restartRequired ? 'warn' : 'success');
+  const outcome = buildSetupSaveOutcome(payload, source);
+  setSetupWizardState({
+    ...setupWizardState,
+    lastSaveOutcome: outcome
+  });
+  renderSetupWizard();
+  setBanner(outcome.banner, outcome.kind);
   window.setTimeout(() => {
-    window.location.href = '/settings.html?setup=done';
-  }, 1200);
+    window.location.href = outcome.redirectUrl;
+  }, outcome.redirectDelayMs);
   return true;
 }
 

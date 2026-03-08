@@ -24,6 +24,7 @@ function loadSetupWizardHelpers() {
 }
 
 const {
+  buildSetupSaveOutcome,
   buildSetupReviewSnapshot,
   createSetupWizardState,
   describeSetupStep,
@@ -400,4 +401,41 @@ test('import validation rejects configs that still miss required setup fields', 
   assert.equal(imported.validation.steps.dv.valid, false);
   assert.equal(imported.validation.steps.services.valid, false);
   assert.match(imported.validation.fields['victron.mqtt.portalId'][0], /Portal ID/i);
+});
+
+test('save outcome highlights warnings and restart-sensitive transport changes', () => {
+  const outcome = buildSetupSaveOutcome({
+    meta: {
+      warnings: [
+        'victron.mqtt.portalId wurde normalisiert',
+        'influx.db wurde auf den Standardwert gesetzt'
+      ]
+    },
+    restartRequired: true,
+    restartRequiredPaths: ['victron.transport', 'victron.mqtt.portalId', 'modbusListenPort']
+  }, 'setup');
+
+  assert.equal(outcome.kind, 'warn');
+  assert.match(outcome.banner, /Dienst-Neustart/i);
+  assert.match(outcome.summary, /erst nach einem Dienst-Neustart/i);
+  assert.deepEqual(Array.from(outcome.warnings), [
+    'victron.mqtt.portalId wurde normalisiert',
+    'influx.db wurde auf den Standardwert gesetzt'
+  ]);
+  assert.match(outcome.restartItems.join(' '), /Victron-Transport/i);
+  assert.match(outcome.restartItems.join(' '), /DV Modbus Proxy/i);
+  assert.equal(outcome.redirectUrl, '/settings.html?setup=done');
+});
+
+test('import outcome uses import-specific completion copy', () => {
+  const outcome = buildSetupSaveOutcome({
+    meta: { warnings: [] },
+    restartRequired: false,
+    restartRequiredPaths: []
+  }, 'import');
+
+  assert.equal(outcome.kind, 'success');
+  assert.match(outcome.title, /Config importiert/i);
+  assert.match(outcome.banner, /Weiterleitung zu den Einstellungen/i);
+  assert.match(outcome.nextSteps.join(' '), /Einstellungen/i);
 });
