@@ -33,29 +33,227 @@ const SETUP_STEP_DEFINITIONS = [
 ];
 
 const SETUP_FIELD_DEFINITIONS = [
-  { stepId: 'basics', legacyId: 'httpPort', path: 'httpPort', label: 'HTTP Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
-  { stepId: 'basics', legacyId: 'apiToken', path: 'apiToken', label: 'API Token', type: 'text', valueType: 'string' },
-  { stepId: 'transport', legacyId: 'victronTransport', path: 'victron.transport', label: 'Transport', type: 'select', valueType: 'string', options: ['modbus', 'mqtt'] },
-  { stepId: 'transport', legacyId: 'victronHost', path: 'victron.host', label: 'GX Host', type: 'text', valueType: 'string' },
-  { stepId: 'transport', legacyId: 'victronPort', path: 'victron.port', label: 'GX Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
-  { stepId: 'transport', legacyId: 'victronUnitId', path: 'victron.unitId', label: 'Unit ID', type: 'number', valueType: 'number', min: 0, max: 255 },
-  { stepId: 'transport', legacyId: 'victronTimeoutMs', path: 'victron.timeoutMs', label: 'Timeout (ms)', type: 'number', valueType: 'number', min: 100, max: 60000 },
-  { stepId: 'transport', legacyId: 'mqttBroker', path: 'victron.mqtt.broker', label: 'MQTT Broker URL', type: 'text', valueType: 'string' },
-  { stepId: 'transport', legacyId: 'mqttPortalId', path: 'victron.mqtt.portalId', label: 'Portal ID', type: 'text', valueType: 'string' },
-  { stepId: 'transport', legacyId: 'mqttKeepalive', path: 'victron.mqtt.keepaliveIntervalMs', label: 'Keepalive (ms)', type: 'number', valueType: 'number', min: 1000, max: 600000 },
-  { stepId: 'dv', legacyId: 'modbusListenHost', path: 'modbusListenHost', label: 'Modbus Listen Host', type: 'text', valueType: 'string' },
-  { stepId: 'dv', legacyId: 'modbusListenPort', path: 'modbusListenPort', label: 'Modbus Listen Port', type: 'number', valueType: 'number', min: 1, max: 65535 },
-  { stepId: 'dv', legacyId: 'gridPositiveMeans', path: 'gridPositiveMeans', label: 'Grid Vorzeichen', type: 'select', valueType: 'string', options: ['feed_in', 'grid_import'] },
-  { stepId: 'dv', legacyId: 'meterFc', path: 'meter.fc', label: 'Meter FC', type: 'select', valueType: 'number', options: [4, 3] },
-  { stepId: 'dv', legacyId: 'meterAddress', path: 'meter.address', label: 'Meter Startadresse', type: 'number', valueType: 'number', min: 0, max: 65535 },
-  { stepId: 'dv', legacyId: 'meterQuantity', path: 'meter.quantity', label: 'Meter Registeranzahl', type: 'number', valueType: 'number', min: 1, max: 125 },
-  { stepId: 'dv', legacyId: 'dvControlEnabled', path: 'dvControl.enabled', label: 'DV Control aktivieren', type: 'boolean', valueType: 'boolean' },
-  { stepId: 'services', legacyId: 'scheduleTimezone', path: 'schedule.timezone', label: 'Zeitzone', type: 'text', valueType: 'string' },
-  { stepId: 'services', legacyId: 'epexEnabled', path: 'epex.enabled', label: 'EPEX aktiv', type: 'boolean', valueType: 'boolean' },
-  { stepId: 'services', legacyId: 'epexBzn', path: 'epex.bzn', label: 'BZN', type: 'text', valueType: 'string' },
-  { stepId: 'services', legacyId: 'influxEnabled', path: 'influx.enabled', label: 'Influx aktiv', type: 'boolean', valueType: 'boolean' },
-  { stepId: 'services', legacyId: 'influxUrl', path: 'influx.url', label: 'Influx URL', type: 'text', valueType: 'string' },
-  { stepId: 'services', legacyId: 'influxDb', path: 'influx.db', label: 'Influx DB', type: 'text', valueType: 'string' }
+  {
+    stepId: 'basics',
+    path: 'httpPort',
+    label: 'HTTP Port',
+    help: 'Port der Weboberflaeche. Standard ist 8080.',
+    type: 'number',
+    valueType: 'number',
+    min: 1,
+    max: 65535
+  },
+  {
+    stepId: 'basics',
+    path: 'apiToken',
+    label: 'API Token',
+    help: 'Optional. Wenn gesetzt, wird es nach dem Speichern fuer diese Browser-Session hinterlegt.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.transport',
+    label: 'Transport',
+    help: 'Modbus ist der Standard fuer GX und Ekrano. MQTT ist fuer Venus OS Push-Daten.',
+    type: 'select',
+    valueType: 'string',
+    options: [
+      { value: 'modbus', label: 'Modbus TCP' },
+      { value: 'mqtt', label: 'MQTT' }
+    ]
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.host',
+    label: 'GX Host',
+    help: 'IP-Adresse oder DNS-Name des GX.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.port',
+    label: 'GX Port',
+    help: 'Standard fuer Modbus TCP ist 502.',
+    type: 'number',
+    valueType: 'number',
+    min: 1,
+    max: 65535
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.unitId',
+    label: 'Unit ID',
+    help: 'Typischerweise 100 beim Victron GX.',
+    type: 'number',
+    valueType: 'number',
+    min: 0,
+    max: 255
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.timeoutMs',
+    label: 'Timeout (ms)',
+    help: 'Timeout fuer Register-Requests.',
+    type: 'number',
+    valueType: 'number',
+    min: 100,
+    max: 60000
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.mqtt.broker',
+    label: 'MQTT Broker URL',
+    help: 'Zum Beispiel mqtt://192.168.1.10:1883.',
+    type: 'text',
+    valueType: 'string',
+    visibleWhen(state) {
+      return getSetupTransportMode(state) === 'mqtt';
+    }
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.mqtt.portalId',
+    label: 'Portal ID',
+    help: 'Victron Portal ID fuer die MQTT Topics.',
+    type: 'text',
+    valueType: 'string',
+    visibleWhen(state) {
+      return getSetupTransportMode(state) === 'mqtt';
+    }
+  },
+  {
+    stepId: 'transport',
+    path: 'victron.mqtt.keepaliveIntervalMs',
+    label: 'Keepalive (ms)',
+    help: 'Intervall fuer MQTT Keepalive-Pakete.',
+    type: 'number',
+    valueType: 'number',
+    min: 1000,
+    max: 600000,
+    visibleWhen(state) {
+      return getSetupTransportMode(state) === 'mqtt';
+    }
+  },
+  {
+    stepId: 'dv',
+    path: 'modbusListenHost',
+    label: 'Modbus Listen Host',
+    help: 'Normalerweise 0.0.0.0 fuer alle Interfaces.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'dv',
+    path: 'modbusListenPort',
+    label: 'Modbus Listen Port',
+    help: 'LUOX / Direktvermarkter verbinden sich spaeter auf diesen Proxy-Port.',
+    type: 'number',
+    valueType: 'number',
+    min: 1,
+    max: 65535
+  },
+  {
+    stepId: 'dv',
+    path: 'gridPositiveMeans',
+    label: 'Grid Vorzeichen',
+    help: 'Abhaengig davon, wie dein Meter die Phasenleistung meldet.',
+    type: 'select',
+    valueType: 'string',
+    options: [
+      { value: 'feed_in', label: 'Positiv bedeutet Einspeisung' },
+      { value: 'grid_import', label: 'Positiv bedeutet Netzbezug' }
+    ]
+  },
+  {
+    stepId: 'dv',
+    path: 'meter.fc',
+    label: 'Meter FC',
+    help: 'Typischerweise 4 fuer Victron Meterbloecke.',
+    type: 'select',
+    valueType: 'number',
+    options: [
+      { value: 4, label: '4 - Input Register' },
+      { value: 3, label: '3 - Holding Register' }
+    ]
+  },
+  {
+    stepId: 'dv',
+    path: 'meter.address',
+    label: 'Meter Startadresse',
+    help: 'Standardblock fuer Grid L1/L2/L3 ist 820.',
+    type: 'number',
+    valueType: 'number',
+    min: 0,
+    max: 65535
+  },
+  {
+    stepId: 'dv',
+    path: 'meter.quantity',
+    label: 'Meter Registeranzahl',
+    help: 'Standard ist 3 Register fuer L1/L2/L3.',
+    type: 'number',
+    valueType: 'number',
+    min: 1,
+    max: 125
+  },
+  {
+    stepId: 'dv',
+    path: 'dvControl.enabled',
+    label: 'DV Control aktivieren',
+    help: 'Schreibt bei DV-Signalen automatisch in die Victron Register 2848 und 2850.',
+    type: 'boolean',
+    valueType: 'boolean'
+  },
+  {
+    stepId: 'services',
+    path: 'schedule.timezone',
+    label: 'Zeitzone',
+    help: 'Wird fuer Schedule und Darstellung genutzt. Standard ist Europe/Berlin.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'services',
+    path: 'epex.enabled',
+    label: 'EPEX aktiv',
+    help: 'Aktiviert Day-Ahead-Preise und Negativpreis-Schutz.',
+    type: 'boolean',
+    valueType: 'boolean'
+  },
+  {
+    stepId: 'services',
+    path: 'epex.bzn',
+    label: 'BZN',
+    help: 'Beispiel: DE-LU.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'services',
+    path: 'influx.enabled',
+    label: 'Influx aktiv',
+    help: 'Optional fuer Langzeit-Logging.',
+    type: 'boolean',
+    valueType: 'boolean'
+  },
+  {
+    stepId: 'services',
+    path: 'influx.url',
+    label: 'Influx URL',
+    help: 'Zum Beispiel http://127.0.0.1:8086.',
+    type: 'text',
+    valueType: 'string'
+  },
+  {
+    stepId: 'services',
+    path: 'influx.db',
+    label: 'Influx DB',
+    help: 'Datenbankname fuer Influx.',
+    type: 'text',
+    valueType: 'string'
+  }
 ];
 
 let setupWizardState = createSetupWizardState();
@@ -104,6 +302,10 @@ function resolveSetupStepId(stepId) {
 
 function getSetupFieldsForStep(stepId) {
   return SETUP_FIELD_DEFINITIONS.filter((field) => field.stepId === stepId);
+}
+
+function getVisibleSetupFieldsForStep(state, stepId) {
+  return getSetupFieldsForStep(stepId).filter((field) => (typeof field.visibleWhen === 'function' ? field.visibleWhen(state) : true));
 }
 
 function buildSetupSteps() {
@@ -313,18 +515,8 @@ function updateMeta() {
   element.textContent = buildMetaText(setupWizardState.meta || {});
 }
 
-function getFieldElement(field) {
-  return document.getElementById(field.legacyId);
-}
-
-function setFieldElementValue(field, value) {
-  const element = getFieldElement(field);
-  if (!element) return;
-  if (field.type === 'boolean') {
-    element.checked = Boolean(value);
-    return;
-  }
-  element.value = value ?? '';
+function getFieldInputId(path) {
+  return `setup_field_${path.replace(/[^a-zA-Z0-9]+/g, '_')}`;
 }
 
 function parseFieldElementValue(field, element) {
@@ -334,20 +526,195 @@ function parseFieldElementValue(field, element) {
   return String(element.value ?? '');
 }
 
-function applySetupWizardStateToForm() {
-  for (const field of SETUP_FIELD_DEFINITIONS) {
-    setFieldElementValue(field, resolveWizardValue(setupWizardState, field.path));
+function summarizeBlockingErrors(state) {
+  return state.validation.summary
+    .slice(0, 2)
+    .map((entry) => entry.message)
+    .join(' ');
+}
+
+function renderSetupSteps() {
+  const container = document.getElementById('setup-steps');
+  if (!container) return;
+  container.replaceChildren();
+
+  const list = document.createElement('ol');
+  list.className = 'wizard-steps';
+
+  for (const step of setupWizardState.steps) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    const isActive = step.id === setupWizardState.activeStepId;
+    const isComplete = setupWizardState.completedStepIds.includes(step.id);
+    const isVisited = setupWizardState.visitedStepIds.includes(step.id);
+    const currentIndex = getCurrentStepIndex(setupWizardState);
+    const stepIndex = setupWizardState.stepOrder.indexOf(step.id);
+
+    button.type = 'button';
+    button.dataset.stepId = step.id;
+    button.className = 'btn btn-ghost';
+    button.disabled = stepIndex > currentIndex + 1 || (!isVisited && stepIndex > currentIndex);
+    button.textContent = `${step.label}: ${step.title}`;
+    button.setAttribute('aria-current', isActive ? 'step' : 'false');
+    if (isComplete) button.dataset.state = 'complete';
+    else if (isActive) button.dataset.state = 'active';
+    else if (isVisited) button.dataset.state = 'visited';
+
+    const meta = document.createElement('small');
+    meta.className = 'field-help';
+    if (!setupWizardState.validation.steps[step.id].valid) meta.textContent = 'Pflichtangaben fehlen';
+    else if (isComplete) meta.textContent = 'Bereit';
+    else if (isActive) meta.textContent = step.description;
+    else meta.textContent = 'Noch offen';
+
+    item.append(button, meta);
+    list.appendChild(item);
   }
-  updateTransportVisibility();
+
+  container.appendChild(list);
+}
+
+function renderField(field) {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'settings-field';
+  if (field.type === 'boolean') wrapper.classList.add('checkbox-field');
+
+  const title = document.createElement('span');
+  title.className = 'settings-field-title';
+  title.textContent = field.label;
+  wrapper.appendChild(title);
+
+  let input;
+  const value = resolveWizardValue(setupWizardState, field.path, field.type === 'boolean' ? false : '');
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = Boolean(value);
+  } else if (field.type === 'select') {
+    input = document.createElement('select');
+    for (const optionDef of field.options || []) {
+      const option = document.createElement('option');
+      option.value = String(optionDef.value);
+      option.textContent = optionDef.label;
+      input.appendChild(option);
+    }
+    input.value = String(value);
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : 'text';
+    if (field.min !== undefined) input.min = String(field.min);
+    if (field.max !== undefined) input.max = String(field.max);
+    input.value = value === null || value === undefined ? '' : String(value);
+  }
+
+  input.id = getFieldInputId(field.path);
+  input.dataset.path = field.path;
+  input.dataset.stepId = field.stepId;
+  wrapper.appendChild(input);
+
+  const help = document.createElement('small');
+  help.className = 'field-help';
+  const fieldErrors = setupWizardState.validation.fields[field.path] || [];
+  help.textContent = fieldErrors.length ? fieldErrors[0] : field.help || '';
+  wrapper.appendChild(help);
+
+  return wrapper;
+}
+
+function renderSetupWorkspace() {
+  const container = document.getElementById('setup-workspace');
+  if (!container) return;
+  container.replaceChildren();
+
+  const activeStep = setupWizardState.steps.find((step) => step.id === setupWizardState.activeStepId);
+  if (!activeStep) return;
+
+  const header = document.createElement('div');
+  header.className = 'panel-head';
+
+  const titleGroup = document.createElement('div');
+  const eyebrow = document.createElement('p');
+  eyebrow.className = 'card-title';
+  eyebrow.textContent = activeStep.label;
+  const title = document.createElement('h2');
+  title.className = 'section-title';
+  title.textContent = activeStep.title;
+  const intro = document.createElement('p');
+  intro.className = 'field-help';
+  intro.textContent = activeStep.description;
+  titleGroup.append(eyebrow, title, intro);
+  header.appendChild(titleGroup);
+
+  const fields = document.createElement('div');
+  fields.className = 'settings-fields compact';
+  for (const field of getVisibleSetupFieldsForStep(setupWizardState, activeStep.id)) {
+    fields.appendChild(renderField(field));
+  }
+
+  container.append(header, fields);
+}
+
+function renderSetupErrors() {
+  const container = document.getElementById('setup-errors');
+  if (!container) return;
+  container.replaceChildren();
+  container.className = 'status-banner';
+
+  const stepErrors = setupWizardState.validation.summary.filter((entry) => entry.stepId === setupWizardState.activeStepId);
+  if (!stepErrors.length) {
+    container.classList.add('info');
+    container.textContent = 'Dieser Schritt ist bereit. Mit Weiter gehst du zur naechsten Setup-Seite.';
+    return;
+  }
+
+  container.classList.add('error');
+  const list = document.createElement('ul');
+  for (const entry of stepErrors) {
+    const item = document.createElement('li');
+    item.textContent = entry.message;
+    list.appendChild(item);
+  }
+  container.appendChild(list);
+}
+
+function renderSetupNav() {
+  const container = document.getElementById('setup-nav');
+  if (!container) return;
+  container.replaceChildren();
+
+  const currentIndex = getCurrentStepIndex(setupWizardState);
+  const isLastStep = currentIndex === setupWizardState.stepOrder.length - 1;
+
+  const backButton = document.createElement('button');
+  backButton.type = 'button';
+  backButton.className = 'btn btn-ghost';
+  backButton.dataset.action = 'back';
+  backButton.disabled = currentIndex === 0;
+  backButton.textContent = 'Zurueck';
+
+  const nextButton = document.createElement('button');
+  nextButton.type = 'button';
+  nextButton.className = 'btn btn-primary';
+  nextButton.dataset.action = 'next';
+  nextButton.textContent = isLastStep ? 'Schritt pruefen' : 'Weiter';
+
+  container.append(backButton, nextButton);
+}
+
+function renderSetupWizard() {
+  renderSetupSteps();
+  renderSetupWorkspace();
+  renderSetupErrors();
+  renderSetupNav();
   updateMeta();
 }
 
-function syncRenderedFieldsToDraft() {
+function syncActiveWorkspaceFieldsToDraft() {
   const nextDraft = clone(setupWizardState.draftConfig || {});
-  for (const field of SETUP_FIELD_DEFINITIONS) {
-    const element = getFieldElement(field);
-    if (!element) continue;
-    setPath(nextDraft, field.path, parseFieldElementValue(field, element));
+  for (const field of getVisibleSetupFieldsForStep(setupWizardState, setupWizardState.activeStepId)) {
+    const input = document.getElementById(getFieldInputId(field.path));
+    if (!input) continue;
+    setPath(nextDraft, field.path, parseFieldElementValue(field, input));
   }
   if (hasPath(nextDraft, 'schedule.timezone')) {
     setPath(nextDraft, 'epex.timezone', getPath(nextDraft, 'schedule.timezone'));
@@ -358,10 +725,10 @@ function syncRenderedFieldsToDraft() {
   });
 }
 
-function updateTransportVisibility() {
-  const mqttFields = document.getElementById('mqttFields');
-  if (!mqttFields) return;
-  mqttFields.style.display = setupWizardState.transportMode === 'mqtt' ? 'grid' : 'none';
+function moveToFirstInvalidStep(state) {
+  const firstInvalid = state.stepOrder.find((stepId) => !state.validation.steps[stepId].valid);
+  if (!firstInvalid) return state;
+  return setSetupWizardState(setActiveSetupStep(state, firstInvalid));
 }
 
 function hydrateSetupWizardState(payload) {
@@ -371,20 +738,8 @@ function hydrateSetupWizardState(payload) {
     meta: payload?.meta || {},
     activeStepId: setupWizardState.activeStepId
   }));
-  applySetupWizardStateToForm();
+  renderSetupWizard();
   return setupWizardState;
-}
-
-function collectConfig() {
-  syncRenderedFieldsToDraft();
-  return clone(setupWizardState.draftConfig || {});
-}
-
-function summarizeBlockingErrors(state) {
-  return state.validation.summary
-    .slice(0, 2)
-    .map((entry) => entry.message)
-    .join(' ');
 }
 
 async function saveSetup(config, source = 'setup') {
@@ -435,20 +790,64 @@ async function importSetupFile(file) {
   }
 }
 
-function handleFieldMutation() {
-  const nextState = syncRenderedFieldsToDraft();
-  if (!nextState.validation.summary.length) return;
-  setBanner(`Es fehlen noch Pflichtangaben. ${summarizeBlockingErrors(nextState)}`, 'warn');
+function handleWizardStepNavigation(requestedStepId) {
+  const currentIndex = getCurrentStepIndex(setupWizardState);
+  const requestedIndex = setupWizardState.stepOrder.indexOf(requestedStepId);
+  syncActiveWorkspaceFieldsToDraft();
+
+  if (requestedIndex > currentIndex) {
+    const nextState = goToNextSetupStep(setupWizardState);
+    setSetupWizardState(nextState);
+    if (nextState.activeStepId !== requestedStepId && nextState.activeStepId === setupWizardState.activeStepId) {
+      moveToFirstInvalidStep(nextState);
+      renderSetupWizard();
+      setBanner(`Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
+      return;
+    }
+  } else {
+    setSetupWizardState(setActiveSetupStep(setupWizardState, requestedStepId));
+  }
+
+  renderSetupWizard();
+}
+
+function handleWizardNav(action) {
+  const syncedState = syncActiveWorkspaceFieldsToDraft();
+  if (action === 'back') {
+    setSetupWizardState(goToPreviousSetupStep(syncedState));
+    renderSetupWizard();
+    return;
+  }
+
+  const nextState = goToNextSetupStep(syncedState);
+  setSetupWizardState(nextState);
+  if (nextState.activeStepId === syncedState.activeStepId) {
+    renderSetupWizard();
+    setBanner(`Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(nextState)}`, 'error');
+    return;
+  }
+
+  renderSetupWizard();
+  setBanner('Schritt gespeichert. Du kannst weiter zur naechsten Setup-Seite gehen.', 'info');
+}
+
+function collectConfig() {
+  const syncedState = syncActiveWorkspaceFieldsToDraft();
+  return clone(syncedState.draftConfig || {});
 }
 
 if (typeof document !== 'undefined') {
   document.getElementById('setupSaveBtn')?.addEventListener('click', () => {
-    const nextState = syncRenderedFieldsToDraft();
+    const nextState = validateSetupWizardState(syncActiveWorkspaceFieldsToDraft());
+    setSetupWizardState(nextState);
     if (nextState.validation.isBlocking) {
-      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(nextState)}`, 'error');
+      moveToFirstInvalidStep(nextState);
+      renderSetupWizard();
+      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
       return;
     }
-    saveSetup(clone(nextState.draftConfig)).catch((error) => {
+
+    saveSetup(collectConfig()).catch((error) => {
       setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
     });
   });
@@ -463,11 +862,37 @@ if (typeof document !== 'undefined') {
     event.target.value = '';
   });
 
-  for (const field of SETUP_FIELD_DEFINITIONS) {
-    const element = getFieldElement(field);
-    const eventName = field.type === 'text' || field.type === 'number' ? 'input' : 'change';
-    element?.addEventListener(eventName, handleFieldMutation);
-  }
+  document.getElementById('setup-workspace')?.addEventListener('input', (event) => {
+    const path = event.target?.dataset?.path;
+    if (!path) return;
+    syncActiveWorkspaceFieldsToDraft();
+    renderSetupErrors();
+    renderSetupSteps();
+  });
+
+  document.getElementById('setup-workspace')?.addEventListener('change', (event) => {
+    const path = event.target?.dataset?.path;
+    if (!path) return;
+    syncActiveWorkspaceFieldsToDraft();
+    if (path === 'victron.transport') {
+      renderSetupWizard();
+      return;
+    }
+    renderSetupErrors();
+    renderSetupSteps();
+  });
+
+  document.getElementById('setup-steps')?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-step-id]');
+    if (!button || button.disabled) return;
+    handleWizardStepNavigation(button.dataset.stepId);
+  });
+
+  document.getElementById('setup-nav')?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    handleWizardNav(button.dataset.action);
+  });
 
   window.addEventListener('plexlite:unauthorized', () => {
     setBanner('API-Zugriff abgelehnt. Wenn ein Token aktiv ist, die Seite mit ?token=DEIN_TOKEN oeffnen.', 'error');
