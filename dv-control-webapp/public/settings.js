@@ -121,12 +121,14 @@ function setActiveSettingsSection(state, requestedId) {
 
 const settingsShellHelpers = {
   SETTINGS_OVERVIEW_ID,
+  buildDestinationWorkspace,
   buildSettingsDestinations,
   createSettingsShellState,
   getDestinationMeta,
   getSettingsSectionFields,
   resolveActiveSettingsSection,
-  setActiveSettingsSection
+  setActiveSettingsSection,
+  shouldOpenSettingsGroup
 };
 
 if (typeof globalThis !== 'undefined') {
@@ -289,6 +291,63 @@ function groupFields(fields) {
   return [...map.values()];
 }
 
+function shouldOpenSettingsGroup({ sectionIndex = 0, groupIndex = 0 }) {
+  return sectionIndex === 0 && groupIndex === 0;
+}
+
+function buildDestinationWorkspace(definitionLike, destinationId) {
+  const destination = buildSettingsDestinations(definitionLike).find((entry) => entry.id === destinationId);
+  if (!destination) return null;
+
+  const sections = (destination.sections || [])
+    .map((section, sectionIndex) => {
+      const sectionFields = getSettingsSectionFields(definitionLike, section.id);
+      if (!sectionFields.length) return null;
+
+      const groups = groupFields(sectionFields).map((group, groupIndex) => ({
+        ...group,
+        fieldCount: group.fields.length,
+        openByDefault: shouldOpenSettingsGroup({ sectionIndex, groupIndex })
+      }));
+
+      return {
+        ...section,
+        fieldCount: sectionFields.length,
+        groupCount: groups.length,
+        groups
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    ...destination,
+    sections
+  };
+}
+
+function buildWorkspaceDefaultCopy(destination) {
+  if (!destination) return '';
+  if (destination.sections.length === 1 && destination.sections[0].groupCount <= 1) {
+    return 'Die relevanten Felder sind direkt sichtbar, ohne weitere Bereiche aufzuklappen.';
+  }
+  return 'Die erste Gruppe ist geoeffnet. Weitere Gruppen bleiben kompakt, bis du sie wirklich brauchst.';
+}
+
+function createSummaryCard(title, text) {
+  const card = document.createElement('div');
+  card.className = 'summary-card';
+
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  card.appendChild(strong);
+
+  const body = document.createElement('span');
+  body.textContent = text;
+  card.appendChild(body);
+
+  return card;
+}
+
 function getActiveSettingsDestination() {
   return settingsShellState.destinations.find((destination) => destination.id === settingsShellState.activeSectionId)
     || settingsShellState.destinations[0]
@@ -320,16 +379,9 @@ function renderSettingsOverview() {
   const summary = document.createElement('div');
   summary.className = 'settings-summary';
   for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
-    const card = document.createElement('div');
-    card.className = 'summary-card';
-    const strong = document.createElement('strong');
-    strong.textContent = destination.label;
-    const text = document.createElement('span');
     const sectionNames = destination.sections?.map((section) => section.label).join(', ');
-    text.textContent = `${destination.description || 'Konfiguration fuer diesen Bereich.'} ${buildSectionMeta(destination)}.${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
-    card.appendChild(strong);
-    card.appendChild(text);
-    summary.appendChild(card);
+    const summaryText = `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration fuer diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
+    summary.appendChild(createSummaryCard(destination.label, summaryText));
   }
   overview.appendChild(summary);
 }
@@ -368,22 +420,24 @@ function renderSectionWorkspace(sectionId) {
   if (!mount) return;
   mount.innerHTML = '';
 
-  const destination = settingsShellState.destinations.find((entry) => entry.id === sectionId);
+  const destination = buildDestinationWorkspace(definition, sectionId);
   const destinationMeta = getDestinationMeta(definition, sectionId);
-  const sectionEntries = destination?.sections || [];
-  if (!destination || !sectionEntries.length) return;
+  if (!destination || !destination.sections.length) return;
 
   const panel = document.createElement('section');
   panel.className = 'panel reveal settings-panel';
 
   const header = document.createElement('div');
-  header.className = 'panel-head';
+  header.className = 'panel-head settings-panel-head';
   header.innerHTML = `
     <div>
       <p class="card-title">Aktiver Bereich</p>
       <h2 class="section-title">${destination.label}</h2>
     </div>
-    <div class="meta">${buildSectionMeta(destination)}</div>
+    <div class="settings-panel-meta">
+      <strong>${buildSectionMeta(destination)}</strong>
+      <span>${destination.sections.map((section) => section.label).join(' • ')}</span>
+    </div>
   `;
   panel.appendChild(header);
 
@@ -392,23 +446,34 @@ function renderSectionWorkspace(sectionId) {
   intro.textContent = destinationMeta?.intro || destination.intro || destination.description || '';
   panel.appendChild(intro);
 
-  for (const section of sectionEntries) {
-    const sectionFields = getSettingsSectionFields(definition, section.id);
-    if (!sectionFields.length) continue;
+  const summary = document.createElement('div');
+  summary.className = 'settings-workspace-summary';
+  summary.appendChild(createSummaryCard('Umfang', buildSectionMeta(destination)));
+  summary.appendChild(createSummaryCard('Bereiche', destination.sections.map((section) => section.label).join(', ')));
+  summary.appendChild(createSummaryCard('Standard', buildWorkspaceDefaultCopy(destination)));
+  panel.appendChild(summary);
+
+  for (const section of destination.sections) {
+    const sectionShell = document.createElement('section');
+    sectionShell.className = 'settings-subsection';
 
     const sectionHead = document.createElement('div');
     sectionHead.className = 'settings-subsection-head';
     sectionHead.innerHTML = `
       <p class="card-title">Bereich</p>
       <h3>${section.label}</h3>
+      <p class="settings-section-meta">${section.fieldCount} Felder in ${section.groupCount} Gruppen</p>
       <p class="tools-note">${section.description || ''}</p>
     `;
-    panel.appendChild(sectionHead);
+    sectionShell.appendChild(sectionHead);
 
-    for (const group of groupFields(sectionFields)) {
+    const groupList = document.createElement('div');
+    groupList.className = 'settings-group-list';
+
+    for (const group of section.groups) {
       const details = document.createElement('details');
       details.className = 'settings-group';
-      details.open = true;
+      details.open = group.openByDefault;
 
       const summary = document.createElement('summary');
       summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
@@ -418,8 +483,11 @@ function renderSectionWorkspace(sectionId) {
       grid.className = 'settings-fields';
       for (const field of group.fields) grid.appendChild(renderField(field));
       details.appendChild(grid);
-      panel.appendChild(details);
+      groupList.appendChild(details);
     }
+
+    sectionShell.appendChild(groupList);
+    panel.appendChild(sectionShell);
   }
 
   mount.appendChild(panel);

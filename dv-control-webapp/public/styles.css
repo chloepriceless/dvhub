@@ -667,6 +667,33 @@ table th {
 
 .settings-panel {
   grid-column: span 12;
+  display: grid;
+  gap: 12px;
+}
+
+.settings-panel-head {
+  align-items: start;
+}
+
+.settings-panel-meta {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  text-align: right;
+}
+
+.settings-panel-meta strong {
+  font-family: var(--font-title);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.9rem;
+}
+
+.settings-panel-meta span,
+.settings-section-meta {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 .settings-toolbar {
@@ -705,6 +732,43 @@ table th {
   color: var(--text-muted);
   font-size: 0.86rem;
   line-height: 1.42;
+}
+
+.settings-workspace-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.settings-subsection {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(123, 151, 178, 0.18);
+  background: rgba(6, 16, 28, 0.45);
+}
+
+.settings-subsection-head {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-subsection-head h3 {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 1.16rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.settings-group-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-group-list .settings-group {
+  margin-top: 0;
 }
 
 .settings-group {
