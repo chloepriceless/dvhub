@@ -23,21 +23,70 @@ function countSettingsGroups(fields) {
   return new Set(fields.map((field) => field.group || 'main')).size;
 }
 
+function getDestinationMeta(definitionLike, destinationId) {
+  return (definitionLike?.destinations || []).find((destination) => destination.id === destinationId) || null;
+}
+
+function buildSectionDestination(section, fields) {
+  return {
+    id: section.id,
+    kind: 'section',
+    label: section.label,
+    description: section.description || '',
+    intro: section.description || '',
+    fieldCount: fields.length,
+    groupCount: countSettingsGroups(fields),
+    sectionCount: 1,
+    sectionIds: [section.id],
+    sections: [section]
+  };
+}
+
 function buildSettingsDestinations(definitionLike) {
-  const sectionDestinations = (definitionLike?.sections || [])
+  const sectionsWithFields = (definitionLike?.sections || [])
     .map((section) => {
       const fields = getSettingsSectionFields(definitionLike, section.id);
       if (!fields.length) return null;
+      return { ...section, fields, fieldCount: fields.length, groupCount: countSettingsGroups(fields) };
+    })
+    .filter(Boolean);
+
+  const destinationDefinitions = definitionLike?.destinations || [];
+  if (!destinationDefinitions.length) {
+    return [
+      {
+        id: SETTINGS_OVERVIEW_ID,
+        kind: 'overview',
+        label: 'Uebersicht',
+        description: 'Startpunkt fuer die wichtigsten Einstellungsbereiche.'
+      },
+      ...sectionsWithFields.map((section) => buildSectionDestination(section, section.fields))
+    ];
+  }
+
+  const sectionDestinations = destinationDefinitions
+    .map((destination) => {
+      const sections = sectionsWithFields.filter((section) => section.destination === destination.id);
+      if (!sections.length) return null;
       return {
-        id: section.id,
-        kind: 'section',
-        label: section.label,
-        description: section.description || '',
-        fieldCount: fields.length,
-        groupCount: countSettingsGroups(fields)
+        id: destination.id,
+        kind: 'destination',
+        label: destination.label,
+        description: destination.description || '',
+        intro: destination.intro || destination.description || '',
+        fieldCount: sections.reduce((sum, section) => sum + section.fieldCount, 0),
+        groupCount: sections.reduce((sum, section) => sum + section.groupCount, 0),
+        sectionCount: sections.length,
+        sectionIds: sections.map((section) => section.id),
+        sections
       };
     })
     .filter(Boolean);
+
+  for (const section of sectionsWithFields) {
+    if (sectionDestinations.some((destination) => destination.sectionIds.includes(section.id))) continue;
+    sectionDestinations.push(buildSectionDestination(section, section.fields));
+  }
 
   return [
     {
@@ -74,6 +123,7 @@ const settingsShellHelpers = {
   SETTINGS_OVERVIEW_ID,
   buildSettingsDestinations,
   createSettingsShellState,
+  getDestinationMeta,
   getSettingsSectionFields,
   resolveActiveSettingsSection,
   setActiveSettingsSection
@@ -246,8 +296,10 @@ function getActiveSettingsDestination() {
 }
 
 function buildSectionMeta(destination) {
-  if (!destination || destination.kind !== 'section') return '';
-  return `${destination.fieldCount} Felder in ${destination.groupCount} Gruppen`;
+  if (!destination) return '';
+  const fieldText = `${destination.fieldCount} Felder`;
+  if (destination.sectionCount > 1) return `${fieldText} in ${destination.sectionCount} Bereichen`;
+  return `${fieldText} in ${destination.groupCount} Gruppen`;
 }
 
 function renderSettingsOverview() {
@@ -267,13 +319,14 @@ function renderSettingsOverview() {
 
   const summary = document.createElement('div');
   summary.className = 'settings-summary';
-  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind === 'section')) {
+  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
     const card = document.createElement('div');
     card.className = 'summary-card';
     const strong = document.createElement('strong');
     strong.textContent = destination.label;
     const text = document.createElement('span');
-    text.textContent = `${destination.description || 'Konfiguration fuer diesen Bereich.'} ${buildSectionMeta(destination)}.`;
+    const sectionNames = destination.sections?.map((section) => section.label).join(', ');
+    text.textContent = `${destination.description || 'Konfiguration fuer diesen Bereich.'} ${buildSectionMeta(destination)}.${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
     card.appendChild(strong);
     card.appendChild(text);
     summary.appendChild(card);
@@ -294,7 +347,7 @@ function renderSidebarNavigation() {
   }
 
   navItems.innerHTML = '';
-  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind === 'section')) {
+  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'settings-sidebar-item';
@@ -315,11 +368,11 @@ function renderSectionWorkspace(sectionId) {
   if (!mount) return;
   mount.innerHTML = '';
 
-  const section = (definition?.sections || []).find((entry) => entry.id === sectionId);
-  const sectionFields = getSettingsSectionFields(definition, sectionId);
-  if (!section || !sectionFields.length) return;
-
   const destination = settingsShellState.destinations.find((entry) => entry.id === sectionId);
+  const destinationMeta = getDestinationMeta(definition, sectionId);
+  const sectionEntries = destination?.sections || [];
+  if (!destination || !sectionEntries.length) return;
+
   const panel = document.createElement('section');
   panel.className = 'panel reveal settings-panel';
 
@@ -328,7 +381,7 @@ function renderSectionWorkspace(sectionId) {
   header.innerHTML = `
     <div>
       <p class="card-title">Aktiver Bereich</p>
-      <h2 class="section-title">${section.label}</h2>
+      <h2 class="section-title">${destination.label}</h2>
     </div>
     <div class="meta">${buildSectionMeta(destination)}</div>
   `;
@@ -336,23 +389,37 @@ function renderSectionWorkspace(sectionId) {
 
   const intro = document.createElement('p');
   intro.className = 'tools-note';
-  intro.textContent = section.description || '';
+  intro.textContent = destinationMeta?.intro || destination.intro || destination.description || '';
   panel.appendChild(intro);
 
-  for (const group of groupFields(sectionFields)) {
-    const details = document.createElement('details');
-    details.className = 'settings-group';
-    details.open = true;
+  for (const section of sectionEntries) {
+    const sectionFields = getSettingsSectionFields(definition, section.id);
+    if (!sectionFields.length) continue;
 
-    const summary = document.createElement('summary');
-    summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
-    details.appendChild(summary);
+    const sectionHead = document.createElement('div');
+    sectionHead.className = 'settings-subsection-head';
+    sectionHead.innerHTML = `
+      <p class="card-title">Bereich</p>
+      <h3>${section.label}</h3>
+      <p class="tools-note">${section.description || ''}</p>
+    `;
+    panel.appendChild(sectionHead);
 
-    const grid = document.createElement('div');
-    grid.className = 'settings-fields';
-    for (const field of group.fields) grid.appendChild(renderField(field));
-    details.appendChild(grid);
-    panel.appendChild(details);
+    for (const group of groupFields(sectionFields)) {
+      const details = document.createElement('details');
+      details.className = 'settings-group';
+      details.open = true;
+
+      const summary = document.createElement('summary');
+      summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
+      details.appendChild(summary);
+
+      const grid = document.createElement('div');
+      grid.className = 'settings-fields';
+      for (const field of group.fields) grid.appendChild(renderField(field));
+      details.appendChild(grid);
+      panel.appendChild(details);
+    }
   }
 
   mount.appendChild(panel);
