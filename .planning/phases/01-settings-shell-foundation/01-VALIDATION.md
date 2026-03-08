@@ -2,7 +2,7 @@
 phase: 01
 slug: settings-shell-foundation
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-03-08
 ---
@@ -38,11 +38,11 @@ created: 2026-03-08
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 01-01-01 | 01 | 1 | NAV-01 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
-| 01-01-02 | 01 | 1 | NAV-02 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
+| 01-01-01 | 01 | 0 | NAV-01 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
+| 01-01-02 | 01 | 0 | NAV-02 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
 | 01-02-01 | 02 | 1 | NAV-03 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
 | 01-02-02 | 02 | 1 | UX-02 | unit | `node --test dv-control-webapp/test/settings-shell.test.js` | ❌ W0 | ⬜ pending |
-| 01-03-01 | 03 | 2 | UX-01 | manual + smoke | `node --test` | ✅ | ⬜ pending |
+| 01-03-01 | 03 | 2 | UX-01 | smoke + manual | `node --test` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -75,4 +75,4 @@ created: 2026-03-08
 - [ ] Feedback latency < 10s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-03-08
