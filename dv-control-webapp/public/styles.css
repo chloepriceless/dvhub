@@ -1086,6 +1086,18 @@ table th {
   line-height: 1.45;
 }
 
+.setup-error-intro {
+  margin: 4px 0 0;
+  color: #ffe2df;
+}
+
+.setup-error-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
 .reveal {
   animation: riseIn 0.65s ease both;
 }

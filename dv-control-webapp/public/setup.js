@@ -145,8 +145,14 @@ function pushValidationError(summary, stepId, path, message) {
   summary.push({ stepId, path, message });
 }
 
+function isBlankValue(value) {
+  return value === '' || value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
+}
+
 function validateIntegerInRange(value, min, max) {
-  return Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max;
+  if (isBlankValue(value)) return false;
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized >= min && normalized <= max;
 }
 
 function validateSetupWizardState(state) {
@@ -169,12 +175,15 @@ function validateSetupWizardState(state) {
   requireInteger('basics', 'httpPort', 1, 65535, 'Bitte einen gueltigen Port zwischen 1 und 65535 eingeben.');
 
   requireOption('transport', 'victron.transport', ['modbus', 'mqtt'], 'Bitte einen gueltigen Victron-Transport waehlen.');
-  requireText('transport', 'victron.host', 'Bitte den GX-Host oder DNS-Namen angeben.');
   if (transport === 'modbus') {
+    requireText('transport', 'victron.host', 'Bitte den GX-Host oder DNS-Namen angeben.');
     requireInteger('transport', 'victron.port', 1, 65535, 'Bitte einen gueltigen GX-Port zwischen 1 und 65535 eingeben.');
     requireInteger('transport', 'victron.unitId', 0, 255, 'Bitte eine gueltige Unit ID zwischen 0 und 255 eingeben.');
     requireInteger('transport', 'victron.timeoutMs', 100, 60000, 'Bitte einen gueltigen Timeout zwischen 100 und 60000 ms eingeben.');
   } else {
+    if (isBlankValue(resolveWizardValue(state, 'victron.host', '')) && isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', ''))) {
+      pushValidationError(summary, 'transport', 'victron.mqtt.broker', 'Bitte entweder eine MQTT Broker URL oder den GX-Host angeben.');
+    }
     requireText('transport', 'victron.mqtt.portalId', 'Bitte die Victron Portal ID fuer MQTT angeben.');
     requireInteger('transport', 'victron.mqtt.keepaliveIntervalMs', 1000, 600000, 'Bitte ein gueltiges Keepalive zwischen 1000 und 600000 ms eingeben.');
   }
@@ -609,13 +618,19 @@ function renderSetupErrors() {
   }
 
   container.classList.add('error');
+  const headline = document.createElement('strong');
+  headline.textContent = `${stepErrors.length} Angabe${stepErrors.length === 1 ? '' : 'n'} noch pruefen`;
+  const intro = document.createElement('p');
+  intro.className = 'setup-error-intro';
+  intro.textContent = 'Bitte diese Punkte korrigieren, bevor du in den naechsten Setup-Schritt wechselst.';
   const list = document.createElement('ul');
+  list.className = 'setup-error-list';
   for (const entry of stepErrors) {
     const item = document.createElement('li');
     item.textContent = entry.message;
     list.appendChild(item);
   }
-  container.appendChild(list);
+  container.append(headline, intro, list);
 }
 
 function renderSetupNav() {

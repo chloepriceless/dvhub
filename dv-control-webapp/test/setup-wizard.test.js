@@ -91,7 +91,7 @@ test('draft values survive forward and backward navigation', () => {
 test('navigation is blocked when required transport values are missing', () => {
   const defaults = createDefaultConfig();
   let state = createSampleState({
-    config: { victron: { transport: 'mqtt', host: '' } },
+    config: { victron: { transport: 'mqtt', host: '', mqtt: { broker: '' } } },
     effectiveConfig: {
       ...defaults,
       victron: {
@@ -100,6 +100,7 @@ test('navigation is blocked when required transport values are missing', () => {
         host: '',
         mqtt: {
           ...defaults.victron.mqtt,
+          broker: '',
           portalId: ''
         }
       }
@@ -111,7 +112,7 @@ test('navigation is blocked when required transport values are missing', () => {
 
   assert.equal(state.activeStepId, 'transport');
   assert.equal(state.validation.steps.transport.valid, false);
-  assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.host'));
+  assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.mqtt.broker'));
   assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.mqtt.portalId'));
 });
 
@@ -160,6 +161,69 @@ test('transport step guidance and visible fields change between modbus and mqtt'
   assert.match(mqttCopy.highlight.body, /Broker/i);
   assert.match(mqttCopy.highlight.body, /GX-Host/i);
   assert.equal(mqttCopy.progressLabel, 'Schritt 2 von 4');
+});
+
+test('mqtt validation accepts broker fallback but blocks when neither broker nor host is present', () => {
+  const defaults = createDefaultConfig();
+  const validWithBroker = validateSetupWizardState(createSampleState({
+    config: {
+      ...defaults,
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: '',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: 'mqtt://venus-broker.local:1883',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 30000
+        }
+      }
+    }
+  }));
+  const invalidWithoutBrokerOrHost = validateSetupWizardState(createSampleState({
+    config: {
+      ...defaults,
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: '',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: '',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 30000
+        }
+      }
+    }
+  }));
+
+  assert.equal(validWithBroker.validation.steps.transport.valid, true);
+  assert.equal(invalidWithoutBrokerOrHost.validation.steps.transport.valid, false);
+  assert.match(invalidWithoutBrokerOrHost.validation.fields['victron.mqtt.broker'][0], /Broker URL oder den GX-Host/i);
+});
+
+test('blank numeric fields stay invalid instead of coercing to zero defaults', () => {
+  const defaults = createDefaultConfig();
+  const state = validateSetupWizardState(createSampleState({
+    config: {
+      ...defaults,
+      victron: {
+        ...defaults.victron,
+        transport: 'modbus',
+        unitId: ''
+      },
+      meter: {
+        ...defaults.meter,
+        address: ''
+      }
+    }
+  }));
+
+  assert.equal(state.validation.steps.transport.valid, false);
+  assert.equal(state.validation.steps.dv.valid, false);
+  assert.match(state.validation.fields['victron.unitId'][0], /Unit ID/i);
+  assert.match(state.validation.fields['meter.address'][0], /Startadresse/i);
 });
 
 test('validateSetupWizardState returns per-step and per-field blocking feedback', () => {
