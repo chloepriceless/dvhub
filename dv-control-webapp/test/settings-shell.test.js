@@ -23,9 +23,11 @@ function loadShellHelpers() {
 
 const {
   SETTINGS_OVERVIEW_ID,
+  buildDestinationWorkspace,
   buildSettingsDestinations,
   createSettingsShellState,
-  setActiveSettingsSection
+  setActiveSettingsSection,
+  shouldOpenSettingsGroup
 } = loadShellHelpers();
 
 const sampleDefinition = {
@@ -42,7 +44,8 @@ const sampleDefinition = {
   fields: [
     { section: 'system', path: 'httpPort' },
     { section: 'system', path: 'modbusListenPort', group: 'network' },
-    { section: 'victron', path: 'victron.transport' },
+    { section: 'victron', path: 'victron.transport', group: 'connection' },
+    { section: 'victron', path: 'victron.host', group: 'mqtt' },
     { section: 'meter', path: 'meter.host', group: 'meter' }
   ]
 };
@@ -58,7 +61,7 @@ test('buildSettingsDestinations groups legacy sections under destination metadat
   assert.equal(destinations[1].label, 'Grundsystem');
   assert.equal(destinations[2].label, 'Verbindung zur Anlage');
   assert.deepEqual(Array.from(destinations[2].sectionIds), ['victron', 'meter']);
-  assert.equal(destinations[2].fieldCount, 2);
+  assert.equal(destinations[2].fieldCount, 3);
   assert.equal(destinations[1].label, sampleDefinition.destinations[0].label);
   assert.notEqual(destinations[2].label, sampleDefinition.sections[1].label);
 });
@@ -77,6 +80,23 @@ test('setActiveSettingsSection accepts known destinations and falls back to over
 
   assert.equal(activeState.activeSectionId, 'connection');
   assert.equal(fallbackState.activeSectionId, SETTINGS_OVERVIEW_ID);
+});
+
+test('shouldOpenSettingsGroup only opens the first group in the active workspace by default', () => {
+  assert.equal(shouldOpenSettingsGroup({ sectionIndex: 0, groupIndex: 0 }), true);
+  assert.equal(shouldOpenSettingsGroup({ sectionIndex: 0, groupIndex: 1 }), false);
+  assert.equal(shouldOpenSettingsGroup({ sectionIndex: 1, groupIndex: 0 }), false);
+});
+
+test('buildDestinationWorkspace keeps only the active destination sections and marks later groups closed', () => {
+  const workspace = buildDestinationWorkspace(sampleDefinition, 'connection');
+
+  assert.equal(workspace.id, 'connection');
+  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron', 'meter']);
+  assert.deepEqual(Array.from(workspace.sections[0].groups, (group) => group.id), ['connection', 'mqtt']);
+  assert.equal(workspace.sections[0].groups[0].openByDefault, true);
+  assert.equal(workspace.sections[0].groups[1].openByDefault, false);
+  assert.equal(workspace.sections[1].groups[0].openByDefault, false);
 });
 
 test('real config definition keeps navigation compact and maps every section with fields', () => {
@@ -100,4 +120,14 @@ test('real config definition exposes friendly grouped labels instead of the raw 
   assert.ok(visibleLabels.includes('Erweitert'));
   assert.ok(!visibleLabels.includes('Victron Verbindung'));
   assert.ok(!visibleLabels.includes('Netzzaehler'));
+});
+
+test('real config workspace stays section-focused and does not reopen unrelated sections', () => {
+  const definition = getConfigDefinition();
+  const workspace = buildDestinationWorkspace(definition, 'connection');
+
+  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron', 'meter']);
+  assert.equal(workspace.sections[0].groups[0].openByDefault, true);
+  assert.equal(workspace.sections[0].groups[1].openByDefault, false);
+  assert.equal(workspace.sections[1].groups[0].openByDefault, false);
 });
