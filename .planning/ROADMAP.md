@@ -12,7 +12,7 @@ Diese Roadmap fuehrt PlexLite von einer funktional starken, aber in Setup und Se
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Settings Shell Foundation** - Build the compact sidebar-based information architecture for Settings.
+- [x] **Phase 1: Settings Shell Foundation** - Build the compact sidebar-based information architecture for Settings.
 - [ ] **Phase 2: Guided Setup Rebuild** - Turn first-run setup into a step-by-step beginner flow.
 - [ ] **Phase 3: Progressive Disclosure Model** - Separate essential, optional, and expert settings with clear expandable structure.
 - [ ] **Phase 4: Safe Apply And Recovery UX** - Make risky saves explain restart, reconnect, and validation consequences.
@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01: Refactor settings page structure into a sidebar shell with active-section state
 - [x] 01-02: Reorganize top-level section taxonomy and task-oriented labels
-- [ ] 01-03: Tighten layout density and section-level rendering behavior
+- [x] 01-03: Tighten layout density and section-level rendering behavior
 
 ### Phase 2: Guided Setup Rebuild
 **Goal**: Replace the current broad setup page with a guided wizard that shows only the essential fields for each step and adapts to the chosen transport.
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Settings Shell Foundation | 2/3 | In Progress | - |
+| 1. Settings Shell Foundation | 3/3 | Complete | 2026-03-08 |
 | 2. Guided Setup Rebuild | 0/3 | Not started | - |
 | 3. Progressive Disclosure Model | 0/2 | Not started | - |
 | 4. Safe Apply And Recovery UX | 0/2 | Not started | - |

@@ -26,7 +26,7 @@
 
 ### Clarity And Density
 
-- [ ] **UX-01**: User sees a more compact settings layout that reduces scrolling and improves overview on common desktop sizes.
+- [x] **UX-01**: User sees a more compact settings layout that reduces scrolling and improves overview on common desktop sizes.
 - [x] **UX-02**: User sees settings labels and short helper text organized by user task rather than only by internal technical terminology.
 - [ ] **UX-03**: User can understand which settings are essential, optional, or expert-level from the page structure itself.
 
@@ -75,7 +75,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DISC-01 | Phase 3 | Pending |
 | DISC-02 | Phase 3 | Pending |
 | DISC-03 | Phase 3 | Pending |
-| UX-01 | Phase 1 | Pending |
+| UX-01 | Phase 1 | Complete |
 | UX-02 | Phase 1 | Complete |
 | UX-03 | Phase 3 | Pending |
 | SAFE-01 | Phase 4 | Pending |
