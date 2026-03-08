@@ -126,6 +126,164 @@ const SECTIONS = [
   }
 ];
 
+const SETUP_WIZARD_STEPS = [
+  {
+    id: 'basics',
+    index: 0,
+    label: 'Schritt 1',
+    title: 'Webserver & Sicherheit',
+    description: 'Lege die Basis fuer Zugriff und Erstkontakt fest, damit PlexLite nach dem Speichern erreichbar bleibt.'
+  },
+  {
+    id: 'transport',
+    index: 1,
+    label: 'Schritt 2',
+    title: 'Victron Verbindung',
+    description: 'Waehle den passenden Victron-Transport und zeige nur die Felder, die fuer Modbus oder MQTT wirklich noetig sind.'
+  },
+  {
+    id: 'dv',
+    index: 2,
+    label: 'Schritt 3',
+    title: 'DV & Meter',
+    description: 'Richte Proxy-Port, Meterblock und die Vorzeichenlogik fuer Netzwerte ein.'
+  },
+  {
+    id: 'services',
+    index: 3,
+    label: 'Schritt 4',
+    title: 'Preise & Zusatzdienste',
+    description: 'Erfasse Zeitzone und optional nur die Dienste, die du direkt zum Start brauchst.'
+  }
+];
+
+const SETUP_WIZARD_FIELD_META = {
+  httpPort: {
+    stepId: 'basics',
+    order: 10,
+    help: 'Unter diesem Port oeffnest du spaeter die PlexLite-Oberflaeche im Browser.'
+  },
+  apiToken: {
+    stepId: 'basics',
+    order: 20,
+    help: 'Optional. Schuetzt die API direkt ab dem ersten Start, wenn du extern auf PlexLite zugreifst.'
+  },
+  'victron.transport': {
+    stepId: 'transport',
+    order: 10,
+    help: 'Modbus ist die direkte GX-Verbindung. MQTT eignet sich fuer Venus-OS-Daten mit Portal-ID.'
+  },
+  'victron.host': {
+    stepId: 'transport',
+    order: 20,
+    help: 'Adresse deines GX. Bei MQTT dient sie auch als Fallback, wenn kein eigener Broker eingetragen ist.'
+  },
+  'victron.port': {
+    stepId: 'transport',
+    order: 30,
+    visibleWhenTransport: ['modbus'],
+    help: 'Nur fuer Modbus. In den meisten Installationen bleibt das 502.'
+  },
+  'victron.unitId': {
+    stepId: 'transport',
+    order: 40,
+    visibleWhenTransport: ['modbus'],
+    help: 'Nur fuer Modbus. Der GX nutzt typischerweise die Unit ID 100.'
+  },
+  'victron.timeoutMs': {
+    stepId: 'transport',
+    order: 50,
+    visibleWhenTransport: ['modbus'],
+    help: 'Nur fuer Modbus. Definiert, wie lange PlexLite auf eine Register-Antwort wartet.'
+  },
+  'victron.mqtt.portalId': {
+    stepId: 'transport',
+    order: 60,
+    visibleWhenTransport: ['mqtt'],
+    help: 'Pflicht fuer Victron MQTT, damit PlexLite die richtigen Venus-Topics lesen kann.'
+  },
+  'victron.mqtt.broker': {
+    stepId: 'transport',
+    order: 70,
+    visibleWhenTransport: ['mqtt'],
+    help: 'Optionaler eigener Broker. Leer bedeutet: PlexLite nutzt den GX-Host als MQTT-Ziel.'
+  },
+  'victron.mqtt.keepaliveIntervalMs': {
+    stepId: 'transport',
+    order: 80,
+    visibleWhenTransport: ['mqtt'],
+    help: 'Nur fuer MQTT. Haelt die Verbindung aktiv, wenn laenger keine Daten eingehen.'
+  },
+  modbusListenHost: {
+    stepId: 'dv',
+    order: 10,
+    help: 'Interface, auf dem PlexLite den lokalen Modbus-Proxy anbietet.'
+  },
+  modbusListenPort: {
+    stepId: 'dv',
+    order: 20,
+    help: 'Auf diesen Port verbindet sich spaeter der Direktvermarkter oder das Zielsystem.'
+  },
+  gridPositiveMeans: {
+    stepId: 'dv',
+    order: 30,
+    help: 'Hier legst du fest, ob positive Netzwerte Einspeisung oder Netzbezug bedeuten.'
+  },
+  'meter.fc': {
+    stepId: 'dv',
+    order: 40,
+    help: 'Function Code fuer den Netzleistungsblock. Bei vielen Victron-Setups ist das 4.'
+  },
+  'meter.address': {
+    stepId: 'dv',
+    order: 50,
+    help: 'Startadresse des Meterblocks fuer L1, L2 und L3.'
+  },
+  'meter.quantity': {
+    stepId: 'dv',
+    order: 60,
+    help: 'Wie viele Register PlexLite fuer den Meterblock am Stueck liest.'
+  },
+  'dvControl.enabled': {
+    stepId: 'dv',
+    order: 70,
+    help: 'Aktiviert die DV-Schreiblogik, sobald spaeter Signale oder Preise darauf reagieren.'
+  },
+  'schedule.timezone': {
+    stepId: 'services',
+    order: 10,
+    help: 'Diese Zeitzone steuert Schedule-Auswertung und dient auch als EPEX-Standard.'
+  },
+  'epex.enabled': {
+    stepId: 'services',
+    order: 20,
+    help: 'Nur aktivieren, wenn du Day-Ahead-Preise direkt in PlexLite nutzen willst.'
+  },
+  'epex.bzn': {
+    stepId: 'services',
+    order: 30,
+    visibleWhenPath: { path: 'epex.enabled', equals: true },
+    help: 'Handelszone fuer EPEX, zum Beispiel DE-LU.'
+  },
+  'influx.enabled': {
+    stepId: 'services',
+    order: 40,
+    help: 'Aktiviere Influx nur, wenn du Messwerte langfristig extern speichern willst.'
+  },
+  'influx.url': {
+    stepId: 'services',
+    order: 50,
+    visibleWhenPath: { path: 'influx.enabled', equals: true },
+    help: 'Adresse deines Influx-Servers oder Containers.'
+  },
+  'influx.db': {
+    stepId: 'services',
+    order: 60,
+    visibleWhenPath: { path: 'influx.enabled', equals: true },
+    help: 'Name der Datenbank oder des Zielbereichs fuer den Influx-Export.'
+  }
+};
+
 const restartSensitivePrefixes = [
   'httpPort',
   'modbusListenHost',
@@ -138,6 +296,18 @@ const restartSensitivePrefixes = [
   'victron.mqtt.keepaliveIntervalMs',
   'victron.mqtt.qos'
 ];
+
+function addSetupWizardMetadata(fields) {
+  return fields.map((field) => {
+    if (!field.path) return field;
+    const setup = SETUP_WIZARD_FIELD_META[field.path];
+    if (!setup) return field;
+    return {
+      ...field,
+      setup: clone(setup)
+    };
+  });
+}
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -411,7 +581,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
     );
   }
 
-  return fields;
+  return addSetupWizardMetadata(fields);
 }
 
 function buildFieldDefinitions() {
@@ -1313,6 +1483,9 @@ export function getConfigDefinition() {
     destinations: clone(SETTINGS_DESTINATIONS),
     sections: clone(SECTIONS),
     fields: clone(FIELD_DEFINITIONS),
+    setupWizard: {
+      steps: clone(SETUP_WIZARD_STEPS)
+    },
     restartSensitivePrefixes: clone(restartSensitivePrefixes)
   };
 }

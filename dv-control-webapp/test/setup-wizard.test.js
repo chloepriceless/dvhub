@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { createDefaultConfig } from '../config-model.js';
+import { createDefaultConfig, getConfigDefinition } from '../config-model.js';
 
 function loadSetupWizardHelpers() {
   const setupPath = fileURLToPath(new URL('../public/setup.js', import.meta.url));
@@ -35,6 +35,7 @@ const {
 function createSampleState(overrides = {}) {
   const defaults = createDefaultConfig();
   return createSetupWizardState({
+    definition: getConfigDefinition(),
     config: {
       victron: { transport: defaults.victron.transport },
       schedule: {},
@@ -56,6 +57,19 @@ test('createSetupWizardState starts on the first step with ordered metadata', ()
   assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services']);
   assert.deepEqual(Array.from(state.visitedStepIds), ['basics']);
   assert.deepEqual(Array.from(state.steps, (step) => step.id), Array.from(state.stepOrder));
+});
+
+test('createSetupWizardState derives setup steps from schema metadata', () => {
+  const definition = getConfigDefinition();
+  const state = createSampleState({ definition });
+  const setupFields = definition.fields.filter((field) => field.setup?.stepId === 'transport');
+
+  assert.ok(Array.isArray(definition.setupWizard?.steps));
+  assert.equal(state.steps[0].title, definition.setupWizard.steps[0].title);
+  assert.deepEqual(
+    Array.from(state.steps.find((step) => step.id === 'transport').fields),
+    Array.from(setupFields.map((field) => field.path))
+  );
 });
 
 test('draft values survive forward and backward navigation', () => {

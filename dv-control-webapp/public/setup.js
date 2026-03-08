@@ -1,260 +1,7 @@
 const common = typeof window !== 'undefined' ? window.PlexLiteCommon || {} : {};
 const { apiFetch, setStoredApiToken } = common;
 
-const SETUP_STEP_DEFINITIONS = [
-  {
-    id: 'basics',
-    index: 0,
-    label: 'Schritt 1',
-    title: 'Webserver & Sicherheit',
-    description: 'Grundlegende Einstellungen fuer Webzugriff und API-Schutz.'
-  },
-  {
-    id: 'transport',
-    index: 1,
-    label: 'Schritt 2',
-    title: 'Victron Verbindung',
-    description: 'Transport, GX-Verbindung und MQTT-Basisdaten.'
-  },
-  {
-    id: 'dv',
-    index: 2,
-    label: 'Schritt 3',
-    title: 'DV & Meter',
-    description: 'Proxy-Port, Meterblock und Vorzeichenlogik fuer Netzwerte.'
-  },
-  {
-    id: 'services',
-    index: 3,
-    label: 'Schritt 4',
-    title: 'Preise & Zusatzdienste',
-    description: 'Zeitzone sowie optionale Preis- und Logging-Dienste.'
-  }
-];
-
-const SETUP_FIELD_DEFINITIONS = [
-  {
-    stepId: 'basics',
-    path: 'httpPort',
-    label: 'HTTP Port',
-    help: 'Port der Weboberflaeche. Standard ist 8080.',
-    type: 'number',
-    valueType: 'number',
-    min: 1,
-    max: 65535
-  },
-  {
-    stepId: 'basics',
-    path: 'apiToken',
-    label: 'API Token',
-    help: 'Optional. Wenn gesetzt, wird es nach dem Speichern fuer diese Browser-Session hinterlegt.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.transport',
-    label: 'Transport',
-    help: 'Modbus ist der Standard fuer GX und Ekrano. MQTT ist fuer Venus OS Push-Daten.',
-    type: 'select',
-    valueType: 'string',
-    options: [
-      { value: 'modbus', label: 'Modbus TCP' },
-      { value: 'mqtt', label: 'MQTT' }
-    ]
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.host',
-    label: 'GX Host',
-    help: 'IP-Adresse oder DNS-Name des GX.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.port',
-    label: 'GX Port',
-    help: 'Standard fuer Modbus TCP ist 502.',
-    type: 'number',
-    valueType: 'number',
-    min: 1,
-    max: 65535
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.unitId',
-    label: 'Unit ID',
-    help: 'Typischerweise 100 beim Victron GX.',
-    type: 'number',
-    valueType: 'number',
-    min: 0,
-    max: 255
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.timeoutMs',
-    label: 'Timeout (ms)',
-    help: 'Timeout fuer Register-Requests.',
-    type: 'number',
-    valueType: 'number',
-    min: 100,
-    max: 60000
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.mqtt.broker',
-    label: 'MQTT Broker URL',
-    help: 'Zum Beispiel mqtt://192.168.1.10:1883.',
-    type: 'text',
-    valueType: 'string',
-    visibleWhen(state) {
-      return getSetupTransportMode(state) === 'mqtt';
-    }
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.mqtt.portalId',
-    label: 'Portal ID',
-    help: 'Victron Portal ID fuer die MQTT Topics.',
-    type: 'text',
-    valueType: 'string',
-    visibleWhen(state) {
-      return getSetupTransportMode(state) === 'mqtt';
-    }
-  },
-  {
-    stepId: 'transport',
-    path: 'victron.mqtt.keepaliveIntervalMs',
-    label: 'Keepalive (ms)',
-    help: 'Intervall fuer MQTT Keepalive-Pakete.',
-    type: 'number',
-    valueType: 'number',
-    min: 1000,
-    max: 600000,
-    visibleWhen(state) {
-      return getSetupTransportMode(state) === 'mqtt';
-    }
-  },
-  {
-    stepId: 'dv',
-    path: 'modbusListenHost',
-    label: 'Modbus Listen Host',
-    help: 'Normalerweise 0.0.0.0 fuer alle Interfaces.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'dv',
-    path: 'modbusListenPort',
-    label: 'Modbus Listen Port',
-    help: 'LUOX / Direktvermarkter verbinden sich spaeter auf diesen Proxy-Port.',
-    type: 'number',
-    valueType: 'number',
-    min: 1,
-    max: 65535
-  },
-  {
-    stepId: 'dv',
-    path: 'gridPositiveMeans',
-    label: 'Grid Vorzeichen',
-    help: 'Abhaengig davon, wie dein Meter die Phasenleistung meldet.',
-    type: 'select',
-    valueType: 'string',
-    options: [
-      { value: 'feed_in', label: 'Positiv bedeutet Einspeisung' },
-      { value: 'grid_import', label: 'Positiv bedeutet Netzbezug' }
-    ]
-  },
-  {
-    stepId: 'dv',
-    path: 'meter.fc',
-    label: 'Meter FC',
-    help: 'Typischerweise 4 fuer Victron Meterbloecke.',
-    type: 'select',
-    valueType: 'number',
-    options: [
-      { value: 4, label: '4 - Input Register' },
-      { value: 3, label: '3 - Holding Register' }
-    ]
-  },
-  {
-    stepId: 'dv',
-    path: 'meter.address',
-    label: 'Meter Startadresse',
-    help: 'Standardblock fuer Grid L1/L2/L3 ist 820.',
-    type: 'number',
-    valueType: 'number',
-    min: 0,
-    max: 65535
-  },
-  {
-    stepId: 'dv',
-    path: 'meter.quantity',
-    label: 'Meter Registeranzahl',
-    help: 'Standard ist 3 Register fuer L1/L2/L3.',
-    type: 'number',
-    valueType: 'number',
-    min: 1,
-    max: 125
-  },
-  {
-    stepId: 'dv',
-    path: 'dvControl.enabled',
-    label: 'DV Control aktivieren',
-    help: 'Schreibt bei DV-Signalen automatisch in die Victron Register 2848 und 2850.',
-    type: 'boolean',
-    valueType: 'boolean'
-  },
-  {
-    stepId: 'services',
-    path: 'schedule.timezone',
-    label: 'Zeitzone',
-    help: 'Wird fuer Schedule und Darstellung genutzt. Standard ist Europe/Berlin.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'services',
-    path: 'epex.enabled',
-    label: 'EPEX aktiv',
-    help: 'Aktiviert Day-Ahead-Preise und Negativpreis-Schutz.',
-    type: 'boolean',
-    valueType: 'boolean'
-  },
-  {
-    stepId: 'services',
-    path: 'epex.bzn',
-    label: 'BZN',
-    help: 'Beispiel: DE-LU.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'services',
-    path: 'influx.enabled',
-    label: 'Influx aktiv',
-    help: 'Optional fuer Langzeit-Logging.',
-    type: 'boolean',
-    valueType: 'boolean'
-  },
-  {
-    stepId: 'services',
-    path: 'influx.url',
-    label: 'Influx URL',
-    help: 'Zum Beispiel http://127.0.0.1:8086.',
-    type: 'text',
-    valueType: 'string'
-  },
-  {
-    stepId: 'services',
-    path: 'influx.db',
-    label: 'Influx DB',
-    help: 'Datenbankname fuer Influx.',
-    type: 'text',
-    valueType: 'string'
-  }
-];
+let setupDefinition = null;
 
 let setupWizardState = createSetupWizardState();
 
@@ -295,22 +42,66 @@ function setPath(obj, path, value) {
   current[parts[0]] = value;
 }
 
-function resolveSetupStepId(stepId) {
-  const validIds = new Set(SETUP_STEP_DEFINITIONS.map((step) => step.id));
-  return validIds.has(stepId) ? stepId : SETUP_STEP_DEFINITIONS[0].id;
+function inferSetupFieldValueType(field) {
+  if (field.type === 'number') return 'number';
+  if (field.type === 'boolean') return 'boolean';
+  if (field.type === 'select' && Array.isArray(field.options) && field.options.length && field.options.every((option) => typeof option.value === 'number')) return 'number';
+  return 'string';
 }
 
-function getSetupFieldsForStep(stepId) {
-  return SETUP_FIELD_DEFINITIONS.filter((field) => field.stepId === stepId);
+function getSetupStepDefinitions(definitionLike = setupDefinition) {
+  return (definitionLike?.setupWizard?.steps || [])
+    .map((step, index) => ({
+      ...step,
+      index: Number.isInteger(step.index) ? step.index : index
+    }))
+    .sort((left, right) => left.index - right.index);
+}
+
+function getSetupFieldDefinitions(definitionLike = setupDefinition) {
+  return (definitionLike?.fields || [])
+    .filter((field) => field?.setup?.stepId)
+    .map((field) => ({
+      ...field,
+      help: field.setup?.help || field.help || '',
+      valueType: inferSetupFieldValueType(field)
+    }))
+    .sort((left, right) => {
+      if (left.setup.stepId !== right.setup.stepId) return left.setup.stepId.localeCompare(right.setup.stepId);
+      return (left.setup.order || 0) - (right.setup.order || 0);
+    });
+}
+
+function resolveSetupStepId(stepId, steps = getSetupStepDefinitions()) {
+  const validIds = new Set((steps || []).map((step) => step.id));
+  if (validIds.has(stepId)) return stepId;
+  return steps[0]?.id || '';
+}
+
+function getSetupFieldsForStep(stepId, definitionLike = setupDefinition) {
+  return getSetupFieldDefinitions(definitionLike).filter((field) => field.setup?.stepId === stepId);
+}
+
+function matchesSetupVisibilityRule(state, rule) {
+  if (!rule?.path) return true;
+  return resolveWizardValue(state, rule.path) === rule.equals;
+}
+
+function isSetupFieldVisible(state, field) {
+  const setup = field?.setup || {};
+  if (Array.isArray(setup.visibleWhenTransport) && setup.visibleWhenTransport.length && !setup.visibleWhenTransport.includes(getSetupTransportMode(state))) return false;
+  if (setup.visibleWhenPath && !matchesSetupVisibilityRule(state, setup.visibleWhenPath)) return false;
+  if (setup.hiddenWhenPath && matchesSetupVisibilityRule(state, setup.hiddenWhenPath)) return false;
+  return true;
 }
 
 function getVisibleSetupFieldsForStep(state, stepId) {
-  return getSetupFieldsForStep(stepId).filter((field) => (typeof field.visibleWhen === 'function' ? field.visibleWhen(state) : true));
+  return getSetupFieldsForStep(stepId, state?.definition || setupDefinition).filter((field) => isSetupFieldVisible(state, field));
 }
 
-function buildSetupSteps() {
-  return SETUP_STEP_DEFINITIONS.map((step) => {
-    const fields = getSetupFieldsForStep(step.id);
+function buildSetupSteps(definitionLike = setupDefinition) {
+  return getSetupStepDefinitions(definitionLike).map((step) => {
+    const fields = getSetupFieldsForStep(step.id, definitionLike);
     return {
       ...step,
       fields: fields.map((field) => field.path),
@@ -329,21 +120,22 @@ function getSetupTransportMode(state) {
   return resolveWizardValue(state, 'victron.transport', 'modbus') === 'mqtt' ? 'mqtt' : 'modbus';
 }
 
-function buildValidationResult(summary) {
+function buildValidationResult(summary, steps = []) {
   const fields = {};
-  const steps = {};
-  for (const step of SETUP_STEP_DEFINITIONS) {
-    steps[step.id] = { valid: true, errors: [] };
+  const stepState = {};
+  for (const step of steps) {
+    stepState[step.id] = { valid: true, errors: [] };
   }
   for (const entry of summary) {
-    steps[entry.stepId].valid = false;
-    steps[entry.stepId].errors.push(entry.message);
+    if (!stepState[entry.stepId]) stepState[entry.stepId] = { valid: true, errors: [] };
+    stepState[entry.stepId].valid = false;
+    stepState[entry.stepId].errors.push(entry.message);
     if (!fields[entry.path]) fields[entry.path] = [];
     fields[entry.path].push(entry.message);
   }
   return {
     fields,
-    steps,
+    steps: stepState,
     summary,
     isBlocking: summary.length > 0
   };
@@ -358,6 +150,7 @@ function validateIntegerInRange(value, min, max) {
 }
 
 function validateSetupWizardState(state) {
+  const steps = buildSetupSteps(state?.definition || setupDefinition);
   const summary = [];
   const transport = getSetupTransportMode(state);
   const requireText = (stepId, path, message) => {
@@ -404,25 +197,31 @@ function validateSetupWizardState(state) {
 
   return {
     ...state,
+    definition: clone(state?.definition || setupDefinition || {}),
+    steps,
+    stepOrder: steps.map((step) => step.id),
+    activeStepId: resolveSetupStepId(state?.activeStepId, steps),
     transportMode: transport,
-    validation: buildValidationResult(summary)
+    validation: buildValidationResult(summary, steps)
   };
 }
 
 function createSetupWizardState(payload = {}) {
-  const steps = buildSetupSteps();
-  const initialStepId = resolveSetupStepId(payload.activeStepId);
+  const definition = clone(payload.definition || setupDefinition || {});
+  const steps = buildSetupSteps(definition);
+  const initialStepId = resolveSetupStepId(payload.activeStepId, steps);
   const state = {
+    definition,
     draftConfig: clone(payload.config || {}),
     effectiveConfig: clone(payload.effectiveConfig || {}),
     meta: clone(payload.meta || {}),
     steps,
     stepOrder: steps.map((step) => step.id),
     activeStepId: initialStepId,
-    visitedStepIds: Array.from(new Set([initialStepId])),
+    visitedStepIds: Array.from(new Set(initialStepId ? [initialStepId] : [])),
     completedStepIds: [],
     transportMode: 'modbus',
-    validation: buildValidationResult([])
+    validation: buildValidationResult([], steps)
   };
   return validateSetupWizardState(state);
 }
@@ -438,9 +237,12 @@ function updateSetupDraftValue(state, path, value) {
 }
 
 function setActiveSetupStep(state, requestedStepId) {
-  const activeStepId = resolveSetupStepId(requestedStepId);
+  const steps = state?.steps?.length ? state.steps : buildSetupSteps(state?.definition || setupDefinition);
+  const activeStepId = resolveSetupStepId(requestedStepId, steps);
   return {
     ...state,
+    steps,
+    stepOrder: steps.map((step) => step.id),
     activeStepId,
     visitedStepIds: Array.from(new Set([...(state?.visitedStepIds || []), activeStepId]))
   };
@@ -469,11 +271,13 @@ function goToPreviousSetupStep(state) {
 }
 
 const setupWizardHelpers = {
-  SETUP_FIELD_DEFINITIONS,
-  SETUP_STEP_DEFINITIONS,
+  buildSetupSteps,
   createSetupWizardState,
   getSetupFieldsForStep,
+  getSetupFieldDefinitions,
+  getSetupStepDefinitions,
   getSetupTransportMode,
+  getVisibleSetupFieldsForStep,
   goToNextSetupStep,
   goToPreviousSetupStep,
   resolveWizardValue,
@@ -487,6 +291,7 @@ if (typeof globalThis !== 'undefined') {
 }
 
 function setSetupWizardState(nextState) {
+  setupDefinition = clone(nextState?.definition || setupDefinition || {});
   setupWizardState = validateSetupWizardState(nextState);
   return setupWizardState;
 }
@@ -733,6 +538,7 @@ function moveToFirstInvalidStep(state) {
 
 function hydrateSetupWizardState(payload) {
   setSetupWizardState(createSetupWizardState({
+    definition: payload?.definition || setupDefinition,
     config: payload?.config || {},
     effectiveConfig: payload?.effectiveConfig || {},
     meta: payload?.meta || {},
