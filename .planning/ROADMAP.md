@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01: Refactor settings page structure into a sidebar shell with active-section state
-- [ ] 01-02: Reorganize top-level section taxonomy and task-oriented labels
+- [x] 01-02: Reorganize top-level section taxonomy and task-oriented labels
 - [ ] 01-03: Tighten layout density and section-level rendering behavior
 
 ### Phase 2: Guided Setup Rebuild
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Settings Shell Foundation | 1/3 | In Progress | - |
+| 1. Settings Shell Foundation | 2/3 | In Progress | - |
 | 2. Guided Setup Rebuild | 0/3 | Not started | - |
 | 3. Progressive Disclosure Model | 0/2 | Not started | - |
 | 4. Safe Apply And Recovery UX | 0/2 | Not started | - |
