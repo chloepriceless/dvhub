@@ -950,18 +950,18 @@ async function evaluateSchedule() {
     const eff = effectiveTargetValue(target);
     if (eff.value == null) continue;
 
-    // Bei negativen Preisen: Grid Setpoint auf Schutzwert begrenzen
+    // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
     if (target === 'gridSetpointW' && priceNegative) {
       const limit = Number(npp.gridSetpointW ?? -40);
+      const prev = state.ctrl.negativePriceActive;
+      if (!prev) pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
+      state.ctrl.negativePriceActive = true;
+      // Victron DC/AC Abregelung immer bei negativen Preisen
+      if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
+        applyDvVictronControl(false);
+      }
       if (eff.value < limit) {
-        const prev = state.ctrl.negativePriceActive;
-        if (!prev) pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
-        state.ctrl.negativePriceActive = true;
         await applyControlTarget(target, limit, 'negative_price_protection');
-        // Auch Victron-Abregelung bei negativen Preisen
-        if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
-          applyDvVictronControl(false);
-        }
         continue;
       }
     }
