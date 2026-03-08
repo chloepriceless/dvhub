@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: In Progress
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-08T23:13:26.304Z"
-last_activity: "2026-03-08 - Completed Phase 2 Plan 01: guided setup backbone"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-08T23:31:48.784Z"
+last_activity: "2026-03-08 - Completed Phase 2 Plan 02: build transport-aware setup steps with beginner-focused copy"
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -26,28 +26,28 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 2 of 5 (Guided Setup Rebuild)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In Progress
-Last activity: 2026-03-08 - Completed Phase 2 Plan 01: guided setup backbone
+Last activity: 2026-03-08 - Completed Phase 2 Plan 02: build transport-aware setup steps with beginner-focused copy
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 6 min
-- Total execution time: 0.4 hours
+- Total execution time: 0.5 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-settings-shell-foundation | 3 | 15 min | 5 min |
-| 02-guided-setup-rebuild | 1 | 8 min | 8 min |
+| 02-guided-setup-rebuild | 2 | 16 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, 6 min, 5 min, 8 min
+- Last 5 plans: 4 min, 6 min, 5 min, 8 min, 8 min
 - Trend: Slightly rising
 
 *Updated after each plan completion*
@@ -57,6 +57,7 @@ Progress: [███████░░░] 67%
 | Phase 01-settings-shell-foundation P02 | 6 min | 3 tasks | 3 files |
 | Phase 01-settings-shell-foundation P03 | 5 min | 3 tasks | 4 files |
 | Phase 02-guided-setup-rebuild P01 | 8min | 3 tasks | 3 files |
+| Phase 02-guided-setup-rebuild P02 | 8 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,9 @@ Recent decisions affecting current work:
 - [Phase 02-guided-setup-rebuild]: Expose setup helpers on globalThis so node:test can validate wizard state without a browser document.
 - [Phase 02-guided-setup-rebuild]: Keep setup source of truth in draftConfig plus effectiveConfig so step changes do not depend on hidden DOM fields.
 - [Phase 02-guided-setup-rebuild]: Render the setup page through shell hooks with one active workspace and dedicated validation summary instead of four always-open cards.
+- [Phase 02-guided-setup-rebuild]: Keep setup step ownership and beginner copy on config definition metadata so the wizard cannot drift from the real schema.
+- [Phase 02-guided-setup-rebuild]: Present the active step with progress chrome and transport-specific guidance instead of showing raw field lists.
+- [Phase 02-guided-setup-rebuild]: Treat MQTT connection validation as broker-or-host and reject blank numeric fields instead of coercing them to zero.
 
 ### Pending Todos
 
@@ -84,10 +88,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Setup and Settings currently use different levels of schema sharing, which is a likely planning concern for Phase 2.
+- Phase 2 still needs the review-and-save step from Plan 03 to cover SET-04 and present restart-sensitive outcomes clearly.
 
 ## Session Continuity
 
-Last session: 2026-03-08T23:13:26.296Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-03-08T23:31:17.578Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None

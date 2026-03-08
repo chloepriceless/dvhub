@@ -50,7 +50,7 @@ Plans:
 
 Plans:
 - [x] 02-01: Extract shared setup draft handling and wizard step state
-- [ ] 02-02: Build transport-aware setup steps with beginner-focused copy
+- [x] 02-02: Build transport-aware setup steps with beginner-focused copy
 - [ ] 02-03: Add setup review step and save integration
 
 ### Phase 3: Progressive Disclosure Model
@@ -105,7 +105,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Settings Shell Foundation | 3/3 | Complete | 2026-03-08 |
-| 2. Guided Setup Rebuild | 1/3 | In Progress | - |
+| 2. Guided Setup Rebuild | 2/3 | In Progress | - |
 | 3. Progressive Disclosure Model | 0/2 | Not started | - |
 | 4. Safe Apply And Recovery UX | 0/2 | Not started | - |
 | 5. Diagnostics And Regression Hardening | 0/2 | Not started | - |
