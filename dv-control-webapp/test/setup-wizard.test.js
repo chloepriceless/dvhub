@@ -32,6 +32,7 @@ const {
   goToPreviousSetupStep,
   setActiveSetupStep,
   updateSetupDraftValue,
+  validateSetupSubmissionConfig,
   validateSetupWizardState
 } = loadSetupWizardHelpers();
 
@@ -348,4 +349,55 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
   const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
   assert.match(reviewStep.highlight.title, /Pruefen|Review/i);
   assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
+});
+
+test('review step is blocked until the full draft validates', () => {
+  const defaults = createDefaultConfig();
+  const state = validateSetupWizardState(createSampleState({
+    activeStepId: 'services',
+    config: {
+      ...defaults,
+      httpPort: '',
+      schedule: {
+        ...defaults.schedule,
+        timezone: 'Europe/Berlin'
+      }
+    }
+  }));
+
+  const nextState = goToNextSetupStep(state);
+
+  assert.equal(nextState.activeStepId, 'services');
+  assert.equal(nextState.validation.steps.basics.valid, false);
+  assert.equal(nextState.validation.steps.services.valid, true);
+});
+
+test('import validation rejects configs that still miss required setup fields', () => {
+  const defaults = createDefaultConfig();
+  const state = createSampleState();
+  const imported = validateSetupSubmissionConfig({
+    ...defaults,
+    httpPort: 8080,
+    victron: {
+      ...defaults.victron,
+      transport: 'mqtt',
+      host: '',
+      mqtt: {
+        ...defaults.victron.mqtt,
+        broker: '',
+        portalId: ''
+      }
+    },
+    modbusListenPort: '',
+    schedule: {
+      ...defaults.schedule,
+      timezone: ''
+    }
+  }, state);
+
+  assert.equal(imported.validation.isBlocking, true);
+  assert.equal(imported.validation.steps.transport.valid, false);
+  assert.equal(imported.validation.steps.dv.valid, false);
+  assert.equal(imported.validation.steps.services.valid, false);
+  assert.match(imported.validation.fields['victron.mqtt.portalId'][0], /Portal ID/i);
 });
