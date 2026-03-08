@@ -24,6 +24,7 @@ function loadSetupWizardHelpers() {
 }
 
 const {
+  buildSetupReviewSnapshot,
   createSetupWizardState,
   describeSetupStep,
   getVisibleSetupFieldsForStep,
@@ -52,11 +53,15 @@ function createSampleState(overrides = {}) {
   });
 }
 
+function getReviewEntryValue(section, label) {
+  return section.entries.find((entry) => entry.label === label)?.value;
+}
+
 test('createSetupWizardState starts on the first step with ordered metadata', () => {
   const state = createSampleState();
 
   assert.equal(state.activeStepId, 'basics');
-  assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services']);
+  assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services', 'review']);
   assert.deepEqual(Array.from(state.visitedStepIds), ['basics']);
   assert.deepEqual(Array.from(state.steps, (step) => step.id), Array.from(state.stepOrder));
 });
@@ -160,7 +165,7 @@ test('transport step guidance and visible fields change between modbus and mqtt'
   assert.match(mqttCopy.highlight.title, /MQTT/i);
   assert.match(mqttCopy.highlight.body, /Broker/i);
   assert.match(mqttCopy.highlight.body, /GX-Host/i);
-  assert.equal(mqttCopy.progressLabel, 'Schritt 2 von 4');
+  assert.equal(mqttCopy.progressLabel, 'Schritt 2 von 5');
 });
 
 test('mqtt validation accepts broker fallback but blocks when neither broker nor host is present', () => {
@@ -248,4 +253,99 @@ test('validateSetupWizardState returns per-step and per-field blocking feedback'
     Array.from(state.validation.fields['meter.quantity']),
     ['Bitte eine gueltige Registeranzahl zwischen 1 und 125 eingeben.']
   );
+});
+
+test('review step extends the wizard flow and summarizes key setup outcomes', () => {
+  const defaults = createDefaultConfig();
+  const state = validateSetupWizardState(createSampleState({
+    config: {
+      ...defaults,
+      httpPort: 9090,
+      apiToken: 'secret-token',
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: 'venus-gx.local',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: '',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 45000
+        }
+      },
+      modbusListenHost: '0.0.0.0',
+      modbusListenPort: 1502,
+      schedule: {
+        ...defaults.schedule,
+        timezone: 'Europe/Berlin'
+      },
+      epex: {
+        ...defaults.epex,
+        enabled: true,
+        bzn: 'DE-LU',
+        timezone: 'Europe/Berlin'
+      },
+      influx: {
+        ...defaults.influx,
+        enabled: false
+      }
+    },
+    effectiveConfig: {
+      ...defaults,
+      httpPort: 9090,
+      apiToken: 'secret-token',
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: 'venus-gx.local',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: '',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 45000
+        }
+      },
+      meter: {
+        ...defaults.meter,
+        host: 'venus-gx.local'
+      },
+      modbusListenHost: '0.0.0.0',
+      modbusListenPort: 1502,
+      schedule: {
+        ...defaults.schedule,
+        timezone: 'Europe/Berlin'
+      },
+      epex: {
+        ...defaults.epex,
+        enabled: true,
+        bzn: 'DE-LU',
+        timezone: 'Europe/Berlin'
+      },
+      influx: {
+        ...defaults.influx,
+        enabled: false
+      }
+    }
+  }));
+
+  assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services', 'review']);
+
+  const review = buildSetupReviewSnapshot(state);
+  const sectionTitles = Array.from(review.map((section) => section.title));
+  assert.deepEqual(sectionTitles, ['Webzugriff', 'Victron Verbindung', 'DV & Meter', 'Dienste']);
+
+  const transportSection = review.find((section) => section.id === 'transport');
+  assert.equal(getReviewEntryValue(transportSection, 'Transport'), 'MQTT');
+  assert.equal(getReviewEntryValue(transportSection, 'GX Host'), 'venus-gx.local');
+  assert.equal(getReviewEntryValue(transportSection, 'Portal ID'), 'VRM123456');
+  assert.match(transportSection.notes.join(' '), /GX-Host/i);
+
+  const servicesSection = review.find((section) => section.id === 'services');
+  assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');
+  assert.equal(getReviewEntryValue(servicesSection, 'EPEX'), 'Aktiv');
+  assert.equal(getReviewEntryValue(servicesSection, 'InfluxDB'), 'Deaktiviert');
+
+  const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
+  assert.match(reviewStep.highlight.title, /Pruefen|Review/i);
+  assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
 });

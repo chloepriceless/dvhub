@@ -3,6 +3,8 @@ const { apiFetch, setStoredApiToken } = common;
 
 let setupDefinition = null;
 
+const REVIEW_STEP_ID = 'review';
+
 let setupWizardState = createSetupWizardState();
 
 function clone(value) {
@@ -100,10 +102,19 @@ function getVisibleSetupFieldsForStep(state, stepId) {
 }
 
 function buildSetupSteps(definitionLike = setupDefinition) {
-  return getSetupStepDefinitions(definitionLike).map((step) => {
+  const steps = getSetupStepDefinitions(definitionLike);
+  const reviewStep = steps.find((step) => step.id === REVIEW_STEP_ID) || {
+    id: REVIEW_STEP_ID,
+    index: steps.length,
+    label: `Schritt ${steps.length + 1}`,
+    title: 'Pruefen & speichern',
+    description: 'Kontrolliere die wichtigsten Werte und die wirksamen Defaults, bevor PlexLite die Config speichert.'
+  };
+  return [...steps, reviewStep].map((step, index) => {
     const fields = getSetupFieldsForStep(step.id, definitionLike);
     return {
       ...step,
+      index,
       fields: fields.map((field) => field.path),
       fieldCount: fields.length
     };
@@ -270,7 +281,9 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
   const baseDescription = {
     progressLabel: steps.length ? `Schritt ${progressCurrent} von ${steps.length}` : '',
     progressValue: steps.length ? Math.round((progressCurrent / steps.length) * 100) : 0,
-    fieldCountLabel: visibleFields.length === 1 ? '1 Fokusfeld' : `${visibleFields.length} Fokusfelder`,
+    fieldCountLabel: activeStep?.id === REVIEW_STEP_ID
+      ? 'Zusammenfassung & Speichern'
+      : (visibleFields.length === 1 ? '1 Fokusfeld' : `${visibleFields.length} Fokusfelder`),
     highlight: {
       eyebrow: activeStep?.label || '',
       title: activeStep?.title || '',
@@ -331,6 +344,16 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         },
         note: 'So bleibt der letzte Schritt klein, auch wenn du nur die Grundkonfiguration speichern willst.'
       };
+    case REVIEW_STEP_ID:
+      return {
+        ...baseDescription,
+        highlight: {
+          eyebrow: 'Letzter Check',
+          title: 'Pruefen, was PlexLite wirklich speichert und verwendet',
+          body: 'Vor dem Speichern siehst du die Kernwerte, aktive Dienste und wichtige Default- oder Fallback-Ergebnisse der aktuellen Konfiguration.'
+        },
+        note: 'Kontrolliere hier besonders Transport, Meter und optionale Dienste. Danach kannst du das Setup oben speichern.'
+      };
     default:
       return baseDescription;
   }
@@ -354,7 +377,122 @@ function goToPreviousSetupStep(state) {
   return setActiveSetupStep(state, previousStepId);
 }
 
+function formatReviewValue(value, fallback = 'Nicht gesetzt') {
+  if (isBlankValue(value)) return fallback;
+  if (typeof value === 'boolean') return value ? 'Aktiv' : 'Deaktiviert';
+  return String(value);
+}
+
+function hasOwnDraftValue(state, path) {
+  return hasPath(state?.draftConfig, path) && !isBlankValue(getPath(state?.draftConfig, path));
+}
+
+function collectInheritedMeterNotes(state) {
+  const effectiveHost = resolveWizardValue(state, 'meter.host', '');
+  const effectivePort = resolveWizardValue(state, 'meter.port', '');
+  const effectiveUnitId = resolveWizardValue(state, 'meter.unitId', '');
+  const effectiveTimeout = resolveWizardValue(state, 'meter.timeoutMs', '');
+  const notes = [];
+
+  if (!hasOwnDraftValue(state, 'meter.host') && !isBlankValue(effectiveHost)) {
+    notes.push(`Meter Host folgt automatisch der Victron-Verbindung: ${effectiveHost}.`);
+  }
+  if (!hasOwnDraftValue(state, 'meter.port') && !isBlankValue(effectivePort)) {
+    notes.push(`Meter Port bleibt auf dem wirksamen Standard ${effectivePort}.`);
+  }
+  if (!hasOwnDraftValue(state, 'meter.unitId') && !isBlankValue(effectiveUnitId)) {
+    notes.push(`Meter Unit ID uebernimmt den wirksamen Wert ${effectiveUnitId}.`);
+  }
+  if (!hasOwnDraftValue(state, 'meter.timeoutMs') && !isBlankValue(effectiveTimeout)) {
+    notes.push(`Meter Timeout bleibt beim wirksamen Wert ${effectiveTimeout} ms.`);
+  }
+
+  return notes;
+}
+
+function buildSetupReviewSnapshot(state) {
+  const transportMode = getSetupTransportMode(state);
+  const host = resolveWizardValue(state, 'victron.host', '');
+  const scheduleTimezone = resolveWizardValue(state, 'schedule.timezone', '');
+  const epexEnabled = Boolean(resolveWizardValue(state, 'epex.enabled', false));
+  const influxEnabled = Boolean(resolveWizardValue(state, 'influx.enabled', false));
+
+  const transportSection = {
+    id: 'transport',
+    title: 'Victron Verbindung',
+    entries: [
+      { label: 'Transport', value: transportMode === 'mqtt' ? 'MQTT' : 'Modbus TCP' },
+      { label: 'GX Host', value: formatReviewValue(host) }
+    ],
+    notes: []
+  };
+
+  if (transportMode === 'mqtt') {
+    transportSection.entries.push(
+      { label: 'Portal ID', value: formatReviewValue(resolveWizardValue(state, 'victron.mqtt.portalId', '')) },
+      { label: 'Broker', value: formatReviewValue(resolveWizardValue(state, 'victron.mqtt.broker', ''), 'GX-Host als Fallback') },
+      { label: 'Keepalive', value: `${formatReviewValue(resolveWizardValue(state, 'victron.mqtt.keepaliveIntervalMs', ''))} ms` }
+    );
+    if (isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', '')) && !isBlankValue(host)) {
+      transportSection.notes.push(`Kein eigener Broker gespeichert. PlexLite nutzt beim Verbinden automatisch den GX-Host ${host} auf MQTT-Port 1883.`);
+    }
+  } else {
+    transportSection.entries.push(
+      { label: 'GX Port', value: formatReviewValue(resolveWizardValue(state, 'victron.port', '')) },
+      { label: 'Unit ID', value: formatReviewValue(resolveWizardValue(state, 'victron.unitId', '')) },
+      { label: 'Timeout', value: `${formatReviewValue(resolveWizardValue(state, 'victron.timeoutMs', ''))} ms` }
+    );
+  }
+
+  const serviceNotes = [];
+  if (epexEnabled && !hasOwnDraftValue(state, 'epex.timezone') && !isBlankValue(scheduleTimezone)) {
+    serviceNotes.push(`EPEX uebernimmt die Setup-Zeitzone ${scheduleTimezone}, solange keine eigene Zeitzone gesetzt ist.`);
+  }
+
+  return [
+    {
+      id: 'basics',
+      title: 'Webzugriff',
+      entries: [
+        { label: 'HTTP Port', value: formatReviewValue(resolveWizardValue(state, 'httpPort', '')) },
+        { label: 'API Token', value: isBlankValue(resolveWizardValue(state, 'apiToken', '')) ? 'Nicht gesetzt' : 'Gesetzt' }
+      ],
+      notes: isBlankValue(resolveWizardValue(state, 'apiToken', ''))
+        ? ['Ohne API-Token bleibt der lokale Zugriff einfacher, externe Zugriffe sollten dann anderweitig abgesichert werden.']
+        : []
+    },
+    transportSection,
+    {
+      id: 'dv',
+      title: 'DV & Meter',
+      entries: [
+        { label: 'Proxy Host', value: formatReviewValue(resolveWizardValue(state, 'modbusListenHost', '')) },
+        { label: 'Proxy Port', value: formatReviewValue(resolveWizardValue(state, 'modbusListenPort', '')) },
+        { label: 'Vorzeichenlogik', value: resolveWizardValue(state, 'gridPositiveMeans', '') === 'grid_import' ? 'Positiv = Netzbezug' : 'Positiv = Einspeisung' },
+        { label: 'Meter FC', value: formatReviewValue(resolveWizardValue(state, 'meter.fc', '')) },
+        { label: 'Meter Start', value: formatReviewValue(resolveWizardValue(state, 'meter.address', '')) },
+        { label: 'Register', value: formatReviewValue(resolveWizardValue(state, 'meter.quantity', '')) }
+      ],
+      notes: collectInheritedMeterNotes(state)
+    },
+    {
+      id: 'services',
+      title: 'Dienste',
+      entries: [
+        { label: 'Zeitzone', value: formatReviewValue(scheduleTimezone) },
+        { label: 'EPEX', value: epexEnabled ? 'Aktiv' : 'Deaktiviert' },
+        { label: 'EPEX BZN', value: epexEnabled ? formatReviewValue(resolveWizardValue(state, 'epex.bzn', '')) : 'Nicht aktiv' },
+        { label: 'InfluxDB', value: influxEnabled ? 'Aktiv' : 'Deaktiviert' },
+        { label: 'Influx URL', value: influxEnabled ? formatReviewValue(resolveWizardValue(state, 'influx.url', '')) : 'Nicht aktiv' },
+        { label: 'Influx DB', value: influxEnabled ? formatReviewValue(resolveWizardValue(state, 'influx.db', '')) : 'Nicht aktiv' }
+      ],
+      notes: serviceNotes
+    }
+  ];
+}
+
 const setupWizardHelpers = {
+  buildSetupReviewSnapshot,
   buildSetupSteps,
   createSetupWizardState,
   describeSetupStep,
@@ -466,6 +604,7 @@ function renderSetupSteps() {
     if (!setupWizardState.validation.steps[step.id].valid) summary.textContent = 'Pflichtangaben fehlen';
     else if (isComplete) summary.textContent = 'Bereit';
     else if (isActive) summary.textContent = step.description;
+    else if (step.id === REVIEW_STEP_ID) summary.textContent = 'Zusammenfassung und letzter Check';
     else summary.textContent = `${step.fieldCount} Felder im Fokus`;
 
     copy.append(title, summary);
@@ -527,8 +666,13 @@ function renderField(field) {
 
 function renderSetupWorkspace() {
   const container = document.getElementById('setup-workspace');
+  const reviewPanel = document.getElementById('setup-review-panel');
   if (!container) return;
   container.replaceChildren();
+  if (reviewPanel) {
+    reviewPanel.replaceChildren();
+    reviewPanel.hidden = true;
+  }
 
   const activeStep = setupWizardState.steps.find((step) => step.id === setupWizardState.activeStepId);
   if (!activeStep) return;
@@ -595,6 +739,59 @@ function renderSetupWorkspace() {
 
   callout.append(calloutEyebrow, calloutTitle, calloutBody, calloutNote);
 
+  if (activeStep.id === REVIEW_STEP_ID) {
+    const review = document.createElement('section');
+    review.className = 'setup-review';
+
+    for (const section of buildSetupReviewSnapshot(setupWizardState)) {
+      const card = document.createElement('article');
+      card.className = 'setup-review-card';
+
+      const cardHead = document.createElement('div');
+      cardHead.className = 'setup-review-head';
+
+      const cardTitle = document.createElement('h3');
+      cardTitle.className = 'setup-review-title';
+      cardTitle.textContent = section.title;
+
+      cardHead.appendChild(cardTitle);
+      card.appendChild(cardHead);
+
+      const list = document.createElement('dl');
+      list.className = 'setup-review-list';
+      for (const entry of section.entries) {
+        const term = document.createElement('dt');
+        term.textContent = entry.label;
+        const value = document.createElement('dd');
+        value.textContent = entry.value;
+        list.append(term, value);
+      }
+      card.appendChild(list);
+
+      if (Array.isArray(section.notes) && section.notes.length) {
+        const notes = document.createElement('ul');
+        notes.className = 'setup-review-notes';
+        for (const note of section.notes) {
+          const item = document.createElement('li');
+          item.textContent = note;
+          notes.appendChild(item);
+        }
+        card.appendChild(notes);
+      }
+
+      review.appendChild(card);
+    }
+
+    container.append(progress, header, callout);
+    if (reviewPanel) {
+      reviewPanel.hidden = false;
+      reviewPanel.appendChild(review);
+    } else {
+      container.appendChild(review);
+    }
+    return;
+  }
+
   const fields = document.createElement('div');
   fields.className = 'settings-fields compact setup-fields';
   for (const field of getVisibleSetupFieldsForStep(setupWizardState, activeStep.id)) {
@@ -640,13 +837,14 @@ function renderSetupNav() {
 
   const currentIndex = getCurrentStepIndex(setupWizardState);
   const isLastStep = currentIndex === setupWizardState.stepOrder.length - 1;
+  const isReviewStep = setupWizardState.activeStepId === REVIEW_STEP_ID;
   const stepDescription = describeSetupStep(setupWizardState);
 
   const copy = document.createElement('div');
   copy.className = 'setup-nav-copy';
 
   const copyTitle = document.createElement('strong');
-  copyTitle.textContent = isLastStep ? 'Letzter Schritt vor dem Speichern' : 'Weiter zum naechsten Fokusblock';
+  copyTitle.textContent = isReviewStep ? 'Zusammenfassung pruefen und dann oben speichern' : 'Weiter zum naechsten Fokusblock';
 
   const copyBody = document.createElement('span');
   copyBody.textContent = stepDescription.note || 'Jeder Schritt zeigt nur die Felder, die du fuer diesen Abschnitt wirklich brauchst.';
@@ -664,7 +862,8 @@ function renderSetupNav() {
   nextButton.type = 'button';
   nextButton.className = 'btn btn-primary';
   nextButton.dataset.action = 'next';
-  nextButton.textContent = isLastStep ? 'Schritt pruefen' : 'Weiter';
+  nextButton.hidden = isReviewStep;
+  nextButton.textContent = isLastStep ? 'Review oeffnen' : 'Weiter';
 
   container.append(copy, backButton, nextButton);
 }
