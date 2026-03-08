@@ -25,6 +25,8 @@ function loadSetupWizardHelpers() {
 
 const {
   createSetupWizardState,
+  describeSetupStep,
+  getVisibleSetupFieldsForStep,
   goToNextSetupStep,
   goToPreviousSetupStep,
   setActiveSetupStep,
@@ -62,7 +64,9 @@ test('createSetupWizardState starts on the first step with ordered metadata', ()
 test('createSetupWizardState derives setup steps from schema metadata', () => {
   const definition = getConfigDefinition();
   const state = createSampleState({ definition });
-  const setupFields = definition.fields.filter((field) => field.setup?.stepId === 'transport');
+  const setupFields = definition.fields
+    .filter((field) => field.setup?.stepId === 'transport')
+    .sort((left, right) => (left.setup.order || 0) - (right.setup.order || 0));
 
   assert.ok(Array.isArray(definition.setupWizard?.steps));
   assert.equal(state.steps[0].title, definition.setupWizard.steps[0].title);
@@ -109,6 +113,53 @@ test('navigation is blocked when required transport values are missing', () => {
   assert.equal(state.validation.steps.transport.valid, false);
   assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.host'));
   assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.mqtt.portalId'));
+});
+
+test('transport step guidance and visible fields change between modbus and mqtt', () => {
+  const defaults = createDefaultConfig();
+  const modbusState = setActiveSetupStep(createSampleState(), 'transport');
+  const mqttState = setActiveSetupStep(createSampleState({
+    config: {
+      victron: { transport: 'mqtt' },
+      schedule: {},
+      epex: {},
+      influx: {},
+      meter: {},
+      dvControl: {}
+    },
+    effectiveConfig: {
+      ...defaults,
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt'
+      }
+    }
+  }), 'transport');
+
+  const modbusFields = getVisibleSetupFieldsForStep(modbusState, 'transport').map((field) => field.path);
+  const mqttFields = getVisibleSetupFieldsForStep(mqttState, 'transport').map((field) => field.path);
+  const modbusCopy = describeSetupStep(modbusState);
+  const mqttCopy = describeSetupStep(mqttState);
+
+  assert.deepEqual(Array.from(modbusFields), [
+    'victron.transport',
+    'victron.host',
+    'victron.port',
+    'victron.unitId',
+    'victron.timeoutMs'
+  ]);
+  assert.deepEqual(Array.from(mqttFields), [
+    'victron.transport',
+    'victron.host',
+    'victron.mqtt.portalId',
+    'victron.mqtt.broker',
+    'victron.mqtt.keepaliveIntervalMs'
+  ]);
+  assert.match(modbusCopy.highlight.title, /Modbus/i);
+  assert.match(mqttCopy.highlight.title, /MQTT/i);
+  assert.match(mqttCopy.highlight.body, /Broker/i);
+  assert.match(mqttCopy.highlight.body, /GX-Host/i);
+  assert.equal(mqttCopy.progressLabel, 'Schritt 2 von 4');
 });
 
 test('validateSetupWizardState returns per-step and per-field blocking feedback', () => {

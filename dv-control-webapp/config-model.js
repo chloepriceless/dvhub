@@ -581,7 +581,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
     );
   }
 
-  return addSetupWizardMetadata(fields);
+  return fields;
 }
 
 function buildFieldDefinitions() {
@@ -1228,7 +1228,7 @@ function buildFieldDefinitions() {
     }
   );
 
-  return fields.filter((entry) => entry.path);
+  return addSetupWizardMetadata(fields.filter((entry) => entry.path));
 }
 
 const FIELD_DEFINITIONS = buildFieldDefinitions();

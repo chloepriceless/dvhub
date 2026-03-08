@@ -252,6 +252,81 @@ function getCurrentStepIndex(state) {
   return Math.max(0, (state?.stepOrder || []).indexOf(state?.activeStepId));
 }
 
+function describeSetupStep(state, stepId = state?.activeStepId) {
+  const steps = state?.steps || [];
+  const activeStep = steps.find((step) => step.id === stepId) || steps[0] || null;
+  const currentIndex = Math.max(0, steps.findIndex((step) => step.id === activeStep?.id));
+  const progressCurrent = steps.length ? currentIndex + 1 : 0;
+  const visibleFields = activeStep ? getVisibleSetupFieldsForStep(state, activeStep.id) : [];
+  const baseDescription = {
+    progressLabel: steps.length ? `Schritt ${progressCurrent} von ${steps.length}` : '',
+    progressValue: steps.length ? Math.round((progressCurrent / steps.length) * 100) : 0,
+    fieldCountLabel: visibleFields.length === 1 ? '1 Fokusfeld' : `${visibleFields.length} Fokusfelder`,
+    highlight: {
+      eyebrow: activeStep?.label || '',
+      title: activeStep?.title || '',
+      body: activeStep?.description || ''
+    },
+    note: ''
+  };
+
+  switch (activeStep?.id) {
+    case 'basics':
+      return {
+        ...baseDescription,
+        highlight: {
+          eyebrow: 'Erster Zugriff',
+          title: 'Nur die Daten, die PlexLite direkt erreichbar machen',
+          body: 'HTTP-Port und optionales API-Token reichen fuer den ersten sicheren Einstieg.'
+        },
+        note: 'Alles Weitere bleibt spaeter in den Einstellungen verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
+      };
+    case 'transport':
+      if (getSetupTransportMode(state) === 'mqtt') {
+        return {
+          ...baseDescription,
+          highlight: {
+            eyebrow: 'Venus MQTT',
+            title: 'MQTT mit Portal ID und optionalem Broker',
+            body: 'Portal ID ist Pflicht. Einen Broker trennst du nur dann ein, wenn PlexLite nicht direkt ueber den GX-Host verbinden soll.'
+          },
+          note: 'Wenn das Broker-Feld leer bleibt, verwendet PlexLite den GX-Host als MQTT-Fallback. Unpassende Modbus-Felder verschwinden aus diesem Schritt.'
+        };
+      }
+      return {
+        ...baseDescription,
+        highlight: {
+          eyebrow: 'Direkte Registerverbindung',
+          title: 'Modbus TCP direkt zum GX',
+          body: 'Fuer Modbus brauchst du nur Host, Port, Unit ID und Timeout fuer die erste stabile Registerverbindung.'
+        },
+        note: 'MQTT-spezifische Felder werden ausgeblendet, damit der Schritt ruhig und eindeutig bleibt.'
+      };
+    case 'dv':
+      return {
+        ...baseDescription,
+        highlight: {
+          eyebrow: 'Proxy & Meter',
+          title: 'DV-Port, Meterblock und Vorzeichen an einem Ort',
+          body: 'In diesem Schritt definierst du, wie PlexLite Netzwerte liest und spaeter an externe Systeme weiterreicht.'
+        },
+        note: 'Nur der Kernblock fuer den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen spaeter in den Einstellungen.'
+      };
+    case 'services':
+      return {
+        ...baseDescription,
+        highlight: {
+          eyebrow: 'Optional zum Start',
+          title: 'Zeitzone zuerst, Dienste nur bei Bedarf',
+          body: 'Schedule, EPEX und Influx bleiben kompakt. Zusatzfelder erscheinen erst, wenn du den jeweiligen Dienst einschaltest.'
+        },
+        note: 'So bleibt der letzte Schritt klein, auch wenn du nur die Grundkonfiguration speichern willst.'
+      };
+    default:
+      return baseDescription;
+  }
+}
+
 function goToNextSetupStep(state) {
   const validatedState = validateSetupWizardState(state);
   const currentStepId = validatedState.activeStepId;
@@ -273,6 +348,7 @@ function goToPreviousSetupStep(state) {
 const setupWizardHelpers = {
   buildSetupSteps,
   createSetupWizardState,
+  describeSetupStep,
   getSetupFieldsForStep,
   getSetupFieldDefinitions,
   getSetupStepDefinitions,
@@ -348,6 +424,7 @@ function renderSetupSteps() {
 
   for (const step of setupWizardState.steps) {
     const item = document.createElement('li');
+    item.className = 'setup-step-item';
     const button = document.createElement('button');
     const isActive = step.id === setupWizardState.activeStepId;
     const isComplete = setupWizardState.completedStepIds.includes(step.id);
@@ -357,22 +434,34 @@ function renderSetupSteps() {
 
     button.type = 'button';
     button.dataset.stepId = step.id;
-    button.className = 'btn btn-ghost';
+    button.className = 'setup-step-button';
     button.disabled = stepIndex > currentIndex + 1 || (!isVisited && stepIndex > currentIndex);
-    button.textContent = `${step.label}: ${step.title}`;
     button.setAttribute('aria-current', isActive ? 'step' : 'false');
     if (isComplete) button.dataset.state = 'complete';
     else if (isActive) button.dataset.state = 'active';
     else if (isVisited) button.dataset.state = 'visited';
 
-    const meta = document.createElement('small');
-    meta.className = 'field-help';
-    if (!setupWizardState.validation.steps[step.id].valid) meta.textContent = 'Pflichtangaben fehlen';
-    else if (isComplete) meta.textContent = 'Bereit';
-    else if (isActive) meta.textContent = step.description;
-    else meta.textContent = 'Noch offen';
+    const index = document.createElement('span');
+    index.className = 'setup-step-index';
+    index.textContent = String(step.index + 1).padStart(2, '0');
 
-    item.append(button, meta);
+    const copy = document.createElement('span');
+    copy.className = 'setup-step-copy';
+
+    const title = document.createElement('strong');
+    title.className = 'setup-step-title';
+    title.textContent = step.title;
+
+    const summary = document.createElement('small');
+    summary.className = 'setup-step-meta';
+    if (!setupWizardState.validation.steps[step.id].valid) summary.textContent = 'Pflichtangaben fehlen';
+    else if (isComplete) summary.textContent = 'Bereit';
+    else if (isActive) summary.textContent = step.description;
+    else summary.textContent = `${step.fieldCount} Felder im Fokus`;
+
+    copy.append(title, summary);
+    button.append(index, copy);
+    item.appendChild(button);
     list.appendChild(item);
   }
 
@@ -381,7 +470,7 @@ function renderSetupSteps() {
 
 function renderField(field) {
   const wrapper = document.createElement('label');
-  wrapper.className = 'settings-field';
+  wrapper.className = 'settings-field setup-field';
   if (field.type === 'boolean') wrapper.classList.add('checkbox-field');
 
   const title = document.createElement('span');
@@ -414,12 +503,13 @@ function renderField(field) {
 
   input.id = getFieldInputId(field.path);
   input.dataset.path = field.path;
-  input.dataset.stepId = field.stepId;
+  input.dataset.stepId = field.setup?.stepId || '';
   wrapper.appendChild(input);
 
   const help = document.createElement('small');
   help.className = 'field-help';
   const fieldErrors = setupWizardState.validation.fields[field.path] || [];
+  if (fieldErrors.length) wrapper.classList.add('has-error');
   help.textContent = fieldErrors.length ? fieldErrors[0] : field.help || '';
   wrapper.appendChild(help);
 
@@ -433,9 +523,34 @@ function renderSetupWorkspace() {
 
   const activeStep = setupWizardState.steps.find((step) => step.id === setupWizardState.activeStepId);
   if (!activeStep) return;
+  const stepDescription = describeSetupStep(setupWizardState, activeStep.id);
+
+  const progress = document.createElement('div');
+  progress.className = 'setup-progress';
+
+  const progressHead = document.createElement('div');
+  progressHead.className = 'setup-progress-head';
+
+  const progressLabel = document.createElement('p');
+  progressLabel.className = 'eyebrow setup-progress-label';
+  progressLabel.textContent = stepDescription.progressLabel;
+
+  const progressCount = document.createElement('span');
+  progressCount.className = 'setup-progress-count';
+  progressCount.textContent = stepDescription.fieldCountLabel;
+
+  const progressBar = document.createElement('div');
+  progressBar.className = 'setup-progress-bar';
+  const progressFill = document.createElement('span');
+  progressFill.className = 'setup-progress-fill';
+  progressFill.style.width = `${stepDescription.progressValue}%`;
+  progressBar.appendChild(progressFill);
+
+  progressHead.append(progressLabel, progressCount);
+  progress.append(progressHead, progressBar);
 
   const header = document.createElement('div');
-  header.className = 'panel-head';
+  header.className = 'panel-head setup-step-head';
 
   const titleGroup = document.createElement('div');
   const eyebrow = document.createElement('p');
@@ -445,18 +560,39 @@ function renderSetupWorkspace() {
   title.className = 'section-title';
   title.textContent = activeStep.title;
   const intro = document.createElement('p');
-  intro.className = 'field-help';
+  intro.className = 'field-help setup-step-intro';
   intro.textContent = activeStep.description;
   titleGroup.append(eyebrow, title, intro);
   header.appendChild(titleGroup);
 
+  const callout = document.createElement('section');
+  callout.className = 'setup-callout';
+
+  const calloutEyebrow = document.createElement('p');
+  calloutEyebrow.className = 'card-title setup-callout-eyebrow';
+  calloutEyebrow.textContent = stepDescription.highlight.eyebrow;
+
+  const calloutTitle = document.createElement('h3');
+  calloutTitle.className = 'setup-callout-title';
+  calloutTitle.textContent = stepDescription.highlight.title;
+
+  const calloutBody = document.createElement('p');
+  calloutBody.className = 'setup-callout-body';
+  calloutBody.textContent = stepDescription.highlight.body;
+
+  const calloutNote = document.createElement('p');
+  calloutNote.className = 'setup-callout-note';
+  calloutNote.textContent = stepDescription.note;
+
+  callout.append(calloutEyebrow, calloutTitle, calloutBody, calloutNote);
+
   const fields = document.createElement('div');
-  fields.className = 'settings-fields compact';
+  fields.className = 'settings-fields compact setup-fields';
   for (const field of getVisibleSetupFieldsForStep(setupWizardState, activeStep.id)) {
     fields.appendChild(renderField(field));
   }
 
-  container.append(header, fields);
+  container.append(progress, header, callout, fields);
 }
 
 function renderSetupErrors() {
@@ -489,6 +625,18 @@ function renderSetupNav() {
 
   const currentIndex = getCurrentStepIndex(setupWizardState);
   const isLastStep = currentIndex === setupWizardState.stepOrder.length - 1;
+  const stepDescription = describeSetupStep(setupWizardState);
+
+  const copy = document.createElement('div');
+  copy.className = 'setup-nav-copy';
+
+  const copyTitle = document.createElement('strong');
+  copyTitle.textContent = isLastStep ? 'Letzter Schritt vor dem Speichern' : 'Weiter zum naechsten Fokusblock';
+
+  const copyBody = document.createElement('span');
+  copyBody.textContent = stepDescription.note || 'Jeder Schritt zeigt nur die Felder, die du fuer diesen Abschnitt wirklich brauchst.';
+
+  copy.append(copyTitle, copyBody);
 
   const backButton = document.createElement('button');
   backButton.type = 'button';
@@ -503,7 +651,7 @@ function renderSetupNav() {
   nextButton.dataset.action = 'next';
   nextButton.textContent = isLastStep ? 'Schritt pruefen' : 'Weiter';
 
-  container.append(backButton, nextButton);
+  container.append(copy, backButton, nextButton);
 }
 
 function renderSetupWizard() {

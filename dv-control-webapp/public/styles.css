@@ -879,6 +879,213 @@ table th {
   background: rgba(7, 18, 29, 0.56);
 }
 
+.setup-shell {
+  align-items: start;
+}
+
+.setup-stepper {
+  gap: 14px;
+}
+
+.setup-stage {
+  gap: 14px;
+}
+
+.setup-progress {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 211, 46, 0.22);
+  background: linear-gradient(135deg, rgba(14, 31, 48, 0.88), rgba(8, 18, 29, 0.72));
+}
+
+.setup-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.setup-progress-label {
+  margin: 0;
+}
+
+.setup-progress-count {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.setup-progress-bar {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.setup-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--yellow), var(--cyan));
+  box-shadow: 0 0 20px rgba(52, 219, 255, 0.28);
+}
+
+.setup-step-head {
+  margin-bottom: 0;
+}
+
+.setup-step-intro {
+  max-width: 60ch;
+}
+
+.setup-callout {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(76, 227, 108, 0.18);
+  background: linear-gradient(135deg, rgba(16, 42, 62, 0.9), rgba(7, 19, 30, 0.7));
+}
+
+.setup-callout-eyebrow {
+  color: var(--cyan);
+}
+
+.setup-callout-title {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 1.35rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.setup-callout-body,
+.setup-callout-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.setup-callout-note {
+  color: var(--text-soft);
+  font-size: 0.84rem;
+}
+
+.setup-fields {
+  align-items: start;
+}
+
+.setup-field {
+  min-height: 100%;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(121, 149, 174, 0.18);
+  background: rgba(8, 18, 29, 0.48);
+}
+
+.setup-field.has-error {
+  border-color: rgba(255, 108, 99, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(255, 108, 99, 0.22);
+}
+
+.wizard-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-step-item {
+  list-style: none;
+}
+
+.setup-step-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(121, 149, 174, 0.2);
+  background: rgba(9, 21, 32, 0.7);
+  text-align: left;
+}
+
+.setup-step-button[data-state="active"] {
+  border-color: rgba(255, 211, 46, 0.54);
+  background: linear-gradient(135deg, rgba(31, 141, 255, 0.18), rgba(9, 21, 32, 0.82));
+}
+
+.setup-step-button[data-state="complete"] {
+  border-color: rgba(76, 227, 108, 0.4);
+}
+
+.setup-step-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.setup-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 12px;
+  font-family: var(--font-title);
+  font-size: 1rem;
+  color: #07111c;
+  background: linear-gradient(135deg, var(--yellow), rgba(255, 171, 8, 0.92));
+}
+
+.setup-step-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setup-step-title {
+  color: var(--text-main);
+  font-size: 0.96rem;
+  line-height: 1.2;
+}
+
+.setup-step-meta {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.setup-nav-bar {
+  align-items: stretch;
+}
+
+.setup-nav-copy {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 280px;
+  min-width: 220px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(121, 149, 174, 0.18);
+  background: rgba(7, 18, 29, 0.58);
+}
+
+.setup-nav-copy strong {
+  font-size: 0.95rem;
+}
+
+.setup-nav-copy span {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .reveal {
   animation: riseIn 0.65s ease both;
 }
@@ -1057,6 +1264,14 @@ table th {
     justify-content: space-between;
   }
 
+  .setup-step-button {
+    grid-template-columns: 36px 1fr;
+  }
+
+  .setup-nav-bar {
+    flex-direction: column;
+  }
+
   svg {
     min-height: 280px;
   }
@@ -1086,6 +1301,15 @@ table th {
 
   .hero-logo {
     width: 64px;
+  }
+
+  .setup-progress-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .setup-step-button {
+    padding: 10px;
   }
 
   .hero-title {
