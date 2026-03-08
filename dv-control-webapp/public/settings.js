@@ -5,9 +5,11 @@ const SETTINGS_OVERVIEW_ID = 'overview';
 
 let definition = null;
 let currentRawConfig = {};
+let currentDraftConfig = {};
 let currentEffectiveConfig = {};
 let currentMeta = null;
 let currentHealth = null;
+let settingsShellState = createSettingsShellState();
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -153,16 +155,16 @@ function buildMetaText(meta) {
 }
 
 function renderFieldValue(field) {
-  const rawDefined = hasPath(currentRawConfig, field.path);
-  const rawValue = rawDefined ? getPath(currentRawConfig, field.path) : undefined;
+  const draftDefined = hasPath(currentDraftConfig, field.path);
+  const draftValue = draftDefined ? getPath(currentDraftConfig, field.path) : undefined;
   const effectiveValue = getPath(currentEffectiveConfig, field.path);
   const optionalOverride = field.empty === 'delete';
 
-  if (optionalOverride && !rawDefined) {
+  if (optionalOverride && !draftDefined) {
     return { value: '', inherited: effectiveValue };
   }
-  if (rawValue === null || rawValue === undefined) return { value: '', inherited: effectiveValue };
-  return { value: rawValue, inherited: rawDefined ? null : effectiveValue };
+  if (draftValue === null || draftValue === undefined) return { value: '', inherited: effectiveValue };
+  return { value: draftValue, inherited: draftDefined ? null : effectiveValue };
 }
 
 function renderField(field) {
@@ -237,50 +239,169 @@ function groupFields(fields) {
   return [...map.values()];
 }
 
-function renderDefinition() {
+function getActiveSettingsDestination() {
+  return settingsShellState.destinations.find((destination) => destination.id === settingsShellState.activeSectionId)
+    || settingsShellState.destinations[0]
+    || null;
+}
+
+function buildSectionMeta(destination) {
+  if (!destination || destination.kind !== 'section') return '';
+  return `${destination.fieldCount} Felder in ${destination.groupCount} Gruppen`;
+}
+
+function renderSettingsOverview() {
+  const overview = document.getElementById('settingsOverview');
+  if (!overview) return;
+
+  overview.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'settings-overview-head';
+  head.innerHTML = `
+    <p class="card-title">Start</p>
+    <h2 class="section-title">Womit moechtest du beginnen?</h2>
+    <p class="tools-note">Die Uebersicht ist der Standard-Einstieg. Von hier aus fuehrt die Seitenleiste in genau einen aktiven Arbeitsbereich.</p>
+  `;
+  overview.appendChild(head);
+
+  const summary = document.createElement('div');
+  summary.className = 'settings-summary';
+  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind === 'section')) {
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    const strong = document.createElement('strong');
+    strong.textContent = destination.label;
+    const text = document.createElement('span');
+    text.textContent = `${destination.description || 'Konfiguration fuer diesen Bereich.'} ${buildSectionMeta(destination)}.`;
+    card.appendChild(strong);
+    card.appendChild(text);
+    summary.appendChild(card);
+  }
+  overview.appendChild(summary);
+}
+
+function renderSidebarNavigation() {
+  const sidebar = document.getElementById('settingsSidebar');
+  const navItems = document.getElementById('settingsNavItems');
+  if (!sidebar || !navItems) return;
+
+  const overviewButton = sidebar.querySelector('[data-settings-target="overview"]');
+  if (overviewButton) {
+    const isActive = settingsShellState.activeSectionId === SETTINGS_OVERVIEW_ID;
+    overviewButton.classList.toggle('is-active', isActive);
+    overviewButton.setAttribute('aria-current', isActive ? 'page' : 'false');
+  }
+
+  navItems.innerHTML = '';
+  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind === 'section')) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'settings-sidebar-item';
+    button.dataset.settingsTarget = destination.id;
+    const isActive = destination.id === settingsShellState.activeSectionId;
+    if (isActive) button.classList.add('is-active');
+    button.setAttribute('aria-current', isActive ? 'page' : 'false');
+    button.innerHTML = `
+      <span class="settings-sidebar-label">${destination.label}</span>
+      <small class="settings-sidebar-copy">${destination.description || buildSectionMeta(destination)}</small>
+    `;
+    navItems.appendChild(button);
+  }
+}
+
+function renderSectionWorkspace(sectionId) {
   const mount = document.getElementById('settingsSections');
+  if (!mount) return;
   mount.innerHTML = '';
 
-  for (const section of definition.sections || []) {
-    const sectionFields = (definition.fields || []).filter((field) => field.section === section.id);
-    if (!sectionFields.length) continue;
+  const section = (definition?.sections || []).find((entry) => entry.id === sectionId);
+  const sectionFields = getSettingsSectionFields(definition, sectionId);
+  if (!section || !sectionFields.length) return;
 
-    const panel = document.createElement('section');
-    panel.className = 'panel reveal settings-panel';
+  const destination = settingsShellState.destinations.find((entry) => entry.id === sectionId);
+  const panel = document.createElement('section');
+  panel.className = 'panel reveal settings-panel';
 
-    const header = document.createElement('div');
-    header.className = 'panel-head';
-    header.innerHTML = `
-      <div>
-        <p class="card-title">${section.label}</p>
-        <h2 class="section-title">${section.label}</h2>
-      </div>
-    `;
-    panel.appendChild(header);
+  const header = document.createElement('div');
+  header.className = 'panel-head';
+  header.innerHTML = `
+    <div>
+      <p class="card-title">Aktiver Bereich</p>
+      <h2 class="section-title">${section.label}</h2>
+    </div>
+    <div class="meta">${buildSectionMeta(destination)}</div>
+  `;
+  panel.appendChild(header);
 
-    const intro = document.createElement('p');
-    intro.className = 'tools-note';
-    intro.textContent = section.description || '';
-    panel.appendChild(intro);
+  const intro = document.createElement('p');
+  intro.className = 'tools-note';
+  intro.textContent = section.description || '';
+  panel.appendChild(intro);
 
-    for (const group of groupFields(sectionFields)) {
-      const details = document.createElement('details');
-      details.className = 'settings-group';
-      details.open = true;
+  for (const group of groupFields(sectionFields)) {
+    const details = document.createElement('details');
+    details.className = 'settings-group';
+    details.open = true;
 
-      const summary = document.createElement('summary');
-      summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
-      details.appendChild(summary);
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
+    details.appendChild(summary);
 
-      const grid = document.createElement('div');
-      grid.className = 'settings-fields';
-      for (const field of group.fields) grid.appendChild(renderField(field));
-      details.appendChild(grid);
-      panel.appendChild(details);
-    }
-
-    mount.appendChild(panel);
+    const grid = document.createElement('div');
+    grid.className = 'settings-fields';
+    for (const field of group.fields) grid.appendChild(renderField(field));
+    details.appendChild(grid);
+    panel.appendChild(details);
   }
+
+  mount.appendChild(panel);
+}
+
+function renderActiveSettingsDestination() {
+  const overview = document.getElementById('settingsOverview');
+  const workspace = document.getElementById('settingsWorkspace');
+  const activeDestination = getActiveSettingsDestination();
+  if (!overview || !workspace) return;
+
+  if (!activeDestination || activeDestination.id === SETTINGS_OVERVIEW_ID) {
+    renderSettingsOverview();
+    overview.hidden = false;
+    workspace.hidden = true;
+    const mount = document.getElementById('settingsSections');
+    if (mount) mount.innerHTML = '';
+    return;
+  }
+
+  overview.hidden = true;
+  workspace.hidden = false;
+  renderSectionWorkspace(activeDestination.id);
+}
+
+function renderSettingsShell() {
+  settingsShellState = createSettingsShellState(definition, settingsShellState.activeSectionId);
+  renderSidebarNavigation();
+  renderActiveSettingsDestination();
+}
+
+function syncRenderedFieldsToDraft() {
+  const next = clone(currentDraftConfig || {});
+  for (const field of definition?.fields || []) {
+    const input = document.getElementById(fieldId(field.path));
+    if (!input) continue;
+    const parsed = parseFieldInput(field);
+    if (parsed && parsed.action === 'delete') deletePath(next, field.path);
+    else setPath(next, field.path, parsed);
+  }
+  currentDraftConfig = next;
+  return next;
+}
+
+function activateSettingsDestination(sectionId) {
+  syncRenderedFieldsToDraft();
+  settingsShellState = setActiveSettingsSection(settingsShellState, sectionId);
+  renderSidebarNavigation();
+  renderActiveSettingsDestination();
 }
 
 function parseFieldInput(field) {
@@ -305,23 +426,20 @@ function parseFieldInput(field) {
 }
 
 function collectConfigFromForm() {
-  const next = clone(currentRawConfig || {});
-  for (const field of definition.fields || []) {
-    const parsed = parseFieldInput(field);
-    if (parsed && parsed.action === 'delete') deletePath(next, field.path);
-    else setPath(next, field.path, parsed);
-  }
-  return next;
+  syncRenderedFieldsToDraft();
+  return clone(currentDraftConfig || {});
 }
 
 function applyConfigPayload(payload) {
   definition = payload.definition || definition;
   currentRawConfig = payload.config || {};
+  currentDraftConfig = clone(currentRawConfig);
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
+  settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
-  renderDefinition();
+  renderSettingsShell();
 }
 
 function setHealthBanner(message, kind = 'info') {
@@ -443,6 +561,12 @@ async function restartService() {
 }
 
 function initSettingsPage() {
+  document.getElementById('settingsSidebar')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-settings-target]');
+    if (!target) return;
+    activateSettingsDestination(target.dataset.settingsTarget);
+  });
+
   document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {
     setBanner(`Neu laden fehlgeschlagen: ${error.message}`, 'error');
   }));
