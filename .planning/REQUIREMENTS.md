@@ -7,9 +7,9 @@
 
 ### Navigation
 
-- [ ] **NAV-01**: User can open a fixed settings sidebar with clearly named main sections instead of navigating one long settings page.
-- [ ] **NAV-02**: User can focus on one settings section at a time without scrolling through unrelated settings blocks.
-- [ ] **NAV-03**: User can always see which settings section is active and switch directly to another section.
+- [x] **NAV-01**: User can open a fixed settings sidebar with clearly named main sections instead of navigating one long settings page.
+- [x] **NAV-02**: User can focus on one settings section at a time without scrolling through unrelated settings blocks.
+- [x] **NAV-03**: User can always see which settings section is active and switch directly to another section.
 
 ### Setup
 
@@ -65,9 +65,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| NAV-01 | Phase 1 | Pending |
-| NAV-02 | Phase 1 | Pending |
-| NAV-03 | Phase 1 | Pending |
+| NAV-01 | Phase 1 | Complete |
+| NAV-02 | Phase 1 | Complete |
+| NAV-03 | Phase 1 | Complete |
 | SET-01 | Phase 2 | Pending |
 | SET-02 | Phase 2 | Pending |
 | SET-03 | Phase 2 | Pending |
