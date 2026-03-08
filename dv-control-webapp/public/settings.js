@@ -1,4 +1,7 @@
-const { apiFetch, buildApiUrl, setStoredApiToken } = window.PlexLiteCommon;
+const common = typeof window !== 'undefined' ? window.PlexLiteCommon || {} : {};
+const { apiFetch, buildApiUrl, setStoredApiToken } = common;
+
+const SETTINGS_OVERVIEW_ID = 'overview';
 
 let definition = null;
 let currentRawConfig = {};
@@ -8,6 +11,74 @@ let currentHealth = null;
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function getSettingsSectionFields(definitionLike, sectionId) {
+  return (definitionLike?.fields || []).filter((field) => field.section === sectionId);
+}
+
+function countSettingsGroups(fields) {
+  return new Set(fields.map((field) => field.group || 'main')).size;
+}
+
+function buildSettingsDestinations(definitionLike) {
+  const sectionDestinations = (definitionLike?.sections || [])
+    .map((section) => {
+      const fields = getSettingsSectionFields(definitionLike, section.id);
+      if (!fields.length) return null;
+      return {
+        id: section.id,
+        kind: 'section',
+        label: section.label,
+        description: section.description || '',
+        fieldCount: fields.length,
+        groupCount: countSettingsGroups(fields)
+      };
+    })
+    .filter(Boolean);
+
+  return [
+    {
+      id: SETTINGS_OVERVIEW_ID,
+      kind: 'overview',
+      label: 'Uebersicht',
+      description: 'Startpunkt fuer die wichtigsten Einstellungsbereiche.'
+    },
+    ...sectionDestinations
+  ];
+}
+
+function resolveActiveSettingsSection(destinations, requestedId) {
+  const ids = new Set((destinations || []).map((destination) => destination.id));
+  return ids.has(requestedId) ? requestedId : SETTINGS_OVERVIEW_ID;
+}
+
+function createSettingsShellState(definitionLike, requestedId = SETTINGS_OVERVIEW_ID) {
+  const destinations = buildSettingsDestinations(definitionLike);
+  return {
+    destinations,
+    activeSectionId: resolveActiveSettingsSection(destinations, requestedId)
+  };
+}
+
+function setActiveSettingsSection(state, requestedId) {
+  return {
+    ...state,
+    activeSectionId: resolveActiveSettingsSection(state?.destinations || [], requestedId)
+  };
+}
+
+const settingsShellHelpers = {
+  SETTINGS_OVERVIEW_ID,
+  buildSettingsDestinations,
+  createSettingsShellState,
+  getSettingsSectionFields,
+  resolveActiveSettingsSection,
+  setActiveSettingsSection
+};
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.PlexLiteSettingsShell = settingsShellHelpers;
 }
 
 function getParts(path) {
@@ -371,39 +442,45 @@ async function restartService() {
   }, 8000);
 }
 
-document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {
-  setBanner(`Neu laden fehlgeschlagen: ${error.message}`, 'error');
-}));
+function initSettingsPage() {
+  document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {
+    setBanner(`Neu laden fehlgeschlagen: ${error.message}`, 'error');
+  }));
 
-document.getElementById('saveConfigBtn')?.addEventListener('click', () => saveCurrentForm().catch((error) => {
-  setBanner(`Speichern fehlgeschlagen: ${error.message}`, 'error');
-}));
+  document.getElementById('saveConfigBtn')?.addEventListener('click', () => saveCurrentForm().catch((error) => {
+    setBanner(`Speichern fehlgeschlagen: ${error.message}`, 'error');
+  }));
 
-document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
-document.getElementById('refreshHealthBtn')?.addEventListener('click', () => loadHealth().catch((error) => {
-  setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
-}));
-document.getElementById('restartServiceBtn')?.addEventListener('click', () => restartService().catch((error) => {
-  setHealthBanner(`Restart fehlgeschlagen: ${error.message}`, 'error');
-}));
+  document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
+  document.getElementById('refreshHealthBtn')?.addEventListener('click', () => loadHealth().catch((error) => {
+    setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
+  }));
+  document.getElementById('restartServiceBtn')?.addEventListener('click', () => restartService().catch((error) => {
+    setHealthBanner(`Restart fehlgeschlagen: ${error.message}`, 'error');
+  }));
 
-document.getElementById('importConfigBtn')?.addEventListener('click', () => {
-  document.getElementById('importConfigFile')?.click();
-});
+  document.getElementById('importConfigBtn')?.addEventListener('click', () => {
+    document.getElementById('importConfigFile')?.click();
+  });
 
-document.getElementById('importConfigFile')?.addEventListener('change', async (event) => {
-  const file = event.target.files?.[0];
-  await importConfigFromFile(file);
-  event.target.value = '';
-});
+  document.getElementById('importConfigFile')?.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    await importConfigFromFile(file);
+    event.target.value = '';
+  });
 
-window.addEventListener('plexlite:unauthorized', () => {
-  setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN oeffnen oder das Token neu speichern.', 'error');
-});
+  window.addEventListener('plexlite:unauthorized', () => {
+    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN oeffnen oder das Token neu speichern.', 'error');
+  });
 
-loadConfig().catch((error) => {
-  setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
-});
-loadHealth().catch((error) => {
-  setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
-});
+  loadConfig().catch((error) => {
+    setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
+  });
+  loadHealth().catch((error) => {
+    setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
+  });
+}
+
+if (typeof document !== 'undefined') {
+  initSettingsPage();
+}
