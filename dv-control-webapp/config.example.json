@@ -71,7 +71,7 @@
     "enabled": false,
     "apiVersion": "v3",
     "url": "http://127.0.0.1:8086",
-    "db": "plexlite",
+    "db": "dvhub",
     "token": "",
     "measurement": "dv"
   },

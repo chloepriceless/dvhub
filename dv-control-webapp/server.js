@@ -24,7 +24,7 @@ let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
 let cfg = loadedConfig.effectiveConfig;
 const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
-const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'plexlite.service';
+const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 
 const state = {
@@ -1379,7 +1379,7 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/config/export' && req.method === 'GET') {
-    return downloadJson(res, 'plexlite-config.json', rawCfg);
+    return downloadJson(res, 'dvhub-config.json', rawCfg);
   }
 
   if (url.pathname === '/api/admin/health' && req.method === 'GET') {

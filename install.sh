@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/plexlite/plexlite.git}"
+REPO_URL="${REPO_URL:-https://github.com/dvhub/dvhub.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/plexlite}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
-SERVICE_USER="${SERVICE_USER:-plexlite}"
-SERVICE_NAME="${SERVICE_NAME:-plexlite}"
-CONFIG_DIR="${CONFIG_DIR:-/etc/plexlite}"
+SERVICE_USER="${SERVICE_USER:-dvhub}"
+SERVICE_NAME="${SERVICE_NAME:-dvhub}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
 
 while [[ $# -gt 0 ]]; do
@@ -41,7 +41,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
     exec sudo --preserve-env=REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH bash "$0" "$@"
   fi
-  echo "Dieses Skript muss als root ausgefuehrt werden." >&2
+  echo "Dieses Skript muss als root ausgeführt werden." >&2
   exit 1
 fi
 
@@ -108,7 +108,7 @@ chmod 440 "${SUDOERS_FILE}"
 
 cat >/etc/systemd/system/${SERVICE_NAME}.service <<SERVICE
 [Unit]
-Description=PlexLite DV Control
+Description=DVhub DV Control
 After=network-online.target
 Wants=network-online.target
 
@@ -139,11 +139,11 @@ if [[ -z "${PRIMARY_IP}" ]]; then
 fi
 
 echo
-echo "PlexLite wurde installiert."
+echo "DVhub wurde installiert."
 echo "Service: systemctl status ${SERVICE_NAME}.service"
 echo "Config-Datei: ${CONFIG_PATH}"
-echo "Setup-Oberflaeche: http://${PRIMARY_IP}:8080/"
+echo "Setup-Oberfläche: http://${PRIMARY_IP}:8080/"
 echo
 echo "Da der Service eine externe Config-Datei nutzt, erscheint beim ersten Aufruf automatisch der Setup-Assistent,"
 echo "solange ${CONFIG_PATH} noch nicht angelegt wurde."
-echo "Restart-Button und Health-Check sind ueber die Einstellungen aktiv."
+echo "Restart-Button und Health-Check sind über die Einstellungen aktiv."

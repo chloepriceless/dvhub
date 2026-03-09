@@ -3,22 +3,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { getConfigDefinition } from '../config-model.js';
 
 function loadShellHelpers() {
-  const source = fs.readFileSync(path.resolve('dv-control-webapp/public/settings.js'), 'utf8');
+  const settingsPath = fileURLToPath(new URL('../public/settings.js', import.meta.url));
+  const source = fs.readFileSync(settingsPath, 'utf8');
   const sandbox = {
     console,
     globalThis: {},
     window: {
-      PlexLiteCommon: {},
+      DVhubCommon: {},
       addEventListener() {},
       setTimeout() {}
     }
   };
   sandbox.globalThis = sandbox;
-  vm.runInNewContext(source, sandbox, { filename: 'settings.js' });
-  return sandbox.PlexLiteSettingsShell;
+  vm.runInNewContext(source, sandbox, { filename: path.basename(settingsPath) });
+  return sandbox.DVhubSettingsShell;
 }
 
 const {
@@ -32,8 +34,8 @@ const {
 
 const sampleDefinition = {
   destinations: [
-    { id: 'basics', label: 'Grundsystem', description: 'Basis fuer PlexLite', intro: 'Grundlagen zuerst.' },
-    { id: 'connection', label: 'Verbindung zur Anlage', description: 'GX und Zaehler anbinden', intro: 'Verbindungen konfigurieren.' }
+    { id: 'basics', label: 'Grundsystem', description: 'Basis für DVhub', intro: 'Grundlagen zuerst.' },
+    { id: 'connection', label: 'Verbindung zur Anlage', description: 'GX und Zähler anbinden', intro: 'Verbindungen konfigurieren.' }
   ],
   sections: [
     { id: 'system', label: 'System', description: 'Basisoptionen', destination: 'basics' },

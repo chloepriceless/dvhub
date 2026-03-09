@@ -1,4 +1,4 @@
-const { apiFetch } = window.PlexLiteCommon;
+const { apiFetch } = window.DVhubCommon;
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
@@ -78,9 +78,9 @@ document.getElementById('startScan').addEventListener('click', startScan);
 document.getElementById('loadSchedule').addEventListener('click', loadSchedule);
 document.getElementById('saveSchedule').addEventListener('click', saveSchedule);
 
-window.addEventListener('plexlite:unauthorized', () => {
-  setText('scanMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN oeffnen.');
-  setText('scheduleMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN oeffnen.');
+window.addEventListener('dvhub:unauthorized', () => {
+  setText('scanMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN öffnen.');
+  setText('scheduleMeta', 'API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN öffnen.');
 });
 
 loadSchedule();

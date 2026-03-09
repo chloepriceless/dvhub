@@ -10,7 +10,7 @@ const POINT_META = {
   acPvL3W: { label: 'AC PV L3', description: 'Liest AC-PV auf Phase L3.' },
   gridSetpointW: { label: 'Grid Setpoint Readback', description: 'Liest den aktuellen Netz-Sollwert aus dem GX.' },
   minSocPct: { label: 'Minimum SOC Readback', description: 'Liest den Minimum-SOC als Rueckmeldung.' },
-  selfConsumptionW: { label: 'Self Consumption', description: 'Summiert den Hausverbrauch ueber mehrere Register.' }
+  selfConsumptionW: { label: 'Self Consumption', description: 'Summiert den Hausverbrauch über mehrere Register.' }
 };
 
 const CONTROL_WRITE_META = {
@@ -28,37 +28,37 @@ const SETTINGS_DESTINATIONS = [
   {
     id: 'basics',
     label: 'Grundsystem',
-    description: 'Die wichtigsten Laufzeit- und Zugriffsoptionen fuer PlexLite.',
+    description: 'Die wichtigsten Laufzeit- und Zugriffsoptionen für DVhub.',
     intro: 'Hier richtest du die Grundfunktionen, Netzwerkbasis und das Verhalten der App ein.'
   },
   {
     id: 'connection',
     label: 'Verbindung zur Anlage',
-    description: 'Alles fuer die Verbindung zu Victron-System und Netzzaehler.',
-    intro: 'Waehle hier, wie PlexLite mit deiner Anlage spricht und wo Messwerte herkommen.'
+    description: 'Alles für die Verbindung zu Victron-System und Netzzaehler.',
+    intro: 'Wähle hier, wie DVhub mit deiner Anlage spricht und wo Messwerte herkommen.'
   },
   {
     id: 'control',
     label: 'Direktvermarktung',
-    description: 'Steuerlogik und Schreibwerte fuer die aktive Regelung.',
-    intro: 'Diese Einstellungen bestimmen, wie PlexLite Sollwerte schreibt und DV-Logik anwendet.'
+    description: 'Steuerlogik und Schreibwerte für die aktive Regelung.',
+    intro: 'Diese Einstellungen bestimmen, wie DVhub Sollwerte schreibt und DV-Logik anwendet.'
   },
   {
     id: 'schedule',
     label: 'Zeitplan',
-    description: 'Globale Regeln und Standardwerte fuer die zeitgesteuerte Steuerung.',
+    description: 'Globale Regeln und Standardwerte für die zeitgesteuerte Steuerung.',
     intro: 'Passe hier an, wie der Zeitplan bewertet wird und welche Standardwerte gelten.'
   },
   {
     id: 'services',
     label: 'Preise & Dienste',
-    description: 'Optionale Preis- und Datendienste fuer Monitoring und Day-Ahead-Daten.',
+    description: 'Optionale Preis- und Datendienste für Monitoring und Day-Ahead-Daten.',
     intro: 'Verbinde optionale Dienste, damit Preise und Verlaufsdaten sauber eingebunden werden.'
   },
   {
     id: 'advanced',
     label: 'Erweitert',
-    description: 'Register-nahe und technische Bereiche fuer Spezialfaelle.',
+    description: 'Register-nahe und technische Bereiche für Spezialfaelle.',
     intro: 'Hier liegen tiefergehende Register- und Scan-Einstellungen, die meist nur bei Sonderfaellen noetig sind.'
   }
 ];
@@ -79,37 +79,37 @@ const SECTIONS = [
   {
     id: 'meter',
     label: 'Netzzaehler',
-    description: 'Register- und Verbindungsdaten fuer den Netzleistungsblock.',
+    description: 'Register- und Verbindungsdaten für den Netzleistungsblock.',
     destination: 'connection'
   },
   {
     id: 'points',
     label: 'Lese-Register',
-    description: 'Alle Lesepunkte fuer SOC, PV, Batterie, Setpoints und Hausverbrauch.',
+    description: 'Alle Lesepunkte für SOC, PV, Batterie, Setpoints und Hausverbrauch.',
     destination: 'advanced'
   },
   {
     id: 'controlWrite',
     label: 'Schreib-Register',
-    description: 'Register fuer Grid Setpoint, Charge Current und Minimum SOC.',
+    description: 'Register für Grid Setpoint, Charge Current und Minimum SOC.',
     destination: 'control'
   },
   {
     id: 'dvControl',
     label: 'DV Steuerung',
-    description: 'Victron-Register fuer DC/AC-PV-Freigabe und Negativpreis-Schutz.',
+    description: 'Victron-Register für DC/AC-PV-Freigabe und Negativpreis-Schutz.',
     destination: 'control'
   },
   {
     id: 'schedule',
     label: 'Zeitplan',
-    description: 'Globale Parameter fuer Zeitplan und Default-Werte. Die Regeln selbst bleiben im Dashboard editierbar.',
+    description: 'Globale Parameter für Zeitplan und Default-Werte. Die Regeln selbst bleiben im Dashboard editierbar.',
     destination: 'schedule'
   },
   {
     id: 'scan',
     label: 'Scan Tool',
-    description: 'Voreinstellungen fuer den Modbus-Scanner.',
+    description: 'Voreinstellungen für den Modbus-Scanner.',
     destination: 'advanced'
   },
   {
@@ -121,7 +121,7 @@ const SECTIONS = [
   {
     id: 'epex',
     label: 'EPEX',
-    description: 'Boersenpreis-Abruf fuer Day-Ahead-Preise.',
+    description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
     destination: 'services'
   }
 ];
@@ -132,21 +132,21 @@ const SETUP_WIZARD_STEPS = [
     index: 0,
     label: 'Schritt 1',
     title: 'Webserver & Sicherheit',
-    description: 'Lege die Basis fuer Zugriff und Erstkontakt fest, damit PlexLite nach dem Speichern erreichbar bleibt.'
+    description: 'Lege die Basis für Zugriff und Erstkontakt fest, damit DVhub nach dem Speichern erreichbar bleibt.'
   },
   {
     id: 'transport',
     index: 1,
     label: 'Schritt 2',
     title: 'Victron Verbindung',
-    description: 'Waehle den passenden Victron-Transport und zeige nur die Felder, die fuer Modbus oder MQTT wirklich noetig sind.'
+    description: 'Wähle den passenden Victron-Transport und zeige nur die Felder, die für Modbus oder MQTT wirklich noetig sind.'
   },
   {
     id: 'dv',
     index: 2,
     label: 'Schritt 3',
     title: 'DV & Meter',
-    description: 'Richte Proxy-Port, Meterblock und die Vorzeichenlogik fuer Netzwerte ein.'
+    description: 'Richte Proxy-Port, Meterblock und die Vorzeichenlogik für Netzwerte ein.'
   },
   {
     id: 'services',
@@ -161,17 +161,17 @@ const SETUP_WIZARD_FIELD_META = {
   httpPort: {
     stepId: 'basics',
     order: 10,
-    help: 'Unter diesem Port oeffnest du spaeter die PlexLite-Oberflaeche im Browser.'
+    help: 'Unter diesem Port oeffnest du später die DVhub-Oberfläche im Browser.'
   },
   apiToken: {
     stepId: 'basics',
     order: 20,
-    help: 'Optional. Schuetzt die API direkt ab dem ersten Start, wenn du extern auf PlexLite zugreifst.'
+    help: 'Optional. Schuetzt die API direkt ab dem ersten Start, wenn du extern auf DVhub zugreifst.'
   },
   'victron.transport': {
     stepId: 'transport',
     order: 10,
-    help: 'Modbus ist die direkte GX-Verbindung. MQTT eignet sich fuer Venus-OS-Daten mit Portal-ID.'
+    help: 'Modbus ist die direkte GX-Verbindung. MQTT eignet sich für Venus-OS-Daten mit Portal-ID.'
   },
   'victron.host': {
     stepId: 'transport',
@@ -182,47 +182,47 @@ const SETUP_WIZARD_FIELD_META = {
     stepId: 'transport',
     order: 30,
     visibleWhenTransport: ['modbus'],
-    help: 'Nur fuer Modbus. In den meisten Installationen bleibt das 502.'
+    help: 'Nur für Modbus. In den meisten Installationen bleibt das 502.'
   },
   'victron.unitId': {
     stepId: 'transport',
     order: 40,
     visibleWhenTransport: ['modbus'],
-    help: 'Nur fuer Modbus. Der GX nutzt typischerweise die Unit ID 100.'
+    help: 'Nur für Modbus. Der GX nutzt typischerweise die Unit ID 100.'
   },
   'victron.timeoutMs': {
     stepId: 'transport',
     order: 50,
     visibleWhenTransport: ['modbus'],
-    help: 'Nur fuer Modbus. Definiert, wie lange PlexLite auf eine Register-Antwort wartet.'
+    help: 'Nur für Modbus. Definiert, wie lange DVhub auf eine Register-Antwort wartet.'
   },
   'victron.mqtt.portalId': {
     stepId: 'transport',
     order: 60,
     visibleWhenTransport: ['mqtt'],
-    help: 'Pflicht fuer Victron MQTT, damit PlexLite die richtigen Venus-Topics lesen kann.'
+    help: 'Pflicht für Victron MQTT, damit DVhub die richtigen Venus-Topics lesen kann.'
   },
   'victron.mqtt.broker': {
     stepId: 'transport',
     order: 70,
     visibleWhenTransport: ['mqtt'],
-    help: 'Optionaler eigener Broker. Leer bedeutet: PlexLite nutzt den GX-Host als MQTT-Ziel.'
+    help: 'Optionaler eigener Broker. Leer bedeutet: DVhub nutzt den GX-Host als MQTT-Ziel.'
   },
   'victron.mqtt.keepaliveIntervalMs': {
     stepId: 'transport',
     order: 80,
     visibleWhenTransport: ['mqtt'],
-    help: 'Nur fuer MQTT. Haelt die Verbindung aktiv, wenn laenger keine Daten eingehen.'
+    help: 'Nur für MQTT. Haelt die Verbindung aktiv, wenn laenger keine Daten eingehen.'
   },
   modbusListenHost: {
     stepId: 'dv',
     order: 10,
-    help: 'Interface, auf dem PlexLite den lokalen Modbus-Proxy anbietet.'
+    help: 'Interface, auf dem DVhub den lokalen Modbus-Proxy anbietet.'
   },
   modbusListenPort: {
     stepId: 'dv',
     order: 20,
-    help: 'Auf diesen Port verbindet sich spaeter der Direktvermarkter oder das Zielsystem.'
+    help: 'Auf diesen Port verbindet sich später der Direktvermarkter oder das Zielsystem.'
   },
   gridPositiveMeans: {
     stepId: 'dv',
@@ -232,22 +232,22 @@ const SETUP_WIZARD_FIELD_META = {
   'meter.fc': {
     stepId: 'dv',
     order: 40,
-    help: 'Function Code fuer den Netzleistungsblock. Bei vielen Victron-Setups ist das 4.'
+    help: 'Function Code für den Netzleistungsblock. Bei vielen Victron-Setups ist das 4.'
   },
   'meter.address': {
     stepId: 'dv',
     order: 50,
-    help: 'Startadresse des Meterblocks fuer L1, L2 und L3.'
+    help: 'Startadresse des Meterblocks für L1, L2 und L3.'
   },
   'meter.quantity': {
     stepId: 'dv',
     order: 60,
-    help: 'Wie viele Register PlexLite fuer den Meterblock am Stueck liest.'
+    help: 'Wie viele Register DVhub für den Meterblock am Stueck liest.'
   },
   'dvControl.enabled': {
     stepId: 'dv',
     order: 70,
-    help: 'Aktiviert die DV-Schreiblogik, sobald spaeter Signale oder Preise darauf reagieren.'
+    help: 'Aktiviert die DV-Schreiblogik, sobald später Signale oder Preise darauf reagieren.'
   },
   'schedule.timezone': {
     stepId: 'services',
@@ -257,13 +257,13 @@ const SETUP_WIZARD_FIELD_META = {
   'epex.enabled': {
     stepId: 'services',
     order: 20,
-    help: 'Nur aktivieren, wenn du Day-Ahead-Preise direkt in PlexLite nutzen willst.'
+    help: 'Nur aktivieren, wenn du Day-Ahead-Preise direkt in DVhub nutzen willst.'
   },
   'epex.bzn': {
     stepId: 'services',
     order: 30,
     visibleWhenPath: { path: 'epex.enabled', equals: true },
-    help: 'Handelszone fuer EPEX, zum Beispiel DE-LU.'
+    help: 'Handelszone für EPEX, zum Beispiel DE-LU.'
   },
   'influx.enabled': {
     stepId: 'services',
@@ -280,7 +280,7 @@ const SETUP_WIZARD_FIELD_META = {
     stepId: 'services',
     order: 60,
     visibleWhenPath: { path: 'influx.enabled', equals: true },
-    help: 'Name der Datenbank oder des Zielbereichs fuer den Influx-Export.'
+    help: 'Name der Datenbank oder des Zielbereichs für den Influx-Export.'
   }
 };
 
@@ -404,7 +404,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
         { value: 6, label: '6 - Write Single' },
         { value: 16, label: '16 - Write Multiple' }
       ],
-      help: 'Modbus Function Code fuer diesen Eintrag.'
+      help: 'Modbus Function Code für diesen Eintrag.'
     },
     {
       section: sectionId,
@@ -480,7 +480,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
           { value: 'int32', label: 'int32' },
           { value: 'uint32', label: 'uint32' }
         ],
-        help: 'Datentyp fuer Schreibzugriffe.'
+        help: 'Datentyp für Schreibzugriffe.'
       },
       {
         section: sectionId,
@@ -494,7 +494,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
           { value: 'be', label: 'Big Endian (Standard)' },
           { value: 'le', label: 'Little Endian / Swapped' }
         ],
-        help: 'Nur relevant fuer 32-Bit-Werte.'
+        help: 'Nur relevant für 32-Bit-Werte.'
       }
     );
   }
@@ -521,7 +521,7 @@ function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {})
       path: `${basePath}.allowAddressZero`,
       label: 'Adresse 0 zulassen',
       type: 'boolean',
-      help: 'Sicherheitsfreigabe fuer Adresse 0 bei Schreibzugriffen.'
+      help: 'Sicherheitsfreigabe für Adresse 0 bei Schreibzugriffen.'
     });
   }
 
@@ -613,7 +613,7 @@ function buildFieldDefinitions() {
       label: 'API Token',
       type: 'text',
       empty: 'blank',
-      help: 'Optionaler Bearer-Token fuer alle API-Endpunkte.'
+      help: 'Optionaler Bearer-Token für alle API-Endpunkte.'
     },
     {
       section: 'system',
@@ -623,7 +623,7 @@ function buildFieldDefinitions() {
       path: 'modbusListenHost',
       label: 'Modbus Listen Host',
       type: 'text',
-      help: 'IP oder Interface fuer den Modbus-Server.'
+      help: 'IP oder Interface für den Modbus-Server.'
     },
     {
       section: 'system',
@@ -635,7 +635,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port, auf dem PlexLite als Modbus-Proxy lauscht.'
+      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht.'
     },
     {
       section: 'system',
@@ -673,7 +673,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 5,
       max: 3600,
-      help: 'Intervall fuer den Uptime-/Heartbeat-Endpunkt.'
+      help: 'Intervall für den Uptime-/Heartbeat-Endpunkt.'
     },
     {
       section: 'system',
@@ -724,7 +724,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Standard ist 502 fuer Modbus TCP.'
+      help: 'Standard ist 502 für Modbus TCP.'
     },
     {
       section: 'victron',
@@ -749,7 +749,7 @@ function buildFieldDefinitions() {
       min: 100,
       max: 60000,
       step: 100,
-      help: 'Timeout fuer Modbus-Requests.'
+      help: 'Timeout für Modbus-Requests.'
     },
     {
       section: 'victron',
@@ -769,7 +769,7 @@ function buildFieldDefinitions() {
       path: 'victron.mqtt.portalId',
       label: 'Portal ID',
       type: 'text',
-      help: 'Victron Portal ID fuer Venus MQTT Topics.'
+      help: 'Victron Portal ID für Venus MQTT Topics.'
     },
     {
       section: 'victron',
@@ -782,7 +782,7 @@ function buildFieldDefinitions() {
       min: 1000,
       max: 600000,
       step: 1000,
-      help: 'Intervall fuer MQTT Keepalive-Pakete.'
+      help: 'Intervall für MQTT Keepalive-Pakete.'
     },
     {
       section: 'victron',
@@ -797,14 +797,14 @@ function buildFieldDefinitions() {
         { value: 1, label: '1 - At least once' },
         { value: 2, label: '2 - Exactly once' }
       ],
-      help: 'QoS fuer MQTT Subscribe/Publish.'
+      help: 'QoS für MQTT Subscribe/Publish.'
     },
 
     {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.fc',
       label: 'Function Code',
       type: 'select',
@@ -812,13 +812,13 @@ function buildFieldDefinitions() {
         { value: 3, label: '3 - Holding Register' },
         { value: 4, label: '4 - Input Register' }
       ],
-      help: 'Typischerweise 4 fuer Input Register.'
+      help: 'Typischerweise 4 für Input Register.'
     },
     {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.address',
       label: 'Startadresse',
       type: 'number',
@@ -830,19 +830,19 @@ function buildFieldDefinitions() {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.quantity',
       label: 'Anzahl Register',
       type: 'number',
       min: 1,
       max: 125,
-      help: 'Typischerweise 3 Register fuer L1/L2/L3.'
+      help: 'Typischerweise 3 Register für L1/L2/L3.'
     },
     {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.timeoutMs',
       label: 'Timeout (ms)',
       type: 'number',
@@ -850,13 +850,13 @@ function buildFieldDefinitions() {
       max: 60000,
       step: 100,
       empty: 'delete',
-      help: 'Leer lassen fuer Victron-Timeout.'
+      help: 'Leer lassen für Victron-Timeout.'
     },
     {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.host',
       label: 'Host Override',
       type: 'text',
@@ -867,7 +867,7 @@ function buildFieldDefinitions() {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.port',
       label: 'Port Override',
       type: 'number',
@@ -880,7 +880,7 @@ function buildFieldDefinitions() {
       section: 'meter',
       group: 'main',
       groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock fuer L1/L2/L3.',
+      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
       path: 'meter.unitId',
       label: 'Unit ID Override',
       type: 'number',
@@ -940,41 +940,41 @@ function buildFieldDefinitions() {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.host',
       label: 'Scan Host',
       type: 'text',
-      help: 'Host fuer das Scan-Tool.'
+      help: 'Host für das Scan-Tool.'
     },
     {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.port',
       label: 'Scan Port',
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port fuer das Scan-Tool.'
+      help: 'Port für das Scan-Tool.'
     },
     {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.unitId',
       label: 'Scan Unit ID',
       type: 'number',
       min: 0,
       max: 255,
-      help: 'Unit ID fuer das Scan-Tool.'
+      help: 'Unit ID für das Scan-Tool.'
     },
     {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.fc',
       label: 'Scan Function Code',
       type: 'select',
@@ -982,13 +982,13 @@ function buildFieldDefinitions() {
         { value: 3, label: '3 - Holding Register' },
         { value: 4, label: '4 - Input Register' }
       ],
-      help: 'Function Code fuer das Scan-Tool.'
+      help: 'Function Code für das Scan-Tool.'
     },
     {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.start',
       label: 'Startadresse',
       type: 'number',
@@ -1000,7 +1000,7 @@ function buildFieldDefinitions() {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.end',
       label: 'Endadresse',
       type: 'number',
@@ -1012,7 +1012,7 @@ function buildFieldDefinitions() {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.step',
       label: 'Schrittweite',
       type: 'number',
@@ -1024,7 +1024,7 @@ function buildFieldDefinitions() {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.quantity',
       label: 'Register pro Anfrage',
       type: 'number',
@@ -1036,20 +1036,20 @@ function buildFieldDefinitions() {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.timeoutMs',
       label: 'Timeout (ms)',
       type: 'number',
       min: 100,
       max: 60000,
       step: 100,
-      help: 'Timeout fuer das Scan-Tool.'
+      help: 'Timeout für das Scan-Tool.'
     },
     {
       section: 'scan',
       group: 'scan',
       groupLabel: 'Scan Default',
-      groupDescription: 'Voreinstellungen fuer die Diagnose-Seite.',
+      groupDescription: 'Voreinstellungen für die Diagnose-Seite.',
       path: 'scan.onlyNonZero',
       label: 'Nur nicht-null Treffer',
       type: 'boolean',
@@ -1098,7 +1098,7 @@ function buildFieldDefinitions() {
       path: 'influx.db',
       label: 'Database / DB',
       type: 'text',
-      help: 'DB-Name fuer Influx v3 oder Fallback fuer v2.'
+      help: 'DB-Name für Influx v3 oder Fallback für v2.'
     },
     {
       section: 'influx',
@@ -1109,7 +1109,7 @@ function buildFieldDefinitions() {
       label: 'Organisation',
       type: 'text',
       empty: 'blank',
-      help: 'Nur fuer Influx v2 relevant.'
+      help: 'Nur für Influx v2 relevant.'
     },
     {
       section: 'influx',
@@ -1120,7 +1120,7 @@ function buildFieldDefinitions() {
       label: 'Bucket',
       type: 'text',
       empty: 'blank',
-      help: 'Nur fuer Influx v2 relevant.'
+      help: 'Nur für Influx v2 relevant.'
     },
     {
       section: 'influx',
@@ -1141,24 +1141,24 @@ function buildFieldDefinitions() {
       path: 'influx.measurement',
       label: 'Measurement',
       type: 'text',
-      help: 'Measurement-Name fuer alle Messreihen.'
+      help: 'Measurement-Name für alle Messreihen.'
     },
 
     {
       section: 'epex',
       group: 'market',
       groupLabel: 'EPEX',
-      groupDescription: 'Day-Ahead-Preisfeed fuer Preise, Prognosen und Negativpreis-Logik.',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.enabled',
       label: 'EPEX aktiv',
       type: 'boolean',
-      help: 'Aktiviert den Abruf von Boersenpreisen.'
+      help: 'Aktiviert den Abruf von Börsenpreisen.'
     },
     {
       section: 'epex',
       group: 'market',
       groupLabel: 'EPEX',
-      groupDescription: 'Day-Ahead-Preisfeed fuer Preise, Prognosen und Negativpreis-Logik.',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.bzn',
       label: 'BZN',
       type: 'text',
@@ -1168,7 +1168,7 @@ function buildFieldDefinitions() {
       section: 'epex',
       group: 'market',
       groupLabel: 'EPEX',
-      groupDescription: 'Day-Ahead-Preisfeed fuer Preise, Prognosen und Negativpreis-Logik.',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.timezone',
       label: 'EPEX Zeitzone',
       type: 'text',
@@ -1204,7 +1204,7 @@ function buildFieldDefinitions() {
       path: 'dvControl.enabled',
       label: 'DV Control aktiv',
       type: 'boolean',
-      help: 'Aktiviert die automatische Umschaltung fuer DV-Signale.'
+      help: 'Aktiviert die automatische Umschaltung für DV-Signale.'
     },
     {
       section: 'dvControl',

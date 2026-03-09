@@ -3,72 +3,91 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PlexLite Tools</title>
+  <title>DVhub Tools</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Saira+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="page-tools">
-  <div class="app-shell">
-    <header class="panel hero reveal">
-      <div class="brand-lockup">
-        <img src="/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png" alt="PlexLite Logo" class="hero-logo" />
+  <div class="app-shell shell-layout">
+    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
+      <div class="app-nav-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
         <div>
-          <p class="eyebrow">PlexLite Utilities</p>
-          <h1 class="hero-title">Tools & Diagnostics</h1>
-          <p class="hero-sub">Analyse, Scan und Regelwerk-Editing im gleichen Corporate Design wie das Control Cockpit.</p>
+          <p class="app-nav-eyebrow">Direktvermarktung</p>
+          <strong class="app-nav-title">DVhub</strong>
         </div>
       </div>
-      <div class="hero-actions">
-        <a class="btn btn-ghost" href="/">Zurueck zum Dashboard</a>
-        <a class="btn btn-ghost" href="/settings.html">Einstellungen</a>
+      <nav class="app-nav-links">
+        <a class="app-nav-link" href="/">Leitstand</a>
+        <a class="app-nav-link" href="/settings.html">Einstellungen</a>
+        <a class="app-nav-link is-active" href="/tools.html">Tools</a>
+        <a class="app-nav-link" href="/setup.html">Setup</a>
+      </nav>
+      <div class="app-nav-meta">
+        <p class="card-title">Diagnose</p>
+        <p class="tools-note">Scan, Regelprüfung und JSON-Bearbeitung ohne visuelle Ablenkung.</p>
       </div>
-    </header>
+    </aside>
 
-    <main class="tools-grid">
-      <section class="panel reveal">
-        <h2 class="tools-card-title">Modbus Scan</h2>
-        <p class="tools-note">Direktscan von Registerbereichen fuer schnelle Diagnose und Mapping.</p>
-
-        <div class="controls">
-          <label>Unit <input id="scanUnit" type="number" value="0" /></label>
-          <label>Start <input id="scanStart" type="number" value="2500" /></label>
-          <label>Ende <input id="scanEnd" type="number" value="2700" /></label>
-          <label>Step <input id="scanStep" type="number" value="10" /></label>
-          <label>Qty <input id="scanQty" type="number" value="10" /></label>
-          <button id="startScan" class="btn btn-primary">Scan starten</button>
+    <div class="app-main">
+      <header class="panel page-topbar reveal">
+        <div class="page-topbar-copy">
+          <p class="page-kicker">Tools</p>
+          <h1 class="page-title">DVhub Diagnose</h1>
+          <p class="page-subtitle">Register prüfen, Regeln editieren und Eingriffe nachvollziehbar vorbereiten.</p>
         </div>
-
-        <div class="meta" id="scanMeta">-</div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Addr</th>
-              <th>Regs (u16)</th>
-              <th>Regs (s16)</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="scanRows"></tbody>
-        </table>
-      </section>
-
-      <section class="panel reveal">
-        <h2 class="tools-card-title">Schedule / Control</h2>
-        <p class="tools-note">Rules laden und editieren.</p>
-
-        <div class="controls">
-          <button id="loadSchedule">Schedule laden</button>
-          <button id="saveSchedule">Schedule speichern</button>
+        <div class="page-actions">
+          <a class="btn btn-ghost" href="/">Zum Leitstand</a>
+          <a class="btn btn-primary" href="/settings.html">Einstellungen</a>
         </div>
+      </header>
 
-        <div class="meta">JSON-Format: <code>{ "rules": [ ... ] }</code></div>
-        <textarea id="scheduleJson"></textarea>
+      <main class="tools-grid">
+        <section class="panel reveal">
+          <h2 class="tools-card-title">Modbus-Scan</h2>
+          <p class="tools-note">Direktscan von Registerbereichen für schnelle Diagnose und Mapping.</p>
 
-        <div class="meta" id="scheduleMeta">-</div>
-      </section>
-    </main>
+          <div class="controls">
+            <label>Unit <input id="scanUnit" type="number" value="0" /></label>
+            <label>Start <input id="scanStart" type="number" value="2500" /></label>
+            <label>Ende <input id="scanEnd" type="number" value="2700" /></label>
+            <label>Schritt <input id="scanStep" type="number" value="10" /></label>
+            <label>Anzahl <input id="scanQty" type="number" value="10" /></label>
+            <button id="startScan" class="btn btn-primary">Scan starten</button>
+          </div>
+
+          <div class="meta" id="scanMeta">-</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Adresse</th>
+                <th>Register (u16)</th>
+                <th>Register (s16)</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="scanRows"></tbody>
+          </table>
+        </section>
+
+        <section class="panel reveal">
+          <h2 class="tools-card-title">Schedule / Control</h2>
+          <p class="tools-note">Regeln laden, prüfen und als JSON gezielt anpassen.</p>
+
+          <div class="controls">
+            <button id="loadSchedule">Zeitplan laden</button>
+            <button id="saveSchedule">Zeitplan speichern</button>
+          </div>
+
+          <div class="meta">JSON-Format: <code>{ "rules": [ ... ] }</code></div>
+          <textarea id="scheduleJson"></textarea>
+
+          <div class="meta" id="scheduleMeta">-</div>
+        </section>
+      </main>
+    </div>
   </div>
 
   <script src="/common.js"></script>

@@ -3,64 +3,88 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PlexLite Setup</title>
+  <title>DVhub Setup</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Saira+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="page-setup">
-  <div class="app-shell">
-    <header class="panel hero reveal">
-      <div class="brand-lockup">
-        <img src="/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png" alt="PlexLite Logo" class="hero-logo" />
+  <div class="app-shell shell-layout">
+    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
+      <div class="app-nav-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
         <div>
-          <p class="eyebrow">PlexLite First Run</p>
-          <h1 class="hero-title">Gefuehrtes Setup</h1>
-          <p class="hero-sub">Wenn noch keine gueltige Config existiert, fuehrt dich dieser Assistent durch die wichtigsten Einstellungen fuer Victron, DV und Monitoring.</p>
+          <p class="app-nav-eyebrow">Direktvermarktung</p>
+          <strong class="app-nav-title">DVhub</strong>
         </div>
       </div>
-      <div class="hero-actions">
-        <a class="btn btn-ghost" href="/settings.html">Experten-Menue</a>
-        <a class="btn btn-ghost" href="/">Dashboard</a>
+      <nav class="app-nav-links">
+        <a class="app-nav-link" href="/">Leitstand</a>
+        <a class="app-nav-link" href="/settings.html">Einstellungen</a>
+        <a class="app-nav-link" href="/tools.html">Tools</a>
+        <a class="app-nav-link is-active" href="/setup.html">Setup</a>
+      </nav>
+      <div class="app-nav-meta">
+        <p class="card-title">Ersteinrichtung</p>
+        <p class="tools-note">Geführter Einstieg für Verbindung, DV-Proxy, Dienste und abschließende Kontrolle.</p>
       </div>
-    </header>
+    </aside>
 
-    <main class="settings-grid">
-      <section class="panel reveal span-12">
-        <div class="panel-head">
-          <div>
-            <p class="card-title">Setup Status</p>
-            <h2 class="section-title">Ersteinrichtung</h2>
-          </div>
-          <div class="hero-actions">
-            <button id="setupSaveBtn" class="btn btn-primary" type="button">Setup speichern</button>
-            <button id="setupImportBtn" class="btn btn-ghost" type="button">Vorhandene Config importieren</button>
-          </div>
+    <div class="app-main">
+      <header class="panel page-topbar reveal">
+        <div class="page-topbar-copy">
+          <p class="page-kicker">Setup</p>
+          <h1 class="page-title">DVhub Inbetriebnahme</h1>
+          <p class="page-subtitle">Wenn noch keine gültige Config existiert, führt dich dieser Assistent durch die wichtigsten Systemwerte.</p>
         </div>
-        <div id="setupBanner" class="status-banner">Setup wird geladen...</div>
-        <div id="setupMeta" class="meta">-</div>
-        <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
-      </section>
-
-      <section class="panel reveal span-12">
-        <div id="setup-wizard" class="wizard-grid setup-shell">
-          <aside class="wizard-step setup-stepper">
-            <p class="card-title">Schritte</p>
-            <h2 class="section-title">Setup-Navigation</h2>
-            <div id="setup-steps" class="setup-steps"></div>
-          </aside>
-
-          <section class="wizard-step setup-stage">
-            <div id="setup-errors" class="status-banner info setup-errors">Setup wird vorbereitet...</div>
-            <div id="setup-workspace" class="setup-workspace"></div>
-            <section id="setup-review-panel" class="setup-review-panel" hidden></section>
-            <section id="setup-save-outcome" class="setup-save-outcome" hidden></section>
-            <div id="setup-nav" class="hero-actions setup-nav-bar"></div>
-          </section>
+        <div class="page-actions">
+          <a class="btn btn-ghost" href="/settings.html">Expertenmenü</a>
+          <a class="btn btn-primary" href="/">Zum Leitstand</a>
         </div>
-      </section>
-    </main>
+      </header>
+
+      <main class="settings-grid">
+        <section class="panel reveal span-12">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Setup-Status</p>
+              <h2 class="section-title">Ersteinrichtung</h2>
+            </div>
+            <div class="hero-actions">
+              <button id="setupSaveBtn" class="btn btn-primary" type="button">Setup speichern</button>
+              <button id="setupImportBtn" class="btn btn-ghost" type="button">Vorhandene Config importieren</button>
+            </div>
+          </div>
+          <div id="setupBanner" class="status-banner">Setup wird geladen...</div>
+          <div id="setupMeta" class="meta">-</div>
+          <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
+        </section>
+
+        <section class="panel reveal span-12">
+          <div id="setup-shell" class="settings-shell setup-shell">
+            <aside class="settings-sidebar setup-stepper" aria-label="Setup-Schritte">
+              <div class="settings-sidebar-sticky">
+                <div class="settings-sidebar-head">
+                  <p class="card-title">Ablauf</p>
+                  <h2 class="section-title">Schritte</h2>
+                  <p class="tools-note">Der Assistent bleibt bewusst kompakt und führt von links nach rechts durch die Kernentscheidungen.</p>
+                </div>
+                <div id="setup-progress" class="setup-progress"></div>
+                <div id="setup-steps" class="settings-sidebar-nav"></div>
+              </div>
+            </aside>
+
+            <section class="settings-workspace setup-stage">
+              <div id="setup-callout" class="setup-callout"></div>
+              <div id="setup-errors" class="status-banner" hidden></div>
+              <div id="setup-workspace" class="settings-workspace-panel"></div>
+              <div id="setup-nav" class="panel-head"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
 
   <script src="/common.js"></script>

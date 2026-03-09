@@ -1,4 +1,4 @@
-const common = typeof window !== 'undefined' ? window.PlexLiteCommon || {} : {};
+const common = typeof window !== 'undefined' ? window.DVhubCommon || {} : {};
 const { apiFetch, setStoredApiToken } = common;
 
 let setupDefinition = null;
@@ -107,8 +107,8 @@ function buildSetupSteps(definitionLike = setupDefinition) {
     id: REVIEW_STEP_ID,
     index: steps.length,
     label: `Schritt ${steps.length + 1}`,
-    title: 'Pruefen & speichern',
-    description: 'Kontrolliere die wichtigsten Werte und die wirksamen Defaults, bevor PlexLite die Config speichert.'
+    title: 'Prüfen & speichern',
+    description: 'Kontrolliere die wichtigsten Werte und die wirksamen Defaults, bevor DVhub die Config speichert.'
   };
   return [...steps, reviewStep].map((step, index) => {
     const fields = getSetupFieldsForStep(step.id, definitionLike);
@@ -183,32 +183,32 @@ function validateSetupWizardState(state) {
     pushValidationError(summary, stepId, path, message);
   };
 
-  requireInteger('basics', 'httpPort', 1, 65535, 'Bitte einen gueltigen Port zwischen 1 und 65535 eingeben.');
+  requireInteger('basics', 'httpPort', 1, 65535, 'Bitte einen gültigen Port zwischen 1 und 65535 eingeben.');
 
-  requireOption('transport', 'victron.transport', ['modbus', 'mqtt'], 'Bitte einen gueltigen Victron-Transport waehlen.');
+  requireOption('transport', 'victron.transport', ['modbus', 'mqtt'], 'Bitte einen gültigen Victron-Transport wählen.');
   if (transport === 'modbus') {
     requireText('transport', 'victron.host', 'Bitte den GX-Host oder DNS-Namen angeben.');
-    requireInteger('transport', 'victron.port', 1, 65535, 'Bitte einen gueltigen GX-Port zwischen 1 und 65535 eingeben.');
-    requireInteger('transport', 'victron.unitId', 0, 255, 'Bitte eine gueltige Unit ID zwischen 0 und 255 eingeben.');
-    requireInteger('transport', 'victron.timeoutMs', 100, 60000, 'Bitte einen gueltigen Timeout zwischen 100 und 60000 ms eingeben.');
+    requireInteger('transport', 'victron.port', 1, 65535, 'Bitte einen gültigen GX-Port zwischen 1 und 65535 eingeben.');
+    requireInteger('transport', 'victron.unitId', 0, 255, 'Bitte eine gültige Unit ID zwischen 0 und 255 eingeben.');
+    requireInteger('transport', 'victron.timeoutMs', 100, 60000, 'Bitte einen gültigen Timeout zwischen 100 und 60000 ms eingeben.');
   } else {
     if (isBlankValue(resolveWizardValue(state, 'victron.host', '')) && isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', ''))) {
       pushValidationError(summary, 'transport', 'victron.mqtt.broker', 'Bitte entweder eine MQTT Broker URL oder den GX-Host angeben.');
     }
-    requireText('transport', 'victron.mqtt.portalId', 'Bitte die Victron Portal ID fuer MQTT angeben.');
-    requireInteger('transport', 'victron.mqtt.keepaliveIntervalMs', 1000, 600000, 'Bitte ein gueltiges Keepalive zwischen 1000 und 600000 ms eingeben.');
+    requireText('transport', 'victron.mqtt.portalId', 'Bitte die Victron Portal ID für MQTT angeben.');
+    requireInteger('transport', 'victron.mqtt.keepaliveIntervalMs', 1000, 600000, 'Bitte ein gültiges Keepalive zwischen 1000 und 600000 ms eingeben.');
   }
 
   requireText('dv', 'modbusListenHost', 'Bitte den Modbus-Listen-Host angeben.');
-  requireInteger('dv', 'modbusListenPort', 1, 65535, 'Bitte einen gueltigen Port zwischen 1 und 65535 eingeben.');
-  requireOption('dv', 'gridPositiveMeans', ['feed_in', 'grid_import'], 'Bitte eine gueltige Vorzeichenlogik waehlen.');
-  requireOption('dv', 'meter.fc', [3, 4], 'Bitte einen gueltigen Meter Function Code waehlen.');
-  requireInteger('dv', 'meter.address', 0, 65535, 'Bitte eine gueltige Meter-Startadresse zwischen 0 und 65535 eingeben.');
-  requireInteger('dv', 'meter.quantity', 1, 125, 'Bitte eine gueltige Registeranzahl zwischen 1 und 125 eingeben.');
+  requireInteger('dv', 'modbusListenPort', 1, 65535, 'Bitte einen gültigen Port zwischen 1 und 65535 eingeben.');
+  requireOption('dv', 'gridPositiveMeans', ['feed_in', 'grid_import'], 'Bitte eine gültige Vorzeichenlogik wählen.');
+  requireOption('dv', 'meter.fc', [3, 4], 'Bitte einen gültigen Meter Function Code wählen.');
+  requireInteger('dv', 'meter.address', 0, 65535, 'Bitte eine gültige Meter-Startadresse zwischen 0 und 65535 eingeben.');
+  requireInteger('dv', 'meter.quantity', 1, 125, 'Bitte eine gültige Registeranzahl zwischen 1 und 125 eingeben.');
 
-  requireText('services', 'schedule.timezone', 'Bitte eine Zeitzone fuer den Zeitplan angeben.');
+  requireText('services', 'schedule.timezone', 'Bitte eine Zeitzone für den Zeitplan angeben.');
   if (resolveWizardValue(state, 'epex.enabled', false)) {
-    requireText('services', 'epex.bzn', 'Bitte die BZN fuer den EPEX-Dienst angeben.');
+    requireText('services', 'epex.bzn', 'Bitte die BZN für den EPEX-Dienst angeben.');
   }
   if (resolveWizardValue(state, 'influx.enabled', false)) {
     requireText('services', 'influx.url', 'Bitte die Influx-URL angeben.');
@@ -298,10 +298,10 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         ...baseDescription,
         highlight: {
           eyebrow: 'Erster Zugriff',
-          title: 'Nur die Daten, die PlexLite direkt erreichbar machen',
-          body: 'HTTP-Port und optionales API-Token reichen fuer den ersten sicheren Einstieg.'
+          title: 'Nur die Daten, die DVhub direkt erreichbar machen',
+          body: 'HTTP-Port und optionales API-Token reichen für den ersten sicheren Einstieg.'
         },
-        note: 'Alles Weitere bleibt spaeter in den Einstellungen verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
+        note: 'Alles Weitere bleibt später in den Einstellungen verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
       };
     case 'transport':
       if (getSetupTransportMode(state) === 'mqtt') {
@@ -310,9 +310,9 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
           highlight: {
             eyebrow: 'Venus MQTT',
             title: 'MQTT mit Portal ID und optionalem Broker',
-            body: 'Portal ID ist Pflicht. Einen Broker trennst du nur dann ein, wenn PlexLite nicht direkt ueber den GX-Host verbinden soll.'
+            body: 'Portal ID ist Pflicht. Einen Broker trennst du nur dann ein, wenn DVhub nicht direkt über den GX-Host verbinden soll.'
           },
-          note: 'Wenn das Broker-Feld leer bleibt, verwendet PlexLite den GX-Host als MQTT-Fallback. Unpassende Modbus-Felder verschwinden aus diesem Schritt.'
+          note: 'Wenn das Broker-Feld leer bleibt, verwendet DVhub den GX-Host als MQTT-Fallback. Unpassende Modbus-Felder verschwinden aus diesem Schritt.'
         };
       }
       return {
@@ -320,7 +320,7 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         highlight: {
           eyebrow: 'Direkte Registerverbindung',
           title: 'Modbus TCP direkt zum GX',
-          body: 'Fuer Modbus brauchst du nur Host, Port, Unit ID und Timeout fuer die erste stabile Registerverbindung.'
+          body: 'Für Modbus brauchst du nur Host, Port, Unit ID und Timeout für die erste stabile Registerverbindung.'
         },
         note: 'MQTT-spezifische Felder werden ausgeblendet, damit der Schritt ruhig und eindeutig bleibt.'
       };
@@ -330,9 +330,9 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         highlight: {
           eyebrow: 'Proxy & Meter',
           title: 'DV-Port, Meterblock und Vorzeichen an einem Ort',
-          body: 'In diesem Schritt definierst du, wie PlexLite Netzwerte liest und spaeter an externe Systeme weiterreicht.'
+          body: 'In diesem Schritt definierst du, wie DVhub Netzwerte liest und später an externe Systeme weiterreicht.'
         },
-        note: 'Nur der Kernblock fuer den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen spaeter in den Einstellungen.'
+        note: 'Nur der Kernblock für den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen später in den Einstellungen.'
       };
     case 'services':
       return {
@@ -349,7 +349,7 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         ...baseDescription,
         highlight: {
           eyebrow: 'Letzter Check',
-          title: 'Pruefen, was PlexLite wirklich speichert und verwendet',
+          title: 'Prüfen, was DVhub wirklich speichert und verwendet',
           body: 'Vor dem Speichern siehst du die Kernwerte, aktive Dienste und wichtige Default- oder Fallback-Ergebnisse der aktuellen Konfiguration.'
         },
         note: 'Kontrolliere hier besonders Transport, Meter und optionale Dienste. Danach kannst du das Setup oben speichern.'
@@ -402,7 +402,7 @@ function collectInheritedMeterNotes(state) {
     notes.push(`Meter Port bleibt auf dem wirksamen Standard ${effectivePort}.`);
   }
   if (!hasOwnDraftValue(state, 'meter.unitId') && !isBlankValue(effectiveUnitId)) {
-    notes.push(`Meter Unit ID uebernimmt den wirksamen Wert ${effectiveUnitId}.`);
+    notes.push(`Meter Unit ID übernimmt den wirksamen Wert ${effectiveUnitId}.`);
   }
   if (!hasOwnDraftValue(state, 'meter.timeoutMs') && !isBlankValue(effectiveTimeout)) {
     notes.push(`Meter Timeout bleibt beim wirksamen Wert ${effectiveTimeout} ms.`);
@@ -435,7 +435,7 @@ function buildSetupReviewSnapshot(state) {
       { label: 'Keepalive', value: `${formatReviewValue(resolveWizardValue(state, 'victron.mqtt.keepaliveIntervalMs', ''))} ms` }
     );
     if (isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', '')) && !isBlankValue(host)) {
-      transportSection.notes.push(`Kein eigener Broker gespeichert. PlexLite nutzt beim Verbinden automatisch den GX-Host ${host} auf MQTT-Port 1883.`);
+      transportSection.notes.push(`Kein eigener Broker gespeichert. DVhub nutzt beim Verbinden automatisch den GX-Host ${host} auf MQTT-Port 1883.`);
     }
   } else {
     transportSection.entries.push(
@@ -447,7 +447,7 @@ function buildSetupReviewSnapshot(state) {
 
   const serviceNotes = [];
   if (epexEnabled && !hasOwnDraftValue(state, 'epex.timezone') && !isBlankValue(scheduleTimezone)) {
-    serviceNotes.push(`EPEX uebernimmt die Setup-Zeitzone ${scheduleTimezone}, solange keine eigene Zeitzone gesetzt ist.`);
+    serviceNotes.push(`EPEX übernimmt die Setup-Zeitzone ${scheduleTimezone}, solange keine eigene Zeitzone gesetzt ist.`);
   }
 
   return [
@@ -520,15 +520,15 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
   const title = source === 'import' ? 'Config importiert' : 'Setup gespeichert';
   const kind = payload?.restartRequired || warnings.length ? 'warn' : 'success';
   const summary = payload?.restartRequired
-    ? 'Ein Teil der Aenderungen ist gespeichert, wird aber erst nach einem Dienst-Neustart oder einer neuen Verbindung wirksam.'
+    ? 'Ein Teil der Änderungen ist gespeichert, wird aber erst nach einem Dienst-Neustart oder einer neuen Verbindung wirksam.'
     : 'Die Kernkonfiguration ist gespeichert und die naechsten Schritte liegen jetzt in den Einstellungen.';
   const bannerParts = [title];
   if (payload?.restartRequired) bannerParts.push('Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.');
-  if (warnings.length) bannerParts.push(`Bitte ${warnings.length === 1 ? 'die Warnung' : 'die Warnungen'} unten pruefen.`);
+  if (warnings.length) bannerParts.push(`Bitte ${warnings.length === 1 ? 'die Warnung' : 'die Warnungen'} unten prüfen.`);
   bannerParts.push('Weiterleitung zu den Einstellungen...');
   const nextSteps = payload?.restartRequired
-    ? ['In den Einstellungen pruefen, welche Verbindungswerte aktiv sind.', 'Danach den PlexLite-Dienst oder die betroffene Verbindung neu starten.']
-    : ['In den Einstellungen die vollstaendige Config pruefen und bei Bedarf weiter verfeinern.'];
+    ? ['In den Einstellungen prüfen, welche Verbindungswerte aktiv sind.', 'Danach den DVhub-Dienst oder die betroffene Verbindung neu starten.']
+    : ['In den Einstellungen die vollstaendige Config prüfen und bei Bedarf weiter verfeinern.'];
   return {
     title,
     kind,
@@ -564,7 +564,7 @@ const setupWizardHelpers = {
 };
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.PlexLiteSetupWizard = setupWizardHelpers;
+  globalThis.DVhubSetupWizard = setupWizardHelpers;
 }
 
 function setSetupWizardState(nextState) {
@@ -577,7 +577,7 @@ function buildMetaText(meta) {
   const parts = [
     `Datei: ${meta.path || '-'}`,
     `Vorhanden: ${meta.exists ? 'Ja' : 'Nein'}`,
-    `Gueltig: ${meta.valid ? 'Ja' : 'Nein'}`
+    `Gültig: ${meta.valid ? 'Ja' : 'Nein'}`
   ];
   if (meta.parseError) parts.push(`Parse Fehler: ${meta.parseError}`);
   if (Array.isArray(meta.warnings) && meta.warnings.length) parts.push(`Warnungen: ${meta.warnings.length}`);
@@ -870,7 +870,7 @@ function renderSetupErrors() {
 
   container.classList.add('error');
   const headline = document.createElement('strong');
-  headline.textContent = `${stepErrors.length} Angabe${stepErrors.length === 1 ? '' : 'n'} noch pruefen`;
+  headline.textContent = `${stepErrors.length} Angabe${stepErrors.length === 1 ? '' : 'n'} noch prüfen`;
   const intro = document.createElement('p');
   intro.className = 'setup-error-intro';
   intro.textContent = 'Bitte diese Punkte korrigieren, bevor du in den naechsten Setup-Schritt wechselst.';
@@ -913,7 +913,7 @@ function renderSetupOutcome() {
   if (Array.isArray(outcome.restartItems) && outcome.restartItems.length) {
     const restartTitle = document.createElement('strong');
     restartTitle.className = 'setup-save-subtitle';
-    restartTitle.textContent = 'Neustart oder Neuverbindung noetig fuer:';
+    restartTitle.textContent = 'Neustart oder Neuverbindung noetig für:';
     const restartList = document.createElement('ul');
     restartList.className = 'setup-save-list';
     for (const item of outcome.restartItems) {
@@ -969,10 +969,10 @@ function renderSetupNav() {
   copy.className = 'setup-nav-copy';
 
   const copyTitle = document.createElement('strong');
-  copyTitle.textContent = isReviewStep ? 'Zusammenfassung pruefen und dann oben speichern' : 'Weiter zum naechsten Fokusblock';
+  copyTitle.textContent = isReviewStep ? 'Zusammenfassung prüfen und dann oben speichern' : 'Weiter zum naechsten Fokusblock';
 
   const copyBody = document.createElement('span');
-  copyBody.textContent = stepDescription.note || 'Jeder Schritt zeigt nur die Felder, die du fuer diesen Abschnitt wirklich brauchst.';
+  copyBody.textContent = stepDescription.note || 'Jeder Schritt zeigt nur die Felder, die du für diesen Abschnitt wirklich brauchst.';
 
   copy.append(copyTitle, copyBody);
 
@@ -981,14 +981,14 @@ function renderSetupNav() {
   backButton.className = 'btn btn-ghost';
   backButton.dataset.action = 'back';
   backButton.disabled = currentIndex === 0;
-  backButton.textContent = 'Zurueck';
+  backButton.textContent = 'Zurück';
 
   const nextButton = document.createElement('button');
   nextButton.type = 'button';
   nextButton.className = 'btn btn-primary';
   nextButton.dataset.action = 'next';
   nextButton.hidden = isReviewStep;
-  nextButton.textContent = isLastStep ? 'Review oeffnen' : 'Weiter';
+  nextButton.textContent = isLastStep ? 'Review öffnen' : 'Weiter';
 
   container.append(copy, backButton, nextButton);
 }
@@ -1075,8 +1075,8 @@ async function loadSetup() {
     return;
   }
   hydrateSetupWizardState(payload);
-  if (payload.meta.needsSetup) setBanner('Noch keine gueltige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
-  else setBanner('Es existiert bereits eine gueltige Config. Der Assistent kann trotzdem zum schnellen Ueberschreiben genutzt werden.', 'success');
+  if (payload.meta.needsSetup) setBanner('Noch keine gültige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
+  else setBanner('Es existiert bereits eine gültige Config. Der Assistent kann trotzdem zum schnellen Ueberschreiben genutzt werden.', 'success');
 }
 
 async function importSetupFile(file) {
@@ -1211,8 +1211,8 @@ if (typeof document !== 'undefined') {
     handleWizardNav(button.dataset.action);
   });
 
-  window.addEventListener('plexlite:unauthorized', () => {
-    setBanner('API-Zugriff abgelehnt. Wenn ein Token aktiv ist, die Seite mit ?token=DEIN_TOKEN oeffnen.', 'error');
+  window.addEventListener('dvhub:unauthorized', () => {
+    setBanner('API-Zugriff abgelehnt. Wenn ein Token aktiv ist, die Seite mit ?token=DEIN_TOKEN öffnen.', 'error');
   });
 
   loadSetup().catch((error) => setBanner(`Setup konnte nicht geladen werden: ${error.message}`, 'error'));

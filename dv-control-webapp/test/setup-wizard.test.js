@@ -13,14 +13,14 @@ function loadSetupWizardHelpers() {
     console,
     globalThis: {},
     window: {
-      PlexLiteCommon: {},
+      DVhubCommon: {},
       addEventListener() {},
       setTimeout() {}
     }
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(source, sandbox, { filename: path.basename(setupPath) });
-  return sandbox.PlexLiteSetupWizard;
+  return sandbox.DVhubSetupWizard;
 }
 
 const {
@@ -249,11 +249,11 @@ test('validateSetupWizardState returns per-step and per-field blocking feedback'
   assert.equal(state.validation.steps.dv.valid, false);
   assert.deepEqual(
     Array.from(state.validation.fields.modbusListenPort),
-    ['Bitte einen gueltigen Port zwischen 1 und 65535 eingeben.']
+    ['Bitte einen gültigen Port zwischen 1 und 65535 eingeben.']
   );
   assert.deepEqual(
     Array.from(state.validation.fields['meter.quantity']),
-    ['Bitte eine gueltige Registeranzahl zwischen 1 und 125 eingeben.']
+    ['Bitte eine gültige Registeranzahl zwischen 1 und 125 eingeben.']
   );
 });
 
@@ -348,7 +348,7 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
   assert.equal(getReviewEntryValue(servicesSection, 'InfluxDB'), 'Deaktiviert');
 
   const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
-  assert.match(reviewStep.highlight.title, /Pruefen|Review/i);
+  assert.match(reviewStep.highlight.title, /Prüfen|Review/i);
   assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
 });
 

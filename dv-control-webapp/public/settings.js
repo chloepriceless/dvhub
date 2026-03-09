@@ -1,4 +1,4 @@
-const common = typeof window !== 'undefined' ? window.PlexLiteCommon || {} : {};
+const common = typeof window !== 'undefined' ? window.DVhubCommon || {} : {};
 const { apiFetch, buildApiUrl, setStoredApiToken } = common;
 
 const SETTINGS_OVERVIEW_ID = 'overview';
@@ -57,8 +57,8 @@ function buildSettingsDestinations(definitionLike) {
       {
         id: SETTINGS_OVERVIEW_ID,
         kind: 'overview',
-        label: 'Uebersicht',
-        description: 'Startpunkt fuer die wichtigsten Einstellungsbereiche.'
+        label: 'Übersicht',
+        description: 'Startpunkt für die wichtigsten Einstellungsbereiche.'
       },
       ...sectionsWithFields.map((section) => buildSectionDestination(section, section.fields))
     ];
@@ -92,8 +92,8 @@ function buildSettingsDestinations(definitionLike) {
     {
       id: SETTINGS_OVERVIEW_ID,
       kind: 'overview',
-      label: 'Uebersicht',
-      description: 'Startpunkt fuer die wichtigsten Einstellungsbereiche.'
+      label: 'Übersicht',
+      description: 'Startpunkt für die wichtigsten Einstellungsbereiche.'
     },
     ...sectionDestinations
   ];
@@ -132,7 +132,7 @@ const settingsShellHelpers = {
 };
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.PlexLiteSettingsShell = settingsShellHelpers;
+  globalThis.DVhubSettingsShell = settingsShellHelpers;
 }
 
 function getParts(path) {
@@ -198,7 +198,7 @@ function buildMetaText(meta) {
   const parts = [
     `Datei: ${meta.path || '-'}`,
     `Vorhanden: ${meta.exists ? 'Ja' : 'Nein'}`,
-    `Gueltig: ${meta.valid ? 'Ja' : 'Nein'}`
+    `Gültig: ${meta.valid ? 'Ja' : 'Nein'}`
   ];
   if (meta.parseError) parts.push(`Parse Fehler: ${meta.parseError}`);
   if (Array.isArray(meta.warnings) && meta.warnings.length) parts.push(`Warnungen: ${meta.warnings.length}`);
@@ -330,7 +330,7 @@ function buildWorkspaceDefaultCopy(destination) {
   if (destination.sections.length === 1 && destination.sections[0].groupCount <= 1) {
     return 'Die relevanten Felder sind direkt sichtbar, ohne weitere Bereiche aufzuklappen.';
   }
-  return 'Die erste Gruppe ist geoeffnet. Weitere Gruppen bleiben kompakt, bis du sie wirklich brauchst.';
+  return 'Die erste Gruppe ist geöffnet. Weitere Gruppen bleiben kompakt, bis du sie wirklich brauchst.';
 }
 
 function createSummaryCard(title, text) {
@@ -371,8 +371,8 @@ function renderSettingsOverview() {
   head.className = 'settings-overview-head';
   head.innerHTML = `
     <p class="card-title">Start</p>
-    <h2 class="section-title">Womit moechtest du beginnen?</h2>
-    <p class="tools-note">Die Uebersicht ist der Standard-Einstieg. Von hier aus fuehrt die Seitenleiste in genau einen aktiven Arbeitsbereich.</p>
+    <h2 class="section-title">Womit möchtest du beginnen?</h2>
+    <p class="tools-note">Die Übersicht ist der Standard-Einstieg. Von hier aus führt die Seitenleiste in genau einen aktiven Arbeitsbereich.</p>
   `;
   overview.appendChild(head);
 
@@ -380,7 +380,7 @@ function renderSettingsOverview() {
   summary.className = 'settings-summary';
   for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
     const sectionNames = destination.sections?.map((section) => section.label).join(', ');
-    const summaryText = `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration fuer diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
+    const summaryText = `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration für diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
     summary.appendChild(createSummaryCard(destination.label, summaryText));
   }
   overview.appendChild(summary);
@@ -608,7 +608,7 @@ function renderHealth(payload) {
   const restartButton = document.getElementById('restartServiceBtn');
   if (restartButton) restartButton.disabled = !(service.enabled && service.status !== 'unavailable');
 
-  if (!service.enabled) setHealthBanner('Restart-Aktionen sind deaktiviert. Aktivierung erfolgt ueber den Installer bzw. ENV-Variablen.', 'warn');
+  if (!service.enabled) setHealthBanner('Restart-Aktionen sind deaktiviert. Aktivierung erfolgt über den Installer bzw. ENV-Variablen.', 'warn');
   else if (service.status === 'unavailable') setHealthBanner(`Service-Check fehlgeschlagen: ${service.detail || 'systemctl nicht erreichbar'}`, 'error');
   else setHealthBanner(`Service ${service.name} ist erreichbar. Status: ${service.status}.`, 'success');
 }
@@ -621,8 +621,8 @@ async function loadConfig() {
     return;
   }
   applyConfigPayload(payload);
-  if (currentMeta.needsSetup) setBanner('Es wurde noch keine gueltige Config gefunden. Du kannst sie hier direkt anlegen oder den Setup-Assistenten nutzen.', 'warn');
-  else setBanner('Konfiguration geladen. Aenderungen koennen jetzt im Menue bearbeitet werden.', 'success');
+  if (currentMeta.needsSetup) setBanner('Es wurde noch keine gültige Config gefunden. Du kannst sie hier direkt anlegen oder den Setup-Assistenten nutzen.', 'warn');
+  else setBanner('Konfiguration geladen. Änderungen können jetzt im Menü bearbeitet werden.', 'success');
 }
 
 async function loadHealth() {
@@ -656,7 +656,7 @@ async function saveConfig(config, source = 'settings') {
   });
 
   const restartNote = payload.restartRequired
-    ? ` Neustart empfohlen fuer: ${payload.restartRequiredPaths.join(', ')}`
+    ? ` Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`
     : '';
   setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
   await loadHealth();
@@ -728,8 +728,8 @@ function initSettingsPage() {
     event.target.value = '';
   });
 
-  window.addEventListener('plexlite:unauthorized', () => {
-    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN oeffnen oder das Token neu speichern.', 'error');
+  window.addEventListener('dvhub:unauthorized', () => {
+    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN öffnen oder das Token neu speichern.', 'error');
   });
 
   loadConfig().catch((error) => {

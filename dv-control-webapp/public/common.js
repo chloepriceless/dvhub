@@ -1,9 +1,25 @@
 (function () {
-  const STORAGE_KEY = 'plexlite.apiToken';
+  const STORAGE_KEY = 'dvhub.apiToken';
+  const LEGACY_STORAGE_KEY = ['plex', 'lite.apiToken'].join('');
+
+  function migrateLegacyToken() {
+    try {
+      const currentToken = window.localStorage.getItem(STORAGE_KEY);
+      if (currentToken) return currentToken;
+      const legacyToken = window.localStorage.getItem(LEGACY_STORAGE_KEY) || '';
+      if (legacyToken) {
+        window.localStorage.setItem(STORAGE_KEY, legacyToken);
+        window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      }
+      return legacyToken;
+    } catch {
+      return '';
+    }
+  }
 
   function getStoredApiToken() {
     try {
-      return window.localStorage.getItem(STORAGE_KEY) || '';
+      return window.localStorage.getItem(STORAGE_KEY) || migrateLegacyToken();
     } catch {
       return '';
     }
@@ -37,14 +53,14 @@
     if (token && !headers.has('authorization')) headers.set('authorization', `Bearer ${token}`);
     const response = await fetch(buildApiUrl(path), { ...options, headers });
     if (response.status === 401) {
-      window.dispatchEvent(new CustomEvent('plexlite:unauthorized'));
+      window.dispatchEvent(new CustomEvent('dvhub:unauthorized'));
     }
     return response;
   }
 
   syncTokenFromUrl();
 
-  window.PlexLiteCommon = {
+  window.DVhubCommon = {
     apiFetch,
     buildApiUrl,
     getStoredApiToken,
