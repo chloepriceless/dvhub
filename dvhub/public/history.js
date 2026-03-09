@@ -133,12 +133,12 @@ function linePath(points, width, height, min, max) {
   }).join(' ');
 }
 
-function linePathWithOffset(points, width, height, min, max, xOffset) {
+function linePathWithOffset(points, width, height, min, max, xOffset, yOffset = 0) {
   if (!points.length) return '';
   const span = max - min || 1;
   return points.map((point, index) => {
     const x = points.length === 1 ? xOffset + (width / 2) : xOffset + (index / (points.length - 1)) * width;
-    const y = height - (((point - min) / span) * height);
+    const y = yOffset + height - (((point - min) / span) * height);
     return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(' ');
 }
@@ -152,7 +152,92 @@ function axisTicks(min, max, count, formatter) {
   });
 }
 
-function renderLineChart(mountId, items, series, formatter, unitLabel) {
+function axisTickMeta(min, max, count, formatter) {
+  const span = max - min || 1;
+  return Array.from({ length: count }, (_, index) => {
+    const ratio = index / Math.max(count - 1, 1);
+    const value = max - (span * ratio);
+    return {
+      label: formatter(value),
+      ratio,
+      value
+    };
+  });
+}
+
+function compactAxisLabel(label) {
+  const value = String(label || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [, month, day] = value.split('-');
+    return `${day}.${month}.`;
+  }
+  if (/^\d{4}-\d{2}$/.test(value)) {
+    const [year, month] = value.split('-');
+    return `${month}/${year.slice(2)}`;
+  }
+  if (/^\d{2}:\d{2}$/.test(value)) {
+    return value;
+  }
+  return value.length > 8 ? `${value.slice(0, 8)}…` : value;
+}
+
+function selectedChartIndex(mountId, items) {
+  return Math.max(0, Math.min(
+    Number(historyState.chartCursorByMount[mountId] ?? (items.length - 1)),
+    items.length - 1
+  ));
+}
+
+function xAxisTickMeta(items, maxLabels = 6) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const step = Math.max(1, Math.ceil(items.length / maxLabels));
+  return items.map((item, index) => ({
+    index,
+    label: compactAxisLabel(item?.label || item?.key || '-')
+  })).filter((entry, idx, list) => (
+    entry.index === 0
+      || entry.index === list.length - 1
+      || entry.index % step === 0
+  ));
+}
+
+function bindLineChartPointer(mount, mountId, items, rerender) {
+  if (typeof mount.querySelector !== 'function') return;
+  const hoverSurface = mount.querySelector('.history-chart-hover-surface');
+  if (!hoverSurface || typeof hoverSurface.addEventListener !== 'function') return;
+  const setIndexFromPointer = (event) => {
+    const touch = event?.touches?.[0] || event;
+    const rect = typeof hoverSurface.getBoundingClientRect === 'function'
+      ? hoverSurface.getBoundingClientRect()
+      : { left: 0, width: 1 };
+    const widthValue = Math.max(Number(rect.width || 0), 1);
+    const ratio = Math.max(0, Math.min(1, (Number(touch?.clientX || 0) - Number(rect.left || 0)) / widthValue));
+    historyState.chartCursorByMount[mountId] = Math.round(ratio * Math.max(items.length - 1, 0));
+    rerender();
+  };
+  hoverSurface.addEventListener('mousemove', setIndexFromPointer);
+  hoverSurface.addEventListener('mouseenter', setIndexFromPointer);
+  hoverSurface.addEventListener('touchstart', setIndexFromPointer, { passive: true });
+  hoverSurface.addEventListener('touchmove', setIndexFromPointer, { passive: true });
+}
+
+function bindBarChartPointer(mount, mountId, items, rerender) {
+  if (typeof mount.querySelectorAll !== 'function') return;
+  const targets = mount.querySelectorAll('.history-chart-hover-surface[data-history-index]');
+  if (!targets || typeof targets.forEach !== 'function') return;
+  targets.forEach((target) => {
+    if (typeof target.addEventListener !== 'function') return;
+    const setActive = () => {
+      historyState.chartCursorByMount[mountId] = Number(target.dataset.historyIndex || 0);
+      rerender();
+    };
+    target.addEventListener('mouseenter', setActive);
+    target.addEventListener('click', setActive);
+    target.addEventListener('touchstart', setActive, { passive: true });
+  });
+}
+
+function renderLineChart(mountId, items, series, formatter, unitLabel, options = {}) {
   const mount = byId(mountId);
   if (!mount) return;
   if (!Array.isArray(items) || !items.length) {
@@ -160,13 +245,26 @@ function renderLineChart(mountId, items, series, formatter, unitLabel) {
     return;
   }
 
-  const width = 420;
-  const height = 180;
+  const width = Number(options.width || 420);
+  const height = Number(options.height || 180);
+  const marginLeft = 44;
+  const marginRight = 12;
+  const marginTop = 12;
+  const marginBottom = 28;
+  const innerWidth = width - marginLeft - marginRight;
+  const innerHeight = height - marginTop - marginBottom;
   const values = series.flatMap((entry) => items.map((item) => Number(item?.[entry.key])))
     .filter((value) => Number.isFinite(value));
-  const min = Math.min(0, ...(values.length ? values : [0]));
+  const min = Number.isFinite(options.min) ? Number(options.min) : Math.min(0, ...(values.length ? values : [0]));
   const max = Math.max(...(values.length ? values : [1]), 1);
-  const ticks = axisTicks(min, max, 4, formatter);
+  const ticks = axisTickMeta(min, max, Number(options.tickCount || 4), formatter);
+  const xTicks = xAxisTickMeta(items, Number(options.maxLabels || 6));
+  const interactive = options.interactive !== false;
+  const selectedIndex = selectedChartIndex(mountId, items);
+  const selectedItem = items[selectedIndex] || items[0];
+  const cursorX = items.length === 1
+    ? marginLeft + (innerWidth / 2)
+    : marginLeft + ((selectedIndex / Math.max(items.length - 1, 1)) * innerWidth);
 
   mount.innerHTML = `
     <div class="history-line-chart">
@@ -174,21 +272,45 @@ function renderLineChart(mountId, items, series, formatter, unitLabel) {
         ${series.map((entry) => `<span><i class="history-legend-swatch ${entry.className}"></i>${escapeHtml(entry.label)}</span>`).join('')}
       </div>
       <div class="history-axis-caption">${escapeHtml(unitLabel)}</div>
-      <svg viewBox="0 0 ${width} ${height}" class="history-line-svg" aria-hidden="true">
-        ${ticks.map((label, index) => {
-          const y = (index / Math.max(ticks.length - 1, 1)) * (height - 24) + 8;
+      <div class="history-chart-interaction">
+        <svg viewBox="0 0 ${width} ${height}" class="history-line-svg${options.detail ? ' history-line-svg-detail' : ''}" aria-hidden="true">
+          <g class="history-axis-y">
+        ${ticks.map((tick) => {
+          const y = marginTop + (tick.ratio * innerHeight);
           return `
-            <path class="history-grid-line" d="M42,${y.toFixed(2)} L${width},${y.toFixed(2)}" />
-            <text class="history-axis-label" x="0" y="${(y + 4).toFixed(2)}">${escapeHtml(label)}</text>
+            <path class="history-grid-line" d="M${marginLeft},${y.toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${y.toFixed(2)}" />
+            <text class="history-axis-label" x="0" y="${(y + 4).toFixed(2)}">${escapeHtml(tick.label)}</text>
           `;
         }).join('')}
+          </g>
+          <g class="history-axis-x">
+            <path class="history-axis-baseline" d="M${marginLeft},${(marginTop + innerHeight).toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${(marginTop + innerHeight).toFixed(2)}" />
+            ${xTicks.map((tick) => {
+              const x = items.length === 1 ? marginLeft + (innerWidth / 2) : marginLeft + ((tick.index / Math.max(items.length - 1, 1)) * innerWidth);
+              return `<text class="history-axis-label history-x-axis-label" x="${x.toFixed(2)}" y="${(height - 6).toFixed(2)}">${escapeHtml(tick.label)}</text>`;
+            }).join('')}
+          </g>
         ${series.map((entry) => {
           const points = items.map((item) => Number(item?.[entry.key]));
-          return `<path class="history-series-line ${entry.className}" d="${linePathWithOffset(points, width - 52, height - 24, min, max, 42)}" />`;
+          return `<path class="history-series-line ${entry.className}" d="${linePathWithOffset(points, innerWidth, innerHeight, min, max, marginLeft, marginTop)}" />`;
         }).join('')}
-      </svg>
+        ${interactive ? `<path class="history-cursor-line" d="M${cursorX.toFixed(2)},${marginTop} L${cursorX.toFixed(2)},${(marginTop + innerHeight).toFixed(2)}" />` : ''}
+        </svg>
+        ${interactive ? `<div class="history-chart-hover-surface" data-history-mount="${escapeHtml(mountId)}" aria-hidden="true"></div>` : ''}
+      </div>
+      ${interactive ? `
+        <div class="history-chart-inspector">
+          <strong>${escapeHtml(selectedItem?.label || '-')}</strong>
+          ${series.map((entry) => `<span>${escapeHtml(entry.label)} ${entry.formatter ? entry.formatter(selectedItem?.[entry.key]) : formatter(selectedItem?.[entry.key])}</span>`).join('')}
+          ${typeof options.badgeRenderer === 'function' ? options.badgeRenderer(selectedItem) : ''}
+        </div>
+      ` : ''}
     </div>
   `;
+
+  if (interactive) {
+    bindLineChartPointer(mount, mountId, items, () => renderLineChart(mountId, items, series, formatter, unitLabel, options));
+  }
 }
 
 function yFor(value, min, max, height) {
@@ -197,13 +319,6 @@ function yFor(value, min, max, height) {
 }
 
 function renderDetailedDayChart(mountId, items) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
-    return;
-  }
-
   const series = [
     { key: 'pvKwh', label: 'PV', className: 'history-series-pv', formatter: fmtKwh },
     { key: 'importKwh', label: 'Import', className: 'history-series-import-red', formatter: fmtKwh },
@@ -211,68 +326,16 @@ function renderDetailedDayChart(mountId, items) {
     { key: 'exportKwh', label: 'Export', className: 'history-series-export', formatter: fmtKwh },
     { key: 'loadKwh', label: 'Last', className: 'history-series-load-gray', formatter: fmtKwh }
   ];
-  const width = 580;
-  const height = 220;
-  const values = series.flatMap((entry) => items.map((item) => Number(item?.[entry.key])))
-    .filter((value) => Number.isFinite(value));
-  const min = 0;
-  const max = Math.max(...(values.length ? values : [1]), 1);
-  const selectedIndex = Math.min(
-    Number(historyState.chartCursorByMount[mountId] ?? (items.length - 1)),
-    items.length - 1
-  );
-  const selectedItem = items[selectedIndex] || items[0];
-  const ticks = axisTicks(min, max, 5, fmtKwh);
-
-  mount.innerHTML = `
-    <div class="history-line-chart history-line-chart-detail">
-      <div class="history-chart-legend">
-        ${series.map((entry) => `<span><i class="history-legend-swatch ${entry.className}"></i>${escapeHtml(entry.label)}</span>`).join('')}
-      </div>
-      <div class="history-axis-caption">kWh</div>
-      <div class="history-chart-interaction">
-        <svg viewBox="0 0 ${width} ${height}" class="history-line-svg history-line-svg-detail" aria-hidden="true">
-          ${ticks.map((label, index) => {
-            const y = (index / Math.max(ticks.length - 1, 1)) * (height - 32) + 10;
-            return `
-              <path class="history-grid-line" d="M48,${y.toFixed(2)} L${width},${y.toFixed(2)}" />
-              <text class="history-axis-label" x="0" y="${(y + 4).toFixed(2)}">${escapeHtml(label)}</text>
-            `;
-          }).join('')}
-          ${series.map((entry) => {
-            const points = items.map((item) => Number(item?.[entry.key]));
-            return `<path class="history-series-line ${entry.className}" d="${points.map((point, index) => {
-              const x = items.length === 1 ? (width + 48) / 2 : 48 + (index / (items.length - 1)) * (width - 48);
-              const y = yFor(point, min, max, height - 32) + 10;
-              return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`;
-            }).join(' ')}" />`;
-          }).join('')}
-          <path class="history-cursor-line" d="M${(48 + ((items.length === 1 ? 0 : selectedIndex / Math.max(items.length - 1, 1)) * (width - 48))).toFixed(2)},10 L${(48 + ((items.length === 1 ? 0 : selectedIndex / Math.max(items.length - 1, 1)) * (width - 48))).toFixed(2)},${height - 22}" />
-        </svg>
-        <div class="history-chart-hover-surface" data-history-mount="${escapeHtml(mountId)}" aria-hidden="true"></div>
-      </div>
-      <div class="history-chart-inspector">
-        <strong>${escapeHtml(selectedItem?.label || '-')}</strong>
-        ${series.map((entry) => `<span>${escapeHtml(entry.label)} ${entry.formatter(selectedItem?.[entry.key])}</span>`).join('')}
-        ${chartBadge(selectedItem)}
-      </div>
-    </div>
-  `;
-
-  if (typeof mount.querySelector !== 'function') return;
-  const hoverSurface = mount.querySelector('.history-chart-hover-surface');
-  if (!hoverSurface || typeof hoverSurface.addEventListener !== 'function') return;
-  const setIndexFromPointer = (event) => {
-    const rect = typeof hoverSurface.getBoundingClientRect === 'function'
-      ? hoverSurface.getBoundingClientRect()
-      : { left: 0, width: 1 };
-    const widthValue = Math.max(Number(rect.width || 0), 1);
-    const ratio = Math.max(0, Math.min(1, (Number(event?.clientX || 0) - Number(rect.left || 0)) / widthValue));
-    historyState.chartCursorByMount[mountId] = Math.round(ratio * Math.max(items.length - 1, 0));
-    renderDetailedDayChart(mountId, items);
-  };
-  hoverSurface.addEventListener('mousemove', setIndexFromPointer);
-  hoverSurface.addEventListener('mouseenter', setIndexFromPointer);
+  renderLineChart(mountId, items, series, fmtKwh, 'kWh', {
+    width: 580,
+    height: 220,
+    min: 0,
+    tickCount: 5,
+    detail: true,
+    interactive: true,
+    maxLabels: 8,
+    badgeRenderer: chartBadge
+  });
 }
 
 function stackHeight(value, max) {
@@ -336,6 +399,10 @@ function renderCombinedPeriodBars(mountId, items) {
     Number(item?.exportRevenueEur || 0),
     blendedCostEur(item)
   ]), 0.01);
+  const energyTicks = axisTickMeta(0, energyMax, 4, fmtKwh);
+  const financeTicks = axisTickMeta(0, financeMax, 4, fmtEur);
+  const selectedIndex = selectedChartIndex(mountId, items);
+  const selectedItem = items[selectedIndex] || items[0];
 
   mount.innerHTML = `
     <div class="history-stack-chart history-stack-chart-combined">
@@ -346,31 +413,73 @@ function renderCombinedPeriodBars(mountId, items) {
         <span><i class="history-legend-swatch history-bar-pv"></i>Eigenverbrauch PV</span>
         <span><i class="history-legend-swatch history-bar-battery"></i>Eigenverbrauch Akku</span>
       </div>
-      <div class="history-bars history-bars-combined">
-        ${items.map((item) => `
-          <div class="history-bar-card history-bar-card-combined">
-            <div class="history-stack history-stack-energy">
-              <div class="history-bar history-bar-grid" style="height:${stackHeight(item?.importKwh, energyMax)}px"></div>
-              <div class="history-bar history-bar-pv" style="height:${stackHeight(item?.pvShareKwh, energyMax)}px"></div>
-              <div class="history-bar history-bar-battery" style="height:${stackHeight(item?.batteryShareKwh, energyMax)}px"></div>
-              <div class="history-bar history-bar-export" style="height:${stackHeight(item?.exportKwh, energyMax)}px"></div>
+      <div class="history-comparison-chart" style="--history-bar-count:${items.length}; --history-x-label-count:${items.length};">
+        <div class="history-comparison-section">
+          <div class="history-axis-caption">Energie</div>
+          <div class="history-comparison-frame">
+            <div class="history-axis-y">
+              ${energyTicks.map((tick) => `<span class="history-axis-label">${escapeHtml(tick.label)}</span>`).join('')}
             </div>
-            <div class="history-stack history-stack-finance">
-              <div class="history-bar history-bar-revenue" style="height:${stackHeight(item?.exportRevenueEur, financeMax)}px"></div>
-              <div class="history-bar history-bar-cost" style="height:${stackHeight(blendedCostEur(item), financeMax)}px"></div>
+            <div class="history-comparison-plot">
+              <div class="history-bar-guides">
+                ${energyTicks.map(() => '<span class="history-grid-line history-grid-line-block"></span>').join('')}
+              </div>
+              <div class="history-bars history-bars-combined history-bars-compressed">
+                ${items.map((item, index) => `
+                  <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
+                    <div class="history-stack history-stack-energy">
+                      <div class="history-bar history-bar-grid history-bar-slim" style="height:${stackHeight(item?.importKwh, energyMax)}px"></div>
+                      <div class="history-bar history-bar-pv history-bar-slim" style="height:${stackHeight(item?.pvShareKwh, energyMax)}px"></div>
+                      <div class="history-bar history-bar-battery history-bar-slim" style="height:${stackHeight(item?.batteryShareKwh, energyMax)}px"></div>
+                      <div class="history-bar history-bar-export history-bar-slim" style="height:${stackHeight(item?.exportKwh, energyMax)}px"></div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
             </div>
-            <strong>${escapeHtml(item.label || '-')}</strong>
-            <span>Import ${fmtKwh(item?.importKwh)}</span>
-            <span>Verbrauch ${fmtKwh(item?.loadKwh)}</span>
-            <span>Eigenverbrauch PV ${fmtKwh(item?.pvShareKwh)}</span>
-            <span>Eigenverbrauch Akku ${fmtKwh(item?.batteryShareKwh)}</span>
-            <span>Erlös ${fmtEur(item?.exportRevenueEur)}</span>
-            <span>Kosten ${fmtEur(blendedCostEur(item))}</span>
           </div>
-        `).join('')}
+        </div>
+        <div class="history-comparison-section">
+          <div class="history-axis-caption">Finanzen</div>
+          <div class="history-comparison-frame">
+            <div class="history-axis-y">
+              ${financeTicks.map((tick) => `<span class="history-axis-label">${escapeHtml(tick.label)}</span>`).join('')}
+            </div>
+            <div class="history-comparison-plot">
+              <div class="history-bar-guides">
+                ${financeTicks.map(() => '<span class="history-grid-line history-grid-line-block"></span>').join('')}
+              </div>
+              <div class="history-bars history-bars-combined history-bars-compressed">
+                ${items.map((item, index) => `
+                  <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
+                    <div class="history-stack history-stack-finance">
+                      <div class="history-bar history-bar-revenue history-bar-slim" style="height:${stackHeight(item?.exportRevenueEur, financeMax)}px"></div>
+                      <div class="history-bar history-bar-cost history-bar-slim" style="height:${stackHeight(blendedCostEur(item), financeMax)}px"></div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="history-axis-x">
+          ${items.map((item) => `<span class="history-axis-label history-x-axis-label">${escapeHtml(compactAxisLabel(item.label || '-'))}</span>`).join('')}
+        </div>
+      </div>
+      <div class="history-chart-inspector">
+        <strong>${escapeHtml(selectedItem?.label || '-')}</strong>
+        <span>Import ${fmtKwh(selectedItem?.importKwh)}</span>
+        <span>Verbrauch ${fmtKwh(selectedItem?.loadKwh)}</span>
+        <span>Eigenverbrauch PV ${fmtKwh(selectedItem?.pvShareKwh)}</span>
+        <span>Eigenverbrauch Akku ${fmtKwh(selectedItem?.batteryShareKwh)}</span>
+        <span>Erlös ${fmtEur(selectedItem?.exportRevenueEur)}</span>
+        <span>Kosten ${fmtEur(blendedCostEur(selectedItem))}</span>
+        ${chartBadge(selectedItem)}
       </div>
     </div>
   `;
+
+  bindBarChartPointer(mount, mountId, items, () => renderCombinedPeriodBars(mountId, items));
 }
 
 function renderExportBars(mountId, items) {
