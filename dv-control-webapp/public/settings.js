@@ -1,8 +1,6 @@
 const common = typeof window !== 'undefined' ? window.DVhubCommon || {} : {};
 const { apiFetch, buildApiUrl, setStoredApiToken } = common;
 
-const SETTINGS_OVERVIEW_ID = 'overview';
-
 let definition = null;
 let currentRawConfig = {};
 let currentDraftConfig = {};
@@ -61,15 +59,7 @@ function buildSettingsDestinations(definitionLike) {
 
   const destinationDefinitions = definitionLike?.destinations || [];
   if (!destinationDefinitions.length) {
-    return [
-      {
-        id: SETTINGS_OVERVIEW_ID,
-        kind: 'overview',
-        label: 'Übersicht',
-        description: 'Startpunkt für die wichtigsten Einstellungsbereiche.'
-      },
-      ...sectionsWithFields.map((section) => buildSectionDestination(section, section.fields))
-    ];
+    return sectionsWithFields.map((section) => buildSectionDestination(section, section.fields));
   }
 
   const sectionDestinations = destinationDefinitions
@@ -96,23 +86,16 @@ function buildSettingsDestinations(definitionLike) {
     sectionDestinations.push(buildSectionDestination(section, section.fields));
   }
 
-  return [
-    {
-      id: SETTINGS_OVERVIEW_ID,
-      kind: 'overview',
-      label: 'Übersicht',
-      description: 'Startpunkt für die wichtigsten Einstellungsbereiche.'
-    },
-    ...sectionDestinations
-  ];
+  return sectionDestinations;
 }
 
 function resolveActiveSettingsSection(destinations, requestedId) {
-  const ids = new Set((destinations || []).map((destination) => destination.id));
-  return ids.has(requestedId) ? requestedId : SETTINGS_OVERVIEW_ID;
+  const ids = Array.from((destinations || []).map((destination) => destination.id));
+  if (ids.includes(requestedId)) return requestedId;
+  return ids[0] || '';
 }
 
-function createSettingsShellState(definitionLike, requestedId = SETTINGS_OVERVIEW_ID) {
+function createSettingsShellState(definitionLike, requestedId = '') {
   const destinations = buildSettingsDestinations(definitionLike);
   return {
     destinations,
@@ -128,7 +111,6 @@ function setActiveSettingsSection(state, requestedId) {
 }
 
 const settingsShellHelpers = {
-  SETTINGS_OVERVIEW_ID,
   buildDestinationWorkspace,
   buildSettingsDestinations,
   createSettingsShellState,
@@ -442,11 +424,35 @@ function buildSectionMeta(destination) {
   return `${fieldText} in ${destination.groupCount} Gruppen`;
 }
 
-function renderSettingsOverview() {
-  const overview = document.getElementById('settingsOverview');
-  if (!overview) return;
+function buildDestinationSummaryText(destination) {
+  const sectionNames = destination.sections?.map((section) => section.label).join(', ');
+  return `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration für diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
+}
 
-  overview.innerHTML = '';
+function renderSidebarNavigation() {
+  const navTree = document.getElementById('settingsNavTree');
+  if (!navTree) return;
+
+  navTree.innerHTML = '';
+  for (const destination of settingsShellState.destinations) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'app-nav-subitem';
+    button.dataset.settingsTarget = destination.id;
+    const isActive = destination.id === settingsShellState.activeSectionId;
+    if (isActive) button.classList.add('is-active');
+    button.setAttribute('aria-current', isActive ? 'page' : 'false');
+    button.innerHTML = `
+      <span class="app-nav-subitem-label">${destination.label}</span>
+      <small class="app-nav-subitem-copy">${destination.description || buildSectionMeta(destination)}</small>
+    `;
+    navTree.appendChild(button);
+  }
+}
+
+function renderWorkspaceGuide(activeDestinationId) {
+  const wrapper = document.createElement('section');
+  wrapper.className = 'settings-workspace-guide';
 
   const head = document.createElement('div');
   head.className = 'settings-overview-head';
@@ -455,45 +461,22 @@ function renderSettingsOverview() {
     <h2 class="section-title">Was möchtest du einrichten?</h2>
     <p class="tools-note">Die Übersicht ist der ruhige Einstieg in die Einrichtung. Wartung und Diagnose liegen bewusst auf einer eigenen Seite.</p>
   `;
-  overview.appendChild(head);
+  wrapper.appendChild(head);
 
   const summary = document.createElement('div');
-  summary.className = 'settings-summary';
-  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
-    const sectionNames = destination.sections?.map((section) => section.label).join(', ');
-    const summaryText = `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration für diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
-    summary.appendChild(createSummaryCard(destination.label, summaryText));
-  }
-  overview.appendChild(summary);
-}
-
-function renderSidebarNavigation() {
-  const sidebar = document.getElementById('settingsSidebar');
-  const navItems = document.getElementById('settingsNavItems');
-  if (!sidebar || !navItems) return;
-
-  const overviewButton = sidebar.querySelector('[data-settings-target="overview"]');
-  if (overviewButton) {
-    const isActive = settingsShellState.activeSectionId === SETTINGS_OVERVIEW_ID;
-    overviewButton.classList.toggle('is-active', isActive);
-    overviewButton.setAttribute('aria-current', isActive ? 'page' : 'false');
-  }
-
-  navItems.innerHTML = '';
-  for (const destination of settingsShellState.destinations.filter((entry) => entry.kind !== 'overview')) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'settings-sidebar-item';
-    button.dataset.settingsTarget = destination.id;
-    const isActive = destination.id === settingsShellState.activeSectionId;
-    if (isActive) button.classList.add('is-active');
-    button.setAttribute('aria-current', isActive ? 'page' : 'false');
-    button.innerHTML = `
-      <span class="settings-sidebar-label">${destination.label}</span>
-      <small class="settings-sidebar-copy">${destination.description || buildSectionMeta(destination)}</small>
+  summary.className = 'compact-note-list settings-guide-list';
+  for (const destination of settingsShellState.destinations) {
+    const item = document.createElement('div');
+    item.className = 'compact-note settings-guide-item';
+    if (destination.id === activeDestinationId) item.classList.add('is-active');
+    item.innerHTML = `
+      <strong>${destination.label}</strong>
+      <span>${buildDestinationSummaryText(destination)}</span>
     `;
-    navItems.appendChild(button);
+    summary.appendChild(item);
   }
+  wrapper.appendChild(summary);
+  return wrapper;
 }
 
 function renderSectionWorkspace(sectionId) {
@@ -507,6 +490,8 @@ function renderSectionWorkspace(sectionId) {
 
   const panel = document.createElement('section');
   panel.className = 'panel reveal settings-panel';
+
+  panel.appendChild(renderWorkspaceGuide(sectionId));
 
   const header = document.createElement('div');
   header.className = 'panel-head settings-panel-head';
@@ -526,13 +511,6 @@ function renderSectionWorkspace(sectionId) {
   intro.className = 'tools-note';
   intro.textContent = destinationMeta?.intro || destination.intro || destination.description || '';
   panel.appendChild(intro);
-
-  const summary = document.createElement('div');
-  summary.className = 'settings-workspace-summary';
-  summary.appendChild(createSummaryCard('Umfang', buildSectionMeta(destination)));
-  summary.appendChild(createSummaryCard('Bereiche', destination.sections.map((section) => section.label).join(', ')));
-  summary.appendChild(createSummaryCard('Standard', buildWorkspaceDefaultCopy(destination)));
-  panel.appendChild(summary);
 
   for (const section of destination.sections) {
     const sectionShell = document.createElement('section');
@@ -703,22 +681,8 @@ function bindHistoryImportControls(panel) {
 }
 
 function renderActiveSettingsDestination() {
-  const overview = document.getElementById('settingsOverview');
-  const workspace = document.getElementById('settingsWorkspace');
   const activeDestination = getActiveSettingsDestination();
-  if (!overview || !workspace) return;
-
-  if (!activeDestination || activeDestination.id === SETTINGS_OVERVIEW_ID) {
-    renderSettingsOverview();
-    overview.hidden = false;
-    workspace.hidden = true;
-    const mount = document.getElementById('settingsSections');
-    if (mount) mount.innerHTML = '';
-    return;
-  }
-
-  overview.hidden = true;
-  workspace.hidden = false;
+  if (!activeDestination) return;
   renderSectionWorkspace(activeDestination.id);
 }
 
@@ -951,7 +915,7 @@ function initSettingsPage() {
     if (fieldAffectsVisibility(input.dataset.path)) renderActiveSettingsDestination();
   });
 
-  document.getElementById('settingsSidebar')?.addEventListener('click', (event) => {
+  document.getElementById('settingsNavTree')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-settings-target]');
     if (!target) return;
     activateSettingsDestination(target.dataset.settingsTarget);

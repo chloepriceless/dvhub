@@ -24,7 +24,6 @@ function loadShellHelpers() {
 }
 
 const {
-  SETTINGS_OVERVIEW_ID,
   buildDestinationWorkspace,
   buildSettingsDestinations,
   createSettingsShellState,
@@ -55,33 +54,32 @@ const sampleDefinition = {
 test('buildSettingsDestinations groups legacy sections under destination metadata', () => {
   const destinations = buildSettingsDestinations(sampleDefinition);
 
-  assert.equal(destinations[0].id, SETTINGS_OVERVIEW_ID);
   assert.deepEqual(
     Array.from(destinations, (destination) => destination.id),
-    [SETTINGS_OVERVIEW_ID, 'basics', 'connection']
+    ['basics', 'connection']
   );
-  assert.equal(destinations[1].label, 'Grundsystem');
-  assert.equal(destinations[2].label, 'Verbindung zur Anlage');
-  assert.deepEqual(Array.from(destinations[2].sectionIds), ['victron', 'meter']);
-  assert.equal(destinations[2].fieldCount, 3);
-  assert.equal(destinations[1].label, sampleDefinition.destinations[0].label);
-  assert.notEqual(destinations[2].label, sampleDefinition.sections[1].label);
+  assert.equal(destinations[0].label, 'Grundsystem');
+  assert.equal(destinations[1].label, 'Verbindung zur Anlage');
+  assert.deepEqual(Array.from(destinations[1].sectionIds), ['victron', 'meter']);
+  assert.equal(destinations[1].fieldCount, 3);
+  assert.equal(destinations[0].label, sampleDefinition.destinations[0].label);
+  assert.notEqual(destinations[1].label, sampleDefinition.sections[1].label);
 });
 
-test('createSettingsShellState defaults fresh entry to overview', () => {
+test('createSettingsShellState defaults fresh entry to the first real destination', () => {
   const state = createSettingsShellState(sampleDefinition);
 
-  assert.equal(state.activeSectionId, SETTINGS_OVERVIEW_ID);
-  assert.equal(state.destinations.length, 3);
+  assert.equal(state.activeSectionId, 'basics');
+  assert.equal(state.destinations.length, 2);
 });
 
-test('setActiveSettingsSection accepts known destinations and falls back to overview for unknown ids', () => {
+test('setActiveSettingsSection accepts known destinations and falls back to the first destination for unknown ids', () => {
   const initialState = createSettingsShellState(sampleDefinition);
   const activeState = setActiveSettingsSection(initialState, 'connection');
   const fallbackState = setActiveSettingsSection(activeState, 'missing');
 
   assert.equal(activeState.activeSectionId, 'connection');
-  assert.equal(fallbackState.activeSectionId, SETTINGS_OVERVIEW_ID);
+  assert.equal(fallbackState.activeSectionId, 'basics');
 });
 
 test('shouldOpenSettingsGroup only opens the first group in the active workspace by default', () => {
@@ -104,18 +102,16 @@ test('buildDestinationWorkspace keeps only the active destination sections and m
 test('real config definition keeps navigation compact and maps every section with fields', () => {
   const definition = getConfigDefinition();
   const destinations = buildSettingsDestinations(definition);
-  const visibleDestinations = destinations.filter((destination) => destination.kind !== 'overview');
-  const coveredSectionIds = new Set(visibleDestinations.flatMap((destination) => destination.sectionIds || []));
+  const coveredSectionIds = new Set(destinations.flatMap((destination) => destination.sectionIds || []));
   const sectionIdsWithFields = Array.from(new Set(definition.fields.map((field) => field.section))).sort();
 
-  assert.ok(visibleDestinations.length >= 5 && visibleDestinations.length <= 6);
+  assert.ok(destinations.length >= 5 && destinations.length <= 6);
   assert.deepEqual(Array.from(coveredSectionIds).sort(), sectionIdsWithFields);
 });
 
 test('real config definition exposes friendly grouped labels instead of the raw technical taxonomy', () => {
   const definition = getConfigDefinition();
   const visibleLabels = Array.from(buildSettingsDestinations(definition)
-    .filter((destination) => destination.kind !== 'overview')
     .map((destination) => destination.label));
 
   assert.deepEqual(visibleLabels, ['Schnellstart', 'Anlage verbinden', 'Steuerung', 'Preise & Daten', 'Erweitert']);
