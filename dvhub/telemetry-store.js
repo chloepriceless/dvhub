@@ -45,6 +45,15 @@ function weightedAverage(entries) {
   return weightedTotal / totalWeight;
 }
 
+function parseMetaJson(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupIntervals = [300, 900, 3600] }) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -330,9 +339,18 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
 
   function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
     const rows = db.prepare(`
-      SELECT series_key, ts_utc, resolution_seconds, value_num
+      SELECT series_key, ts_utc, resolution_seconds, value_num, meta_json
       FROM timeseries_samples
-      WHERE series_key IN ('grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w')
+      WHERE series_key IN (
+        'grid_import_w',
+        'grid_export_w',
+        'grid_total_w',
+        'pv_total_w',
+        'battery_power_w',
+        'battery_charge_w',
+        'battery_discharge_w',
+        'load_power_w'
+      )
         AND value_num IS NOT NULL
         AND ts_utc >= ?
         AND ts_utc < ?
@@ -357,13 +375,41 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           if (!Number.isFinite(avgPower)) return 0;
           return roundKwh((avgPower * bucketSeconds) / 3600000);
         };
+        const flagsForSeries = (seriesKey) => {
+          const entries = bucket.get(seriesKey) || [];
+          const meta = entries.map((entry) => parseMetaJson(entry.meta_json)).filter(Boolean);
+          return {
+            estimated: meta.some((item) => item.provenance === 'estimated'),
+            incomplete: meta.some((item) => item.incomplete === true)
+          };
+        };
+        const trackedSeries = [
+          'grid_import_w',
+          'grid_export_w',
+          'pv_total_w',
+          'battery_power_w',
+          'battery_charge_w',
+          'battery_discharge_w',
+          'load_power_w'
+        ];
+        const estimatedSeriesKeys = trackedSeries.filter((seriesKey) => flagsForSeries(seriesKey).estimated);
+        const incompleteSeriesKeys = trackedSeries.filter((seriesKey) => flagsForSeries(seriesKey).incomplete);
         return {
           ts,
           importKwh: energyForSeries('grid_import_w'),
           exportKwh: energyForSeries('grid_export_w'),
           gridKwh: energyForSeries('grid_total_w'),
           pvKwh: energyForSeries('pv_total_w'),
-          batteryKwh: energyForSeries('battery_power_w')
+          batteryKwh: energyForSeries('battery_power_w'),
+          batteryChargeKwh: energyForSeries('battery_charge_w'),
+          batteryDischargeKwh: energyForSeries('battery_discharge_w'),
+          loadKwh: energyForSeries('load_power_w'),
+          estimated: estimatedSeriesKeys.length > 0,
+          incomplete: incompleteSeriesKeys.length > 0,
+          estimatedSeriesCount: estimatedSeriesKeys.length,
+          incompleteSeriesCount: incompleteSeriesKeys.length,
+          estimatedSeriesKeys,
+          incompleteSeriesKeys
         };
       });
   }

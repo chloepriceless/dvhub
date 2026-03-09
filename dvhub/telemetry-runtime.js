@@ -17,6 +17,29 @@ function pushSample(rows, seriesKey, value, unit, base = {}) {
   });
 }
 
+export function buildHistoricalTelemetrySample({
+  seriesKey,
+  ts,
+  value,
+  unit,
+  resolutionSeconds = 900,
+  source = 'vrm_import',
+  quality = 'backfilled',
+  meta = null,
+  scope = 'history'
+} = {}) {
+  const rows = [];
+  pushSample(rows, seriesKey, value, unit, {
+    ts,
+    resolutionSeconds,
+    scope,
+    source,
+    quality,
+    meta
+  });
+  return rows[0] || null;
+}
+
 export function resolveTelemetryDbPath({ configPath, telemetryConfig = {}, dataDir }) {
   if (telemetryConfig.dbPath) return String(telemetryConfig.dbPath);
   let baseDir = dataDir;

@@ -137,6 +137,128 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
   assert.match(elements.get('historyBanner').textContent, /unvollständig/i);
 });
 
+test('history page renders daily line charts and estimated markers from chart payloads', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'day',
+    date: '2026-03-09',
+    kpis: {
+      importCostEur: 0.3,
+      exportRevenueEur: 0.04,
+      netEur: -0.26,
+      importKwh: 1,
+      exportKwh: 0.5
+    },
+    rows: [],
+    charts: {
+      dayEnergyLines: [
+        { label: '11:00', importKwh: 1, exportKwh: 0, loadKwh: 1.2, estimated: false, incomplete: false },
+        { label: '11:15', importKwh: 0, exportKwh: 0.5, loadKwh: 0, estimated: true, incomplete: true }
+      ],
+      dayFinancialLines: [
+        { label: '11:00', gridCostEur: 0.3, pvCostEur: 0.01, batteryCostEur: 0, selfConsumptionCostEur: 0.31, exportRevenueEur: 0, netEur: -0.31, estimated: false, incomplete: false },
+        { label: '11:15', gridCostEur: 0, pvCostEur: 0, batteryCostEur: 0, selfConsumptionCostEur: 0, exportRevenueEur: 0.04, netEur: 0.04, estimated: true, incomplete: true }
+      ],
+      dayPriceLines: [
+        { label: '11:00', marketPriceCtKwh: 5, userImportPriceCtKwh: 30, estimated: false, incomplete: false },
+        { label: '11:15', marketPriceCtKwh: 8, userImportPriceCtKwh: 30, estimated: true, incomplete: true }
+      ]
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 1,
+        estimatedSlots: 1
+      }
+    }
+  });
+
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-line-chart/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /Last/);
+  assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /geschätzt/);
+});
+
+test('history page renders weekly revenue bars and split cost bars from summary payload', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'week',
+    date: '2026-03-09',
+    kpis: {
+      importCostEur: 0.3,
+      exportRevenueEur: 0.04,
+      netEur: -0.26,
+      importKwh: 3,
+      exportKwh: 0.5
+    },
+    rows: [
+      {
+        label: '2026-03-09',
+        importKwh: 1,
+        exportKwh: 0.5,
+        gridCostEur: 0.3,
+        pvCostEur: 0.01,
+        batteryCostEur: 0,
+        selfConsumptionCostEur: 0.31,
+        exportRevenueEur: 0.04,
+        netEur: -0.27,
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      },
+      {
+        label: '2026-03-10',
+        importKwh: 2,
+        exportKwh: 0,
+        gridCostEur: 0,
+        pvCostEur: 0.01,
+        batteryCostEur: 0,
+        selfConsumptionCostEur: 0.01,
+        exportRevenueEur: 0,
+        netEur: -0.01,
+        incompleteSlots: 1,
+        estimatedSlots: 1
+      }
+    ],
+    charts: {
+      periodFinancialBars: [
+        {
+          label: '2026-03-09',
+          exportRevenueEur: 0.04,
+          gridCostEur: 0.3,
+          pvCostEur: 0.01,
+          batteryCostEur: 0,
+          estimatedSlots: 0,
+          incompleteSlots: 0
+        },
+        {
+          label: '2026-03-10',
+          exportRevenueEur: 0,
+          gridCostEur: 0,
+          pvCostEur: 0.01,
+          batteryCostEur: 0,
+          estimatedSlots: 1,
+          incompleteSlots: 1
+        }
+      ]
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 1,
+        estimatedSlots: 1
+      }
+    }
+  });
+
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-stack-chart/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Nettoerlös/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Netzkosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);
+  assert.match(elements.get('historyRows').innerHTML, /1 geschätzt/);
+  assert.match(elements.get('historyRows').innerHTML, /1 offen/);
+});
+
 test('history page toggles the backfill button label and disabled state while loading', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
