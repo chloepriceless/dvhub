@@ -16,6 +16,7 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.telemetry.historyImport.vrmToken, '');
   assert.equal(defaults.userEnergyPricing.mode, 'fixed');
   assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, null);
+  assert.deepEqual(defaults.userEnergyPricing.periods, []);
   assert.equal(defaults.userEnergyPricing.dynamicComponents.vatPct, 19);
   assert.equal(defaults.userEnergyPricing.usesParagraph14aModule3, false);
   assert.equal(defaults.userEnergyPricing.module3Windows.window1.enabled, false);
@@ -38,6 +39,7 @@ test('config definition exposes telemetry section and fields', () => {
   assert.ok(fieldPaths.includes('telemetry.historyImport.provider'));
   assert.ok(!fieldPaths.includes('telemetry.historyImport.gxPath'));
   assert.ok(fieldPaths.includes('userEnergyPricing.mode'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.periods'));
   assert.ok(fieldPaths.includes('userEnergyPricing.fixedGrossImportCtKwh'));
   assert.ok(fieldPaths.includes('userEnergyPricing.dynamicComponents.gridChargesCtKwh'));
   assert.ok(fieldPaths.includes('userEnergyPricing.module3Windows.window1.priceCtKwh'));
@@ -102,6 +104,74 @@ test('normalizeConfigInput coerces user energy pricing booleans and numbers', ()
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.pvCtKwh, 7.1);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryBaseCtKwh, 2.2);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+});
+
+test('dated pricing periods accept non-overlapping date ranges', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      periods: [
+        {
+          id: 'winter-fixed',
+          label: 'Winter',
+          startDate: '2026-01-01',
+          endDate: '2026-03-31',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: '31.5'
+        },
+        {
+          id: 'summer-dynamic',
+          label: 'Sommer',
+          startDate: '2026-04-01',
+          endDate: '2026-12-31',
+          mode: 'dynamic',
+          dynamicComponents: {
+            energyMarkupCtKwh: '0',
+            gridChargesCtKwh: '8.5',
+            leviesAndFeesCtKwh: '3',
+            vatPct: '19'
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal(normalized.warnings.length, 0);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods.length, 2);
+  assert.deepEqual(normalized.persistedConfig.userEnergyPricing.periods.map((period) => period.id), [
+    'winter-fixed',
+    'summer-dynamic'
+  ]);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods[0].fixedGrossImportCtKwh, 31.5);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods[1].dynamicComponents.gridChargesCtKwh, 8.5);
+});
+
+test('dated pricing periods reject overlapping date ranges', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      periods: [
+        {
+          id: 'winter-fixed',
+          startDate: '2026-01-01',
+          endDate: '2026-03-31',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: 31.5
+        },
+        {
+          id: 'overlap-fixed',
+          startDate: '2026-03-15',
+          endDate: '2026-04-15',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: 32.1
+        }
+      ]
+    }
+  });
+
+  assert.match(normalized.warnings.join('\n'), /overlap/i);
+  assert.deepEqual(
+    normalized.persistedConfig.userEnergyPricing.periods.map((period) => period.id),
+    ['winter-fixed']
+  );
 });
 
 test('normalizeConfigInput strips legacy schedule rule fields', () => {
