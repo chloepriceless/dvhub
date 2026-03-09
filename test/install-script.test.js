@@ -17,3 +17,16 @@ test('installer registers the repo directory as a git safe.directory before upda
   assert.notEqual(fetchIndex, -1, 'install.sh must update existing repositories via git fetch');
   assert.ok(safeIndex < fetchIndex, 'safe.directory must be configured before fetch/checkouts run');
 });
+
+test('installer force-syncs an existing checkout to the requested remote branch instead of using ff-only pull', () => {
+  assert.match(
+    source,
+    /git -C "\$INSTALL_DIR" checkout -B "\$REPO_BRANCH" "origin\/\$REPO_BRANCH"/,
+    'install.sh must align the local branch with origin/$REPO_BRANCH for managed deploy checkouts'
+  );
+  assert.doesNotMatch(
+    source,
+    /git -C "\$INSTALL_DIR" pull --ff-only origin "\$REPO_BRANCH"/,
+    'install.sh must not rely on ff-only pull for existing managed installs'
+  );
+});
