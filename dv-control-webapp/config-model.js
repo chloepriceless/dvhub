@@ -1773,15 +1773,13 @@ function sanitizeScheduleRules(value, warnings) {
   const rules = [];
   for (const item of value) {
     if (!isPlainObject(item)) continue;
-    const next = { ...item };
-    if (next.id != null) next.id = String(next.id);
-    if (next.target != null) next.target = String(next.target);
-    if (next.start != null) next.start = String(next.start);
-    if (next.end != null) next.end = String(next.end);
-    if (next.value != null) next.value = Number(next.value);
-    if (next.enabled != null) next.enabled = coerceBoolean(next.enabled);
-    if (next.oneTime != null) next.oneTime = coerceBoolean(next.oneTime);
-    if (Array.isArray(next.days)) next.days = next.days.map((entry) => Number(entry)).filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 6);
+    const next = {};
+    if (item.id != null) next.id = String(item.id);
+    if (item.target != null) next.target = String(item.target);
+    if (item.start != null) next.start = String(item.start);
+    if (item.end != null) next.end = String(item.end);
+    if (item.value != null) next.value = Number(item.value);
+    if (item.enabled != null) next.enabled = coerceBoolean(item.enabled);
     if (next.value != null && !Number.isFinite(next.value)) {
       warnings.push(`schedule.rules.${next.id || rules.length}: value ignored because it is not numeric`);
       continue;

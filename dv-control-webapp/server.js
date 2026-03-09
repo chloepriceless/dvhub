@@ -19,6 +19,12 @@ import {
   buildPriceTelemetrySamples,
   resolveTelemetryDbPath
 } from './telemetry-runtime.js';
+import {
+  autoDisableExpiredScheduleRules,
+  parseHHMM,
+  sanitizePersistedScheduleRules,
+  scheduleMatch
+} from './schedule-runtime.js';
 import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
@@ -134,7 +140,7 @@ function persistConfig() {
   try {
     const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
-    current.schedule.rules = state.schedule.rules.map(({ _wasActive, days, oneTime, ...rest }) => rest);
+    current.schedule.rules = sanitizePersistedScheduleRules(state.schedule.rules);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
     saveAndApplyConfig(current);
@@ -301,25 +307,9 @@ function addDays(dateStr, days) {
   return `${yy}-${mm}-${dd}`;
 }
 
-function localWeekdayIndex(date = new Date()) {
-  const s = date.toLocaleString('en-US', { timeZone: cfg.schedule.timezone, weekday: 'short' });
-  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return map[s] ?? 0;
-}
-
 function localMinutesOfDay(date = new Date()) {
   const hh = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, hour: '2-digit', hour12: false }));
   const mm = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, minute: '2-digit', hour12: false }));
-  return hh * 60 + mm;
-}
-
-function parseHHMM(s) {
-  if (typeof s !== 'string') return null;
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
 }
 
@@ -1087,21 +1077,11 @@ async function runMeterScan(params = {}) {
   }
 }
 
-function scheduleMatch(rule, nowDay, nowMin) {
-  if (!rule || rule.enabled === false) return false;
-  const s = parseHHMM(rule.start);
-  const e = parseHHMM(rule.end);
-  if (s == null || e == null) return false;
-  if (s <= e) return nowMin >= s && nowMin < e;
-  return nowMin >= s || nowMin < e;
-}
-
 function effectiveTargetValue(target) {
   const now = Date.now();
-  const day = localWeekdayIndex(new Date(now));
   const mod = localMinutesOfDay(new Date(now));
 
-  const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, day, mod));
+  const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, mod));
   if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
 
   const mo = state.schedule.manualOverride[target];
@@ -1236,20 +1216,16 @@ async function evaluateSchedule() {
   }
 
   // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
-  let needPersist = false;
-  for (const rule of state.schedule.rules) {
-    if (rule._wasActive && rule.enabled !== false) {
-      const nowDay = localWeekdayIndex(new Date());
-      const nowMin = localMinutesOfDay(new Date());
-      if (!scheduleMatch(rule, nowDay, nowMin)) {
-        rule.enabled = false;
-        delete rule._wasActive;
-        pushLog('schedule_auto_disabled', { id: rule.id, target: rule.target });
-        needPersist = true;
-      }
+  const nowMin = localMinutesOfDay(new Date());
+  const autoDisable = autoDisableExpiredScheduleRules(state.schedule.rules, nowMin);
+  if (autoDisable.changed) {
+    for (const rule of state.schedule.rules) {
+      if (!rule?._wasActive || rule.enabled === false || scheduleMatch(rule, nowMin)) continue;
+      pushLog('schedule_auto_disabled', { id: rule.id, target: rule.target });
     }
+    state.schedule.rules = autoDisable.rules;
+    persistConfig();
   }
-  if (needPersist) persistConfig();
 
   // Negative-Preis-Schutz aufheben wenn Preis wieder positiv
   if (state.ctrl.negativePriceActive && !priceNegative) {

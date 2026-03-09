@@ -103,3 +103,33 @@ test('normalizeConfigInput coerces user energy pricing booleans and numbers', ()
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryBaseCtKwh, 2.2);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryLossMarkupPct, 20);
 });
+
+test('normalizeConfigInput strips legacy schedule rule fields', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      rules: [
+        {
+          id: 'legacy',
+          enabled: true,
+          target: 'gridSetpointW',
+          start: '08:00',
+          end: '09:00',
+          value: '-40',
+          days: [1, 2, 3],
+          oneTime: true
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.rules, [
+    {
+      id: 'legacy',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '08:00',
+      end: '09:00',
+      value: -40
+    }
+  ]);
+});
