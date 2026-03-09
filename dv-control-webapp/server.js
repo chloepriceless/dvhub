@@ -900,6 +900,147 @@ function epexNowNext() {
   };
 }
 
+function roundCtKwh(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function configuredModule3Windows(pricing = cfg.userEnergyPricing || {}) {
+  if (!pricing?.usesParagraph14aModule3) return [];
+  return Object.entries(pricing.module3Windows || {})
+    .map(([id, window]) => {
+      const start = parseHHMM(window?.start);
+      const end = parseHHMM(window?.end);
+      const priceCtKwh = Number(window?.priceCtKwh);
+      if (window?.enabled !== true || start == null || end == null || !Number.isFinite(priceCtKwh)) return null;
+      return {
+        id,
+        label: window?.label ? String(window.label) : id,
+        start,
+        end,
+        priceCtKwh: roundCtKwh(priceCtKwh)
+      };
+    })
+    .filter(Boolean);
+}
+
+function slotMinuteMatchesWindow(minuteOfDay, window) {
+  if (!window) return false;
+  if (window.start <= window.end) return minuteOfDay >= window.start && minuteOfDay < window.end;
+  return minuteOfDay >= window.start || minuteOfDay < window.end;
+}
+
+function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.gridChargesCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
+}
+
+function effectiveBatteryCostCtKwh(costs = {}) {
+  const base = Number(costs?.batteryBaseCtKwh);
+  if (!Number.isFinite(base)) return null;
+  const markup = Number(costs?.batteryLossMarkupPct || 0);
+  return roundCtKwh(base * (1 + markup / 100));
+}
+
+function mixedCostCtKwh(costs = {}) {
+  const pvCtKwh = Number(costs?.pvCtKwh);
+  const batteryCtKwh = effectiveBatteryCostCtKwh(costs);
+  if (Number.isFinite(pvCtKwh) && Number.isFinite(batteryCtKwh)) return roundCtKwh((pvCtKwh + batteryCtKwh) / 2);
+  if (Number.isFinite(pvCtKwh)) return roundCtKwh(pvCtKwh);
+  if (Number.isFinite(batteryCtKwh)) return roundCtKwh(batteryCtKwh);
+  return null;
+}
+
+function resolveImportPriceCtKwhForSlot(row, pricing = cfg.userEnergyPricing || {}) {
+  if (!row) return null;
+  const minuteOfDay = localMinutesOfDay(new Date(row.ts));
+  for (const window of configuredModule3Windows(pricing)) {
+    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
+  }
+
+  if (pricing?.mode === 'fixed') {
+    const fixed = Number(pricing?.fixedGrossImportCtKwh);
+    return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
+  }
+
+  return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), pricing?.dynamicComponents || {});
+}
+
+function slotComparison(row, pricing = cfg.userEnergyPricing || {}) {
+  if (!row) return null;
+  const importPriceCtKwh = resolveImportPriceCtKwhForSlot(row, pricing);
+  const pvCtKwh = Number(pricing?.costs?.pvCtKwh);
+  const batteryCtKwh = effectiveBatteryCostCtKwh(pricing?.costs || {});
+  const mixedCt = mixedCostCtKwh(pricing?.costs || {});
+  const exportPriceCtKwh = roundCtKwh(Number(row.ct_kwh || 0));
+
+  const margins = [
+    Number.isFinite(pvCtKwh) ? { source: 'pv', marginCtKwh: roundCtKwh(exportPriceCtKwh - pvCtKwh) } : null,
+    Number.isFinite(batteryCtKwh) ? { source: 'battery', marginCtKwh: roundCtKwh(exportPriceCtKwh - batteryCtKwh) } : null,
+    Number.isFinite(mixedCt) ? { source: 'mixed', marginCtKwh: roundCtKwh(exportPriceCtKwh - mixedCt) } : null
+  ].filter(Boolean);
+  const best = margins.length
+    ? margins.reduce((winner, entry) => (winner == null || entry.marginCtKwh > winner.marginCtKwh ? entry : winner), null)
+    : null;
+
+  return {
+    ts: row.ts,
+    exportPriceCtKwh,
+    importPriceCtKwh,
+    spreadToImportCtKwh: Number.isFinite(importPriceCtKwh) ? roundCtKwh(exportPriceCtKwh - importPriceCtKwh) : null,
+    pvMarginCtKwh: Number.isFinite(pvCtKwh) ? roundCtKwh(exportPriceCtKwh - pvCtKwh) : null,
+    batteryMarginCtKwh: Number.isFinite(batteryCtKwh) ? roundCtKwh(exportPriceCtKwh - batteryCtKwh) : null,
+    mixedMarginCtKwh: Number.isFinite(mixedCt) ? roundCtKwh(exportPriceCtKwh - mixedCt) : null,
+    bestSource: best?.source || null,
+    bestMarginCtKwh: best?.marginCtKwh ?? null
+  };
+}
+
+function userEnergyPricingSummary() {
+  const pricing = cfg.userEnergyPricing || {};
+  const costs = pricing.costs || {};
+  const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing)) : [];
+  const currentTs = epexNowNext()?.current?.ts;
+  const current = slots.find((row) => row?.ts === currentTs) || null;
+  const configured =
+    (pricing.mode === 'fixed' && Number.isFinite(Number(pricing.fixedGrossImportCtKwh)))
+    || pricing.mode === 'dynamic';
+
+  return {
+    configured,
+    mode: pricing.mode || 'fixed',
+    usesParagraph14aModule3: pricing.usesParagraph14aModule3 === true,
+    dynamicComponents: {
+      energyMarkupCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.energyMarkupCtKwh || 0)),
+      gridChargesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.gridChargesCtKwh || 0)),
+      leviesAndFeesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.leviesAndFeesCtKwh || 0)),
+      vatPct: roundCtKwh(Number(pricing?.dynamicComponents?.vatPct || 0))
+    },
+    fixedGrossImportCtKwh: Number.isFinite(Number(pricing.fixedGrossImportCtKwh))
+      ? roundCtKwh(Number(pricing.fixedGrossImportCtKwh))
+      : null,
+    module3Windows: configuredModule3Windows(pricing).map((window) => ({
+      id: window.id,
+      label: window.label,
+      start: window.start,
+      end: window.end,
+      priceCtKwh: window.priceCtKwh
+    })),
+    costs: {
+      pvCtKwh: Number.isFinite(Number(costs.pvCtKwh)) ? roundCtKwh(Number(costs.pvCtKwh)) : null,
+      batteryBaseCtKwh: Number.isFinite(Number(costs.batteryBaseCtKwh)) ? roundCtKwh(Number(costs.batteryBaseCtKwh)) : null,
+      batteryLossMarkupPct: roundCtKwh(Number(costs.batteryLossMarkupPct || 0)),
+      batteryEffectiveCtKwh: effectiveBatteryCostCtKwh(costs),
+      mixedCtKwh: mixedCostCtKwh(costs)
+    },
+    current,
+    slots
+  };
+}
+
 async function runMeterScan(params = {}) {
   if (state.scan.running) throw new Error('scan already running');
   const p = { ...cfg.scan, ...params };
@@ -1151,7 +1292,8 @@ function costSummary() {
     costEur: Number(state.energy.costEur.toFixed(4)),
     revenueEur: Number(state.energy.revenueEur.toFixed(4)),
     netEur: Number((state.energy.revenueEur - state.energy.costEur).toFixed(4)),
-    priceNowCtKwh: Number(epexNowNext()?.current?.ct_kwh ?? 0)
+    priceNowCtKwh: Number(epexNowNext()?.current?.ct_kwh ?? 0),
+    userImportPriceNowCtKwh: Number(userEnergyPricingSummary()?.current?.importPriceCtKwh ?? 0)
   };
 }
 
@@ -1168,7 +1310,8 @@ function integrationState() {
     batteryPowerW: state.victron.batteryPowerW,
     pvTotalW: state.victron.pvTotalW,
     scheduleActive: state.schedule.active,
-    costs: costSummary()
+    costs: costSummary(),
+    userEnergyPricing: userEnergyPricingSummary()
   };
 }
 
@@ -1553,6 +1696,7 @@ const web = http.createServer(async (req, res) => {
       schedule: state.schedule,
       setup: configMetaPayload(),
       costs: costSummary(),
+      userEnergyPricing: userEnergyPricingSummary(),
       epex: { ...state.epex, summary: epexNowNext() },
       telemetry: {
         ...state.telemetry,

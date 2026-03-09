@@ -56,6 +56,39 @@ function cssVar(name, fallback) {
   return value || fallback;
 }
 
+function roundCt(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function hhmmToMinutes(value) {
+  if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) return null;
+  const [hours, minutes] = value.split(':').map((part) => Number(part));
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+function computeDynamicGrossImportCtKwh({ marketCtKwh = 0, components = {} } = {}) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.gridChargesCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  const vatFactor = 1 + (Number(components.vatPct || 0) / 100);
+  return roundCt(base * vatFactor);
+}
+
+function isScheduleWindowExpired(windowLike, nowTs = Date.now()) {
+  const startMin = hhmmToMinutes(windowLike?.start);
+  const endMin = hhmmToMinutes(windowLike?.end);
+  if (startMin == null || endMin == null) return false;
+
+  const now = new Date(nowTs);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  if (startMin <= endMin) return nowMin >= endMin;
+  return nowMin >= endMin && nowMin < startMin;
+}
+
 const CHART_DEFAULT_SLOT_MS = 60 * 60 * 1000;
 const chartSelectionState = {
   data: [],
@@ -200,10 +233,56 @@ function buildChartSelectionRange(startIndex, endIndex) {
   return range;
 }
 
-function showChartTooltip(tooltip, row, event) {
+function fmtCt(value) {
+  if (!Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ct/kWh`;
+}
+
+function fmtSignedCt(value) {
+  if (!Number.isFinite(Number(value))) return '-';
+  const prefix = Number(value) > 0 ? '+' : '';
+  return `${prefix}${fmtCt(value)}`;
+}
+
+function updateChartComparisonSummary(pricing) {
+  const summary = document.getElementById('chartComparisonSummary');
+  const detail = document.getElementById('chartComparisonDetail');
+  if (!summary || !detail) return;
+
+  if (!pricing?.configured) {
+    summary.textContent = 'Eigener Strompreis noch nicht konfiguriert';
+    detail.textContent = 'Lege in den Einstellungen deinen Bruttopreis, Preisbestandteile und interne Kosten an, damit DVhub jeden Börsenslot gegen Netzbezug, PV und Akku bewerten kann.';
+    return;
+  }
+
+  if (!pricing.current) {
+    summary.textContent = 'Eigener Strompreis ist konfiguriert';
+    detail.textContent = 'Sobald aktuelle EPEX-Slots vorliegen, zeigt DVhub hier den Vergleich zwischen Börse, Netzbezug, PV und Akku für den aktiven Zeitslot.';
+    return;
+  }
+
+  const current = pricing.current;
+  summary.textContent = `Jetzt: Börse ${fmtCt(current.exportPriceCtKwh)} | Bezug ${fmtCt(current.importPriceCtKwh)}`;
+  detail.textContent = [
+    `Spread ${fmtSignedCt(current.spreadToImportCtKwh)}`,
+    `PV ${fmtSignedCt(current.pvMarginCtKwh)}`,
+    `Akku ${fmtSignedCt(current.batteryMarginCtKwh)}`,
+    `Gemischt ${fmtSignedCt(current.mixedMarginCtKwh)}`,
+    current.bestSource ? `Beste Quelle: ${current.bestSource}` : ''
+  ].filter(Boolean).join(' | ');
+}
+
+function showChartTooltip(tooltip, row, event, comparison) {
   if (!tooltip || !row || !event) return;
   tooltip.style.display = 'block';
-  tooltip.textContent = `${fmtDmHm(row.ts)} | ${fmtEuroFromCt(row.ct_kwh)}/kWh`;
+  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh)}`];
+  if (comparison) {
+    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh)}`);
+    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh)}`);
+    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh)}`);
+    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh)}`);
+  }
+  tooltip.textContent = parts.join(' | ');
   tooltip.style.left = `${event.clientX + 12}px`;
   tooltip.style.top = `${event.clientY + 12}px`;
 }
@@ -233,7 +312,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
   return windows;
 }
 
-function drawPriceChart(data, nowTs) {
+function drawPriceChart(data, nowTs, comparisons = []) {
   const svg = document.getElementById('priceChart');
   const tooltip = document.getElementById('tooltip');
   if (!svg) return;
@@ -260,10 +339,16 @@ function drawPriceChart(data, nowTs) {
   const chartPositive = cssVar('--chart-positive', '#1d4ed8');
   const chartNegative = cssVar('--chart-negative', '#ef4444');
   const chartNow = cssVar('--chart-now', '#facc15');
+  const chartImport = cssVar('--chart-import', '#22c55e');
 
+  const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
+  const importVals = data
+    .map((d) => Number(comparisonByTs.get(Number(d.ts))?.importPriceCtKwh) / 100)
+    .filter((value) => Number.isFinite(value));
+  const allVals = vals.concat(importVals);
+  let min = Math.min(...allVals);
+  let max = Math.max(...allVals);
   if (min === max) {
     min -= 1;
     max += 1;
@@ -332,6 +417,7 @@ function drawPriceChart(data, nowTs) {
   const zeroY = y(0);
   const baseY = zeroY >= padT && zeroY <= H - padB ? zeroY : H - padB;
   data.forEach((row, index) => {
+    const comparison = comparisonByTs.get(Number(row.ts)) || null;
     const val = Number(row.ct_kwh) / 100;
     const bx = x(index);
     const by = y(val);
@@ -351,7 +437,7 @@ function drawPriceChart(data, nowTs) {
       chartSelectionState.didDrag = false;
       chartSelectionState.hoveredIndex = index;
       setChartSelection(data, [index]);
-      showChartTooltip(tooltip, row, event);
+      showChartTooltip(tooltip, row, event, comparison);
     });
     rect.addEventListener('mouseenter', (event) => {
       chartSelectionState.hoveredIndex = index;
@@ -361,7 +447,7 @@ function drawPriceChart(data, nowTs) {
       } else {
         updateChartBarStates();
       }
-      showChartTooltip(tooltip, row, event);
+      showChartTooltip(tooltip, row, event, comparison);
     });
     rect.addEventListener('mousemove', (event) => {
       chartSelectionState.hoveredIndex = index;
@@ -371,11 +457,30 @@ function drawPriceChart(data, nowTs) {
       } else {
         updateChartBarStates();
       }
-      showChartTooltip(tooltip, row, event);
+      showChartTooltip(tooltip, row, event, comparison);
     });
     svg.appendChild(rect);
     chartSelectionState.barElements.push(rect);
   });
+
+  const importPoints = data
+    .map((row, index) => {
+      const comparison = comparisonByTs.get(Number(row.ts));
+      const importCtKwh = Number(comparison?.importPriceCtKwh);
+      if (!Number.isFinite(importCtKwh)) return null;
+      return `${x(index) + (barW / 2)},${y(importCtKwh / 100)}`;
+    })
+    .filter(Boolean);
+  if (importPoints.length >= 2) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', chartImport);
+    line.setAttribute('stroke-width', '2.5');
+    line.setAttribute('stroke-linejoin', 'round');
+    line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('points', importPoints.join(' '));
+    svg.appendChild(line);
+  }
 
   if (zeroY >= padT && zeroY <= H - padB) {
     const zero = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -475,8 +580,10 @@ async function refresh() {
   if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
   if (lwM?.at) lwParts.push(`MinSOC: ${lwM.value} @ ${fmtTs(lwM.at)}`);
   setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
+  applyScheduleRowStates(status.now);
+  updateChartComparisonSummary(status.userEnergyPricing);
 
-  drawPriceChart(status.epex?.data || [], status.now);
+  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || []);
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
   const rows = (logs.rows || []).slice(-20).reverse();
@@ -536,6 +643,29 @@ async function manualWriteMinSoc() {
 
 let scheduleCache = { rules: [], config: {} };
 
+function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
+  if (!tr) return false;
+  const enabled = tr.querySelector('.sched-row-enabled')?.checked ?? true;
+  const expired = isScheduleWindowExpired({
+    start: tr.dataset.start || tr.querySelector('.sched-start')?.value,
+    end: tr.dataset.end || tr.querySelector('.sched-end')?.value
+  }, nowTs);
+
+  tr.classList.toggle('sched-row-expired', expired);
+  tr.style.opacity = enabled ? (expired ? '0.55' : '1') : '0.4';
+  return expired;
+}
+
+function applyScheduleRowStates(nowTs = Date.now()) {
+  const tbody = document.getElementById('scheduleRowsDash');
+  if (!tbody) return;
+  for (const tr of tbody.querySelectorAll('tr')) {
+    tr.dataset.start = tr.querySelector('.sched-start')?.value || '';
+    tr.dataset.end = tr.querySelector('.sched-end')?.value || '';
+    updateScheduleRowVisualState(tr, nowTs);
+  }
+}
+
 function addScheduleRow(opts = {}) {
   const {
     start = '06:45', end = '07:15',
@@ -558,9 +688,15 @@ function addScheduleRow(opts = {}) {
   tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
 
   const enableCb = tr.querySelector('.sched-row-enabled');
-  const applyDisabledStyle = () => { tr.style.opacity = enableCb.checked ? '1' : '0.4'; };
-  enableCb.addEventListener('change', applyDisabledStyle);
-  applyDisabledStyle();
+  const syncRowState = () => {
+    tr.dataset.start = tr.querySelector('.sched-start')?.value || '';
+    tr.dataset.end = tr.querySelector('.sched-end')?.value || '';
+    updateScheduleRowVisualState(tr);
+  };
+  enableCb.addEventListener('change', syncRowState);
+  tr.querySelector('.sched-start')?.addEventListener('change', syncRowState);
+  tr.querySelector('.sched-end')?.addEventListener('change', syncRowState);
+  syncRowState();
 
   tbody.appendChild(tr);
 }
@@ -665,6 +801,7 @@ async function loadScheduleDash() {
   }
 
   setControlMsg(`Schedule geladen (${fmtTs(Date.now())})`);
+  applyScheduleRowStates();
 }
 
 async function saveScheduleDash() {
@@ -743,7 +880,9 @@ function initDashboard() {
 
 const dashboardApi = {
   buildScheduleWindowsFromSelection,
+  computeDynamicGrossImportCtKwh,
   inferChartSlotMs,
+  isScheduleWindowExpired,
   normalizeChartSelectionIndices
 };
 

@@ -79,3 +79,44 @@ test('dashboard exposes and renders today min max with the same scaling as tomor
   assert.match(app, /Number\(s\.todayMin\) \/ 10/);
   assert.match(app, /Number\(s\.todayMax\) \/ 10/);
 });
+
+test('dashboard helpers compute dynamic gross import prices from market price and surcharges', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.computeDynamicGrossImportCtKwh, 'function');
+  assert.equal(
+    helpers.computeDynamicGrossImportCtKwh({
+      marketCtKwh: 8,
+      components: {
+        energyMarkupCtKwh: 2,
+        gridChargesCtKwh: 9,
+        leviesAndFeesCtKwh: 3,
+        vatPct: 19
+      }
+    }),
+    26.18
+  );
+});
+
+test('dashboard helpers mark schedule windows as expired based on the current local time', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.isScheduleWindowExpired, 'function');
+  assert.equal(
+    helpers.isScheduleWindowExpired({ start: '06:00', end: '07:00' }, Date.parse('2026-03-09T08:00:00+01:00')),
+    true
+  );
+  assert.equal(
+    helpers.isScheduleWindowExpired({ start: '08:30', end: '09:30' }, Date.parse('2026-03-09T08:45:00+01:00')),
+    false
+  );
+});
+
+test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+
+  assert.match(html, /chartComparisonSummary/);
+  assert.match(html, /chartComparisonDetail/);
+  assert.match(css, /\.sched-row-expired/);
+});

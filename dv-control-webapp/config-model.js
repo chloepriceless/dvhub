@@ -125,6 +125,12 @@ const SECTIONS = [
     destination: 'services'
   },
   {
+    id: 'pricing',
+    label: 'Eigene Strompreise',
+    description: 'Persönliche Bezugs- und interne Kosten für den Marktvergleich.',
+    destination: 'services'
+  },
+  {
     id: 'epex',
     label: 'EPEX',
     description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
@@ -1235,6 +1241,294 @@ function buildFieldDefinitions() {
     },
 
     {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Hinterlege deinen vollständigen Bruttopreis inklusive MwSt, Netzentgelten, Umlagen und sonstigen kWh-basierten Bestandteilen.',
+      path: 'userEnergyPricing.mode',
+      label: 'Preislogik',
+      type: 'select',
+      options: [
+        { value: 'fixed', label: 'Fester Bruttopreis' },
+        { value: 'dynamic', label: 'Dynamisch aus EPEX + Preisbestandteilen' }
+      ],
+      help: 'Fester Preis bedeutet ein kompletter Endkundenpreis. Dynamisch berechnet DVhub den Bruttopreis pro Slot aus EPEX und deinen Zuschlägen.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Hinterlege deinen vollständigen Bruttopreis inklusive MwSt, Netzentgelten, Umlagen und sonstigen kWh-basierten Bestandteilen.',
+      path: 'userEnergyPricing.fixedGrossImportCtKwh',
+      label: 'Fester Bruttopreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'fixed' },
+      help: 'Bitte den vollständigen Arbeitspreis inklusive MwSt, Netzentgelten, Umlagen, Abgaben und Steuern eintragen.'
+    },
+    {
+      section: 'pricing',
+      group: 'dynamic',
+      groupLabel: 'Dynamische Preisbestandteile',
+      groupDescription: 'Diese Bestandteile werden auf den EPEX-Preis pro Slot addiert und anschließend mit MwSt beaufschlagt.',
+      path: 'userEnergyPricing.dynamicComponents.energyMarkupCtKwh',
+      label: 'Energie-Aufschlag (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'dynamic' },
+      help: 'Zusätzlicher kWh-Aufschlag außerhalb von Netzentgelten und Umlagen.'
+    },
+    {
+      section: 'pricing',
+      group: 'dynamic',
+      groupLabel: 'Dynamische Preisbestandteile',
+      groupDescription: 'Diese Bestandteile werden auf den EPEX-Preis pro Slot addiert und anschließend mit MwSt beaufschlagt.',
+      path: 'userEnergyPricing.dynamicComponents.gridChargesCtKwh',
+      label: 'Netzentgelte (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'dynamic' },
+      help: 'Netzentgelte und vergleichbare kWh-basierte Netzbestandteile.'
+    },
+    {
+      section: 'pricing',
+      group: 'dynamic',
+      groupLabel: 'Dynamische Preisbestandteile',
+      groupDescription: 'Diese Bestandteile werden auf den EPEX-Preis pro Slot addiert und anschließend mit MwSt beaufschlagt.',
+      path: 'userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh',
+      label: 'Umlagen & Abgaben (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'dynamic' },
+      help: 'Alle weiteren verbrauchsabhängigen Preisbestandteile, die nicht direkt im Marktpreis enthalten sind.'
+    },
+    {
+      section: 'pricing',
+      group: 'dynamic',
+      groupLabel: 'Dynamische Preisbestandteile',
+      groupDescription: 'Diese Bestandteile werden auf den EPEX-Preis pro Slot addiert und anschließend mit MwSt beaufschlagt.',
+      path: 'userEnergyPricing.dynamicComponents.vatPct',
+      label: 'MwSt (%)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'dynamic' },
+      help: 'Mehrwertsteuer auf die Summe aus Börsenpreis und Preisbestandteilen.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.usesParagraph14aModule3',
+      label: 'Paragraph 14a Modul 3 aktiv',
+      type: 'boolean',
+      help: 'Aktivieren, wenn für bestimmte Zeitfenster abweichende Bruttopreise gelten.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window1.enabled',
+      label: 'Fenster 1 aktiv',
+      type: 'boolean',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Aktiviert das erste Modul-3-Zeitfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window1.label',
+      label: 'Fenster 1 Bezeichnung',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Optionaler Name, zum Beispiel Nachtfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window1.start',
+      label: 'Fenster 1 Start',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Startzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window1.end',
+      label: 'Fenster 1 Ende',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Endzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window1.priceCtKwh',
+      label: 'Fenster 1 Bruttopreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window2.enabled',
+      label: 'Fenster 2 aktiv',
+      type: 'boolean',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Aktiviert das zweite Modul-3-Zeitfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window2.label',
+      label: 'Fenster 2 Bezeichnung',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Optionaler Name für das zweite Zeitfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window2.start',
+      label: 'Fenster 2 Start',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Startzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window2.end',
+      label: 'Fenster 2 Ende',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Endzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window2.priceCtKwh',
+      label: 'Fenster 2 Bruttopreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window3.enabled',
+      label: 'Fenster 3 aktiv',
+      type: 'boolean',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Aktiviert das dritte Modul-3-Zeitfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window3.label',
+      label: 'Fenster 3 Bezeichnung',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Optionaler Name für das dritte Zeitfenster.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window3.start',
+      label: 'Fenster 3 Start',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Startzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window3.end',
+      label: 'Fenster 3 Ende',
+      type: 'text',
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Endzeit im Format HH:MM.'
+    },
+    {
+      section: 'pricing',
+      group: 'module3',
+      groupLabel: 'Paragraph 14a Modul 3',
+      groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
+      path: 'userEnergyPricing.module3Windows.window3.priceCtKwh',
+      label: 'Fenster 3 Bruttopreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
+      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+    },
+    {
+      section: 'pricing',
+      group: 'costs',
+      groupLabel: 'Interne Kosten',
+      groupDescription: 'Eigene Erzeugungs- und Speicherkosten für den Vergleich pro Börsenslot.',
+      path: 'userEnergyPricing.costs.pvCtKwh',
+      label: 'PV-Kosten (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      help: 'Eigene PV-Stromgestehungskosten pro kWh.'
+    },
+    {
+      section: 'pricing',
+      group: 'costs',
+      groupLabel: 'Interne Kosten',
+      groupDescription: 'Eigene Erzeugungs- und Speicherkosten für den Vergleich pro Börsenslot.',
+      path: 'userEnergyPricing.costs.batteryBaseCtKwh',
+      label: 'Akku-Basispreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      help: 'Basispreis der gespeicherten kWh ohne pauschalen Verlustaufschlag.'
+    },
+    {
+      section: 'pricing',
+      group: 'costs',
+      groupLabel: 'Interne Kosten',
+      groupDescription: 'Eigene Erzeugungs- und Speicherkosten für den Vergleich pro Börsenslot.',
+      path: 'userEnergyPricing.costs.batteryLossMarkupPct',
+      label: 'Akku-Verlustaufschlag (%)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      help: 'Pauschaler Effizienzaufschlag auf den Akku-Basispreis.'
+    },
+    {
       section: 'epex',
       group: 'market',
       groupLabel: 'EPEX',
@@ -1381,6 +1675,27 @@ export function createDefaultConfig() {
       defaultChargeCurrentA: null,
       rules: []
     },
+    userEnergyPricing: {
+      mode: 'fixed',
+      fixedGrossImportCtKwh: null,
+      dynamicComponents: {
+        energyMarkupCtKwh: 0,
+        gridChargesCtKwh: 0,
+        leviesAndFeesCtKwh: 0,
+        vatPct: 19
+      },
+      usesParagraph14aModule3: false,
+      module3Windows: {
+        window1: { enabled: false, label: '', start: '', end: '', priceCtKwh: null },
+        window2: { enabled: false, label: '', start: '', end: '', priceCtKwh: null },
+        window3: { enabled: false, label: '', start: '', end: '', priceCtKwh: null }
+      },
+      costs: {
+        pvCtKwh: null,
+        batteryBaseCtKwh: null,
+        batteryLossMarkupPct: 20
+      }
+    },
     scan: {
       host: '192.168.1.19',
       port: 502,
@@ -1476,6 +1791,68 @@ function sanitizeScheduleRules(value, warnings) {
   return rules;
 }
 
+function sanitizeUserEnergyPricingWindows(value, warnings) {
+  const windowIds = ['window1', 'window2', 'window3'];
+  const out = {};
+  const source = isPlainObject(value) ? value : {};
+  for (const windowId of windowIds) {
+    const entry = isPlainObject(source[windowId]) ? { ...source[windowId] } : {};
+    const next = {
+      enabled: coerceBoolean(entry.enabled),
+      label: entry.label == null ? '' : String(entry.label),
+      start: entry.start == null ? '' : String(entry.start),
+      end: entry.end == null ? '' : String(entry.end),
+      priceCtKwh: entry.priceCtKwh == null || entry.priceCtKwh === '' ? null : Number(entry.priceCtKwh)
+    };
+    if (next.priceCtKwh != null && !Number.isFinite(next.priceCtKwh)) {
+      warnings.push(`userEnergyPricing.module3Windows.${windowId}.priceCtKwh: invalid number, field was reset`);
+      next.priceCtKwh = null;
+    }
+    out[windowId] = next;
+  }
+  return out;
+}
+
+function sanitizeUserEnergyPricing(value, warnings) {
+  if (!isPlainObject(value)) return value;
+  const next = clone(value);
+  if (next.mode != null) next.mode = String(next.mode);
+  if (next.fixedGrossImportCtKwh != null && next.fixedGrossImportCtKwh !== '') {
+    next.fixedGrossImportCtKwh = Number(next.fixedGrossImportCtKwh);
+    if (!Number.isFinite(next.fixedGrossImportCtKwh)) {
+      warnings.push('userEnergyPricing.fixedGrossImportCtKwh: invalid number, field was reset');
+      delete next.fixedGrossImportCtKwh;
+    }
+  }
+  if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
+
+  if (isPlainObject(next.dynamicComponents)) {
+    for (const key of ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct']) {
+      if (next.dynamicComponents[key] == null || next.dynamicComponents[key] === '') continue;
+      next.dynamicComponents[key] = Number(next.dynamicComponents[key]);
+      if (!Number.isFinite(next.dynamicComponents[key])) {
+        warnings.push(`userEnergyPricing.dynamicComponents.${key}: invalid number, field was reset`);
+        delete next.dynamicComponents[key];
+      }
+    }
+  }
+
+  next.module3Windows = sanitizeUserEnergyPricingWindows(next.module3Windows, warnings);
+
+  if (isPlainObject(next.costs)) {
+    for (const key of ['pvCtKwh', 'batteryBaseCtKwh', 'batteryLossMarkupPct']) {
+      if (next.costs[key] == null || next.costs[key] === '') continue;
+      next.costs[key] = Number(next.costs[key]);
+      if (!Number.isFinite(next.costs[key])) {
+        warnings.push(`userEnergyPricing.costs.${key}: invalid number, field was reset`);
+        delete next.costs[key];
+      }
+    }
+  }
+
+  return next;
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -1525,6 +1902,9 @@ function sanitizeRawConfig(rawInput) {
 
   raw.schedule = raw.schedule || {};
   raw.schedule.rules = sanitizeScheduleRules(raw.schedule.rules, warnings);
+  if (hasPath(raw, 'userEnergyPricing')) {
+    raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
+  }
   return { raw, warnings };
 }
 

@@ -55,6 +55,27 @@
       { "id": "fallback", "enabled": false, "target": "gridSetpointW", "days": [1,2,3,4,5,6,0], "start": "18:00", "end": "23:59", "value": -40, "oneTime": false }
     ]
   },
+  "userEnergyPricing": {
+    "mode": "fixed",
+    "fixedGrossImportCtKwh": 31.5,
+    "dynamicComponents": {
+      "energyMarkupCtKwh": 0,
+      "gridChargesCtKwh": 8.5,
+      "leviesAndFeesCtKwh": 3,
+      "vatPct": 19
+    },
+    "usesParagraph14aModule3": false,
+    "module3Windows": {
+      "window1": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window2": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window3": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null }
+    },
+    "costs": {
+      "pvCtKwh": 6,
+      "batteryBaseCtKwh": 2,
+      "batteryLossMarkupPct": 20
+    }
+  },
   "scan": {
     "host": "192.168.x.x",
     "port": 502,

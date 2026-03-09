@@ -630,6 +630,27 @@ svg {
   font-size: 0.86rem;
 }
 
+.chart-comparison-summary {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(123, 151, 178, 0.24);
+  background: rgba(7, 18, 30, 0.58);
+}
+
+.chart-comparison-summary strong {
+  font-family: var(--font-title);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-comparison-summary span {
+  color: var(--text-soft);
+  font-size: 0.86rem;
+}
+
 #tooltip {
   position: fixed;
   display: none;
@@ -678,6 +699,14 @@ table th {
 .sched-table input[type="number"],
 .sched-table input[type="time"] {
   width: 96px;
+}
+
+.sched-row-expired {
+  filter: grayscale(0.82);
+}
+
+.sched-row-expired td {
+  color: var(--text-muted);
 }
 
 

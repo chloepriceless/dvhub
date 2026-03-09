@@ -268,6 +268,38 @@ function renderFieldValue(field) {
   return { value: draftValue, inherited: draftDefined ? null : effectiveValue };
 }
 
+function valuesEqual(left, right) {
+  if (left === right) return true;
+  if (typeof left === 'boolean' || typeof right === 'boolean') return Boolean(left) === Boolean(right);
+  return String(left) === String(right);
+}
+
+function getVisibilityValue(path) {
+  if (hasPath(currentDraftConfig, path)) return getPath(currentDraftConfig, path);
+  return getPath(currentEffectiveConfig, path);
+}
+
+function isFieldVisible(field) {
+  if (field.visibleWhenPath) {
+    const currentValue = getVisibilityValue(field.visibleWhenPath.path);
+    if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
+  }
+
+  if (Array.isArray(field.visibleWhenTransport) && field.visibleWhenTransport.length) {
+    const transport = getVisibilityValue('victron.transport');
+    if (!field.visibleWhenTransport.includes(transport)) return false;
+  }
+
+  return true;
+}
+
+function fieldAffectsVisibility(path) {
+  return (definition?.fields || []).some((field) => (
+    field.visibleWhenPath?.path === path
+    || (path === 'victron.transport' && Array.isArray(field.visibleWhenTransport) && field.visibleWhenTransport.length)
+  ));
+}
+
 function renderField(field) {
   const wrapper = document.createElement('label');
   wrapper.className = 'settings-field';
@@ -520,6 +552,9 @@ function renderSectionWorkspace(sectionId) {
     groupList.className = 'settings-group-list';
 
     for (const group of section.groups) {
+      const visibleFields = group.fields.filter((field) => isFieldVisible(field));
+      if (!visibleFields.length) continue;
+
       const details = document.createElement('details');
       details.className = 'settings-group';
       details.open = group.openByDefault;
@@ -530,7 +565,7 @@ function renderSectionWorkspace(sectionId) {
 
       const grid = document.createElement('div');
       grid.className = 'settings-fields';
-      for (const field of group.fields) grid.appendChild(renderField(field));
+      for (const field of visibleFields) grid.appendChild(renderField(field));
       details.appendChild(grid);
       groupList.appendChild(details);
     }
@@ -906,6 +941,13 @@ async function restartService() {
 }
 
 function initSettingsPage() {
+  document.getElementById('settingsSections')?.addEventListener('change', (event) => {
+    const input = event.target;
+    if (!input?.dataset?.path) return;
+    syncRenderedFieldsToDraft();
+    if (fieldAffectsVisibility(input.dataset.path)) renderActiveSettingsDestination();
+  });
+
   document.getElementById('settingsSidebar')?.addEventListener('click', (event) => {
     const target = event.target.closest('[data-settings-target]');
     if (!target) return;
