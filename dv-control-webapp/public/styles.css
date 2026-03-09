@@ -117,15 +117,15 @@ a {
 .app-main {
   min-width: 0;
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .app-nav {
   position: sticky;
   top: 16px;
   display: grid;
-  gap: 18px;
-  min-height: calc(100vh - 32px);
+  gap: 14px;
+  min-height: auto;
   align-content: start;
 }
 
@@ -205,16 +205,46 @@ a {
   align-items: end;
 }
 
-.page-topbar-copy {
+.page-topbar-copy,
+.compact-topbar-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.compact-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-color: rgba(0, 168, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 24%),
+    linear-gradient(145deg, rgba(12, 37, 69, 0.96), rgba(9, 27, 49, 0.92));
+}
+
+.compact-topbar-meta {
   display: grid;
   gap: 6px;
+  margin-top: 4px;
+}
+
+.compact-meta {
+  margin-top: 0;
+  font-size: 0.8rem;
+}
+
+.btn-inline {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 0.82rem;
 }
 
 .page-title {
   margin: 0;
   font-family: var(--font-title);
-  font-size: clamp(2rem, 4vw, 2.9rem);
-  line-height: 0.95;
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  line-height: 0.92;
   letter-spacing: 0.02em;
 }
 
@@ -222,8 +252,8 @@ a {
   margin: 0;
   max-width: 68ch;
   color: var(--text-muted);
-  font-size: 0.98rem;
-  line-height: 1.6;
+  font-size: 0.9rem;
+  line-height: 1.42;
 }
 
 .page-actions {
@@ -235,8 +265,8 @@ a {
 
 .panel {
   position: relative;
-  padding: 16px;
-  border-radius: var(--radius-lg);
+  padding: 14px;
+  border-radius: 14px;
   border: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 22%),
@@ -329,8 +359,8 @@ a {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 8px 14px;
+  min-height: 38px;
+  padding: 7px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
@@ -763,16 +793,47 @@ table th {
   margin: 0;
   font-size: 0.88rem;
   color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.compact-note-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-note {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(123, 151, 178, 0.22);
+  background: rgba(6, 16, 28, 0.46);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.38;
+}
+
+.compact-note strong {
+  font-family: var(--font-title);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dvhub-lime);
+  font-size: 0.92rem;
+}
+
+.compact-note span {
+  color: inherit;
 }
 
 .status-banner {
-  margin-top: 12px;
-  border-radius: var(--radius-md);
+  margin-top: 8px;
+  border-radius: 10px;
   border: 1px solid rgba(137, 166, 195, 0.35);
   background: rgba(10, 24, 38, 0.82);
-  padding: 12px 14px;
+  padding: 8px 10px;
   color: var(--text-main);
-  font-size: 0.92rem;
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .status-banner.success {
@@ -798,8 +859,7 @@ table th {
 
 .settings-compact-bar {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
 }
 
 .settings-header {
@@ -823,10 +883,10 @@ table th {
 
 .settings-shell {
   display: grid;
-  grid-template-columns: minmax(220px, 248px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(208px, 232px) minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
-  padding: 14px;
+  padding: 12px;
 }
 
 .settings-sidebar {
@@ -837,7 +897,7 @@ table th {
   position: sticky;
   top: 14px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-sidebar-head,
@@ -855,10 +915,10 @@ table th {
 
 .settings-sidebar-item {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   width: 100%;
-  padding: 11px 12px;
-  border-radius: var(--radius-md);
+  padding: 9px 10px;
+  border-radius: 10px;
   border: 1px solid rgba(123, 151, 178, 0.24);
   background: rgba(7, 18, 30, 0.58);
   text-align: left;
@@ -873,29 +933,53 @@ table th {
 
 .settings-sidebar-label {
   font-family: var(--font-title);
-  font-size: 1rem;
+  font-size: 0.96rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .settings-sidebar-copy {
   color: var(--text-soft);
-  font-size: 0.82rem;
-  line-height: 1.4;
+  font-size: 0.76rem;
+  line-height: 1.32;
+}
+
+.settings-sidebar-status {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 151, 178, 0.2);
+  background: rgba(6, 16, 28, 0.58);
+}
+
+.settings-sidebar-status-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 8px;
+}
+
+.settings-sidebar-status-title {
+  margin: 2px 0 0;
+  font-family: var(--font-title);
+  font-size: 1.02rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .settings-workspace {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .settings-workspace-panel,
 .settings-overview {
   display: grid;
-  gap: 12px;
-  padding: 14px;
-  border-radius: var(--radius-lg);
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
   border: 1px solid rgba(123, 151, 178, 0.24);
   background: rgba(7, 18, 30, 0.5);
 }
@@ -908,7 +992,7 @@ table th {
 .settings-panel {
   grid-column: span 12;
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-panel-head {
@@ -941,37 +1025,42 @@ table th {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .settings-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.settings-summary-compact {
+  grid-template-columns: 1fr;
+  margin-top: 0;
 }
 
 .summary-card {
   display: grid;
-  gap: 5px;
-  padding: 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(126, 156, 183, 0.28);
-  background: rgba(6, 16, 28, 0.72);
+  gap: 4px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(126, 156, 183, 0.22);
+  background: rgba(6, 16, 28, 0.48);
 }
 
 .summary-card strong {
   font-family: var(--font-title);
   color: var(--dvhub-lime);
-  font-size: 1rem;
+  font-size: 0.92rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .summary-card span {
   color: var(--text-muted);
-  font-size: 0.86rem;
-  line-height: 1.42;
+  font-size: 0.8rem;
+  line-height: 1.34;
 }
 
 .settings-workspace-summary {
@@ -982,9 +1071,9 @@ table th {
 
 .settings-subsection {
   display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-radius: var(--radius-md);
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
   border: 1px solid rgba(123, 151, 178, 0.18);
   background: rgba(6, 16, 28, 0.45);
 }
@@ -1012,8 +1101,8 @@ table th {
 }
 
 .settings-group {
-  margin-top: 10px;
-  border-radius: var(--radius-md);
+  margin-top: 8px;
+  border-radius: 10px;
   border: 1px solid rgba(123, 151, 178, 0.24);
   background: rgba(7, 18, 30, 0.55);
 }
@@ -1025,7 +1114,7 @@ table th {
   gap: 12px;
   cursor: pointer;
   list-style: none;
-  padding: 12px 14px;
+  padding: 10px 12px;
   font-family: var(--font-title);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1051,8 +1140,8 @@ table th {
 .settings-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 0 14px 14px;
+  gap: 8px;
+  padding: 0 12px 12px;
 }
 
 .settings-fields.compact {
@@ -1074,10 +1163,10 @@ table th {
 
 .settings-field {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   align-items: start;
-  padding: 12px;
-  border-radius: var(--radius-md);
+  padding: 10px;
+  border-radius: 10px;
   border: 1px solid rgba(122, 150, 176, 0.22);
   background: rgba(8, 18, 28, 0.6);
 }
@@ -1147,8 +1236,8 @@ table th {
 .setup-progress {
   display: grid;
   gap: 8px;
-  padding: 12px 14px;
-  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  border-radius: 10px;
   border: 1px solid rgba(0, 168, 255, 0.24);
   background: linear-gradient(135deg, rgba(12, 37, 69, 0.9), rgba(8, 26, 50, 0.76));
 }
@@ -1196,11 +1285,11 @@ table th {
 
 .setup-callout {
   display: grid;
-  gap: 6px;
-  padding: 14px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(76, 227, 108, 0.18);
-  background: linear-gradient(135deg, rgba(16, 42, 62, 0.9), rgba(7, 19, 30, 0.7));
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(76, 227, 108, 0.16);
+  background: rgba(10, 28, 41, 0.72);
 }
 
 .setup-callout-eyebrow {
@@ -1210,7 +1299,7 @@ table th {
 .setup-callout-title {
   margin: 0;
   font-family: var(--font-title);
-  font-size: 1.35rem;
+  font-size: 1.08rem;
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
@@ -1219,7 +1308,7 @@ table th {
 .setup-callout-note {
   margin: 0;
   color: var(--text-muted);
-  line-height: 1.55;
+  line-height: 1.4;
 }
 
 .setup-callout-note {
@@ -1618,7 +1707,8 @@ table th {
     min-height: auto;
   }
 
-  .page-topbar {
+  .page-topbar,
+  .compact-topbar {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -1813,7 +1903,8 @@ table th {
 
   .settings-workspace-panel,
   .settings-overview,
-  .settings-sidebar-item {
+  .settings-sidebar-item,
+  .settings-sidebar-status {
     padding: 12px;
   }
 
