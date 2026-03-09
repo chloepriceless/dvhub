@@ -114,11 +114,11 @@ test('real config definition keeps navigation compact and maps every section wit
 
 test('real config definition exposes friendly grouped labels instead of the raw technical taxonomy', () => {
   const definition = getConfigDefinition();
-  const visibleLabels = buildSettingsDestinations(definition)
+  const visibleLabels = Array.from(buildSettingsDestinations(definition)
     .filter((destination) => destination.kind !== 'overview')
-    .map((destination) => destination.label);
+    .map((destination) => destination.label));
 
-  assert.ok(visibleLabels.includes('Verbindung zur Anlage'));
+  assert.deepEqual(visibleLabels, ['Schnellstart', 'Anlage verbinden', 'Steuerung', 'Preise & Daten', 'Erweitert']);
   assert.ok(visibleLabels.includes('Erweitert'));
   assert.ok(!visibleLabels.includes('Victron Verbindung'));
   assert.ok(!visibleLabels.includes('Netzzaehler'));
@@ -132,4 +132,15 @@ test('real config workspace stays section-focused and does not reopen unrelated 
   assert.equal(workspace.sections[0].groups[0].openByDefault, true);
   assert.equal(workspace.sections[0].groups[1].openByDefault, false);
   assert.equal(workspace.sections[1].groups[0].openByDefault, false);
+});
+
+test('real config definition maps technical sections into Erweitert instead of exposing raw technical destinations', () => {
+  const definition = getConfigDefinition();
+  const workspace = buildDestinationWorkspace(definition, 'advanced');
+  const destinationLabels = buildSettingsDestinations(definition).map((destination) => destination.label);
+
+  assert.ok(workspace.sections.some((section) => section.id === 'points'));
+  assert.ok(workspace.sections.some((section) => section.id === 'scan'));
+  assert.ok(!destinationLabels.includes('Lese-Register'));
+  assert.ok(!destinationLabels.includes('Scan Tool'));
 });

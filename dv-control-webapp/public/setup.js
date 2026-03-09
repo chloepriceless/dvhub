@@ -301,7 +301,7 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
           title: 'Nur die Daten, die DVhub direkt erreichbar machen',
           body: 'HTTP-Port und optionales API-Token reichen für den ersten sicheren Einstieg.'
         },
-        note: 'Alles Weitere bleibt später in den Einstellungen verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
+        note: 'Alles Weitere bleibt später in der Einrichtung verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
       };
     case 'transport':
       if (getSetupTransportMode(state) === 'mqtt') {
@@ -332,7 +332,7 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
           title: 'DV-Port, Meterblock und Vorzeichen an einem Ort',
           body: 'In diesem Schritt definierst du, wie DVhub Netzwerte liest und später an externe Systeme weiterreicht.'
         },
-        note: 'Nur der Kernblock für den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen später in den Einstellungen.'
+        note: 'Nur der Kernblock für den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen später in der Einrichtung.'
       };
     case 'services':
       return {
@@ -521,14 +521,14 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
   const kind = payload?.restartRequired || warnings.length ? 'warn' : 'success';
   const summary = payload?.restartRequired
     ? 'Ein Teil der Änderungen ist gespeichert, wird aber erst nach einem Dienst-Neustart oder einer neuen Verbindung wirksam.'
-    : 'Die Kernkonfiguration ist gespeichert und die naechsten Schritte liegen jetzt in den Einstellungen.';
+    : 'Die Kernkonfiguration ist gespeichert und die naechsten Schritte liegen jetzt in der Einrichtung.';
   const bannerParts = [title];
   if (payload?.restartRequired) bannerParts.push('Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.');
   if (warnings.length) bannerParts.push(`Bitte ${warnings.length === 1 ? 'die Warnung' : 'die Warnungen'} unten prüfen.`);
-  bannerParts.push('Weiterleitung zu den Einstellungen...');
+  bannerParts.push('Weiterleitung zur Einrichtung...');
   const nextSteps = payload?.restartRequired
-    ? ['In den Einstellungen prüfen, welche Verbindungswerte aktiv sind.', 'Danach den DVhub-Dienst oder die betroffene Verbindung neu starten.']
-    : ['In den Einstellungen die vollstaendige Config prüfen und bei Bedarf weiter verfeinern.'];
+    ? ['In der Einrichtung prüfen, welche Verbindungswerte aktiv sind.', 'Danach den DVhub-Dienst oder die betroffene Verbindung neu starten.']
+    : ['In der Einrichtung die vollstaendige Config prüfen und bei Bedarf weiter verfeinern.'];
   return {
     title,
     kind,

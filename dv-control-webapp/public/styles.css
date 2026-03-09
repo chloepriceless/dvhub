@@ -745,6 +745,12 @@ table th {
   gap: 14px;
 }
 
+.maintenance-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .tools-card-title {
   margin: 0 0 4px;
   font-family: var(--font-title);
@@ -788,6 +794,12 @@ table th {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
+}
+
+.settings-compact-bar {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
 }
 
 .settings-header {
@@ -1640,6 +1652,7 @@ table th {
   }
 
   .settings-header,
+  .maintenance-grid,
   .settings-shell,
   .settings-summary,
   .wizard-grid,

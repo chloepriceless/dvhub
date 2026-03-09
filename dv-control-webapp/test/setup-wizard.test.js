@@ -425,6 +425,8 @@ test('save outcome highlights warnings and restart-sensitive transport changes',
   assert.match(outcome.restartItems.join(' '), /Victron-Transport/i);
   assert.match(outcome.restartItems.join(' '), /DV Modbus Proxy/i);
   assert.equal(outcome.redirectUrl, '/settings.html?setup=done');
+  assert.match(outcome.banner, /Weiterleitung zur Einrichtung/i);
+  assert.match(outcome.nextSteps.join(' '), /Einrichtung/i);
 });
 
 test('import outcome uses import-specific completion copy', () => {
@@ -436,6 +438,6 @@ test('import outcome uses import-specific completion copy', () => {
 
   assert.equal(outcome.kind, 'success');
   assert.match(outcome.title, /Config importiert/i);
-  assert.match(outcome.banner, /Weiterleitung zu den Einstellungen/i);
-  assert.match(outcome.nextSteps.join(' '), /Einstellungen/i);
+  assert.match(outcome.banner, /Weiterleitung zur Einrichtung/i);
+  assert.match(outcome.nextSteps.join(' '), /Einrichtung/i);
 });
