@@ -111,11 +111,13 @@ test('public pages use compact topbars instead of large hero-style headers', () 
   }
 });
 
-test('settings page keeps a small status block below the menu and moves restart actions to maintenance', () => {
+test('settings page moves the status block into the top row and removes the permanent start panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'settings.html'), 'utf8');
 
-  assert.match(html, /settings-sidebar-status/);
-  assert.match(html, /Wartung öffnen/);
+  assert.match(html, /settings-topbar-status/);
+  assert.match(html, /settingsNavTree/);
+  assert.doesNotMatch(html, /data-settings-target="overview"/);
+  assert.doesNotMatch(html, /settingsOverview/);
   assert.doesNotMatch(html, /Dienst neu starten/);
 });
 
@@ -145,7 +147,8 @@ test('styles define compact settings and maintenance layout primitives', () => {
   assert.match(css, /\.settings-compact-bar\s*\{/);
   assert.match(css, /\.maintenance-grid\s*\{/);
   assert.match(css, /\.compact-topbar\s*\{/);
-  assert.match(css, /\.settings-sidebar-status\s*\{/);
+  assert.match(css, /\.settings-topbar-status\s*\{/);
+  assert.match(css, /\.app-nav-subtree\s*\{/);
   assert.match(css, /\.compact-note\s*\{/);
 });
 
