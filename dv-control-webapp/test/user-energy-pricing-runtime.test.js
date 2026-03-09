@@ -5,6 +5,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+import {
+  resolveActiveUserEnergyPricingForTimestamp,
+  resolveUserImportPriceCtKwhForSlot
+} from '../config-model.js';
+
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 function extractFunction(source, name) {
@@ -69,5 +74,64 @@ test('mixed cost stays between direct pv cost and battery path cost', () => {
       batteryLossMarkupPct: 20
     }),
     8.22
+  );
+});
+
+test('pricing resolver selects the period active for the slot date in Berlin local time', () => {
+  const pricing = {
+    mode: 'fixed',
+    fixedGrossImportCtKwh: 29.9,
+    periods: [
+      {
+        id: 'winter-fixed',
+        startDate: '2026-01-01',
+        endDate: '2026-03-31',
+        mode: 'fixed',
+        fixedGrossImportCtKwh: 31.5
+      },
+      {
+        id: 'summer-dynamic',
+        startDate: '2026-04-01',
+        endDate: '2026-12-31',
+        mode: 'dynamic',
+        dynamicComponents: {
+          energyMarkupCtKwh: 0,
+          gridChargesCtKwh: 8.5,
+          leviesAndFeesCtKwh: 3,
+          vatPct: 19
+        }
+      }
+    ]
+  };
+
+  const winter = resolveActiveUserEnergyPricingForTimestamp('2026-03-31T20:30:00.000Z', pricing);
+  const summer = resolveActiveUserEnergyPricingForTimestamp('2026-03-31T22:30:00.000Z', pricing);
+
+  assert.equal(winter?.id, 'winter-fixed');
+  assert.equal(summer?.id, 'summer-dynamic');
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-03-31T22:30:00.000Z', ct_kwh: 5 }, pricing),
+    19.63
+  );
+});
+
+test('legacy single-price config stays as fallback when no dated period matches', () => {
+  const pricing = {
+    mode: 'fixed',
+    fixedGrossImportCtKwh: 29.9,
+    periods: [
+      {
+        id: 'winter-fixed',
+        startDate: '2026-01-01',
+        endDate: '2026-03-31',
+        mode: 'fixed',
+        fixedGrossImportCtKwh: 31.5
+      }
+    ]
+  };
+
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-12-15T12:00:00.000Z', ct_kwh: 4.5 }, pricing),
+    29.9
   );
 });

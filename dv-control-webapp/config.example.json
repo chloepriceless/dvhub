@@ -58,6 +58,29 @@
   "userEnergyPricing": {
     "mode": "fixed",
     "fixedGrossImportCtKwh": 31.5,
+    "periods": [
+      {
+        "id": "winter-2026",
+        "label": "Fixpreis Winter",
+        "startDate": "2026-01-01",
+        "endDate": "2026-04-30",
+        "mode": "fixed",
+        "fixedGrossImportCtKwh": 31.5
+      },
+      {
+        "id": "summer-2026",
+        "label": "Dynamisch Sommer",
+        "startDate": "2026-05-01",
+        "endDate": "2026-12-31",
+        "mode": "dynamic",
+        "dynamicComponents": {
+          "energyMarkupCtKwh": 0,
+          "gridChargesCtKwh": 8.5,
+          "leviesAndFeesCtKwh": 3,
+          "vatPct": 19
+        }
+      }
+    ],
     "dynamicComponents": {
       "energyMarkupCtKwh": 0,
       "gridChargesCtKwh": 8.5,

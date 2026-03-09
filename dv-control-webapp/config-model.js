@@ -24,6 +24,8 @@ const DV_CONTROL_META = {
   dontFeedExcessAcPv: { label: 'AC PV Block Flag', description: 'Steuert, ob AC-PV-Einspeisung blockiert wird.' }
 };
 
+const BERLIN_TIME_ZONE = 'Europe/Berlin';
+
 const SETTINGS_DESTINATIONS = [
   {
     id: 'quickstart',
@@ -1252,6 +1254,16 @@ function buildFieldDefinitions() {
       section: 'pricing',
       group: 'mode',
       groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Optional koennen mehrere gueltige Tarifzeiträume mit eigener Preislogik gepflegt werden.',
+      path: 'userEnergyPricing.periods',
+      label: 'Preiszeiträume',
+      type: 'array',
+      help: 'Wird von der erweiterten Preiseingabe genutzt, um tageweise gueltige Tarife zu speichern.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
       groupDescription: 'Hinterlege deinen vollständigen Bruttopreis inklusive MwSt, Netzentgelten, Umlagen und sonstigen kWh-basierten Bestandteilen.',
       path: 'userEnergyPricing.fixedGrossImportCtKwh',
       label: 'Fester Bruttopreis (ct/kWh)',
@@ -1672,6 +1684,7 @@ export function createDefaultConfig() {
     userEnergyPricing: {
       mode: 'fixed',
       fixedGrossImportCtKwh: null,
+      periods: [],
       dynamicComponents: {
         energyMarkupCtKwh: 0,
         gridChargesCtKwh: 0,
@@ -1762,6 +1775,87 @@ function coerceBoolean(value) {
   return Boolean(value);
 }
 
+function roundCtKwh(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function formatLocalDate(value, timeZone = BERLIN_TIME_ZONE) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  if (!year || !month || !day) return null;
+  return `${year}-${month}-${day}`;
+}
+
+function localMinutesOfDay(value, timeZone = BERLIN_TIME_ZONE) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function parseHHMM(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function slotMinuteMatchesWindow(minuteOfDay, window) {
+  if (minuteOfDay == null || !window) return false;
+  if (window.start <= window.end) return minuteOfDay >= window.start && minuteOfDay < window.end;
+  return minuteOfDay >= window.start || minuteOfDay < window.end;
+}
+
+function sanitizePricingNumberField(target, key, warningPrefix, warnings) {
+  if (!isPlainObject(target)) return;
+  if (target[key] == null || target[key] === '') return;
+  target[key] = Number(target[key]);
+  if (!Number.isFinite(target[key])) {
+    warnings.push(`${warningPrefix}.${key}: invalid number, field was reset`);
+    delete target[key];
+  }
+}
+
+function sanitizeDynamicComponents(value, warnings, warningPrefix = 'userEnergyPricing.dynamicComponents') {
+  const next = isPlainObject(value) ? clone(value) : {};
+  for (const key of ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct']) {
+    sanitizePricingNumberField(next, key, warningPrefix, warnings);
+  }
+  return next;
+}
+
+function sanitizePricingCosts(value, warnings, warningPrefix = 'userEnergyPricing.costs') {
+  const next = isPlainObject(value) ? clone(value) : {};
+  for (const key of ['pvCtKwh', 'batteryBaseCtKwh', 'batteryLossMarkupPct']) {
+    sanitizePricingNumberField(next, key, warningPrefix, warnings);
+  }
+  return next;
+}
+
+function isIsoDateOnly(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 function sanitizeScheduleRules(value, warnings) {
   if (!Array.isArray(value)) return [];
   const rules = [];
@@ -1805,6 +1899,85 @@ function sanitizeUserEnergyPricingWindows(value, warnings) {
   return out;
 }
 
+function sanitizeUserEnergyPricingPeriods(value, warnings) {
+  if (!Array.isArray(value)) return [];
+
+  const normalized = value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        warnings.push(`userEnergyPricing.periods.${index}: invalid entry ignored`);
+        return null;
+      }
+
+      const next = {
+        id: entry.id == null || entry.id === '' ? `period-${index + 1}` : String(entry.id),
+        label: entry.label == null ? '' : String(entry.label),
+        startDate: entry.startDate == null ? '' : String(entry.startDate),
+        endDate: entry.endDate == null ? '' : String(entry.endDate),
+        mode: entry.mode == null ? '' : String(entry.mode)
+      };
+
+      if (!isIsoDateOnly(next.startDate) || !isIsoDateOnly(next.endDate)) {
+        warnings.push(`userEnergyPricing.periods.${next.id}: startDate and endDate must use YYYY-MM-DD`);
+        return null;
+      }
+      if (next.startDate > next.endDate) {
+        warnings.push(`userEnergyPricing.periods.${next.id}: startDate must be on or before endDate`);
+        return null;
+      }
+      if (!['fixed', 'dynamic'].includes(next.mode)) {
+        warnings.push(`userEnergyPricing.periods.${next.id}: mode must be fixed or dynamic`);
+        return null;
+      }
+
+      if (next.mode === 'fixed') {
+        next.fixedGrossImportCtKwh = entry.fixedGrossImportCtKwh == null || entry.fixedGrossImportCtKwh === ''
+          ? null
+          : Number(entry.fixedGrossImportCtKwh);
+        if (!Number.isFinite(next.fixedGrossImportCtKwh)) {
+          warnings.push(`userEnergyPricing.periods.${next.id}.fixedGrossImportCtKwh: required numeric value for fixed mode`);
+          return null;
+        }
+      }
+
+      if (next.mode === 'dynamic') {
+        next.dynamicComponents = sanitizeDynamicComponents(
+          entry.dynamicComponents,
+          warnings,
+          `userEnergyPricing.periods.${next.id}.dynamicComponents`
+        );
+        const requiredKeys = ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct'];
+        if (requiredKeys.some((key) => !Number.isFinite(Number(next.dynamicComponents[key])))) {
+          warnings.push(`userEnergyPricing.periods.${next.id}.dynamicComponents: all dynamic fields are required`);
+          return null;
+        }
+      }
+
+      if (entry.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(entry.usesParagraph14aModule3);
+      if (entry.module3Windows != null) next.module3Windows = sanitizeUserEnergyPricingWindows(entry.module3Windows, warnings);
+      if (entry.costs != null) next.costs = sanitizePricingCosts(
+        entry.costs,
+        warnings,
+        `userEnergyPricing.periods.${next.id}.costs`
+      );
+
+      return next;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.startDate.localeCompare(right.startDate) || left.endDate.localeCompare(right.endDate));
+
+  const accepted = [];
+  for (const period of normalized) {
+    const previous = accepted[accepted.length - 1];
+    if (previous && period.startDate <= previous.endDate) {
+      warnings.push(`userEnergyPricing.periods.${period.id}: overlap with ${previous.id}`);
+      continue;
+    }
+    accepted.push(period);
+  }
+  return accepted;
+}
+
 function sanitizeUserEnergyPricing(value, warnings) {
   if (!isPlainObject(value)) return value;
   const next = clone(value);
@@ -1817,31 +1990,10 @@ function sanitizeUserEnergyPricing(value, warnings) {
     }
   }
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
-
-  if (isPlainObject(next.dynamicComponents)) {
-    for (const key of ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct']) {
-      if (next.dynamicComponents[key] == null || next.dynamicComponents[key] === '') continue;
-      next.dynamicComponents[key] = Number(next.dynamicComponents[key]);
-      if (!Number.isFinite(next.dynamicComponents[key])) {
-        warnings.push(`userEnergyPricing.dynamicComponents.${key}: invalid number, field was reset`);
-        delete next.dynamicComponents[key];
-      }
-    }
-  }
-
+  next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
+  next.dynamicComponents = sanitizeDynamicComponents(next.dynamicComponents, warnings);
   next.module3Windows = sanitizeUserEnergyPricingWindows(next.module3Windows, warnings);
-
-  if (isPlainObject(next.costs)) {
-    for (const key of ['pvCtKwh', 'batteryBaseCtKwh', 'batteryLossMarkupPct']) {
-      if (next.costs[key] == null || next.costs[key] === '') continue;
-      next.costs[key] = Number(next.costs[key]);
-      if (!Number.isFinite(next.costs[key])) {
-        warnings.push(`userEnergyPricing.costs.${key}: invalid number, field was reset`);
-        delete next.costs[key];
-      }
-    }
-  }
-
+  next.costs = sanitizePricingCosts(next.costs, warnings);
   return next;
 }
 
@@ -1889,6 +2041,8 @@ function sanitizeRawConfig(rawInput) {
       continue;
     }
 
+    if (field.type === 'array') continue;
+
     setPath(raw, field.path, currentValue == null ? '' : String(currentValue));
   }
 
@@ -1907,6 +2061,73 @@ export function normalizeConfigInput(rawInput) {
   if (!Array.isArray(persistedConfig.schedule?.rules)) persistedConfig.schedule.rules = [];
   const effectiveConfig = applyVictronDefaults(persistedConfig);
   return { rawConfig: raw, persistedConfig, effectiveConfig, warnings };
+}
+
+function buildEffectiveUserEnergyPricing(pricing = {}) {
+  return {
+    mode: pricing?.mode || 'fixed',
+    fixedGrossImportCtKwh: pricing?.fixedGrossImportCtKwh ?? null,
+    dynamicComponents: clone(pricing?.dynamicComponents || {}),
+    usesParagraph14aModule3: pricing?.usesParagraph14aModule3 === true,
+    module3Windows: clone(pricing?.module3Windows || {}),
+    costs: clone(pricing?.costs || {})
+  };
+}
+
+function configuredModule3Windows(pricing = {}) {
+  if (!pricing?.usesParagraph14aModule3) return [];
+  return Object.entries(pricing.module3Windows || {})
+    .map(([id, window]) => {
+      const start = parseHHMM(window?.start);
+      const end = parseHHMM(window?.end);
+      const priceCtKwh = Number(window?.priceCtKwh);
+      if (window?.enabled !== true || start == null || end == null || !Number.isFinite(priceCtKwh)) return null;
+      return {
+        id,
+        label: window?.label ? String(window.label) : id,
+        start,
+        end,
+        priceCtKwh: roundCtKwh(priceCtKwh)
+      };
+    })
+    .filter(Boolean);
+}
+
+function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.gridChargesCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
+}
+
+export function resolveActiveUserEnergyPricingForTimestamp(ts, pricing = {}, options = {}) {
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const localDate = formatLocalDate(ts, timeZone);
+  if (!localDate) return null;
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  const match = periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate);
+  if (!match) return null;
+  return deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
+}
+
+export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = {}) {
+  if (!row?.ts) return null;
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const minuteOfDay = localMinutesOfDay(row.ts, timeZone);
+  const effectivePricing = resolveActiveUserEnergyPricingForTimestamp(row.ts, pricing, options) || buildEffectiveUserEnergyPricing(pricing);
+
+  for (const window of configuredModule3Windows(effectivePricing)) {
+    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
+  }
+
+  if (effectivePricing.mode === 'fixed') {
+    const fixed = Number(effectivePricing.fixedGrossImportCtKwh);
+    return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
+  }
+
+  return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), effectivePricing.dynamicComponents || {});
 }
 
 export function loadConfigFile(configPath) {
