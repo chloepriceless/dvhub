@@ -929,10 +929,14 @@ function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
 }
 
 function effectiveBatteryCostCtKwh(costs = {}) {
+  const pvCtKwh = Number(costs?.pvCtKwh);
   const base = Number(costs?.batteryBaseCtKwh);
-  if (!Number.isFinite(base)) return null;
+  if (!Number.isFinite(base) && !Number.isFinite(pvCtKwh)) return null;
   const markup = Number(costs?.batteryLossMarkupPct || 0);
-  return roundCtKwh(base * (1 + markup / 100));
+  const combinedBase =
+    (Number.isFinite(pvCtKwh) ? pvCtKwh : 0)
+    + (Number.isFinite(base) ? base : 0);
+  return roundCtKwh(combinedBase * (1 + markup / 100));
 }
 
 function mixedCostCtKwh(costs = {}) {
