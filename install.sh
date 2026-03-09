@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/chloepriceless/dvhub.git}"
-REPO_BRANCH="${REPO_BRANCH:-feature/schedule-mqtt}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"

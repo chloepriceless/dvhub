@@ -30,3 +30,11 @@ test('installer force-syncs an existing checkout to the requested remote branch 
     'install.sh must not rely on ff-only pull for existing managed installs'
   );
 });
+
+test('installer defaults to the main branch for fresh installs', () => {
+  assert.match(
+    source,
+    /REPO_BRANCH="\$\{REPO_BRANCH:-main\}"/,
+    'install.sh must default REPO_BRANCH to main so unattended installs track the merge target'
+  );
+});

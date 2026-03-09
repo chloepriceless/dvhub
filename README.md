@@ -164,7 +164,7 @@ Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 Einfachste Variante:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/feature/schedule-mqtt/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash
 ```
 
 Das Skript installiert Node.js, klont das Repo nach `/opt/dvhub`, richtet einen systemd-Service ein
@@ -455,4 +455,3 @@ while preventing commercial reselling of the software.
 
 If your company wants to integrate this software into a commercial
 product, please request a **commercial license**.
-
