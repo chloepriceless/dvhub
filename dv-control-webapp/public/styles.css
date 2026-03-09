@@ -316,6 +316,152 @@ a {
   background: rgba(6, 16, 28, 0.58);
 }
 
+.history-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.history-actions {
+  align-items: end;
+}
+
+.history-control {
+  display: grid;
+  gap: 6px;
+  min-width: 140px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.history-control span {
+  font-family: var(--font-title);
+}
+
+.history-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.history-kpi-card {
+  min-height: 118px;
+  display: grid;
+  align-content: space-between;
+}
+
+.history-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.history-chart-shell {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px dashed rgba(141, 180, 221, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
+    rgba(6, 16, 28, 0.44);
+  color: var(--text-soft);
+  text-align: center;
+}
+
+.history-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.history-row-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background: rgba(7, 18, 30, 0.46);
+}
+
+.history-row-head,
+.history-row-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-bars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 10px;
+  align-items: end;
+  min-height: 168px;
+}
+
+.history-bar-card {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 10px 8px;
+  border-radius: 12px;
+  background: rgba(7, 18, 30, 0.38);
+}
+
+.history-bar {
+  width: 100%;
+  max-width: 30px;
+  border-radius: 999px 999px 6px 6px;
+  background: rgba(141, 180, 221, 0.5);
+}
+
+.history-bar-net {
+  background: linear-gradient(180deg, rgba(57, 224, 111, 0.9), rgba(0, 168, 255, 0.72));
+}
+
+.history-bar-energy {
+  background: linear-gradient(180deg, rgba(0, 168, 255, 0.92), rgba(0, 119, 255, 0.7));
+}
+
+.history-price-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(7, 18, 30, 0.38);
+}
+
+.settings-pricing-periods {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.pricing-period-list {
+  display: grid;
+  gap: 12px;
+}
+
+.pricing-period-card {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background: rgba(7, 18, 30, 0.38);
+}
+
+.pricing-period-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
 .settings-topbar-status-head {
   display: flex;
   justify-content: space-between;

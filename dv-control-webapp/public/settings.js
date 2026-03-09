@@ -15,6 +15,8 @@ let historyImportFormState = {
   end: '',
   interval: '15mins'
 };
+let pricingPeriodsDraft = [];
+let pricingPeriodsValidation = [];
 let settingsShellState = createSettingsShellState();
 
 function clone(value) {
@@ -163,6 +165,109 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryImportActionState,
     buildHistoryImportRequest,
     shouldRenderHistoryImportPanel
+  };
+}
+
+function createEmptyPricingPeriod(index = 0) {
+  return {
+    id: `period-${index + 1}`,
+    label: '',
+    startDate: '',
+    endDate: '',
+    mode: 'fixed',
+    fixedGrossImportCtKwh: '',
+    dynamicComponents: {
+      energyMarkupCtKwh: '',
+      gridChargesCtKwh: '',
+      leviesAndFeesCtKwh: '',
+      vatPct: '19'
+    }
+  };
+}
+
+function addPricingPeriod(periods = []) {
+  return [...periods, createEmptyPricingPeriod(periods.length)];
+}
+
+function removePricingPeriod(periods = [], periodId) {
+  return periods.filter((period) => period.id !== periodId);
+}
+
+function serializePricingPeriods(periods = []) {
+  return periods.map((period, index) => {
+    const next = {
+      id: period.id || `period-${index + 1}`,
+      label: period.label || '',
+      startDate: period.startDate || '',
+      endDate: period.endDate || '',
+      mode: period.mode || 'fixed'
+    };
+    if (next.mode === 'fixed') {
+      next.fixedGrossImportCtKwh = period.fixedGrossImportCtKwh === '' || period.fixedGrossImportCtKwh == null
+        ? null
+        : Number(period.fixedGrossImportCtKwh);
+    } else {
+      next.dynamicComponents = {
+        energyMarkupCtKwh: Number(period.dynamicComponents?.energyMarkupCtKwh || 0),
+        gridChargesCtKwh: Number(period.dynamicComponents?.gridChargesCtKwh || 0),
+        leviesAndFeesCtKwh: Number(period.dynamicComponents?.leviesAndFeesCtKwh || 0),
+        vatPct: Number(period.dynamicComponents?.vatPct || 0)
+      };
+    }
+    return next;
+  });
+}
+
+function validatePricingPeriods(periods = []) {
+  const messages = [];
+  const serialized = serializePricingPeriods(periods);
+  const validPeriods = [];
+
+  for (const period of serialized) {
+    if (!period.startDate || !period.endDate) {
+      messages.push(`Zeitraum ${period.id}: Start- und Enddatum sind Pflicht.`);
+      continue;
+    }
+    if (period.startDate > period.endDate) {
+      messages.push(`Zeitraum ${period.id}: Startdatum muss vor dem Enddatum liegen.`);
+      continue;
+    }
+    if (period.mode === 'fixed' && (period.fixedGrossImportCtKwh == null || !Number.isFinite(Number(period.fixedGrossImportCtKwh)))) {
+      messages.push(`Zeitraum ${period.id}: Fester Bruttopreis fehlt.`);
+      continue;
+    }
+    if (period.mode === 'dynamic') {
+      const components = period.dynamicComponents || {};
+      const required = ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct'];
+      if (required.some((key) => !Number.isFinite(Number(components[key])))) {
+        messages.push(`Zeitraum ${period.id}: Dynamische Preisbestandteile sind unvollständig.`);
+        continue;
+      }
+    }
+    validPeriods.push(period);
+  }
+
+  const sorted = [...validPeriods].sort((left, right) => left.startDate.localeCompare(right.startDate));
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index].startDate <= sorted[index - 1].endDate) {
+      messages.push(`Zeitraum ${sorted[index].id}: überschneidet sich mit ${sorted[index - 1].id}.`);
+    }
+  }
+
+  return {
+    valid: messages.length === 0,
+    messages,
+    periods: serialized
+  };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsPricingPeriods = {
+    addPricingPeriod,
+    createEmptyPricingPeriod,
+    removePricingPeriod,
+    serializePricingPeriods,
+    validatePricingPeriods
   };
 }
 
@@ -494,7 +599,7 @@ function renderSectionWorkspace(sectionId) {
     groupList.className = 'settings-group-list';
 
     for (const group of section.groups) {
-      const visibleFields = group.fields.filter((field) => isFieldVisible(field));
+      const visibleFields = group.fields.filter((field) => field.type !== 'array' && isFieldVisible(field));
       if (!visibleFields.length) continue;
 
       const details = document.createElement('details');
@@ -513,6 +618,9 @@ function renderSectionWorkspace(sectionId) {
     }
 
     sectionShell.appendChild(groupList);
+    if (section.id === 'pricing') {
+      sectionShell.appendChild(renderPricingPeriodsEditor());
+    }
     panel.appendChild(sectionShell);
   }
 
@@ -626,6 +734,113 @@ function syncHistoryImportForm(panel) {
   };
 }
 
+function updatePricingPeriodField(periodId, path, value) {
+  pricingPeriodsDraft = pricingPeriodsDraft.map((period) => {
+    if (period.id !== periodId) return period;
+    const next = clone(period);
+    setPath(next, path, value);
+    return next;
+  });
+}
+
+function renderPricingPeriodsEditor() {
+  const section = document.createElement('section');
+  section.className = 'settings-pricing-periods';
+  const validation = pricingPeriodsValidation.length
+    ? `<div class="status-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '<div class="status-banner info">Tarifzeiträume werden tagesgenau auf die Historienberechnung angewendet.</div>';
+
+  section.innerHTML = `
+    <div class="settings-subsection-head">
+      <p class="card-title">Bezugspreise nach Zeitraum</p>
+      <h3>Tarifzeiträume</h3>
+      <p class="settings-section-meta">${pricingPeriodsDraft.length} definierte Zeiträume</p>
+      <p class="tools-note">Definiere hier fixe oder dynamische Tarife pro Zeitraum. Überlappungen werden vor dem Speichern blockiert.</p>
+    </div>
+    ${validation}
+    <div class="settings-inline-actions">
+      <button id="addPricingPeriodBtn" class="btn btn-ghost" type="button">Zeitraum hinzufügen</button>
+    </div>
+    <div class="pricing-period-list">
+      ${pricingPeriodsDraft.map((period) => `
+        <article class="pricing-period-card" data-period-id="${period.id}">
+          <div class="pricing-period-grid">
+            <label class="settings-field">
+              <span class="settings-field-title">Bezeichnung</span>
+              <input data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Start</span>
+              <input data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Ende</span>
+              <input data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Modus</span>
+              <select data-period-id="${period.id}" data-period-path="mode">
+                <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
+                <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+              </select>
+            </label>
+            ${period.mode === 'fixed' ? `
+              <label class="settings-field">
+                <span class="settings-field-title">Bruttopreis (ct/kWh)</span>
+                <input data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" />
+              </label>
+            ` : `
+              <label class="settings-field">
+                <span class="settings-field-title">Energie-Aufschlag</span>
+                <input data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" />
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Netzentgelte</span>
+                <input data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" />
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">Umlagen &amp; Abgaben</span>
+                <input data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" />
+              </label>
+              <label class="settings-field">
+                <span class="settings-field-title">MwSt (%)</span>
+                <input data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" />
+              </label>
+            `}
+          </div>
+          <div class="settings-inline-actions">
+            <button class="btn btn-danger" type="button" data-remove-period="${period.id}">Entfernen</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+
+  section.querySelector('#addPricingPeriodBtn')?.addEventListener('click', () => {
+    pricingPeriodsDraft = addPricingPeriod(pricingPeriodsDraft);
+    pricingPeriodsValidation = [];
+    renderActiveSettingsDestination();
+  });
+
+  section.querySelectorAll('[data-remove-period]').forEach((button) => {
+    button.addEventListener('click', () => {
+      pricingPeriodsDraft = removePricingPeriod(pricingPeriodsDraft, button.dataset.removePeriod);
+      pricingPeriodsValidation = [];
+      renderActiveSettingsDestination();
+    });
+  });
+
+  section.querySelectorAll('[data-period-id][data-period-path]').forEach((input) => {
+    input.addEventListener('change', () => {
+      updatePricingPeriodField(input.dataset.periodId, input.dataset.periodPath, input.value);
+      pricingPeriodsValidation = [];
+      renderActiveSettingsDestination();
+    });
+  });
+
+  return section;
+}
+
 function bindHistoryImportControls(panel) {
   const handleChange = () => {
     syncHistoryImportForm(panel);
@@ -699,7 +914,10 @@ function parseFieldInput(field) {
 
 function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
-  return clone(currentDraftConfig || {});
+  const next = clone(currentDraftConfig || {});
+  next.userEnergyPricing = next.userEnergyPricing || {};
+  next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
+  return next;
 }
 
 function applyConfigPayload(payload) {
@@ -708,6 +926,8 @@ function applyConfigPayload(payload) {
   currentDraftConfig = clone(currentRawConfig);
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
+  pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
+  pricingPeriodsValidation = [];
   settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
@@ -841,6 +1061,13 @@ async function triggerHistoryImport() {
 
 async function saveCurrentForm() {
   const config = collectConfigFromForm();
+  const validation = validatePricingPeriods(pricingPeriodsDraft);
+  pricingPeriodsValidation = validation.messages;
+  if (!validation.valid) {
+    renderActiveSettingsDestination();
+    setBanner(`Speichern blockiert: ${validation.messages[0]}`, 'error');
+    return;
+  }
   await saveConfig(config, 'settings');
 }
 
