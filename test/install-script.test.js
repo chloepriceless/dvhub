@@ -8,6 +8,19 @@ const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const installPath = path.join(repoRoot, 'install.sh');
 const source = fs.readFileSync(installPath, 'utf8');
 
+test('installer defaults APP_DIR to the renamed dvhub app directory', () => {
+  assert.match(
+    source,
+    /APP_DIR="\$\{APP_DIR:-\$INSTALL_DIR\/dvhub\}"/,
+    'install.sh must default APP_DIR to /opt/dvhub/dvhub'
+  );
+  assert.doesNotMatch(
+    source,
+    /APP_DIR="\$\{APP_DIR:-\$INSTALL_DIR\/dv-control-webapp\}"/,
+    'install.sh must not keep the legacy default app directory'
+  );
+});
+
 test('installer registers the repo directory as a git safe.directory before updating an existing checkout', () => {
   const safeDirectoryLine = 'git config --global --add safe.directory "$INSTALL_DIR"';
   const safeIndex = source.indexOf(safeDirectoryLine);
