@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.2.5 by agentic engineering.|
+| **Status** | `main` -- Version 0.2.5 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -31,25 +31,21 @@
 
 ---
 
-## Änderungen seit `main` (v0.1.0 -> v0.2.5)
+## Aktueller Stand auf `main` (v0.2.5)
 
-Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
+Der aktuelle Hauptstand bündelt inzwischen die folgenden Erweiterungen:
 
-- **DVhub Branding-Refresh** mit aktualisierten Assets, Navigation und konsistenter Produktbenennung in Dashboard, Einstellungen, Setup und Tools
-- **Interaktives Day-Ahead-Chart**: Balken leuchten beim Hover, Einzelklick legt sofort ein Schedule-Fenster an, Drag-Auswahl bündelt mehrere Börsenfenster und erzeugt bei Lücken mehrere Schedule-Zeilen
-- **Erweiterte Marktdatenkarte** mit Heute- und Morgen-Min/Max, Negativpreis-Hinweisen und sichtbarem Schutzstatus
-- **Kompakte Einstellungsoberfläche** mit linker Bereichsnavigation, fokussiertem Arbeitsbereich, Import/Export, Health-Checks und optionalem Restart-Button
-- **Geführter Setup-Assistent** mit transportabhängigen Schritten, Review-Snapshot, blockierender Validierung vor dem Speichern und validiertem Config-Import
-- **MQTT-Transport für Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive für Settings-Topics
-- **Erweiterte Schedule-Steuerung** für Grid Setpoint, Charge Current und Min SOC mit Default-Werten, manuellen Writes und vereinfachter GUI
-- **EOS- und EMHASS-Integrations-Endpunkte** zum Abrufen von Messwerten/Preisen und Anwenden von Optimierungsergebnissen
-- **Interne Telemetrie-Datenbank** für Live-Historie, Preiszeitreihen, Steuerereignisse und Optimizer-Runs direkt in DVhub
-- **History-Import über VRM** für spätere Nachfüllung bei neuen Installationen und Datenlücken
-- **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung für Influx v2/v3
-- **Neues `install.sh`** für einfache GitHub-Installation inklusive systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
-- **Dokumentation erweitert und sprachlich vereinheitlicht** inklusive deutscher Umlaute und aktueller GUI-/Setup-/Installationspfade
+- **DVhub Branding-Refresh** mit aktualisierten Assets, kompakter Shell-Navigation und konsistenter Produktbenennung in Dashboard, Einstellungen, Setup und Wartung
+- **Preis-Engine im Dashboard** mit interaktivem Day-Ahead-Chart, Heute-/Morgen-Min/Max, Negativpreis-Schutz und Slot-Vergleich gegen Netzbezug, PV und Akku
+- **Kompakte Einstellungsoberfläche** mit fokussierten Bereichen für Schnellstart, Anlage, Steuerung, Preise/Daten und erweiterte Technik
+- **Geführter Setup-Assistent** mit transportabhängigen Schritten, Review-Snapshot, blockierender Validierung und Import bestehender Konfigurationen
+- **Schedule- und Steuerlogik** für Grid Setpoint, Charge Current und Min SOC inklusive Chart-zu-Schedule-Auswahl, manuellen Writes und Default-Werten
+- **Victron-Anbindung per Modbus TCP oder MQTT** inklusive Venus-OS-Topic-Mapping und Keepalive
+- **Interne Telemetrie und Historie** mit SQLite-Datenbank, Rollups, VRM-Nachimport und Betriebsdaten direkt in DVhub
+- **Integrationen und Datendienste** für EOS, EMHASS, Home Assistant, Loxone sowie InfluxDB v2/v3
+- **Produktionsreifer Installer** per `install.sh` mit externer Config-Datei, systemd-Service, Health-Checks und optionalem Restart aus der GUI
 
-Damit ist DVhub jetzt nicht mehr nur ein Dashboard plus Proxy, sondern eine installier- und wartbare Anwendung mit geführter Inbetriebnahme, validierter Konfiguration und direkter Betriebssteuerung aus der Weboberfläche.
+Damit ist DVhub auf `main` nicht mehr nur ein Dashboard plus Proxy, sondern eine installier- und wartbare Anwendung mit geführter Inbetriebnahme, validierter Konfiguration, Historie und direkter Betriebssteuerung aus der Weboberfläche.
 
 ---
 
@@ -154,6 +150,7 @@ Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 - **Einstellungsseite** für die komplette Konfiguration als kompakte Navigation mit fokussiertem Arbeitsbereich statt als rohe `config.json`
 - **First-Run-Setup** als geführter Assistent mit Review-Schritt, Validierung und sauberem Import vorhandener Configs
 - **Import/Export** vorhandener Config-Dateien direkt über die Weboberfläche
+- **Historischer Nachimport** per VRM für Telemetrie-Datenlücken und spätere Erstbefüllung
 - **Health & Service** mit Install-/Status-Checks und optionalem Restart-Button für den systemd-Dienst
 
 ### Getestet auf
@@ -184,16 +181,17 @@ sudo apt install -y curl ca-certificates git
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo apt install -y tcpdump jq
-sudo mkdir -p /opt/dv-control-webapp
-sudo mkdir -p /var/lib/dvhub
+sudo mkdir -p /opt/dvhub /etc/dvhub /var/lib/dvhub
 sudo useradd -r -s /usr/sbin/nologin dvhub
+sudo git clone https://github.com/chloepriceless/dvhub.git /opt/dvhub
 ```
-An dieser Stelle den Inhalt des Repos nach `/opt/dv-control-webapp` kopieren.
+Die Webapp liegt danach unter `/opt/dvhub/dv-control-webapp`.
 ```bash
-sudo chown -R dvhub:dvhub /opt/dv-control-webapp /var/lib/dvhub
-cd /opt/dv-control-webapp
-cp config.example.json config.json
-nano config.json  # Konfiguration anpassen
+sudo chown -R dvhub:dvhub /opt/dvhub /etc/dvhub /var/lib/dvhub
+cd /opt/dvhub/dv-control-webapp
+npm install --omit=dev
+sudo cp config.example.json /etc/dvhub/config.json
+sudo nano /etc/dvhub/config.json  # Konfiguration anpassen
 # Optional: Nur bei MQTT-Nutzung (victron.transport: "mqtt")
 npm install mqtt
 ```
@@ -201,7 +199,7 @@ npm install mqtt
 ### Systemd Service einrichten
 
 ```bash
-sudo nano /etc/systemd/system/dv-control-webapp.service
+sudo nano /etc/systemd/system/dvhub.service
 ```
 
 Inhalt:
@@ -215,30 +213,44 @@ Wants=network-online.target
 Type=simple
 User=dvhub
 Group=dvhub
-WorkingDirectory=/opt/dv-control-webapp
-ExecStart=/usr/bin/node --experimental-sqlite /opt/dv-control-webapp/server.js
+WorkingDirectory=/opt/dvhub/dv-control-webapp
+ExecStart=/usr/bin/node --experimental-sqlite /opt/dvhub/dv-control-webapp/server.js
+Environment=NODE_ENV=production
+Environment=DV_APP_CONFIG=/etc/dvhub/config.json
+Environment=DV_ENABLE_SERVICE_ACTIONS=1
+Environment=DV_SERVICE_NAME=dvhub.service
+Environment=DV_SERVICE_USE_SUDO=1
+Environment=DV_DATA_DIR=/var/lib/dvhub
 Restart=always
 RestartSec=3
-Environment=NODE_ENV=production
-Environment=DV_DATA_DIR=/var/lib/dvhub
 
 [Install]
 WantedBy=multi-user.target
+```
+
+Für den Restart-Button in Einstellungen/Wartung zusätzlich:
+
+```bash
+SYSTEMCTL_PATH="$(command -v systemctl)"
+echo "dvhub ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart dvhub.service" | sudo tee /etc/sudoers.d/dvhub-service-actions >/dev/null
+echo "dvhub ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active dvhub.service" | sudo tee -a /etc/sudoers.d/dvhub-service-actions >/dev/null
+echo "dvhub ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show dvhub.service *" | sudo tee -a /etc/sudoers.d/dvhub-service-actions >/dev/null
+sudo chmod 440 /etc/sudoers.d/dvhub-service-actions
 ```
 
 > **Hinweis:** Wenn DVhub auf einem privilegierten Port (z.B. 502) lauschen muss,
 > kann man stattdessen `User=root` verwenden oder dem Node-Binary `CAP_NET_BIND_SERVICE` geben.
 
 ```bash
-sudo systemctl enable --now dv-control-webapp
+sudo systemctl daemon-reload
+sudo systemctl enable --now dvhub
 ```
 
 ### Manueller Start (ohne Service)
 
 ```bash
-cd /opt/dv-control-webapp
-cp config.example.json config.json
-npm start
+cd /opt/dvhub/dv-control-webapp
+DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 ```
 
 ### Setup-Flow nach der Installation
@@ -336,6 +348,8 @@ Unter **Einstellungen -> Health & Service** zeigt DVhub jetzt:
   - Tagesbasiertes Import/Export Tracking in kWh
   - Kosten und Erlöse basierend auf aktuellem EPEX-Preis
   - Netto-Berechnung (Erlös - Kosten)
+  - Eigene Preislogik für Netz, PV und Akku via `userEnergyPricing`
+  - Dynamischer Bruttopreis aus EPEX + Zuschlägen oder fixer Endkundenpreis
   - Persistente Speicherung in `energy_state.json` (überlebt Neustarts)
   - Speicherung alle 60 Sekunden + bei Shutdown + bei Tageswechsel
   - Tagesabschluss-Log mit Zusammenfassung
@@ -375,6 +389,8 @@ Kartenübersicht:
 Tools: `http://<host>:8080/tools.html`
 - Register Scan (Modbus Register Discovery)
 - Schedule JSON editieren
+- Health-/Service-Status mit optionalem Restart
+- VRM History-Import für Telemetrie-Nachfüllung
 
 ### API Endpoints
 
@@ -387,10 +403,13 @@ Tools: `http://<host>:8080/tools.html`
 | `POST` | `/api/epex/refresh` | EPEX-Preise manuell aktualisieren |
 | `GET` | `/api/meter/scan` | Scan-Ergebnisse abrufen |
 | `POST` | `/api/meter/scan` | Modbus Register-Scan starten |
+| `GET` | `/api/history/import/status` | Status des konfigurierten History-Imports |
+| `POST` | `/api/history/import` | Historische Telemetrie-Daten importieren |
 | `GET` | `/api/schedule` | Aktuelle Schedule-Regeln und Config |
 | `POST` | `/api/schedule/rules` | Schedule-Regeln aktualisieren |
 | `POST` | `/api/schedule/config` | Default-Werte aktualisieren (gridSetpointW, chargeCurrentA) |
 | `POST` | `/api/control/write` | Manueller Write (target: gridSetpointW/chargeCurrentA/minSocPct) |
+| `POST` | `/api/admin/service/restart` | systemd-Service über die GUI neu starten |
 | `GET` | `/api/integration/home-assistant` | Home Assistant kompatibles JSON |
 | `GET` | `/api/integration/loxone` | Loxone kompatibles Text-Format |
 | `GET` | `/api/integration/eos` | EOS (Akkudoktor) Messwerte + EPEX-Preise |
@@ -414,6 +433,8 @@ Die Konfiguration erfolgt über `config.json`. Wichtige Sektionen:
 | `schedule` | Zeitplan-Regeln und Defaults |
 | `epex` | EPEX-Preiszone und Timezone |
 | `influx` | InfluxDB Anbindung (optional) |
+| `telemetry` | Lokale SQLite-Historie, Rollups und optionaler VRM-Nachimport |
+| `userEnergyPricing` | Eigene Netz-/PV-/Akkukosten und Preisvergleich für die Preis-Engine |
 | `scan` | Modbus Register-Scan Parameter |
 
 ### Hinweise
