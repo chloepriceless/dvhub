@@ -349,7 +349,15 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         'battery_power_w',
         'battery_charge_w',
         'battery_discharge_w',
-        'load_power_w'
+        'load_power_w',
+        'self_consumption_w',
+        'solar_direct_use_w',
+        'solar_to_battery_w',
+        'solar_to_grid_w',
+        'grid_direct_use_w',
+        'grid_to_battery_w',
+        'battery_direct_use_w',
+        'battery_to_grid_w'
       )
         AND value_num IS NOT NULL
         AND ts_utc >= ?
@@ -404,6 +412,14 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           batteryChargeKwh: energyForSeries('battery_charge_w'),
           batteryDischargeKwh: energyForSeries('battery_discharge_w'),
           loadKwh: energyForSeries('load_power_w'),
+          selfConsumptionKwh: energyForSeries('self_consumption_w'),
+          solarDirectUseKwh: energyForSeries('solar_direct_use_w'),
+          solarToBatteryKwh: energyForSeries('solar_to_battery_w'),
+          solarToGridKwh: energyForSeries('solar_to_grid_w'),
+          gridDirectUseKwh: energyForSeries('grid_direct_use_w'),
+          gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
+          batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
+          batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,

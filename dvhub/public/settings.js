@@ -12,8 +12,7 @@ let currentHistoryImportResult = null;
 let historyImportBusy = false;
 let historyImportFormState = {
   start: '',
-  end: '',
-  interval: '15mins'
+  end: ''
 };
 let pricingPeriodsDraft = [];
 let pricingPeriodsValidation = [];
@@ -142,7 +141,7 @@ function buildHistoryImportRequest(formState) {
   return {
     start: parseDateTimeLocal(formState?.start),
     end: parseDateTimeLocal(formState?.end),
-    interval: formState?.interval || '15mins'
+    interval: '15mins'
   };
 }
 
@@ -677,14 +676,10 @@ function renderHistoryImportPanel(destinationId) {
       <input id="historyImportEnd" type="datetime-local" value="${historyImportFormState.end || ''}" />
       <small class="field-help">Endzeit des VRM-Historienimports.</small>
     </label>
-    <label class="settings-field" for="historyImportInterval">
+    <label class="settings-field">
       <span class="settings-field-title">Intervall</span>
-      <select id="historyImportInterval">
-        <option value="15mins"${historyImportFormState.interval === '15mins' ? ' selected' : ''}>15 Minuten</option>
-        <option value="hours"${historyImportFormState.interval === 'hours' ? ' selected' : ''}>1 Stunde</option>
-        <option value="days"${historyImportFormState.interval === 'days' ? ' selected' : ''}>1 Tag</option>
-      </select>
-      <small class="field-help">Auflösung für den VRM-Stats-Import.</small>
+      <input type="text" value="15 Minuten" readonly />
+      <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
     </label>
   `;
   panel.appendChild(grid);
@@ -729,8 +724,7 @@ function renderHistoryImportPanel(destinationId) {
 function syncHistoryImportForm(panel) {
   historyImportFormState = {
     start: panel.querySelector('#historyImportStart')?.value || '',
-    end: panel.querySelector('#historyImportEnd')?.value || '',
-    interval: panel.querySelector('#historyImportInterval')?.value || '15mins'
+    end: panel.querySelector('#historyImportEnd')?.value || ''
   };
 }
 
@@ -849,7 +843,6 @@ function bindHistoryImportControls(panel) {
 
   panel.querySelector('#historyImportStart')?.addEventListener('change', handleChange);
   panel.querySelector('#historyImportEnd')?.addEventListener('change', handleChange);
-  panel.querySelector('#historyImportInterval')?.addEventListener('change', handleChange);
   panel.querySelector('#historyImportBtn')?.addEventListener('click', () => {
     triggerHistoryImport().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };

@@ -77,6 +77,14 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'pv_ac_l3_w', victron.acPvL3W, 'W', base);
   pushSample(rows, 'pv_total_w', victron.pvTotalW, 'W', base);
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
+  pushSample(rows, 'self_consumption_w', victron.selfConsumptionW, 'W', base);
+  pushSample(rows, 'solar_direct_use_w', victron.solarDirectUseW, 'W', base);
+  pushSample(rows, 'solar_to_battery_w', victron.solarToBatteryW, 'W', base);
+  pushSample(rows, 'solar_to_grid_w', victron.solarToGridW, 'W', base);
+  pushSample(rows, 'grid_direct_use_w', victron.gridDirectUseW, 'W', base);
+  pushSample(rows, 'grid_to_battery_w', victron.gridToBatteryW, 'W', base);
+  pushSample(rows, 'battery_direct_use_w', victron.batteryDirectUseW, 'W', base);
+  pushSample(rows, 'battery_to_grid_w', victron.batteryToGridW, 'W', base);
   pushSample(rows, 'grid_setpoint_w', victron.gridSetpointW, 'W', base);
   pushSample(rows, 'min_soc_pct', victron.minSocPct, '%', base);
 

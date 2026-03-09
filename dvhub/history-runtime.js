@@ -178,6 +178,13 @@ function buildRowAccumulator(key, label) {
     exportKwh: 0,
     loadKwh: 0,
     pvKwh: 0,
+    solarDirectUseKwh: 0,
+    solarToBatteryKwh: 0,
+    solarToGridKwh: 0,
+    gridDirectUseKwh: 0,
+    gridToBatteryKwh: 0,
+    batteryDirectUseKwh: 0,
+    batteryToGridKwh: 0,
     batteryChargeKwh: 0,
     batteryDischargeKwh: 0,
     selfConsumptionKwh: 0,
@@ -224,6 +231,13 @@ function summarizeRows(slots, view) {
     row.exportKwh = round2(row.exportKwh + slot.exportKwh);
     row.loadKwh = round2(row.loadKwh + Number(slot.loadKwh || 0));
     row.pvKwh = round2(row.pvKwh + Number(slot.pvKwh || 0));
+    row.solarDirectUseKwh = round2(row.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0));
+    row.solarToBatteryKwh = round2(row.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0));
+    row.solarToGridKwh = round2(row.solarToGridKwh + Number(slot.solarToGridKwh || 0));
+    row.gridDirectUseKwh = round2(row.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0));
+    row.gridToBatteryKwh = round2(row.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0));
+    row.batteryDirectUseKwh = round2(row.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0));
+    row.batteryToGridKwh = round2(row.batteryToGridKwh + Number(slot.batteryToGridKwh || 0));
     row.batteryChargeKwh = round2(row.batteryChargeKwh + Number(slot.batteryChargeKwh || 0));
     row.batteryDischargeKwh = round2(row.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0));
     row.selfConsumptionKwh = round2(row.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0));
@@ -264,6 +278,13 @@ function buildDayCharts(slots) {
       ts: slot.ts,
       label: localTimeLabel(slot.ts),
       pvKwh: round2(slot.pvKwh || 0),
+      solarDirectUseKwh: round2(slot.solarDirectUseKwh || 0),
+      solarToBatteryKwh: round2(slot.solarToBatteryKwh || 0),
+      solarToGridKwh: round2(slot.solarToGridKwh || 0),
+      gridDirectUseKwh: round2(slot.gridDirectUseKwh || 0),
+      gridToBatteryKwh: round2(slot.gridToBatteryKwh || 0),
+      batteryDirectUseKwh: round2(slot.batteryDirectUseKwh || 0),
+      batteryToGridKwh: round2(slot.batteryToGridKwh || 0),
       importKwh: slot.importKwh,
       selfConsumptionKwh: round2(slot.selfConsumptionKwh || 0),
       batteryKwh: round2(Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0)),
@@ -319,6 +340,13 @@ function buildPeriodCharts(rows) {
       exportKwh: row.exportKwh,
       loadKwh: row.loadKwh,
       pvKwh: row.pvKwh,
+      solarDirectUseKwh: row.solarDirectUseKwh,
+      solarToBatteryKwh: row.solarToBatteryKwh,
+      solarToGridKwh: row.solarToGridKwh,
+      gridDirectUseKwh: row.gridDirectUseKwh,
+      gridToBatteryKwh: row.gridToBatteryKwh,
+      batteryDirectUseKwh: row.batteryDirectUseKwh,
+      batteryToGridKwh: row.batteryToGridKwh,
       batteryChargeKwh: row.batteryChargeKwh,
       batteryDischargeKwh: row.batteryDischargeKwh,
       selfConsumptionKwh: row.selfConsumptionKwh,
@@ -467,6 +495,15 @@ export function createHistoryRuntime({
           ct_kwh: marketPriceCtKwh
         }, pricingConfig);
         const shares = proportionalSourceShares(slot);
+        const flowValues = {
+          solarDirectUseKwh: round2(Number(slot.solarDirectUseKwh || 0)),
+          solarToBatteryKwh: round2(Number(slot.solarToBatteryKwh || 0)),
+          solarToGridKwh: round2(Number(slot.solarToGridKwh || 0)),
+          gridDirectUseKwh: round2(Number(slot.gridDirectUseKwh || 0)),
+          gridToBatteryKwh: round2(Number(slot.gridToBatteryKwh || 0)),
+          batteryDirectUseKwh: round2(Number(slot.batteryDirectUseKwh || 0)),
+          batteryToGridKwh: round2(Number(slot.batteryToGridKwh || 0))
+        };
         const localSelfConsumptionKwh = round2(Number(shares.pvShareKwh || 0) + Number(shares.batteryShareKwh || 0));
         const selfConsumptionKwh = round2(Number(shares.gridShareKwh || 0) + localSelfConsumptionKwh);
         const missingImportPrice = Number(slot.importKwh || 0) > 0 && !Number.isFinite(userImportPriceCtKwh);
@@ -482,6 +519,7 @@ export function createHistoryRuntime({
 
         return {
           ...slot,
+          ...flowValues,
           ...shares,
           selfConsumptionKwh,
           marketPriceCtKwh,
@@ -508,6 +546,13 @@ export function createHistoryRuntime({
       exportKwh: round2(totals.exportKwh + slot.exportKwh),
       loadKwh: round2(totals.loadKwh + Number(slot.loadKwh || 0)),
       pvKwh: round2(totals.pvKwh + Number(slot.pvKwh || 0)),
+      solarDirectUseKwh: round2(totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0)),
+      solarToBatteryKwh: round2(totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0)),
+      solarToGridKwh: round2(totals.solarToGridKwh + Number(slot.solarToGridKwh || 0)),
+      gridDirectUseKwh: round2(totals.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0)),
+      gridToBatteryKwh: round2(totals.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0)),
+      batteryDirectUseKwh: round2(totals.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0)),
+      batteryToGridKwh: round2(totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0)),
       batteryChargeKwh: round2(totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0)),
       batteryDischargeKwh: round2(totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0)),
       selfConsumptionKwh: round2(totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0)),
@@ -528,6 +573,13 @@ export function createHistoryRuntime({
       exportKwh: 0,
       loadKwh: 0,
       pvKwh: 0,
+      solarDirectUseKwh: 0,
+      solarToBatteryKwh: 0,
+      solarToGridKwh: 0,
+      gridDirectUseKwh: 0,
+      gridToBatteryKwh: 0,
+      batteryDirectUseKwh: 0,
+      batteryToGridKwh: 0,
       batteryChargeKwh: 0,
       batteryDischargeKwh: 0,
       selfConsumptionKwh: 0,
@@ -596,6 +648,13 @@ export function createHistoryRuntime({
           exportKwh: slot.exportKwh,
           loadKwh: slot.loadKwh,
           pvKwh: roundOrZero(slot.pvKwh),
+          solarDirectUseKwh: roundOrZero(slot.solarDirectUseKwh),
+          solarToBatteryKwh: roundOrZero(slot.solarToBatteryKwh),
+          solarToGridKwh: roundOrZero(slot.solarToGridKwh),
+          gridDirectUseKwh: roundOrZero(slot.gridDirectUseKwh),
+          gridToBatteryKwh: roundOrZero(slot.gridToBatteryKwh),
+          batteryDirectUseKwh: roundOrZero(slot.batteryDirectUseKwh),
+          batteryToGridKwh: roundOrZero(slot.batteryToGridKwh),
           batteryChargeKwh: roundOrZero(slot.batteryChargeKwh),
           batteryDischargeKwh: roundOrZero(slot.batteryDischargeKwh),
           selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
