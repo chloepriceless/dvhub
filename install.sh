@@ -11,6 +11,7 @@ SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
 DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
+LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 
 function parse_branch_from_installer_url() {
   local url="${1:-}"
@@ -78,6 +79,118 @@ function resolve_default_repo_branch() {
   return 1
 }
 
+function move_dir_contents_if_present() {
+  local source_dir="${1:-}"
+  local target_dir="${2:-}"
+  local entries=()
+
+  if [[ -z "$source_dir" || -z "$target_dir" || ! -d "$source_dir" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  shopt -s dotglob nullglob
+  entries=("$source_dir"/*)
+  shopt -u dotglob nullglob
+
+  if [[ ${#entries[@]} -eq 0 ]]; then
+    rmdir "$source_dir" 2>/dev/null || true
+    return 0
+  fi
+
+  for entry in "${entries[@]}"; do
+    local name
+    name="$(basename "$entry")"
+    if [[ -e "$target_dir/$name" ]]; then
+      echo "Ueberspringe bestehendes Ziel $target_dir/$name waehrend der Legacy-Migration." >&2
+      continue
+    fi
+    mv "$entry" "$target_dir/$name"
+  done
+
+  rmdir "$source_dir" 2>/dev/null || true
+}
+
+function move_file_if_present() {
+  local source_path="${1:-}"
+  local target_path="${2:-}"
+
+  if [[ -z "$source_path" || -z "$target_path" || ! -e "$source_path" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target_path")"
+  if [[ -e "$target_path" ]]; then
+    echo "Ueberspringe bestehendes Ziel $target_path waehrend der Legacy-Migration." >&2
+    return 0
+  fi
+
+  mv "$source_path" "$target_path"
+}
+
+function assert_supported_layout() {
+  if [[ -e "$APP_DIR" && ! -d "$APP_DIR" ]]; then
+    echo "App-Pfad $APP_DIR existiert, ist aber kein Verzeichnis." >&2
+    exit 1
+  fi
+
+  if [[ -e "$LEGACY_APP_DIR" && ! -d "$LEGACY_APP_DIR" ]]; then
+    echo "Legacy-App-Pfad $LEGACY_APP_DIR existiert, ist aber kein Verzeichnis." >&2
+    exit 1
+  fi
+}
+
+function migrate_legacy_config_files() {
+  local legacy_config_json="$LEGACY_APP_DIR/config.json"
+  local entry=""
+  local base_name=""
+
+  if [[ ! -d "$LEGACY_APP_DIR" ]]; then
+    return 0
+  fi
+
+  move_file_if_present "$legacy_config_json" "$CONFIG_PATH"
+
+  shopt -s nullglob
+  for entry in "$LEGACY_APP_DIR"/config*.json; do
+    base_name="$(basename "$entry")"
+    if [[ "$base_name" == "config.example.json" || "$entry" == "$legacy_config_json" ]]; then
+      continue
+    fi
+    move_file_if_present "$entry" "$CONFIG_DIR/$base_name"
+  done
+  shopt -u nullglob
+}
+
+function migrate_legacy_data_files() {
+  local entry=""
+  local base_name=""
+
+  if [[ ! -d "$LEGACY_APP_DIR" ]]; then
+    return 0
+  fi
+
+  move_dir_contents_if_present "$LEGACY_APP_DIR/data" "$DATA_DIR"
+
+  shopt -s nullglob
+  for entry in \
+    "$LEGACY_APP_DIR"/*.sqlite \
+    "$LEGACY_APP_DIR"/*.sqlite-* \
+    "$LEGACY_APP_DIR"/*.db \
+    "$LEGACY_APP_DIR"/*.db-* \
+    "$LEGACY_APP_DIR"/energy_state.json; do
+    base_name="$(basename "$entry")"
+    move_file_if_present "$entry" "$DATA_DIR/$base_name"
+  done
+  shopt -u nullglob
+}
+
+function remove_legacy_app_dir() {
+  if [[ -d "$LEGACY_APP_DIR" && "$LEGACY_APP_DIR" != "$APP_DIR" ]]; then
+    rm -rf "$LEGACY_APP_DIR"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -129,6 +242,8 @@ if ! command -v apt-get >/dev/null 2>&1; then
   exit 1
 fi
 
+assert_supported_layout
+
 echo "[1/7] Pakete installieren"
 apt-get update
 apt-get install -y curl ca-certificates git sudo
@@ -148,6 +263,8 @@ fi
 
 echo "[4/7] Repository bereitstellen"
 mkdir -p "$(dirname "$INSTALL_DIR")"
+migrate_legacy_config_files
+migrate_legacy_data_files
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$INSTALL_DIR"; then
     git config --global --add safe.directory "$INSTALL_DIR"
@@ -161,6 +278,8 @@ else
   rm -rf "$INSTALL_DIR"
   git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
+
+remove_legacy_app_dir
 
 if [[ ! -f "$APP_DIR/package.json" ]]; then
   echo "Konnte die Webapp unter $APP_DIR nicht finden." >&2
@@ -216,6 +335,7 @@ SERVICE
 
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"
+systemctl restart "${SERVICE_NAME}.service"
 
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${PRIMARY_IP}" ]]; then

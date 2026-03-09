@@ -21,6 +21,49 @@ test('installer defaults APP_DIR to the renamed dvhub app directory', () => {
   );
 });
 
+test('installer defines a legacy app path and migration helpers for old host layouts', () => {
+  assert.match(
+    source,
+    /LEGACY_APP_DIR="\$\{LEGACY_APP_DIR:-\$INSTALL_DIR\/dv-control-webapp\}"/,
+    'install.sh must keep track of the legacy app directory so old hosts can be migrated'
+  );
+  assert.match(
+    source,
+    /function migrate_legacy_config_files\(\)/,
+    'install.sh must define a config migration helper for legacy installs'
+  );
+  assert.match(
+    source,
+    /function migrate_legacy_data_files\(\)/,
+    'install.sh must define a data migration helper for legacy installs'
+  );
+  assert.match(
+    source,
+    /function remove_legacy_app_dir\(\)/,
+    'install.sh must define a cleanup helper for the old app directory'
+  );
+  assert.match(
+    source,
+    /function assert_supported_layout\(\)/,
+    'install.sh must validate host layouts before migration'
+  );
+});
+
+test('installer runs legacy migration before validating the renamed app directory', () => {
+  const migrateIndex = source.indexOf('migrate_legacy_config_files');
+  const migrateDataIndex = source.indexOf('migrate_legacy_data_files');
+  const cleanupIndex = source.indexOf('remove_legacy_app_dir');
+  const packageIndex = source.indexOf('if [[ ! -f "$APP_DIR/package.json" ]]');
+
+  assert.notEqual(migrateIndex, -1, 'install.sh must invoke legacy config migration');
+  assert.notEqual(migrateDataIndex, -1, 'install.sh must invoke legacy data migration');
+  assert.notEqual(cleanupIndex, -1, 'install.sh must remove the legacy app dir after migration');
+  assert.notEqual(packageIndex, -1, 'install.sh must still validate the renamed app directory');
+  assert.ok(migrateIndex < packageIndex, 'legacy migration must happen before app validation');
+  assert.ok(migrateDataIndex < packageIndex, 'legacy data migration must happen before app validation');
+  assert.ok(cleanupIndex < packageIndex, 'legacy cleanup must happen before app validation');
+});
+
 test('installer registers the repo directory as a git safe.directory before updating an existing checkout', () => {
   const safeDirectoryLine = 'git config --global --add safe.directory "$INSTALL_DIR"';
   const safeIndex = source.indexOf(safeDirectoryLine);
@@ -71,4 +114,13 @@ test('installer still falls back to the main branch when source detection is una
     /REPO_BRANCH="main"/,
     'install.sh must still fall back to main so unattended installs without source metadata remain stable'
   );
+});
+
+test('installer restarts the dvhub service after a successful sync', () => {
+  const enableIndex = source.indexOf('systemctl enable --now "${SERVICE_NAME}.service"');
+  const restartIndex = source.indexOf('systemctl restart "${SERVICE_NAME}.service"');
+
+  assert.notEqual(enableIndex, -1, 'install.sh must enable the service');
+  assert.notEqual(restartIndex, -1, 'install.sh must explicitly restart the service after updates');
+  assert.ok(restartIndex > enableIndex, 'service restart must happen after the unit is enabled and started');
 });

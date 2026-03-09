@@ -162,5 +162,5 @@ test('readme references the DVhub assets folder for logo and screenshot', () => 
   assert.match(readme, /assets\/dvhub\.jpg/);
   assert.match(readme, /assets\/dvhub-fullpage-192\.168\.20\.66-8080\.png/);
   assert.doesNotMatch(readme, /docs\/dvhub-logo\.png|docs\/dashboard-desktop\.png/);
-  assert.doesNotMatch(readme, /dv-control-webapp/);
+  assert.doesNotMatch(readme, /cd \/opt\/dvhub\/dv-control-webapp|WorkingDirectory=\/opt\/dvhub\/dv-control-webapp|ExecStart=\/usr\/bin\/node --experimental-sqlite \/opt\/dvhub\/dv-control-webapp\/server\.js/);
 });

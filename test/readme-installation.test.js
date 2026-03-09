@@ -39,7 +39,7 @@ test('README startup and service paths use the dvhub app directory', () => {
   );
   assert.doesNotMatch(
     source,
-    /dv-control-webapp/,
-    'README must no longer reference the legacy app folder'
+    /cd \/opt\/dvhub\/dv-control-webapp|WorkingDirectory=\/opt\/dvhub\/dv-control-webapp|ExecStart=\/usr\/bin\/node --experimental-sqlite \/opt\/dvhub\/dv-control-webapp\/server\.js/,
+    'README must no longer document the legacy app directory as the runtime path'
   );
 });

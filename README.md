@@ -73,10 +73,13 @@ Der Installer:
 
 - installiert Node.js
 - klont das Repo nach `/opt/dvhub`
+- nutzt die App unter `/opt/dvhub/dvhub`
+- migriert alte Installationen aus `/opt/dvhub/dv-control-webapp`
 - richtet einen systemd-Service ein
 - nutzt eine externe Config-Datei unter `/etc/dvhub/config.json`
 - aktiviert Health-Checks und optionalen Restart aus der GUI
 - legt die interne Telemetrie-Datenbank unter `/var/lib/dvhub/telemetry.sqlite` an
+- startet `dvhub.service` nach dem Update automatisch neu
 
 Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten Aufruf automatisch den Setup-Assistenten.
 
