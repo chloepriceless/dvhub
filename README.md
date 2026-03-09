@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="640" />
+  <img src="assets/dvhub.jpg" alt="DVhub Logo" width="640" />
 </p>
 
 ```
@@ -21,41 +21,39 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.2.1 by agentic engineering.|
+| **Status** | WIP -- Version 0.2.4 by agentic engineering.|
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
 <p align="center">
-  <img src="docs/dashboard-desktop.png" alt="PlexLite Dashboard — Desktop" width="900" />
+  <img src="assets/dvhub-fullpage-192.168.1.66-8080.png" alt="DVhub Dashboard — Desktop" width="900" />
 </p>
 
 ---
 
-## Änderungen seit `main` (v0.1.0 -> v0.2.1)
+## Änderungen seit `main` (v0.1.0 -> v0.2.4)
 
 Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
 
-- **MQTT-Transport fuer Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive fuer Settings-Topics
-- **Erweiterte Schedule-Steuerung** fuer Grid Setpoint, Charge Current und Min SOC, spaeter vereinfacht auf einen alltagstauglicheren Ablauf ohne Tage-/Einmalig-Logik in der GUI
-- **Auto-Deaktivierung von Schedule-Regeln** nach Ablauf sowie vereinfachtes Persistieren der Default-Werte
+- **DVhub Branding-Refresh** mit aktualisierten Assets, Navigation und konsistenter Produktbenennung in Dashboard, Einstellungen, Setup und Tools
+- **Interaktives Day-Ahead-Chart**: Balken leuchten beim Hover, Einzelklick legt sofort ein Schedule-Fenster an, Drag-Auswahl bündelt mehrere Börsenfenster und erzeugt bei Lücken mehrere Schedule-Zeilen
+- **Erweiterte Marktdatenkarte** mit Heute- und Morgen-Min/Max, Negativpreis-Hinweisen und sichtbarem Schutzstatus
+- **Kompakte Einstellungsoberfläche** mit linker Bereichsnavigation, fokussiertem Arbeitsbereich, Import/Export, Health-Checks und optionalem Restart-Button
+- **Geführter Setup-Assistent** mit transportabhängigen Schritten, Review-Snapshot, blockierender Validierung vor dem Speichern und validiertem Config-Import
+- **MQTT-Transport für Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive für Settings-Topics
+- **Erweiterte Schedule-Steuerung** für Grid Setpoint, Charge Current und Min SOC mit Default-Werten, manuellen Writes und vereinfachter GUI
 - **EOS- und EMHASS-Integrations-Endpunkte** zum Abrufen von Messwerten/Preisen und Anwenden von Optimierungsergebnissen
-- **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung fuer Influx v2/v3
-- **Vollstaendige Config-Verwaltung ueber die Web-GUI** statt nur per direkter Bearbeitung der `config.json`
-- **Neue Einstellungsseite** mit Formularen fuer Victron, Meter, Register, EPEX, Influx, DV-Control und globale Systemwerte
-- **First-Run-Setup-Assistent**, der automatisch erscheint wenn noch keine gueltige Config vorhanden ist
-- **Config-Import/Export** direkt ueber die Weboberflaeche
-- **Health- und Service-Bereich** mit Statuspruefungen fuer Config, Setup, Meter, EPEX und systemd-Service
-- **Optionaler Restart-Button** fuer den PlexLite-Dienst bei Installationen mit freigeschalteten Service-Aktionen
-- **Neues `install.sh`** fuer einfache Github-Installation inkl. systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
-- **Dokumentation erweitert und sprachlich vereinheitlicht**, inklusive deutscher Umlaute und Beschreibung der neuen GUI-/Setup-/Installationspfade
+- **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung für Influx v2/v3
+- **Neues `install.sh`** für einfache GitHub-Installation inklusive systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
+- **Dokumentation erweitert und sprachlich vereinheitlicht** inklusive deutscher Umlaute und aktueller GUI-/Setup-/Installationspfade
 
-Damit ist PlexLite jetzt nicht mehr nur ein Dashboard plus Proxy, sondern eine deutlich besser installier- und wartbare Anwendung mit gefuehrter Inbetriebnahme.
+Damit ist DVhub jetzt nicht mehr nur ein Dashboard plus Proxy, sondern eine installier- und wartbare Anwendung mit geführter Inbetriebnahme, validierter Konfiguration und direkter Betriebssteuerung aus der Weboberfläche.
 
 ---
 
 ## Überblick
 
-PlexLite ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle.
+DVhub ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle.
 Alle Modbus-Anfragen von LUOX wurden per Paketmitschnitt am physischen Plexlog abgefangen
 und in Software nachgebaut -- damit können **alle Victron-Anlagen** in die Direktvermarktung integriert werden.
 
@@ -63,7 +61,7 @@ und in Software nachgebaut -- damit können **alle Victron-Anlagen** in die Dire
 Der Plexlog kann Live-Werte liefern (z.B. über einen Victron VM3P75CT Zähler via ModbusTCP),
 aber die Leistungsreduzierung scheint nur über die physischen Modbus-Ports zu funktionieren --
 eine Steuerung der Victron-Anlage war bisher nicht möglich.
-PlexLite liest die Daten direkt vom Ekrano-GX und beantwortet die Modbus-Anfragen des Direktvermarkters.
+DVhub liest die Daten direkt vom Ekrano-GX und beantwortet die Modbus-Anfragen des Direktvermarkters.
 
 ---
 
@@ -125,7 +123,7 @@ und Ladepunkten, Az. 618-25-02) die Umsetzung der Pauschaloption:
 
 1. **LUOX mitteilen** dass ein PLEXLOG als DV-Schnittstelle verbaut ist
 2. **OpenVPN-Tunnel** zu LUOX einrichten (Config + Zertifikat erhält man von LUOX)
-3. **Portforwarding** in der Firewall: Port 502 (Modbus TCP) vom VPN-Tunnel auf Port 1502 (PlexLite) weiterleiten
+3. **Portforwarding** in der Firewall: Port 502 (Modbus TCP) vom VPN-Tunnel auf Port 1502 (DVhub) weiterleiten
 
 ### Unifi-Spezialfall
 
@@ -140,7 +138,7 @@ Es kann auch zur Ersteinrichtung genutzt werden sobald der VPN-Tunnel steht.
 Die [LUOX Testseite](https://www.luox-energy.de/verbindungsstatus) sollte grün anzeigen sobald:
 - VPN-Tunnel aufgebaut ist
 - Portweiterleitung funktioniert
-- PlexLite auf Port 1502 läuft und antwortet
+- DVhub auf Port 1502 läuft und antwortet
 
 ---
 
@@ -150,11 +148,11 @@ Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 
 ### Neue Weboberflächen
 
-- **Dashboard** fuer Live-Werte, DV-Status und Schedule-Steuerung
-- **Einstellungsseite** fuer die komplette Konfiguration als Menue/Formular statt als rohe `config.json`
-- **First-Run-Setup** als gefuehrter Assistent, sobald noch keine gueltige Config vorhanden ist
-- **Import/Export** vorhandener Config-Dateien direkt ueber die Weboberflaeche
-- **Health & Service** mit Install-/Status-Checks und optionalem Restart-Button fuer den systemd-Dienst
+- **Dashboard** für Live-Werte, DV-Status, Day-Ahead-Chart und direkte Schedule-Steuerung aus den Börsenfenstern
+- **Einstellungsseite** für die komplette Konfiguration als kompakte Navigation mit fokussiertem Arbeitsbereich statt als rohe `config.json`
+- **First-Run-Setup** als geführter Assistent mit Review-Schritt, Validierung und sauberem Import vorhandener Configs
+- **Import/Export** vorhandener Config-Dateien direkt über die Weboberfläche
+- **Health & Service** mit Install-/Status-Checks und optionalem Restart-Button für den systemd-Dienst
 
 ### Getestet auf
 - Debian 12 Bookworm LXC Container (Community Scripts)
@@ -164,14 +162,14 @@ Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 Einfachste Variante:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/plexlite/plexlite/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dvhub/dvhub/main/install.sh | sudo bash
 ```
 
-Das Skript installiert Node.js, klont das Repo nach `/opt/plexlite`, richtet einen systemd-Service ein
-und verwendet bewusst eine **externe Config-Datei** unter `/etc/plexlite/config.json`.
-Wenn diese Datei noch nicht existiert, oeffnet die Weboberflaeche automatisch den neuen Setup-Assistenten.
-Ausserdem aktiviert das Skript die neuen **Service-Aktionen** in der GUI
-(Health-Check + Restart-Button) ueber eine passende `sudoers`-Regel.
+Das Skript installiert Node.js, klont das Repo nach `/opt/dvhub`, richtet einen systemd-Service ein
+und verwendet bewusst eine **externe Config-Datei** unter `/etc/dvhub/config.json`.
+Wenn diese Datei noch nicht existiert, öffnet die Weboberfläche automatisch den neuen Setup-Assistenten.
+Außerdem aktiviert das Skript die neuen **Service-Aktionen** in der GUI
+(Health-Check + Restart-Button) über eine passende `sudoers`-Regel.
 
 Manuelle Installation:
 
@@ -182,11 +180,11 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo apt install -y tcpdump jq
 sudo mkdir -p /opt/dv-control-webapp
-sudo useradd -r -s /usr/sbin/nologin plexlite
+sudo useradd -r -s /usr/sbin/nologin dvhub
 ```
 An dieser Stelle den Inhalt des Repos nach `/opt/dv-control-webapp` kopieren.
 ```bash
-sudo chown -R plexlite:plexlite /opt/dv-control-webapp
+sudo chown -R dvhub:dvhub /opt/dv-control-webapp
 cd /opt/dv-control-webapp
 cp config.example.json config.json
 nano config.json  # Konfiguration anpassen
@@ -203,14 +201,14 @@ sudo nano /etc/systemd/system/dv-control-webapp.service
 Inhalt:
 ```ini
 [Unit]
-Description=PlexLite DV Control
+Description=DVhub DV Control
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=plexlite
-Group=plexlite
+User=dvhub
+Group=dvhub
 WorkingDirectory=/opt/dv-control-webapp
 ExecStart=/usr/bin/node /opt/dv-control-webapp/server.js
 Restart=always
@@ -221,7 +219,7 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 ```
 
-> **Hinweis:** Wenn PlexLite auf einem privilegierten Port (z.B. 502) lauschen muss,
+> **Hinweis:** Wenn DVhub auf einem privilegierten Port (z.B. 502) lauschen muss,
 > kann man stattdessen `User=root` verwenden oder dem Node-Binary `CAP_NET_BIND_SERVICE` geben.
 
 ```bash
@@ -238,18 +236,19 @@ npm start
 
 ### Setup-Flow nach der Installation
 
-- Wenn die Config-Datei fehlt oder ungueltig ist, zeigt `/` automatisch den **Setup-Assistenten**
-- Der Assistent fuehrt durch:
+- Wenn die Config-Datei fehlt oder ungültig ist, zeigt `/` automatisch den **Setup-Assistenten**
+- Der Assistent führt durch:
   - HTTP-Port und API-Token
   - Victron-Verbindung per Modbus TCP oder MQTT
-  - Basiswerte fuer Meter / DV-Proxy
+  - Basiswerte für Meter / DV-Proxy
   - EPEX- und Influx-Grunddaten
+- Vor dem Speichern gibt es einen **Review-Schritt** mit Zusammenfassung und blockierender Validierung
 - Danach kann in der **Einstellungsseite** jedes Detail weiter verfeinert werden
-- Bestehende `config.json`-Dateien koennen importiert und exportiert werden
+- Bestehende `config.json`-Dateien können importiert und exportiert werden
 
 ### Admin / Health
 
-Unter **Einstellungen -> Health & Service** zeigt PlexLite jetzt:
+Unter **Einstellungen -> Health & Service** zeigt DVhub jetzt:
 
 - Status der Config-Datei und ob das Setup abgeschlossen ist
 - Live-Status von Meter und EPEX
@@ -257,7 +256,7 @@ Unter **Einstellungen -> Health & Service** zeigt PlexLite jetzt:
 - systemd-Service-Status
 - optional einen **Restart-Button**
 
-> Der Restart-Button ist aus Sicherheitsgruenden nur aktiv, wenn die Service-Aktionen per
+> Der Restart-Button ist aus Sicherheitsgründen nur aktiv, wenn die Service-Aktionen per
 > `DV_ENABLE_SERVICE_ACTIONS=1` freigeschaltet wurden. `install.sh` richtet das automatisch ein.
 
 ---
@@ -308,11 +307,12 @@ Unter **Einstellungen -> Health & Service** zeigt PlexLite jetzt:
   - Zeitplanregeln für:
     - `gridSetpointW` (Grid Setpoint in Watt)
     - `chargeCurrentA` (Ladestrom in Ampere)
-  - **Auto-Deaktivierung**: Regeln werden nach Ablauf ihres Zeitfensters automatisch deaktiviert
   - **Aktivierbar/Deaktivierbar**: Jede Regel kann einzeln ein-/ausgeschaltet werden
   - Default-Werte wenn keine Regel greift
   - Manuelle Writes per API für: `gridSetpointW`, `chargeCurrentA`, `minSocPct`
   - Persistierung der Schedule-Regeln in `config.json`
+  - Direkte Erstellung neuer Schedule-Zeilen aus dem Day-Ahead-Chart per Klick oder Drag-Auswahl
+  - Ausgewählte Börsenfenster werden automatisch zu zusammenhängenden Zeitblöcken gruppiert
 
 - Day-Ahead Preise (EPEX)
   - Quelle: energy-charts.info API
@@ -320,8 +320,9 @@ Unter **Einstellungen -> Health & Service** zeigt PlexLite jetzt:
   - Heute + Folgetag Preise
   - Balkendiagramm im Dashboard (negative Preise rot, positive blau)
   - Interaktiver Hover-Tooltip mit Preis und Zeitstempel
+  - Balken-Highlight statt Punkt-Indikator
   - Erkennung zukünftiger Negativpreise (heute + morgen)
-  - Morgen Min/Max Preis Anzeige
+  - Heute- und Morgen-Min/Max Preisanzeige
   - Automatischer Refresh alle 5 Minuten
 
 - Kosten-Tracking (heute, live)
@@ -354,11 +355,11 @@ Dashboard: `http://<host>:8080/`
 
 Kartenübersicht:
 - **DV Schaltstatus**: EIN/AUS, Control Value, Lease-Ablauf, letzte Modbus-Abfrage, DC-PV Einspeisung, AC-PV Blockierung
-- **Börsenpreis**: Aktueller Preis, nächster Slot, Negativpreis-Warnung (heute/morgen), Morgen Min/Max, Negativpreis-Schutz Status
+- **Börsenpreis**: Aktueller Preis, nächster Slot, Negativpreis-Warnung (heute/morgen), Heute-/Morgen-Min/Max, Negativpreis-Schutz Status
 - **Netzleistung**: 3-Phasen Anzeige (L1/L2/L3), Total mit Richtungsanzeige und Flow-Animation
 - **Victron Zusatzwerte**: SOC, Akku-Leistung, PV (DC), PV Gesamt (DC+AC), Grid Setpoint, Min SOC
 - **Kosten (heute, live)**: Import/Export kWh, Kosten/Erlös EUR, Netto
-- **Day-Ahead Preise Chart**: Balkendiagramm mit Zeitachse, Null-Linie, aktuelle-Stunde Markierung
+- **Day-Ahead Preise Chart**: Balkendiagramm mit Zeitachse, Null-Linie, aktuelle-Stunde Markierung, Hover-Highlight und Schedule-Auswahl
 - **Steuerung**: Aktive Werte, letzter Write, manuelle Writes, Default-Werte, Zeitplan-Editor
 - **Letzte Events**: Log der letzten 20 Ereignisse
 
