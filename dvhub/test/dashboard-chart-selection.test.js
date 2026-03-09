@@ -120,3 +120,14 @@ test('dashboard markup and styles expose user price comparison summary and expir
   assert.match(html, /chartComparisonDetail/);
   assert.match(css, /\.sched-row-expired/);
 });
+
+test('dashboard places the schedule panel directly after the price engine panel', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const priceIndex = html.indexOf('Preis-Engine');
+  const scheduleIndex = html.indexOf('<p class="card-title">Zeitplan</p>');
+  const controlIndex = html.indexOf('Manuelle Eingriffe');
+
+  assert.ok(priceIndex >= 0);
+  assert.ok(scheduleIndex > priceIndex);
+  assert.ok(controlIndex > scheduleIndex);
+});

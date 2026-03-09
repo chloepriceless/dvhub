@@ -204,6 +204,9 @@ test('history page renders daily line charts and estimated markers from chart pa
   });
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-line-chart/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-y/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-x/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-x-axis-label/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /PV/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-hover-surface/);
   assert.doesNotMatch(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
@@ -302,6 +305,10 @@ test('history page renders weekly revenue bars and a table instead of time block
   });
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-stack-chart/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-bars-compressed/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-y/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-x/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-chart-hover-surface/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Kosten/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
