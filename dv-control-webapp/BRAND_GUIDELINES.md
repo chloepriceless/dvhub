@@ -11,7 +11,7 @@ Diese Richtlinie beschreibt das visuelle System für DVhub und ist auf die Websi
 ## 2. Logo System
 - Primarlogo: `public/assets/a_digital_logo_design_for_dvhub_is_displayed_by.png`
 - Logoaufbau: Badge + Ribbon + Bolt als zentrales Erkennungszeichen
-- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `P` im Wort `PLEXLITE`
+- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `D` im Wort `DVhub`
 - Nicht erlaubt:
   - Logo verzerren
   - Farben austauschen ausserhalb der definierten Palette
