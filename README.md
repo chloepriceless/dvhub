@@ -40,10 +40,11 @@ DVhub auf `main` ist heute:
 
 - **DV-Schnittstelle und Web-Leitstand** in einer Anwendung
 - **Dashboard** für Live-Werte, Day-Ahead-Preise, Kosten und Steuerung
+- **History-Seite** für Tag/Woche/Monat/Jahr direkt aus der SQLite-Telemetrie
 - **Setup-Assistent** für den ersten Start mit blockierender Validierung
 - **Einstellungsoberfläche** statt roher `config.json`-Bearbeitung
 - **Victron-Anbindung per Modbus TCP oder MQTT**
-- **Telemetrie mit lokaler SQLite-Historie** und optionalem VRM-Nachimport
+- **Telemetrie mit lokaler SQLite-Historie**, gezieltem Preis-Backfill und optionalem VRM-Nachimport
 - **Integrationsplattform** für EOS, EMHASS, Home Assistant, Loxone und InfluxDB
 - **Installierbare Service-Anwendung** mit `install.sh`, systemd und Health-/Restart-Funktionen
 
@@ -82,6 +83,7 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 ### Erster Aufruf
 
 - Dashboard: `http://<host>:8080/`
+- Historie: `http://<host>:8080/history.html`
 - Einstellungen: `http://<host>:8080/settings.html`
 - Setup: `http://<host>:8080/setup.html`
 - Tools: `http://<host>:8080/tools.html`
@@ -99,7 +101,8 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 - **Day-Ahead-Preis-Engine** mit Heute-/Morgen-Daten, Hover-Details und Chart-Auswahl
 - **Schedule-System** mit Defaults, manuellen Writes und Chart-zu-Schedule-Auswahl
 - **Kosten- und Preislogik** für Netz, PV und Akku über `userEnergyPricing`
-- **Lokale Telemetrie** mit Persistenz, Rollups und historischem Nachimport
+- **Datumsbasierte Bezugspreise** über `userEnergyPricing.periods`
+- **Lokale Telemetrie** mit Persistenz, Rollups, historischem Nachimport und SQLite-basierter History-Analyse
 
 ### Betriebsmodell
 
@@ -156,6 +159,16 @@ Die Tool-Seite enthält:
 - Health-/Service-Status
 - VRM History-Import für Telemetrie-Nachfüllung
 
+### Historie
+
+Die History-Seite bündelt die interne SQLite-Historie zu einer eigenen Analyseansicht:
+
+- Tag-, Wochen-, Monats- und Jahresansicht
+- Bezug, Einspeisung, Kosten, Erlöse und Netto je Zeitraum
+- Preisvergleich zwischen historischem Marktpreis und eigenem Bezugspreis
+- Kennzeichnung unvollständiger Slots bei fehlenden Marktpreisen oder Tarifzeiträumen
+- gezielter Preis-Backfill nur für Telemetrie-Buckets ohne historischen Marktpreis
+
 ---
 
 ## Integrationen
@@ -169,6 +182,7 @@ DVhub stellt Daten bereit oder nimmt Optimierungsergebnisse entgegen für:
 - **InfluxDB v2/v3**
 
 Zusätzlich kann DVhub historische Daten per **VRM** nachladen, wenn neue Installationen ältere Werte auffüllen sollen oder Lücken entstanden sind.
+Für Marktpreise kann DVhub zusätzlich fehlende historische Börsenpreise gezielt über Energy Charts in die interne SQLite-Datenbank zurückschreiben.
 
 ---
 
@@ -310,6 +324,22 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 ---
 
 ## API und Konfiguration
+
+### History API
+
+- `GET /api/history/summary?view=day|week|month|year&date=YYYY-MM-DD`
+- `POST /api/history/backfill/prices`
+- `GET /api/history/import/status`
+- `POST /api/history/import`
+
+### Bezugspreise nach Zeitraum
+
+Unter `userEnergyPricing.periods` lassen sich mehrere Tarifzeiträume definieren:
+
+- Zeiträume sind tageweise und inklusive `startDate` bis `endDate`
+- Zeiträume dürfen sich nicht überschneiden
+- pro Zeitraum ist `fixed` oder `dynamic` möglich
+- wenn kein Zeitraum passt, greift die bestehende Legacy-Preislogik als Fallback
 
 ### Wichtige API-Endpunkte
 
