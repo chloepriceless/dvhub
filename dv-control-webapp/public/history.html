@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVhub Historie</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-history">
+  <div class="app-shell shell-layout">
+    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
+      <div class="app-nav-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
+        <div>
+          <p class="app-nav-eyebrow">Direktvermarktung</p>
+          <strong class="app-nav-title">DVhub</strong>
+        </div>
+      </div>
+      <nav class="app-nav-links">
+        <a class="app-nav-link" href="/">Leitstand</a>
+        <a class="app-nav-link is-active" href="/history.html">Historie</a>
+        <a class="app-nav-link" href="/settings.html">Einrichtung</a>
+        <a class="app-nav-link" href="/tools.html">Wartung</a>
+        <a class="app-nav-link" href="/setup.html">Einrichtung starten</a>
+      </nav>
+      <div class="app-nav-meta">
+        <p class="card-title">Historie</p>
+        <p class="tools-note">Zeitreihen, Kosten und Erlöse aus der internen SQLite-Historie.</p>
+      </div>
+    </aside>
+
+    <div class="app-main history-layout">
+      <header class="panel compact-topbar reveal">
+        <div class="compact-topbar-copy">
+          <p class="page-kicker">Historie</p>
+          <h1 class="page-title">DVhub History Analytics</h1>
+          <p class="page-subtitle">Rückblick auf Energieflüsse, Marktpreise, Kosten und Erlöse auf Basis der internen Telemetrie-Datenbank.</p>
+          <div id="historyMeta" class="meta compact-meta">Historienansicht wird vorbereitet...</div>
+        </div>
+        <div class="page-actions history-actions">
+          <label class="history-control">
+            <span>Ansicht</span>
+            <select id="historyView">
+              <option value="day">Tag</option>
+              <option value="week">Woche</option>
+              <option value="month">Monat</option>
+              <option value="year">Jahr</option>
+            </select>
+          </label>
+          <label class="history-control">
+            <span>Datum</span>
+            <input id="historyDate" type="date" />
+          </label>
+          <button id="historyBackfillBtn" class="btn btn-primary" type="button">Preise nachladen</button>
+        </div>
+      </header>
+
+      <section id="historyBanner" class="status-banner reveal">Lade Historie...</section>
+
+      <section id="historyKpiGrid" class="history-kpi-grid reveal">
+        <article class="panel history-kpi-card">
+          <p class="card-title">Kosten</p>
+          <strong id="historyKpiCost" class="big-value">-</strong>
+        </article>
+        <article class="panel history-kpi-card">
+          <p class="card-title">Erlöse</p>
+          <strong id="historyKpiRevenue" class="big-value">-</strong>
+        </article>
+        <article class="panel history-kpi-card">
+          <p class="card-title">Netto</p>
+          <strong id="historyKpiNet" class="big-value">-</strong>
+        </article>
+        <article class="panel history-kpi-card">
+          <p class="card-title">Bezug</p>
+          <strong id="historyKpiImport" class="big-value">-</strong>
+        </article>
+        <article class="panel history-kpi-card">
+          <p class="card-title">Einspeisung</p>
+          <strong id="historyKpiExport" class="big-value">-</strong>
+        </article>
+      </section>
+
+      <section class="history-chart-grid reveal">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Finanzen</p>
+              <h2 class="section-title">Kosten, Erlöse, Netto</h2>
+            </div>
+          </div>
+          <div id="historyFinancialChart" class="history-chart-shell"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Energie</p>
+              <h2 class="section-title">Import und Export</h2>
+            </div>
+          </div>
+          <div id="historyEnergyChart" class="history-chart-shell"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Preise</p>
+              <h2 class="section-title">Markt vs. Bezug</h2>
+            </div>
+          </div>
+          <div id="historyPriceChart" class="history-chart-shell"></div>
+        </article>
+      </section>
+
+      <section class="panel reveal">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Perioden</p>
+            <h2 class="section-title">Gruppierte Historie</h2>
+          </div>
+        </div>
+        <div id="historyRows" class="history-rows"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script src="/history.js"></script>
+</body>
+</html>
