@@ -136,7 +136,7 @@ test('configured VRM import fetches official stats endpoints and normalizes rows
 
     assert.equal(result.ok, true);
     assert.equal(calls.length, 3);
-    assert.equal(store.countRows('timeseries_samples', "source = 'vrm_import'"), 14);
+    assert.equal(store.countRows('timeseries_samples', "source = 'vrm_import'"), 17);
     assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_dc_w'"), 1);
     assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_import'"), 1);
   } finally {
@@ -214,6 +214,81 @@ test('configured VRM import writes canonical history series from VRM stats paylo
       1
     );
     assert.equal(store.countRows('timeseries_samples', "series_key LIKE 'vrm_%'"), 5);
+  } finally {
+    store.close();
+  }
+});
+
+test('configured VRM import normalizes interval to 15 minutes and stores extended flow mappings', async () => {
+  const store = createStore();
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const payloads = {
+      venus: {
+        records: {
+          Pdc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 2800]]
+        }
+      },
+      consumption: {
+        records: {
+          Pc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.7]],
+          Pb: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.3]],
+          Gc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.2]],
+          Gb: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.1]],
+          Bc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.15]],
+          Bg: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.05]],
+          Gs: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.4]]
+        }
+      },
+      kwh: {
+        records: {}
+      }
+    };
+    return {
+      ok: true,
+      async json() {
+        return payloads[type];
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.importFromConfiguredSource({
+      start: '2026-03-08T11:00:00.000Z',
+      end: '2026-03-08T12:00:00.000Z',
+      interval: 'hours'
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(calls[0], /interval=15mins/);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_direct_use_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_battery_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_grid_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_direct_use_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_to_battery_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_direct_use_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_to_grid_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'load_power_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_import_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_export_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_charge_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_discharge_w'"), 1);
   } finally {
     store.close();
   }

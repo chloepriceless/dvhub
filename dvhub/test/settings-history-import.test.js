@@ -62,7 +62,7 @@ test('history import request converts datetime-local fields into API payload', (
     interval: 'hours'
   });
 
-  assert.equal(payload.interval, 'hours');
+  assert.equal(payload.interval, '15mins');
   assert.ok(Number.isFinite(new Date(payload.start).getTime()));
   assert.ok(Number.isFinite(new Date(payload.end).getTime()));
   assert.ok(new Date(payload.end).getTime() > new Date(payload.start).getTime());

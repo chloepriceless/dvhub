@@ -1,5 +1,6 @@
 const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
+const VRM_HISTORY_INTERVAL = '15mins';
 const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
 const PRICE_BUCKET_SECONDS = 900;
 
@@ -25,6 +26,17 @@ const FIELD_TO_SERIES = {
   batteryChargeW: 'battery_charge_w',
   batteryDischargeW: 'battery_discharge_w',
   batteryPowerW: 'battery_power_w'
+};
+
+const FLOW_FIELD_TO_SERIES = {
+  solarDirectUseW: 'solar_direct_use_w',
+  solarToBatteryW: 'solar_to_battery_w',
+  solarToGridW: 'solar_to_grid_w',
+  gridDirectUseW: 'grid_direct_use_w',
+  gridToBatteryW: 'grid_to_battery_w',
+  batteryDirectUseW: 'battery_direct_use_w',
+  batteryToGridW: 'battery_to_grid_w',
+  selfConsumptionW: 'self_consumption_w'
 };
 
 function toIso(value) {
@@ -193,6 +205,17 @@ function addMappedCanonicalSample(bucket, { seriesKey, field = null, value, unit
   addBucketSample(bucket, sample, field);
 }
 
+function addMappedFlowSample(bucket, { field, value, meta }) {
+  const seriesKey = FLOW_FIELD_TO_SERIES[field];
+  if (!seriesKey) return;
+  addMappedCanonicalSample(bucket, {
+    seriesKey,
+    field,
+    value,
+    meta
+  });
+}
+
 function mapBatterySamples(bucket, value, type, code) {
   const meta = {
     provenance: 'mapped_from_vrm',
@@ -252,9 +275,18 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
   }
 
   if (type === 'consumption' && code === 'Pc') {
-    addMappedCanonicalSample(bucket, {
-      seriesKey: 'load_power_w',
-      field: 'loadPowerW',
+    const value = kwhToAveragePower(rawValue, resolutionSeconds);
+    addMappedFlowSample(bucket, {
+      field: 'solarDirectUseW',
+      value,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Pb') {
+    addMappedFlowSample(bucket, {
+      field: 'solarToBatteryW',
       value: kwhToAveragePower(rawValue, resolutionSeconds),
       meta: mappedMeta
     });
@@ -262,9 +294,36 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
   }
 
   if (type === 'consumption' && code === 'Gc') {
-    addMappedCanonicalSample(bucket, {
-      seriesKey: 'grid_import_w',
-      field: 'gridImportW',
+    const value = kwhToAveragePower(rawValue, resolutionSeconds);
+    addMappedFlowSample(bucket, {
+      field: 'gridDirectUseW',
+      value,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Gb') {
+    addMappedFlowSample(bucket, {
+      field: 'gridToBatteryW',
+      value: kwhToAveragePower(rawValue, resolutionSeconds),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Bc') {
+    addMappedFlowSample(bucket, {
+      field: 'batteryDirectUseW',
+      value: kwhToAveragePower(rawValue, resolutionSeconds),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Bg') {
+    addMappedFlowSample(bucket, {
+      field: 'batteryToGridW',
       value: kwhToAveragePower(rawValue, resolutionSeconds),
       meta: mappedMeta
     });
@@ -272,10 +331,10 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
   }
 
   if (type === 'consumption' && code === 'Gs') {
-    addMappedCanonicalSample(bucket, {
-      seriesKey: 'grid_export_w',
-      field: 'gridExportW',
-      value: kwhToAveragePower(rawValue, resolutionSeconds),
+    const value = kwhToAveragePower(rawValue, resolutionSeconds);
+    addMappedFlowSample(bucket, {
+      field: 'solarToGridW',
+      value,
       meta: mappedMeta
     });
     return;
@@ -331,6 +390,122 @@ function deriveMissingField(values, field) {
 }
 
 function reconstructSlotBucket(bucket) {
+  const flowValues = {
+    solarDirectW: Number(bucket.values.solarDirectUseW || 0),
+    solarToBatteryW: Number(bucket.values.solarToBatteryW || 0),
+    solarToGridW: Number(bucket.values.solarToGridW || 0),
+    gridDirectW: Number(bucket.values.gridDirectUseW || 0),
+    gridToBatteryW: Number(bucket.values.gridToBatteryW || 0),
+    batteryDirectW: Number(bucket.values.batteryDirectUseW || 0),
+    batteryToGridW: Number(bucket.values.batteryToGridW || 0)
+  };
+  const directUseFieldsPresent = [
+    Number.isFinite(bucket.values.solarDirectUseW),
+    Number.isFinite(bucket.values.gridDirectUseW),
+    Number.isFinite(bucket.values.batteryDirectUseW)
+  ].filter(Boolean).length;
+
+  if (!Number.isFinite(bucket.values.loadPowerW)) {
+    const loadPower = flowValues.solarDirectW + flowValues.gridDirectW + flowValues.batteryDirectW;
+    if (loadPower > 0 && directUseFieldsPresent >= 2) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'load_power_w',
+        field: 'loadPowerW',
+        value: loadPower,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['solar_direct_use_w', 'grid_direct_use_w', 'battery_direct_use_w']
+        }
+      });
+    }
+  }
+
+  if (!Number.isFinite(bucket.values.gridImportW)) {
+    const gridImport = flowValues.gridDirectW + flowValues.gridToBatteryW;
+    if (gridImport > 0) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'grid_import_w',
+        field: 'gridImportW',
+        value: gridImport,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['grid_direct_use_w', 'grid_to_battery_w']
+        }
+      });
+    }
+  }
+
+  if (!Number.isFinite(bucket.values.gridExportW)) {
+    const gridExport = flowValues.solarToGridW + flowValues.batteryToGridW;
+    if (gridExport > 0) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'grid_export_w',
+        field: 'gridExportW',
+        value: gridExport,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['solar_to_grid_w', 'battery_to_grid_w']
+        }
+      });
+    }
+  }
+
+  if (!Number.isFinite(bucket.values.batteryChargeW)) {
+    const batteryCharge = flowValues.solarToBatteryW + flowValues.gridToBatteryW;
+    if (batteryCharge > 0) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'battery_charge_w',
+        field: 'batteryChargeW',
+        value: batteryCharge,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['solar_to_battery_w', 'grid_to_battery_w']
+        }
+      });
+    }
+  }
+
+  if (!Number.isFinite(bucket.values.batteryDischargeW)) {
+    const batteryDischarge = flowValues.batteryDirectW + flowValues.batteryToGridW;
+    if (batteryDischarge > 0) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'battery_discharge_w',
+        field: 'batteryDischargeW',
+        value: batteryDischarge,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['battery_direct_use_w', 'battery_to_grid_w']
+        }
+      });
+    }
+  }
+
+  if (!Number.isFinite(bucket.values.pvTotalW)) {
+    const pvTotal = flowValues.solarDirectW + flowValues.solarToBatteryW + flowValues.solarToGridW;
+    if (pvTotal > 0) {
+      addMappedCanonicalSample(bucket, {
+        seriesKey: 'pv_total_w',
+        field: 'pvTotalW',
+        value: pvTotal,
+        meta: {
+          provenance: 'derived_from_vrm_flows',
+          derivedFrom: ['solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w']
+        }
+      });
+    }
+  }
+
+  addMappedFlowSample(bucket, {
+    field: 'selfConsumptionW',
+    value: directUseFieldsPresent >= 2
+      ? flowValues.solarDirectW + flowValues.gridDirectW + flowValues.batteryDirectW
+      : null,
+    meta: {
+      provenance: 'derived_from_vrm_flows',
+      derivedFrom: ['solar_direct_use_w', 'grid_direct_use_w', 'battery_direct_use_w']
+    }
+  });
+
   if (Number.isFinite(bucket.values.batteryPowerW)) {
     if (!Number.isFinite(bucket.values.batteryChargeW) && bucket.values.batteryPowerW < 0) {
       setBucketField(bucket, 'batteryChargeW', Math.abs(bucket.values.batteryPowerW), {
@@ -524,7 +699,7 @@ export function createHistoryImportManager({
     };
   }
 
-  async function importFromConfiguredSource({ start, end, interval = '15mins' }) {
+  async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
     const status = getStatus();
     if (!status.enabled) return { ok: false, error: 'history import disabled' };
     if (!status.ready) return { ok: false, error: 'history import not configured' };
@@ -532,7 +707,8 @@ export function createHistoryImportManager({
     if (!start || !end) return { ok: false, error: 'start and end are required for configured imports' };
 
     const importConfig = telemetryConfig.historyImport || {};
-    const resolutionSeconds = intervalSeconds(interval);
+    const normalizedInterval = VRM_HISTORY_INTERVAL;
+    const resolutionSeconds = intervalSeconds(normalizedInterval);
     const rawRows = [];
     const slotBuckets = new Map();
 
@@ -543,7 +719,7 @@ export function createHistoryImportManager({
         type,
         start,
         end,
-        interval,
+        interval: normalizedInterval,
         fetchImpl
       });
       rawRows.push(...parseVrmSeries(type, payload.records || {}, resolutionSeconds));
@@ -579,7 +755,7 @@ export function createHistoryImportManager({
       requestedTo: toIso(end),
       importedRows: allRows.length,
       sourceAccount: importConfig.vrmPortalId,
-      meta: { provider: 'vrm', interval, types: [...VRM_HISTORY_TYPES] }
+      meta: { provider: 'vrm', interval: normalizedInterval, requestedInterval: interval, types: [...VRM_HISTORY_TYPES] }
     });
 
     return {

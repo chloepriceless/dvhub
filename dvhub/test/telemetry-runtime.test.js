@@ -48,6 +48,13 @@ test('buildLiveTelemetrySamples maps meter and victron state to named series', (
       selfConsumptionW: 900,
       batteryChargeW: 0,
       batteryDischargeW: 500,
+      solarDirectUseW: 700,
+      solarToBatteryW: 300,
+      solarToGridW: 400,
+      gridDirectUseW: 200,
+      gridToBatteryW: 100,
+      batteryDirectUseW: 150,
+      batteryToGridW: 50,
       gridSetpointW: -40,
       minSocPct: 20
     }
@@ -58,6 +65,9 @@ test('buildLiveTelemetrySamples maps meter and victron state to named series', (
   assert.equal(map.get('pv_total_w'), 1800);
   assert.equal(map.get('battery_discharge_w'), 500);
   assert.equal(map.get('battery_soc_pct'), 64.2);
+  assert.equal(map.get('solar_direct_use_w'), 700);
+  assert.equal(map.get('grid_to_battery_w'), 100);
+  assert.equal(map.get('battery_to_grid_w'), 50);
 });
 
 test('buildPriceTelemetrySamples expands EPEX rows into storable series', () => {

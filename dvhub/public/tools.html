@@ -102,14 +102,10 @@
               <input id="historyImportEnd" type="datetime-local" />
               <small class="field-help">Endzeit des VRM-Historienimports.</small>
             </label>
-            <label class="settings-field" for="historyImportInterval">
+            <label class="settings-field">
               <span class="settings-field-title">Intervall</span>
-              <select id="historyImportInterval">
-                <option value="15mins">15 Minuten</option>
-                <option value="hours">1 Stunde</option>
-                <option value="days">1 Tag</option>
-              </select>
-              <small class="field-help">Auflösung für den VRM-Stats-Import.</small>
+              <input type="text" value="15 Minuten" readonly />
+              <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
             </label>
           </div>
           <div class="settings-inline-actions">

@@ -70,6 +70,13 @@ const state = {
     selfConsumptionW: null,
     batteryChargeW: null,
     batteryDischargeW: null,
+    solarDirectUseW: null,
+    solarToBatteryW: null,
+    solarToGridW: null,
+    gridDirectUseW: null,
+    gridToBatteryW: null,
+    batteryDirectUseW: null,
+    batteryToGridW: null,
     errors: {}
   },
   scan: { running: false, updatedAt: 0, params: null, rows: [], error: null },
@@ -817,6 +824,29 @@ async function pollMeter() {
   const batP = Number(state.victron.batteryPowerW || 0);
   state.victron.batteryChargeW = Math.max(0, batP);
   state.victron.batteryDischargeW = Math.max(0, -batP);
+
+  const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
+  const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
+  const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
+  const gridExportW = Math.max(0, Number(state.victron.gridExportW || 0));
+  const batteryChargeW = Math.max(0, Number(state.victron.batteryChargeW || 0));
+  const batteryDischargeW = Math.max(0, Number(state.victron.batteryDischargeW || 0));
+
+  const solarToBatteryW = Math.max(0, Math.min(pvTotalW, batteryChargeW));
+  const gridToBatteryW = Math.max(0, batteryChargeW - solarToBatteryW);
+  const batteryToGridW = Math.max(0, Math.min(batteryDischargeW, gridExportW));
+  const batteryDirectUseW = Math.max(0, batteryDischargeW - batteryToGridW);
+  const gridDirectUseW = Math.max(0, gridImportW - gridToBatteryW);
+  const solarToGridW = Math.max(0, gridExportW - batteryToGridW);
+  const solarDirectUseW = Math.max(0, Math.min(pvTotalW, Math.max(0, loadW - gridDirectUseW - batteryDirectUseW)));
+
+  state.victron.solarDirectUseW = solarDirectUseW;
+  state.victron.solarToBatteryW = solarToBatteryW;
+  state.victron.solarToGridW = solarToGridW;
+  state.victron.gridDirectUseW = gridDirectUseW;
+  state.victron.gridToBatteryW = gridToBatteryW;
+  state.victron.batteryDirectUseW = batteryDirectUseW;
+  state.victron.batteryToGridW = batteryToGridW;
 
   telemetrySafeWrite(() => telemetryStore.writeSamples(buildLiveTelemetrySamples({
     ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),

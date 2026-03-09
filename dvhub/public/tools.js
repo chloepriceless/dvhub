@@ -6,8 +6,7 @@ let currentHistoryImportResult = null;
 let historyImportBusy = false;
 let historyImportFormState = {
   start: '',
-  end: '',
-  interval: '15mins'
+  end: ''
 };
 
 function fmtTs(ts) {
@@ -41,7 +40,7 @@ function buildHistoryImportRequest(formState) {
   return {
     start: parseDateTimeLocal(formState?.start),
     end: parseDateTimeLocal(formState?.end),
-    interval: formState?.interval || '15mins'
+    interval: '15mins'
   };
 }
 
@@ -60,8 +59,7 @@ function buildHistoryImportActionState({ status, form, busy }) {
 function syncHistoryImportFormState() {
   historyImportFormState = {
     start: document.getElementById('historyImportStart')?.value || '',
-    end: document.getElementById('historyImportEnd')?.value || '',
-    interval: document.getElementById('historyImportInterval')?.value || '15mins'
+    end: document.getElementById('historyImportEnd')?.value || ''
   };
 }
 
@@ -314,10 +312,6 @@ function initToolsPage() {
     renderHistoryImportState();
   });
   document.getElementById('historyImportEnd')?.addEventListener('change', () => {
-    syncHistoryImportFormState();
-    renderHistoryImportState();
-  });
-  document.getElementById('historyImportInterval')?.addEventListener('change', () => {
     syncHistoryImportFormState();
     renderHistoryImportState();
   });

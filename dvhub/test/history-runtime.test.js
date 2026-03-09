@@ -313,6 +313,47 @@ test('history runtime exposes chart-ready series with split costs and estimation
   });
 });
 
+test('history runtime carries extended vrm flow values into rows and kpis', () => {
+  const slots = [
+    {
+      ts: '2026-03-08T11:00:00.000Z',
+      importKwh: 0.3,
+      exportKwh: 0.45,
+      gridKwh: 0,
+      pvKwh: 1.4,
+      batteryKwh: 0.2,
+      batteryChargeKwh: 0.4,
+      batteryDischargeKwh: 0.2,
+      loadKwh: 1.05,
+      solarDirectUseKwh: 0.7,
+      solarToBatteryKwh: 0.3,
+      solarToGridKwh: 0.4,
+      gridDirectUseKwh: 0.2,
+      gridToBatteryKwh: 0.1,
+      batteryDirectUseKwh: 0.15,
+      batteryToGridKwh: 0.05,
+      estimated: false,
+      incomplete: false
+    }
+  ];
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots: () => slots,
+      listPriceSlots: () => []
+    },
+    getPricingConfig: () => ({})
+  });
+
+  const summary = runtime.getSummary({ view: 'day', date: '2026-03-08' });
+
+  assert.equal(summary.kpis.solarDirectUseKwh, 0.7);
+  assert.equal(summary.kpis.gridToBatteryKwh, 0.1);
+  assert.equal(summary.kpis.batteryToGridKwh, 0.05);
+  assert.equal(summary.rows[0].solarToGridKwh, 0.4);
+  assert.equal(summary.rows[0].batteryDirectUseKwh, 0.15);
+  assert.equal(summary.charts.dayEnergyLines[0].solarDirectUseKwh, 0.7);
+});
+
 test('history runtime derives current-year solar market value from monthly values weighted by exported energy', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),

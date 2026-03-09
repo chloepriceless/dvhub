@@ -302,6 +302,7 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
         <div class="history-chart-inspector">
           <strong>${escapeHtml(selectedItem?.label || '-')}</strong>
           ${series.map((entry) => `<span>${escapeHtml(entry.label)} ${entry.formatter ? entry.formatter(selectedItem?.[entry.key]) : formatter(selectedItem?.[entry.key])}</span>`).join('')}
+          ${typeof options.inspectorExtras === 'function' ? options.inspectorExtras(selectedItem) : ''}
           ${typeof options.badgeRenderer === 'function' ? options.badgeRenderer(selectedItem) : ''}
         </div>
       ` : ''}
@@ -334,6 +335,18 @@ function renderDetailedDayChart(mountId, items) {
     detail: true,
     interactive: true,
     maxLabels: 8,
+    inspectorExtras: (item) => [
+      ['PV direkt', item?.solarDirectUseKwh],
+      ['PV → Akku', item?.solarToBatteryKwh],
+      ['PV → Netz', item?.solarToGridKwh],
+      ['Netz direkt', item?.gridDirectUseKwh],
+      ['Netz → Akku', item?.gridToBatteryKwh],
+      ['Akku direkt', item?.batteryDirectUseKwh],
+      ['Akku → Netz', item?.batteryToGridKwh]
+    ]
+      .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) !== 0)
+      .map(([label, value]) => `<span>${escapeHtml(label)} ${fmtKwh(value)}</span>`)
+      .join(''),
     badgeRenderer: chartBadge
   });
 }
@@ -614,6 +627,13 @@ function renderRows(summary) {
           <th>Import</th>
           <th>Verbrauch</th>
           <th>PV erzeugt</th>
+          <th>PV direkt</th>
+          <th>PV → Akku</th>
+          <th>PV → Netz</th>
+          <th>Netz direkt</th>
+          <th>Netz → Akku</th>
+          <th>Akku direkt</th>
+          <th>Akku → Netz</th>
           <th>Akku geladen</th>
           <th>Akku entladen</th>
           <th>Eigenverbrauch</th>
@@ -638,6 +658,13 @@ function renderRows(summary) {
             <td>${fmtKwh(row.importKwh)}</td>
             <td>${fmtKwh(row.loadKwh)}</td>
             <td>${fmtKwh(row.pvKwh)}</td>
+            <td>${fmtKwh(row.solarDirectUseKwh)}</td>
+            <td>${fmtKwh(row.solarToBatteryKwh)}</td>
+            <td>${fmtKwh(row.solarToGridKwh)}</td>
+            <td>${fmtKwh(row.gridDirectUseKwh)}</td>
+            <td>${fmtKwh(row.gridToBatteryKwh)}</td>
+            <td>${fmtKwh(row.batteryDirectUseKwh)}</td>
+            <td>${fmtKwh(row.batteryToGridKwh)}</td>
             <td>${fmtKwh(row.batteryChargeKwh)}</td>
             <td>${fmtKwh(row.batteryDischargeKwh)}</td>
             <td>${fmtKwh(row.selfConsumptionKwh)}</td>
