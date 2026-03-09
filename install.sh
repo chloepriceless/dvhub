@@ -75,6 +75,9 @@ fi
 echo "[4/7] Repository bereitstellen"
 mkdir -p "$(dirname "$INSTALL_DIR")"
 if [[ -d "$INSTALL_DIR/.git" ]]; then
+  if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$INSTALL_DIR"; then
+    git config --global --add safe.directory "$INSTALL_DIR"
+  fi
   git -C "$INSTALL_DIR" fetch --tags origin
   git -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
   git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH"

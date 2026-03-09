@@ -103,6 +103,22 @@ test('settings page uses a compact control bar and no longer exposes service car
   assert.doesNotMatch(html, /Health &amp; Service/);
 });
 
+test('public pages use compact topbars instead of large hero-style headers', () => {
+  for (const fileName of ['index.html', 'settings.html', 'tools.html', 'setup.html']) {
+    const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
+    assert.match(html, /compact-topbar/);
+    assert.doesNotMatch(html, /page-topbar/);
+  }
+});
+
+test('settings page keeps a small status block below the menu and moves restart actions to maintenance', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'settings.html'), 'utf8');
+
+  assert.match(html, /settings-sidebar-status/);
+  assert.match(html, /Wartung öffnen/);
+  assert.doesNotMatch(html, /Dienst neu starten/);
+});
+
 test('maintenance page groups status, import export, history, and diagnose sections', () => {
   const html = fs.readFileSync(path.join(publicDir, 'tools.html'), 'utf8');
 
@@ -128,6 +144,9 @@ test('styles define compact settings and maintenance layout primitives', () => {
 
   assert.match(css, /\.settings-compact-bar\s*\{/);
   assert.match(css, /\.maintenance-grid\s*\{/);
+  assert.match(css, /\.compact-topbar\s*\{/);
+  assert.match(css, /\.settings-sidebar-status\s*\{/);
+  assert.match(css, /\.compact-note\s*\{/);
 });
 
 test('readme references the DVhub assets folder for logo and screenshot', () => {
