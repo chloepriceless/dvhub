@@ -15,6 +15,7 @@ Thumbs.db
 .claude/
 .vscode/
 .worktrees/
+.planning/
 *.swp
 *.swo
 *~
