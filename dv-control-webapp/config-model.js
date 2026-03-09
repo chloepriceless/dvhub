@@ -2123,6 +2123,7 @@ export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = 
   }
 
   if (effectivePricing.mode === 'fixed') {
+    if (effectivePricing.fixedGrossImportCtKwh == null || effectivePricing.fixedGrossImportCtKwh === '') return null;
     const fixed = Number(effectivePricing.fixedGrossImportCtKwh);
     return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
   }

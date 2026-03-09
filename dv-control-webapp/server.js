@@ -19,6 +19,7 @@ import {
   buildPriceTelemetrySamples,
   resolveTelemetryDbPath
 } from './telemetry-runtime.js';
+import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import {
   autoDisableExpiredScheduleRules,
   parseHHMM,
@@ -110,6 +111,8 @@ const transport = cfg.victron?.transport === 'mqtt'
 const scanTransport = createModbusTransport();
 let telemetryStore = null;
 let historyImportManager = null;
+let historyRuntime = null;
+let historyApi = null;
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -1775,6 +1778,20 @@ const web = http.createServer(async (req, res) => {
     return json(res, result.ok ? 200 : 400, result);
   }
 
+  if (url.pathname === '/api/history/summary' && req.method === 'GET') {
+    const result = await historyApi.getSummary({
+      view: url.searchParams.get('view'),
+      date: url.searchParams.get('date')
+    });
+    return json(res, result.status, result.body);
+  }
+
+  if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const result = await historyApi.postPriceBackfill(body || {});
+    return json(res, result.status, result.body);
+  }
+
   if (url.pathname === '/api/epex/refresh' && req.method === 'POST') {
     await fetchEpexDay();
     return json(res, 200, { ok: state.epex.ok, error: state.epex.error });
@@ -1850,6 +1867,16 @@ historyImportManager = telemetryStore ? createHistoryImportManager({
   store: telemetryStore,
   telemetryConfig: cfg.telemetry || {}
 }) : null;
+historyRuntime = telemetryStore ? createHistoryRuntime({
+  store: telemetryStore,
+  getPricingConfig: () => cfg.userEnergyPricing || {}
+}) : null;
+historyApi = createHistoryApiHandlers({
+  historyRuntime,
+  historyImportManager,
+  telemetryEnabled: !!telemetryStore,
+  defaultBzn: cfg.epex?.bzn || 'DE-LU'
+});
 refreshTelemetryStatus();
 
 web.listen(cfg.httpPort, () => {
