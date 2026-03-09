@@ -79,8 +79,7 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     git config --global --add safe.directory "$INSTALL_DIR"
   fi
   git -C "$INSTALL_DIR" fetch --tags origin
-  git -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH"
+  git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
 elif [[ -d "$INSTALL_DIR" && -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
   echo "Zielverzeichnis $INSTALL_DIR ist nicht leer und kein Git-Repository." >&2
   exit 1
