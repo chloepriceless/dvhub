@@ -5,7 +5,7 @@ REPO_URL="${REPO_URL:-https://github.com/chloepriceless/dvhub.git}"
 REPO_BRANCH="${REPO_BRANCH:-}"
 INSTALLER_SOURCE_URL="${INSTALLER_SOURCE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
-APP_DIR="${APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
+APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
@@ -90,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dir)
       INSTALL_DIR="$2"
-      APP_DIR="$INSTALL_DIR/dv-control-webapp"
+      APP_DIR="$INSTALL_DIR/dvhub"
       shift 2
       ;;
     --config)

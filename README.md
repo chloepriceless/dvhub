@@ -256,7 +256,7 @@ Danach:
 
 ```bash
 sudo chown -R dvhub:dvhub /opt/dvhub /etc/dvhub /var/lib/dvhub
-cd /opt/dvhub/dv-control-webapp
+cd /opt/dvhub/dvhub
 npm install --omit=dev
 sudo cp config.example.json /etc/dvhub/config.json
 sudo nano /etc/dvhub/config.json
@@ -282,8 +282,8 @@ Wants=network-online.target
 Type=simple
 User=dvhub
 Group=dvhub
-WorkingDirectory=/opt/dvhub/dv-control-webapp
-ExecStart=/usr/bin/node --experimental-sqlite /opt/dvhub/dv-control-webapp/server.js
+WorkingDirectory=/opt/dvhub/dvhub
+ExecStart=/usr/bin/node --experimental-sqlite /opt/dvhub/dvhub/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=/etc/dvhub/config.json
 Environment=DV_ENABLE_SERVICE_ACTIONS=1
@@ -317,7 +317,7 @@ sudo chmod 440 /etc/sudoers.d/dvhub-service-actions
 ### Manueller Start
 
 ```bash
-cd /opt/dvhub/dv-control-webapp
+cd /opt/dvhub/dvhub
 DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 ```
 
