@@ -359,14 +359,15 @@ a {
 .history-chart-shell {
   min-height: 220px;
   display: grid;
-  place-items: center;
+  align-content: start;
   border-radius: 12px;
   border: 1px dashed rgba(141, 180, 221, 0.28);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
     rgba(6, 16, 28, 0.44);
   color: var(--text-soft);
-  text-align: center;
+  text-align: left;
+  padding: 12px;
 }
 
 .history-rows {
@@ -400,6 +401,14 @@ a {
   min-height: 168px;
 }
 
+.history-chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 168px;
+  color: var(--text-soft);
+  text-align: center;
+}
+
 .history-bar-card {
   display: grid;
   gap: 8px;
@@ -416,12 +425,165 @@ a {
   background: rgba(141, 180, 221, 0.5);
 }
 
+.history-stack {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  min-height: 132px;
+  width: 100%;
+  justify-content: center;
+}
+
 .history-bar-net {
   background: linear-gradient(180deg, rgba(57, 224, 111, 0.9), rgba(0, 168, 255, 0.72));
 }
 
+.history-bar-revenue {
+  background: linear-gradient(180deg, rgba(57, 224, 111, 0.95), rgba(42, 142, 92, 0.88));
+}
+
+.history-bar-grid {
+  background: linear-gradient(180deg, rgba(0, 168, 255, 0.96), rgba(0, 119, 255, 0.78));
+}
+
+.history-bar-pv {
+  background: linear-gradient(180deg, rgba(168, 240, 0, 0.95), rgba(86, 166, 0, 0.82));
+}
+
+.history-bar-battery {
+  background: linear-gradient(180deg, rgba(255, 152, 0, 0.95), rgba(191, 100, 0, 0.84));
+}
+
 .history-bar-energy {
   background: linear-gradient(180deg, rgba(0, 168, 255, 0.92), rgba(0, 119, 255, 0.7));
+}
+
+.history-bar-export {
+  background: linear-gradient(180deg, rgba(57, 224, 111, 0.92), rgba(20, 126, 84, 0.78));
+}
+
+.history-line-chart,
+.history-stack-chart {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.history-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.history-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  background: rgba(141, 180, 221, 0.5);
+}
+
+.history-line-svg {
+  width: 100%;
+  height: 160px;
+  overflow: visible;
+}
+
+.history-grid-line {
+  fill: none;
+  stroke: rgba(141, 180, 221, 0.2);
+  stroke-width: 1;
+}
+
+.history-series-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.history-series-cost,
+.history-series-import,
+.history-series-market,
+.history-series-user,
+.history-legend-swatch.history-series-cost,
+.history-legend-swatch.history-series-import,
+.history-legend-swatch.history-series-market,
+.history-legend-swatch.history-series-user {
+  stroke: var(--dvhub-electric);
+  background: var(--dvhub-electric);
+}
+
+.history-series-revenue,
+.history-series-export,
+.history-legend-swatch.history-series-revenue,
+.history-legend-swatch.history-series-export {
+  stroke: var(--dvhub-green);
+  background: var(--dvhub-green);
+}
+
+.history-series-net,
+.history-series-load,
+.history-legend-swatch.history-series-net,
+.history-legend-swatch.history-series-load {
+  stroke: var(--dvhub-lime);
+  background: var(--dvhub-lime);
+}
+
+.history-chart-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.history-chart-point {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background: rgba(7, 18, 30, 0.38);
+  font-size: 0.8rem;
+}
+
+.history-point-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 168, 255, 0.18);
+  color: var(--text-main);
+  font-size: 0.74rem;
+}
+
+.history-point-badge-warn {
+  background: rgba(255, 152, 0, 0.18);
+}
+
+.history-legend-swatch.history-bar-revenue {
+  background: rgba(57, 224, 111, 0.95);
+}
+
+.history-legend-swatch.history-bar-grid {
+  background: rgba(0, 168, 255, 0.96);
+}
+
+.history-legend-swatch.history-bar-pv {
+  background: rgba(168, 240, 0, 0.95);
+}
+
+.history-legend-swatch.history-bar-battery {
+  background: rgba(255, 152, 0, 0.95);
 }
 
 .history-price-list {
@@ -431,7 +593,7 @@ a {
 
 .history-price-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   gap: 10px;
   padding: 10px 12px;
   border-radius: 12px;

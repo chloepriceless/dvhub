@@ -10,6 +10,50 @@ function round2(value) {
   return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
 }
 
+function roundCtKwh(value) {
+  return round2(value);
+}
+
+function effectiveBatteryCostCtKwh(costs = {}) {
+  const pvCtKwh = Number(costs?.pvCtKwh);
+  const base = Number(costs?.batteryBaseCtKwh);
+  if (!Number.isFinite(base) && !Number.isFinite(pvCtKwh)) return null;
+  const markup = Number(costs?.batteryLossMarkupPct || 0);
+  const combinedBase =
+    (Number.isFinite(pvCtKwh) ? pvCtKwh : 0)
+    + (Number.isFinite(base) ? base : 0);
+  return roundCtKwh(combinedBase * (1 + markup / 100));
+}
+
+function proportionalSourceShares(slot) {
+  const loadKwh = Math.max(Number(slot.loadKwh || 0), 0);
+  const gridKwh = Math.max(Number(slot.importKwh || 0), 0);
+  const pvKwh = Math.max(Number(slot.pvKwh || 0), 0);
+  const batteryKwh = Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0);
+  const totalSupplyKwh = gridKwh + pvKwh + batteryKwh;
+  const servedLoadKwh = totalSupplyKwh > 0 ? Math.min(loadKwh, totalSupplyKwh) : 0;
+  if (servedLoadKwh <= 0 || totalSupplyKwh <= 0) {
+    return {
+      gridShareKwh: 0,
+      pvShareKwh: 0,
+      batteryShareKwh: 0
+    };
+  }
+  return {
+    gridShareKwh: servedLoadKwh * (gridKwh / totalSupplyKwh),
+    pvShareKwh: servedLoadKwh * (pvKwh / totalSupplyKwh),
+    batteryShareKwh: servedLoadKwh * (batteryKwh / totalSupplyKwh)
+  };
+}
+
+function costForShareEur(kwh, ctKwh) {
+  const shareKwh = Number(kwh || 0);
+  if (shareKwh <= 0) return 0;
+  const priceCtKwh = Number(ctKwh);
+  if (!Number.isFinite(priceCtKwh)) return null;
+  return round2((shareKwh * priceCtKwh) / 100);
+}
+
 function isDateOnly(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -129,10 +173,15 @@ function buildRowAccumulator(key, label) {
     importKwh: 0,
     exportKwh: 0,
     importCostEur: 0,
+    gridCostEur: 0,
+    pvCostEur: 0,
+    batteryCostEur: 0,
+    selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
     netEur: 0,
     slotCount: 0,
-    incompleteSlots: 0
+    incompleteSlots: 0,
+    estimatedSlots: 0
   };
 }
 
@@ -153,13 +202,75 @@ function summarizeRows(slots, view) {
     row.importKwh = round2(row.importKwh + slot.importKwh);
     row.exportKwh = round2(row.exportKwh + slot.exportKwh);
     row.importCostEur = round2(row.importCostEur + (slot.importCostEur || 0));
+    row.gridCostEur = round2(row.gridCostEur + (slot.gridCostEur || 0));
+    row.pvCostEur = round2(row.pvCostEur + (slot.pvCostEur || 0));
+    row.batteryCostEur = round2(row.batteryCostEur + (slot.batteryCostEur || 0));
+    row.selfConsumptionCostEur = round2(row.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0));
     row.exportRevenueEur = round2(row.exportRevenueEur + (slot.exportRevenueEur || 0));
-    row.netEur = round2(row.exportRevenueEur - row.importCostEur);
+    row.netEur = round2(row.exportRevenueEur - row.selfConsumptionCostEur);
     row.slotCount += 1;
     if (slot.incomplete) row.incompleteSlots += 1;
+    if (slot.estimated) row.estimatedSlots += 1;
     groups.set(key, row);
   }
   return [...groups.values()];
+}
+
+function buildDayCharts(slots) {
+  return {
+    dayEnergyLines: slots.map((slot) => ({
+      ts: slot.ts,
+      label: localTimeLabel(slot.ts),
+      importKwh: slot.importKwh,
+      exportKwh: slot.exportKwh,
+      loadKwh: round2(slot.loadKwh || 0),
+      estimated: Boolean(slot.estimated),
+      incomplete: Boolean(slot.incomplete)
+    })),
+    dayPriceLines: slots.map((slot) => ({
+      ts: slot.ts,
+      label: localTimeLabel(slot.ts),
+      marketPriceCtKwh: slot.marketPriceCtKwh,
+      userImportPriceCtKwh: slot.userImportPriceCtKwh,
+      estimated: Boolean(slot.estimated),
+      incomplete: Boolean(slot.incomplete)
+    })),
+    dayFinancialLines: slots.map((slot) => ({
+      ts: slot.ts,
+      label: localTimeLabel(slot.ts),
+      gridCostEur: slot.gridCostEur,
+      pvCostEur: slot.pvCostEur,
+      batteryCostEur: slot.batteryCostEur,
+      selfConsumptionCostEur: slot.selfConsumptionCostEur,
+      exportRevenueEur: slot.exportRevenueEur,
+      netEur: slot.netEur,
+      estimated: Boolean(slot.estimated),
+      incomplete: Boolean(slot.incomplete)
+    }))
+  };
+}
+
+function buildPeriodCharts(rows) {
+  return {
+    periodFinancialBars: rows.map((row) => ({
+      label: row.label,
+      exportRevenueEur: row.exportRevenueEur,
+      gridCostEur: row.gridCostEur,
+      pvCostEur: row.pvCostEur,
+      batteryCostEur: row.batteryCostEur,
+      selfConsumptionCostEur: row.selfConsumptionCostEur,
+      netEur: row.netEur,
+      estimatedSlots: row.estimatedSlots,
+      incompleteSlots: row.incompleteSlots
+    })),
+    periodEnergyBars: rows.map((row) => ({
+      label: row.label,
+      importKwh: row.importKwh,
+      exportKwh: row.exportKwh,
+      estimatedSlots: row.estimatedSlots,
+      incompleteSlots: row.incompleteSlots
+    }))
+  };
 }
 
 export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
@@ -178,6 +289,8 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
     });
     const priceByTs = new Map(priceRows.map((row) => [row.ts, row]));
     const pricingConfig = getPricingConfig() || {};
+    const pvCostCtKwh = Number(pricingConfig?.costs?.pvCtKwh);
+    const batteryCostCtKwh = effectiveBatteryCostCtKwh(pricingConfig?.costs || {});
 
     const slots = energySlots
       .filter((slot) => {
@@ -191,39 +304,64 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
           ts: slot.ts,
           ct_kwh: marketPriceCtKwh
         }, pricingConfig);
+        const shares = proportionalSourceShares(slot);
 
-        const missingImportPrice = slot.importKwh > 0 && !Number.isFinite(userImportPriceCtKwh);
+        const missingImportPrice = shares.gridShareKwh > 0 && !Number.isFinite(userImportPriceCtKwh);
         const missingMarketPrice = slot.exportKwh > 0 && !Number.isFinite(marketPriceCtKwh);
-        const importCostEur = missingImportPrice ? null : round2((slot.importKwh * Number(userImportPriceCtKwh || 0)) / 100);
+        const gridCostEur = costForShareEur(shares.gridShareKwh, userImportPriceCtKwh);
+        const pvCostEur = costForShareEur(shares.pvShareKwh, pvCostCtKwh);
+        const batteryCostEur = costForShareEur(shares.batteryShareKwh, batteryCostCtKwh);
+        const importCostEur = gridCostEur;
+        const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
         const exportRevenueEur = missingMarketPrice ? null : round2((slot.exportKwh * Number(marketPriceCtKwh || 0)) / 100);
-        const netEur = round2((exportRevenueEur || 0) - (importCostEur || 0));
+        const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
 
         return {
           ...slot,
+          ...shares,
           marketPriceCtKwh,
           userImportPriceCtKwh,
+          gridCostEur,
+          pvCostEur,
+          batteryCostEur,
+          selfConsumptionCostEur,
           importCostEur,
           exportRevenueEur,
           netEur,
-          incomplete: missingImportPrice || missingMarketPrice
+          estimated: Boolean(slot.estimated),
+          incomplete: Boolean(slot.incomplete) || missingImportPrice || missingMarketPrice
         };
       });
 
     const missingImportPriceSlots = slots.filter((slot) => slot.importKwh > 0 && !Number.isFinite(slot.userImportPriceCtKwh)).length;
     const missingMarketPriceSlots = slots.filter((slot) => slot.exportKwh > 0 && !Number.isFinite(slot.marketPriceCtKwh)).length;
+    const incompleteSlots = slots.filter((slot) => slot.incomplete).length;
+    const estimatedSlots = slots.filter((slot) => slot.estimated).length;
     const kpis = slots.reduce((totals, slot) => ({
       importKwh: round2(totals.importKwh + slot.importKwh),
       exportKwh: round2(totals.exportKwh + slot.exportKwh),
       importCostEur: round2(totals.importCostEur + (slot.importCostEur || 0)),
+      gridCostEur: round2(totals.gridCostEur + (slot.gridCostEur || 0)),
+      pvCostEur: round2(totals.pvCostEur + (slot.pvCostEur || 0)),
+      batteryCostEur: round2(totals.batteryCostEur + (slot.batteryCostEur || 0)),
+      selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
       netEur: round2(totals.netEur + slot.netEur)
     }), {
       importKwh: 0,
       exportKwh: 0,
       importCostEur: 0,
+      gridCostEur: 0,
+      pvCostEur: 0,
+      batteryCostEur: 0,
+      selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
       netEur: 0
     });
+    const rows = summarizeRows(slots, view);
+    const charts = view === 'day'
+      ? buildDayCharts(slots)
+      : buildPeriodCharts(rows);
 
     return {
       view,
@@ -238,6 +376,10 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
       series: {
         financial: slots.map((slot) => ({
           ts: slot.ts,
+          gridCostEur: slot.gridCostEur,
+          pvCostEur: slot.pvCostEur,
+          batteryCostEur: slot.batteryCostEur,
+          selfConsumptionCostEur: slot.selfConsumptionCostEur,
           importCostEur: slot.importCostEur,
           exportRevenueEur: slot.exportRevenueEur,
           netEur: slot.netEur
@@ -245,7 +387,11 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
         energy: slots.map((slot) => ({
           ts: slot.ts,
           importKwh: slot.importKwh,
-          exportKwh: slot.exportKwh
+          exportKwh: slot.exportKwh,
+          loadKwh: slot.loadKwh,
+          gridShareKwh: round2(slot.gridShareKwh || 0),
+          pvShareKwh: round2(slot.pvShareKwh || 0),
+          batteryShareKwh: round2(slot.batteryShareKwh || 0)
         })),
         prices: slots.map((slot) => ({
           ts: slot.ts,
@@ -253,13 +399,15 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
           userImportPriceCtKwh: slot.userImportPriceCtKwh
         }))
       },
-      rows: summarizeRows(slots, view),
+      charts,
+      rows,
       slots,
       meta: {
         unresolved: {
           missingImportPriceSlots,
           missingMarketPriceSlots,
-          incompleteSlots: missingImportPriceSlots + missingMarketPriceSlots,
+          incompleteSlots,
+          estimatedSlots,
           slotCount: slots.length
         }
       }

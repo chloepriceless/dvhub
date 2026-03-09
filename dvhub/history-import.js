@@ -3,7 +3,29 @@ const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
 const PRICE_BUCKET_SECONDS = 900;
 
-import { buildHistoricalPriceTelemetrySamples } from './telemetry-runtime.js';
+import {
+  buildHistoricalPriceTelemetrySamples,
+  buildHistoricalTelemetrySample
+} from './telemetry-runtime.js';
+
+const CORE_SLOT_FIELDS = [
+  'loadPowerW',
+  'pvTotalW',
+  'gridImportW',
+  'gridExportW',
+  'batteryChargeW',
+  'batteryDischargeW'
+];
+
+const FIELD_TO_SERIES = {
+  loadPowerW: 'load_power_w',
+  pvTotalW: 'pv_total_w',
+  gridImportW: 'grid_import_w',
+  gridExportW: 'grid_export_w',
+  batteryChargeW: 'battery_charge_w',
+  batteryDischargeW: 'battery_discharge_w',
+  batteryPowerW: 'battery_power_w'
+};
 
 function toIso(value) {
   return new Date(value).toISOString();
@@ -99,6 +121,260 @@ function pushSeriesRow(rows, entry) {
     quality: entry.quality || 'backfilled',
     meta: entry.meta || null
   });
+}
+
+function kwhToAveragePower(value, resolutionSeconds) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return (numeric * 3600000) / Number(resolutionSeconds || 900);
+}
+
+function getOrCreateSlotBucket(slotBuckets, ts, resolutionSeconds) {
+  const key = `${ts}:${resolutionSeconds}`;
+  let bucket = slotBuckets.get(key);
+  if (!bucket) {
+    bucket = {
+      ts,
+      resolutionSeconds,
+      values: {},
+      metaByField: {},
+      samples: new Map()
+    };
+    slotBuckets.set(key, bucket);
+  }
+  return bucket;
+}
+
+function setBucketField(bucket, field, value, meta) {
+  if (!Number.isFinite(Number(value))) return;
+  bucket.values[field] = Number(value);
+  bucket.metaByField[field] = meta;
+}
+
+function addBucketSample(bucket, sample, field = null) {
+  if (!sample?.seriesKey) return;
+  bucket.samples.set(sample.seriesKey, sample);
+  if (field) setBucketField(bucket, field, sample.value, sample.meta);
+}
+
+function addMappedCanonicalSample(bucket, { seriesKey, field = null, value, unit = 'W', meta }) {
+  const sample = buildHistoricalTelemetrySample({
+    seriesKey,
+    ts: bucket.ts,
+    value,
+    unit,
+    resolutionSeconds: bucket.resolutionSeconds,
+    meta
+  });
+  addBucketSample(bucket, sample, field);
+}
+
+function mapBatterySamples(bucket, value, type, code) {
+  const meta = {
+    provenance: 'mapped_from_vrm',
+    vrmType: type,
+    vrmCode: code
+  };
+  addMappedCanonicalSample(bucket, {
+    seriesKey: 'battery_power_w',
+    field: 'batteryPowerW',
+    value,
+    meta
+  });
+  if (value >= 0) {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'battery_discharge_w',
+      field: 'batteryDischargeW',
+      value,
+      meta
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'battery_charge_w',
+      field: 'batteryChargeW',
+      value: 0,
+      meta
+    });
+    return;
+  }
+  addMappedCanonicalSample(bucket, {
+    seriesKey: 'battery_charge_w',
+    field: 'batteryChargeW',
+    value: Math.abs(value),
+    meta
+  });
+  addMappedCanonicalSample(bucket, {
+    seriesKey: 'battery_discharge_w',
+    field: 'batteryDischargeW',
+    value: 0,
+    meta
+  });
+}
+
+function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSeconds }) {
+  const mappedMeta = {
+    provenance: 'mapped_from_vrm',
+    vrmType: type,
+    vrmCode: code
+  };
+
+  if (type === 'venus' && code === 'Pdc') {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'pv_total_w',
+      field: 'pvTotalW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Pc') {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'load_power_w',
+      field: 'loadPowerW',
+      value: kwhToAveragePower(rawValue, resolutionSeconds),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Gc') {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'grid_import_w',
+      field: 'gridImportW',
+      value: kwhToAveragePower(rawValue, resolutionSeconds),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'consumption' && code === 'Gs') {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'grid_export_w',
+      field: 'gridExportW',
+      value: kwhToAveragePower(rawValue, resolutionSeconds),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'kwh' && code === 'Pb') {
+    mapBatterySamples(bucket, kwhToAveragePower(rawValue, resolutionSeconds), type, code);
+  }
+}
+
+function deriveMissingField(values, field) {
+  const load = values.loadPowerW;
+  const pv = values.pvTotalW;
+  const gridImport = values.gridImportW;
+  const gridExport = values.gridExportW;
+  const batteryCharge = values.batteryChargeW;
+  const batteryDischarge = values.batteryDischargeW;
+
+  switch (field) {
+    case 'loadPowerW':
+      if ([pv, batteryDischarge, gridImport, gridExport, batteryCharge].every(Number.isFinite)) {
+        return pv + batteryDischarge + gridImport - gridExport - batteryCharge;
+      }
+      return null;
+    case 'pvTotalW':
+      if ([load, batteryDischarge, gridImport, gridExport, batteryCharge].every(Number.isFinite)) {
+        return load - batteryDischarge - gridImport + gridExport + batteryCharge;
+      }
+      return null;
+    case 'gridImportW':
+      if ([load, pv, batteryDischarge, gridExport, batteryCharge].every(Number.isFinite)) {
+        return load - pv - batteryDischarge + gridExport + batteryCharge;
+      }
+      return null;
+    case 'gridExportW':
+      if ([pv, batteryDischarge, gridImport, batteryCharge, load].every(Number.isFinite)) {
+        return pv + batteryDischarge + gridImport - batteryCharge - load;
+      }
+      return null;
+    case 'batteryChargeW':
+      if ([pv, batteryDischarge, gridImport, gridExport, load].every(Number.isFinite)) {
+        return pv + batteryDischarge + gridImport - gridExport - load;
+      }
+      return null;
+    case 'batteryDischargeW':
+      if ([load, pv, gridImport, gridExport, batteryCharge].every(Number.isFinite)) {
+        return load - pv - gridImport + gridExport + batteryCharge;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+function reconstructSlotBucket(bucket) {
+  if (Number.isFinite(bucket.values.batteryPowerW)) {
+    if (!Number.isFinite(bucket.values.batteryChargeW) && bucket.values.batteryPowerW < 0) {
+      setBucketField(bucket, 'batteryChargeW', Math.abs(bucket.values.batteryPowerW), {
+        provenance: 'mapped_from_vrm',
+        vrmType: 'kwh',
+        vrmCode: 'Pb'
+      });
+    }
+    if (!Number.isFinite(bucket.values.batteryDischargeW) && bucket.values.batteryPowerW > 0) {
+      setBucketField(bucket, 'batteryDischargeW', bucket.values.batteryPowerW, {
+        provenance: 'mapped_from_vrm',
+        vrmType: 'kwh',
+        vrmCode: 'Pb'
+      });
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const field of CORE_SLOT_FIELDS) {
+      if (Number.isFinite(bucket.values[field])) continue;
+      const derived = deriveMissingField(bucket.values, field);
+      if (!Number.isFinite(derived)) continue;
+      const seriesKey = FIELD_TO_SERIES[field];
+      const meta = {
+        provenance: 'estimated',
+        derivedFrom: CORE_SLOT_FIELDS
+          .filter((candidate) => candidate !== field && Number.isFinite(bucket.values[candidate]))
+          .map((candidate) => FIELD_TO_SERIES[candidate])
+      };
+      addBucketSample(bucket, buildHistoricalTelemetrySample({
+        seriesKey,
+        ts: bucket.ts,
+        value: derived,
+        unit: 'W',
+        resolutionSeconds: bucket.resolutionSeconds,
+        meta
+      }), field);
+      changed = true;
+    }
+  }
+
+  if (Number.isFinite(bucket.values.batteryChargeW) || Number.isFinite(bucket.values.batteryDischargeW)) {
+    const batteryPower = Number(bucket.values.batteryDischargeW || 0) - Number(bucket.values.batteryChargeW || 0);
+    if (!bucket.samples.has('battery_power_w')) {
+      addBucketSample(bucket, buildHistoricalTelemetrySample({
+        seriesKey: 'battery_power_w',
+        ts: bucket.ts,
+        value: batteryPower,
+        unit: 'W',
+        resolutionSeconds: bucket.resolutionSeconds,
+        meta: {
+          provenance: 'estimated',
+          derivedFrom: ['battery_discharge_w', 'battery_charge_w']
+        }
+      }), 'batteryPowerW');
+    }
+  }
+
+  const incomplete = CORE_SLOT_FIELDS.some((field) => !Number.isFinite(bucket.values[field]));
+  return [...bucket.samples.values()].map((sample) => ({
+    ...sample,
+    meta: {
+      ...(sample.meta || {}),
+      incomplete
+    }
+  }));
 }
 
 function parseVrmSeries(type, records, resolutionSeconds) {
@@ -228,7 +504,8 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
 
     const importConfig = telemetryConfig.historyImport || {};
     const resolutionSeconds = intervalSeconds(interval);
-    const allRows = [];
+    const rawRows = [];
+    const slotBuckets = new Map();
 
     for (const type of VRM_HISTORY_TYPES) {
       const payload = await fetchVrmStats({
@@ -240,8 +517,26 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
         interval,
         fetchImpl
       });
-      allRows.push(...parseVrmSeries(type, payload.records || {}, resolutionSeconds));
+      rawRows.push(...parseVrmSeries(type, payload.records || {}, resolutionSeconds));
+      for (const [code, values] of Object.entries(payload.records || {})) {
+        if (!Array.isArray(values)) continue;
+        for (const item of values) {
+          if (!Array.isArray(item) || item.length < 2) continue;
+          const ts = toIso(item[0]);
+          const bucket = getOrCreateSlotBucket(slotBuckets, ts, resolutionSeconds);
+          mapCanonicalRowsFromVrm({
+            bucket,
+            type,
+            code,
+            rawValue: item[1],
+            resolutionSeconds
+          });
+        }
+      }
     }
+
+    const canonicalRows = [...slotBuckets.values()].flatMap((bucket) => reconstructSlotBucket(bucket));
+    const allRows = [...rawRows, ...canonicalRows];
 
     if (!allRows.length) {
       return { ok: false, error: 'no importable rows returned from VRM' };
