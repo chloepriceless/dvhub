@@ -1,6 +1,6 @@
-# PlexLite Corporate Identity
+# DVhub Corporate Identity
 
-Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die Website (`public/index.html`, `public/tools.html`) sowie die zentralen Styles (`public/styles.css`) gemappt.
+Diese Richtlinie beschreibt das visuelle System für DVhub und ist auf die Website (`public/index.html`, `public/tools.html`) sowie die zentralen Styles (`public/styles.css`) gemappt.
 
 ## 1. Brand Positioning
 - Claim: `The unofficial DV interface`
@@ -9,9 +9,9 @@ Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die We
 - Visuelle Leitidee: Energiefluss (Solar + Netz) als spannungsreiche, kontrastreiche Leitgrafik
 
 ## 2. Logo System
-- Primarlogo: `public/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png`
+- Primarlogo: `public/assets/a_digital_logo_design_for_dvhub_is_displayed_by.png`
 - Logoaufbau: Badge + Ribbon + Bolt als zentrales Erkennungszeichen
-- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `P` im Wort `PLEXLITE`
+- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `D` im Wort `DVhub`
 - Nicht erlaubt:
   - Logo verzerren
   - Farben austauschen ausserhalb der definierten Palette
@@ -38,12 +38,12 @@ Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die We
 - `--danger`: `#ff6c63`
 
 ## 4. Typografie
-- Titel / Headlines: `Saira Condensed` (Fette 500/700/800)
-- Body / UI: `Manrope` (Fette 400/500/600/700)
+- Titel / Headlines: `Rajdhani` (Fette 500/600/700)
+- Body / UI: `Inter` (Fette 400/500/600/700)
 - Monospace (Logs/JSON): `JetBrains Mono` (Fallback: `Consolas`)
 
 ## 5. UI Prinzipien
-- Panels: dunkle, glashafte Flaechen mit gelbem/zyanem Kantenakzent
+- Panels: dunkle, glashafte Flächen mit gelbem/zyanem Kantenakzent
 - Buttons: klare Funktionshierarchie
   - Primary = gelb/orange Verlauf
   - Secondary = dunkles Ghost-Pattern
@@ -55,7 +55,7 @@ Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die We
 
 ## 6. Motion
 - Page-Load: gestaffelte `riseIn`-Animation auf Panel-Ebene
-- Logo: subtile `logoPulse` Bewegung fuer lebendige Markenpraesenz
+- Logo: subtile `logoPulse` Bewegung für lebendige Markenpraesenz
 - Hover: leichte Lift-Interaktion auf Buttons
 
 ## 7. Voice & Copy
@@ -67,4 +67,4 @@ Diese Richtlinie beschreibt das visuelle System fuer PlexLite und ist auf die We
 - Design Tokens + Komponenten: `public/styles.css`
 - Dashboard-Anwendung: `public/index.html`
 - Tools-Anwendung: `public/tools.html`
-- Chart-Branding: `public/app.js` (Farbvariablen fuer SVG)
+- Chart-Branding: `public/app.js` (Farbvariablen für SVG)

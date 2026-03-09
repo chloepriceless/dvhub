@@ -10,10 +10,13 @@ package-lock.json
 # OS
 .DS_Store
 Thumbs.db
+docs/plans/
 
 # IDE / Tools
 .claude/
 .vscode/
+.worktrees/
+.planning/
 *.swp
 *.swo
 *~

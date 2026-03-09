@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="docs/plexlite-logo.png" alt="PlexLite Logo" width="640" />
+  <img src="assets/dvhub.jpg" alt="DVhub Logo" width="640" />
 </p>
 
 ```
-██████╗ ██╗     ███████╗██╗  ██╗██╗     ██╗████████╗███████╗
-██╔══██╗██║     ██╔════╝╚██╗██╔╝██║     ██║╚══██╔══╝██╔════╝
-██████╔╝██║     █████╗   ╚███╔╝ ██║     ██║   ██║   █████╗
-██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║     ██║   ██║   ██╔══╝
-██║     ███████╗███████╗██╔╝ ██╗███████╗██║   ██║   ███████╗
-╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝   ╚═╝   ╚══════╝
+██████╗ ██╗   ██╗██╗  ██╗██╗   ██╗██████╗ 
+██╔══██╗██║   ██║██║  ██║██║   ██║██╔══██╗
+██║  ██║██║   ██║███████║██║   ██║██████╔╝
+██║  ██║╚██╗ ██╔╝██╔══██║██║   ██║██╔══██╗
+██████╔╝ ╚████╔╝ ██║  ██║╚██████╔╝██████╔╝
+╚═════╝   ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 ```
 
 <p align="center">
@@ -21,27 +21,49 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.1 by agentic engineering.|
+| **Status** | WIP -- Version 0.2.5 by agentic engineering.|
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
 <p align="center">
-  <img src="docs/dashboard-desktop.png" alt="PlexLite Dashboard — Desktop" width="900" />
+  <img src="assets/dvhub-fullpage-192.168.1.66-8080.png" alt="DVhub Dashboard — Desktop" width="900" />
 </p>
 
 ---
 
-## Ueberblick
+## Änderungen seit `main` (v0.1.0 -> v0.2.5)
 
-PlexLite ersetzt bzw. ergaenzt einen physischen Plexlog als DV-Schnittstelle.
+Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
+
+- **DVhub Branding-Refresh** mit aktualisierten Assets, Navigation und konsistenter Produktbenennung in Dashboard, Einstellungen, Setup und Tools
+- **Interaktives Day-Ahead-Chart**: Balken leuchten beim Hover, Einzelklick legt sofort ein Schedule-Fenster an, Drag-Auswahl bündelt mehrere Börsenfenster und erzeugt bei Lücken mehrere Schedule-Zeilen
+- **Erweiterte Marktdatenkarte** mit Heute- und Morgen-Min/Max, Negativpreis-Hinweisen und sichtbarem Schutzstatus
+- **Kompakte Einstellungsoberfläche** mit linker Bereichsnavigation, fokussiertem Arbeitsbereich, Import/Export, Health-Checks und optionalem Restart-Button
+- **Geführter Setup-Assistent** mit transportabhängigen Schritten, Review-Snapshot, blockierender Validierung vor dem Speichern und validiertem Config-Import
+- **MQTT-Transport für Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive für Settings-Topics
+- **Erweiterte Schedule-Steuerung** für Grid Setpoint, Charge Current und Min SOC mit Default-Werten, manuellen Writes und vereinfachter GUI
+- **EOS- und EMHASS-Integrations-Endpunkte** zum Abrufen von Messwerten/Preisen und Anwenden von Optimierungsergebnissen
+- **Interne Telemetrie-Datenbank** für Live-Historie, Preiszeitreihen, Steuerereignisse und Optimizer-Runs direkt in DVhub
+- **History-Import über VRM** für spätere Nachfüllung bei neuen Installationen und Datenlücken
+- **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung für Influx v2/v3
+- **Neues `install.sh`** für einfache GitHub-Installation inklusive systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
+- **Dokumentation erweitert und sprachlich vereinheitlicht** inklusive deutscher Umlaute und aktueller GUI-/Setup-/Installationspfade
+
+Damit ist DVhub jetzt nicht mehr nur ein Dashboard plus Proxy, sondern eine installier- und wartbare Anwendung mit geführter Inbetriebnahme, validierter Konfiguration und direkter Betriebssteuerung aus der Weboberfläche.
+
+---
+
+## Überblick
+
+DVhub ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle.
 Alle Modbus-Anfragen von LUOX wurden per Paketmitschnitt am physischen Plexlog abgefangen
-und in Software nachgebaut -- damit koennen **alle Victron-Anlagen** in die Direktvermarktung integriert werden.
+und in Software nachgebaut -- damit können **alle Victron-Anlagen** in die Direktvermarktung integriert werden.
 
-**Warum nicht direkt ueber den Plexlog?**
-Der Plexlog kann Live-Werte liefern (z.B. ueber einen Victron VM3P75CT Zaehler via ModbusTCP),
-aber die Leistungsreduzierung scheint nur ueber die physischen Modbus-Ports zu funktionieren --
-eine Steuerung der Victron-Anlage war bisher nicht moeglich.
-PlexLite liest die Daten direkt vom Ekrano-GX und beantwortet die Modbus-Anfragen des Direktvermarkters.
+**Warum nicht direkt über den Plexlog?**
+Der Plexlog kann Live-Werte liefern (z.B. über einen Victron VM3P75CT Zähler via ModbusTCP),
+aber die Leistungsreduzierung scheint nur über die physischen Modbus-Ports zu funktionieren --
+eine Steuerung der Victron-Anlage war bisher nicht möglich.
+DVhub liest die Daten direkt vom Ekrano-GX und beantwortet die Modbus-Anfragen des Direktvermarkters.
 
 ---
 
@@ -51,23 +73,23 @@ PlexLite liest die Daten direkt vom Ekrano-GX und beantwortet die Modbus-Anfrage
 
 Eine DV-Schnittstelle verbindet den Direktvermarkter mit deiner Anlage, um:
 - **Live-Werte** abzufragen (Erzeugung, Einspeisung, SOC, etc.)
-- **Steuersignale** zu empfangen (Abregelung bei negativen Boersenpreisen)
+- **Steuersignale** zu empfangen (Abregelung bei negativen Börsenpreisen)
 
-So kann der Direktvermarkter bei negativen Strompreisen eine Abregelung ausloesen
-und vermeidet Kosten fuer eingespeisten Strom unter Marktwert.
+So kann der Direktvermarkter bei negativen Strompreisen eine Abregelung auslösen
+und vermeidet Kosten für eingespeisten Strom unter Marktwert.
 
-### Wer benoetigt eine DV-Schnittstelle?
+### Wer benötigt eine DV-Schnittstelle?
 
 Laut dem **Solarspitzengesetz** (auch "Stromspitzengesetz", in Kraft seit 25.02.2025):
-- Alle PV-Anlagen **ab 25 kWp** benoetigen eine DV-Schnittstelle fuer die Direktvermarktung
-- Kleinere Anlagen koennen freiwillig teilnehmen
+- Alle PV-Anlagen **ab 25 kWp** benötigen eine DV-Schnittstelle für die Direktvermarktung
+- Kleinere Anlagen können freiwillig teilnehmen
 
 ### Warum Direktvermarktung unter 30 kWp?
 
-Bisher lohnte sich die Direktvermarktung fuer kleine Anlagen kaum -- man brauchte 60-100 kWh Speicher
-fuer nennenswerte Mehrerloese. Mit der kommenden **Pauschaloption** aendert sich das grundlegend:
+Bisher lohnte sich die Direktvermarktung für kleine Anlagen kaum -- man brauchte 60-100 kWh Speicher
+für nennenswerte Mehrerlöse. Mit der kommenden **Pauschaloption** ändert sich das grundlegend:
 Ab ca. 40 kWh Speicher wird die Teilnahme attraktiv, weil Speicher nun flexibel aus PV *und* Netz
-geladen werden duerfen.
+geladen werden dürfen.
 
 ### Die Pauschaloption (MiSpeL)
 
@@ -75,22 +97,22 @@ Die Bundesnetzagentur erarbeitet im Festlegungsverfahren **MiSpeL** (Marktintegr
 und Ladepunkten, Az. 618-25-02) die Umsetzung der Pauschaloption:
 
 **Kernpunkte:**
-- **500 kWh pro kWp** pauschal gefoerderte Einspeisung pro Jahr (Differenz Marktwert zu Anzulegendem Wert wird verguetet)
-- Alles darueber wird als "Graustrom" abgerechnet (Boersenwert, keine EEG-Foerderung)
+- **500 kWh pro kWp** pauschal geförderte Einspeisung pro Jahr (Differenz Marktwert zu Anzulegendem Wert wird vergütet)
+- Alles darüber wird als "Graustrom" abgerechnet (Börsenwert, keine EEG-Förderung)
 - **Mischstromspeicher erlaubt** -- PV und Netzstrom im selben Speicher ohne Subventionsbetrug
-- **Bidirektionales Laden** mit E-Autos ohne weiteres moeglich
-- Nur **ein Smart Meter** (Moderne Messeinrichtung + Gateway) noetig -- keine komplizierten Zaehlkonzepte
-- Max. **30 kWp** installierte Modulleistung (Steckersolargeraete zaehlen nicht)
-- Voraussetzung: **gefoerderte Direktvermarktung** (nicht Einspeiseverguetung)
+- **Bidirektionales Laden** mit E-Autos ohne weiteres möglich
+- Nur **ein Smart Meter** (Moderne Messeinrichtung + Gateway) nötig -- keine komplizierten Zählkonzepte
+- Max. **30 kWp** installierte Modulleistung (Steckersolargeräte zählen nicht)
+- Voraussetzung: **geförderte Direktvermarktung** (nicht Einspeisevergütung)
 
-**Status (Maerz 2026):**
+**Status (März 2026):**
 - BNetzA Festlegung muss bis **30. Juni 2026** finalisiert werden
 - **EU-beihilferechtliche Genehmigung** steht noch aus
 - Konsultationsphase abgeschlossen (Oktober 2025)
 
 **Offizielle Links:**
 - [BNetzA MiSpeL Festlegungsverfahren](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/start.html)
-- [BNetzA MiSpeL Artikel/Uebersicht](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/artikel.html)
+- [BNetzA MiSpeL Artikel/Übersicht](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/artikel.html)
 - [BNetzA Pressemitteilung (19.09.2025)](https://www.bundesnetzagentur.de/SharedDocs/Pressemitteilungen/DE/2025/20250919_MiSpeL.html)
 - [Anlage 2: Pauschaloption Eckpunkte (PDF)](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/DL/Anlage2.pdf)
 - [BMWK FAQ Solarspitzengesetz](https://www.bundeswirtschaftsministerium.de/Redaktion/DE/Dossier/ErneuerbareEnergien/faq-zur-energierechtsnovelle-zur-vermeidung-von-stromspitzen-und-zum-biomassepaket.html)
@@ -102,34 +124,59 @@ und Ladepunkten, Az. 618-25-02) die Umsetzung der Pauschaloption:
 ### Was muss eingerichtet werden?
 
 1. **LUOX mitteilen** dass ein PLEXLOG als DV-Schnittstelle verbaut ist
-2. **OpenVPN-Tunnel** zu LUOX einrichten (Config + Zertifikat erhaelt man von LUOX)
-3. **Portforwarding** in der Firewall: Port 502 (Modbus TCP) vom VPN-Tunnel auf Port 1502 (PlexLite) weiterleiten
+2. **OpenVPN-Tunnel** zu LUOX einrichten (Config + Zertifikat erhält man von LUOX)
+3. **Portforwarding** in der Firewall: Port 502 (Modbus TCP) vom VPN-Tunnel auf Port 1502 (DVhub) weiterleiten
 
 ### Unifi-Spezialfall
 
-Unifi kann das Portforwarding vom VPN-Tunnel zum Modbus-Endpunkt nicht ueber die GUI konfigurieren.
-Die noetige iptables-Regel muss per CLI gesetzt werden -- und ueberlebt ggf. keinen Reboot.
+Unifi kann das Portforwarding vom VPN-Tunnel zum Modbus-Endpunkt nicht über die GUI konfigurieren.
+Die nötige iptables-Regel muss per CLI gesetzt werden -- und überlebt ggf. keinen Reboot.
 
 In der Datei `20-dv-modbus.sh` ist ein Reboot-Script das die Regeln semi-persistent macht.
 Es kann auch zur Ersteinrichtung genutzt werden sobald der VPN-Tunnel steht.
 
-### Verbindung pruefen
+### Verbindung prüfen
 
-Die [LUOX Testseite](https://www.luox-energy.de/verbindungsstatus) sollte gruen anzeigen sobald:
+Die [LUOX Testseite](https://www.luox-energy.de/verbindungsstatus) sollte grün anzeigen sobald:
 - VPN-Tunnel aufgebaut ist
 - Portweiterleitung funktioniert
-- PlexLite auf Port 1502 laeuft und antwortet
+- DVhub auf Port 1502 läuft und antwortet
 
 ---
 
 ## DV Control Webapp
 
-Webapp + Modbus-Proxy als Ersatz/Ergaenzung zum Node-RED-Flow.
+Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
+
+### Neue Weboberflächen
+
+- **Dashboard** für Live-Werte, DV-Status, Day-Ahead-Chart und direkte Schedule-Steuerung aus den Börsenfenstern
+- **Einstellungsseite** für die komplette Konfiguration als kompakte Navigation mit fokussiertem Arbeitsbereich statt als rohe `config.json`
+- **First-Run-Setup** als geführter Assistent mit Review-Schritt, Validierung und sauberem Import vorhandener Configs
+- **Import/Export** vorhandener Config-Dateien direkt über die Weboberfläche
+- **Health & Service** mit Install-/Status-Checks und optionalem Restart-Button für den systemd-Dienst
 
 ### Getestet auf
 - Debian 12 Bookworm LXC Container (Community Scripts)
 
 ### Installation
+
+Einfachste Variante:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash
+```
+
+Das Skript installiert Node.js, klont das Repo nach `/opt/dvhub`, richtet einen systemd-Service ein
+und verwendet bewusst eine **externe Config-Datei** unter `/etc/dvhub/config.json`.
+Wenn diese Datei noch nicht existiert, öffnet die Weboberfläche automatisch den neuen Setup-Assistenten.
+Außerdem aktiviert das Skript die neuen **Service-Aktionen** in der GUI
+(Health-Check + Restart-Button) über eine passende `sudoers`-Regel.
+Zusätzlich wird automatisch eine **interne SQLite-Telemetrie-Datenbank**
+unter `/var/lib/dvhub/telemetry.sqlite` angelegt, die Livewerte, Preise,
+Steuerereignisse und Optimizer-Daten ab dem ersten Start mitschreibt.
+
+Manuelle Installation:
 
 ```bash
 sudo apt update
@@ -138,14 +185,17 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo apt install -y tcpdump jq
 sudo mkdir -p /opt/dv-control-webapp
-sudo useradd -r -s /usr/sbin/nologin plexlite
+sudo mkdir -p /var/lib/dvhub
+sudo useradd -r -s /usr/sbin/nologin dvhub
 ```
 An dieser Stelle den Inhalt des Repos nach `/opt/dv-control-webapp` kopieren.
 ```bash
-sudo chown -R plexlite:plexlite /opt/dv-control-webapp
+sudo chown -R dvhub:dvhub /opt/dv-control-webapp /var/lib/dvhub
 cd /opt/dv-control-webapp
 cp config.example.json config.json
 nano config.json  # Konfiguration anpassen
+# Optional: Nur bei MQTT-Nutzung (victron.transport: "mqtt")
+npm install mqtt
 ```
 
 ### Systemd Service einrichten
@@ -157,25 +207,26 @@ sudo nano /etc/systemd/system/dv-control-webapp.service
 Inhalt:
 ```ini
 [Unit]
-Description=PlexLite DV Control
+Description=DVhub DV Control
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=plexlite
-Group=plexlite
+User=dvhub
+Group=dvhub
 WorkingDirectory=/opt/dv-control-webapp
-ExecStart=/usr/bin/node /opt/dv-control-webapp/server.js
+ExecStart=/usr/bin/node --experimental-sqlite /opt/dv-control-webapp/server.js
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
+Environment=DV_DATA_DIR=/var/lib/dvhub
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-> **Hinweis:** Wenn PlexLite auf einem privilegierten Port (z.B. 502) lauschen muss,
+> **Hinweis:** Wenn DVhub auf einem privilegierten Port (z.B. 502) lauschen muss,
 > kann man stattdessen `User=root` verwenden oder dem Node-Binary `CAP_NET_BIND_SERVICE` geben.
 
 ```bash
@@ -189,6 +240,31 @@ cd /opt/dv-control-webapp
 cp config.example.json config.json
 npm start
 ```
+
+### Setup-Flow nach der Installation
+
+- Wenn die Config-Datei fehlt oder ungültig ist, zeigt `/` automatisch den **Setup-Assistenten**
+- Der Assistent führt durch:
+  - HTTP-Port und API-Token
+  - Victron-Verbindung per Modbus TCP oder MQTT
+  - Basiswerte für Meter / DV-Proxy
+  - EPEX- und Influx-Grunddaten
+- Vor dem Speichern gibt es einen **Review-Schritt** mit Zusammenfassung und blockierender Validierung
+- Danach kann in der **Einstellungsseite** jedes Detail weiter verfeinert werden
+- Bestehende `config.json`-Dateien können importiert und exportiert werden
+
+### Admin / Health
+
+Unter **Einstellungen -> Health & Service** zeigt DVhub jetzt:
+
+- Status der Config-Datei und ob das Setup abgeschlossen ist
+- Live-Status von Meter und EPEX
+- Laufzeitdaten des aktuellen Prozesses
+- systemd-Service-Status
+- optional einen **Restart-Button**
+
+> Der Restart-Button ist aus Sicherheitsgründen nur aktiv, wenn die Service-Aktionen per
+> `DV_ENABLE_SERVICE_ACTIONS=1` freigeschaltet wurden. `install.sh` richtet das automatisch ein.
 
 ---
 
@@ -204,9 +280,16 @@ npm start
 
 - Keepalive / Monitoring
   - `GET /api/keepalive/modbus`: letzte Modbus-Abfrage (Zeit, Quelle, Request)
-  - `GET /api/keepalive/pulse`: 60s-Pulse fuer Uptime-Kuma/Monitoring
+  - `GET /api/keepalive/pulse`: 60s-Pulse für Uptime-Kuma/Monitoring
 
-- Meter + Victron Polling
+- Victron Kommunikation (Modbus TCP oder MQTT)
+  - **Transport wählbar** in config: `victron.transport: "modbus"` (Default) oder `"mqtt"`
+  - **Modbus TCP**: Direkte Register-Kommunikation mit dem GX-Gerät (Default Port 502, unitId 100)
+  - **MQTT**: Verbindung über Venus OS MQTT-Broker (Port 1883, keine Auth auf LAN)
+    - Automatisches Subscribe auf System-Topics (Grid, SOC, PV, Batterie)
+    - Writes über `W/`-Topics mit Engineering-Werten
+    - Keepalive alle 30s für Settings-Refresh
+    - Benötigtes Paket: `npm install mqtt` (nur bei MQTT-Nutzung)
   - Hauptmeterblock (Default unitId 100, addr 820, 3 Phasen)
   - Zusatzpunkte (SOC, Batterie, PV, Grid Setpoint, Min SOC, Self Consumption)
   - AC-PV Fronius Phasen 808/809/810 (konfigurierbar) + Summe zu PV Gesamt
@@ -223,17 +306,20 @@ npm start
 - Negativpreis-Schutz (`dvControl.negativePriceProtection` in config)
   - Automatische Abregelung bei negativen EPEX-Preisen
   - Grid Setpoint wird auf konfigurierbaren Wert begrenzt (Default: -40 W)
-  - Zusaetzlich werden die Victron DC/AC-PV Register gesperrt (Eigenverbrauch)
+  - Zusätzlich werden die Victron DC/AC-PV Register gesperrt (Eigenverbrauch)
   - Wird automatisch aufgehoben wenn Preis wieder positiv
   - Status im Dashboard sichtbar
 
 - Schedule / Steuerung
-  - Zeitplanregeln fuer:
+  - Zeitplanregeln für:
     - `gridSetpointW` (Grid Setpoint in Watt)
     - `chargeCurrentA` (Ladestrom in Ampere)
+  - **Aktivierbar/Deaktivierbar**: Jede Regel kann einzeln ein-/ausgeschaltet werden
   - Default-Werte wenn keine Regel greift
-  - Manuelle Writes per API fuer: `gridSetpointW`, `chargeCurrentA`, `minSocPct`
+  - Manuelle Writes per API für: `gridSetpointW`, `chargeCurrentA`, `minSocPct`
   - Persistierung der Schedule-Regeln in `config.json`
+  - Direkte Erstellung neuer Schedule-Zeilen aus dem Day-Ahead-Chart per Klick oder Drag-Auswahl
+  - Ausgewählte Börsenfenster werden automatisch zu zusammenhängenden Zeitblöcken gruppiert
 
 - Day-Ahead Preise (EPEX)
   - Quelle: energy-charts.info API
@@ -241,20 +327,24 @@ npm start
   - Heute + Folgetag Preise
   - Balkendiagramm im Dashboard (negative Preise rot, positive blau)
   - Interaktiver Hover-Tooltip mit Preis und Zeitstempel
-  - Erkennung zukuenftiger Negativpreise (heute + morgen)
-  - Morgen Min/Max Preis Anzeige
+  - Balken-Highlight statt Punkt-Indikator
+  - Erkennung zukünftiger Negativpreise (heute + morgen)
+  - Heute- und Morgen-Min/Max Preisanzeige
   - Automatischer Refresh alle 5 Minuten
 
 - Kosten-Tracking (heute, live)
   - Tagesbasiertes Import/Export Tracking in kWh
-  - Kosten und Erloese basierend auf aktuellem EPEX-Preis
-  - Netto-Berechnung (Erloes - Kosten)
-  - Persistente Speicherung in `energy_state.json` (ueberlebt Neustarts)
+  - Kosten und Erlöse basierend auf aktuellem EPEX-Preis
+  - Netto-Berechnung (Erlös - Kosten)
+  - Persistente Speicherung in `energy_state.json` (überlebt Neustarts)
   - Speicherung alle 60 Sekunden + bei Shutdown + bei Tageswechsel
   - Tagesabschluss-Log mit Zusammenfassung
 
 - InfluxDB (optional)
+  - **InfluxDB v3** (Default) und v2 unterstützt (`influx.apiVersion`: `"v3"` oder `"v2"`)
   - Schreiben von Livewerten als Line Protocol
+  - v3: `/api/v3/write_lp?db=...&precision=second` mit Bearer-Token
+  - v2: `/api/v2/write?org=...&bucket=...&precision=s` mit Token-Auth
   - Measurements: meter, ctrl, victron, energy
   - Flush-Intervall: 10 Sekunden
   - Aktivierung via `influx.enabled=true` in config
@@ -262,23 +352,21 @@ npm start
 - Integrationen
   - Home Assistant: `GET /api/integration/home-assistant` (JSON)
   - Loxone: `GET /api/integration/loxone` (Text Key=Value)
+  - EOS (Akkudoktor): `GET /api/integration/eos` (Messwerte + EPEX-Preise im EOS-Format)
+  - EMHASS: `GET /api/integration/emhass` (Messwerte + Preisarrays im EMHASS-Format)
+  - Optimierung anwenden: `POST /api/integration/eos/apply` bzw. `/emhass/apply`
 
 ### Dashboard
 
 Dashboard: `http://<host>:8080/`
 
-<p align="center">
-  <img src="docs/dashboard-mobile.png" alt="PlexLite Dashboard — iPhone" width="320" />
-  <br/><em>Mobile-Ansicht (iPhone 17 Pro)</em>
-</p>
-
-Karten-Uebersicht:
+Kartenübersicht:
 - **DV Schaltstatus**: EIN/AUS, Control Value, Lease-Ablauf, letzte Modbus-Abfrage, DC-PV Einspeisung, AC-PV Blockierung
-- **Boersenpreis**: Aktueller Preis, naechster Slot, Negativpreis-Warnung (heute/morgen), Morgen Min/Max, Negativpreis-Schutz Status
+- **Börsenpreis**: Aktueller Preis, nächster Slot, Negativpreis-Warnung (heute/morgen), Heute-/Morgen-Min/Max, Negativpreis-Schutz Status
 - **Netzleistung**: 3-Phasen Anzeige (L1/L2/L3), Total mit Richtungsanzeige und Flow-Animation
 - **Victron Zusatzwerte**: SOC, Akku-Leistung, PV (DC), PV Gesamt (DC+AC), Grid Setpoint, Min SOC
-- **Kosten (heute, live)**: Import/Export kWh, Kosten/Erloes EUR, Netto
-- **Day-Ahead Preise Chart**: Balkendiagramm mit Zeitachse, Null-Linie, aktuelle-Stunde Markierung
+- **Kosten (heute, live)**: Import/Export kWh, Kosten/Erlös EUR, Netto
+- **Day-Ahead Preise Chart**: Balkendiagramm mit Zeitachse, Null-Linie, aktuelle-Stunde Markierung, Hover-Highlight und Schedule-Auswahl
 - **Steuerung**: Aktive Werte, letzter Write, manuelle Writes, Default-Werte, Zeitplan-Editor
 - **Letzte Events**: Log der letzten 20 Ereignisse
 
@@ -287,16 +375,15 @@ Karten-Uebersicht:
 Tools: `http://<host>:8080/tools.html`
 - Register Scan (Modbus Register Discovery)
 - Schedule JSON editieren
-- Override setzen/loeschen
 
 ### API Endpoints
 
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | `GET` | `/dv/control-value` | DV Status: `0` = Abregelung, `1` = Einspeisung erlaubt |
-| `GET` | `/api/status` | Vollstaendiger Systemstatus (alle Karten-Daten) |
-| `GET` | `/api/costs` | Tages-Kostenuebersicht (Import/Export/Kosten/Erloes) |
-| `GET` | `/api/log` | Letzte 300 Event-Log Eintraege |
+| `GET` | `/api/status` | Vollständiger Systemstatus (alle Karten-Daten) |
+| `GET` | `/api/costs` | Tages-Kostenübersicht (Import/Export/Kosten/Erlös) |
+| `GET` | `/api/log` | Letzte 300 Event-Log Einträge |
 | `POST` | `/api/epex/refresh` | EPEX-Preise manuell aktualisieren |
 | `GET` | `/api/meter/scan` | Scan-Ergebnisse abrufen |
 | `POST` | `/api/meter/scan` | Modbus Register-Scan starten |
@@ -306,16 +393,20 @@ Tools: `http://<host>:8080/tools.html`
 | `POST` | `/api/control/write` | Manueller Write (target: gridSetpointW/chargeCurrentA/minSocPct) |
 | `GET` | `/api/integration/home-assistant` | Home Assistant kompatibles JSON |
 | `GET` | `/api/integration/loxone` | Loxone kompatibles Text-Format |
+| `GET` | `/api/integration/eos` | EOS (Akkudoktor) Messwerte + EPEX-Preise |
+| `POST` | `/api/integration/eos/apply` | EOS Optimierung anwenden (gridSetpointW, chargeCurrentA, minSocPct) |
+| `GET` | `/api/integration/emhass` | EMHASS Messwerte + Preisarrays |
+| `POST` | `/api/integration/emhass/apply` | EMHASS Optimierung anwenden (gridSetpointW, chargeCurrentA, minSocPct) |
 | `GET` | `/api/keepalive/modbus` | Letzte Modbus-Abfrage Info |
 | `GET` | `/api/keepalive/pulse` | 60s Uptime-Pulse |
 
 ### Konfiguration
 
-Die Konfiguration erfolgt ueber `config.json`. Wichtige Sektionen:
+Die Konfiguration erfolgt über `config.json`. Wichtige Sektionen:
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `victron` | Victron GX Verbindung (host, port, unitId) |
+| `victron` | Victron GX Verbindung (host, port, unitId, transport, mqtt) |
 | `meter` | Grid-Meter Register (Default addr 820, 3 Phasen) |
 | `points` | Victron Datenpunkte zum Lesen (SOC, Batterie, PV, etc.) |
 | `controlWrite` | Schreibbare Register (gridSetpointW, chargeCurrentA, minSocPct) |
@@ -327,13 +418,17 @@ Die Konfiguration erfolgt ueber `config.json`. Wichtige Sektionen:
 
 ### Hinweise
 
-- Fuer Schreibregister kann `controlWrite.<target>.writeType` auf `int16`, `uint16`, `int32` oder `uint32` gesetzt werden.
-- ESS Mode 2/3 Empfehlung: Grid-Setpoint ueber `unitId 100`, `address 2700`, `fc 16`, `writeType int16` schreiben (nicht auf `address 0`) -> Nicht auf Register 2716/2717 - sind only on memory und nicht persistent wie 2700.
-- Legacy-Fallback fuer Grid-Setpoint bleibt moeglich: `fc 6`, `address 2700`, `writeType int16`.
-- Influx schreibt nur wenn `influx.enabled=true` und URL/Org/Bucket/Token gesetzt sind.
+- Für Schreibregister kann `controlWrite.<target>.writeType` auf `int16`, `uint16`, `int32` oder `uint32` gesetzt werden.
+- ESS Mode 2/3 Empfehlung: Grid-Setpoint über `unitId 100`, `address 2700`, `fc 16`, `writeType int16` schreiben (nicht auf `address 0`) -> Nicht auf Register 2716/2717 - sind only on memory und nicht persistent wie 2700.
+- Legacy-Fallback für Grid-Setpoint bleibt möglich: `fc 6`, `address 2700`, `writeType int16`.
+- **InfluxDB v3** (Default): `influx.apiVersion: "v3"`, `influx.url: "http://host:8086"`, `influx.db: "datenbankname"`, `influx.token: "bearer-token"`. Für v2: `apiVersion: "v2"` setzen und `org`/`bucket` statt `db` verwenden.
 - DV-Victron-Steuerung (`dvControl`) ist per Default deaktiviert (`enabled: false`). In `config.json` auf `true` setzen um die automatische Ansteuerung bei DV-Signal und negativen Preisen zu aktivieren.
-- Kosten-Daten werden in `energy_state.json` gespeichert und ueberleben Neustarts (solange der Tag gleich bleibt).
-- Alle Victron-Register (points, controlWrite, dvControl) erben automatisch `host`, `port`, `unitId` und `timeoutMs` von der `victron`-Sektion, koennen aber pro Register ueberschrieben werden.
+- Kosten-Daten werden in `energy_state.json` gespeichert und überleben Neustarts (solange der Tag gleich bleibt).
+- Alle Victron-Register (points, controlWrite, dvControl) erben automatisch `host`, `port`, `unitId` und `timeoutMs` von der `victron`-Sektion, können aber pro Register überschrieben werden.
+- **EOS-Anbindung (Akkudoktor)**: Messwerte via `GET /api/integration/eos` abrufen und an EOS weiterleiten (`PUT /v1/measurement/data`). Optimierungsergebnisse via `POST /api/integration/eos/apply` zurückschreiben. Enthält EPEX-Preise, SOC, PV, Grid und Batterie-Werte.
+- **EMHASS-Anbindung**: Messwerte + Preisarrays via `GET /api/integration/emhass` abrufen. `load_cost_forecast` und `prod_price_forecast` können direkt an EMHASS übergeben werden. Ergebnisse via `POST /api/integration/emhass/apply` anwenden.
+- **MQTT-Modus**: In `config.json` unter `victron.transport` auf `"mqtt"` setzen und `victron.mqtt.portalId` mit der VRM Portal ID befüllen (zu finden auf dem GX-Gerät unter Settings -> VRM Online Portal). Der DV-Modbus-Server (Port 1502) läuft unabhängig vom Transport immer über Modbus.
+- **MQTT-Paket installieren**: `npm install mqtt` -- wird nur benötigt wenn `transport: "mqtt"` konfiguriert ist. Bei Modbus-Betrieb (Default) ist keine Installation nötig.
 
 ---
 

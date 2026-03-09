@@ -2,7 +2,7 @@
 set -eu
 
 VPN_IP="IP-Deiner-VLAN-SEITE"
-LAN_HOST="PLEXLITEHosts"
+LAN_HOST="DVHUBHosts"
 TUN_IF="tunovpnc1"
 SRC_PORT="502"
 DST_PORT="1502"
@@ -42,4 +42,3 @@ iptables -t nat -I PREROUTING 1 -j DV502_DNAT
 
 while iptables -C FORWARD -j DV502_FWD 2>/dev/null; do iptables -D FORWARD -j DV502_FWD; done
 iptables -I FORWARD 1 -j DV502_FWD
-

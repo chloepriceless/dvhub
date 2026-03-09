@@ -1,7 +1,7 @@
 {
-  "name": "plexlite",
-  "version": "0.1.0",
-  "description": "Direktvermarktungs-Schnittstelle fuer Victron ESS — Modbus-Proxy und Control-Dashboard",
+  "name": "dvhub",
+  "version": "0.2.5",
+  "description": "Direktvermarktungs-Schnittstelle für Victron ESS - Modbus-Proxy und DVhub Leitstand",
   "private": true,
   "type": "module",
   "license": "SEE LICENSE IN ../LICENSE.md",
@@ -9,19 +9,24 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/plexlite/plexlite"
+    "url": "https://github.com/dvhub/dvhub"
   },
   "keywords": [
     "victron",
     "modbus",
+    "mqtt",
     "direktvermarktung",
     "solar",
     "energy",
     "ess",
     "epex"
-  ]
+  ],
+  "optionalDependencies": {
+    "mqtt": "^5.10.0"
+  }
 }

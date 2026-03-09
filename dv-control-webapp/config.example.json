@@ -7,10 +7,16 @@
   "keepalivePulseSec": 60,
   "gridPositiveMeans": "feed_in",
   "victron": {
+    "transport": "modbus",
     "host": "192.168.x.x",
     "port": 502,
     "unitId": 100,
-    "timeoutMs": 1000
+    "timeoutMs": 1000,
+    "mqtt": {
+      "broker": "mqtt://192.168.x.x:1883",
+      "portalId": "",
+      "keepaliveIntervalMs": 30000
+    }
   },
   "meter": {
     "fc": 4,
@@ -46,8 +52,29 @@
     "defaultGridSetpointW": -40,
     "defaultChargeCurrentA": null,
     "rules": [
-      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "days": [1,2,3,4,5,6,0], "start": "18:00", "end": "23:59", "value": -40 }
+      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "start": "18:00", "end": "23:59", "value": -40 }
     ]
+  },
+  "userEnergyPricing": {
+    "mode": "fixed",
+    "fixedGrossImportCtKwh": 31.5,
+    "dynamicComponents": {
+      "energyMarkupCtKwh": 0,
+      "gridChargesCtKwh": 8.5,
+      "leviesAndFeesCtKwh": 3,
+      "vatPct": 19
+    },
+    "usesParagraph14aModule3": false,
+    "module3Windows": {
+      "window1": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window2": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window3": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null }
+    },
+    "costs": {
+      "pvCtKwh": 6,
+      "batteryBaseCtKwh": 2,
+      "batteryLossMarkupPct": 20
+    }
   },
   "scan": {
     "host": "192.168.x.x",
@@ -63,11 +90,23 @@
   },
   "influx": {
     "enabled": false,
-    "url": "http://127.0.0.1:8086/api/v2/write",
-    "org": "my-org",
-    "bucket": "dv-data",
+    "apiVersion": "v3",
+    "url": "http://127.0.0.1:8086",
+    "db": "dvhub",
     "token": "",
     "measurement": "dv"
+  },
+  "telemetry": {
+    "enabled": true,
+    "dbPath": "",
+    "rawRetentionDays": 45,
+    "rollupIntervals": [300, 900, 3600],
+    "historyImport": {
+      "enabled": false,
+      "provider": "vrm",
+      "vrmPortalId": "",
+      "vrmToken": ""
+    }
   },
   "epex": {
     "enabled": true,

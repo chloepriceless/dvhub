@@ -3,73 +3,187 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PlexLite Tools</title>
+  <title>DVhub Wartung</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Saira+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="page-tools">
-  <div class="app-shell">
-    <header class="panel hero reveal">
-      <div class="brand-lockup">
-        <img src="/assets/a_digital_logo_design_for_plexlite_is_displayed_by.png" alt="PlexLite Logo" class="hero-logo" />
+  <div class="app-shell shell-layout">
+    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
+      <div class="app-nav-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
         <div>
-          <p class="eyebrow">PlexLite Utilities</p>
-          <h1 class="hero-title">Tools & Diagnostics</h1>
-          <p class="hero-sub">Analyse, Scan und Regelwerk-Editing im gleichen Corporate Design wie das Control Cockpit.</p>
+          <p class="app-nav-eyebrow">Direktvermarktung</p>
+          <strong class="app-nav-title">DVhub</strong>
         </div>
       </div>
-      <div class="hero-actions">
-        <a class="btn btn-ghost" href="/">Zurueck zum Dashboard</a>
+      <nav class="app-nav-links">
+        <a class="app-nav-link" href="/">Leitstand</a>
+        <a class="app-nav-link" href="/settings.html">Einrichtung</a>
+        <a class="app-nav-link is-active" href="/tools.html">Wartung</a>
+        <a class="app-nav-link" href="/setup.html">Einrichtung starten</a>
+      </nav>
+      <div class="app-nav-meta">
+        <p class="card-title">Wartung</p>
+        <p class="tools-note">Status, Diagnose und Servicefunktionen gebündelt an einem Ort.</p>
       </div>
-    </header>
+    </aside>
 
-    <main class="tools-grid">
-      <section class="panel reveal">
-        <h2 class="tools-card-title">Modbus Scan</h2>
-        <p class="tools-note">Direktscan von Registerbereichen fuer schnelle Diagnose und Mapping.</p>
-
-        <div class="controls">
-          <label>Unit <input id="scanUnit" type="number" value="0" /></label>
-          <label>Start <input id="scanStart" type="number" value="2500" /></label>
-          <label>Ende <input id="scanEnd" type="number" value="2700" /></label>
-          <label>Step <input id="scanStep" type="number" value="10" /></label>
-          <label>Qty <input id="scanQty" type="number" value="10" /></label>
-          <button id="startScan" class="btn btn-primary">Scan starten</button>
+    <div class="app-main">
+      <header class="panel compact-topbar reveal">
+        <div class="compact-topbar-copy">
+          <p class="page-kicker">Wartung</p>
+          <h1 class="page-title">DVhub Wartung</h1>
+          <p class="page-subtitle">Status prüfen, Diagnose fahren und technische Eingriffe kompakt vorbereiten.</p>
         </div>
-
-        <div class="meta" id="scanMeta">-</div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Addr</th>
-              <th>Regs (u16)</th>
-              <th>Regs (s16)</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="scanRows"></tbody>
-        </table>
-      </section>
-
-      <section class="panel reveal">
-        <h2 class="tools-card-title">Schedule / Control</h2>
-        <p class="tools-note">Rules laden und editieren.</p>
-
-        <div class="controls">
-          <button id="loadSchedule">Schedule laden</button>
-          <button id="saveSchedule">Schedule speichern</button>
+        <div class="page-actions">
+          <a class="btn btn-ghost" href="/">Zum Leitstand</a>
+          <a class="btn btn-primary" href="/settings.html">Einrichtung</a>
         </div>
+      </header>
 
-        <div class="meta">JSON-Format: <code>{ "rules": [ ... ] }</code></div>
-        <textarea id="scheduleJson"></textarea>
+      <main class="maintenance-grid">
+        <section class="panel reveal span-6">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Systemstatus</p>
+              <h2 class="section-title">Systemstatus</h2>
+            </div>
+            <div class="hero-actions">
+              <button id="refreshHealthBtn" class="btn btn-ghost" type="button">Status neu laden</button>
+              <button id="restartServiceBtn" class="btn btn-danger" type="button">Dienst neu starten</button>
+            </div>
+          </div>
+          <div id="healthBanner" class="status-banner">Health-Status wird geladen...</div>
+          <div id="healthChecks" class="settings-summary"></div>
+          <div id="serviceMeta" class="meta">-</div>
+        </section>
 
-        <div class="meta" id="scheduleMeta">-</div>
-      </section>
-    </main>
+        <section class="panel reveal span-6">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Config</p>
+              <h2 class="section-title">Import &amp; Export</h2>
+            </div>
+          </div>
+          <p class="tools-note compact-note">Konfiguration sichern, prüfen oder aus einer vorbereiteten Datei wieder einspielen.</p>
+          <div class="settings-toolbar">
+            <button id="exportConfigBtn" class="btn btn-ghost" type="button">Config exportieren</button>
+            <button id="importConfigBtn" class="btn btn-primary" type="button">Config importieren</button>
+          </div>
+          <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
+          <div id="importBanner" class="status-banner">Noch kein Import oder Export ausgeführt.</div>
+          <div id="importMeta" class="meta">Export lädt die aktuelle wirksame Config. Import nutzt dieselbe Server-Validierung wie die Einrichtung.</div>
+        </section>
+
+        <section class="panel reveal span-6">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Historie</p>
+              <h2 class="section-title">Historie</h2>
+            </div>
+            <div class="hero-actions">
+              <button id="refreshHistoryBtn" class="btn btn-ghost" type="button">Status prüfen</button>
+            </div>
+          </div>
+          <p class="tools-note compact-note">Historische Nachimporte bleiben absichtlich in der Wartung, damit die Einrichtung ruhig und platzsparend bleibt.</p>
+          <div id="historyBanner" class="status-banner">VRM-Status wird geladen...</div>
+          <div class="settings-fields compact">
+            <label class="settings-field" for="historyImportStart">
+              <span class="settings-field-title">Von</span>
+              <input id="historyImportStart" type="datetime-local" />
+              <small class="field-help">Startzeit des VRM-Historienimports.</small>
+            </label>
+            <label class="settings-field" for="historyImportEnd">
+              <span class="settings-field-title">Bis</span>
+              <input id="historyImportEnd" type="datetime-local" />
+              <small class="field-help">Endzeit des VRM-Historienimports.</small>
+            </label>
+            <label class="settings-field" for="historyImportInterval">
+              <span class="settings-field-title">Intervall</span>
+              <select id="historyImportInterval">
+                <option value="15mins">15 Minuten</option>
+                <option value="hours">1 Stunde</option>
+                <option value="days">1 Tag</option>
+              </select>
+              <small class="field-help">Auflösung für den VRM-Stats-Import.</small>
+            </label>
+          </div>
+          <div class="settings-inline-actions">
+            <button id="historyImportBtn" class="btn btn-primary" type="button">VRM-Historie importieren</button>
+            <small id="historyReason" class="tools-note">Der Import schreibt historische VRM-Zeitreihen direkt in die interne Telemetrie-Datenbank.</small>
+          </div>
+          <div id="historyResult" class="status-banner">Noch kein Import gestartet.</div>
+        </section>
+
+        <section class="panel reveal span-6">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Diagnose</p>
+              <h2 class="section-title">Diagnose</h2>
+            </div>
+          </div>
+          <p class="tools-note compact-note">Registerscan und Zeitplan-JSON bleiben erhalten, sind aber klar als Diagnosewerkzeuge markiert.</p>
+          <div class="settings-summary">
+            <div class="summary-card">
+              <strong>Scan</strong>
+              <span>Registerbereiche live lesen, wenn Mapping oder Adressen geprüft werden müssen.</span>
+            </div>
+            <div class="summary-card">
+              <strong>Zeitplan</strong>
+              <span>Regeln als JSON laden und speichern, wenn gezielte Serviceeingriffe nötig sind.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel reveal span-6">
+          <h2 class="tools-card-title">Modbus-Scan</h2>
+          <p class="tools-note">Direktscan von Registerbereichen für schnelle Diagnose und Mapping.</p>
+
+          <div class="controls">
+            <label>Unit <input id="scanUnit" type="number" value="0" /></label>
+            <label>Start <input id="scanStart" type="number" value="2500" /></label>
+            <label>Ende <input id="scanEnd" type="number" value="2700" /></label>
+            <label>Schritt <input id="scanStep" type="number" value="10" /></label>
+            <label>Anzahl <input id="scanQty" type="number" value="10" /></label>
+            <button id="startScan" class="btn btn-primary" type="button">Scan starten</button>
+          </div>
+
+          <div class="meta" id="scanMeta">-</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Adresse</th>
+                <th>Register (u16)</th>
+                <th>Register (s16)</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="scanRows"></tbody>
+          </table>
+        </section>
+
+        <section class="panel reveal span-6">
+          <h2 class="tools-card-title">Schedule / Control</h2>
+          <p class="tools-note">Regeln laden, prüfen und als JSON gezielt anpassen.</p>
+
+          <div class="controls">
+            <button id="loadSchedule" type="button">Zeitplan laden</button>
+            <button id="saveSchedule" type="button">Zeitplan speichern</button>
+          </div>
+
+          <div class="meta">JSON-Format: <code>{ "rules": [ ... ] }</code></div>
+          <textarea id="scheduleJson"></textarea>
+
+          <div class="meta" id="scheduleMeta">-</div>
+        </section>
+      </main>
+    </div>
   </div>
 
+  <script src="/common.js"></script>
   <script src="/tools.js"></script>
 </body>
 </html>

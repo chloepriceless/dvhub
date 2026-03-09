@@ -2,133 +2,46 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import {
+  collectChangedPaths,
+  detectRestartRequired,
+  getConfigDefinition,
+  loadConfigFile,
+  saveConfigFile
+} from './config-model.js';
+import { createTelemetryStore } from './telemetry-store.js';
+import {
+  buildLiveTelemetrySamples,
+  buildOptimizerRunPayload,
+  buildPriceTelemetrySamples,
+  resolveTelemetryDbPath
+} from './telemetry-runtime.js';
+import {
+  autoDisableExpiredScheduleRules,
+  parseHHMM,
+  sanitizePersistedScheduleRules,
+  scheduleMatch
+} from './schedule-runtime.js';
+import { createHistoryImportManager } from './history-import.js';
+import { createModbusTransport } from './transport-modbus.js';
+import { createMqttTransport } from './transport-mqtt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const CONFIG_PATH = process.env.DV_APP_CONFIG || path.join(__dirname, 'config.json');
+const execFileAsync = promisify(execFile);
+const CONFIG_DEFINITION = getConfigDefinition();
+let loadedConfig = loadConfigFile(CONFIG_PATH);
+let rawCfg = loadedConfig.rawConfig;
+let cfg = loadedConfig.effectiveConfig;
+const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
+const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
+const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
+const DATA_DIR = process.env.DV_DATA_DIR || '';
 
-function deepMerge(base, override) {
-  if (!override || typeof override !== 'object') return base;
-  const out = { ...base };
-  for (const [k, v] of Object.entries(override)) {
-    if (Array.isArray(v)) out[k] = v;
-    else if (v && typeof v === 'object' && !Array.isArray(v) && typeof out[k] === 'object' && out[k] !== null) {
-      out[k] = deepMerge(out[k], v);
-    } else out[k] = v;
-  }
-  return out;
-}
-
-function loadConfig() {
-  const defaults = {
-    httpPort: 8080,
-    apiToken: '',
-    modbusListenHost: '0.0.0.0',
-    modbusListenPort: 1502,
-    offLeaseMs: 8 * 60 * 1000,
-    meterPollMs: 2000,
-    keepalivePulseSec: 60,
-    gridPositiveMeans: 'feed_in',
-    victron: {
-      host: '192.168.1.19',
-      port: 502,
-      unitId: 100,
-      timeoutMs: 1000
-    },
-    meter: {
-      fc: 4,
-      address: 820,
-      quantity: 3,
-      timeoutMs: 1200
-    },
-    points: {
-      soc: { enabled: true, fc: 4, address: 843, quantity: 1, signed: false, scale: 1, offset: 0 },
-      batteryPowerW: { enabled: true, fc: 4, address: 842, quantity: 1, signed: true, scale: 1, offset: 0 },
-      pvPowerW: { enabled: true, fc: 4, address: 850, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL1W: { enabled: true, fc: 4, address: 808, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL2W: { enabled: true, fc: 4, address: 809, quantity: 1, signed: false, scale: 1, offset: 0 },
-      acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
-      gridSetpointW: { enabled: true, fc: 4, address: 2700, quantity: 1, signed: true, scale: 1, offset: 0 },
-      minSocPct: { enabled: true, fc: 4, address: 2901, quantity: 1, signed: false, scale: 0.1, offset: 0 },
-      selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
-    },
-    controlWrite: {
-      gridSetpointW: { enabled: true, fc: 6, address: 2700, writeType: 'int16', signed: true, scale: 1, offset: 0 },
-      chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0 },
-      minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0 }
-    },
-    dvControl: {
-      enabled: false,
-      feedExcessDcPv: { enabled: true, fc: 6, address: 2848, writeType: 'uint16', signed: false, scale: 1, offset: 0 },
-      dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2850, writeType: 'uint16', signed: false, scale: 1, offset: 0 },
-      negativePriceProtection: { enabled: true, gridSetpointW: -40 }
-    },
-    schedule: {
-      timezone: 'Europe/Berlin',
-      evaluateMs: 15000,
-      defaultGridSetpointW: null,
-      defaultChargeCurrentA: null,
-      rules: []
-    },
-    scan: {
-      host: '192.168.1.19',
-      port: 502,
-      unitId: 0,
-      fc: 4,
-      start: 2500,
-      end: 2700,
-      step: 10,
-      quantity: 10,
-      timeoutMs: 700,
-      onlyNonZero: true
-    },
-    influx: {
-      enabled: false,
-      url: 'http://127.0.0.1:8086/api/v2/write',
-      org: '',
-      bucket: '',
-      token: '',
-      measurement: 'dv'
-    },
-    epex: {
-      enabled: true,
-      bzn: 'DE-LU',
-      timezone: 'Europe/Berlin'
-    }
-  };
-
-  if (!fs.existsSync(CONFIG_PATH)) return applyVictronDefaults(defaults);
-  try {
-    const fileCfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    return applyVictronDefaults(deepMerge(defaults, fileCfg));
-  } catch (e) {
-    console.error('Config parse error, using defaults:', e.message);
-    return applyVictronDefaults(defaults);
-  }
-}
-
-function applyVictronDefaults(c) {
-  const v = c.victron || {};
-  const fill = (obj) => {
-    if (!obj || typeof obj !== 'object') return;
-    obj.host = obj.host ?? v.host;
-    obj.port = obj.port ?? v.port;
-    obj.unitId = obj.unitId ?? v.unitId;
-    obj.timeoutMs = obj.timeoutMs ?? v.timeoutMs;
-  };
-  fill(c.meter);
-  for (const p of Object.values(c.points || {})) fill(p);
-  for (const w of Object.values(c.controlWrite || {})) fill(w);
-  if (c.dvControl) {
-    for (const [k, v] of Object.entries(c.dvControl)) {
-      if (v && typeof v === 'object' && k !== 'enabled') fill(v);
-    }
-  }
-  return c;
-}
-
-const cfg = loadConfig();
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
   ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now() },
@@ -164,6 +77,7 @@ const state = {
     },
     active: { gridSetpointW: null, chargeCurrentA: null },
     lastWrite: { gridSetpointW: null, chargeCurrentA: null },
+    manualOverride: {},
     lastEvalAt: 0
   },
   energy: {
@@ -175,21 +89,126 @@ const state = {
     lastTs: 0
   },
   epex: { ok: false, date: null, nextDate: null, updatedAt: 0, data: [], error: null },
+  telemetry: {
+    enabled: !!cfg.telemetry?.enabled,
+    dbPath: null,
+    ok: false,
+    lastWriteAt: null,
+    lastRollupAt: null,
+    lastCleanupAt: null,
+    lastError: null
+  },
   log: []
 };
 
-let tidCounter = 1;
+// ── Transport erstellen (Modbus oder MQTT) ──────────────────────────
+const transport = cfg.victron?.transport === 'mqtt'
+  ? createMqttTransport(cfg.victron)
+  : createModbusTransport();
+
+// Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
+const scanTransport = createModbusTransport();
+let telemetryStore = null;
+let historyImportManager = null;
+
+function applyLoadedConfig(nextLoadedConfig) {
+  loadedConfig = nextLoadedConfig;
+  rawCfg = nextLoadedConfig.rawConfig;
+  cfg = nextLoadedConfig.effectiveConfig;
+  state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
+  state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
+  state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
+  state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
+}
+
+function saveAndApplyConfig(nextRawConfig) {
+  const previousRaw = rawCfg;
+  const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
+  applyLoadedConfig(saved);
+  const changedPaths = collectChangedPaths(previousRaw, rawCfg);
+  const restart = detectRestartRequired(changedPaths);
+  return {
+    ok: true,
+    changedPaths,
+    restartRequired: restart.required,
+    restartRequiredPaths: restart.paths,
+    loadedConfig: saved
+  };
+}
 
 function persistConfig() {
   try {
-    const current = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {};
+    const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
-    current.schedule.rules = state.schedule.rules;
+    current.schedule.rules = sanitizePersistedScheduleRules(state.schedule.rules);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    saveAndApplyConfig(current);
+    telemetrySafeWrite(() => telemetryStore.writeScheduleSnapshot({
+      ts: new Date(),
+      rules: current.schedule.rules,
+      defaultGridSetpointW: state.schedule.config.defaultGridSetpointW,
+      defaultChargeCurrentA: state.schedule.config.defaultChargeCurrentA,
+      source: 'config_persist'
+    }));
   } catch (e) {
     pushLog('config_persist_error', { error: e.message });
+  }
+}
+
+function createTelemetryStoreIfEnabled() {
+  if (!cfg.telemetry?.enabled) return null;
+  try {
+    const dbPath = resolveTelemetryDbPath({
+      configPath: CONFIG_PATH,
+      telemetryConfig: cfg.telemetry,
+      dataDir: DATA_DIR
+    });
+    const store = createTelemetryStore({
+      dbPath,
+      rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45),
+      rollupIntervals: Array.isArray(cfg.telemetry.rollupIntervals) ? cfg.telemetry.rollupIntervals : [300, 900, 3600]
+    });
+    state.telemetry.enabled = true;
+    state.telemetry.dbPath = dbPath;
+    state.telemetry.ok = true;
+    state.telemetry.lastError = null;
+    return store;
+  } catch (error) {
+    state.telemetry.enabled = true;
+    state.telemetry.ok = false;
+    state.telemetry.lastError = error.message;
+    pushLog('telemetry_store_init_error', { error: error.message });
+    return null;
+  }
+}
+
+function refreshTelemetryStatus() {
+  if (!telemetryStore) {
+    state.telemetry.enabled = !!cfg.telemetry?.enabled;
+    state.telemetry.ok = false;
+    return;
+  }
+  const status = telemetryStore.getStatus();
+  state.telemetry.enabled = !!cfg.telemetry?.enabled;
+  state.telemetry.dbPath = status.dbPath;
+  state.telemetry.ok = true;
+  state.telemetry.lastWriteAt = status.lastWriteAt;
+}
+
+function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
+  if (!telemetryStore) return null;
+  try {
+    const result = action();
+    refreshTelemetryStatus();
+    if (updateRollup) state.telemetry.lastRollupAt = Date.now();
+    if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
+    return result;
+  } catch (error) {
+    state.telemetry.ok = false;
+    state.telemetry.lastError = error.message;
+    pushLog('telemetry_store_error', { error: error.message });
+    return null;
   }
 }
 
@@ -234,6 +253,7 @@ function loadEnergy() {
 }
 
 function nowIso() { return new Date().toISOString(); }
+function fmtTs(ts) { return ts ? new Date(ts).toISOString() : '-'; }
 function pushLog(event, details = {}) {
   const row = { ts: nowIso(), event, ...details };
   state.log.push(row);
@@ -287,25 +307,9 @@ function addDays(dateStr, days) {
   return `${yy}-${mm}-${dd}`;
 }
 
-function localWeekdayIndex(date = new Date()) {
-  const s = date.toLocaleString('en-US', { timeZone: cfg.schedule.timezone, weekday: 'short' });
-  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return map[s] ?? 0;
-}
-
 function localMinutesOfDay(date = new Date()) {
   const hh = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, hour: '2-digit', hour12: false }));
   const mm = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, minute: '2-digit', hour12: false }));
-  return hh * 60 + mm;
-}
-
-function parseHHMM(s) {
-  if (typeof s !== 'string') return null;
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
 }
 
@@ -355,14 +359,15 @@ async function applyDvVictronControl(feedIn) {
   if (dc.feedExcessDcPv?.enabled) {
     const val = feedIn ? 1 : 0;
     try {
-      await mbWriteSingle({
-        host: dc.feedExcessDcPv.host,
-        port: dc.feedExcessDcPv.port,
-        unitId: dc.feedExcessDcPv.unitId,
-        address: dc.feedExcessDcPv.address,
-        value: val,
-        timeoutMs: dc.feedExcessDcPv.timeoutMs
-      });
+      if (transport.type === 'mqtt') {
+        await transport.mqttWrite('feedExcessDcPv', val);
+      } else {
+        await transport.mbWriteSingle({
+          host: dc.feedExcessDcPv.host, port: dc.feedExcessDcPv.port,
+          unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
+          value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
+        });
+      }
       results.feedExcessDcPv = { ok: true, value: val };
       pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
     } catch (e) {
@@ -375,14 +380,15 @@ async function applyDvVictronControl(feedIn) {
   if (dc.dontFeedExcessAcPv?.enabled) {
     const val = feedIn ? 0 : 1;
     try {
-      await mbWriteSingle({
-        host: dc.dontFeedExcessAcPv.host,
-        port: dc.dontFeedExcessAcPv.port,
-        unitId: dc.dontFeedExcessAcPv.unitId,
-        address: dc.dontFeedExcessAcPv.address,
-        value: val,
-        timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
-      });
+      if (transport.type === 'mqtt') {
+        await transport.mqttWrite('dontFeedExcessAcPv', val);
+      } else {
+        await transport.mbWriteSingle({
+          host: dc.dontFeedExcessAcPv.host, port: dc.dontFeedExcessAcPv.port,
+          unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
+          value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
+        });
+      }
       results.dontFeedExcessAcPv = { ok: true, value: val };
       pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
     } catch (e) {
@@ -543,190 +549,7 @@ function startModbusServer() {
   mbServer = server;
 }
 
-const mbPool = new Map();
-const MB_IDLE_MS = 30000;
-
-function getMbConn(host, port) {
-  const key = `${host}:${port}`;
-  let c = mbPool.get(key);
-  if (c && !c.destroyed) return c;
-
-  c = {
-    key,
-    sock: null,
-    destroyed: false,
-    buf: Buffer.alloc(0),
-    pending: null,
-    queue: [],
-    idleTimer: null,
-    connect() {
-      if (this.sock && !this.sock.destroyed) return;
-      this.sock = new net.Socket();
-      this.sock.setKeepAlive(true, 10000);
-      this.sock.connect(port, host);
-      this.sock.on('data', (chunk) => {
-        this.buf = Buffer.concat([this.buf, chunk]);
-        this._drain();
-      });
-      this.sock.on('error', (e) => this._fail(e));
-      this.sock.on('close', () => this._fail(new Error('connection closed')));
-    },
-    _resetIdle() {
-      if (this.idleTimer) clearTimeout(this.idleTimer);
-      this.idleTimer = setTimeout(() => this.destroy(), MB_IDLE_MS);
-    },
-    _drain() {
-      while (this.pending && this.buf.length >= 7) {
-        const len = this.buf.readUInt16BE(4);
-        const total = 6 + len;
-        if (this.buf.length < total) break;
-        const frame = this.buf.subarray(0, total);
-        this.buf = this.buf.subarray(total);
-        const p = this.pending;
-        this.pending = null;
-        if (p.timer) clearTimeout(p.timer);
-        p.resolve(frame);
-        this._resetIdle();
-        this._next();
-      }
-    },
-    _fail(err) {
-      const p = this.pending;
-      if (p) {
-        this.pending = null;
-        if (p.timer) clearTimeout(p.timer);
-        p.reject(err);
-      }
-      for (const q of this.queue) {
-        if (q.timer) clearTimeout(q.timer);
-        q.reject(err);
-      }
-      this.queue = [];
-      this.buf = Buffer.alloc(0);
-      if (this.sock && !this.sock.destroyed) this.sock.destroy();
-      this.sock = null;
-    },
-    destroy() {
-      this.destroyed = true;
-      this._fail(new Error('pool cleanup'));
-      mbPool.delete(this.key);
-    },
-    send(reqBuf, timeoutMs) {
-      return new Promise((resolve, reject) => {
-        const entry = { reqBuf, resolve, reject, timer: null, timeoutMs };
-        this.queue.push(entry);
-        this._next();
-      });
-    },
-    _next() {
-      if (this.pending || !this.queue.length) return;
-      if (!this.sock || this.sock.destroyed) {
-        this.connect();
-        this.sock.once('connect', () => this._next());
-        return;
-      }
-      if (!this.sock.writable) {
-        this.connect();
-        this.sock.once('connect', () => this._next());
-        return;
-      }
-      const entry = this.queue.shift();
-      this.pending = entry;
-      entry.timer = setTimeout(() => {
-        if (this.pending === entry) {
-          this.pending = null;
-          entry.reject(new Error('modbus timeout'));
-          if (this.sock && !this.sock.destroyed) this.sock.destroy();
-          this.sock = null;
-          this._next();
-        }
-      }, entry.timeoutMs || 1000);
-      this.sock.write(entry.reqBuf);
-    }
-  };
-  mbPool.set(key, c);
-  return c;
-}
-
-function mbRequest({ host, port, unitId, fc, address, quantity, timeoutMs }) {
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const req = Buffer.alloc(12);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(6, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(fc, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(quantity, 10);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const rFc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid modbus response');
-    if ((rFc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
-    if (rFc !== fc) throw new Error(`unexpected fc ${rFc}`);
-    const byteCount = frame.readUInt8(8);
-    const data = frame.subarray(9, 9 + byteCount);
-    const regs = [];
-    for (let i = 0; i + 1 < data.length; i += 2) regs.push(data.readUInt16BE(i));
-    return regs;
-  });
-}
-
-function mbWriteSingle({ host, port, unitId, address, value, timeoutMs }) {
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const req = Buffer.alloc(12);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(6, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(6, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(value & 0xffff, 10);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const fc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 6) throw new Error('invalid write ack');
-    return { addr: frame.readUInt16BE(8), value: frame.readUInt16BE(10) };
-  });
-}
-
-function mbWriteMultiple({ host, port, unitId, address, values, timeoutMs }) {
-  const words = Array.isArray(values) ? values.map((v) => Number(v) & 0xffff) : [];
-  if (!words.length) return Promise.reject(new Error('modbus write multiple: empty values'));
-  if (words.length > 123) return Promise.reject(new Error('modbus write multiple: too many values'));
-
-  const tid = (tidCounter++ & 0xffff) || 1;
-  const qty = words.length;
-  const byteCount = qty * 2;
-  const req = Buffer.alloc(13 + byteCount);
-  req.writeUInt16BE(tid, 0);
-  req.writeUInt16BE(0, 2);
-  req.writeUInt16BE(7 + byteCount, 4);
-  req.writeUInt8(unitId, 6);
-  req.writeUInt8(16, 7);
-  req.writeUInt16BE(address, 8);
-  req.writeUInt16BE(qty, 10);
-  req.writeUInt8(byteCount, 12);
-  for (let i = 0; i < qty; i += 1) req.writeUInt16BE(words[i], 13 + i * 2);
-
-  const conn = getMbConn(host, port);
-  return conn.send(req, timeoutMs).then((frame) => {
-    const rTid = frame.readUInt16BE(0);
-    const pid = frame.readUInt16BE(2);
-    const unit = frame.readUInt8(6);
-    const fc = frame.readUInt8(7);
-    if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 16) throw new Error('invalid write ack');
-    return { addr: frame.readUInt16BE(8), quantity: frame.readUInt16BE(10) };
-  });
-}
+// Modbus-Client-Funktionen sind jetzt in transport-modbus.js / transport-mqtt.js
 
 function pointFromRegs(regs, conf) {
   if (!regs || !regs.length) return null;
@@ -799,8 +622,13 @@ function toRawForWrite(value, conf) {
 async function pollPoint(name, conf) {
   if (!conf?.enabled) return;
   try {
-    const regs = await mbRequest(conf);
-    state.victron[name] = pointFromRegs(regs, conf);
+    if (transport.type === 'mqtt') {
+      const result = await transport.readPoint(name);
+      state.victron[name] = result.mqttValue;
+    } else {
+      const regs = await transport.mbRequest(conf);
+      state.victron[name] = pointFromRegs(regs, conf);
+    }
     delete state.victron.errors[name];
     state.victron.updatedAt = Date.now();
   } catch (e) {
@@ -858,11 +686,23 @@ async function flushInflux() {
   if (!cfg.influx.enabled || !influxBuffer.length) return;
   const lines = influxBuffer.splice(0);
   try {
-    const qp = new URLSearchParams({ org: cfg.influx.org, bucket: cfg.influx.bucket, precision: 's' });
-    const url = `${cfg.influx.url}?${qp.toString()}`;
+    const base = cfg.influx.url.replace(/\/+$/, '');
     const body = lines.join('\n');
     const headers = { 'content-type': 'text/plain; charset=utf-8' };
-    if (cfg.influx.token) headers.Authorization = `Token ${cfg.influx.token}`;
+    let url;
+
+    if (cfg.influx.apiVersion === 'v2') {
+      // InfluxDB v2: /api/v2/write?org=...&bucket=...&precision=s
+      const qp = new URLSearchParams({ org: cfg.influx.org || '', bucket: cfg.influx.bucket || cfg.influx.db || '', precision: 's' });
+      url = `${base}/api/v2/write?${qp.toString()}`;
+      if (cfg.influx.token) headers.Authorization = `Token ${cfg.influx.token}`;
+    } else {
+      // InfluxDB v3 (Default): /api/v3/write_lp?db=...&precision=second
+      const qp = new URLSearchParams({ db: cfg.influx.db || cfg.influx.bucket || '', precision: 'second' });
+      url = `${base}/api/v3/write_lp?${qp.toString()}`;
+      if (cfg.influx.token) headers.Authorization = `Bearer ${cfg.influx.token}`;
+    }
+
     const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   } catch (e) {
@@ -895,29 +735,44 @@ function buildInfluxLines(nowSec) {
 
 async function pollMeter() {
   try {
-    const regs = await mbRequest(cfg.meter);
-    const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
-    const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
-    const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
-    const rawTotal = rawL1 + rawL2 + rawL3;
+    let l1, l2, l3, total;
+    if (transport.type === 'mqtt') {
+      // MQTT: Werte aus Cache lesen (Venus OS: positiv = Import, negativ = Export)
+      const ml1 = transport.getCached('meter_l1') ?? 0;
+      const ml2 = transport.getCached('meter_l2') ?? 0;
+      const ml3 = transport.getCached('meter_l3') ?? 0;
+      const posImport = cfg.gridPositiveMeans === 'grid_import';
+      // Venus MQTT: positiv = Import → bei feed_in-Konvention invertieren
+      const sign = posImport ? 1 : -1;
+      l1 = ml1 * sign;
+      l2 = ml2 * sign;
+      l3 = ml3 * sign;
+      total = (ml1 + ml2 + ml3) * sign;
+      state.meter = {
+        ok: true, updatedAt: Date.now(), raw: [ml1, ml2, ml3],
+        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+        error: null
+      };
+    } else {
+      // Modbus: Register lesen und signed interpretieren
+      const regs = await transport.mbRequest(cfg.meter);
+      const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
+      const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
+      const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
+      const rawTotal = rawL1 + rawL2 + rawL3;
 
-    const posImport = cfg.gridPositiveMeans === 'grid_import';
-    const sign = posImport ? 1 : -1;
-    const l1 = rawL1 * sign;
-    const l2 = rawL2 * sign;
-    const l3 = rawL3 * sign;
-    const total = rawTotal * sign;
-
-    state.meter = {
-      ok: true,
-      updatedAt: Date.now(),
-      raw: regs,
-      grid_l1_w: l1,
-      grid_l2_w: l2,
-      grid_l3_w: l3,
-      grid_total_w: total,
-      error: null
-    };
+      const posImport = cfg.gridPositiveMeans === 'grid_import';
+      const sign = posImport ? 1 : -1;
+      l1 = rawL1 * sign;
+      l2 = rawL2 * sign;
+      l3 = rawL3 * sign;
+      total = rawTotal * sign;
+      state.meter = {
+        ok: true, updatedAt: Date.now(), raw: regs,
+        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+        error: null
+      };
+    }
 
     setReg(0, u16(total));
     setReg(1, total < 0 ? 0xffff : 0x0000);
@@ -956,6 +811,13 @@ async function pollMeter() {
   state.victron.batteryChargeW = Math.max(0, batP);
   state.victron.batteryDischargeW = Math.max(0, -batP);
 
+  telemetrySafeWrite(() => telemetryStore.writeSamples(buildLiveTelemetrySamples({
+    ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
+    resolutionSeconds: Math.max(1, Math.round(Number(cfg.meterPollMs || 1000) / 1000)),
+    meter: state.meter,
+    victron: state.victron
+  })));
+
   bufferInflux(buildInfluxLines(Math.floor(Date.now() / 1000)));
 }
 
@@ -985,6 +847,11 @@ async function fetchEpexDay() {
 
     data.sort((a, b) => a.ts - b.ts);
     state.epex = { ok: true, date: day, nextDate: day2, updatedAt: Date.now(), data, error: null };
+    telemetrySafeWrite(() => telemetryStore.writeSamples(buildPriceTelemetrySamples(data, {
+      source: 'price_api',
+      scope: 'forecast',
+      resolutionSeconds: 3600
+    })));
     pushLog('epex_refresh_ok', { count: data.length });
   } catch (e) {
     state.epex.ok = false;
@@ -1023,6 +890,151 @@ function epexNowNext() {
   };
 }
 
+function roundCtKwh(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function configuredModule3Windows(pricing = cfg.userEnergyPricing || {}) {
+  if (!pricing?.usesParagraph14aModule3) return [];
+  return Object.entries(pricing.module3Windows || {})
+    .map(([id, window]) => {
+      const start = parseHHMM(window?.start);
+      const end = parseHHMM(window?.end);
+      const priceCtKwh = Number(window?.priceCtKwh);
+      if (window?.enabled !== true || start == null || end == null || !Number.isFinite(priceCtKwh)) return null;
+      return {
+        id,
+        label: window?.label ? String(window.label) : id,
+        start,
+        end,
+        priceCtKwh: roundCtKwh(priceCtKwh)
+      };
+    })
+    .filter(Boolean);
+}
+
+function slotMinuteMatchesWindow(minuteOfDay, window) {
+  if (!window) return false;
+  if (window.start <= window.end) return minuteOfDay >= window.start && minuteOfDay < window.end;
+  return minuteOfDay >= window.start || minuteOfDay < window.end;
+}
+
+function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.gridChargesCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
+}
+
+function effectiveBatteryCostCtKwh(costs = {}) {
+  const pvCtKwh = Number(costs?.pvCtKwh);
+  const base = Number(costs?.batteryBaseCtKwh);
+  if (!Number.isFinite(base) && !Number.isFinite(pvCtKwh)) return null;
+  const markup = Number(costs?.batteryLossMarkupPct || 0);
+  const combinedBase =
+    (Number.isFinite(pvCtKwh) ? pvCtKwh : 0)
+    + (Number.isFinite(base) ? base : 0);
+  return roundCtKwh(combinedBase * (1 + markup / 100));
+}
+
+function mixedCostCtKwh(costs = {}) {
+  const pvCtKwh = Number(costs?.pvCtKwh);
+  const batteryCtKwh = effectiveBatteryCostCtKwh(costs);
+  if (Number.isFinite(pvCtKwh) && Number.isFinite(batteryCtKwh)) return roundCtKwh((pvCtKwh + batteryCtKwh) / 2);
+  if (Number.isFinite(pvCtKwh)) return roundCtKwh(pvCtKwh);
+  if (Number.isFinite(batteryCtKwh)) return roundCtKwh(batteryCtKwh);
+  return null;
+}
+
+function resolveImportPriceCtKwhForSlot(row, pricing = cfg.userEnergyPricing || {}) {
+  if (!row) return null;
+  const minuteOfDay = localMinutesOfDay(new Date(row.ts));
+  for (const window of configuredModule3Windows(pricing)) {
+    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
+  }
+
+  if (pricing?.mode === 'fixed') {
+    const fixed = Number(pricing?.fixedGrossImportCtKwh);
+    return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
+  }
+
+  return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), pricing?.dynamicComponents || {});
+}
+
+function slotComparison(row, pricing = cfg.userEnergyPricing || {}) {
+  if (!row) return null;
+  const importPriceCtKwh = resolveImportPriceCtKwhForSlot(row, pricing);
+  const pvCtKwh = Number(pricing?.costs?.pvCtKwh);
+  const batteryCtKwh = effectiveBatteryCostCtKwh(pricing?.costs || {});
+  const mixedCt = mixedCostCtKwh(pricing?.costs || {});
+  const exportPriceCtKwh = roundCtKwh(Number(row.ct_kwh || 0));
+
+  const margins = [
+    Number.isFinite(pvCtKwh) ? { source: 'pv', marginCtKwh: roundCtKwh(exportPriceCtKwh - pvCtKwh) } : null,
+    Number.isFinite(batteryCtKwh) ? { source: 'battery', marginCtKwh: roundCtKwh(exportPriceCtKwh - batteryCtKwh) } : null,
+    Number.isFinite(mixedCt) ? { source: 'mixed', marginCtKwh: roundCtKwh(exportPriceCtKwh - mixedCt) } : null
+  ].filter(Boolean);
+  const best = margins.length
+    ? margins.reduce((winner, entry) => (winner == null || entry.marginCtKwh > winner.marginCtKwh ? entry : winner), null)
+    : null;
+
+  return {
+    ts: row.ts,
+    exportPriceCtKwh,
+    importPriceCtKwh,
+    spreadToImportCtKwh: Number.isFinite(importPriceCtKwh) ? roundCtKwh(exportPriceCtKwh - importPriceCtKwh) : null,
+    pvMarginCtKwh: Number.isFinite(pvCtKwh) ? roundCtKwh(exportPriceCtKwh - pvCtKwh) : null,
+    batteryMarginCtKwh: Number.isFinite(batteryCtKwh) ? roundCtKwh(exportPriceCtKwh - batteryCtKwh) : null,
+    mixedMarginCtKwh: Number.isFinite(mixedCt) ? roundCtKwh(exportPriceCtKwh - mixedCt) : null,
+    bestSource: best?.source || null,
+    bestMarginCtKwh: best?.marginCtKwh ?? null
+  };
+}
+
+function userEnergyPricingSummary() {
+  const pricing = cfg.userEnergyPricing || {};
+  const costs = pricing.costs || {};
+  const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing)) : [];
+  const currentTs = epexNowNext()?.current?.ts;
+  const current = slots.find((row) => row?.ts === currentTs) || null;
+  const configured =
+    (pricing.mode === 'fixed' && Number.isFinite(Number(pricing.fixedGrossImportCtKwh)))
+    || pricing.mode === 'dynamic';
+
+  return {
+    configured,
+    mode: pricing.mode || 'fixed',
+    usesParagraph14aModule3: pricing.usesParagraph14aModule3 === true,
+    dynamicComponents: {
+      energyMarkupCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.energyMarkupCtKwh || 0)),
+      gridChargesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.gridChargesCtKwh || 0)),
+      leviesAndFeesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.leviesAndFeesCtKwh || 0)),
+      vatPct: roundCtKwh(Number(pricing?.dynamicComponents?.vatPct || 0))
+    },
+    fixedGrossImportCtKwh: Number.isFinite(Number(pricing.fixedGrossImportCtKwh))
+      ? roundCtKwh(Number(pricing.fixedGrossImportCtKwh))
+      : null,
+    module3Windows: configuredModule3Windows(pricing).map((window) => ({
+      id: window.id,
+      label: window.label,
+      start: window.start,
+      end: window.end,
+      priceCtKwh: window.priceCtKwh
+    })),
+    costs: {
+      pvCtKwh: Number.isFinite(Number(costs.pvCtKwh)) ? roundCtKwh(Number(costs.pvCtKwh)) : null,
+      batteryBaseCtKwh: Number.isFinite(Number(costs.batteryBaseCtKwh)) ? roundCtKwh(Number(costs.batteryBaseCtKwh)) : null,
+      batteryLossMarkupPct: roundCtKwh(Number(costs.batteryLossMarkupPct || 0)),
+      batteryEffectiveCtKwh: effectiveBatteryCostCtKwh(costs),
+      mixedCtKwh: mixedCostCtKwh(costs)
+    },
+    current,
+    slots
+  };
+}
+
 async function runMeterScan(params = {}) {
   if (state.scan.running) throw new Error('scan already running');
   const p = { ...cfg.scan, ...params };
@@ -1042,7 +1054,7 @@ async function runMeterScan(params = {}) {
   try {
     for (let addr = p.start; addr <= p.end; addr += p.step) {
       try {
-        const regs = await mbRequest({
+        const regs = await scanTransport.mbRequest({
           host: p.host,
           port: p.port,
           unitId: p.unitId,
@@ -1069,27 +1081,22 @@ async function runMeterScan(params = {}) {
   }
 }
 
-function scheduleMatch(rule, nowDay, nowMin) {
-  if (!rule || rule.enabled === false) return false;
-  if (Array.isArray(rule.days) && rule.days.length && !rule.days.includes(nowDay)) return false;
-  const s = parseHHMM(rule.start);
-  const e = parseHHMM(rule.end);
-  if (s == null || e == null) return false;
-  if (s <= e) return nowMin >= s && nowMin < e;
-  return nowMin >= s || nowMin < e;
-}
-
 function effectiveTargetValue(target) {
   const now = Date.now();
-  const day = localWeekdayIndex(new Date(now));
   const mod = localMinutesOfDay(new Date(now));
 
-  const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, day, mod));
-  if (hit) return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}` };
+  const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, mod));
+  if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
 
-  if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default' };
-  if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default' };
-  return { value: null, source: 'none' };
+  const mo = state.schedule.manualOverride[target];
+  if (mo && (Date.now() - mo.at) < (cfg.schedule.manualOverrideTtlMs || 300000)) {
+    return { value: Number(mo.value), source: 'manual_override', rule: null };
+  }
+  delete state.schedule.manualOverride[target];
+
+  if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
+  if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
+  return { value: null, source: 'none', rule: null };
 }
 
 async function applyControlTarget(target, value, source) {
@@ -1104,17 +1111,27 @@ async function applyControlTarget(target, value, source) {
   }
 
   try {
-    const encoded = toRawForWrite(value, conf);
-    const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
-    const fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
-
-    if (fc === 6) {
-      if (words.length !== 1) throw new Error(`fc6 only supports one register, got ${words.length}`);
-      await mbWriteSingle({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs });
-    } else if (fc === 16) {
-      await mbWriteMultiple({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs });
+    let encoded, words, fc;
+    if (transport.type === 'mqtt') {
+      // MQTT: Engineering-Wert direkt schreiben (kein Register-Encoding)
+      await transport.mqttWrite(target, value);
+      encoded = { raw: value, scaled: value, writeType: 'mqtt', wordOrder: 'n/a' };
+      words = [value];
+      fc = 0;
     } else {
-      throw new Error(`unsupported write fc: ${fc}`);
+      // Modbus: Wert in Register-Format kodieren
+      encoded = toRawForWrite(value, conf);
+      words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
+      fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
+
+      if (fc === 6) {
+        if (words.length !== 1) throw new Error(`fc6 only supports one register, got ${words.length}`);
+        await transport.mbWriteSingle({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs });
+      } else if (fc === 16) {
+        await transport.mbWriteMultiple({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs });
+      } else {
+        throw new Error(`unsupported write fc: ${fc}`);
+      }
     }
 
     state.schedule.lastWrite[target] = {
@@ -1141,9 +1158,32 @@ async function applyControlTarget(target, value, source) {
       address: conf.address,
       source
     });
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'control_write',
+      target,
+      valueNum: Number(value),
+      reason: source,
+      source: source.includes('optimization') ? 'optimizer' : 'runtime',
+      meta: {
+        raw: encoded.raw,
+        words,
+        scaled: encoded.scaled,
+        writeType: encoded.writeType,
+        fc,
+        address: conf.address
+      }
+    }));
     return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address };
   } catch (e) {
     pushLog('control_write_error', { target, value, source, error: e.message });
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'control_write_error',
+      target,
+      valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
+      reason: source,
+      source: 'runtime',
+      meta: { error: e.message }
+    }));
     return { ok: false, error: e.message };
   }
 }
@@ -1160,23 +1200,35 @@ async function evaluateSchedule() {
     const eff = effectiveTargetValue(target);
     if (eff.value == null) continue;
 
-    // Bei negativen Preisen: Grid Setpoint auf Schutzwert begrenzen
+    // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
     if (target === 'gridSetpointW' && priceNegative) {
       const limit = Number(npp.gridSetpointW ?? -40);
+      const prev = state.ctrl.negativePriceActive;
+      if (!prev) pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
+      state.ctrl.negativePriceActive = true;
+      // Victron DC/AC Abregelung immer bei negativen Preisen
+      if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
+        applyDvVictronControl(false);
+      }
       if (eff.value < limit) {
-        const prev = state.ctrl.negativePriceActive;
-        if (!prev) pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
-        state.ctrl.negativePriceActive = true;
         await applyControlTarget(target, limit, 'negative_price_protection');
-        // Auch Victron-Abregelung bei negativen Preisen
-        if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
-          applyDvVictronControl(false);
-        }
         continue;
       }
     }
 
     await applyControlTarget(target, eff.value, eff.source);
+  }
+
+  // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
+  const nowMin = localMinutesOfDay(new Date());
+  const autoDisable = autoDisableExpiredScheduleRules(state.schedule.rules, nowMin);
+  if (autoDisable.changed) {
+    for (const rule of state.schedule.rules) {
+      if (!rule?._wasActive || rule.enabled === false || scheduleMatch(rule, nowMin)) continue;
+      pushLog('schedule_auto_disabled', { id: rule.id, target: rule.target });
+    }
+    state.schedule.rules = autoDisable.rules;
+    persistConfig();
   }
 
   // Negative-Preis-Schutz aufheben wenn Preis wieder positiv
@@ -1220,7 +1272,8 @@ function costSummary() {
     costEur: Number(state.energy.costEur.toFixed(4)),
     revenueEur: Number(state.energy.revenueEur.toFixed(4)),
     netEur: Number((state.energy.revenueEur - state.energy.costEur).toFixed(4)),
-    priceNowCtKwh: Number(epexNowNext()?.current?.ct_kwh ?? 0)
+    priceNowCtKwh: Number(epexNowNext()?.current?.ct_kwh ?? 0),
+    userImportPriceNowCtKwh: Number(userEnergyPricingSummary()?.current?.importPriceCtKwh ?? 0)
   };
 }
 
@@ -1237,8 +1290,88 @@ function integrationState() {
     batteryPowerW: state.victron.batteryPowerW,
     pvTotalW: state.victron.pvTotalW,
     scheduleActive: state.schedule.active,
-    costs: costSummary()
+    costs: costSummary(),
+    userEnergyPricing: userEnergyPricingSummary()
   };
+}
+
+// ── EOS (Akkudoktor) Integration ─────────────────────────────────────
+function eosState() {
+  const now = new Date();
+  const soc = Number(state.victron.soc ?? 0);
+  const gridTotal = Number(state.meter.grid_total_w ?? 0);
+  const posImport = cfg.gridPositiveMeans === 'grid_import';
+  const gridImportW = Math.max(0, posImport ? gridTotal : -gridTotal);
+  const gridExportW = Math.max(0, posImport ? -gridTotal : gridTotal);
+
+  return {
+    // Messwerte im EOS-Format (PUT /v1/measurement/data)
+    measurement: {
+      start_datetime: now.toISOString(),
+      interval: `${cfg.meterPollMs / 1000} seconds`,
+      battery_soc: [soc / 100],
+      battery_power: [Number(state.victron.batteryPowerW ?? 0)],
+      grid_import_w: [gridImportW],
+      grid_export_w: [gridExportW],
+      pv_power: [Number(state.victron.pvTotalW ?? 0)],
+      load_power: [Number(state.victron.selfConsumptionW ?? 0)],
+      power_l1_w: [Number(state.meter.grid_l1_w ?? 0)],
+      power_l2_w: [Number(state.meter.grid_l2_w ?? 0)],
+      power_l3_w: [Number(state.meter.grid_l3_w ?? 0)]
+    },
+    // Aktuelle Systeminfo
+    system: {
+      timestamp: now.toISOString(),
+      soc_pct: soc,
+      battery_power_w: Number(state.victron.batteryPowerW ?? 0),
+      pv_total_w: Number(state.victron.pvTotalW ?? 0),
+      grid_total_w: gridTotal,
+      grid_import_w: gridImportW,
+      grid_export_w: gridExportW,
+      grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
+      min_soc_pct: Number(state.victron.minSocPct ?? 0),
+      self_consumption_w: Number(state.victron.selfConsumptionW ?? 0)
+    },
+    // EPEX-Preise (fuer EOS prediction import)
+    prices: epexPriceArray()
+  };
+}
+
+// ── EMHASS Integration ───────────────────────────────────────────────
+function emhassState() {
+  const soc = Number(state.victron.soc ?? 0);
+  const prices = epexPriceArray();
+
+  return {
+    // Aktuelle Werte fuer soc_init
+    soc_init: soc / 100,
+    battery_power_w: Number(state.victron.batteryPowerW ?? 0),
+    pv_power_w: Number(state.victron.pvTotalW ?? 0),
+    load_power_w: Number(state.victron.selfConsumptionW ?? 0),
+    grid_power_w: Number(state.meter.grid_total_w ?? 0),
+    // EPEX-Preise als Array (EUR/kWh) fuer load_cost_forecast
+    load_cost_forecast: prices.map((p) => p.eur_kwh),
+    // Timestamps dazu
+    price_timestamps: prices.map((p) => p.ts_iso),
+    // Preise als prod_price_forecast (Einspeiseverguetung, hier identisch)
+    prod_price_forecast: prices.map((p) => p.eur_kwh),
+    // System-Metadaten
+    timestamp: new Date().toISOString(),
+    grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
+    min_soc_pct: Number(state.victron.minSocPct ?? 0)
+  };
+}
+
+// ── EPEX-Preise als Array (fuer EOS + EMHASS) ───────────────────────
+function epexPriceArray() {
+  if (!state.epex.ok || !Array.isArray(state.epex.data)) return [];
+  return state.epex.data.map((row) => ({
+    ts: row.ts,
+    ts_iso: new Date(row.ts).toISOString(),
+    eur_mwh: Number(row.eur_mwh ?? 0),
+    eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
+    ct_kwh: Number(row.ct_kwh ?? 0)
+  }));
 }
 
 function checkAuth(req, res) {
@@ -1268,6 +1401,171 @@ function text(res, code, payload) {
   res.end(String(payload));
 }
 
+function downloadJson(res, filename, payload) {
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    'content-disposition': `attachment; filename="${filename}"`
+  });
+  res.end(JSON.stringify(payload, null, 2));
+}
+
+function configMetaPayload() {
+  return {
+    path: CONFIG_PATH,
+    exists: loadedConfig.exists,
+    valid: loadedConfig.valid,
+    parseError: loadedConfig.parseError,
+    needsSetup: loadedConfig.needsSetup,
+    warnings: loadedConfig.warnings || []
+  };
+}
+
+function configApiPayload() {
+  return {
+    ok: true,
+    meta: configMetaPayload(),
+    config: rawCfg,
+    effectiveConfig: cfg,
+    definition: CONFIG_DEFINITION
+  };
+}
+
+function serviceCommandParts(args) {
+  if (SERVICE_USE_SUDO) return { command: 'sudo', args: ['-n', 'systemctl', ...args] };
+  return { command: 'systemctl', args };
+}
+
+async function runServiceCommand(args) {
+  const parts = serviceCommandParts(args);
+  try {
+    const result = await execFileAsync(parts.command, parts.args, { timeout: 8000 });
+    return {
+      ok: true,
+      command: `${parts.command} ${parts.args.join(' ')}`,
+      stdout: String(result.stdout || '').trim(),
+      stderr: String(result.stderr || '').trim()
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      command: `${parts.command} ${parts.args.join(' ')}`,
+      error: String(error.stderr || error.stdout || error.message || 'command failed').trim()
+    };
+  }
+}
+
+async function adminHealthPayload() {
+  const service = {
+    enabled: SERVICE_ACTIONS_ENABLED,
+    name: SERVICE_NAME,
+    useSudo: SERVICE_USE_SUDO,
+    status: 'disabled',
+    detail: 'Service-Aktionen sind per ENV deaktiviert.'
+  };
+
+  if (SERVICE_ACTIONS_ENABLED) {
+    const activeCheck = await runServiceCommand(['is-active', SERVICE_NAME]);
+    const showCheck = await runServiceCommand(['show', SERVICE_NAME, '--property=ActiveState,SubState,UnitFileState', '--value']);
+    service.status = activeCheck.ok ? (activeCheck.stdout || 'unknown') : 'unavailable';
+    service.detail = activeCheck.ok ? 'systemctl erreichbar' : activeCheck.error;
+    service.show = showCheck.ok ? showCheck.stdout : showCheck.error;
+  }
+
+  return {
+    ok: true,
+    checkedAt: Date.now(),
+    service,
+    runtime: {
+      node: process.version,
+      platform: `${process.platform}/${process.arch}`,
+      pid: process.pid,
+      transport: transport.type,
+      uptimeSec: Math.round(process.uptime())
+    },
+    checks: [
+      {
+        id: 'config',
+        label: 'Config Datei',
+        ok: loadedConfig.exists && loadedConfig.valid,
+        detail: loadedConfig.exists
+          ? (loadedConfig.valid ? `gueltig unter ${CONFIG_PATH}` : `ungueltig: ${loadedConfig.parseError}`)
+          : `fehlt: ${CONFIG_PATH}`
+      },
+      {
+        id: 'setup',
+        label: 'Setup Status',
+        ok: !loadedConfig.needsSetup,
+        detail: loadedConfig.needsSetup ? 'Setup noch nicht abgeschlossen' : 'Setup abgeschlossen'
+      },
+      {
+        id: 'meter',
+        label: 'Live Meter Daten',
+        ok: state.meter.ok,
+        detail: state.meter.ok
+          ? `letztes Update ${fmtTs(state.meter.updatedAt)}`
+          : (state.meter.error || 'noch keine erfolgreichen Meter-Daten')
+      },
+      {
+        id: 'epex',
+        label: 'EPEX Feed',
+        ok: !cfg.epex.enabled || state.epex.ok,
+        detail: !cfg.epex.enabled
+          ? 'deaktiviert'
+          : state.epex.ok
+            ? `letztes Update ${fmtTs(state.epex.updatedAt)}`
+            : (state.epex.error || 'noch keine Preisdaten')
+      },
+      {
+        id: 'service_actions',
+        label: 'Restart Aktion',
+        ok: SERVICE_ACTIONS_ENABLED && service.status !== 'unavailable',
+        detail: SERVICE_ACTIONS_ENABLED
+          ? `Service ${SERVICE_NAME}: ${service.status}`
+          : 'per ENV deaktiviert'
+      },
+      {
+        id: 'telemetry',
+        label: 'Interne Historie',
+        ok: !cfg.telemetry?.enabled || state.telemetry.ok,
+        detail: !cfg.telemetry?.enabled
+          ? 'deaktiviert'
+          : state.telemetry.dbPath
+            ? `DB ${state.telemetry.dbPath}, letztes Schreiben ${fmtTs(state.telemetry.lastWriteAt)}`
+            : (state.telemetry.lastError || 'noch keine Telemetrie-Initialisierung')
+      }
+    ]
+  };
+}
+
+function scheduleServiceRestart() {
+  const parts = serviceCommandParts(['restart', SERVICE_NAME]);
+  const helperScript = `
+    const { spawn } = require('node:child_process');
+    setTimeout(() => {
+      const child = spawn(${JSON.stringify(parts.command)}, ${JSON.stringify(parts.args)}, {
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+    }, 1200);
+  `;
+  const helper = spawn(process.execPath, ['-e', helperScript], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  helper.unref();
+}
+
+function servePage(res, filename) {
+  const publicDir = path.resolve(__dirname, 'public');
+  const file = path.resolve(publicDir, filename);
+  if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
+  if (!fs.existsSync(file)) return text(res, 404, 'not found');
+  res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+  fs.createReadStream(file).pipe(res);
+}
+
 function serveStatic(req, res) {
   const urlPath = new URL(req.url, 'http://localhost').pathname;
   const reqPath = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
@@ -1293,6 +1591,10 @@ const web = http.createServer(async (req, res) => {
   try {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if (url.pathname === '/' && req.method === 'GET') {
+    return servePage(res, loadedConfig.needsSetup ? 'setup.html' : 'index.html');
+  }
+
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
     if (!checkAuth(req, res)) return;
   }
@@ -1301,6 +1603,57 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/keepalive/modbus' && req.method === 'GET') return json(res, 200, keepaliveModbusPayload());
   if (url.pathname === '/api/keepalive/pulse' && req.method === 'GET') return json(res, 200, keepalivePulsePayload());
+  if (url.pathname === '/api/setup/status' && req.method === 'GET') return json(res, 200, configMetaPayload());
+
+  if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
+
+  if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
+    const body = await parseBody(req);
+    if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
+      return json(res, 400, { ok: false, error: 'config object required' });
+    }
+    const result = saveAndApplyConfig(body.config);
+    pushLog('config_saved', {
+      changedPaths: result.changedPaths.length,
+      restartRequired: result.restartRequired,
+      source: url.pathname.endsWith('/import') ? 'import' : 'settings'
+    });
+    return json(res, 200, {
+      ok: true,
+      meta: configMetaPayload(),
+      config: rawCfg,
+      effectiveConfig: cfg,
+      changedPaths: result.changedPaths,
+      restartRequired: result.restartRequired,
+      restartRequiredPaths: result.restartRequiredPaths
+    });
+  }
+
+  if (url.pathname === '/api/config/export' && req.method === 'GET') {
+    return downloadJson(res, 'dvhub-config.json', rawCfg);
+  }
+
+  if (url.pathname === '/api/admin/health' && req.method === 'GET') {
+    return json(res, 200, await adminHealthPayload());
+  }
+
+  if (url.pathname === '/api/admin/service/restart' && req.method === 'POST') {
+    if (!SERVICE_ACTIONS_ENABLED) {
+      return json(res, 403, { ok: false, error: 'service actions disabled' });
+    }
+    const check = await runServiceCommand(['show', SERVICE_NAME, '--property=Id', '--value']);
+    if (!check.ok) {
+      return json(res, 500, { ok: false, error: check.error, command: check.command });
+    }
+    scheduleServiceRestart();
+    pushLog('service_restart_scheduled', { service: SERVICE_NAME });
+    return json(res, 202, {
+      ok: true,
+      accepted: true,
+      service: SERVICE_NAME,
+      message: 'Service restart scheduled'
+    });
+  }
 
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
@@ -1321,8 +1674,14 @@ const web = http.createServer(async (req, res) => {
       victron: state.victron,
       scan: state.scan,
       schedule: state.schedule,
+      setup: configMetaPayload(),
       costs: costSummary(),
-      epex: { ...state.epex, summary: epexNowNext() }
+      userEnergyPricing: userEnergyPricingSummary(),
+      epex: { ...state.epex, summary: epexNowNext() },
+      telemetry: {
+        ...state.telemetry,
+        historyImport: historyImportManager ? historyImportManager.getStatus() : null
+      }
     });
   }
 
@@ -1336,7 +1695,85 @@ const web = http.createServer(async (req, res) => {
     return text(res, 200, lines.join('\n'));
   }
 
+  // EOS (Akkudoktor) — Messwerte + Preise abrufen
+  if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
+
+  // EOS — Optimierungsergebnis empfangen und als Schedule-Regeln anwenden
+  if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const results = [];
+    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+      results.push(await applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
+    }
+    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+      results.push(await applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'eos_optimization'));
+    }
+    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+      results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
+    }
+    pushLog('eos_apply', { targets: results.length, body });
+    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+      optimizer: 'eos',
+      body,
+      source: 'eos_apply'
+    })));
+    return json(res, 200, { ok: true, results });
+  }
+
+  // EMHASS — Messwerte + Preise abrufen
+  if (url.pathname === '/api/integration/emhass' && req.method === 'GET') return json(res, 200, emhassState());
+
+  // EMHASS — Optimierungsergebnis empfangen und anwenden
+  if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const results = [];
+    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+      results.push(await applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
+    }
+    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+      results.push(await applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'emhass_optimization'));
+    }
+    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+      results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
+    }
+    pushLog('emhass_apply', { targets: results.length, body });
+    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+      optimizer: 'emhass',
+      body,
+      source: 'emhass_apply'
+    })));
+    return json(res, 200, { ok: true, results });
+  }
+
   if (url.pathname === '/api/log' && req.method === 'GET') return json(res, 200, { rows: state.log.slice(-300) });
+
+  if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
+    return json(res, 200, {
+      ok: true,
+      telemetryEnabled: !!cfg.telemetry?.enabled,
+      historyImport: historyImportManager ? historyImportManager.getStatus() : null
+    });
+  }
+
+  if (url.pathname === '/api/history/import' && req.method === 'POST') {
+    if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    const body = await parseBody(req);
+    const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
+    const result = Array.isArray(body.rows) && body.rows.length
+      ? historyImportManager.importSamples({
+        provider,
+        requestedFrom: body.requestedFrom ?? null,
+        requestedTo: body.requestedTo ?? null,
+        sourceAccount: body.sourceAccount ?? null,
+        rows: body.rows
+      })
+      : await historyImportManager.importFromConfiguredSource({
+        start: body.requestedFrom ?? body.start,
+        end: body.requestedTo ?? body.end,
+        interval: body.interval || '15mins'
+      });
+    return json(res, result.ok ? 200 : 400, result);
+  }
 
   if (url.pathname === '/api/epex/refresh' && req.method === 'POST') {
     await fetchEpexDay();
@@ -1396,6 +1833,7 @@ const web = http.createServer(async (req, res) => {
     if (!['gridSetpointW', 'chargeCurrentA', 'minSocPct'].includes(target) || !Number.isFinite(value)) {
       return json(res, 400, { ok: false, error: 'target/value invalid' });
     }
+    state.schedule.manualOverride[target] = { value, at: Date.now() };
     const result = await applyControlTarget(target, value, 'api_manual_write');
     return json(res, result.ok ? 200 : 500, result);
   }
@@ -1407,6 +1845,13 @@ const web = http.createServer(async (req, res) => {
   }
 });
 
+telemetryStore = createTelemetryStoreIfEnabled();
+historyImportManager = telemetryStore ? createHistoryImportManager({
+  store: telemetryStore,
+  telemetryConfig: cfg.telemetry || {}
+}) : null;
+refreshTelemetryStatus();
+
 web.listen(cfg.httpPort, () => {
   console.log(`Web server listening on :${cfg.httpPort}`);
 });
@@ -1414,29 +1859,45 @@ web.listen(cfg.httpPort, () => {
 loadEnergy();
 startModbusServer();
 setInterval(expireLeaseIfNeeded, 1000);
-pollMeter().catch((e) => console.error('Initial pollMeter error:', e));
-setInterval(() => {
-  pollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
-}, Math.max(500, cfg.meterPollMs));
+
+// Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
+transport.init().then(() => {
+  console.log(`Transport initialisiert: ${transport.type}`);
+  pollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+  setInterval(() => {
+    pollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+  }, Math.max(500, cfg.meterPollMs));
+  setInterval(() => {
+    evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
+  }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
+}).catch((e) => {
+  console.error('Transport init fehlgeschlagen:', e.message);
+  console.error('Polling/Schedule starten ohne Transport...');
+});
 fetchEpexDay();
 setInterval(() => {
   const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
   if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
 }, 5 * 60 * 1000);
 setInterval(() => {
-  evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
-}, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
-setInterval(() => {
   flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
 }, INFLUX_FLUSH_MS);
 setInterval(persistEnergy, 60000);
+setInterval(() => {
+  telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
+}, 5 * 60 * 1000);
+setInterval(() => {
+  telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
+}, 6 * 60 * 60 * 1000);
 
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
+  transport.destroy();
+  scanTransport.destroy();
+  if (telemetryStore) telemetryStore.close();
   if (mbServer) mbServer.close();
   web.close();
-  for (const c of mbPool.values()) c.destroy();
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -1449,6 +1910,20 @@ console.log('Config loaded:', {
   meterAddress: `${cfg.meter.host}:${cfg.meter.port} uid=${cfg.meter.unitId} reg=${cfg.meter.address}`,
   apiTokenSet: !!cfg.apiToken,
   influxEnabled: cfg.influx.enabled,
+  influxApiVersion: cfg.influx.apiVersion || 'v3',
   epexEnabled: cfg.epex.enabled,
-  scheduleRules: cfg.schedule.rules.length
+  scheduleRules: cfg.schedule.rules.length,
+  telemetryEnabled: cfg.telemetry?.enabled,
+  telemetryDbPath: state.telemetry.dbPath,
+  configPath: CONFIG_PATH,
+  configExists: loadedConfig.exists,
+  configValid: loadedConfig.valid,
+  needsSetup: loadedConfig.needsSetup
 });
+
+if (loadedConfig.parseError) {
+  console.error(`Config parse error in ${CONFIG_PATH}: ${loadedConfig.parseError}`);
+}
+if (loadedConfig.needsSetup) {
+  console.log(`No valid config available at ${CONFIG_PATH}. Root URL will open the setup wizard.`);
+}
