@@ -12,6 +12,39 @@ function floorToInterval(date, seconds) {
   return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs);
 }
 
+const DEFAULT_PRICE_BUCKET_SECONDS = 900;
+const DEFAULT_TELEMETRY_BACKFILL_SERIES = [
+  'grid_import_w',
+  'grid_export_w',
+  'grid_total_w',
+  'pv_total_w',
+  'battery_power_w'
+];
+
+function roundKwh(value) {
+  const numeric = Number(value || 0);
+  const sign = numeric < 0 ? -1 : 1;
+  return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
+}
+
+function bucketIso(ts, seconds) {
+  return floorToInterval(new Date(ts), seconds).toISOString();
+}
+
+function weightedAverage(entries) {
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  for (const entry of entries) {
+    const value = Number(entry.value_num);
+    const weight = Number(entry.resolution_seconds || 1);
+    if (!Number.isFinite(value) || !Number.isFinite(weight) || weight <= 0) continue;
+    weightedTotal += value * weight;
+    totalWeight += weight;
+  }
+  if (totalWeight <= 0) return null;
+  return weightedTotal / totalWeight;
+}
+
 export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupIntervals = [300, 900, 3600] }) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -259,6 +292,113 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     return Number(result.changes || 0);
   }
 
+  function getTelemetryBounds() {
+    const row = db.prepare(`
+      SELECT MIN(ts_utc) AS earliest, MAX(ts_utc) AS latest
+      FROM timeseries_samples
+      WHERE series_key NOT LIKE 'price_%'
+    `).get();
+    return {
+      earliest: row?.earliest || null,
+      latest: row?.latest || null
+    };
+  }
+
+  function listMissingPriceBuckets({ start = null, end = null, seriesKeys = DEFAULT_TELEMETRY_BACKFILL_SERIES } = {}) {
+    const keys = Array.isArray(seriesKeys) && seriesKeys.length ? seriesKeys : DEFAULT_TELEMETRY_BACKFILL_SERIES;
+    const placeholders = keys.map(() => '?').join(', ');
+    const telemetryRows = db.prepare(`
+      SELECT ts_utc
+      FROM timeseries_samples
+      WHERE series_key IN (${placeholders})
+        ${start ? 'AND ts_utc >= ?' : ''}
+        ${end ? 'AND ts_utc < ?' : ''}
+    `).all(...keys, ...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+    const priceRows = db.prepare(`
+      SELECT ts_utc
+      FROM timeseries_samples
+      WHERE series_key = 'price_ct_kwh'
+        ${start ? 'AND ts_utc >= ?' : ''}
+        ${end ? 'AND ts_utc < ?' : ''}
+    `).all(...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+
+    const telemetryBuckets = new Set(telemetryRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
+    const pricedBuckets = new Set(priceRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
+
+    return [...telemetryBuckets].filter((ts) => !pricedBuckets.has(ts)).sort();
+  }
+
+  function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+    const rows = db.prepare(`
+      SELECT series_key, ts_utc, resolution_seconds, value_num
+      FROM timeseries_samples
+      WHERE series_key IN ('grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w')
+        AND value_num IS NOT NULL
+        AND ts_utc >= ?
+        AND ts_utc < ?
+      ORDER BY ts_utc ASC
+    `).all(isoTimestamp(start), isoTimestamp(end));
+
+    const buckets = new Map();
+    for (const row of rows) {
+      const ts = bucketIso(row.ts_utc, bucketSeconds);
+      const bucket = buckets.get(ts) || new Map();
+      const entries = bucket.get(row.series_key) || [];
+      entries.push(row);
+      bucket.set(row.series_key, entries);
+      buckets.set(ts, bucket);
+    }
+
+    return [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([ts, bucket]) => {
+        const energyForSeries = (seriesKey) => {
+          const avgPower = weightedAverage(bucket.get(seriesKey) || []);
+          if (!Number.isFinite(avgPower)) return 0;
+          return roundKwh((avgPower * bucketSeconds) / 3600000);
+        };
+        return {
+          ts,
+          importKwh: energyForSeries('grid_import_w'),
+          exportKwh: energyForSeries('grid_export_w'),
+          gridKwh: energyForSeries('grid_total_w'),
+          pvKwh: energyForSeries('pv_total_w'),
+          batteryKwh: energyForSeries('battery_power_w')
+        };
+      });
+  }
+
+  function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+    const rows = db.prepare(`
+      SELECT series_key, ts_utc, resolution_seconds, value_num
+      FROM timeseries_samples
+      WHERE series_key IN ('price_ct_kwh', 'price_eur_mwh')
+        AND value_num IS NOT NULL
+        AND ts_utc >= ?
+        AND ts_utc < ?
+      ORDER BY ts_utc ASC
+    `).all(isoTimestamp(start), isoTimestamp(end));
+
+    const buckets = new Map();
+    for (const row of rows) {
+      const ts = bucketIso(row.ts_utc, bucketSeconds);
+      const bucket = buckets.get(ts) || new Map();
+      const entries = bucket.get(row.series_key) || [];
+      entries.push(row);
+      bucket.set(row.series_key, entries);
+      buckets.set(ts, bucket);
+    }
+
+    return [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([ts, bucket]) => ({
+        ts,
+        priceCtKwh: weightedAverage(bucket.get('price_ct_kwh') || []),
+        priceEurMwh: weightedAverage(bucket.get('price_eur_mwh') || [])
+      }))
+      .filter((row) => row.priceCtKwh != null || row.priceEurMwh != null);
+  }
+
   return {
     dbPath,
     listTables() {
@@ -287,6 +427,10 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     },
     buildRollups,
     cleanupRawSamples,
+    getTelemetryBounds,
+    listMissingPriceBuckets,
+    listAggregatedEnergySlots,
+    listPriceSlots,
     getStatus() {
       const lastSample = db.prepare(`SELECT MAX(ts_utc) AS value FROM timeseries_samples`).get().value;
       const lastEvent = db.prepare(`SELECT MAX(ts_utc) AS value FROM control_events`).get().value;
