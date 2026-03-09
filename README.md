@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | WIP -- Version 0.2.4 by agentic engineering.|
+| **Status** | WIP -- Version 0.2.5 by agentic engineering.|
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -31,7 +31,7 @@
 
 ---
 
-## Änderungen seit `main` (v0.1.0 -> v0.2.4)
+## Änderungen seit `main` (v0.1.0 -> v0.2.5)
 
 Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
 
@@ -43,6 +43,8 @@ Seit dem Stand von `main` wurden folgende Erweiterungen eingebaut:
 - **MQTT-Transport für Victron Venus OS** inklusive Read-/Write-Mapping und Keepalive für Settings-Topics
 - **Erweiterte Schedule-Steuerung** für Grid Setpoint, Charge Current und Min SOC mit Default-Werten, manuellen Writes und vereinfachter GUI
 - **EOS- und EMHASS-Integrations-Endpunkte** zum Abrufen von Messwerten/Preisen und Anwenden von Optimierungsergebnissen
+- **Interne Telemetrie-Datenbank** für Live-Historie, Preiszeitreihen, Steuerereignisse und Optimizer-Runs direkt in DVhub
+- **History-Import über VRM** für spätere Nachfüllung bei neuen Installationen und Datenlücken
 - **InfluxDB v3 Native API Support** inklusive kompatibler Behandlung für Influx v2/v3
 - **Neues `install.sh`** für einfache GitHub-Installation inklusive systemd-Service, externer Config-Datei und vorkonfiguriertem Setup-Start
 - **Dokumentation erweitert und sprachlich vereinheitlicht** inklusive deutscher Umlaute und aktueller GUI-/Setup-/Installationspfade
@@ -162,7 +164,7 @@ Webapp + Modbus-Proxy als Ersatz/Ergänzung zum Node-RED-Flow.
 Einfachste Variante:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dvhub/dvhub/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/feature/schedule-mqtt/install.sh | sudo bash
 ```
 
 Das Skript installiert Node.js, klont das Repo nach `/opt/dvhub`, richtet einen systemd-Service ein
@@ -170,6 +172,9 @@ und verwendet bewusst eine **externe Config-Datei** unter `/etc/dvhub/config.jso
 Wenn diese Datei noch nicht existiert, öffnet die Weboberfläche automatisch den neuen Setup-Assistenten.
 Außerdem aktiviert das Skript die neuen **Service-Aktionen** in der GUI
 (Health-Check + Restart-Button) über eine passende `sudoers`-Regel.
+Zusätzlich wird automatisch eine **interne SQLite-Telemetrie-Datenbank**
+unter `/var/lib/dvhub/telemetry.sqlite` angelegt, die Livewerte, Preise,
+Steuerereignisse und Optimizer-Daten ab dem ersten Start mitschreibt.
 
 Manuelle Installation:
 
@@ -180,11 +185,12 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo apt install -y tcpdump jq
 sudo mkdir -p /opt/dv-control-webapp
+sudo mkdir -p /var/lib/dvhub
 sudo useradd -r -s /usr/sbin/nologin dvhub
 ```
 An dieser Stelle den Inhalt des Repos nach `/opt/dv-control-webapp` kopieren.
 ```bash
-sudo chown -R dvhub:dvhub /opt/dv-control-webapp
+sudo chown -R dvhub:dvhub /opt/dv-control-webapp /var/lib/dvhub
 cd /opt/dv-control-webapp
 cp config.example.json config.json
 nano config.json  # Konfiguration anpassen
@@ -210,10 +216,11 @@ Type=simple
 User=dvhub
 Group=dvhub
 WorkingDirectory=/opt/dv-control-webapp
-ExecStart=/usr/bin/node /opt/dv-control-webapp/server.js
+ExecStart=/usr/bin/node --experimental-sqlite /opt/dv-control-webapp/server.js
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
+Environment=DV_DATA_DIR=/var/lib/dvhub
 
 [Install]
 WantedBy=multi-user.target
@@ -442,9 +449,4 @@ while preventing commercial reselling of the software.
 ### Not allowed
 
 * Selling the software itself
-* Selling hardware with the software preinstalled
-* Commercial SaaS offerings based on this software
-* Bundling the software into commercial products
-
-If your company wants to integrate this software into a commercial
-product, please request a **commercial license**.
+* Selling hardware with the software prei

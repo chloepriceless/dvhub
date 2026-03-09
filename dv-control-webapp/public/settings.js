@@ -9,6 +9,14 @@ let currentDraftConfig = {};
 let currentEffectiveConfig = {};
 let currentMeta = null;
 let currentHealth = null;
+let currentHistoryImportStatus = null;
+let currentHistoryImportResult = null;
+let historyImportBusy = false;
+let historyImportFormState = {
+  start: '',
+  end: '',
+  interval: '15mins'
+};
 let settingsShellState = createSettingsShellState();
 
 function clone(value) {
@@ -133,6 +141,47 @@ const settingsShellHelpers = {
 
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsShell = settingsShellHelpers;
+}
+
+function shouldRenderHistoryImportPanel(destinationId) {
+  return destinationId === 'telemetry';
+}
+
+function parseDateTimeLocal(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function buildHistoryImportRequest(formState) {
+  return {
+    start: parseDateTimeLocal(formState?.start),
+    end: parseDateTimeLocal(formState?.end),
+    interval: formState?.interval || '15mins'
+  };
+}
+
+function buildHistoryImportActionState({ destinationId, status, form, busy }) {
+  const visible = shouldRenderHistoryImportPanel(destinationId);
+  if (!visible) return { visible: false, disabled: true, reason: '' };
+  if (busy) return { visible: true, disabled: true, reason: 'Import läuft bereits.' };
+  if (!status?.enabled) return { visible: true, disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
+  if (!status?.ready) return { visible: true, disabled: true, reason: 'VRM-Zugang ist noch nicht vollständig konfiguriert.' };
+  const payload = buildHistoryImportRequest(form);
+  if (!payload.start || !payload.end) return { visible: true, disabled: true, reason: 'Bitte Start und Ende setzen.' };
+  if (new Date(payload.end).getTime() <= new Date(payload.start).getTime()) {
+    return { visible: true, disabled: true, reason: 'Das Ende muss nach dem Start liegen.' };
+  }
+  return { visible: true, disabled: false, reason: '' };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsHistory = {
+    buildHistoryImportActionState,
+    buildHistoryImportRequest,
+    shouldRenderHistoryImportPanel
+  };
 }
 
 function getParts(path) {
@@ -490,7 +539,132 @@ function renderSectionWorkspace(sectionId) {
     panel.appendChild(sectionShell);
   }
 
+  if (shouldRenderHistoryImportPanel(sectionId)) {
+    panel.appendChild(renderHistoryImportPanel(sectionId));
+  }
+
   mount.appendChild(panel);
+}
+
+function buildHistoryImportSummary(status) {
+  if (!status) return 'Status wird geladen...';
+  if (!status.enabled) return 'VRM-Backfill ist derzeit deaktiviert.';
+  if (!status.ready) return 'VRM-Zugang ist noch nicht vollständig konfiguriert.';
+  return `VRM verbunden für Portal ${status.vrmPortalId || '-'}. Historischer Nachimport ist bereit.`;
+}
+
+function renderHistoryImportPanel(destinationId) {
+  const panel = document.createElement('section');
+  panel.className = 'settings-subsection settings-history-subsection';
+
+  const head = document.createElement('div');
+  head.className = 'settings-subsection-head';
+  head.innerHTML = `
+    <p class="card-title">Historie</p>
+    <h3>VRM Backfill</h3>
+    <p class="settings-section-meta">Historische Nachimporte werden bewusst nur über VRM unterstützt.</p>
+    <p class="tools-note">GX/Cerbo bleibt Live-Quelle. Für Historie und Lückenfüllung nutzt DVhub den VRM-Zugang aus den Telemetrie-Einstellungen.</p>
+  `;
+  panel.appendChild(head);
+
+  const statusBanner = document.createElement('div');
+  statusBanner.className = `status-banner ${currentHistoryImportStatus?.ready ? 'success' : 'warn'}`;
+  statusBanner.textContent = buildHistoryImportSummary(currentHistoryImportStatus);
+  panel.appendChild(statusBanner);
+
+  const summary = document.createElement('div');
+  summary.className = 'settings-workspace-summary';
+  summary.appendChild(createSummaryCard('Quelle', 'VRM Portal'));
+  summary.appendChild(createSummaryCard('Portal ID', currentHistoryImportStatus?.vrmPortalId || '-'));
+  summary.appendChild(createSummaryCard('Status', currentHistoryImportStatus?.ready ? 'Import bereit' : 'Konfiguration unvollständig'));
+  panel.appendChild(summary);
+
+  const grid = document.createElement('div');
+  grid.className = 'settings-fields compact';
+  grid.innerHTML = `
+    <label class="settings-field" for="historyImportStart">
+      <span class="settings-field-title">Von</span>
+      <input id="historyImportStart" type="datetime-local" value="${historyImportFormState.start || ''}" />
+      <small class="field-help">Startzeit des VRM-Historienimports.</small>
+    </label>
+    <label class="settings-field" for="historyImportEnd">
+      <span class="settings-field-title">Bis</span>
+      <input id="historyImportEnd" type="datetime-local" value="${historyImportFormState.end || ''}" />
+      <small class="field-help">Endzeit des VRM-Historienimports.</small>
+    </label>
+    <label class="settings-field" for="historyImportInterval">
+      <span class="settings-field-title">Intervall</span>
+      <select id="historyImportInterval">
+        <option value="15mins"${historyImportFormState.interval === '15mins' ? ' selected' : ''}>15 Minuten</option>
+        <option value="hours"${historyImportFormState.interval === 'hours' ? ' selected' : ''}>1 Stunde</option>
+        <option value="days"${historyImportFormState.interval === 'days' ? ' selected' : ''}>1 Tag</option>
+      </select>
+      <small class="field-help">Auflösung für den VRM-Stats-Import.</small>
+    </label>
+  `;
+  panel.appendChild(grid);
+
+  const actionState = buildHistoryImportActionState({
+    destinationId,
+    status: currentHistoryImportStatus,
+    form: historyImportFormState,
+    busy: historyImportBusy
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'settings-inline-actions';
+  const button = document.createElement('button');
+  button.id = 'historyImportBtn';
+  button.type = 'button';
+  button.className = 'btn btn-primary';
+  button.disabled = actionState.disabled;
+  button.textContent = historyImportBusy ? 'VRM-Import läuft...' : 'VRM-Historie importieren';
+  actions.appendChild(button);
+
+  const note = document.createElement('small');
+  note.className = 'tools-note';
+  note.textContent = actionState.reason || 'Der Import schreibt historische VRM-Zeitreihen direkt in die interne Telemetrie-Datenbank.';
+  actions.appendChild(note);
+  panel.appendChild(actions);
+
+  const result = document.createElement('div');
+  result.id = 'historyImportResult';
+  result.className = `status-banner ${currentHistoryImportResult?.ok ? 'success' : currentHistoryImportResult?.error ? 'error' : 'info'}`;
+  result.textContent = currentHistoryImportResult
+    ? (currentHistoryImportResult.ok
+      ? `Import erfolgreich: ${currentHistoryImportResult.importedRows} Werte, Job ${currentHistoryImportResult.jobId}.`
+      : `Import fehlgeschlagen: ${currentHistoryImportResult.error}`)
+    : 'Noch kein Import gestartet.';
+  panel.appendChild(result);
+
+  bindHistoryImportControls(panel);
+  return panel;
+}
+
+function syncHistoryImportForm(panel) {
+  historyImportFormState = {
+    start: panel.querySelector('#historyImportStart')?.value || '',
+    end: panel.querySelector('#historyImportEnd')?.value || '',
+    interval: panel.querySelector('#historyImportInterval')?.value || '15mins'
+  };
+}
+
+function bindHistoryImportControls(panel) {
+  const handleChange = () => {
+    syncHistoryImportForm(panel);
+    renderActiveSettingsDestination();
+  };
+
+  panel.querySelector('#historyImportStart')?.addEventListener('change', handleChange);
+  panel.querySelector('#historyImportEnd')?.addEventListener('change', handleChange);
+  panel.querySelector('#historyImportInterval')?.addEventListener('change', handleChange);
+  panel.querySelector('#historyImportBtn')?.addEventListener('click', () => {
+    triggerHistoryImport().catch((error) => {
+      currentHistoryImportResult = { ok: false, error: error.message };
+      historyImportBusy = false;
+      renderActiveSettingsDestination();
+    });
+  });
 }
 
 function renderActiveSettingsDestination() {
@@ -635,6 +809,23 @@ async function loadHealth() {
   renderHealth(payload);
 }
 
+async function loadHistoryImportStatus() {
+  const res = await apiFetch('/api/history/import/status');
+  const payload = await res.json();
+  if (!res.ok || !payload.ok) {
+    currentHistoryImportStatus = {
+      enabled: false,
+      ready: false,
+      provider: 'vrm',
+      mode: 'vrm_only',
+      vrmPortalId: ''
+    };
+    currentHistoryImportResult = { ok: false, error: payload.error || String(res.status) };
+    return;
+  }
+  currentHistoryImportStatus = payload.historyImport || null;
+}
+
 async function saveConfig(config, source = 'settings') {
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
@@ -660,7 +851,26 @@ async function saveConfig(config, source = 'settings') {
     : '';
   setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
   await loadHealth();
+  await loadHistoryImportStatus();
+  renderActiveSettingsDestination();
   return true;
+}
+
+async function triggerHistoryImport() {
+  historyImportBusy = true;
+  renderActiveSettingsDestination();
+  const payload = buildHistoryImportRequest(historyImportFormState);
+  const res = await apiFetch('/api/history/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await res.json();
+  currentHistoryImportResult = body;
+  historyImportBusy = false;
+  await loadHistoryImportStatus();
+  renderActiveSettingsDestination();
+  if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
 async function saveCurrentForm() {
@@ -737,6 +947,12 @@ function initSettingsPage() {
   });
   loadHealth().catch((error) => {
     setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
+  });
+  loadHistoryImportStatus().then(() => {
+    renderActiveSettingsDestination();
+  }).catch((error) => {
+    currentHistoryImportResult = { ok: false, error: error.message };
+    renderActiveSettingsDestination();
   });
 }
 

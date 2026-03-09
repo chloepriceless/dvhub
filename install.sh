@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/dvhub/dvhub.git}"
-REPO_BRANCH="${REPO_BRANCH:-main}"
+REPO_URL="${REPO_URL:-https://github.com/chloepriceless/dvhub.git}"
+REPO_BRANCH="${REPO_BRANCH:-feature/schedule-mqtt}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
+DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       CONFIG_DIR="$(dirname "$CONFIG_PATH")"
       shift 2
       ;;
+    --data-dir)
+      DATA_DIR="$2"
+      shift 2
+      ;;
     *)
       echo "Unbekannter Parameter: $1" >&2
       exit 1
@@ -39,7 +44,7 @@ done
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo --preserve-env=REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH bash "$0" "$@"
+    exec sudo --preserve-env=REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "$0" "$@"
   fi
   echo "Dieses Skript muss als root ausgeführt werden." >&2
   exit 1
@@ -92,8 +97,10 @@ npm install --omit=dev
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR"
+mkdir -p "$DATA_DIR"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
+chmod 750 "$DATA_DIR"
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
@@ -117,12 +124,13 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/node ${APP_DIR}/server.js
+ExecStart=/usr/bin/node --experimental-sqlite ${APP_DIR}/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=${CONFIG_PATH}
 Environment=DV_ENABLE_SERVICE_ACTIONS=1
 Environment=DV_SERVICE_NAME=${SERVICE_NAME}.service
 Environment=DV_SERVICE_USE_SUDO=1
+Environment=DV_DATA_DIR=${DATA_DIR}
 Restart=always
 RestartSec=3
 
@@ -142,8 +150,11 @@ echo
 echo "DVhub wurde installiert."
 echo "Service: systemctl status ${SERVICE_NAME}.service"
 echo "Config-Datei: ${CONFIG_PATH}"
+echo "Datenverzeichnis: ${DATA_DIR}"
+echo "Interne Historie: ${DATA_DIR}/telemetry.sqlite"
 echo "Setup-Oberfläche: http://${PRIMARY_IP}:8080/"
 echo
 echo "Da der Service eine externe Config-Datei nutzt, erscheint beim ersten Aufruf automatisch der Setup-Assistent,"
 echo "solange ${CONFIG_PATH} noch nicht angelegt wurde."
 echo "Restart-Button und Health-Check sind über die Einstellungen aktiv."
+echo "Die interne Telemetrie-Datenbank wird automatisch aufgebaut und schreibt ab dem ersten Start alle relevanten Daten mit."

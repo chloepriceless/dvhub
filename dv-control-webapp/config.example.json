@@ -75,6 +75,18 @@
     "token": "",
     "measurement": "dv"
   },
+  "telemetry": {
+    "enabled": true,
+    "dbPath": "",
+    "rawRetentionDays": 45,
+    "rollupIntervals": [300, 900, 3600],
+    "historyImport": {
+      "enabled": false,
+      "provider": "vrm",
+      "vrmPortalId": "",
+      "vrmToken": ""
+    }
+  },
   "epex": {
     "enabled": true,
     "bzn": "DE-LU",

@@ -1018,6 +1018,19 @@ table th {
   padding: 0;
 }
 
+.settings-inline-actions {
+  display: grid;
+  gap: 10px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.settings-history-subsection {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(121, 149, 174, 0.16);
+}
+
 .settings-field {
   display: grid;
   gap: 7px;

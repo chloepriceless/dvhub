@@ -12,6 +12,14 @@ import {
   loadConfigFile,
   saveConfigFile
 } from './config-model.js';
+import { createTelemetryStore } from './telemetry-store.js';
+import {
+  buildLiveTelemetrySamples,
+  buildOptimizerRunPayload,
+  buildPriceTelemetrySamples,
+  resolveTelemetryDbPath
+} from './telemetry-runtime.js';
+import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 
@@ -26,6 +34,7 @@ let cfg = loadedConfig.effectiveConfig;
 const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
 const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
+const DATA_DIR = process.env.DV_DATA_DIR || '';
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
@@ -74,6 +83,15 @@ const state = {
     lastTs: 0
   },
   epex: { ok: false, date: null, nextDate: null, updatedAt: 0, data: [], error: null },
+  telemetry: {
+    enabled: !!cfg.telemetry?.enabled,
+    dbPath: null,
+    ok: false,
+    lastWriteAt: null,
+    lastRollupAt: null,
+    lastCleanupAt: null,
+    lastError: null
+  },
   log: []
 };
 
@@ -84,6 +102,8 @@ const transport = cfg.victron?.transport === 'mqtt'
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport();
+let telemetryStore = null;
+let historyImportManager = null;
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -118,8 +138,71 @@ function persistConfig() {
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
     saveAndApplyConfig(current);
+    telemetrySafeWrite(() => telemetryStore.writeScheduleSnapshot({
+      ts: new Date(),
+      rules: current.schedule.rules,
+      defaultGridSetpointW: state.schedule.config.defaultGridSetpointW,
+      defaultChargeCurrentA: state.schedule.config.defaultChargeCurrentA,
+      source: 'config_persist'
+    }));
   } catch (e) {
     pushLog('config_persist_error', { error: e.message });
+  }
+}
+
+function createTelemetryStoreIfEnabled() {
+  if (!cfg.telemetry?.enabled) return null;
+  try {
+    const dbPath = resolveTelemetryDbPath({
+      configPath: CONFIG_PATH,
+      telemetryConfig: cfg.telemetry,
+      dataDir: DATA_DIR
+    });
+    const store = createTelemetryStore({
+      dbPath,
+      rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45),
+      rollupIntervals: Array.isArray(cfg.telemetry.rollupIntervals) ? cfg.telemetry.rollupIntervals : [300, 900, 3600]
+    });
+    state.telemetry.enabled = true;
+    state.telemetry.dbPath = dbPath;
+    state.telemetry.ok = true;
+    state.telemetry.lastError = null;
+    return store;
+  } catch (error) {
+    state.telemetry.enabled = true;
+    state.telemetry.ok = false;
+    state.telemetry.lastError = error.message;
+    pushLog('telemetry_store_init_error', { error: error.message });
+    return null;
+  }
+}
+
+function refreshTelemetryStatus() {
+  if (!telemetryStore) {
+    state.telemetry.enabled = !!cfg.telemetry?.enabled;
+    state.telemetry.ok = false;
+    return;
+  }
+  const status = telemetryStore.getStatus();
+  state.telemetry.enabled = !!cfg.telemetry?.enabled;
+  state.telemetry.dbPath = status.dbPath;
+  state.telemetry.ok = true;
+  state.telemetry.lastWriteAt = status.lastWriteAt;
+}
+
+function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
+  if (!telemetryStore) return null;
+  try {
+    const result = action();
+    refreshTelemetryStatus();
+    if (updateRollup) state.telemetry.lastRollupAt = Date.now();
+    if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
+    return result;
+  } catch (error) {
+    state.telemetry.ok = false;
+    state.telemetry.lastError = error.message;
+    pushLog('telemetry_store_error', { error: error.message });
+    return null;
   }
 }
 
@@ -738,6 +821,13 @@ async function pollMeter() {
   state.victron.batteryChargeW = Math.max(0, batP);
   state.victron.batteryDischargeW = Math.max(0, -batP);
 
+  telemetrySafeWrite(() => telemetryStore.writeSamples(buildLiveTelemetrySamples({
+    ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
+    resolutionSeconds: Math.max(1, Math.round(Number(cfg.meterPollMs || 1000) / 1000)),
+    meter: state.meter,
+    victron: state.victron
+  })));
+
   bufferInflux(buildInfluxLines(Math.floor(Date.now() / 1000)));
 }
 
@@ -767,6 +857,11 @@ async function fetchEpexDay() {
 
     data.sort((a, b) => a.ts - b.ts);
     state.epex = { ok: true, date: day, nextDate: day2, updatedAt: Date.now(), data, error: null };
+    telemetrySafeWrite(() => telemetryStore.writeSamples(buildPriceTelemetrySamples(data, {
+      source: 'price_api',
+      scope: 'forecast',
+      resolutionSeconds: 3600
+    })));
     pushLog('epex_refresh_ok', { count: data.length });
   } catch (e) {
     state.epex.ok = false;
@@ -938,9 +1033,32 @@ async function applyControlTarget(target, value, source) {
       address: conf.address,
       source
     });
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'control_write',
+      target,
+      valueNum: Number(value),
+      reason: source,
+      source: source.includes('optimization') ? 'optimizer' : 'runtime',
+      meta: {
+        raw: encoded.raw,
+        words,
+        scaled: encoded.scaled,
+        writeType: encoded.writeType,
+        fc,
+        address: conf.address
+      }
+    }));
     return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address };
   } catch (e) {
     pushLog('control_write_error', { target, value, source, error: e.message });
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'control_write_error',
+      target,
+      valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
+      reason: source,
+      source: 'runtime',
+      meta: { error: e.message }
+    }));
     return { ok: false, error: e.message };
   }
 }
@@ -1282,6 +1400,16 @@ async function adminHealthPayload() {
         detail: SERVICE_ACTIONS_ENABLED
           ? `Service ${SERVICE_NAME}: ${service.status}`
           : 'per ENV deaktiviert'
+      },
+      {
+        id: 'telemetry',
+        label: 'Interne Historie',
+        ok: !cfg.telemetry?.enabled || state.telemetry.ok,
+        detail: !cfg.telemetry?.enabled
+          ? 'deaktiviert'
+          : state.telemetry.dbPath
+            ? `DB ${state.telemetry.dbPath}, letztes Schreiben ${fmtTs(state.telemetry.lastWriteAt)}`
+            : (state.telemetry.lastError || 'noch keine Telemetrie-Initialisierung')
       }
     ]
   };
@@ -1425,7 +1553,11 @@ const web = http.createServer(async (req, res) => {
       schedule: state.schedule,
       setup: configMetaPayload(),
       costs: costSummary(),
-      epex: { ...state.epex, summary: epexNowNext() }
+      epex: { ...state.epex, summary: epexNowNext() },
+      telemetry: {
+        ...state.telemetry,
+        historyImport: historyImportManager ? historyImportManager.getStatus() : null
+      }
     });
   }
 
@@ -1456,6 +1588,11 @@ const web = http.createServer(async (req, res) => {
       results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
     }
     pushLog('eos_apply', { targets: results.length, body });
+    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+      optimizer: 'eos',
+      body,
+      source: 'eos_apply'
+    })));
     return json(res, 200, { ok: true, results });
   }
 
@@ -1476,10 +1613,43 @@ const web = http.createServer(async (req, res) => {
       results.push(await applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
     }
     pushLog('emhass_apply', { targets: results.length, body });
+    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+      optimizer: 'emhass',
+      body,
+      source: 'emhass_apply'
+    })));
     return json(res, 200, { ok: true, results });
   }
 
   if (url.pathname === '/api/log' && req.method === 'GET') return json(res, 200, { rows: state.log.slice(-300) });
+
+  if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
+    return json(res, 200, {
+      ok: true,
+      telemetryEnabled: !!cfg.telemetry?.enabled,
+      historyImport: historyImportManager ? historyImportManager.getStatus() : null
+    });
+  }
+
+  if (url.pathname === '/api/history/import' && req.method === 'POST') {
+    if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    const body = await parseBody(req);
+    const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
+    const result = Array.isArray(body.rows) && body.rows.length
+      ? historyImportManager.importSamples({
+        provider,
+        requestedFrom: body.requestedFrom ?? null,
+        requestedTo: body.requestedTo ?? null,
+        sourceAccount: body.sourceAccount ?? null,
+        rows: body.rows
+      })
+      : await historyImportManager.importFromConfiguredSource({
+        start: body.requestedFrom ?? body.start,
+        end: body.requestedTo ?? body.end,
+        interval: body.interval || '15mins'
+      });
+    return json(res, result.ok ? 200 : 400, result);
+  }
 
   if (url.pathname === '/api/epex/refresh' && req.method === 'POST') {
     await fetchEpexDay();
@@ -1551,6 +1721,13 @@ const web = http.createServer(async (req, res) => {
   }
 });
 
+telemetryStore = createTelemetryStoreIfEnabled();
+historyImportManager = telemetryStore ? createHistoryImportManager({
+  store: telemetryStore,
+  telemetryConfig: cfg.telemetry || {}
+}) : null;
+refreshTelemetryStatus();
+
 web.listen(cfg.httpPort, () => {
   console.log(`Web server listening on :${cfg.httpPort}`);
 });
@@ -1582,12 +1759,19 @@ setInterval(() => {
   flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
 }, INFLUX_FLUSH_MS);
 setInterval(persistEnergy, 60000);
+setInterval(() => {
+  telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
+}, 5 * 60 * 1000);
+setInterval(() => {
+  telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
+}, 6 * 60 * 60 * 1000);
 
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
   transport.destroy();
   scanTransport.destroy();
+  if (telemetryStore) telemetryStore.close();
   if (mbServer) mbServer.close();
   web.close();
   process.exit(0);
@@ -1605,6 +1789,8 @@ console.log('Config loaded:', {
   influxApiVersion: cfg.influx.apiVersion || 'v3',
   epexEnabled: cfg.epex.enabled,
   scheduleRules: cfg.schedule.rules.length,
+  telemetryEnabled: cfg.telemetry?.enabled,
+  telemetryDbPath: state.telemetry.dbPath,
   configPath: CONFIG_PATH,
   configExists: loadedConfig.exists,
   configValid: loadedConfig.valid,

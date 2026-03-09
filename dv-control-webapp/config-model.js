@@ -119,6 +119,12 @@ const SECTIONS = [
     destination: 'services'
   },
   {
+    id: 'telemetry',
+    label: 'Telemetrie & Historie',
+    description: 'Interne Datenbank fuer Live-Historie, Rollups und Backfill.',
+    destination: 'services'
+  },
+  {
     id: 'epex',
     label: 'EPEX',
     description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
@@ -289,6 +295,11 @@ const restartSensitivePrefixes = [
   'modbusListenHost',
   'modbusListenPort',
   'meterPollMs',
+  'telemetry.enabled',
+  'telemetry.dbPath',
+  'telemetry.rawRetentionDays',
+  'telemetry.historyImport.enabled',
+  'telemetry.historyImport.provider',
   'schedule.evaluateMs',
   'victron.transport',
   'victron.mqtt.broker',
@@ -688,6 +699,85 @@ function buildFieldDefinitions() {
         { value: 'grid_import', label: 'Positiv bedeutet Netzbezug' }
       ],
       help: 'Legt fest, wie eingehende Meterwerte interpretiert werden.'
+    },
+
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.enabled',
+      label: 'Interne Historie aktiv',
+      type: 'boolean',
+      help: 'Schreibt Livewerte, Preise, Steuerereignisse und Optimierergebnisse lokal in eine eingebaute Datenbank.'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.dbPath',
+      label: 'DB Pfad',
+      type: 'text',
+      empty: 'blank',
+      help: 'Optionaler Override. Leer bedeutet: Standardpfad im DVhub-Datenverzeichnis.'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.rawRetentionDays',
+      label: 'Raw Retention (Tage)',
+      type: 'number',
+      min: 1,
+      max: 3650,
+      help: 'Wie lange Rohdaten mit hoher Aufloesung aufbewahrt werden.'
+    },
+    {
+      section: 'telemetry',
+      group: 'historyImport',
+      groupLabel: 'History Import',
+      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      path: 'telemetry.historyImport.enabled',
+      label: 'History Import aktiv',
+      type: 'boolean',
+      help: 'Aktiviert den optionalen VRM-Import fuer bestehende Historie und Gap-Fill.'
+    },
+    {
+      section: 'telemetry',
+      group: 'historyImport',
+      groupLabel: 'History Import',
+      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      path: 'telemetry.historyImport.provider',
+      label: 'Import Quelle',
+      type: 'select',
+      options: [
+        { value: 'vrm', label: 'VRM' }
+      ],
+      help: 'Historischer Nachimport wird bewusst nur ueber VRM unterstuetzt.'
+    },
+    {
+      section: 'telemetry',
+      group: 'historyImport',
+      groupLabel: 'History Import',
+      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      path: 'telemetry.historyImport.vrmPortalId',
+      label: 'VRM Portal ID',
+      type: 'text',
+      empty: 'blank',
+      help: 'Optional. Wird fuer spaeteren VRM-Historienimport genutzt.'
+    },
+    {
+      section: 'telemetry',
+      group: 'historyImport',
+      groupLabel: 'History Import',
+      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      path: 'telemetry.historyImport.vrmToken',
+      label: 'VRM Token',
+      type: 'text',
+      empty: 'blank',
+      help: 'Optionaler API-Token fuer spaeteren VRM-Backfill.'
     },
 
     {
@@ -1312,6 +1402,18 @@ export function createDefaultConfig() {
       bucket: '',
       token: '',
       measurement: 'dv'
+    },
+    telemetry: {
+      enabled: true,
+      dbPath: '',
+      rawRetentionDays: 45,
+      rollupIntervals: [300, 900, 3600],
+      historyImport: {
+        enabled: false,
+        provider: 'vrm',
+        vrmPortalId: '',
+        vrmToken: ''
+      }
     },
     epex: {
       enabled: true,
