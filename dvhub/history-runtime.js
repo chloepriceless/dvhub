@@ -178,6 +178,8 @@ function buildRowAccumulator(key, label) {
     batteryCostEur: 0,
     selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
+    solarCompensationEur: 0,
+    solarMarketValueCtKwh: null,
     netEur: 0,
     slotCount: 0,
     incompleteSlots: 0,
@@ -221,7 +223,9 @@ function buildDayCharts(slots) {
     dayEnergyLines: slots.map((slot) => ({
       ts: slot.ts,
       label: localTimeLabel(slot.ts),
+      pvKwh: round2(slot.pvKwh || 0),
       importKwh: slot.importKwh,
+      batteryKwh: round2(Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0)),
       exportKwh: slot.exportKwh,
       loadKwh: round2(slot.loadKwh || 0),
       estimated: Boolean(slot.estimated),
@@ -254,6 +258,7 @@ function buildPeriodCharts(rows) {
   return {
     periodFinancialBars: rows.map((row) => ({
       label: row.label,
+      exportKwh: row.exportKwh,
       exportRevenueEur: row.exportRevenueEur,
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
@@ -273,8 +278,90 @@ function buildPeriodCharts(rows) {
   };
 }
 
-export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
-  function getSummary({ view = 'day', date }) {
+function currentBerlinDate() {
+  return localDateString(new Date());
+}
+
+function summarizeSolarMarketValue({ year, rows, solarMarketValues }) {
+  const annualCtKwhByYear = solarMarketValues?.annualCtKwhByYear || {};
+  const monthlyCtKwhByMonth = solarMarketValues?.monthlyCtKwhByMonth || {};
+  const officialAnnual = Number(annualCtKwhByYear?.[year]);
+  const availableMonths = rows.filter((row) => Number.isFinite(Number(monthlyCtKwhByMonth[row.label]))).length;
+
+  if (Number.isFinite(officialAnnual)) {
+    return {
+      year,
+      annualCtKwh: round2(officialAnnual),
+      source: 'official_annual',
+      availableMonths
+    };
+  }
+
+  const weighted = rows.reduce((acc, row) => {
+    const ctKwh = Number(monthlyCtKwhByMonth[row.label]);
+    const exportKwh = Number(row.exportKwh || 0);
+    if (!Number.isFinite(ctKwh) || exportKwh <= 0) return acc;
+    acc.weightedCt += ctKwh * exportKwh;
+    acc.exportKwh += exportKwh;
+    return acc;
+  }, { weightedCt: 0, exportKwh: 0 });
+
+  if (weighted.exportKwh <= 0) return null;
+  return {
+    year,
+    annualCtKwh: round2(weighted.weightedCt / weighted.exportKwh),
+    source: 'derived_monthly_weighted',
+    availableMonths
+  };
+}
+
+function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValues }) {
+  if (view !== 'year') return { rows, kpis, meta };
+  const parts = parseDateOnly(startOfYear(date));
+  const year = parts?.year;
+  if (!year) return { rows, kpis, meta };
+  const monthlyCtKwhByMonth = solarMarketValues?.monthlyCtKwhByMonth || {};
+
+  const nextRows = rows.map((row) => {
+    const solarMarketValueCtKwh = Number(monthlyCtKwhByMonth[row.label]);
+    const solarCompensationEur = Number.isFinite(solarMarketValueCtKwh) && Number(row.exportKwh || 0) > 0
+      ? round2((Number(row.exportKwh || 0) * solarMarketValueCtKwh) / 100)
+      : 0;
+    return {
+      ...row,
+      solarMarketValueCtKwh: Number.isFinite(solarMarketValueCtKwh) ? solarMarketValueCtKwh : null,
+      solarCompensationEur
+    };
+  });
+
+  const solarMarketValue = summarizeSolarMarketValue({
+    year,
+    rows: nextRows,
+    solarMarketValues
+  });
+  const nextKpis = {
+    ...kpis,
+    solarCompensationEur: solarMarketValue?.source === 'official_annual'
+      ? round2((Number(kpis.exportKwh || 0) * Number(solarMarketValue.annualCtKwh || 0)) / 100)
+      : round2(nextRows.reduce((sum, row) => sum + Number(row.solarCompensationEur || 0), 0))
+  };
+  const nextMeta = {
+    ...meta,
+    solarMarketValue
+  };
+  return {
+    rows: nextRows,
+    kpis: nextKpis,
+    meta: nextMeta
+  };
+}
+
+export function createHistoryRuntime({
+  store,
+  getPricingConfig = () => ({}),
+  getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} })
+}) {
+  function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
@@ -346,6 +433,7 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
       batteryCostEur: round2(totals.batteryCostEur + (slot.batteryCostEur || 0)),
       selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
+      solarCompensationEur: 0,
       netEur: round2(totals.netEur + slot.netEur)
     }), {
       importKwh: 0,
@@ -356,9 +444,29 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
       batteryCostEur: 0,
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
+      solarCompensationEur: 0,
       netEur: 0
     });
-    const rows = summarizeRows(slots, view);
+    const baseRows = summarizeRows(slots, view);
+    const solarApplied = applySolarMarketValues({
+      rows: baseRows,
+      view,
+      date,
+      kpis,
+      meta: {
+        unresolved: {
+          missingImportPriceSlots,
+          missingMarketPriceSlots,
+          incompleteSlots,
+          estimatedSlots,
+          slotCount: slots.length
+        }
+      },
+      solarMarketValues: solarMarketValues || getSolarMarketValueSummary({
+        year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year
+      })
+    });
+    const rows = solarApplied.rows;
     const charts = view === 'day'
       ? buildDayCharts(slots)
       : buildPeriodCharts(rows);
@@ -372,7 +480,7 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
         start,
         end
       },
-      kpis,
+      kpis: solarApplied.kpis,
       series: {
         financial: slots.map((slot) => ({
           ts: slot.ts,
@@ -402,15 +510,7 @@ export function createHistoryRuntime({ store, getPricingConfig = () => ({}) }) {
       charts,
       rows,
       slots,
-      meta: {
-        unresolved: {
-          missingImportPriceSlots,
-          missingMarketPriceSlots,
-          incompleteSlots,
-          estimatedSlots,
-          slotCount: slots.length
-        }
-      }
+      meta: solarApplied.meta
     };
   }
 
@@ -424,7 +524,8 @@ export function createHistoryApiHandlers({
   historyImportManager,
   telemetryEnabled,
   defaultBzn = 'DE-LU',
-  appVersion = null
+  appVersion = null,
+  getSolarMarketValueSummary = null
 }) {
   return {
     async getSummary(query = {}) {
@@ -439,10 +540,20 @@ export function createHistoryApiHandlers({
       if (!isDateOnly(date)) {
         return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
       }
+      let solarMarketValues = null;
+      if (view === 'year' && typeof getSolarMarketValueSummary === 'function') {
+        try {
+          solarMarketValues = await getSolarMarketValueSummary({
+            year: parseDateOnly(startOfYear(date))?.year
+          });
+        } catch (_error) {
+          solarMarketValues = null;
+        }
+      }
       return {
         status: 200,
         body: {
-          ...historyRuntime.getSummary({ view, date }),
+          ...historyRuntime.getSummary({ view, date, solarMarketValues }),
           app: appVersion
         }
       };
@@ -451,12 +562,27 @@ export function createHistoryApiHandlers({
       if (!telemetryEnabled || !historyImportManager) {
         return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };
       }
-      const result = await historyImportManager.backfillMissingPriceHistory({
-        bzn: String(body.bzn || defaultBzn),
-        start: body.start ?? body.requestedFrom ?? null,
-        end: body.end ?? body.requestedTo ?? null
-      });
-      return { status: result.ok ? 200 : 400, body: result };
+      const explicitStart = body.start ?? body.requestedFrom ?? null;
+      const explicitEnd = body.end ?? body.requestedTo ?? null;
+      let start = explicitStart;
+      let end = explicitEnd;
+      if (!start || !end) {
+        const view = SUPPORTED_VIEWS.has(String(body.view || '')) ? String(body.view) : 'day';
+        const date = isDateOnly(String(body.date || '')) ? String(body.date) : currentBerlinDate();
+        const range = normalizeViewRange(view, date);
+        start = localDateTimeToUtcIso(range.startDate, 0, 0);
+        end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
+      }
+      try {
+        const result = await historyImportManager.backfillMissingPriceHistory({
+          bzn: String(body.bzn || defaultBzn),
+          start,
+          end
+        });
+        return { status: result.ok ? 200 : 400, body: result };
+      } catch (error) {
+        return { status: 502, body: { ok: false, error: error.message } };
+      }
     }
   };
 }

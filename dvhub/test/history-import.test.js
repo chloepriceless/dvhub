@@ -442,3 +442,55 @@ test('price backfill is idempotent when the same bucket is imported twice', asyn
     store.close();
   }
 });
+
+test('price backfill returns a structured error when an Energy Charts day request fails', async () => {
+  const store = createStore();
+
+  store.writeSamples([
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-02T12:00:00.000Z',
+      value: 1200,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    }
+  ]);
+
+  const fetchImpl = async () => ({
+    ok: false,
+    status: 500,
+    async json() {
+      return {};
+    }
+  });
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillMissingPriceHistory({
+      bzn: 'DE-LU',
+      start: '2026-01-02T00:00:00.000Z',
+      end: '2026-01-03T00:00:00.000Z'
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /2026-01-02/);
+    assert.match(result.error, /HTTP 500/);
+  } finally {
+    store.close();
+  }
+});

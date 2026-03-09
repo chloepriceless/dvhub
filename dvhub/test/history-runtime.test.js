@@ -244,8 +244,81 @@ test('history runtime exposes chart-ready series with split costs and estimation
   });
 });
 
+test('history runtime derives current-year solar market value from monthly values weighted by exported energy', () => {
+  const runtime = createHistoryRuntime({
+    store: createStoreFixture(),
+    getPricingConfig: () => pricingConfig,
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: {
+        '2026-03': 5,
+        '2026-04': 7
+      },
+      annualCtKwhByYear: {}
+    })
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2026-03-09' });
+
+  assert.equal(year.rows[0].solarMarketValueCtKwh, 5);
+  assert.equal(year.rows[0].solarCompensationEur, 0.03);
+  assert.equal(year.rows[1].solarMarketValueCtKwh, 7);
+  assert.equal(year.rows[1].solarCompensationEur, 0.07);
+  assert.deepEqual(year.meta.solarMarketValue, {
+    year: 2026,
+    annualCtKwh: 6.33,
+    source: 'derived_monthly_weighted',
+    availableMonths: 2
+  });
+  assert.equal(year.kpis.solarCompensationEur, 0.1);
+});
+
+test('history runtime uses official annual solar market value for completed years', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2025-02-01T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 2,
+            gridKwh: 0,
+            pvKwh: 2,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [];
+      }
+    },
+    getPricingConfig: () => pricingConfig,
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: {},
+      annualCtKwhByYear: {
+        2025: 4.5
+      }
+    })
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2025-06-01' });
+
+  assert.deepEqual(year.meta.solarMarketValue, {
+    year: 2025,
+    annualCtKwh: 4.5,
+    source: 'official_annual',
+    availableMonths: 0
+  });
+  assert.equal(year.kpis.solarCompensationEur, 0.09);
+});
+
 test('history summary API validates views and delegates to the runtime', async () => {
   let called = 0;
+  let backfillInput = null;
   const handlers = createHistoryApiHandlers({
     historyRuntime: {
       getSummary(input) {
@@ -254,7 +327,8 @@ test('history summary API validates views and delegates to the runtime', async (
       }
     },
     historyImportManager: {
-      async backfillMissingPriceHistory() {
+      async backfillMissingPriceHistory(input) {
+        backfillInput = input;
         return { ok: true, requestedDays: 1 };
       }
     },
@@ -270,14 +344,19 @@ test('history summary API validates views and delegates to the runtime', async (
 
   const invalid = await handlers.getSummary({ view: 'quarter', date: '2026-03-09' });
   const valid = await handlers.getSummary({ view: 'month', date: '2026-03-09' });
-  const backfill = await handlers.postPriceBackfill({});
+  const backfill = await handlers.postPriceBackfill({ view: 'week', date: '2026-03-09' });
 
   assert.equal(invalid.status, 400);
   assert.match(invalid.body.error, /view/i);
   assert.equal(valid.status, 200);
-  assert.deepEqual(valid.body.echo, { view: 'month', date: '2026-03-09' });
+  assert.deepEqual(valid.body.echo, { view: 'month', date: '2026-03-09', solarMarketValues: null });
   assert.equal(valid.body.app.versionLabel, 'v0.2.5+ea104c9');
   assert.equal(backfill.status, 200);
   assert.equal(backfill.body.requestedDays, 1);
+  assert.deepEqual(backfillInput, {
+    bzn: 'DE-LU',
+    start: '2026-03-08T23:00:00.000Z',
+    end: '2026-03-15T23:00:00.000Z'
+  });
   assert.equal(called, 1);
 });

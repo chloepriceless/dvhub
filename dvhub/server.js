@@ -20,6 +20,7 @@ import {
   resolveTelemetryDbPath
 } from './telemetry-runtime.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
+import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
   autoDisableExpiredScheduleRules,
@@ -115,6 +116,7 @@ let telemetryStore = null;
 let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
+const energyChartsMarketValueService = createEnergyChartsMarketValueService();
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -1879,7 +1881,8 @@ historyApi = createHistoryApiHandlers({
   historyImportManager,
   telemetryEnabled: !!telemetryStore,
   defaultBzn: cfg.epex?.bzn || 'DE-LU',
-  appVersion: APP_VERSION
+  appVersion: APP_VERSION,
+  getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
 });
 refreshTelemetryStatus();
 
