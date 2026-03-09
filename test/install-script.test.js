@@ -31,10 +31,31 @@ test('installer force-syncs an existing checkout to the requested remote branch 
   );
 });
 
-test('installer defaults to the main branch for fresh installs', () => {
+test('installer preserves INSTALLER_SOURCE_URL across sudo re-exec', () => {
   assert.match(
     source,
-    /REPO_BRANCH="\$\{REPO_BRANCH:-main\}"/,
-    'install.sh must default REPO_BRANCH to main so unattended installs track the merge target'
+    /sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "\$0" "\$@"/,
+    'install.sh must preserve INSTALLER_SOURCE_URL so branch auto-detection survives sudo re-exec'
+  );
+});
+
+test('installer derives the default branch from the installer source URL when available', () => {
+  assert.match(
+    source,
+    /function parse_branch_from_installer_url\(\)/,
+    'install.sh must parse the branch name from GitHub installer URLs'
+  );
+  assert.match(
+    source,
+    /INSTALLER_SOURCE_URL/,
+    'install.sh must read installer source metadata before falling back to main'
+  );
+});
+
+test('installer still falls back to the main branch when source detection is unavailable', () => {
+  assert.match(
+    source,
+    /REPO_BRANCH="main"/,
+    'install.sh must still fall back to main so unattended installs without source metadata remain stable'
   );
 });
