@@ -43,7 +43,9 @@ function loadHistoryPageHelpers() {
     'historyRows',
     'historyBackfillBtn',
     'historyView',
-    'historyDate'
+    'historyDate',
+    'historyPrevBtn',
+    'historyNextBtn'
   ];
   const elements = new Map(ids.map((id) => [id, createElement()]));
   elements.get('historyView').value = 'day';
@@ -77,11 +79,13 @@ test('navigation exposes Historie across shell pages', () => {
   }
 });
 
-test('history page exposes view switcher, KPI blocks, chart containers, and grouped rows mount', () => {
+test('history page exposes view switcher, date navigation, KPI blocks, chart containers, and grouped rows mount', () => {
   const html = readPublic('history.html');
 
   assert.match(html, /id="historyView"/);
   assert.match(html, /id="historyDate"/);
+  assert.match(html, /id="historyPrevBtn"/);
+  assert.match(html, /id="historyNextBtn"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /id="historyKpiGrid"/);
   assert.match(html, /id="historyFinancialChart"/);
@@ -178,13 +182,14 @@ test('history page renders daily line charts and estimated markers from chart pa
   });
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-line-chart/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /Last/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /PV/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /kWh/);
   assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /geschätzt/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
 });
 
-test('history page renders weekly revenue bars and split cost bars from summary payload', () => {
+test('history page renders weekly revenue bars and a table instead of time block cards', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
@@ -256,11 +261,11 @@ test('history page renders weekly revenue bars and split cost bars from summary 
   });
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-stack-chart/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Nettoerlös/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Netzkosten/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);
-  assert.match(elements.get('historyRows').innerHTML, /1 geschätzt/);
-  assert.match(elements.get('historyRows').innerHTML, /1 offen/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Kosten/);
+  assert.match(elements.get('historyRows').innerHTML, /history-data-table/);
+  assert.match(elements.get('historyRows').innerHTML, /2026-03-10/);
+  assert.doesNotMatch(elements.get('historyRows').innerHTML, /history-row-card/);
 });
 
 test('history page toggles the backfill button label and disabled state while loading', () => {

@@ -602,12 +602,24 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
     const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
     const matchedRows = [];
 
-    for (const day of days) {
-      const rows = await fetchEnergyChartsDay({ bzn, day, fetchImpl });
-      for (const row of rows) {
-        if (!missingSet.has(bucketIso(row.ts))) continue;
-        matchedRows.push(row);
+    try {
+      for (const day of days) {
+        const rows = await fetchEnergyChartsDay({ bzn, day, fetchImpl });
+        for (const row of rows) {
+          if (!missingSet.has(bucketIso(row.ts))) continue;
+          matchedRows.push(row);
+        }
       }
+    } catch (error) {
+      return {
+        ok: false,
+        requestedDays: days.length,
+        matchedBuckets: matchedRows.length,
+        importedRows: 0,
+        skippedBuckets: missingBuckets.length,
+        days,
+        error: error.message
+      };
     }
 
     const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);

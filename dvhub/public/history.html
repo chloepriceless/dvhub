@@ -41,6 +41,10 @@
           <div id="historyMeta" class="meta compact-meta">Historienansicht wird vorbereitet...</div>
         </div>
         <div class="page-actions history-actions">
+          <div class="history-nav-buttons" aria-label="Zeitraum wechseln">
+            <button id="historyPrevBtn" class="btn btn-secondary history-arrow-btn" type="button" aria-label="Vorheriger Zeitraum">&#8592;</button>
+            <button id="historyNextBtn" class="btn btn-secondary history-arrow-btn" type="button" aria-label="Naechster Zeitraum">&#8594;</button>
+          </div>
           <label class="history-control">
             <span>Ansicht</span>
             <select id="historyView">
@@ -95,12 +99,12 @@
         </article>
         <article class="panel">
           <div class="panel-head">
-            <div>
-              <p class="card-title">Energie</p>
-              <h2 class="section-title">Import und Export</h2>
-            </div>
+          <div>
+            <p class="card-title">Energie</p>
+            <h2 class="section-title">PV, Import, Akku, Export und Last</h2>
           </div>
-          <div id="historyEnergyChart" class="history-chart-shell"></div>
+        </div>
+        <div id="historyEnergyChart" class="history-chart-shell"></div>
         </article>
         <article class="panel">
           <div class="panel-head">
@@ -117,7 +121,7 @@
         <div class="panel-head">
           <div>
             <p class="card-title">Perioden</p>
-            <h2 class="section-title">Gruppierte Historie</h2>
+            <h2 class="section-title">Historie als Tabelle</h2>
           </div>
         </div>
         <div id="historyRows" class="history-rows"></div>
