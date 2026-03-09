@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildHistoricalPriceTelemetrySamples,
   buildLiveTelemetrySamples,
   buildOptimizerRunPayload,
   buildPriceTelemetrySamples,
@@ -69,6 +70,18 @@ test('buildPriceTelemetrySamples expands EPEX rows into storable series', () => 
   assert.equal(rows.length, 2);
   assert.equal(rows[0].seriesKey, 'price_eur_mwh');
   assert.equal(rows[1].seriesKey, 'price_ct_kwh');
+});
+
+test('buildHistoricalPriceTelemetrySamples creates history-scoped backfill rows', () => {
+  const rows = buildHistoricalPriceTelemetrySamples([
+    { ts: Date.UTC(2026, 0, 2, 12, 0, 0), eur_mwh: 44, ct_kwh: 4.4 }
+  ]);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].scope, 'history');
+  assert.equal(rows[0].source, 'price_backfill');
+  assert.equal(rows[0].quality, 'backfilled');
+  assert.equal(rows[0].resolutionSeconds, 900);
 });
 
 test('buildOptimizerRunPayload stores scalar optimizer outputs as output series', () => {

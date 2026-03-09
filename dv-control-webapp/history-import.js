@@ -1,5 +1,9 @@
 const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
+const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
+const PRICE_BUCKET_SECONDS = 900;
+
+import { buildHistoricalPriceTelemetrySamples } from './telemetry-runtime.js';
 
 function toIso(value) {
   return new Date(value).toISOString();
@@ -17,6 +21,67 @@ function intervalSeconds(interval = '15mins') {
     days: 86400
   };
   return map[interval] || 900;
+}
+
+function berlinDateString(value) {
+  const date = new Date(value);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(dateString, days) {
+  const [year, month, day] = String(dateString).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function bucketIso(value, seconds = PRICE_BUCKET_SECONDS) {
+  const bucketMs = seconds * 1000;
+  const date = new Date(value);
+  return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs).toISOString();
+}
+
+function parseEnergyChartsPriceRows(payload = {}) {
+  const unix = Array.isArray(payload?.unix_seconds) ? payload.unix_seconds : [];
+  const prices = Array.isArray(payload?.price) ? payload.price : [];
+  const count = Math.min(unix.length, prices.length);
+  const rows = [];
+  for (let index = 0; index < count; index += 1) {
+    const seconds = Number(unix[index]);
+    const eurMwh = Number(prices[index]);
+    if (!Number.isFinite(seconds) || !Number.isFinite(eurMwh)) continue;
+    rows.push({
+      ts: seconds * 1000,
+      eur_mwh: eurMwh,
+      ct_kwh: eurMwh / 10
+    });
+  }
+  return rows;
+}
+
+async function fetchEnergyChartsDay({ bzn, day, fetchImpl }) {
+  const nextDay = addDays(day, 1);
+  const params = new URLSearchParams({
+    bzn,
+    start: day,
+    end: nextDay
+  });
+  const response = await fetchImpl(`${ENERGY_CHARTS_PRICE_API_BASE}?${params.toString()}`, {
+    headers: { accept: 'application/json' }
+  });
+  if (!response.ok) {
+    throw new Error(`Energy Charts price request failed for ${day}: HTTP ${response.status}`);
+  }
+  return parseEnergyChartsPriceRows(await response.json());
 }
 
 function pushSeriesRow(rows, entry) {
@@ -202,9 +267,88 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
     };
   }
 
+  async function backfillMissingPriceHistory({ bzn = 'DE-LU', start = null, end = null, seriesKeys } = {}) {
+    const bounds = store.getTelemetryBounds();
+    const rangeStart = start ? toIso(start) : bounds.earliest;
+    const rangeEnd = end
+      ? toIso(end)
+      : bounds.latest
+        ? new Date(new Date(bounds.latest).getTime() + PRICE_BUCKET_SECONDS * 1000).toISOString()
+        : null;
+
+    if (!rangeStart || !rangeEnd) {
+      return {
+        ok: true,
+        requestedDays: 0,
+        matchedBuckets: 0,
+        importedRows: 0,
+        skippedBuckets: 0,
+        days: []
+      };
+    }
+
+    const missingBuckets = store.listMissingPriceBuckets({
+      start: rangeStart,
+      end: rangeEnd,
+      seriesKeys
+    });
+    if (!missingBuckets.length) {
+      return {
+        ok: true,
+        requestedDays: 0,
+        matchedBuckets: 0,
+        importedRows: 0,
+        skippedBuckets: 0,
+        days: []
+      };
+    }
+
+    const missingSet = new Set(missingBuckets.map((ts) => bucketIso(ts)));
+    const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
+    const matchedRows = [];
+
+    for (const day of days) {
+      const rows = await fetchEnergyChartsDay({ bzn, day, fetchImpl });
+      for (const row of rows) {
+        if (!missingSet.has(bucketIso(row.ts))) continue;
+        matchedRows.push(row);
+      }
+    }
+
+    const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);
+    if (historyRows.length) store.writeSamples(historyRows);
+
+    const skippedBuckets = Math.max(0, missingBuckets.length - matchedRows.length);
+    const jobId = store.writeImportJob({
+      jobType: 'price_backfill',
+      status: 'completed',
+      requestedFrom: rangeStart,
+      requestedTo: rangeEnd,
+      importedRows: historyRows.length,
+      sourceAccount: bzn,
+      meta: {
+        provider: 'energy_charts',
+        requestedDays: days,
+        matchedBuckets: matchedRows.length,
+        skippedBuckets
+      }
+    });
+
+    return {
+      ok: true,
+      jobId,
+      requestedDays: days.length,
+      matchedBuckets: matchedRows.length,
+      importedRows: historyRows.length,
+      skippedBuckets,
+      days
+    };
+  }
+
   return {
     getStatus,
     importSamples,
-    importFromConfiguredSource
+    importFromConfiguredSource,
+    backfillMissingPriceHistory
   };
 }

@@ -77,6 +77,16 @@ export function buildPriceTelemetrySamples(rows, options = {}) {
   });
 }
 
+export function buildHistoricalPriceTelemetrySamples(rows, options = {}) {
+  return buildPriceTelemetrySamples(rows, {
+    resolutionSeconds: 900,
+    scope: 'history',
+    source: 'price_backfill',
+    quality: 'backfilled',
+    ...options
+  });
+}
+
 const OPTIMIZER_TARGET_MAP = {
   gridSetpointW: { seriesKey: 'grid_setpoint_w', unit: 'W' },
   chargeCurrentA: { seriesKey: 'charge_current_a', unit: 'A' },

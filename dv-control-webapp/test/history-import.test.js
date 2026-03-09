@@ -143,3 +143,135 @@ test('configured VRM import fetches official stats endpoints and normalizes rows
     store.close();
   }
 });
+
+test('price backfill imports only days with telemetry-backed missing buckets', async () => {
+  const store = createStore();
+  const calls = [];
+  const jan2Noon = Date.UTC(2026, 0, 2, 12, 0, 0);
+
+  store.writeSamples([
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-01T12:00:00.000Z',
+      value: 900,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    },
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-02T12:00:00.000Z',
+      value: 1200,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    },
+    {
+      seriesKey: 'price_ct_kwh',
+      ts: '2026-01-01T12:00:00.000Z',
+      value: 5.1,
+      scope: 'history',
+      source: 'price_backfill',
+      quality: 'backfilled',
+      resolutionSeconds: 900,
+      unit: 'ct/kWh'
+    }
+  ]);
+
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      async json() {
+        return {
+          unix_seconds: [Math.floor(jan2Noon / 1000), Math.floor(Date.UTC(2026, 0, 2, 12, 15, 0) / 1000)],
+          price: [44, 47]
+        };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /start=2026-01-02/);
+    assert.match(calls[0], /end=2026-01-03/);
+    assert.equal(result.ok, true);
+    assert.equal(result.requestedDays, 1);
+    assert.equal(result.matchedBuckets, 1);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 3);
+    assert.equal(store.countRows('import_jobs', "job_type = 'price_backfill'"), 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('price backfill is idempotent when the same bucket is imported twice', async () => {
+  const store = createStore();
+  const noon = Date.UTC(2026, 0, 2, 12, 0, 0);
+
+  store.writeSamples([
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-02T12:00:00.000Z',
+      value: 1200,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    }
+  ]);
+
+  const fetchImpl = async () => ({
+    ok: true,
+    async json() {
+      return {
+        unix_seconds: [Math.floor(noon / 1000)],
+        price: [44]
+      };
+    }
+  });
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const first = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+    const second = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+
+    assert.equal(first.matchedBuckets, 1);
+    assert.equal(second.matchedBuckets, 0);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+  } finally {
+    store.close();
+  }
+});
