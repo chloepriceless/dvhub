@@ -423,7 +423,8 @@ export function createHistoryApiHandlers({
   historyRuntime,
   historyImportManager,
   telemetryEnabled,
-  defaultBzn = 'DE-LU'
+  defaultBzn = 'DE-LU',
+  appVersion = null
 }) {
   return {
     async getSummary(query = {}) {
@@ -438,7 +439,13 @@ export function createHistoryApiHandlers({
       if (!isDateOnly(date)) {
         return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
       }
-      return { status: 200, body: historyRuntime.getSummary({ view, date }) };
+      return {
+        status: 200,
+        body: {
+          ...historyRuntime.getSummary({ view, date }),
+          app: appVersion
+        }
+      };
     },
     async postPriceBackfill(body = {}) {
       if (!telemetryEnabled || !historyImportManager) {

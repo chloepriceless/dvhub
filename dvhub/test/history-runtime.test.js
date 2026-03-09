@@ -259,7 +259,13 @@ test('history summary API validates views and delegates to the runtime', async (
       }
     },
     telemetryEnabled: true,
-    defaultBzn: 'DE-LU'
+    defaultBzn: 'DE-LU',
+    appVersion: {
+      name: 'dvhub',
+      version: '0.2.5',
+      revision: 'ea104c9',
+      versionLabel: 'v0.2.5+ea104c9'
+    }
   });
 
   const invalid = await handlers.getSummary({ view: 'quarter', date: '2026-03-09' });
@@ -270,6 +276,7 @@ test('history summary API validates views and delegates to the runtime', async (
   assert.match(invalid.body.error, /view/i);
   assert.equal(valid.status, 200);
   assert.deepEqual(valid.body.echo, { view: 'month', date: '2026-03-09' });
+  assert.equal(valid.body.app.versionLabel, 'v0.2.5+ea104c9');
   assert.equal(backfill.status, 200);
   assert.equal(backfill.body.requestedDays, 1);
   assert.equal(called, 1);
