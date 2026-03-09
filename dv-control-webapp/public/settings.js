@@ -424,11 +424,6 @@ function buildSectionMeta(destination) {
   return `${fieldText} in ${destination.groupCount} Gruppen`;
 }
 
-function buildDestinationSummaryText(destination) {
-  const sectionNames = destination.sections?.map((section) => section.label).join(', ');
-  return `${buildSectionMeta(destination)}. ${destination.description || 'Konfiguration für diesen Bereich.'}${sectionNames ? ` Enthaelt: ${sectionNames}.` : ''}`;
-}
-
 function renderSidebarNavigation() {
   const navTree = document.getElementById('settingsNavTree');
   if (!navTree) return;
@@ -450,35 +445,6 @@ function renderSidebarNavigation() {
   }
 }
 
-function renderWorkspaceGuide(activeDestinationId) {
-  const wrapper = document.createElement('section');
-  wrapper.className = 'settings-workspace-guide';
-
-  const head = document.createElement('div');
-  head.className = 'settings-overview-head';
-  head.innerHTML = `
-    <p class="card-title">Schnellstart</p>
-    <h2 class="section-title">Was möchtest du einrichten?</h2>
-    <p class="tools-note">Die Übersicht ist der ruhige Einstieg in die Einrichtung. Wartung und Diagnose liegen bewusst auf einer eigenen Seite.</p>
-  `;
-  wrapper.appendChild(head);
-
-  const summary = document.createElement('div');
-  summary.className = 'compact-note-list settings-guide-list';
-  for (const destination of settingsShellState.destinations) {
-    const item = document.createElement('div');
-    item.className = 'compact-note settings-guide-item';
-    if (destination.id === activeDestinationId) item.classList.add('is-active');
-    item.innerHTML = `
-      <strong>${destination.label}</strong>
-      <span>${buildDestinationSummaryText(destination)}</span>
-    `;
-    summary.appendChild(item);
-  }
-  wrapper.appendChild(summary);
-  return wrapper;
-}
-
 function renderSectionWorkspace(sectionId) {
   const mount = document.getElementById('settingsSections');
   if (!mount) return;
@@ -490,8 +456,6 @@ function renderSectionWorkspace(sectionId) {
 
   const panel = document.createElement('section');
   panel.className = 'panel reveal settings-panel';
-
-  panel.appendChild(renderWorkspaceGuide(sectionId));
 
   const header = document.createElement('div');
   header.className = 'panel-head settings-panel-head';
