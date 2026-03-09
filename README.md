@@ -449,4 +449,10 @@ while preventing commercial reselling of the software.
 ### Not allowed
 
 * Selling the software itself
-* Selling hardware with the software prei
+* Selling hardware with the software preinstalled
+* Commercial SaaS offerings based on this software
+* Bundling the software into commercial products
+
+If your company wants to integrate this software into a commercial
+product, please request a **commercial license**.
+
