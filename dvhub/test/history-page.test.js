@@ -45,7 +45,9 @@ function loadHistoryPageHelpers() {
     'historyView',
     'historyDate',
     'historyPrevBtn',
-    'historyNextBtn'
+    'historyNextBtn',
+    'historyOpportunityBlend',
+    'historyOpportunityLabel'
   ];
   const elements = new Map(ids.map((id) => [id, createElement()]));
   elements.get('historyView').value = 'day';
@@ -86,6 +88,7 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyDate"/);
   assert.match(html, /id="historyPrevBtn"/);
   assert.match(html, /id="historyNextBtn"/);
+  assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /id="historyKpiGrid"/);
   assert.match(html, /id="historyFinancialChart"/);
@@ -111,6 +114,10 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
     date: '2026-03-09',
     kpis: {
       importCostEur: 1.23,
+      gridCostEur: 1.23,
+      pvCostEur: 0.32,
+      batteryCostEur: 0.11,
+      selfConsumptionKwh: 8.2,
       exportRevenueEur: 0.45,
       netEur: -0.78,
       importKwh: 4.5,
@@ -120,8 +127,19 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
       {
         label: '2026-03-09',
         importKwh: 4.5,
+        loadKwh: 8.2,
+        pvKwh: 5.3,
+        batteryChargeKwh: 1.1,
+        batteryDischargeKwh: 0.9,
+        selfConsumptionKwh: 8.2,
+        gridShareKwh: 4.5,
+        pvShareKwh: 2.8,
+        batteryShareKwh: 0.9,
         exportKwh: 1.25,
         importCostEur: 1.23,
+        gridCostEur: 1.23,
+        pvCostEur: 0.32,
+        batteryCostEur: 0.11,
         exportRevenueEur: 0.45,
         netEur: -0.78,
         incompleteSlots: 2
@@ -137,9 +155,13 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
     }
   });
 
-  assert.match(elements.get('historyKpiCost').textContent, /1,23/);
+  assert.match(elements.get('historyKpiCost').textContent, /1,66/);
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
+  assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);
+  assert.match(elements.get('historyRows').innerHTML, /PV erzeugt/);
+  assert.match(elements.get('historyRows').innerHTML, /Akku geladen/);
+  assert.match(elements.get('historyRows').innerHTML, /Eigenverbrauch PV/);
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
   assert.match(elements.get('historyBanner').textContent, /unvollständig/i);
   assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
@@ -161,12 +183,12 @@ test('history page renders daily line charts and estimated markers from chart pa
     rows: [],
     charts: {
       dayEnergyLines: [
-        { label: '11:00', importKwh: 1, exportKwh: 0, loadKwh: 1.2, estimated: false, incomplete: false },
-        { label: '11:15', importKwh: 0, exportKwh: 0.5, loadKwh: 0, estimated: true, incomplete: true }
+        { label: '11:00', importKwh: 1, exportKwh: 0, loadKwh: 1.2, pvKwh: 0.3, batteryKwh: 0.1, estimated: false, incomplete: false },
+        { label: '11:15', importKwh: 0, exportKwh: 0.5, loadKwh: 0, pvKwh: 0.6, batteryKwh: 0, estimated: true, incomplete: true }
       ],
       dayFinancialLines: [
-        { label: '11:00', gridCostEur: 0.3, pvCostEur: 0.01, batteryCostEur: 0, selfConsumptionCostEur: 0.31, exportRevenueEur: 0, netEur: -0.31, estimated: false, incomplete: false },
-        { label: '11:15', gridCostEur: 0, pvCostEur: 0, batteryCostEur: 0, selfConsumptionCostEur: 0, exportRevenueEur: 0.04, netEur: 0.04, estimated: true, incomplete: true }
+        { label: '11:00', gridCostEur: 0.3, pvCostEur: 0.01, batteryCostEur: 0, opportunityCostEur: 0.02, selfConsumptionCostEur: 0.31, exportRevenueEur: 0, netEur: -0.31, estimated: false, incomplete: false },
+        { label: '11:15', gridCostEur: 0, pvCostEur: 0, batteryCostEur: 0, opportunityCostEur: 0, selfConsumptionCostEur: 0, exportRevenueEur: 0.04, netEur: 0.04, estimated: true, incomplete: true }
       ],
       dayPriceLines: [
         { label: '11:00', marketPriceCtKwh: 5, userImportPriceCtKwh: 30, estimated: false, incomplete: false },
@@ -183,7 +205,8 @@ test('history page renders daily line charts and estimated markers from chart pa
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-line-chart/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /PV/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-hover-surface/);
+  assert.doesNotMatch(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /kWh/);
   assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
@@ -231,9 +254,18 @@ test('history page renders weekly revenue bars and a table instead of time block
       }
     ],
     charts: {
-      periodFinancialBars: [
+      periodCombinedBars: [
         {
           label: '2026-03-09',
+          importKwh: 1,
+          loadKwh: 1.4,
+          pvKwh: 0.8,
+          batteryChargeKwh: 0.1,
+          batteryDischargeKwh: 0.2,
+          selfConsumptionKwh: 1.4,
+          gridShareKwh: 1,
+          pvShareKwh: 0.3,
+          batteryShareKwh: 0.1,
           exportRevenueEur: 0.04,
           gridCostEur: 0.3,
           pvCostEur: 0.01,
@@ -243,6 +275,15 @@ test('history page renders weekly revenue bars and a table instead of time block
         },
         {
           label: '2026-03-10',
+          importKwh: 2,
+          loadKwh: 2.3,
+          pvKwh: 0.4,
+          batteryChargeKwh: 0,
+          batteryDischargeKwh: 0.2,
+          selfConsumptionKwh: 2.3,
+          gridShareKwh: 2,
+          pvShareKwh: 0.2,
+          batteryShareKwh: 0.1,
           exportRevenueEur: 0,
           gridCostEur: 0,
           pvCostEur: 0.01,
@@ -263,6 +304,8 @@ test('history page renders weekly revenue bars and a table instead of time block
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-stack-chart/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Kosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
   assert.match(elements.get('historyRows').innerHTML, /history-data-table/);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-10/);
   assert.doesNotMatch(elements.get('historyRows').innerHTML, /history-row-card/);

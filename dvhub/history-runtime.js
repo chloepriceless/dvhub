@@ -54,6 +54,10 @@ function costForShareEur(kwh, ctKwh) {
   return round2((shareKwh * priceCtKwh) / 100);
 }
 
+function roundOrZero(value) {
+  return round2(Number(value || 0));
+}
+
 function isDateOnly(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -172,14 +176,29 @@ function buildRowAccumulator(key, label) {
     label,
     importKwh: 0,
     exportKwh: 0,
+    loadKwh: 0,
+    pvKwh: 0,
+    batteryChargeKwh: 0,
+    batteryDischargeKwh: 0,
+    selfConsumptionKwh: 0,
+    gridShareKwh: 0,
+    pvShareKwh: 0,
+    batteryShareKwh: 0,
     importCostEur: 0,
     gridCostEur: 0,
     pvCostEur: 0,
     batteryCostEur: 0,
+    opportunityCostEur: 0,
     selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
     solarCompensationEur: 0,
     solarMarketValueCtKwh: null,
+    marketPriceWeightedCtKwh: null,
+    userImportPriceWeightedCtKwh: null,
+    marketPriceWeightKwh: 0,
+    userImportPriceWeightKwh: 0,
+    marketPriceWeightedCtTotal: 0,
+    userImportPriceWeightedCtTotal: 0,
     netEur: 0,
     slotCount: 0,
     incompleteSlots: 0,
@@ -203,13 +222,34 @@ function summarizeRows(slots, view) {
     const row = groups.get(key) || buildRowAccumulator(key, label);
     row.importKwh = round2(row.importKwh + slot.importKwh);
     row.exportKwh = round2(row.exportKwh + slot.exportKwh);
+    row.loadKwh = round2(row.loadKwh + Number(slot.loadKwh || 0));
+    row.pvKwh = round2(row.pvKwh + Number(slot.pvKwh || 0));
+    row.batteryChargeKwh = round2(row.batteryChargeKwh + Number(slot.batteryChargeKwh || 0));
+    row.batteryDischargeKwh = round2(row.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0));
+    row.selfConsumptionKwh = round2(row.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0));
+    row.gridShareKwh = round2(row.gridShareKwh + Number(slot.gridShareKwh || 0));
+    row.pvShareKwh = round2(row.pvShareKwh + Number(slot.pvShareKwh || 0));
+    row.batteryShareKwh = round2(row.batteryShareKwh + Number(slot.batteryShareKwh || 0));
     row.importCostEur = round2(row.importCostEur + (slot.importCostEur || 0));
     row.gridCostEur = round2(row.gridCostEur + (slot.gridCostEur || 0));
     row.pvCostEur = round2(row.pvCostEur + (slot.pvCostEur || 0));
     row.batteryCostEur = round2(row.batteryCostEur + (slot.batteryCostEur || 0));
+    row.opportunityCostEur = round2(row.opportunityCostEur + (slot.opportunityCostEur || 0));
     row.selfConsumptionCostEur = round2(row.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0));
     row.exportRevenueEur = round2(row.exportRevenueEur + (slot.exportRevenueEur || 0));
     row.netEur = round2(row.exportRevenueEur - row.selfConsumptionCostEur);
+    const marketWeight = Number(slot.pvShareKwh || 0) + Number(slot.batteryShareKwh || 0) + Number(slot.exportKwh || 0);
+    if (Number.isFinite(Number(slot.marketPriceCtKwh)) && marketWeight > 0) {
+      row.marketPriceWeightKwh = round2(row.marketPriceWeightKwh + marketWeight);
+      row.marketPriceWeightedCtTotal = round2(row.marketPriceWeightedCtTotal + (marketWeight * Number(slot.marketPriceCtKwh)));
+      row.marketPriceWeightedCtKwh = round2(row.marketPriceWeightedCtTotal / row.marketPriceWeightKwh);
+    }
+    const importWeight = Number(slot.importKwh || 0);
+    if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
+      row.userImportPriceWeightKwh = round2(row.userImportPriceWeightKwh + importWeight);
+      row.userImportPriceWeightedCtTotal = round2(row.userImportPriceWeightedCtTotal + (importWeight * Number(slot.userImportPriceCtKwh)));
+      row.userImportPriceWeightedCtKwh = round2(row.userImportPriceWeightedCtTotal / row.userImportPriceWeightKwh);
+    }
     row.slotCount += 1;
     if (slot.incomplete) row.incompleteSlots += 1;
     if (slot.estimated) row.estimatedSlots += 1;
@@ -225,7 +265,10 @@ function buildDayCharts(slots) {
       label: localTimeLabel(slot.ts),
       pvKwh: round2(slot.pvKwh || 0),
       importKwh: slot.importKwh,
+      selfConsumptionKwh: round2(slot.selfConsumptionKwh || 0),
       batteryKwh: round2(Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0)),
+      batteryChargeKwh: round2(Math.max(Number(slot.batteryChargeKwh || 0), 0)),
+      batteryDischargeKwh: round2(Math.max(Number(slot.batteryDischargeKwh || 0), 0)),
       exportKwh: slot.exportKwh,
       loadKwh: round2(slot.loadKwh || 0),
       estimated: Boolean(slot.estimated),
@@ -245,6 +288,7 @@ function buildDayCharts(slots) {
       gridCostEur: slot.gridCostEur,
       pvCostEur: slot.pvCostEur,
       batteryCostEur: slot.batteryCostEur,
+      opportunityCostEur: slot.opportunityCostEur,
       selfConsumptionCostEur: slot.selfConsumptionCostEur,
       exportRevenueEur: slot.exportRevenueEur,
       netEur: slot.netEur,
@@ -263,6 +307,29 @@ function buildPeriodCharts(rows) {
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
       batteryCostEur: row.batteryCostEur,
+      opportunityCostEur: row.opportunityCostEur,
+      selfConsumptionCostEur: row.selfConsumptionCostEur,
+      netEur: row.netEur,
+      estimatedSlots: row.estimatedSlots,
+      incompleteSlots: row.incompleteSlots
+    })),
+    periodCombinedBars: rows.map((row) => ({
+      label: row.label,
+      importKwh: row.importKwh,
+      exportKwh: row.exportKwh,
+      loadKwh: row.loadKwh,
+      pvKwh: row.pvKwh,
+      batteryChargeKwh: row.batteryChargeKwh,
+      batteryDischargeKwh: row.batteryDischargeKwh,
+      selfConsumptionKwh: row.selfConsumptionKwh,
+      gridShareKwh: row.gridShareKwh,
+      pvShareKwh: row.pvShareKwh,
+      batteryShareKwh: row.batteryShareKwh,
+      exportRevenueEur: row.exportRevenueEur,
+      gridCostEur: row.gridCostEur,
+      pvCostEur: row.pvCostEur,
+      batteryCostEur: row.batteryCostEur,
+      opportunityCostEur: row.opportunityCostEur,
       selfConsumptionCostEur: row.selfConsumptionCostEur,
       netEur: row.netEur,
       estimatedSlots: row.estimatedSlots,
@@ -272,6 +339,14 @@ function buildPeriodCharts(rows) {
       label: row.label,
       importKwh: row.importKwh,
       exportKwh: row.exportKwh,
+      loadKwh: row.loadKwh,
+      pvKwh: row.pvKwh,
+      batteryChargeKwh: row.batteryChargeKwh,
+      batteryDischargeKwh: row.batteryDischargeKwh,
+      selfConsumptionKwh: row.selfConsumptionKwh,
+      gridShareKwh: row.gridShareKwh,
+      pvShareKwh: row.pvShareKwh,
+      batteryShareKwh: row.batteryShareKwh,
       estimatedSlots: row.estimatedSlots,
       incompleteSlots: row.incompleteSlots
     }))
@@ -392,13 +467,15 @@ export function createHistoryRuntime({
           ct_kwh: marketPriceCtKwh
         }, pricingConfig);
         const shares = proportionalSourceShares(slot);
-
-        const missingImportPrice = shares.gridShareKwh > 0 && !Number.isFinite(userImportPriceCtKwh);
+        const localSelfConsumptionKwh = round2(Number(shares.pvShareKwh || 0) + Number(shares.batteryShareKwh || 0));
+        const selfConsumptionKwh = round2(Number(shares.gridShareKwh || 0) + localSelfConsumptionKwh);
+        const missingImportPrice = Number(slot.importKwh || 0) > 0 && !Number.isFinite(userImportPriceCtKwh);
         const missingMarketPrice = slot.exportKwh > 0 && !Number.isFinite(marketPriceCtKwh);
-        const gridCostEur = costForShareEur(shares.gridShareKwh, userImportPriceCtKwh);
+        const gridCostEur = costForShareEur(slot.importKwh, userImportPriceCtKwh);
         const pvCostEur = costForShareEur(shares.pvShareKwh, pvCostCtKwh);
         const batteryCostEur = costForShareEur(shares.batteryShareKwh, batteryCostCtKwh);
         const importCostEur = gridCostEur;
+        const opportunityCostEur = costForShareEur(localSelfConsumptionKwh, marketPriceCtKwh);
         const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
         const exportRevenueEur = missingMarketPrice ? null : round2((slot.exportKwh * Number(marketPriceCtKwh || 0)) / 100);
         const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
@@ -406,11 +483,13 @@ export function createHistoryRuntime({
         return {
           ...slot,
           ...shares,
+          selfConsumptionKwh,
           marketPriceCtKwh,
           userImportPriceCtKwh,
           gridCostEur,
           pvCostEur,
           batteryCostEur,
+          opportunityCostEur,
           selfConsumptionCostEur,
           importCostEur,
           exportRevenueEur,
@@ -427,10 +506,19 @@ export function createHistoryRuntime({
     const kpis = slots.reduce((totals, slot) => ({
       importKwh: round2(totals.importKwh + slot.importKwh),
       exportKwh: round2(totals.exportKwh + slot.exportKwh),
+      loadKwh: round2(totals.loadKwh + Number(slot.loadKwh || 0)),
+      pvKwh: round2(totals.pvKwh + Number(slot.pvKwh || 0)),
+      batteryChargeKwh: round2(totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0)),
+      batteryDischargeKwh: round2(totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0)),
+      selfConsumptionKwh: round2(totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0)),
+      gridShareKwh: round2(totals.gridShareKwh + Number(slot.gridShareKwh || 0)),
+      pvShareKwh: round2(totals.pvShareKwh + Number(slot.pvShareKwh || 0)),
+      batteryShareKwh: round2(totals.batteryShareKwh + Number(slot.batteryShareKwh || 0)),
       importCostEur: round2(totals.importCostEur + (slot.importCostEur || 0)),
       gridCostEur: round2(totals.gridCostEur + (slot.gridCostEur || 0)),
       pvCostEur: round2(totals.pvCostEur + (slot.pvCostEur || 0)),
       batteryCostEur: round2(totals.batteryCostEur + (slot.batteryCostEur || 0)),
+      opportunityCostEur: round2(totals.opportunityCostEur + (slot.opportunityCostEur || 0)),
       selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
       solarCompensationEur: 0,
@@ -438,10 +526,19 @@ export function createHistoryRuntime({
     }), {
       importKwh: 0,
       exportKwh: 0,
+      loadKwh: 0,
+      pvKwh: 0,
+      batteryChargeKwh: 0,
+      batteryDischargeKwh: 0,
+      selfConsumptionKwh: 0,
+      gridShareKwh: 0,
+      pvShareKwh: 0,
+      batteryShareKwh: 0,
       importCostEur: 0,
       gridCostEur: 0,
       pvCostEur: 0,
       batteryCostEur: 0,
+      opportunityCostEur: 0,
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
       solarCompensationEur: 0,
@@ -487,6 +584,7 @@ export function createHistoryRuntime({
           gridCostEur: slot.gridCostEur,
           pvCostEur: slot.pvCostEur,
           batteryCostEur: slot.batteryCostEur,
+          opportunityCostEur: slot.opportunityCostEur,
           selfConsumptionCostEur: slot.selfConsumptionCostEur,
           importCostEur: slot.importCostEur,
           exportRevenueEur: slot.exportRevenueEur,
@@ -497,6 +595,10 @@ export function createHistoryRuntime({
           importKwh: slot.importKwh,
           exportKwh: slot.exportKwh,
           loadKwh: slot.loadKwh,
+          pvKwh: roundOrZero(slot.pvKwh),
+          batteryChargeKwh: roundOrZero(slot.batteryChargeKwh),
+          batteryDischargeKwh: roundOrZero(slot.batteryDischargeKwh),
+          selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
           gridShareKwh: round2(slot.gridShareKwh || 0),
           pvShareKwh: round2(slot.pvShareKwh || 0),
           batteryShareKwh: round2(slot.batteryShareKwh || 0)

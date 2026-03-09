@@ -494,3 +494,157 @@ test('price backfill returns a structured error when an Energy Charts day reques
     store.close();
   }
 });
+
+test('price backfill retries a day after HTTP 429 and still imports the requested buckets', async () => {
+  const store = createStore();
+  let calls = 0;
+
+  store.writeSamples([
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-02T12:00:00.000Z',
+      value: 1200,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    }
+  ]);
+
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 429,
+        async json() {
+          return {};
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          unix_seconds: [Math.floor(Date.UTC(2026, 0, 2, 12, 0, 0) / 1000)],
+          price: [44]
+        };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillMissingPriceHistory({
+      bzn: 'DE-LU',
+      start: '2026-01-02T00:00:00.000Z',
+      end: '2026-01-03T00:00:00.000Z'
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(result.ok, true);
+    assert.equal(result.partial, false);
+    assert.equal(result.requestedDays, 1);
+    assert.equal(result.matchedBuckets, 1);
+    assert.deepEqual(result.openDays, []);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+  } finally {
+    store.close();
+  }
+});
+
+test('price backfill reports partial success when one day fails but previous days were imported', async () => {
+  const store = createStore();
+  const calls = [];
+
+  store.writeSamples([
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-01T12:00:00.000Z',
+      value: 900,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    },
+    {
+      seriesKey: 'grid_import_w',
+      ts: '2026-01-02T12:00:00.000Z',
+      value: 1200,
+      scope: 'live',
+      source: 'local_poll',
+      quality: 'raw',
+      resolutionSeconds: 900,
+      unit: 'W'
+    }
+  ]);
+
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (url.includes('start=2026-01-02')) {
+      return {
+        ok: false,
+        status: 429,
+        async json() {
+          return {};
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          unix_seconds: [Math.floor(Date.UTC(2026, 0, 1, 12, 0, 0) / 1000)],
+          price: [40]
+        };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillMissingPriceHistory({
+      bzn: 'DE-LU',
+      start: '2026-01-01T00:00:00.000Z',
+      end: '2026-01-03T00:00:00.000Z'
+    });
+
+    assert.equal(calls.length, 4);
+    assert.equal(result.ok, true);
+    assert.equal(result.partial, true);
+    assert.equal(result.requestedDays, 2);
+    assert.equal(result.matchedBuckets, 1);
+    assert.equal(result.importedRows, 2);
+    assert.deepEqual(result.openDays, ['2026-01-02']);
+    assert.match(result.error, /2026-01-02/);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+  } finally {
+    store.close();
+  }
+});

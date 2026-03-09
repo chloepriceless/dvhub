@@ -101,9 +101,33 @@ async function fetchEnergyChartsDay({ bzn, day, fetchImpl }) {
     headers: { accept: 'application/json' }
   });
   if (!response.ok) {
-    throw new Error(`Energy Charts price request failed for ${day}: HTTP ${response.status}`);
+    const error = new Error(`Energy Charts price request failed for ${day}: HTTP ${response.status}`);
+    error.status = Number(response.status);
+    error.day = day;
+    throw error;
   }
   return parseEnergyChartsPriceRows(await response.json());
+}
+
+async function fetchEnergyChartsDayWithRetry({
+  bzn,
+  day,
+  fetchImpl,
+  waitImpl,
+  maxAttempts = 3,
+  retryDelayMs = 250
+}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetchEnergyChartsDay({ bzn, day, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      if (Number(error?.status) !== 429 || attempt >= maxAttempts) break;
+      await waitImpl(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
 }
 
 function pushSeriesRow(rows, entry) {
@@ -439,7 +463,12 @@ async function fetchVrmStats({ portalId, token, type, start, end, interval, fetc
   return response.json();
 }
 
-export function createHistoryImportManager({ store, telemetryConfig = {}, fetchImpl = globalThis.fetch }) {
+export function createHistoryImportManager({
+  store,
+  telemetryConfig = {},
+  fetchImpl = globalThis.fetch,
+  waitImpl = async () => {}
+}) {
   function getStatus() {
     const importConfig = telemetryConfig.historyImport || {};
     const provider = 'vrm';
@@ -601,34 +630,36 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
     const missingSet = new Set(missingBuckets.map((ts) => bucketIso(ts)));
     const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
     const matchedRows = [];
+    const openDays = [];
+    const errors = [];
 
-    try {
-      for (const day of days) {
-        const rows = await fetchEnergyChartsDay({ bzn, day, fetchImpl });
+    for (const day of days) {
+      try {
+        const rows = await fetchEnergyChartsDayWithRetry({
+          bzn,
+          day,
+          fetchImpl,
+          waitImpl
+        });
         for (const row of rows) {
           if (!missingSet.has(bucketIso(row.ts))) continue;
           matchedRows.push(row);
         }
+      } catch (error) {
+        openDays.push(day);
+        errors.push(error?.message || String(error));
       }
-    } catch (error) {
-      return {
-        ok: false,
-        requestedDays: days.length,
-        matchedBuckets: matchedRows.length,
-        importedRows: 0,
-        skippedBuckets: missingBuckets.length,
-        days,
-        error: error.message
-      };
     }
 
     const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);
     if (historyRows.length) store.writeSamples(historyRows);
 
     const skippedBuckets = Math.max(0, missingBuckets.length - matchedRows.length);
+    const partial = openDays.length > 0 && historyRows.length > 0;
+    const ok = openDays.length === 0 || partial;
     const jobId = store.writeImportJob({
       jobType: 'price_backfill',
-      status: 'completed',
+      status: ok ? (partial ? 'completed_with_gaps' : 'completed') : 'failed',
       requestedFrom: rangeStart,
       requestedTo: rangeEnd,
       importedRows: historyRows.length,
@@ -637,18 +668,23 @@ export function createHistoryImportManager({ store, telemetryConfig = {}, fetchI
         provider: 'energy_charts',
         requestedDays: days,
         matchedBuckets: matchedRows.length,
-        skippedBuckets
+        skippedBuckets,
+        openDays,
+        errors
       }
     });
 
     return {
-      ok: true,
+      ok,
+      partial,
       jobId,
       requestedDays: days.length,
       matchedBuckets: matchedRows.length,
       importedRows: historyRows.length,
       skippedBuckets,
-      days
+      days,
+      openDays,
+      error: errors.length ? errors.join('; ') : null
     };
   }
 

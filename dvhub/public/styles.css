@@ -350,6 +350,15 @@ a {
   font-family: var(--font-title);
 }
 
+.history-control-wide {
+  min-width: 220px;
+}
+
+.history-control input[type="range"] {
+  width: 100%;
+  accent-color: #f5c451;
+}
+
 .history-kpi-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -521,6 +530,16 @@ a {
   height: 220px;
 }
 
+.history-chart-interaction {
+  position: relative;
+}
+
+.history-chart-hover-surface {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
+
 .history-grid-line {
   fill: none;
   stroke: rgba(141, 180, 221, 0.2);
@@ -629,6 +648,24 @@ a {
   gap: 10px;
 }
 
+.history-stack-chart-combined {
+  gap: 14px;
+}
+
+.history-bars-combined {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.history-bar-card-combined {
+  align-items: stretch;
+  justify-items: stretch;
+}
+
+.history-stack-energy,
+.history-stack-finance {
+  justify-content: center;
+}
+
 .history-data-table {
   width: 100%;
   border-collapse: collapse;
@@ -651,6 +688,12 @@ a {
 
 .history-data-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.history-data-table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 .history-point-badge {

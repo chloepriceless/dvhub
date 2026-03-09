@@ -118,10 +118,19 @@ test('history runtime computes slot-level import cost, export revenue, and unres
 
   assert.equal(summary.kpis.importKwh, 3);
   assert.equal(summary.kpis.exportKwh, 0.5);
+  assert.equal(summary.kpis.loadKwh, 3.3);
+  assert.equal(summary.kpis.pvKwh, 0.7);
+  assert.equal(summary.kpis.batteryChargeKwh, 0.1);
+  assert.equal(summary.kpis.batteryDischargeKwh, 0);
+  assert.equal(summary.kpis.selfConsumptionKwh, 3.3);
+  assert.equal(summary.kpis.gridShareKwh, 3);
+  assert.equal(summary.kpis.pvShareKwh, 0.3);
+  assert.equal(summary.kpis.batteryShareKwh, 0);
   assert.equal(summary.kpis.importCostEur, 0.3);
   assert.equal(summary.kpis.exportRevenueEur, 0.04);
   assert.equal(summary.kpis.pvCostEur, 0.02);
   assert.equal(summary.kpis.selfConsumptionCostEur, 0.32);
+  assert.equal(summary.kpis.opportunityCostEur, 0.01);
   assert.equal(summary.kpis.netEur, -0.28);
   assert.deepEqual(summary.meta.unresolved, {
     missingImportPriceSlots: 1,
@@ -134,6 +143,14 @@ test('history runtime computes slot-level import cost, export revenue, and unres
   assert.equal(summary.series.prices[0].userImportPriceCtKwh, 30);
   assert.equal(summary.rows[0].gridCostEur, 0.3);
   assert.equal(summary.rows[0].pvCostEur, 0.01);
+  assert.equal(summary.rows[0].loadKwh, 1.2);
+  assert.equal(summary.rows[0].pvKwh, 0.6);
+  assert.equal(summary.rows[0].batteryChargeKwh, 0.1);
+  assert.equal(summary.rows[0].batteryDischargeKwh, 0);
+  assert.equal(summary.rows[0].selfConsumptionKwh, 1.2);
+  assert.equal(summary.rows[0].gridShareKwh, 1);
+  assert.equal(summary.rows[0].pvShareKwh, 0.2);
+  assert.equal(summary.rows[0].batteryShareKwh, 0);
 });
 
 test('history runtime splits self-consumption cost across grid pv and battery shares', () => {
@@ -178,6 +195,8 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
   assert.equal(summary.kpis.pvCostEur, 0.03);
   assert.equal(summary.kpis.batteryCostEur, 0.02);
   assert.equal(summary.kpis.selfConsumptionCostEur, 0.17);
+  assert.equal(summary.kpis.selfConsumptionKwh, 1);
+  assert.equal(summary.kpis.opportunityCostEur, 0.03);
   assert.equal(summary.kpis.netEur, -0.17);
   assert.equal(summary.meta.unresolved.estimatedSlots, 1);
   assert.deepEqual(summary.series.financial[0], {
@@ -186,10 +205,55 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
     pvCostEur: 0.03,
     batteryCostEur: 0.02,
     selfConsumptionCostEur: 0.17,
+    opportunityCostEur: 0.03,
     importCostEur: 0.12,
     exportRevenueEur: 0,
     netEur: -0.17
   });
+});
+
+test('history runtime prices all imported energy with the import tariff even when part of the slot is not direct load share', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-03-09T11:00:00.000Z',
+            importKwh: 1,
+            exportKwh: 0.5,
+            gridKwh: 1,
+            pvKwh: 2,
+            batteryKwh: -1.5,
+            batteryChargeKwh: 1.5,
+            batteryDischargeKwh: 0,
+            loadKwh: 1,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          {
+            ts: '2026-03-09T11:00:00.000Z',
+            priceCtKwh: 5,
+            priceEurMwh: 50
+          }
+        ];
+      }
+    },
+    getPricingConfig: () => pricingConfig
+  });
+
+  const summary = runtime.getSummary({
+    view: 'day',
+    date: '2026-03-09'
+  });
+
+  assert.equal(summary.kpis.importKwh, 1);
+  assert.equal(summary.kpis.gridShareKwh, 0.33);
+  assert.equal(summary.kpis.importCostEur, 0.3);
+  assert.equal(summary.kpis.gridCostEur, 0.3);
 });
 
 test('history runtime groups day, week, month, and year views with correct totals', () => {
@@ -229,11 +293,16 @@ test('history runtime exposes chart-ready series with split costs and estimation
   assert.equal(day.charts.dayPriceLines[0].marketPriceCtKwh, 5);
   assert.equal(Array.isArray(day.charts?.dayFinancialLines), true);
   assert.equal(day.charts.dayFinancialLines[0].gridCostEur, 0.3);
+  assert.equal(day.charts.dayFinancialLines[0].opportunityCostEur, 0.01);
   assert.equal(Array.isArray(week.charts?.periodFinancialBars), true);
   assert.equal(week.charts.periodFinancialBars[0].label, '2026-03-09');
   assert.equal(week.charts.periodFinancialBars[0].gridCostEur, 0.3);
   assert.equal(week.charts.periodFinancialBars[0].pvCostEur, 0.01);
   assert.equal(week.charts.periodFinancialBars[0].batteryCostEur, 0);
+  assert.equal(Array.isArray(week.charts?.periodCombinedBars), true);
+  assert.equal(week.charts.periodCombinedBars[0].loadKwh, 1.2);
+  assert.equal(week.charts.periodCombinedBars[0].importKwh, 1);
+  assert.equal(week.charts.periodCombinedBars[0].selfConsumptionKwh, 1.2);
   assert.equal(week.charts.periodFinancialBars[1].estimatedSlots, 1);
   assert.deepEqual(week.meta.unresolved, {
     missingImportPriceSlots: 1,
