@@ -297,7 +297,8 @@ function renderSummary(summary) {
       ? `${estimatedCount} Slots sind geschätzt.`
       : 'Historie geladen.';
   setBanner(warningText, warningCount ? 'warn' : 'success');
-  setText('historyMeta', `${String(summary?.view || '').toUpperCase()} · ${summary?.date || currentDateValue()}`);
+  const versionLabel = summary?.app?.versionLabel ? ` · ${summary.app.versionLabel}` : '';
+  setText('historyMeta', `${String(summary?.view || '').toUpperCase()} · ${summary?.date || currentDateValue()}${versionLabel}`);
 }
 
 async function loadHistorySummary() {

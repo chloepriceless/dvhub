@@ -123,6 +123,9 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
         incompleteSlots: 2
       }
     ],
+    app: {
+      versionLabel: 'v0.2.5+ea104c9'
+    },
     meta: {
       unresolved: {
         incompleteSlots: 2
@@ -135,6 +138,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
   assert.match(elements.get('historyBanner').textContent, /unvollständig/i);
+  assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
 });
 
 test('history page renders daily line charts and estimated markers from chart payloads', () => {

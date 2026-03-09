@@ -20,6 +20,7 @@ import {
   resolveTelemetryDbPath
 } from './telemetry-runtime.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
+import { readAppVersionInfo } from './app-version.js';
 import {
   autoDisableExpiredScheduleRules,
   parseHHMM,
@@ -42,6 +43,7 @@ const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
 const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 const DATA_DIR = process.env.DV_DATA_DIR || '';
+const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
@@ -1478,6 +1480,7 @@ async function adminHealthPayload() {
   return {
     ok: true,
     checkedAt: Date.now(),
+    app: APP_VERSION,
     service,
     runtime: {
       node: process.version,
@@ -1875,7 +1878,8 @@ historyApi = createHistoryApiHandlers({
   historyRuntime,
   historyImportManager,
   telemetryEnabled: !!telemetryStore,
-  defaultBzn: cfg.epex?.bzn || 'DE-LU'
+  defaultBzn: cfg.epex?.bzn || 'DE-LU',
+  appVersion: APP_VERSION
 });
 refreshTelemetryStatus();
 
