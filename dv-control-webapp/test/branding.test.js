@@ -72,6 +72,16 @@ test('all public HTML entrypoints use DVhub branding and remove legacy product c
   }
 });
 
+test('shell navigation uses the simplified Leitstand, Einrichtung, and Wartung structure', () => {
+  for (const fileName of ['index.html', 'settings.html', 'tools.html', 'setup.html']) {
+    const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
+    assert.match(html, />Leitstand</);
+    assert.match(html, />Einrichtung</);
+    assert.match(html, />Wartung</);
+    assert.doesNotMatch(html, />Tools</);
+  }
+});
+
 test('shell branding includes the DVhub logo asset and menu buttons are solid-color buttons', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
@@ -85,6 +95,24 @@ test('shell branding includes the DVhub logo asset and menu buttons are solid-co
   assert.doesNotMatch(css, /\.btn-primary\s*\{[^}]*linear-gradient/s);
 });
 
+test('settings page uses a compact control bar and no longer exposes service cards in the header', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'settings.html'), 'utf8');
+
+  assert.match(html, /settings-compact-bar/);
+  assert.doesNotMatch(html, /settings-service-panel/);
+  assert.doesNotMatch(html, /Health &amp; Service/);
+});
+
+test('maintenance page groups status, import export, history, and diagnose sections', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'tools.html'), 'utf8');
+
+  assert.match(html, /DVhub Wartung/);
+  assert.match(html, /Systemstatus/);
+  assert.match(html, /Import &amp; Export/);
+  assert.match(html, /Historie/);
+  assert.match(html, /Diagnose/);
+});
+
 test('global styles use the DVhub palette and typography', () => {
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
 
@@ -93,6 +121,13 @@ test('global styles use the DVhub palette and typography', () => {
   assert.match(css, /--font-title:\s*"Rajdhani"/);
   assert.match(css, /--font-body:\s*"Inter"/);
   assert.doesNotMatch(css, new RegExp(`${legacyHeadingFont}|${legacyBodyFont}`));
+});
+
+test('styles define compact settings and maintenance layout primitives', () => {
+  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+
+  assert.match(css, /\.settings-compact-bar\s*\{/);
+  assert.match(css, /\.maintenance-grid\s*\{/);
 });
 
 test('readme references the DVhub assets folder for logo and screenshot', () => {

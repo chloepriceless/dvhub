@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DVhub Einstellungen</title>
+  <title>DVhub Einrichtung</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -21,91 +21,63 @@
       </div>
       <nav class="app-nav-links">
         <a class="app-nav-link" href="/">Leitstand</a>
-        <a class="app-nav-link is-active" href="/settings.html">Einstellungen</a>
-        <a class="app-nav-link" href="/tools.html">Tools</a>
-        <a class="app-nav-link" href="/setup.html">Setup</a>
+        <a class="app-nav-link is-active" href="/settings.html">Einrichtung</a>
+        <a class="app-nav-link" href="/tools.html">Wartung</a>
+        <a class="app-nav-link" href="/setup.html">Einrichtung starten</a>
       </nav>
       <div class="app-nav-meta">
-        <p class="card-title">Konfiguration</p>
-        <p class="tools-note">Alle Systemwerte strukturiert, mit Fokus auf Betriebsfähigkeit und Diagnose.</p>
+        <p class="card-title">Einrichtung</p>
+        <p class="tools-note">Alle Systemwerte strukturiert, mit Fokus auf Inbetriebnahme, Anpassung und sichere Wartung.</p>
       </div>
     </aside>
 
     <div class="app-main">
       <header class="panel page-topbar reveal">
         <div class="page-topbar-copy">
-          <p class="page-kicker">Konfiguration</p>
-          <h1 class="page-title">DVhub Einstellungen</h1>
-          <p class="page-subtitle">Systemzugriff, Transport, Preisdienste und Service-Aktionen in einer kompakten Betriebsansicht.</p>
+          <p class="page-kicker">Einrichtung</p>
+          <h1 class="page-title">DVhub Einrichtung</h1>
+          <p class="page-subtitle">Verbindung, Steuerung und Datendienste in einer kompakten, verständlichen Konfigurationsansicht.</p>
         </div>
         <div class="page-actions">
           <a class="btn btn-ghost" href="/">Leitstand</a>
-          <a class="btn btn-primary" href="/setup.html">Setup öffnen</a>
+          <a class="btn btn-ghost" href="/tools.html">Zur Wartung</a>
+          <a class="btn btn-primary" href="/setup.html">Assistent öffnen</a>
         </div>
       </header>
 
       <main class="settings-grid">
-        <div class="settings-header span-12">
-          <section class="panel reveal settings-header-panel settings-actions-panel">
-            <div class="panel-head">
-              <div>
-                <p class="card-title">Status</p>
-                <h2 class="section-title">Konfigurationsverwaltung</h2>
-              </div>
-              <div class="hero-actions">
-                <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
-                <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
-              </div>
+        <section class="panel reveal settings-compact-bar span-12">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Arbeitsmodus</p>
+              <h2 class="section-title">Kompakte Einrichtung</h2>
             </div>
-            <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
-            <div class="settings-toolbar">
-              <button id="exportConfigBtn" type="button">Config exportieren</button>
-              <button id="importConfigBtn" type="button">Config importieren</button>
-              <a class="btn btn-ghost" href="/setup.html">Setup-Assistent</a>
+            <div class="hero-actions">
+              <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
+              <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
             </div>
-            <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
-            <div id="configMeta" class="meta">-</div>
-          </section>
-
-          <section class="panel reveal settings-header-panel settings-orientation-panel">
-            <div class="panel-head">
-              <div>
-                <p class="card-title">Hinweis</p>
-                <h2 class="section-title">Was hier bearbeitet wird</h2>
-              </div>
+          </div>
+          <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
+          <div class="settings-summary">
+            <div class="summary-card">
+              <strong>Schnell</strong>
+              <span>Hier bearbeitest du nur die eigentliche Einrichtung. Service- und Diagnosefunktionen liegen in der Wartung.</span>
             </div>
-            <div class="settings-summary">
-              <div class="summary-card">
-                <strong>Einfach</strong>
-                <span>Victron, Meter, EPEX, Influx und DV-Funktionen sind direkt als Formulare editierbar.</span>
-              </div>
-              <div class="summary-card">
-                <strong>Sicher</strong>
-                <span>Import und Export laufen über dieselbe Validierung wie Setup und Dashboard-Zeitplan.</span>
-              </div>
-              <div class="summary-card">
-                <strong>Wichtig</strong>
-                <span>Server- oder MQTT-Änderungen werden gespeichert, brauchen aber teilweise einen Neustart des Dienstes.</span>
-              </div>
+            <div class="summary-card">
+              <strong>Fokussiert</strong>
+              <span>Links bleiben nur die wichtigsten Aufgaben sichtbar, technische Sonderfälle liegen gesammelt unter Erweitert.</span>
             </div>
-          </section>
-
-          <section class="panel reveal settings-header-panel settings-service-panel">
-            <div class="panel-head">
-              <div>
-                <p class="card-title">Admin</p>
-                <h2 class="section-title">Health &amp; Service</h2>
-              </div>
-              <div class="hero-actions">
-                <button id="refreshHealthBtn" class="btn btn-ghost" type="button">Health neu laden</button>
-                <button id="restartServiceBtn" class="btn btn-danger" type="button">Dienst neu starten</button>
-              </div>
+            <div class="summary-card">
+              <strong>Sicher</strong>
+              <span>Änderungen werden direkt geprüft. Neustart, Import, Export und Historie bleiben bewusst aus diesem Bereich herausgelöst.</span>
             </div>
-            <div id="healthBanner" class="status-banner">Health-Status wird geladen...</div>
-            <div id="healthChecks" class="settings-summary"></div>
-            <div id="serviceMeta" class="meta">-</div>
-          </section>
-        </div>
+          </div>
+          <div class="settings-toolbar">
+            <a class="btn btn-ghost" href="/setup.html">Assistent starten</a>
+            <a class="btn btn-ghost" href="/tools.html">Wartung öffnen</a>
+          </div>
+          <div id="configMeta" class="meta">-</div>
+        </section>
 
         <section class="panel reveal settings-shell span-12">
           <aside class="settings-sidebar" aria-label="Einstellungsbereiche">
@@ -113,7 +85,7 @@
               <div class="settings-sidebar-head">
                 <p class="card-title">Navigation</p>
                 <h2 class="section-title">Bereiche</h2>
-                <p class="tools-note">Links bleibt die Orientierung sichtbar. Rechts ist immer nur ein kompakter Arbeitsbereich aktiv.</p>
+                <p class="tools-note">Wähle links genau eine Aufgabe. Rechts bleibt die aktive Konfiguration kompakt und ruhig.</p>
               </div>
               <nav id="settingsSidebar" class="settings-sidebar-nav">
                 <button
@@ -122,8 +94,8 @@
                   data-settings-target="overview"
                   aria-current="page"
                 >
-                  <span class="settings-sidebar-label">Übersicht</span>
-                  <small class="settings-sidebar-copy">Start mit Orientierung und den wichtigsten Bereichen.</small>
+                  <span class="settings-sidebar-label">Start</span>
+                  <small class="settings-sidebar-copy">Schnelle Orientierung und die wichtigsten Einstiege.</small>
                 </button>
                 <div id="settingsNavItems" class="settings-sidebar-list"></div>
               </nav>
@@ -133,22 +105,22 @@
           <section class="settings-workspace">
             <div id="settingsOverview" class="settings-overview">
               <div class="settings-overview-head">
-                <p class="card-title">Start</p>
-                <h2 class="section-title">Womit möchtest du beginnen?</h2>
-                <p class="tools-note">Die Übersicht fasst die wichtigsten Wege zusammen, bevor du links in genau einen Bereich wechselst.</p>
+                <p class="card-title">Schnellstart</p>
+                <h2 class="section-title">Was möchtest du einrichten?</h2>
+                <p class="tools-note">Beginne mit einem klaren Aufgabenbereich. Wartung und Diagnose sind bewusst in eine eigene Seite ausgelagert.</p>
               </div>
               <div class="settings-summary">
                 <div class="summary-card">
-                  <strong>Komprimiert</strong>
-                  <span>Desktop-Ansichten nutzen dichtere Karten und Feldraster, damit Kernbereiche mit weniger Scrollen erreichbar bleiben.</span>
+                  <strong>Anlage</strong>
+                  <span>Victron, Zähler und Grundzugriff liegen gesammelt in wenigen Bereichen statt in technischer Einzelnavigation.</span>
                 </div>
                 <div class="summary-card">
-                  <strong>Fokus</strong>
-                  <span>Der rechte Bereich zeigt immer nur eine Übersicht oder genau ein Ziel aus der Seitenleiste.</span>
+                  <strong>Steuerung</strong>
+                  <span>DV-Logik, Schreibwerte und Zeitplan-Basis bleiben zusammen, damit Änderungen nachvollziehbar bleiben.</span>
                 </div>
                 <div class="summary-card">
-                  <strong>Stabil</strong>
-                  <span>Aktionen und Navigation bleiben beim Scrollen greifbar, während schmale Breiten sauber auf eine Spalte zurückfallen.</span>
+                  <strong>Wartung</strong>
+                  <span>Health, Neustart, Import, Export und Historie findest du gesammelt in der Wartung statt verteilt über mehrere Karten.</span>
                 </div>
               </div>
             </div>

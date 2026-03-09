@@ -26,34 +26,28 @@ const DV_CONTROL_META = {
 
 const SETTINGS_DESTINATIONS = [
   {
-    id: 'basics',
-    label: 'Grundsystem',
-    description: 'Die wichtigsten Laufzeit- und Zugriffsoptionen für DVhub.',
-    intro: 'Hier richtest du die Grundfunktionen, Netzwerkbasis und das Verhalten der App ein.'
+    id: 'quickstart',
+    label: 'Schnellstart',
+    description: 'Die wichtigsten Grundwerte und Einstiege für die Einrichtung.',
+    intro: 'Beginne hier mit den Kernwerten für Zugriff, Erreichbarkeit und sicheren Start.'
   },
   {
     id: 'connection',
-    label: 'Verbindung zur Anlage',
-    description: 'Alles für die Verbindung zu Victron-System und Netzzaehler.',
-    intro: 'Wähle hier, wie DVhub mit deiner Anlage spricht und wo Messwerte herkommen.'
+    label: 'Anlage verbinden',
+    description: 'Victron-System und Netzzaehler verständlich anbinden.',
+    intro: 'Hier legst du fest, wie DVhub mit deiner Anlage spricht und wo die Kernmesswerte herkommen.'
   },
   {
     id: 'control',
-    label: 'Direktvermarktung',
-    description: 'Steuerlogik und Schreibwerte für die aktive Regelung.',
-    intro: 'Diese Einstellungen bestimmen, wie DVhub Sollwerte schreibt und DV-Logik anwendet.'
-  },
-  {
-    id: 'schedule',
-    label: 'Zeitplan',
-    description: 'Globale Regeln und Standardwerte für die zeitgesteuerte Steuerung.',
-    intro: 'Passe hier an, wie der Zeitplan bewertet wird und welche Standardwerte gelten.'
+    label: 'Steuerung',
+    description: 'Regelung, Schreibwerte und Zeitplan-Basis für DVhub.',
+    intro: 'Diese Einstellungen steuern Sollwerte, DV-Logik und die Basis des Zeitplans.'
   },
   {
     id: 'services',
-    label: 'Preise & Dienste',
-    description: 'Optionale Preis- und Datendienste für Monitoring und Day-Ahead-Daten.',
-    intro: 'Verbinde optionale Dienste, damit Preise und Verlaufsdaten sauber eingebunden werden.'
+    label: 'Preise & Daten',
+    description: 'Optionale Preis- und Datendienste für Marktwerte und Verlauf.',
+    intro: 'Verbinde hier Preisquellen, Historie und Datendienste, wenn du sie wirklich brauchst.'
   },
   {
     id: 'advanced',
@@ -68,7 +62,7 @@ const SECTIONS = [
     id: 'system',
     label: 'System',
     description: 'Allgemeine Laufzeit- und Webserver-Einstellungen.',
-    destination: 'basics'
+    destination: 'quickstart'
   },
   {
     id: 'victron',
@@ -104,7 +98,7 @@ const SECTIONS = [
     id: 'schedule',
     label: 'Zeitplan',
     description: 'Globale Parameter für Zeitplan und Default-Werte. Die Regeln selbst bleiben im Dashboard editierbar.',
-    destination: 'schedule'
+    destination: 'control'
   },
   {
     id: 'scan',

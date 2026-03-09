@@ -451,9 +451,9 @@ function renderSettingsOverview() {
   const head = document.createElement('div');
   head.className = 'settings-overview-head';
   head.innerHTML = `
-    <p class="card-title">Start</p>
-    <h2 class="section-title">Womit möchtest du beginnen?</h2>
-    <p class="tools-note">Die Übersicht ist der Standard-Einstieg. Von hier aus führt die Seitenleiste in genau einen aktiven Arbeitsbereich.</p>
+    <p class="card-title">Schnellstart</p>
+    <h2 class="section-title">Was möchtest du einrichten?</h2>
+    <p class="tools-note">Die Übersicht ist der ruhige Einstieg in die Einrichtung. Wartung und Diagnose liegen bewusst auf einer eigenen Seite.</p>
   `;
   overview.appendChild(head);
 
@@ -796,6 +796,7 @@ function setHealthBanner(message, kind = 'info') {
 function renderHealth(payload) {
   currentHealth = payload;
   const mount = document.getElementById('healthChecks');
+  if (!mount) return;
   mount.innerHTML = '';
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
   for (const check of checks) {
@@ -811,8 +812,11 @@ function renderHealth(payload) {
   }
 
   const service = payload.service || {};
-  document.getElementById('serviceMeta').textContent =
-    `Service: ${service.name || '-'} | Status: ${service.status || '-'} | Runtime: ${payload.runtime?.node || '-'} | Geprueft: ${fmtTs(payload.checkedAt)}`;
+  const serviceMeta = document.getElementById('serviceMeta');
+  if (serviceMeta) {
+    serviceMeta.textContent =
+      `Service: ${service.name || '-'} | Status: ${service.status || '-'} | Runtime: ${payload.runtime?.node || '-'} | Geprueft: ${fmtTs(payload.checkedAt)}`;
+  }
 
   const restartButton = document.getElementById('restartServiceBtn');
   if (restartButton) restartButton.disabled = !(service.enabled && service.status !== 'unavailable');
@@ -885,7 +889,6 @@ async function saveConfig(config, source = 'settings') {
     ? ` Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`
     : '';
   setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
-  await loadHealth();
   await loadHistoryImportStatus();
   renderActiveSettingsDestination();
   return true;
@@ -986,9 +989,6 @@ function initSettingsPage() {
 
   loadConfig().catch((error) => {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
-  });
-  loadHealth().catch((error) => {
-    setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
   });
   loadHistoryImportStatus().then(() => {
     renderActiveSettingsDestination();
