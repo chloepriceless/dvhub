@@ -498,10 +498,106 @@ function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValue
   };
 }
 
+function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary }) {
+  const plants = Array.isArray(pvPlants) ? pvPlants : [];
+  const applicableValueCtKwhByMonth = applicableValueSummary?.applicableValueCtKwhByMonth || {};
+  if (!plants.length) {
+    return {
+      weightedApplicableValueCtKwh: null,
+      configuredPlantCount: 0,
+      resolvedPlantCount: 0
+    };
+  }
+
+  let totalKwp = 0;
+  let weightedApplicableValueCt = 0;
+  let resolvedPlantCount = 0;
+
+  for (const plant of plants) {
+    const kwp = Number(plant?.kwp);
+    const commissionedAt = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt : '';
+    const monthKey = commissionedAt.slice(0, 7);
+    const applicableValueCtKwh = Number(applicableValueCtKwhByMonth[monthKey]);
+    if (!Number.isFinite(kwp) || kwp <= 0) continue;
+    if (!Number.isFinite(applicableValueCtKwh)) {
+      return {
+        weightedApplicableValueCtKwh: null,
+        configuredPlantCount: plants.length,
+        resolvedPlantCount
+      };
+    }
+    totalKwp += kwp;
+    weightedApplicableValueCt += kwp * applicableValueCtKwh;
+    resolvedPlantCount += 1;
+  }
+
+  if (totalKwp <= 0) {
+    return {
+      weightedApplicableValueCtKwh: null,
+      configuredPlantCount: plants.length,
+      resolvedPlantCount
+    };
+  }
+
+  return {
+    weightedApplicableValueCtKwh: round2(weightedApplicableValueCt / totalKwp),
+    configuredPlantCount: plants.length,
+    resolvedPlantCount
+  };
+}
+
+function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, applicableValueSummary }) {
+  if (view !== 'year') {
+    return { kpis, meta };
+  }
+
+  const weightedApplicableValue = summarizeWeightedApplicableValue({
+    pvPlants: pricingConfig?.pvPlants,
+    applicableValueSummary
+  });
+  const premiumEligibleExportKwh = round2(slots.reduce((sum, slot) => {
+    const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
+    if (!Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0) return sum;
+    return sum + Number(slot?.exportKwh || 0);
+  }, 0));
+  const officialAnnualMarketValueCtKwh = meta?.solarMarketValue?.source === 'official_annual'
+    ? round2(Number(meta.solarMarketValue.annualCtKwh || 0))
+    : null;
+  const weightedApplicableValueCtKwh = weightedApplicableValue.weightedApplicableValueCtKwh;
+  const marketPremiumEur =
+    Number.isFinite(officialAnnualMarketValueCtKwh)
+    && Number.isFinite(weightedApplicableValueCtKwh)
+    && premiumEligibleExportKwh > 0
+      ? round2((premiumEligibleExportKwh * (weightedApplicableValueCtKwh - officialAnnualMarketValueCtKwh)) / 100)
+      : null;
+
+  return {
+    kpis: {
+      ...kpis,
+      annualMarketValueCtKwh: officialAnnualMarketValueCtKwh,
+      weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? weightedApplicableValueCtKwh : null,
+      premiumEligibleExportKwh,
+      marketPremiumEur
+    },
+    meta: {
+      ...meta,
+      marketPremium: {
+        annualMarketValueCtKwh: officialAnnualMarketValueCtKwh,
+        weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? weightedApplicableValueCtKwh : null,
+        premiumEligibleExportKwh,
+        marketPremiumEur,
+        configuredPlantCount: weightedApplicableValue.configuredPlantCount,
+        resolvedPlantCount: weightedApplicableValue.resolvedPlantCount
+      }
+    }
+  };
+}
+
 export function createHistoryRuntime({
   store,
   getPricingConfig = () => ({}),
   getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} }),
+  getApplicableValueSummary = () => ({ applicableValueCtKwhByMonth: {} }),
   getCurrentDate = currentBerlinDate
 }) {
   function listRawFallbackSlotsForRange({ start, end }) {
@@ -668,7 +764,11 @@ export function createHistoryRuntime({
       selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
       solarCompensationEur: 0,
-      netEur: round2(totals.netEur + slot.netEur)
+      netEur: round2(totals.netEur + slot.netEur),
+      annualMarketValueCtKwh: null,
+      weightedApplicableValueCtKwh: null,
+      premiumEligibleExportKwh: 0,
+      marketPremiumEur: null
     }), {
       importKwh: 0,
       exportKwh: 0,
@@ -699,7 +799,11 @@ export function createHistoryRuntime({
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
       solarCompensationEur: 0,
-      netEur: 0
+      netEur: 0,
+      annualMarketValueCtKwh: null,
+      weightedApplicableValueCtKwh: null,
+      premiumEligibleExportKwh: 0,
+      marketPremiumEur: null
     });
     const baseRows = summarizeRows(slots, view);
     const solarApplied = applySolarMarketValues({
@@ -718,6 +822,17 @@ export function createHistoryRuntime({
       },
       solarMarketValues: solarMarketValues || getSolarMarketValueSummary({
         year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year
+      })
+    });
+    const annualPremiumApplied = applyAnnualMarketPremium({
+      view,
+      slots,
+      kpis: solarApplied.kpis,
+      meta: solarApplied.meta,
+      pricingConfig,
+      applicableValueSummary: getApplicableValueSummary({
+        year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year,
+        pvPlants: pricingConfig?.pvPlants || []
       })
     });
     const rows = solarApplied.rows;
@@ -746,7 +861,7 @@ export function createHistoryRuntime({
         start,
         end
       },
-      kpis: solarApplied.kpis,
+      kpis: annualPremiumApplied.kpis,
       series: {
         financial: slots.map((slot) => ({
           ts: slot.ts,
@@ -793,7 +908,7 @@ export function createHistoryRuntime({
       rows,
       slots,
       meta: {
-        ...solarApplied.meta,
+        ...annualPremiumApplied.meta,
         sourceSummary
       }
     };
