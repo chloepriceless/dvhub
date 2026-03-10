@@ -613,6 +613,12 @@ a {
   background: #f5c451;
 }
 
+.history-series-pv-ac,
+.history-legend-swatch.history-series-pv-ac {
+  stroke: #ff9f43;
+  background: #ff9f43;
+}
+
 .history-series-import-red,
 .history-legend-swatch.history-series-import-red {
   stroke: #ff6b6b;

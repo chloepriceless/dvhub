@@ -187,6 +187,19 @@ function setBucketField(bucket, field, value, meta) {
   bucket.metaByField[field] = meta;
 }
 
+function extractVrmSources(meta) {
+  if (!meta) return [];
+  if (Array.isArray(meta.vrmSources)) {
+    return meta.vrmSources
+      .filter((item) => item && item.vrmType && item.vrmCode)
+      .map((item) => ({ vrmType: item.vrmType, vrmCode: item.vrmCode }));
+  }
+  if (meta.vrmType && meta.vrmCode) {
+    return [{ vrmType: meta.vrmType, vrmCode: meta.vrmCode }];
+  }
+  return [];
+}
+
 function addBucketSample(bucket, sample, field = null) {
   if (!sample?.seriesKey) return;
   bucket.samples.set(sample.seriesKey, sample);
@@ -203,6 +216,26 @@ function addMappedCanonicalSample(bucket, { seriesKey, field = null, value, unit
     meta
   });
   addBucketSample(bucket, sample, field);
+}
+
+function addAccumulatedCanonicalSample(bucket, { seriesKey, field, value, unit = 'W', meta }) {
+  const existingValue = Number(bucket.values[field]);
+  if (!Number.isFinite(existingValue)) {
+    addMappedCanonicalSample(bucket, { seriesKey, field, value, unit, meta });
+    return;
+  }
+  const accumulatedValue = existingValue + Number(value || 0);
+  const vrmSources = [...extractVrmSources(bucket.metaByField[field]), ...extractVrmSources(meta)];
+  addMappedCanonicalSample(bucket, {
+    seriesKey,
+    field,
+    value: accumulatedValue,
+    unit,
+    meta: {
+      provenance: 'summed_from_vrm',
+      vrmSources
+    }
+  });
 }
 
 function addMappedFlowSample(bucket, { field, value, meta }) {
@@ -265,7 +298,17 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
   };
 
   if (type === 'venus' && code === 'Pdc') {
-    addMappedCanonicalSample(bucket, {
+    addAccumulatedCanonicalSample(bucket, {
+      seriesKey: 'pv_total_w',
+      field: 'pvTotalW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'Pac') {
+    addAccumulatedCanonicalSample(bucket, {
       seriesKey: 'pv_total_w',
       field: 'pvTotalW',
       value: rawValue,
@@ -330,7 +373,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Gs') {
+  if (type === 'consumption' && (code === 'Gs' || code === 'Pg')) {
     const value = kwhToAveragePower(rawValue, resolutionSeconds);
     addMappedFlowSample(bucket, {
       field: 'solarToGridW',
@@ -596,6 +639,16 @@ function parseVrmSeries(type, records, resolutionSeconds) {
       if (type === 'venus' && code === 'Pdc') {
         pushSeriesRow(rows, {
           seriesKey: 'pv_dc_w',
+          ts,
+          value,
+          unit: 'W',
+          resolutionSeconds
+        });
+      }
+
+      if (type === 'venus' && code === 'Pac') {
+        pushSeriesRow(rows, {
+          seriesKey: 'pv_ac_w',
           ts,
           value,
           unit: 'W',

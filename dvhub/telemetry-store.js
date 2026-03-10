@@ -337,7 +337,13 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     return [...telemetryBuckets].filter((ts) => !pricedBuckets.has(ts)).sort();
   }
 
-  function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+  function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS, scopes = null }) {
+    const scopeList = Array.isArray(scopes)
+      ? scopes.map((scope) => String(scope || '').trim()).filter(Boolean)
+      : [];
+    const scopeClause = scopeList.length
+      ? ` AND scope IN (${scopeList.map(() => '?').join(', ')})`
+      : '';
     const rows = db.prepare(`
       SELECT series_key, ts_utc, resolution_seconds, value_num, meta_json
       FROM timeseries_samples
@@ -346,6 +352,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         'grid_export_w',
         'grid_total_w',
         'pv_total_w',
+        'pv_ac_w',
         'battery_power_w',
         'battery_charge_w',
         'battery_discharge_w',
@@ -362,8 +369,9 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         AND value_num IS NOT NULL
         AND ts_utc >= ?
         AND ts_utc < ?
+        ${scopeClause}
       ORDER BY ts_utc ASC
-    `).all(isoTimestamp(start), isoTimestamp(end));
+    `).all(isoTimestamp(start), isoTimestamp(end), ...scopeList);
 
     const buckets = new Map();
     for (const row of rows) {
@@ -408,6 +416,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           exportKwh: energyForSeries('grid_export_w'),
           gridKwh: energyForSeries('grid_total_w'),
           pvKwh: energyForSeries('pv_total_w'),
+          pvAcKwh: energyForSeries('pv_ac_w'),
           batteryKwh: energyForSeries('battery_power_w'),
           batteryChargeKwh: energyForSeries('battery_charge_w'),
           batteryDischargeKwh: energyForSeries('battery_discharge_w'),

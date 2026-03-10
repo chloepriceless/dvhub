@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { createHistoryApiHandlers, createHistoryRuntime } from '../history-runtime.js';
 
+const FIXED_CURRENT_DATE = '2027-04-02';
+
 function createStoreFixture() {
   return {
     listAggregatedEnergySlots({ start, end, bucketSeconds }) {
@@ -108,7 +110,8 @@ const pricingConfig = {
 test('history runtime computes slot-level import cost, export revenue, and unresolved counters', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
-    getPricingConfig: () => pricingConfig
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const summary = runtime.getSummary({
@@ -183,7 +186,8 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
         ];
       }
     },
-    getPricingConfig: () => pricingConfig
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const summary = runtime.getSummary({
@@ -242,7 +246,8 @@ test('history runtime prices all imported energy with the import tariff even whe
         ];
       }
     },
-    getPricingConfig: () => pricingConfig
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const summary = runtime.getSummary({
@@ -259,7 +264,8 @@ test('history runtime prices all imported energy with the import tariff even whe
 test('history runtime groups day, week, month, and year views with correct totals', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
-    getPricingConfig: () => pricingConfig
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const day = runtime.getSummary({ view: 'day', date: '2026-03-09' });
@@ -279,7 +285,8 @@ test('history runtime groups day, week, month, and year views with correct total
 test('history runtime exposes chart-ready series with split costs and estimation metadata', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
-    getPricingConfig: () => pricingConfig
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const day = runtime.getSummary({ view: 'day', date: '2026-03-09' });
@@ -321,6 +328,7 @@ test('history runtime carries extended vrm flow values into rows and kpis', () =
       exportKwh: 0.45,
       gridKwh: 0,
       pvKwh: 1.4,
+      pvAcKwh: 0.5,
       batteryKwh: 0.2,
       batteryChargeKwh: 0.4,
       batteryDischargeKwh: 0.2,
@@ -341,23 +349,78 @@ test('history runtime carries extended vrm flow values into rows and kpis', () =
       listAggregatedEnergySlots: () => slots,
       listPriceSlots: () => []
     },
-    getPricingConfig: () => ({})
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
   const summary = runtime.getSummary({ view: 'day', date: '2026-03-08' });
 
   assert.equal(summary.kpis.solarDirectUseKwh, 0.7);
+  assert.equal(summary.kpis.pvAcKwh, 0.5);
   assert.equal(summary.kpis.gridToBatteryKwh, 0.1);
   assert.equal(summary.kpis.batteryToGridKwh, 0.05);
+  assert.equal(summary.rows[0].pvAcKwh, 0.5);
   assert.equal(summary.rows[0].solarToGridKwh, 0.4);
   assert.equal(summary.rows[0].batteryDirectUseKwh, 0.15);
+  assert.equal(summary.charts.dayEnergyLines[0].pvAcKwh, 0.5);
   assert.equal(summary.charts.dayEnergyLines[0].solarDirectUseKwh, 0.7);
+});
+
+test('history runtime reads past days from history scope and the current day from live scope', () => {
+  const calls = [];
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots(input) {
+        calls.push(input);
+        return [];
+      },
+      listPriceSlots() {
+        return [];
+      }
+    },
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => '2026-03-10'
+  });
+
+  runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  runtime.getSummary({ view: 'day', date: '2026-03-10' });
+
+  assert.deepEqual(calls[0].scopes, ['history']);
+  assert.deepEqual(calls[1].scopes, ['live']);
+});
+
+test('history runtime splits ranges that span today into history and live queries', () => {
+  const calls = [];
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots(input) {
+        calls.push(input);
+        return [];
+      },
+      listPriceSlots() {
+        return [];
+      }
+    },
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => '2026-03-10'
+  });
+
+  runtime.getSummary({ view: 'week', date: '2026-03-10' });
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].scopes, ['history']);
+  assert.equal(calls[0].start, '2026-03-08T23:00:00.000Z');
+  assert.equal(calls[0].end, '2026-03-09T23:00:00.000Z');
+  assert.deepEqual(calls[1].scopes, ['live']);
+  assert.equal(calls[1].start, '2026-03-09T23:00:00.000Z');
+  assert.equal(calls[1].end, '2026-03-15T23:00:00.000Z');
 });
 
 test('history runtime derives current-year solar market value from monthly values weighted by exported energy', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE,
     getSolarMarketValueSummary: () => ({
       monthlyCtKwhByMonth: {
         '2026-03': 5,

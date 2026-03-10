@@ -271,6 +271,16 @@ test('telemetry store returns aggregated slot rows and joined price slots', () =
         unit: 'W'
       },
       {
+        seriesKey: 'pv_ac_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 600,
+        scope: 'history',
+        source: 'vrm_import',
+        quality: 'backfilled',
+        resolutionSeconds: 900,
+        unit: 'W'
+      },
+      {
         seriesKey: 'battery_power_w',
         ts: '2026-03-09T12:15:00.000Z',
         value: -300,
@@ -312,6 +322,7 @@ test('telemetry store returns aggregated slot rows and joined price slots', () =
     assert.equal(slots[0].ts, '2026-03-09T12:00:00.000Z');
     assert.equal(slots[0].importKwh, 0.25);
     assert.equal(slots[0].pvKwh, 0.4);
+    assert.equal(slots[0].pvAcKwh, 0.15);
     assert.equal(slots[0].batteryKwh, 0);
     assert.equal(slots[1].ts, '2026-03-09T12:15:00.000Z');
     assert.equal(slots[1].exportKwh, 0.1);
@@ -376,6 +387,57 @@ test('telemetry store exposes estimated and incomplete history slot markers', ()
     assert.equal(slot.incomplete, true);
     assert.equal(slot.estimatedSeriesCount, 1);
     assert.equal(slot.incompleteSeriesCount, 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store can aggregate energy slots for a selected scope only', () => {
+  const store = createTelemetryStore({
+    dbPath: createTempDbPath(),
+    rawRetentionDays: 30,
+    rollupIntervals: [900]
+  });
+
+  try {
+    store.writeSamples([
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 1000,
+        scope: 'history',
+        source: 'vrm_import',
+        quality: 'backfilled',
+        resolutionSeconds: 900,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 2000,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 900,
+        unit: 'W'
+      }
+    ]);
+
+    const [historySlot] = store.listAggregatedEnergySlots({
+      start: '2026-03-09T12:00:00.000Z',
+      end: '2026-03-09T12:15:00.000Z',
+      bucketSeconds: 900,
+      scopes: ['history']
+    });
+    const [liveSlot] = store.listAggregatedEnergySlots({
+      start: '2026-03-09T12:00:00.000Z',
+      end: '2026-03-09T12:15:00.000Z',
+      bucketSeconds: 900,
+      scopes: ['live']
+    });
+
+    assert.equal(historySlot.importKwh, 0.25);
+    assert.equal(liveSlot.importKwh, 0.5);
   } finally {
     store.close();
   }

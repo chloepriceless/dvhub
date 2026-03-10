@@ -178,6 +178,7 @@ function buildRowAccumulator(key, label) {
     exportKwh: 0,
     loadKwh: 0,
     pvKwh: 0,
+    pvAcKwh: 0,
     solarDirectUseKwh: 0,
     solarToBatteryKwh: 0,
     solarToGridKwh: 0,
@@ -231,6 +232,7 @@ function summarizeRows(slots, view) {
     row.exportKwh = round2(row.exportKwh + slot.exportKwh);
     row.loadKwh = round2(row.loadKwh + Number(slot.loadKwh || 0));
     row.pvKwh = round2(row.pvKwh + Number(slot.pvKwh || 0));
+    row.pvAcKwh = round2(row.pvAcKwh + Number(slot.pvAcKwh || 0));
     row.solarDirectUseKwh = round2(row.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0));
     row.solarToBatteryKwh = round2(row.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0));
     row.solarToGridKwh = round2(row.solarToGridKwh + Number(slot.solarToGridKwh || 0));
@@ -278,6 +280,7 @@ function buildDayCharts(slots) {
       ts: slot.ts,
       label: localTimeLabel(slot.ts),
       pvKwh: round2(slot.pvKwh || 0),
+      pvAcKwh: round2(slot.pvAcKwh || 0),
       solarDirectUseKwh: round2(slot.solarDirectUseKwh || 0),
       solarToBatteryKwh: round2(slot.solarToBatteryKwh || 0),
       solarToGridKwh: round2(slot.solarToGridKwh || 0),
@@ -340,6 +343,7 @@ function buildPeriodCharts(rows) {
       exportKwh: row.exportKwh,
       loadKwh: row.loadKwh,
       pvKwh: row.pvKwh,
+      pvAcKwh: row.pvAcKwh,
       solarDirectUseKwh: row.solarDirectUseKwh,
       solarToBatteryKwh: row.solarToBatteryKwh,
       solarToGridKwh: row.solarToGridKwh,
@@ -369,6 +373,7 @@ function buildPeriodCharts(rows) {
       exportKwh: row.exportKwh,
       loadKwh: row.loadKwh,
       pvKwh: row.pvKwh,
+      pvAcKwh: row.pvAcKwh,
       batteryChargeKwh: row.batteryChargeKwh,
       batteryDischargeKwh: row.batteryDischargeKwh,
       selfConsumptionKwh: row.selfConsumptionKwh,
@@ -462,17 +467,51 @@ function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValue
 export function createHistoryRuntime({
   store,
   getPricingConfig = () => ({}),
-  getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} })
+  getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} }),
+  getCurrentDate = currentBerlinDate
 }) {
+  function listEnergySlotsForRange({ start, end }) {
+    const today = getCurrentDate();
+    const todayStart = localDateTimeToUtcIso(today, 0, 0);
+
+    if (end <= todayStart) {
+      return store.listAggregatedEnergySlots({
+        start,
+        end,
+        bucketSeconds: SLOT_BUCKET_SECONDS,
+        scopes: ['history']
+      });
+    }
+
+    if (start >= todayStart) {
+      return store.listAggregatedEnergySlots({
+        start,
+        end,
+        bucketSeconds: SLOT_BUCKET_SECONDS,
+        scopes: ['live']
+      });
+    }
+
+    const historySlots = store.listAggregatedEnergySlots({
+      start,
+      end: todayStart,
+      bucketSeconds: SLOT_BUCKET_SECONDS,
+      scopes: ['history']
+    });
+    const liveSlots = store.listAggregatedEnergySlots({
+      start: todayStart,
+      end,
+      bucketSeconds: SLOT_BUCKET_SECONDS,
+      scopes: ['live']
+    });
+    return [...historySlots, ...liveSlots].sort((left, right) => left.ts.localeCompare(right.ts));
+  }
+
   function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
-    const energySlots = store.listAggregatedEnergySlots({
-      start,
-      end,
-      bucketSeconds: SLOT_BUCKET_SECONDS
-    });
+    const energySlots = listEnergySlotsForRange({ start, end });
     const priceRows = store.listPriceSlots({
       start,
       end
@@ -497,6 +536,7 @@ export function createHistoryRuntime({
         const shares = proportionalSourceShares(slot);
         const flowValues = {
           solarDirectUseKwh: round2(Number(slot.solarDirectUseKwh || 0)),
+          pvAcKwh: round2(Number(slot.pvAcKwh || 0)),
           solarToBatteryKwh: round2(Number(slot.solarToBatteryKwh || 0)),
           solarToGridKwh: round2(Number(slot.solarToGridKwh || 0)),
           gridDirectUseKwh: round2(Number(slot.gridDirectUseKwh || 0)),
@@ -546,6 +586,7 @@ export function createHistoryRuntime({
       exportKwh: round2(totals.exportKwh + slot.exportKwh),
       loadKwh: round2(totals.loadKwh + Number(slot.loadKwh || 0)),
       pvKwh: round2(totals.pvKwh + Number(slot.pvKwh || 0)),
+      pvAcKwh: round2(totals.pvAcKwh + Number(slot.pvAcKwh || 0)),
       solarDirectUseKwh: round2(totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0)),
       solarToBatteryKwh: round2(totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0)),
       solarToGridKwh: round2(totals.solarToGridKwh + Number(slot.solarToGridKwh || 0)),
@@ -573,6 +614,7 @@ export function createHistoryRuntime({
       exportKwh: 0,
       loadKwh: 0,
       pvKwh: 0,
+      pvAcKwh: 0,
       solarDirectUseKwh: 0,
       solarToBatteryKwh: 0,
       solarToGridKwh: 0,
@@ -648,6 +690,7 @@ export function createHistoryRuntime({
           exportKwh: slot.exportKwh,
           loadKwh: slot.loadKwh,
           pvKwh: roundOrZero(slot.pvKwh),
+          pvAcKwh: roundOrZero(slot.pvAcKwh),
           solarDirectUseKwh: roundOrZero(slot.solarDirectUseKwh),
           solarToBatteryKwh: roundOrZero(slot.solarToBatteryKwh),
           solarToGridKwh: roundOrZero(slot.solarToGridKwh),

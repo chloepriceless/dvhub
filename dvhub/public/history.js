@@ -322,6 +322,7 @@ function yFor(value, min, max, height) {
 function renderDetailedDayChart(mountId, items) {
   const series = [
     { key: 'pvKwh', label: 'PV', className: 'history-series-pv', formatter: fmtKwh },
+    { key: 'pvAcKwh', label: 'PV AC', className: 'history-series-pv-ac', formatter: fmtKwh },
     { key: 'importKwh', label: 'Import', className: 'history-series-import-red', formatter: fmtKwh },
     { key: 'batteryKwh', label: 'Akku', className: 'history-series-battery', formatter: fmtKwh },
     { key: 'exportKwh', label: 'Export', className: 'history-series-export', formatter: fmtKwh },
@@ -336,6 +337,7 @@ function renderDetailedDayChart(mountId, items) {
     interactive: true,
     maxLabels: 8,
     inspectorExtras: (item) => [
+      ['PV AC', item?.pvAcKwh],
       ['PV direkt', item?.solarDirectUseKwh],
       ['PV → Akku', item?.solarToBatteryKwh],
       ['PV → Netz', item?.solarToGridKwh],
@@ -627,6 +629,7 @@ function renderRows(summary) {
           <th>Import</th>
           <th>Verbrauch</th>
           <th>PV erzeugt</th>
+          <th>PV AC</th>
           <th>PV direkt</th>
           <th>PV → Akku</th>
           <th>PV → Netz</th>
@@ -658,6 +661,7 @@ function renderRows(summary) {
             <td>${fmtKwh(row.importKwh)}</td>
             <td>${fmtKwh(row.loadKwh)}</td>
             <td>${fmtKwh(row.pvKwh)}</td>
+            <td>${fmtKwh(row.pvAcKwh)}</td>
             <td>${fmtKwh(row.solarDirectUseKwh)}</td>
             <td>${fmtKwh(row.solarToBatteryKwh)}</td>
             <td>${fmtKwh(row.solarToGridKwh)}</td>

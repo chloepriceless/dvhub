@@ -129,6 +129,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
         importKwh: 4.5,
         loadKwh: 8.2,
         pvKwh: 5.3,
+        pvAcKwh: 1.9,
         solarDirectUseKwh: 2.4,
         solarToBatteryKwh: 1.1,
         solarToGridKwh: 1.8,
@@ -167,6 +168,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);
   assert.match(elements.get('historyRows').innerHTML, /PV erzeugt/);
+  assert.match(elements.get('historyRows').innerHTML, /PV AC/);
   assert.match(elements.get('historyRows').innerHTML, /PV direkt/);
   assert.match(elements.get('historyRows').innerHTML, /Netz → Akku/);
   assert.match(elements.get('historyRows').innerHTML, /Akku → Netz/);
@@ -193,8 +195,8 @@ test('history page renders daily line charts and estimated markers from chart pa
     rows: [],
     charts: {
       dayEnergyLines: [
-        { label: '11:00', importKwh: 1, exportKwh: 0, loadKwh: 1.2, pvKwh: 0.3, batteryKwh: 0.1, solarDirectUseKwh: 0.2, gridToBatteryKwh: 0.1, estimated: false, incomplete: false },
-        { label: '11:15', importKwh: 0, exportKwh: 0.5, loadKwh: 0, pvKwh: 0.6, batteryKwh: 0, solarDirectUseKwh: 0.3, gridToBatteryKwh: 0, estimated: true, incomplete: true }
+        { label: '11:00', importKwh: 1, exportKwh: 0, loadKwh: 1.2, pvKwh: 0.3, pvAcKwh: 0.1, batteryKwh: 0.1, solarDirectUseKwh: 0.2, gridToBatteryKwh: 0.1, estimated: false, incomplete: false },
+        { label: '11:15', importKwh: 0, exportKwh: 0.5, loadKwh: 0, pvKwh: 0.6, pvAcKwh: 0.4, batteryKwh: 0, solarDirectUseKwh: 0.3, gridToBatteryKwh: 0, estimated: true, incomplete: true }
       ],
       dayFinancialLines: [
         { label: '11:00', gridCostEur: 0.3, pvCostEur: 0.01, batteryCostEur: 0, opportunityCostEur: 0.02, selfConsumptionCostEur: 0.31, exportRevenueEur: 0, netEur: -0.31, estimated: false, incomplete: false },
@@ -221,6 +223,7 @@ test('history page renders daily line charts and estimated markers from chart pa
   assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-hover-surface/);
   assert.doesNotMatch(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /kWh/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /PV AC/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /PV direkt/);
   assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
