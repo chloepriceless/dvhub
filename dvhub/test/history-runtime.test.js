@@ -485,6 +485,11 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
     opportunityCostEur: 0,
     selfConsumptionCostEur: 0.08,
     netEur: 0.04,
+    grossReturnEur: 0.04,
+    premiumEligibleExportKwh: 1,
+    premiumValuedExportKwh: 0,
+    marketPremiumEur: null,
+    marketPremiumCtKwh: null,
     estimatedSlots: 0,
     incompleteSlots: 0
   });
@@ -493,19 +498,23 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
   assert.equal(week.charts.periodCombinedBars[1].batteryCostEur, 0);
   assert.equal(week.charts.periodCombinedBars[1].avoidedImportGrossEur, 0.15);
   assert.equal(week.charts.periodCombinedBars[1].netEur, -0.63);
+  assert.equal(week.charts.periodCombinedBars[1].grossReturnEur, -0.48);
   assert.equal(week.kpis.exportRevenueEur, 0.12);
   assert.equal(week.kpis.gridCostEur, 0.6);
   assert.equal(week.kpis.pvCostEur, 0.07);
   assert.equal(week.kpis.batteryCostEur, 0.04);
   assert.equal(week.kpis.avoidedImportGrossEur, 0.15);
   assert.equal(week.kpis.netEur, -0.59);
+  assert.equal(week.kpis.grossReturnEur, -0.44);
   assert.equal(month.charts.periodCombinedBars[0].pvCostEur, 0.04);
+  assert.equal(month.charts.periodCombinedBars[0].grossReturnEur, 0.04);
   assert.equal(month.charts.periodCombinedBars[1].netEur, -0.63);
   assert.equal(year.charts.periodCombinedBars[0].exportRevenueEur, 0.12);
   assert.equal(year.charts.periodCombinedBars[0].pvCostEur, 0.07);
   assert.equal(year.charts.periodCombinedBars[0].batteryCostEur, 0.04);
   assert.equal(year.charts.periodCombinedBars[0].avoidedImportGrossEur, 0.15);
   assert.equal(year.charts.periodCombinedBars[0].netEur, -0.59);
+  assert.equal(year.charts.periodCombinedBars[0].grossReturnEur, -0.44);
 });
 
 test('history runtime groups day, week, month, and year views with correct totals', () => {
@@ -1209,6 +1218,119 @@ test('history runtime derives current-year market premium from available monthly
   assert.equal(year.kpis.marketPremiumEur, 0.05);
   assert.equal(year.meta.marketPremium.source, 'derived_monthly_running');
   assert.equal(year.meta.marketPremium.availableMarketValueMonths, 2);
+});
+
+test('history runtime exposes monthly and cross-month weekly market premium rates for aggregate rows', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots({ start, end }) {
+        const slots = [
+          {
+            ts: '2026-01-31T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 1,
+            gridKwh: 0,
+            pvKwh: 1,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-02-01T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 0.5,
+            gridKwh: 0,
+            pvKwh: 0.5,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-02-15T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 2,
+            gridKwh: 0,
+            pvKwh: 2,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+        return slots.filter((slot) => slot.ts >= start && slot.ts < end);
+      },
+      listPriceSlots() {
+        return [
+          { ts: '2026-01-31T10:00:00.000Z', priceCtKwh: 6, priceEurMwh: 60 },
+          { ts: '2026-02-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 },
+          { ts: '2026-02-15T10:00:00.000Z', priceCtKwh: 4, priceEurMwh: 40 }
+        ];
+      }
+    },
+    getPricingConfig: () => ({
+      ...pricingConfig,
+      pvPlants: [
+        { kwp: 10, commissionedAt: '2021-04-15' }
+      ]
+    }),
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: {
+        '2026-01': 5.5,
+        '2026-02': 4.5
+      },
+      annualCtKwhByYear: {
+        2026: 5.17
+      }
+    }),
+    getCurrentDate: () => FIXED_CURRENT_DATE,
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {
+        '2021-04': 8.2
+      }
+    })
+  });
+
+  const week = runtime.getSummary({ view: 'week', date: '2026-02-01' });
+  const month = runtime.getSummary({ view: 'month', date: '2026-02-15' });
+  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+
+  const januaryWeekRow = week.rows.find((row) => row.label === '2026-01-31');
+  const februaryWeekRow = week.rows.find((row) => row.label === '2026-02-01');
+  assert.equal(januaryWeekRow?.premiumEligibleExportKwh, 1);
+  assert.equal(januaryWeekRow?.marketPremiumEur, 0.03);
+  assert.equal(januaryWeekRow?.marketPremiumCtKwh, 2.7);
+  assert.equal(februaryWeekRow?.premiumEligibleExportKwh, 0.5);
+  assert.equal(februaryWeekRow?.marketPremiumEur, 0.02);
+  assert.equal(februaryWeekRow?.marketPremiumCtKwh, 3.7);
+  assert.equal(week.kpis.premiumEligibleExportKwh, 1.5);
+  assert.equal(week.kpis.marketPremiumEur, 0.05);
+  assert.equal(week.kpis.marketPremiumCtKwh, 3.03);
+
+  assert.equal(month.rows[0].label, '2026-02-01');
+  assert.equal(month.rows[0].marketPremiumEur, 0.02);
+  assert.equal(month.rows[0].marketPremiumCtKwh, 3.7);
+  assert.equal(month.rows[1].label, '2026-02-15');
+  assert.equal(month.rows[1].marketPremiumEur, 0.07);
+  assert.equal(month.rows[1].marketPremiumCtKwh, 3.7);
+  assert.equal(month.kpis.marketPremiumEur, 0.09);
+  assert.equal(month.kpis.marketPremiumCtKwh, 3.7);
+
+  assert.equal(year.rows[0].label, '2026-01');
+  assert.equal(year.rows[0].marketPremiumEur, 0.03);
+  assert.equal(year.rows[0].marketPremiumCtKwh, 2.7);
+  assert.equal(year.rows[1].label, '2026-02');
+  assert.equal(year.rows[1].marketPremiumEur, 0.09);
+  assert.equal(year.rows[1].marketPremiumCtKwh, 3.7);
+  assert.equal(year.kpis.marketPremiumEur, 0.11);
+  assert.equal(year.kpis.marketPremiumCtKwh, 3.03);
 });
 
 test('history runtime counts current-year premium-eligible export for all non-negative price slots even when later months lack market values', () => {

@@ -580,10 +580,10 @@ test('history page switches aggregated month view to summarized weekly table mod
       exportKwh: 18
     },
     rows: [
-      { label: '2026-02-01', importKwh: 4, loadKwh: 8, pvShareKwh: 3, batteryShareKwh: 1, exportKwh: 0.5, exportRevenueEur: 0.1, gridCostEur: 1.2, pvCostEur: 0.1, batteryCostEur: 0.05, avoidedImportGrossEur: 0.7, netEur: -1.25 },
-      { label: '2026-02-02', importKwh: 5, loadKwh: 9, pvShareKwh: 2, batteryShareKwh: 1, exportKwh: 0.6, exportRevenueEur: 0.15, gridCostEur: 1.4, pvCostEur: 0.11, batteryCostEur: 0.06, avoidedImportGrossEur: 0.8, netEur: -1.42 },
-      { label: '2026-02-08', importKwh: 6, loadKwh: 10, pvShareKwh: 2.5, batteryShareKwh: 1.2, exportKwh: 0.7, exportRevenueEur: 0.18, gridCostEur: 1.5, pvCostEur: 0.12, batteryCostEur: 0.07, avoidedImportGrossEur: 0.9, netEur: -1.51 },
-      { label: '2026-02-15', importKwh: 7, loadKwh: 11, pvShareKwh: 3.1, batteryShareKwh: 1.3, exportKwh: 0.9, exportRevenueEur: 0.2, gridCostEur: 1.6, pvCostEur: 0.14, batteryCostEur: 0.08, avoidedImportGrossEur: 1.1, netEur: -1.62 }
+      { label: '2026-02-01', importKwh: 4, loadKwh: 8, pvShareKwh: 3, batteryShareKwh: 1, exportKwh: 0.5, exportRevenueEur: 0.1, gridCostEur: 1.2, pvCostEur: 0.1, batteryCostEur: 0.05, avoidedImportGrossEur: 0.7, netEur: -1.25, grossReturnEur: -0.55, premiumEligibleExportKwh: 0.5, marketPremiumEur: 0.02, marketPremiumCtKwh: 3.7 },
+      { label: '2026-02-02', importKwh: 5, loadKwh: 9, pvShareKwh: 2, batteryShareKwh: 1, exportKwh: 0.6, exportRevenueEur: 0.15, gridCostEur: 1.4, pvCostEur: 0.11, batteryCostEur: 0.06, avoidedImportGrossEur: 0.8, netEur: -1.42, grossReturnEur: -0.62, premiumEligibleExportKwh: 0.6, marketPremiumEur: 0.02, marketPremiumCtKwh: 3.7 },
+      { label: '2026-02-08', importKwh: 6, loadKwh: 10, pvShareKwh: 2.5, batteryShareKwh: 1.2, exportKwh: 0.7, exportRevenueEur: 0.18, gridCostEur: 1.5, pvCostEur: 0.12, batteryCostEur: 0.07, avoidedImportGrossEur: 0.9, netEur: -1.51, grossReturnEur: -0.61, premiumEligibleExportKwh: 0.7, marketPremiumEur: 0.03, marketPremiumCtKwh: 3.7 },
+      { label: '2026-02-15', importKwh: 7, loadKwh: 11, pvShareKwh: 3.1, batteryShareKwh: 1.3, exportKwh: 0.9, exportRevenueEur: 0.2, gridCostEur: 1.6, pvCostEur: 0.14, batteryCostEur: 0.08, avoidedImportGrossEur: 1.1, netEur: -1.62, grossReturnEur: -0.52, premiumEligibleExportKwh: 0.9, marketPremiumEur: 0.03, marketPremiumCtKwh: 3.7 }
     ],
     charts: {
       periodCombinedBars: []
@@ -605,6 +605,9 @@ test('history page switches aggregated month view to summarized weekly table mod
   assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Brutto-Erlös/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
   assert.match(String(elements.get('historyAggregateOverviewBtn').ariaPressed), /false/);
   assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
   assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
@@ -637,15 +640,19 @@ test('history page renders yearly aggregate table with year total and month rows
       avoidedImportGrossEur: 30,
       exportRevenueEur: 11,
       netEur: -40,
+      grossReturnEur: -10,
       importKwh: 300,
       loadKwh: 820,
       pvKwh: 900,
-      exportKwh: 220
+      exportKwh: 220,
+      premiumEligibleExportKwh: 185,
+      marketPremiumEur: 410.2,
+      marketPremiumCtKwh: 2.22
     },
     rows: [
-      { label: '2026-01', importKwh: 80, loadKwh: 200, pvShareKwh: 40, batteryShareKwh: 18, exportKwh: 20, exportRevenueEur: 1.5, gridCostEur: 10, pvCostEur: 1.2, batteryCostEur: 0.5, avoidedImportGrossEur: 7, netEur: -10.2 },
-      { label: '2026-02', importKwh: 70, loadKwh: 210, pvShareKwh: 45, batteryShareKwh: 16, exportKwh: 30, exportRevenueEur: 2.2, gridCostEur: 9, pvCostEur: 1.3, batteryCostEur: 0.6, avoidedImportGrossEur: 8, netEur: -8.7 },
-      { label: '2026-03', importKwh: 60, loadKwh: 190, pvShareKwh: 50, batteryShareKwh: 14, exportKwh: 40, exportRevenueEur: 2.8, gridCostEur: 8, pvCostEur: 1.1, batteryCostEur: 0.4, avoidedImportGrossEur: 6, netEur: -6.7 }
+      { label: '2026-01', importKwh: 80, loadKwh: 200, pvShareKwh: 40, batteryShareKwh: 18, exportKwh: 20, exportRevenueEur: 1.5, gridCostEur: 10, pvCostEur: 1.2, batteryCostEur: 0.5, avoidedImportGrossEur: 7, netEur: -10.2, grossReturnEur: -3.2, premiumEligibleExportKwh: 18, marketPremiumEur: 39.6, marketPremiumCtKwh: 2.2 },
+      { label: '2026-02', importKwh: 70, loadKwh: 210, pvShareKwh: 45, batteryShareKwh: 16, exportKwh: 30, exportRevenueEur: 2.2, gridCostEur: 9, pvCostEur: 1.3, batteryCostEur: 0.6, avoidedImportGrossEur: 8, netEur: -8.7, grossReturnEur: -0.7, premiumEligibleExportKwh: 26, marketPremiumEur: 59.8, marketPremiumCtKwh: 2.3 },
+      { label: '2026-03', importKwh: 60, loadKwh: 190, pvShareKwh: 50, batteryShareKwh: 14, exportKwh: 40, exportRevenueEur: 2.8, gridCostEur: 8, pvCostEur: 1.1, batteryCostEur: 0.4, avoidedImportGrossEur: 6, netEur: -6.7, grossReturnEur: -0.7, premiumEligibleExportKwh: 34, marketPremiumEur: 76.5, marketPremiumCtKwh: 2.25 }
     ],
     charts: {
       periodCombinedBars: []
@@ -662,6 +669,9 @@ test('history page renders yearly aggregate table with year total and month rows
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-01/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-02/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Brutto-Erlös/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
   assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
 });
 
