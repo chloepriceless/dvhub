@@ -1262,6 +1262,16 @@ function buildFieldDefinitions() {
     },
     {
       section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen für Marktprämie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      path: 'userEnergyPricing.pvPlants',
+      label: 'PV-Anlagen',
+      type: 'array',
+      help: 'Wird von der PV-Anlagenliste genutzt, um kWp und Inbetriebnahme mehrerer Anlagen zu pflegen.'
+    },
+    {
+      section: 'pricing',
       group: 'mode',
       groupLabel: 'Eigener Strompreis',
       groupDescription: 'Hinterlege deinen vollständigen Bruttopreis inklusive MwSt, Netzentgelten, Umlagen und sonstigen kWh-basierten Bestandteilen.',
@@ -1685,6 +1695,7 @@ export function createDefaultConfig() {
       mode: 'fixed',
       fixedGrossImportCtKwh: null,
       periods: [],
+      pvPlants: [],
       dynamicComponents: {
         energyMarkupCtKwh: 0,
         gridChargesCtKwh: 0,
@@ -1978,6 +1989,35 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
   return accepted;
 }
 
+function sanitizeUserEnergyPricingPvPlants(value, warnings) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        warnings.push(`userEnergyPricing.pvPlants.${index}: invalid entry ignored`);
+        return null;
+      }
+
+      const kwp = entry.kwp == null || entry.kwp === '' ? null : Number(entry.kwp);
+      const commissionedAt = entry.commissionedAt == null ? '' : String(entry.commissionedAt);
+      if (!Number.isFinite(kwp) || kwp <= 0) {
+        warnings.push(`userEnergyPricing.pvPlants.${index}: kwp must be a positive number`);
+        return null;
+      }
+      if (!isIsoDateOnly(commissionedAt)) {
+        warnings.push(`userEnergyPricing.pvPlants.${index}: commissionedAt must use YYYY-MM-DD`);
+        return null;
+      }
+
+      return {
+        kwp: roundCtKwh(kwp),
+        commissionedAt
+      };
+    })
+    .filter(Boolean);
+}
+
 function sanitizeUserEnergyPricing(value, warnings) {
   if (!isPlainObject(value)) return value;
   const next = clone(value);
@@ -1991,6 +2031,7 @@ function sanitizeUserEnergyPricing(value, warnings) {
   }
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
   next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
+  next.pvPlants = sanitizeUserEnergyPricingPvPlants(next.pvPlants, warnings);
   next.dynamicComponents = sanitizeDynamicComponents(next.dynamicComponents, warnings);
   next.module3Windows = sanitizeUserEnergyPricingWindows(next.module3Windows, warnings);
   next.costs = sanitizePricingCosts(next.costs, warnings);

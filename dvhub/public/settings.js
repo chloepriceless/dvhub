@@ -16,6 +16,8 @@ let historyImportFormState = {
 };
 let pricingPeriodsDraft = [];
 let pricingPeriodsValidation = [];
+let pvPlantsDraft = [];
+let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
 
 function clone(value) {
@@ -294,6 +296,60 @@ if (typeof globalThis !== 'undefined') {
     removePricingPeriod,
     serializePricingPeriods,
     validatePricingPeriods
+  };
+}
+
+function createEmptyPvPlant(index = 0) {
+  return {
+    id: `pv-plant-${index + 1}`,
+    kwp: '',
+    commissionedAt: ''
+  };
+}
+
+function addPvPlant(plants = []) {
+  return [...plants, createEmptyPvPlant(plants.length)];
+}
+
+function removePvPlant(plants = [], plantId) {
+  return plants.filter((plant) => plant.id !== plantId);
+}
+
+function serializePvPlants(plants = []) {
+  return plants.map((plant) => ({
+    kwp: plant.kwp === '' || plant.kwp == null ? null : Number(plant.kwp),
+    commissionedAt: plant.commissionedAt || ''
+  }));
+}
+
+function validatePvPlants(plants = []) {
+  const messages = [];
+  const serialized = serializePvPlants(plants);
+
+  serialized.forEach((plant, index) => {
+    const label = `Anlage ${index + 1}`;
+    if (!Number.isFinite(plant.kwp) || Number(plant.kwp) <= 0) {
+      messages.push(`${label}: kWp fehlt oder ist ungültig.`);
+    }
+    if (!plant.commissionedAt) {
+      messages.push(`${label}: Inbetriebnahme fehlt.`);
+    }
+  });
+
+  return {
+    valid: messages.length === 0,
+    messages,
+    plants: serialized
+  };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsPvPlants = {
+    addPvPlant,
+    createEmptyPvPlant,
+    removePvPlant,
+    serializePvPlants,
+    validatePvPlants
   };
 }
 
@@ -645,6 +701,7 @@ function renderSectionWorkspace(sectionId) {
 
     sectionShell.appendChild(groupList);
     if (section.id === 'pricing') {
+      sectionShell.appendChild(renderPvPlantsEditor());
       sectionShell.appendChild(renderPricingPeriodsEditor());
     }
     panel.appendChild(sectionShell);
@@ -771,6 +828,79 @@ function updatePricingPeriodField(periodId, path, value) {
     setPath(next, path, value);
     return next;
   });
+}
+
+function updatePvPlantField(plantId, path, value) {
+  pvPlantsDraft = pvPlantsDraft.map((plant) => {
+    if (plant.id !== plantId) return plant;
+    const next = clone(plant);
+    setPath(next, path, value);
+    return next;
+  });
+}
+
+function renderPvPlantsEditor() {
+  const section = document.createElement('section');
+  section.className = 'settings-pricing-periods';
+  const validation = pvPlantsValidation.length
+    ? `<div class="status-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '<div class="status-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
+
+  section.innerHTML = `
+    <div class="settings-subsection-head">
+      <p class="card-title">Marktprämie</p>
+      <h3>PV-Anlagen</h3>
+      <p class="settings-section-meta">${pvPlantsDraft.length} konfigurierte Anlagen</p>
+      <p class="tools-note">Pflege hier pro Anlage nur die installierte Leistung und das Inbetriebnahmedatum. Die offiziellen Referenzwerte werden später daraus abgeleitet.</p>
+    </div>
+    ${validation}
+    <div class="settings-inline-actions">
+      <button id="addPvPlantBtn" class="btn btn-ghost" type="button">PV-Anlage hinzufügen</button>
+    </div>
+    <div class="pricing-period-list">
+      ${pvPlantsDraft.map((plant) => `
+        <article class="pricing-period-card" data-pv-plant-id="${plant.id}">
+          <div class="pricing-period-grid">
+            <label class="settings-field">
+              <span class="settings-field-title">Leistung (kWp)</span>
+              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Inbetriebnahme</span>
+              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" />
+            </label>
+          </div>
+          <div class="settings-inline-actions">
+            <button class="btn btn-danger" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+
+  section.querySelector('#addPvPlantBtn')?.addEventListener('click', () => {
+    pvPlantsDraft = addPvPlant(pvPlantsDraft);
+    pvPlantsValidation = [];
+    renderActiveSettingsDestination();
+  });
+
+  section.querySelectorAll('[data-remove-pv-plant]').forEach((button) => {
+    button.addEventListener('click', () => {
+      pvPlantsDraft = removePvPlant(pvPlantsDraft, button.dataset.removePvPlant);
+      pvPlantsValidation = [];
+      renderActiveSettingsDestination();
+    });
+  });
+
+  section.querySelectorAll('[data-pv-plant-id][data-pv-plant-path]').forEach((input) => {
+    input.addEventListener('change', () => {
+      updatePvPlantField(input.dataset.pvPlantId, input.dataset.pvPlantPath, input.value);
+      pvPlantsValidation = [];
+      renderActiveSettingsDestination();
+    });
+  });
+
+  return section;
 }
 
 function renderPricingPeriodsEditor() {
@@ -953,6 +1083,7 @@ function collectConfigFromForm() {
   const next = clone(currentDraftConfig || {});
   next.userEnergyPricing = next.userEnergyPricing || {};
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
+  next.userEnergyPricing.pvPlants = serializePvPlants(pvPlantsDraft);
   return next;
 }
 
@@ -963,7 +1094,13 @@ function applyConfigPayload(payload) {
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
+  pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
+    ...createEmptyPvPlant(index),
+    kwp: plant?.kwp ?? '',
+    commissionedAt: plant?.commissionedAt || ''
+  }));
   pricingPeriodsValidation = [];
+  pvPlantsValidation = [];
   settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
@@ -1114,11 +1251,13 @@ async function triggerHistoryBackfill() {
 
 async function saveCurrentForm() {
   const config = collectConfigFromForm();
-  const validation = validatePricingPeriods(pricingPeriodsDraft);
-  pricingPeriodsValidation = validation.messages;
-  if (!validation.valid) {
+  const pricingValidation = validatePricingPeriods(pricingPeriodsDraft);
+  const pvValidation = validatePvPlants(pvPlantsDraft);
+  pricingPeriodsValidation = pricingValidation.messages;
+  pvPlantsValidation = pvValidation.messages;
+  if (!pricingValidation.valid || !pvValidation.valid) {
     renderActiveSettingsDestination();
-    setBanner(`Speichern blockiert: ${validation.messages[0]}`, 'error');
+    setBanner(`Speichern blockiert: ${pricingValidation.messages[0] || pvValidation.messages[0]}`, 'error');
     return;
   }
   await saveConfig(config, 'settings');
