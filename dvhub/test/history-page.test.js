@@ -229,6 +229,67 @@ test('history page renders daily line charts and estimated markers from chart pa
   assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
 });
 
+test('history page shows local provisional and VRM confirmed origins in banner and row status', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'day',
+    date: '2026-03-09',
+    kpis: {
+      importCostEur: 0.3,
+      exportRevenueEur: 0.04,
+      netEur: -0.26,
+      importKwh: 1,
+      exportKwh: 0.5
+    },
+    rows: [
+      {
+        label: '12:00',
+        importKwh: 1,
+        exportKwh: 0,
+        loadKwh: 1,
+        pvKwh: 0.2,
+        selfConsumptionKwh: 1,
+        gridShareKwh: 1,
+        pvShareKwh: 0,
+        batteryShareKwh: 0,
+        sourceKind: 'local_live',
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      },
+      {
+        label: '12:15',
+        importKwh: 0,
+        exportKwh: 0.5,
+        loadKwh: 0.2,
+        pvKwh: 0.7,
+        selfConsumptionKwh: 0.2,
+        gridShareKwh: 0,
+        pvShareKwh: 0.2,
+        batteryShareKwh: 0,
+        sourceKind: 'vrm_import',
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    ],
+    meta: {
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      },
+      sourceSummary: {
+        localLiveSlots: 1,
+        vrmImportSlots: 1
+      }
+    }
+  });
+
+  assert.match(elements.get('historyRows').innerHTML, /lokal vorlaeufig/);
+  assert.match(elements.get('historyRows').innerHTML, /durch VRM bestaetigt/);
+  assert.match(elements.get('historyBanner').textContent, /lokal vorlaeufig/i);
+  assert.match(elements.get('historyBanner').textContent, /VRM bestaetigt/i);
+});
+
 test('history page renders weekly revenue bars and a table instead of time block cards', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { createHistoryImportManager } from '../history-import.js';
 import { createTelemetryStore } from '../telemetry-store.js';
@@ -75,6 +76,88 @@ test('manual history import writes backfilled samples and import job metadata', 
     assert.equal(result.importedRows, 1);
     assert.equal(store.countRows('timeseries_samples', "quality = 'backfilled'"), 1);
     assert.equal(store.countRows('import_jobs'), 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('vrm imports materialize slot rows without deleting existing local live slots', () => {
+  const store = createStore();
+  try {
+    store.writeSamples([
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-01-01T00:00:00.000Z',
+        value: 1000,
+        unit: 'W',
+        resolutionSeconds: 900,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw'
+      }
+    ]);
+
+    const manager = createHistoryImportManager({
+      store,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: 'abc123',
+          vrmToken: 'secret'
+        }
+      }
+    });
+
+    const result = manager.importSamples({
+      provider: 'vrm',
+      requestedFrom: '2026-01-01T00:00:00.000Z',
+      requestedTo: '2026-01-01T00:15:00.000Z',
+      rows: [
+        {
+          seriesKey: 'grid_import_w',
+          ts: '2026-01-01T00:00:00.000Z',
+          value: 1600,
+          unit: 'W',
+          resolutionSeconds: 900,
+          scope: 'history'
+        }
+      ]
+    });
+
+    assert.equal(result.ok, true);
+
+    const db = new DatabaseSync(store.dbPath);
+    try {
+      const rows = db.prepare(`
+        SELECT slot_start_utc, series_key, source_kind, quality, value_num, unit
+        FROM energy_slots_15m
+        WHERE slot_start_utc = '2026-01-01T00:00:00.000Z'
+          AND series_key = 'grid_import_w'
+        ORDER BY source_kind ASC
+      `).all().map((row) => ({ ...row }));
+
+      assert.deepEqual(rows, [
+        {
+          slot_start_utc: '2026-01-01T00:00:00.000Z',
+          series_key: 'grid_import_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.25,
+          unit: 'kWh'
+        },
+        {
+          slot_start_utc: '2026-01-01T00:00:00.000Z',
+          series_key: 'grid_import_w',
+          source_kind: 'vrm_import',
+          quality: 'backfilled',
+          value_num: 0.4,
+          unit: 'kWh'
+        }
+      ]);
+    } finally {
+      db.close();
+    }
   } finally {
     store.close();
   }
