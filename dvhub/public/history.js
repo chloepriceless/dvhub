@@ -479,7 +479,6 @@ function renderCombinedPeriodBars(mountId, items) {
   const energyMax = Math.max(...items.flatMap((item) => [
     Number(item?.importKwh || 0),
     Number(item?.exportKwh || 0),
-    Number(item?.loadKwh || 0),
     Number(item?.pvShareKwh || 0),
     Number(item?.batteryShareKwh || 0)
   ]), 0.01);
@@ -490,10 +489,34 @@ function renderCombinedPeriodBars(mountId, items) {
     Number(item?.batteryCostEur || 0),
     Math.abs(actualNetEur(item))
   ]), 0.01);
-  const energyTicks = axisTickMeta(0, energyMax, 4, fmtKwh);
-  const financeTicks = axisTickMeta(0, financeMax, 4, fmtEur);
   const selectedIndex = selectedChartIndex(mountId, items);
   const selectedItem = items[selectedIndex] || items[0];
+  const energyMetrics = [
+    { key: 'importKwh', label: 'Import', formatter: fmtKwh, className: 'history-bar-grid' },
+    { key: 'pvShareKwh', label: 'Eigenverbrauch PV', formatter: fmtKwh, className: 'history-bar-pv' },
+    { key: 'batteryShareKwh', label: 'Eigenverbrauch Akku', formatter: fmtKwh, className: 'history-bar-battery' },
+    { key: 'exportKwh', label: 'Einspeisung', formatter: fmtKwh, className: 'history-bar-export' }
+  ];
+  const financeMetrics = [
+    { key: 'exportRevenueEur', label: 'Erlös Einspeisung', formatter: fmtEur, className: 'history-bar-revenue' },
+    { key: 'gridCostEur', fallbackKey: 'importCostEur', label: 'Bezugskosten', formatter: fmtEur, className: 'history-bar-cost' },
+    { key: 'pvCostEur', label: 'PV-Kosten', formatter: fmtEur, className: 'history-bar-pv' },
+    { key: 'batteryCostEur', label: 'Akku-Kosten', formatter: fmtEur, className: 'history-bar-battery' }
+  ];
+  const renderMetric = (item, metric, max) => {
+    const rawValue = metric.fallbackKey != null
+      ? (item?.[metric.key] ?? item?.[metric.fallbackKey] ?? 0)
+      : (item?.[metric.key] ?? 0);
+    return `
+      <div class="history-period-metric">
+        <div class="history-period-bar-shell">
+          <div class="history-bar history-bar-slim ${metric.className}" style="height:${stackHeight(rawValue, max)}px"></div>
+        </div>
+        <span class="history-period-metric-label">${escapeHtml(metric.label)}</span>
+        <strong class="history-period-metric-value">${metric.formatter(rawValue)}</strong>
+      </div>
+    `;
+  };
 
   mount.innerHTML = `
     <div class="history-stack-chart history-stack-chart-combined">
@@ -509,61 +532,30 @@ function renderCombinedPeriodBars(mountId, items) {
       </div>
       <div class="history-chart-summary">
         <span>Vermiedene Bezugskosten ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
+        <span>Energie-Skala bis ${fmtKwh(energyMax)}</span>
+        <span>Finanz-Skala bis ${fmtEur(financeMax)}</span>
       </div>
-      <div class="history-comparison-chart" style="--history-bar-count:${items.length}; --history-x-label-count:${items.length};">
-        <div class="history-comparison-section">
-          <div class="history-axis-caption">Energie</div>
-          <div class="history-comparison-frame">
-            <div class="history-axis-y">
-              ${energyTicks.map((tick) => `<span class="history-axis-label">${escapeHtml(tick.label)}</span>`).join('')}
+      <div class="history-period-clusters">
+        ${items.map((item, index) => `
+          <article class="history-period-cluster ${index === selectedIndex ? 'is-active' : ''} history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
+            <div class="history-period-header">
+              <strong>${escapeHtml(item.label || '-')}</strong>
+              ${chartBadge(item)}
             </div>
-            <div class="history-comparison-plot">
-              <div class="history-bar-guides">
-                ${energyTicks.map(() => '<span class="history-grid-line history-grid-line-block"></span>').join('')}
+            <section class="history-period-section">
+              <div class="history-period-section-title">Energie</div>
+              <div class="history-period-metrics">
+                ${energyMetrics.map((metric) => renderMetric(item, metric, energyMax)).join('')}
               </div>
-              <div class="history-bars history-bars-combined history-bars-compressed">
-                ${items.map((item, index) => `
-                  <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
-                    <div class="history-stack history-stack-energy">
-                      <div class="history-bar history-bar-grid history-bar-slim" style="height:${stackHeight(item?.importKwh, energyMax)}px"></div>
-                      <div class="history-bar history-bar-pv history-bar-slim" style="height:${stackHeight(item?.pvShareKwh, energyMax)}px"></div>
-                      <div class="history-bar history-bar-battery history-bar-slim" style="height:${stackHeight(item?.batteryShareKwh, energyMax)}px"></div>
-                      <div class="history-bar history-bar-export history-bar-slim" style="height:${stackHeight(item?.exportKwh, energyMax)}px"></div>
-                    </div>
-                  </div>
-                `).join('')}
+            </section>
+            <section class="history-period-section">
+              <div class="history-period-section-title">Finanzen</div>
+              <div class="history-period-metrics">
+                ${financeMetrics.map((metric) => renderMetric(item, metric, financeMax)).join('')}
               </div>
-            </div>
-          </div>
-        </div>
-        <div class="history-comparison-section">
-          <div class="history-axis-caption">Finanzen</div>
-          <div class="history-comparison-frame">
-            <div class="history-axis-y">
-              ${financeTicks.map((tick) => `<span class="history-axis-label">${escapeHtml(tick.label)}</span>`).join('')}
-            </div>
-            <div class="history-comparison-plot">
-              <div class="history-bar-guides">
-                ${financeTicks.map(() => '<span class="history-grid-line history-grid-line-block"></span>').join('')}
-              </div>
-              <div class="history-bars history-bars-combined history-bars-compressed">
-                ${items.map((item, index) => `
-                  <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
-                    <div class="history-stack history-stack-finance">
-                      <div class="history-bar history-bar-revenue history-bar-slim" style="height:${stackHeight(item?.exportRevenueEur, financeMax)}px"></div>
-                      <div class="history-bar history-bar-cost history-bar-slim" style="height:${stackHeight(item?.gridCostEur ?? item?.importCostEur, financeMax)}px"></div>
-                      <div class="history-bar history-bar-pv history-bar-slim" style="height:${stackHeight(item?.pvCostEur, financeMax)}px"></div>
-                      <div class="history-bar history-bar-battery history-bar-slim" style="height:${stackHeight(item?.batteryCostEur, financeMax)}px"></div>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="history-axis-x">
-          ${items.map((item) => `<span class="history-axis-label history-x-axis-label">${escapeHtml(compactAxisLabel(item.label || '-'))}</span>`).join('')}
-        </div>
+            </section>
+          </article>
+        `).join('')}
       </div>
       <div class="history-chart-inspector">
         <strong>${escapeHtml(selectedItem?.label || '-')}</strong>

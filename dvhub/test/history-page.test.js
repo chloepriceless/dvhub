@@ -148,6 +148,8 @@ test('history shell styles define dedicated layout classes', () => {
   assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*96px;/s);
   assert.match(css, /\.history-kpi-breakdown\s*\{/);
   assert.match(css, /\.history-chart-grid\s*\{/);
+  assert.match(css, /\.history-period-clusters\s*\{/);
+  assert.match(css, /\.history-period-cluster\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
   assert.doesNotMatch(css, /\.history-bars-compressed\s*\{[^}]*--history-bar-count:\s*1/s);
 });
@@ -452,11 +454,16 @@ test('history page renders one aggregated net-analysis card, hides secondary car
     }
   });
 
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-stack-chart/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-bars-compressed/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-y/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-x/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-clusters/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-cluster/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-header/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-section/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-metric-label/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-chart-hover-surface/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-09/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-10/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Energie/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Finanzen/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Bezugskosten/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);
@@ -464,6 +471,8 @@ test('history page renders one aggregated net-analysis card, hides secondary car
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch Akku/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Einspeisung/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Vermiedene Bezugskosten/);
   assert.match(elements.get('historyFinancialPanel').className, /history-chart-panel-wide/);
   assert.equal(elements.get('historyEnergyPanel').hidden, true);
