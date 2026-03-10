@@ -208,12 +208,65 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
     gridCostEur: 0.12,
     pvCostEur: 0.03,
     batteryCostEur: 0.02,
+    avoidedImportGrossEur: 0.18,
+    avoidedImportPvGrossEur: 0.12,
+    avoidedImportBatteryGrossEur: 0.06,
     selfConsumptionCostEur: 0.17,
     opportunityCostEur: 0.03,
     importCostEur: 0.12,
     exportRevenueEur: 0,
     netEur: -0.17
   });
+});
+
+test('history runtime computes avoided import gross values for slots, rows, and kpis', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-03-09T11:00:00.000Z',
+            importKwh: 0.4,
+            exportKwh: 0,
+            gridKwh: 0.4,
+            pvKwh: 0.4,
+            batteryKwh: 0.2,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0.2,
+            loadKwh: 1,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          {
+            ts: '2026-03-09T11:00:00.000Z',
+            priceCtKwh: 5,
+            priceEurMwh: 50
+          }
+        ];
+      }
+    },
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const summary = runtime.getSummary({
+    view: 'day',
+    date: '2026-03-09'
+  });
+
+  assert.equal(summary.kpis.avoidedImportGrossEur, 0.18);
+  assert.equal(summary.kpis.avoidedImportPvGrossEur, 0.12);
+  assert.equal(summary.kpis.avoidedImportBatteryGrossEur, 0.06);
+  assert.equal(summary.rows[0].avoidedImportGrossEur, 0.18);
+  assert.equal(summary.rows[0].avoidedImportPvGrossEur, 0.12);
+  assert.equal(summary.rows[0].avoidedImportBatteryGrossEur, 0.06);
+  assert.equal(summary.slots[0].avoidedImportGrossEur, 0.18);
+  assert.equal(summary.slots[0].avoidedImportPvGrossEur, 0.12);
+  assert.equal(summary.slots[0].avoidedImportBatteryGrossEur, 0.06);
 });
 
 test('history runtime prices all imported energy with the import tariff even when part of the slot is not direct load share', () => {

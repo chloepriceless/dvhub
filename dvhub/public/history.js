@@ -74,6 +74,11 @@ function renderBackfillButtonState() {
 function renderKpis(summary) {
   setText('historyKpiCost', fmtEur(blendedCostEur(summary?.kpis)));
   setText('historyKpiRevenue', fmtEur(summary?.kpis?.exportRevenueEur));
+  setText('historyKpiAvoided', fmtEur(summary?.kpis?.avoidedImportGrossEur));
+  setText('historyKpiAvoidedPvGross', fmtEur(summary?.kpis?.avoidedImportPvGrossEur));
+  setText('historyKpiAvoidedBatteryGross', fmtEur(summary?.kpis?.avoidedImportBatteryGrossEur));
+  setText('historyKpiAvoidedPvCost', fmtEur(summary?.kpis?.pvCostEur));
+  setText('historyKpiAvoidedBatteryCost', fmtEur(summary?.kpis?.batteryCostEur));
   setText('historyKpiNet', fmtEur(blendedNetEur(summary?.kpis)));
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
   setText('historyKpiLoad', fmtKwh(summary?.kpis?.loadKwh));
@@ -452,6 +457,7 @@ function renderCombinedPeriodBars(mountId, items) {
   ]), 0.01);
   const financeMax = Math.max(...items.flatMap((item) => [
     Number(item?.exportRevenueEur || 0),
+    Number(item?.avoidedImportGrossEur || 0),
     blendedCostEur(item)
   ]), 0.01);
   const energyTicks = axisTickMeta(0, energyMax, 4, fmtKwh);
@@ -462,7 +468,8 @@ function renderCombinedPeriodBars(mountId, items) {
   mount.innerHTML = `
     <div class="history-stack-chart history-stack-chart-combined">
       <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös</span>
+        <span><i class="history-legend-swatch history-bar-revenue"></i>Einspeisung</span>
+        <span><i class="history-legend-swatch history-bar-avoided"></i>Vermiedener Bezug</span>
         <span><i class="history-legend-swatch history-bar-cost"></i>Kosten</span>
         <span><i class="history-legend-swatch history-bar-grid"></i>Import</span>
         <span><i class="history-legend-swatch history-bar-pv"></i>Eigenverbrauch PV</span>
@@ -509,6 +516,7 @@ function renderCombinedPeriodBars(mountId, items) {
                   <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
                     <div class="history-stack history-stack-finance">
                       <div class="history-bar history-bar-revenue history-bar-slim" style="height:${stackHeight(item?.exportRevenueEur, financeMax)}px"></div>
+                      <div class="history-bar history-bar-avoided history-bar-slim" style="height:${stackHeight(item?.avoidedImportGrossEur, financeMax)}px"></div>
                       <div class="history-bar history-bar-cost history-bar-slim" style="height:${stackHeight(blendedCostEur(item), financeMax)}px"></div>
                     </div>
                   </div>
@@ -527,8 +535,10 @@ function renderCombinedPeriodBars(mountId, items) {
         <span>Verbrauch ${fmtKwh(selectedItem?.loadKwh)}</span>
         <span>Eigenverbrauch PV ${fmtKwh(selectedItem?.pvShareKwh)}</span>
         <span>Eigenverbrauch Akku ${fmtKwh(selectedItem?.batteryShareKwh)}</span>
-        <span>Erlös ${fmtEur(selectedItem?.exportRevenueEur)}</span>
+        <span>Einspeisung ${fmtEur(selectedItem?.exportRevenueEur)}</span>
+        <span>Vermiedener Bezug ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
         <span>Kosten ${fmtEur(blendedCostEur(selectedItem))}</span>
+        <span class="history-inspector-emphasis">Netto ${fmtEur(blendedNetEur(selectedItem))}</span>
         ${chartBadge(selectedItem)}
       </div>
     </div>
@@ -608,6 +618,12 @@ function renderPriceList(mountId, items) {
   `;
 }
 
+function renderAggregatePriceHint(mountId) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  mount.innerHTML = '<div class="history-chart-empty">Preisvergleich nur in der Tagesansicht. In aggregierten Ansichten liegt der Fokus auf dem kombinierten Finanzchart.</div>';
+}
+
 function renderCharts(summary) {
   const charts = summary?.charts || {};
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
@@ -646,13 +662,7 @@ function renderCharts(summary) {
     return;
   }
 
-    renderPriceList('historyPriceChart', (summary?.rows || []).map((row) => ({
-      label: row.label,
-      marketPriceCtKwh: row.marketPriceWeightedCtKwh,
-      userImportPriceCtKwh: row.userImportPriceWeightedCtKwh,
-      estimated: row.estimatedSlots > 0,
-      incomplete: row.incompleteSlots > 0
-    })));
+  renderAggregatePriceHint('historyPriceChart');
 }
 
 function renderRows(summary) {
@@ -687,7 +697,8 @@ function renderRows(summary) {
           <th>Netzkosten</th>
           <th>PV-Kosten</th>
           <th>Akku-Kosten</th>
-          <th>Erlös</th>
+          <th>Vermiedener Bezug</th>
+          <th>Erlös Einspeisung</th>
           <th>Kosten</th>
           <th>Netto</th>
           ${includeSolar ? '<th>Marktwert Solar</th><th>Solar-Ausgleich</th>' : ''}
@@ -719,6 +730,7 @@ function renderRows(summary) {
             <td>${fmtEur(row.gridCostEur ?? row.importCostEur)}</td>
             <td>${fmtEur(row.pvCostEur)}</td>
             <td>${fmtEur(row.batteryCostEur)}</td>
+            <td>${fmtEur(row.avoidedImportGrossEur)}</td>
             <td>${fmtEur(row.exportRevenueEur)}</td>
             <td>${fmtEur(blendedCostEur(row))}</td>
             <td>${fmtEur(blendedNetEur(row))}</td>
