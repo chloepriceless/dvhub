@@ -662,7 +662,6 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
       premiumEligibleExportKwh: 0,
       marketPremiumCt: 0
     });
-    premiumEligibleExportKwh = round2(provisional.premiumEligibleExportKwh);
     marketPremiumEur = premiumEligibleExportKwh > 0 ? round2(provisional.marketPremiumCt / 100) : null;
     source = premiumEligibleExportKwh > 0 ? 'derived_monthly_running' : null;
   }
