@@ -107,6 +107,15 @@ function shiftIsoByDays(value, days) {
   return date.toISOString();
 }
 
+function startOfUtcDayIso(value) {
+  const date = new Date(value);
+  return new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate()
+  )).toISOString();
+}
+
 function compareIso(left, right) {
   return new Date(left).getTime() - new Date(right).getTime();
 }
@@ -1536,14 +1545,18 @@ export function createHistoryImportManager({
         started: false
       };
     }
-    const plan = collectGapWindows(options);
+    const autoNow = startOfUtcDayIso(options.now || new Date());
+    const plan = collectGapWindows({
+      ...options,
+      now: autoNow
+    });
     if (!plan.gapWindows.length) {
       return {
         ok: true,
         started: false
       };
     }
-    vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options })
+    vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options, now: autoNow })
       .catch((error) => ({
         ok: false,
         auto: true,

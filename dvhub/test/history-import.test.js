@@ -1323,3 +1323,48 @@ test('automatic VRM backfill stays idle when the lookback horizon is already cov
     store.close();
   }
 });
+
+test('automatic VRM backfill ignores a tiny uncovered tail inside the current utc day', async () => {
+  const store = createStore();
+  const requests = [];
+
+  store.writeImportJob({
+    jobType: 'vrm_history_gap_backfill',
+    status: 'completed',
+    requestedFrom: '2026-03-03T00:00:00.000Z',
+    requestedTo: '2026-03-10T00:00:00.000Z',
+    importedRows: 64,
+    sourceAccount: '12345'
+  });
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return { ok: true, async json() { return { records: {} }; } };
+      },
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = manager.startAutomaticBackfill({
+      now: '2026-03-10T04:15:00.000Z',
+      lookbackDays: 7
+    });
+
+    assert.deepEqual(result, {
+      ok: true,
+      started: false
+    });
+    assert.equal(requests.length, 0);
+  } finally {
+    store.close();
+  }
+});
