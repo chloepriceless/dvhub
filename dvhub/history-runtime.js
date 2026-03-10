@@ -1035,7 +1035,7 @@ export function createHistoryRuntime({
       series: buildSummarySeries(view, slots),
       charts,
       rows,
-      slots,
+      slots: view === 'year' ? [] : slots,
       meta: {
         ...annualPremiumApplied.meta,
         sourceSummary
