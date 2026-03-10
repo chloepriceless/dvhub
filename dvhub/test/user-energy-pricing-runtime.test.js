@@ -41,11 +41,12 @@ function loadPricingHelpers() {
   const snippets = [
     extractFunction(source, 'roundCtKwh'),
     extractFunction(source, 'effectiveBatteryCostCtKwh'),
-    extractFunction(source, 'mixedCostCtKwh')
+    extractFunction(source, 'mixedCostCtKwh'),
+    extractFunction(source, 'resolveLogLimit')
   ].join('\n\n');
   const sandbox = { globalThis: {}, Number, Math };
   sandbox.globalThis = sandbox;
-  vm.runInNewContext(`${snippets}\nglobalThis.helpers = { roundCtKwh, effectiveBatteryCostCtKwh, mixedCostCtKwh };`, sandbox, {
+  vm.runInNewContext(`${snippets}\nglobalThis.helpers = { roundCtKwh, effectiveBatteryCostCtKwh, mixedCostCtKwh, resolveLogLimit };`, sandbox, {
     filename: 'server-pricing-helpers.js'
   });
   return sandbox.helpers;
@@ -75,6 +76,17 @@ test('mixed cost stays between direct pv cost and battery path cost', () => {
     }),
     8.22
   );
+});
+
+test('log limit helper defaults to dashboard-sized payloads and clamps extreme values', () => {
+  const helpers = loadPricingHelpers();
+
+  assert.equal(helpers.resolveLogLimit(undefined), 20);
+  assert.equal(helpers.resolveLogLimit('7'), 7);
+  assert.equal(helpers.resolveLogLimit('0'), 20);
+  assert.equal(helpers.resolveLogLimit('-5'), 20);
+  assert.equal(helpers.resolveLogLimit('999'), 200);
+  assert.equal(helpers.resolveLogLimit('not-a-number'), 20);
 });
 
 test('pricing resolver selects the period active for the slot date in Berlin local time', () => {

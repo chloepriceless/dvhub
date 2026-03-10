@@ -146,6 +146,56 @@ test('dashboard refresh helper prevents overlapping refresh runs and coalesces o
   assert.equal(coordinator.isRunning(), false);
 });
 
+test('dashboard refresh task applies status before log resolution and requests only the visible log rows', async () => {
+  const helpers = loadDashboardHelpers();
+  const calls = [];
+  let resolveStatus;
+  let resolveLog;
+  let statusApplied = false;
+  let logApplied = false;
+
+  assert.equal(typeof helpers.createDashboardRefreshTask, 'function');
+  assert.equal(typeof helpers.getDashboardLogUrl, 'function');
+  assert.equal(helpers.getDashboardLogUrl(), '/api/log?limit=20');
+
+  const refreshTask = helpers.createDashboardRefreshTask({
+    fetchStatus: async () => new Promise((resolve) => {
+      resolveStatus = () => resolve({ ok: true, json: async () => ({ now: 123 }) });
+    }),
+    fetchLog: async () => {
+      calls.push(helpers.getDashboardLogUrl());
+      return new Promise((resolve) => {
+        resolveLog = () => resolve({ ok: true, json: async () => ({ rows: [{ event: 'log' }] }) });
+      });
+    },
+    applyStatus: async (status) => {
+      statusApplied = true;
+      calls.push(`status:${status.now}`);
+    },
+    applyLog: async (payload) => {
+      logApplied = true;
+      calls.push(`log:${payload.rows.length}`);
+    }
+  });
+
+  const pending = refreshTask();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, ['/api/log?limit=20']);
+  assert.equal(statusApplied, false);
+  assert.equal(logApplied, false);
+
+  resolveStatus();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(statusApplied, true);
+  assert.equal(logApplied, false);
+  assert.deepEqual(calls, ['/api/log?limit=20', 'status:123']);
+
+  resolveLog();
+  await pending;
+  assert.equal(logApplied, true);
+  assert.deepEqual(calls, ['/api/log?limit=20', 'status:123', 'log:1']);
+});
+
 test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');

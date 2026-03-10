@@ -529,11 +529,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
   updateChartBarStates();
 }
 
-async function refresh() {
-  const [statusRes, logRes] = await Promise.all([apiFetch('/api/status'), apiFetch('/api/log')]);
-  const status = await statusRes.json();
-  const logs = await logRes.json();
-
+function renderDashboardStatus(status) {
   const dvOn = Number(status.dvControlValue) === 1;
   setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
   setText('nowTime', fmtTs(status.now));
@@ -613,9 +609,48 @@ async function refresh() {
 
   drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || []);
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
+}
 
+function renderDashboardLog(logs) {
   const rows = (logs.rows || []).slice(-20).reverse();
   document.getElementById('logBox').textContent = rows.map((r) => JSON.stringify(r)).join('\n') || '-';
+}
+
+function getDashboardLogUrl(limit = 20) {
+  const normalizedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 20;
+  return `/api/log?limit=${normalizedLimit}`;
+}
+
+function createDashboardRefreshTask({
+  fetchStatus,
+  fetchLog,
+  applyStatus,
+  applyLog
+}) {
+  return async function runDashboardRefresh() {
+    const logTask = Promise.resolve()
+      .then(() => fetchLog())
+      .then((result) => (result && typeof result.json === 'function' ? result.json() : result))
+      .then((payload) => applyLog(payload));
+
+    const statusPayload = await Promise.resolve()
+      .then(() => fetchStatus())
+      .then((result) => (result && typeof result.json === 'function' ? result.json() : result));
+
+    await applyStatus(statusPayload);
+    await logTask;
+  };
+}
+
+const refreshDashboardTask = createDashboardRefreshTask({
+  fetchStatus: () => apiFetch('/api/status'),
+  fetchLog: () => apiFetch(getDashboardLogUrl()),
+  applyStatus: async (status) => renderDashboardStatus(status),
+  applyLog: async (logs) => renderDashboardLog(logs)
+});
+
+async function refresh() {
+  await refreshDashboardTask();
 }
 
 const dashboardRefreshCoordinator = createRefreshCoordinator({
@@ -919,7 +954,9 @@ function initDashboard() {
 const dashboardApi = {
   buildScheduleWindowsFromSelection,
   computeDynamicGrossImportCtKwh,
+  createDashboardRefreshTask,
   createRefreshCoordinator,
+  getDashboardLogUrl,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices
