@@ -1797,7 +1797,7 @@ const web = http.createServer(async (req, res) => {
     if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
     const body = await parseBody(req);
     if (body.mode === 'backfill') {
-      const result = await historyImportManager.backfillHistoryFromConfiguredSource({});
+      const result = await historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
       return json(res, result.ok ? 200 : 400, result);
     }
     const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
@@ -1819,7 +1819,9 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
     if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-    const result = await historyImportManager.backfillHistoryFromConfiguredSource({});
+    const body = await parseBody(req);
+    const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
+    const result = await historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
     return json(res, result.ok ? 200 : 400, result);
   }
 

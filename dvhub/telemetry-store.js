@@ -753,6 +753,59 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       });
   }
 
+  function listImportJobRanges({
+    jobTypes = [],
+    statuses = ['completed'],
+    sourceAccount = null,
+    requestedFrom = null,
+    requestedTo = null
+  } = {}) {
+    const typeList = Array.isArray(jobTypes)
+      ? jobTypes.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const statusList = Array.isArray(statuses)
+      ? statuses.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const clauses = ['requested_from IS NOT NULL', 'requested_to IS NOT NULL'];
+    const params = [];
+
+    if (typeList.length) {
+      clauses.push(`job_type IN (${typeList.map(() => '?').join(', ')})`);
+      params.push(...typeList);
+    }
+    if (statusList.length) {
+      clauses.push(`status IN (${statusList.map(() => '?').join(', ')})`);
+      params.push(...statusList);
+    }
+    if (sourceAccount) {
+      clauses.push('source_account = ?');
+      params.push(String(sourceAccount));
+    }
+    if (requestedFrom) {
+      clauses.push('requested_to > ?');
+      params.push(isoTimestamp(requestedFrom));
+    }
+    if (requestedTo) {
+      clauses.push('requested_from < ?');
+      params.push(isoTimestamp(requestedTo));
+    }
+
+    return db.prepare(`
+      SELECT job_type, status, requested_from, requested_to, imported_rows, source_account, meta_json
+      FROM import_jobs
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY requested_from ASC, requested_to ASC
+    `).all(...params).map((row) => ({
+      jobType: row.job_type,
+      status: row.status,
+      requestedFrom: row.requested_from,
+      requestedTo: row.requested_to,
+      importedRows: Number(row.imported_rows || 0),
+      sourceAccount: row.source_account || null,
+      meta: parseMetaJson(row.meta_json)
+    }));
+  }
+
   return {
     dbPath,
     listTables() {
@@ -785,6 +838,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    listImportJobRanges,
     listPriceSlots,
     getStatus() {
       const lastSample = db.prepare(`SELECT MAX(ts_utc) AS value FROM timeseries_samples`).get().value;

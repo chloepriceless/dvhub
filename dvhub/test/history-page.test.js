@@ -81,6 +81,16 @@ test('navigation exposes Historie across shell pages', () => {
   }
 });
 
+test('tools page exposes separate gap and full VRM backfill controls', () => {
+  const html = readPublic('tools.html');
+
+  assert.match(html, /id="historyBackfillBtn"/);
+  assert.match(html, /VRM-Luecken schliessen/);
+  assert.match(html, /id="historyFullBackfillAck"/);
+  assert.match(html, /id="historyFullBackfillBtn"/);
+  assert.match(html, /Voll-Backfill/);
+});
+
 test('history page exposes view switcher, date navigation, KPI blocks, chart containers, and grouped rows mount', () => {
   const html = readPublic('history.html');
 

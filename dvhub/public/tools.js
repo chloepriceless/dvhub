@@ -4,6 +4,7 @@ const { apiFetch, buildApiUrl } = common;
 let currentHistoryImportStatus = null;
 let currentHistoryImportResult = null;
 let historyImportBusy = false;
+let historyFullBackfillAcknowledged = false;
 let historyImportFormState = {
   start: '',
   end: ''
@@ -44,9 +45,16 @@ function buildHistoryImportRequest(formState) {
   };
 }
 
-function buildHistoryBackfillRequest() {
+function buildHistoryGapBackfillRequest() {
   return {
-    mode: 'backfill',
+    mode: 'gap',
+    interval: '15mins'
+  };
+}
+
+function buildHistoryFullBackfillRequest() {
+  return {
+    mode: 'full',
     interval: '15mins'
   };
 }
@@ -65,14 +73,35 @@ function buildHistoryImportActionState({ status, form, busy }) {
 
 function buildHistoryBackfillActionState({ status, busy }) {
   if (busy) return { disabled: true, reason: 'Import läuft bereits.' };
+  if (status?.backfillRunning) return { disabled: true, reason: 'VRM-Backfill läuft bereits.' };
   if (!status?.enabled) return { disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
   if (!status?.ready) return { disabled: true, reason: 'VRM-Zugang ist noch nicht vollständig konfiguriert.' };
+  return { disabled: false, reason: '' };
+}
+
+function buildHistoryFullBackfillActionState({ status, busy, acknowledged }) {
+  const baseState = buildHistoryBackfillActionState({ status, busy });
+  if (baseState.disabled) return baseState;
+  if (!acknowledged) {
+    return {
+      disabled: true,
+      reason: 'Bitte die Warnung fuer den Voll-Backfill erst explizit bestaetigen.'
+    };
+  }
   return { disabled: false, reason: '' };
 }
 
 function formatHistoryImportResult(result) {
   if (!result) return 'Noch kein Import gestartet.';
   if (!result.ok) return `Import fehlgeschlagen: ${result.error}`;
+  if (result.mode === 'full') {
+    return `Voll-Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} Fenster mit Daten, Job ${result.jobId}.`;
+  }
+  if (result.mode === 'gap') {
+    return result.windowsVisited
+      ? `Luecken-Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} offene Fenster bearbeitet, Job ${result.jobId}.`
+      : 'Keine offenen VRM-Luecken gefunden.';
+  }
   if (result.windowsVisited != null) {
     return `Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} Fenster mit Daten, Job ${result.jobId}.`;
   }
@@ -96,14 +125,21 @@ function renderHistoryImportState() {
     status: currentHistoryImportStatus,
     busy: historyImportBusy
   });
+  const fullBackfillState = buildHistoryFullBackfillActionState({
+    status: currentHistoryImportStatus,
+    busy: historyImportBusy,
+    acknowledged: historyFullBackfillAcknowledged
+  });
   const bannerText = !currentHistoryImportStatus
     ? 'VRM-Status wird geladen...'
+    : currentHistoryImportStatus.backfillRunning
+      ? 'VRM-Backfill laeuft gerade. Leitstand und Regelung bleiben verfuegbar, der Nachimport arbeitet im Hintergrund.'
     : !currentHistoryImportStatus.enabled
       ? 'VRM-Backfill ist derzeit deaktiviert.'
       : !currentHistoryImportStatus.ready
         ? 'VRM-Zugang ist noch nicht vollständig konfiguriert.'
-        : `VRM verbunden für Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Historischer Nachimport ist bereit.`;
-  const bannerKind = currentHistoryImportStatus?.ready ? 'success' : 'warn';
+        : `VRM verbunden fuer Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Lueckenabgleich und manueller Voll-Backfill sind bereit.`;
+  const bannerKind = currentHistoryImportStatus?.backfillRunning ? 'warn' : (currentHistoryImportStatus?.ready ? 'success' : 'warn');
   setBanner('historyBanner', bannerText, bannerKind);
 
   const button = document.getElementById('historyImportBtn');
@@ -114,9 +150,25 @@ function renderHistoryImportState() {
   const backfillButton = document.getElementById('historyBackfillBtn');
   if (backfillButton) {
     backfillButton.disabled = backfillState.disabled;
-    backfillButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten';
+    backfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job laeuft...' : 'VRM-Luecken schliessen';
   }
-  setText('historyReason', actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill bis zur ersten leeren Historie.');
+  const fullBackfillButton = document.getElementById('historyFullBackfillBtn');
+  if (fullBackfillButton) {
+    fullBackfillButton.disabled = fullBackfillState.disabled;
+    fullBackfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job laeuft...' : 'Voll-Backfill starten';
+  }
+  const fullAck = document.getElementById('historyFullBackfillAck');
+  if (fullAck) {
+    fullAck.checked = historyFullBackfillAcknowledged;
+    fullAck.disabled = historyImportBusy || Boolean(currentHistoryImportStatus?.backfillRunning);
+  }
+  setText(
+    'historyReason',
+    actionState.reason
+      || backfillState.reason
+      || fullBackfillState.reason
+      || 'Der normale Backfill prueft nur den letzten Zeitraum auf echte Luecken. Voll-Backfill zieht die komplette Historie erneut.'
+  );
 
   if (currentHistoryImportResult) {
     setBanner(
@@ -306,10 +358,12 @@ async function triggerHistoryImport() {
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
-async function triggerHistoryBackfill() {
+async function triggerHistoryBackfill(mode = 'gap') {
   historyImportBusy = true;
   renderHistoryImportState();
-  const payload = buildHistoryBackfillRequest();
+  const payload = mode === 'full'
+    ? buildHistoryFullBackfillRequest()
+    : buildHistoryGapBackfillRequest();
   const res = await apiFetch('/api/history/backfill/vrm', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -362,6 +416,10 @@ function initToolsPage() {
     syncHistoryImportFormState();
     renderHistoryImportState();
   });
+  document.getElementById('historyFullBackfillAck')?.addEventListener('change', (event) => {
+    historyFullBackfillAcknowledged = event.target.checked === true;
+    renderHistoryImportState();
+  });
   document.getElementById('historyImportBtn')?.addEventListener('click', () => {
     triggerHistoryImport().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
@@ -370,7 +428,14 @@ function initToolsPage() {
     });
   });
   document.getElementById('historyBackfillBtn')?.addEventListener('click', () => {
-    triggerHistoryBackfill().catch((error) => {
+    triggerHistoryBackfill('gap').catch((error) => {
+      currentHistoryImportResult = { ok: false, error: error.message };
+      historyImportBusy = false;
+      renderHistoryImportState();
+    });
+  });
+  document.getElementById('historyFullBackfillBtn')?.addEventListener('click', () => {
+    triggerHistoryBackfill('full').catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
       renderHistoryImportState();
@@ -400,4 +465,16 @@ function initToolsPage() {
 
 if (typeof document !== 'undefined') {
   initToolsPage();
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubToolsHistory = {
+    buildHistoryImportRequest,
+    buildHistoryGapBackfillRequest,
+    buildHistoryFullBackfillRequest,
+    buildHistoryImportActionState,
+    buildHistoryBackfillActionState,
+    buildHistoryFullBackfillActionState,
+    formatHistoryImportResult
+  };
 }

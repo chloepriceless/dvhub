@@ -3,10 +3,18 @@ const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
 const VRM_HISTORY_SLOT_SECONDS = 900;
 const VRM_BACKFILL_CHUNK_DAYS = 7;
+const VRM_GAP_BACKFILL_LOOKBACK_DAYS = 7;
+const VRM_GAP_BACKFILL_CHUNK_DAYS = 1;
 const VRM_BACKFILL_EMPTY_WINDOW_LIMIT = 2;
 const VRM_BACKFILL_DELAY_MS = 500;
 const VRM_BACKFILL_RETRY_ATTEMPTS = 3;
 const VRM_BACKFILL_RETRY_DELAY_MS = 1000;
+const VRM_COVERAGE_JOB_TYPES = [
+  'vrm_history_import',
+  'vrm_history_backfill',
+  'vrm_history_full_backfill',
+  'vrm_history_gap_backfill'
+];
 const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
 const PRICE_BUCKET_SECONDS = 900;
 
@@ -97,6 +105,47 @@ function shiftIsoByDays(value, days) {
   const date = new Date(value);
   date.setUTCDate(date.getUTCDate() + Number(days || 0));
   return date.toISOString();
+}
+
+function compareIso(left, right) {
+  return new Date(left).getTime() - new Date(right).getTime();
+}
+
+function mergeCoverageRanges(ranges = []) {
+  const normalized = ranges
+    .filter((range) => range?.start && range?.end && compareIso(range.start, range.end) < 0)
+    .sort((left, right) => compareIso(left.start, right.start));
+  const merged = [];
+  for (const range of normalized) {
+    const last = merged[merged.length - 1];
+    if (!last || compareIso(range.start, last.end) > 0) {
+      merged.push({ start: range.start, end: range.end });
+      continue;
+    }
+    if (compareIso(range.end, last.end) > 0) last.end = range.end;
+  }
+  return merged;
+}
+
+function buildBackfillWindows({ start, end, chunkDays }) {
+  const windows = [];
+  const stepDays = Math.max(1, Number(chunkDays || 1));
+  let cursor = toIso(start);
+  const rangeEnd = toIso(end);
+  while (compareIso(cursor, rangeEnd) < 0) {
+    const next = shiftIsoByDays(cursor, stepDays);
+    const windowEnd = compareIso(next, rangeEnd) < 0 ? next : rangeEnd;
+    windows.push({
+      start: cursor,
+      end: windowEnd
+    });
+    cursor = windowEnd;
+  }
+  return windows;
+}
+
+function rangeIsCovered(window, ranges) {
+  return ranges.some((range) => compareIso(range.start, window.start) <= 0 && compareIso(range.end, window.end) >= 0);
 }
 
 function bucketIso(value, seconds = PRICE_BUCKET_SECONDS) {
@@ -1117,6 +1166,48 @@ export function createHistoryImportManager({
     return { ok: true, status };
   }
 
+  function listCompletedCoverageRanges({ start, end }) {
+    const importConfig = telemetryConfig.historyImport || {};
+    const rows = typeof store.listImportJobRanges === 'function'
+      ? store.listImportJobRanges({
+        jobTypes: VRM_COVERAGE_JOB_TYPES,
+        statuses: ['completed'],
+        sourceAccount: importConfig.vrmPortalId || null,
+        requestedFrom: start,
+        requestedTo: end
+      })
+      : [];
+    return mergeCoverageRanges(rows.map((row) => ({
+      start: row.requestedFrom,
+      end: row.requestedTo
+    })));
+  }
+
+  function collectGapWindows({
+    now = null,
+    lookbackDays = VRM_GAP_BACKFILL_LOOKBACK_DAYS,
+    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS
+  } = {}) {
+    const rangeEnd = now ? toIso(now) : new Date().toISOString();
+    const rangeStart = shiftIsoByDays(rangeEnd, -Math.max(1, Number(lookbackDays || VRM_GAP_BACKFILL_LOOKBACK_DAYS)));
+    const coverage = listCompletedCoverageRanges({
+      start: rangeStart,
+      end: rangeEnd
+    });
+    const windows = buildBackfillWindows({
+      start: rangeStart,
+      end: rangeEnd,
+      chunkDays
+    });
+    return {
+      requestedFrom: rangeStart,
+      requestedTo: rangeEnd,
+      coverage,
+      windows,
+      gapWindows: windows.filter((window) => !rangeIsCovered(window, coverage))
+    };
+  }
+
   function importSamples({ provider = 'vrm', rows = [], requestedFrom = null, requestedTo = null, sourceAccount = null }) {
     const cleaned = rows
       .filter((row) => row && row.seriesKey && row.ts != null && row.value != null)
@@ -1240,7 +1331,7 @@ export function createHistoryImportManager({
     };
   }
 
-  async function runVrmBackfill({
+  async function runVrmFullBackfill({
     now = null,
     chunkDays = VRM_BACKFILL_CHUNK_DAYS,
     delayMs = VRM_BACKFILL_DELAY_MS,
@@ -1288,7 +1379,7 @@ export function createHistoryImportManager({
 
     const importConfig = telemetryConfig.historyImport || {};
     const jobId = store.writeImportJob({
-      jobType: 'vrm_history_backfill',
+      jobType: 'vrm_history_full_backfill',
       status: 'completed',
       requestedFrom,
       requestedTo,
@@ -1298,6 +1389,7 @@ export function createHistoryImportManager({
         provider: 'vrm',
         interval,
         auto,
+        mode: 'full',
         chunkDays,
         maxEmptyWindows,
         windowsVisited,
@@ -1311,6 +1403,7 @@ export function createHistoryImportManager({
       partial: false,
       provider: 'vrm',
       auto,
+      mode: 'full',
       jobId,
       requestedFrom,
       requestedTo,
@@ -1321,14 +1414,113 @@ export function createHistoryImportManager({
     };
   }
 
+  async function runVrmGapBackfill({
+    now = null,
+    lookbackDays = VRM_GAP_BACKFILL_LOOKBACK_DAYS,
+    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS,
+    delayMs = VRM_BACKFILL_DELAY_MS,
+    interval = VRM_HISTORY_INTERVAL,
+    auto = false
+  } = {}) {
+    const validation = validateConfiguredVrmImport({ requireRange: false });
+    if (!validation.ok) return validation;
+
+    const plan = collectGapWindows({ now, lookbackDays, chunkDays });
+    const { requestedFrom, requestedTo, gapWindows } = plan;
+    if (!gapWindows.length) {
+      return {
+        ok: true,
+        partial: false,
+        provider: 'vrm',
+        auto,
+        mode: 'gap',
+        jobId: null,
+        requestedFrom,
+        requestedTo,
+        windowsVisited: 0,
+        importedWindows: 0,
+        emptyWindows: 0,
+        importedRows: 0
+      };
+    }
+
+    let importedWindows = 0;
+    let importedRows = 0;
+    let emptyWindows = 0;
+
+    for (let index = 0; index < gapWindows.length; index += 1) {
+      const window = gapWindows[index];
+      const fetched = await fetchConfiguredVrmRows({
+        start: window.start,
+        end: window.end,
+        interval
+      });
+      if (!fetched.ok) return fetched;
+
+      if ((fetched.rows || []).length > 0) {
+        store.writeSamples(fetched.rows);
+        importedWindows += 1;
+        importedRows += fetched.rows.length;
+      } else {
+        emptyWindows += 1;
+      }
+
+      if (index + 1 < gapWindows.length) {
+        await waitImpl(delayMs);
+      }
+    }
+
+    const importConfig = telemetryConfig.historyImport || {};
+    const status = emptyWindows > 0 ? 'completed_with_gaps' : 'completed';
+    const jobId = store.writeImportJob({
+      jobType: 'vrm_history_gap_backfill',
+      status,
+      requestedFrom,
+      requestedTo,
+      importedRows,
+      sourceAccount: importConfig.vrmPortalId,
+      meta: {
+        provider: 'vrm',
+        interval,
+        auto,
+        mode: 'gap',
+        chunkDays,
+        lookbackDays,
+        windowsVisited: gapWindows.length,
+        importedWindows,
+        emptyWindows,
+        coverageWindows: plan.windows.length,
+        coveredWindows: plan.windows.length - gapWindows.length
+      }
+    });
+
+    return {
+      ok: true,
+      partial: emptyWindows > 0,
+      provider: 'vrm',
+      auto,
+      mode: 'gap',
+      jobId,
+      requestedFrom,
+      requestedTo,
+      windowsVisited: gapWindows.length,
+      importedWindows,
+      emptyWindows,
+      importedRows
+    };
+  }
+
   async function backfillHistoryFromConfiguredSource(options = {}) {
+    const mode = options.mode === 'full' ? 'full' : 'gap';
     if (vrmBackfillPromise) {
       return {
         ok: false,
         error: 'vrm history backfill already running'
       };
     }
-    vrmBackfillPromise = runVrmBackfill(options);
+    vrmBackfillPromise = mode === 'full'
+      ? runVrmFullBackfill(options)
+      : runVrmGapBackfill(options);
     try {
       return await vrmBackfillPromise;
     } finally {
@@ -1344,7 +1536,14 @@ export function createHistoryImportManager({
         started: false
       };
     }
-    vrmBackfillPromise = runVrmBackfill({ auto: true, ...options })
+    const plan = collectGapWindows(options);
+    if (!plan.gapWindows.length) {
+      return {
+        ok: true,
+        started: false
+      };
+    }
+    vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options })
       .catch((error) => ({
         ok: false,
         auto: true,

@@ -1185,6 +1185,7 @@ test('VRM backfill job walks chunked windows until repeated empty history and wa
     });
 
     const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'full',
       now: '2026-03-05T00:00:00.000Z',
       chunkDays: 1,
       delayMs: 50,
@@ -1198,9 +1199,126 @@ test('VRM backfill job walks chunked windows until repeated empty history and wa
     assert.equal(result.emptyWindows, 2);
     assert.equal(result.importedRows > 0, true);
     assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_total_w'"), 2);
-    assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_backfill'"), 1);
+    assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_full_backfill'"), 1);
     assert.deepEqual(waits, [50, 50, 50, 50]);
     assert.equal(requests.length, 15);
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM gap backfill imports only uncovered windows inside the lookback horizon', async () => {
+  const store = createStore();
+  const waits = [];
+  const requests = [];
+
+  store.writeImportJob({
+    jobType: 'vrm_history_gap_backfill',
+    status: 'completed',
+    requestedFrom: '2026-03-04T00:00:00.000Z',
+    requestedTo: '2026-03-06T00:00:00.000Z',
+    importedRows: 42,
+    sourceAccount: '12345'
+  });
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    const end = new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString();
+    requests.push(`${type}:${start}|${end}`);
+    return {
+      ok: true,
+      async json() {
+        return type === 'venus'
+          ? { records: { Pdc: [[Date.parse(start), 1000]] } }
+          : { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async (ms) => {
+        waits.push(ms);
+      },
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'gap',
+      now: '2026-03-07T00:00:00.000Z',
+      lookbackDays: 4,
+      chunkDays: 1,
+      delayMs: 25
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.mode, 'gap');
+    assert.equal(result.importedWindows, 2);
+    assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_gap_backfill'"), 2);
+    assert.deepEqual(waits, [25]);
+    assert.deepEqual(
+      requests.filter((entry) => entry.startsWith('venus:')),
+      [
+        'venus:2026-03-03T00:00:00.000Z|2026-03-04T00:00:00.000Z',
+        'venus:2026-03-06T00:00:00.000Z|2026-03-07T00:00:00.000Z'
+      ]
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('automatic VRM backfill stays idle when the lookback horizon is already covered', async () => {
+  const store = createStore();
+  const requests = [];
+
+  store.writeImportJob({
+    jobType: 'vrm_history_gap_backfill',
+    status: 'completed',
+    requestedFrom: '2026-03-03T00:00:00.000Z',
+    requestedTo: '2026-03-10T00:00:00.000Z',
+    importedRows: 128,
+    sourceAccount: '12345'
+  });
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl: async (url) => {
+        requests.push(url);
+        return { ok: true, async json() { return { records: {} }; } };
+      },
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = manager.startAutomaticBackfill({
+      now: '2026-03-10T00:00:00.000Z',
+      lookbackDays: 7
+    });
+
+    assert.deepEqual(result, {
+      ok: true,
+      started: false
+    });
+    assert.equal(requests.length, 0);
   } finally {
     store.close();
   }

@@ -110,8 +110,24 @@
           </div>
           <div class="settings-inline-actions">
             <button id="historyImportBtn" class="btn btn-primary" type="button">VRM-Historie importieren</button>
-            <button id="historyBackfillBtn" class="btn btn-secondary" type="button">VRM-Backfill starten</button>
-            <small id="historyReason" class="tools-note">Der Import schreibt historische VRM-Zeitreihen direkt in die interne Telemetrie-Datenbank.</small>
+            <button id="historyBackfillBtn" class="btn btn-secondary" type="button">VRM-Luecken schliessen</button>
+            <small id="historyReason" class="tools-note">Der normale Backfill prueft nur den letzten Zeitraum auf offene VRM-Luecken.</small>
+          </div>
+          <div class="settings-summary">
+            <div class="summary-card">
+              <strong>Voll-Backfill</strong>
+              <span>Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich laenger.</span>
+            </div>
+          </div>
+          <label class="settings-field" for="historyFullBackfillAck">
+            <span class="settings-field-title">Warnung bestaetigen</span>
+            <div class="toggle-row">
+              <input id="historyFullBackfillAck" type="checkbox" />
+              <small class="field-help">Ich bestaetige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur fuer Reparaturfaelle gedacht ist.</small>
+            </div>
+          </label>
+          <div class="settings-inline-actions">
+            <button id="historyFullBackfillBtn" class="btn btn-danger" type="button">Voll-Backfill starten</button>
           </div>
           <div id="historyResult" class="status-banner">Noch kein Import gestartet.</div>
         </section>
