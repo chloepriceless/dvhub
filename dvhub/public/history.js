@@ -135,15 +135,38 @@ function renderKpis(summary) {
   );
   setText('historyKpiExport', fmtKwh(summary?.kpis?.exportKwh));
 
-  const premiumVisible = String(summary?.view || '') === 'year';
+  const view = String(summary?.view || '');
+  const premiumVisible = view === 'week' || view === 'month' || view === 'year';
+  const weightedApplicableValueCtKwh = Number(summary?.kpis?.weightedApplicableValueCtKwh);
+  const marketPremiumCtKwh = Number(summary?.kpis?.marketPremiumCtKwh);
+  let premiumScopeLabel = 'Jahresansicht';
+  let marketValueLabel = 'Jahresmarktwert';
+  if (view === 'month') {
+    premiumScopeLabel = 'Monatsansicht';
+    marketValueLabel = 'Monatsmarktwert';
+  } else if (view === 'week') {
+    premiumScopeLabel = 'Wochenansicht';
+    marketValueLabel = 'Marktwert (gewichtet)';
+  }
   setHidden('historyPremiumFields', !premiumVisible);
   setHidden('historyPremiumHint', true);
   setText('historyPremiumHint', '');
+  setText('historyPremiumScopeLabel', premiumScopeLabel);
+  setText('historyPremiumMarketValueLabel', marketValueLabel);
   if (!premiumVisible) return;
+  const periodMarketValueCtKwh =
+    hasFiniteNumber(summary?.kpis?.annualMarketValueCtKwh)
+      ? Number(summary.kpis.annualMarketValueCtKwh)
+      : (
+          Number.isFinite(weightedApplicableValueCtKwh)
+          && Number.isFinite(marketPremiumCtKwh)
+            ? round2(weightedApplicableValueCtKwh - marketPremiumCtKwh)
+            : null
+        );
   setText(
     'historyKpiAnnualMarketValue',
-    hasFiniteNumber(summary?.kpis?.annualMarketValueCtKwh)
-      ? fmtCt(summary?.kpis?.annualMarketValueCtKwh)
+    hasFiniteNumber(periodMarketValueCtKwh)
+      ? fmtCt(periodMarketValueCtKwh)
       : 'noch nicht verfügbar'
   );
   setText(
@@ -159,7 +182,7 @@ function renderKpis(summary) {
       : 'noch nicht verfügbar'
   );
   const premiumMeta = summary?.meta?.marketPremium || {};
-  if (premiumMeta?.source === 'derived_monthly_running') {
+  if (view === 'year' && premiumMeta?.source === 'derived_monthly_running') {
     const availableMonths = Number(premiumMeta?.availableMarketValueMonths || 0);
     const monthLabel = `${availableMonths} Monatswert${availableMonths === 1 ? '' : 'e'}`;
     setText(
@@ -351,9 +374,7 @@ const aggregateTableColumns = [
   { key: 'batteryCostEur', label: 'Akku-Kosten', formatter: fmtEur },
   { key: 'avoidedImportGrossEur', label: 'Vermiedene Bezugskosten', formatter: fmtEur },
   { key: 'netEur', derived: actualNetEur, label: 'Netto', formatter: fmtEur },
-  { key: 'grossReturnEur', derived: grossReturnEur, label: 'Brutto-Erlös', formatter: fmtEur },
-  { key: 'marketPremiumEur', derived: marketPremiumValueEur, label: 'Marktprämie €', formatter: fmtEur },
-  { key: 'marketPremiumCtKwh', derived: marketPremiumRateCtKwh, label: 'Marktprämie ct/kWh', formatter: fmtCt }
+  { key: 'grossReturnEur', derived: grossReturnEur, label: 'Brutto-Erlös', formatter: fmtEur }
 ];
 
 const aggregateMetricKeys = [
@@ -475,9 +496,7 @@ function renderAggregateSummaryTable(summary) {
     aggregateTableColumns[8],
     aggregateTableColumns[9],
     aggregateTableColumns[10],
-    aggregateTableColumns[11],
-    aggregateTableColumns[12],
-    aggregateTableColumns[13]
+    aggregateTableColumns[11]
   ];
 
   return `
@@ -1105,7 +1124,6 @@ function renderRows(summary) {
   if (!rowsMount) return;
   const rows = Array.isArray(summary?.rows) ? summary.rows : [];
   const includeSolar = String(summary?.view || '') === 'year';
-  const includePremium = String(summary?.view || '') !== 'day';
 
   rowsMount.innerHTML = `
     <table class="history-data-table">
@@ -1137,7 +1155,7 @@ function renderRows(summary) {
           <th>Erlös Einspeisung</th>
           <th>Kosten</th>
           <th>Netto</th>
-          ${includePremium ? '<th>Brutto-Erlös</th><th>Marktprämie €</th><th>Marktprämie ct/kWh</th>' : ''}
+          <th>Brutto-Erlös</th>
           ${includeSolar ? '<th>Marktwert Solar</th><th>Solar-Ausgleich</th>' : ''}
           <th>Status</th>
         </tr>
@@ -1171,7 +1189,7 @@ function renderRows(summary) {
             <td>${fmtEur(row.exportRevenueEur)}</td>
             <td>${fmtEur(actualCostEur(row))}</td>
             <td>${fmtEur(actualNetEur(row))}</td>
-            ${includePremium ? `<td>${fmtEur(grossReturnEur(row))}</td><td>${fmtEur(marketPremiumValueEur(row))}</td><td>${fmtCt(marketPremiumRateCtKwh(row))}</td>` : ''}
+            <td>${fmtEur(grossReturnEur(row))}</td>
             ${includeSolar ? `<td>${fmtCt(row.solarMarketValueCtKwh)}</td><td>${fmtEur(row.solarCompensationEur)}</td>` : ''}
             <td>${[
               sourceStatusLabel(row),
