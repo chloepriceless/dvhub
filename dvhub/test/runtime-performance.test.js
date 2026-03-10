@@ -99,3 +99,30 @@ test('poll interval normalization enforces a one-second minimum cadence', () => 
   assert.equal(normalizePollIntervalMs(1000), 1000);
   assert.equal(normalizePollIntervalMs(2500), 2500);
 });
+
+test('runtime poll triggers are serialized and do not accumulate backlog', async () => {
+  const deferred = [];
+  let runs = 0;
+  const runner = createSerialTaskRunner({
+    queueWhileRunning: false,
+    task: async () => {
+      runs += 1;
+      await new Promise((resolve) => deferred.push(resolve));
+    }
+  });
+
+  const triggers = Array.from({ length: 5 }, () => runner.run());
+  assert.equal(runs, 1);
+  assert.equal(runner.isRunning(), true);
+
+  deferred.shift()();
+  await Promise.all(triggers);
+  assert.equal(runs, 1);
+  assert.equal(runner.isRunning(), false);
+
+  const followUp = runner.run();
+  assert.equal(runs, 2);
+  deferred.shift()();
+  await followUp;
+  assert.equal(runs, 2);
+});
