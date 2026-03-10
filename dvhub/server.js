@@ -25,7 +25,11 @@ import {
   normalizePollIntervalMs
 } from './runtime-performance.js';
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
-import { buildRuntimeSnapshot } from './runtime-state.js';
+import {
+  buildHistoryImportStatusResponse,
+  buildRuntimeSnapshot,
+  buildWorkerBackedStatusResponse
+} from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
@@ -56,6 +60,9 @@ const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
+const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
+const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
+const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE === 'monolith';
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
@@ -138,6 +145,8 @@ const energyChartsMarketValueService = createEnergyChartsMarketValueService();
 let liveTelemetryBuffer = null;
 let runtimeWorker = null;
 let runtimeWorkerSnapshot = null;
+let runtimeWorkerStatusPayload = null;
+let runtimeWorkerHeartbeatAt = 0;
 let runtimeWorkerState = {
   ready: false,
   lastError: null
@@ -247,6 +256,75 @@ function buildCurrentRuntimeSnapshot() {
   });
 }
 
+function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCurrentRuntimeSnapshot() } = {}) {
+  return {
+    now: Number(now),
+    dvControlValue: controlValue(),
+    dvRegs: state.dvRegs,
+    ctrl: { ...state.ctrl, dvControl: state.ctrl.dvControl || null },
+    keepalive: state.keepalive,
+    meter: runtimeSnapshot.meter,
+    victron: runtimeSnapshot.victron,
+    scan: state.scan,
+    schedule: runtimeSnapshot.schedule,
+    costs: costSummary(),
+    userEnergyPricing: userEnergyPricingSummary(),
+    epex: { ...state.epex, summary: epexNowNext() },
+    telemetry: {
+      ...runtimeSnapshot.telemetry,
+      historyImport: runtimeSnapshot.historyImport
+    }
+  };
+}
+
+function buildRuntimeRouteMeta(now = Date.now()) {
+  const snapshotCapturedAt = runtimeWorkerSnapshot?.capturedAt ? Date.parse(runtimeWorkerSnapshot.capturedAt) : Number.NaN;
+  return {
+    ready: RUNTIME_WORKER_ENABLED ? runtimeWorkerState.ready : true,
+    busy: false,
+    queueDepth: 0,
+    snapshotAgeMs: Number.isFinite(snapshotCapturedAt) ? Math.max(0, now - snapshotCapturedAt) : null,
+    heartbeatAgeMs: runtimeWorkerHeartbeatAt ? Math.max(0, now - runtimeWorkerHeartbeatAt) : null,
+    mode: RUNTIME_WORKER_ENABLED ? 'worker' : 'in_process',
+    lastError: runtimeWorkerState.lastError
+  };
+}
+
+function getCachedRuntimeStatusPayload() {
+  if (!IS_WEB_PROCESS || !RUNTIME_WORKER_ENABLED) return null;
+  return runtimeWorkerStatusPayload;
+}
+
+function buildApiStatusResponse(now = Date.now()) {
+  const runtimeSnapshot = buildCurrentRuntimeSnapshot();
+  return buildWorkerBackedStatusResponse({
+    cachedStatus: getCachedRuntimeStatusPayload(),
+    fallbackStatus: buildCurrentStatusPayload({ now, runtimeSnapshot }),
+    setup: configMetaPayload(),
+    runtime: buildRuntimeRouteMeta(now)
+  });
+}
+
+function buildApiHistoryImportStatusResponse() {
+  const runtimeSnapshot = buildCurrentRuntimeSnapshot();
+  return buildHistoryImportStatusResponse({
+    cachedStatus: getCachedRuntimeStatusPayload(),
+    fallbackTelemetryEnabled: !!cfg.telemetry?.enabled,
+    fallbackHistoryImport: runtimeSnapshot.historyImport
+  });
+}
+
+function publishRuntimeSnapshot() {
+  if (!IS_RUNTIME_PROCESS || typeof process.send !== 'function') return;
+  const now = Date.now();
+  const snapshot = buildCurrentRuntimeSnapshot();
+  process.send({
+    type: RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT,
+    snapshot,
+    status: buildCurrentStatusPayload({ now, runtimeSnapshot: snapshot })
+  });
+}
+
 function assertValidRuntimeCommand(type, payload) {
   const request = createRuntimeCommandRequest(type, payload);
   const validation = validateRuntimeCommand(request);
@@ -260,7 +338,10 @@ function assertValidRuntimeCommand(type, payload) {
 
 function startDedicatedRuntimeWorker() {
   const worker = startRuntimeWorker({
-    cwd: __dirname
+    cwd: __dirname,
+    env: {
+      DVHUB_PROCESS_ROLE: 'runtime-worker'
+    }
   });
 
   worker.on('message', (message) => {
@@ -272,6 +353,8 @@ function startDedicatedRuntimeWorker() {
     }
     if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT) {
       runtimeWorkerSnapshot = message.snapshot;
+      runtimeWorkerStatusPayload = message.status || null;
+      runtimeWorkerHeartbeatAt = Date.now();
       return;
     }
     if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_ERROR) {
@@ -282,6 +365,7 @@ function startDedicatedRuntimeWorker() {
   worker.on('exit', (code, signal) => {
     runtimeWorkerState.ready = false;
     runtimeWorkerState.lastError = `runtime worker exited (code=${code}, signal=${signal})`;
+    runtimeWorkerHeartbeatAt = 0;
   });
 
   return worker;
@@ -940,6 +1024,7 @@ async function pollMeter() {
   liveTelemetryBuffer?.flush();
 
   bufferInflux(buildInfluxLines(Math.floor(Date.now() / 1000)));
+  publishRuntimeSnapshot();
 }
 
 async function fetchEpexDay() {
@@ -980,6 +1065,7 @@ async function fetchEpexDay() {
     state.epex.updatedAt = Date.now();
     pushLog('epex_refresh_err', { error: e.message });
   }
+  publishRuntimeSnapshot();
 }
 
 function epexNowNext() {
@@ -1360,6 +1446,8 @@ async function evaluateSchedule() {
       applyDvVictronControl(true);
     }
   }
+
+  publishRuntimeSnapshot();
 }
 
 function keepaliveModbusPayload() {
@@ -1779,26 +1867,7 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
-    const runtimeSnapshot = buildCurrentRuntimeSnapshot();
-    return json(res, 200, {
-      now: Date.now(),
-      dvControlValue: controlValue(),
-      dvRegs: state.dvRegs,
-      ctrl: { ...state.ctrl, dvControl: state.ctrl.dvControl || null },
-      keepalive: state.keepalive,
-      meter: runtimeSnapshot.meter,
-      victron: runtimeSnapshot.victron,
-      scan: state.scan,
-      schedule: runtimeSnapshot.schedule,
-      setup: configMetaPayload(),
-      costs: costSummary(),
-      userEnergyPricing: userEnergyPricingSummary(),
-      epex: { ...state.epex, summary: epexNowNext() },
-      telemetry: {
-        ...runtimeSnapshot.telemetry,
-        historyImport: runtimeSnapshot.historyImport
-      }
-    });
+    return json(res, 200, buildApiStatusResponse(Date.now()));
   }
 
   if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary());
@@ -1867,12 +1936,7 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
-    const runtimeSnapshot = buildCurrentRuntimeSnapshot();
-    return json(res, 200, {
-      ok: true,
-      telemetryEnabled: !!cfg.telemetry?.enabled,
-      historyImport: runtimeSnapshot.historyImport
-    });
+    return json(res, 200, buildApiHistoryImportStatusResponse());
   }
 
   if (url.pathname === '/api/history/import' && req.method === 'POST') {
@@ -2005,7 +2069,7 @@ const web = http.createServer(async (req, res) => {
 });
 
 telemetryStore = createTelemetryStoreIfEnabled();
-liveTelemetryBuffer = telemetryStore ? createTelemetryWriteBuffer({
+liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
   flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
   buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
   writeSamples: (rows) => telemetrySafeWrite(() => telemetryStore.writeSamples(rows))
@@ -2014,7 +2078,7 @@ historyImportManager = telemetryStore ? createHistoryImportManager({
   store: telemetryStore,
   telemetryConfig: cfg.telemetry || {}
 }) : null;
-if (historyImportManager) historyImportManager.startAutomaticBackfill();
+if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
 historyRuntime = telemetryStore ? createHistoryRuntime({
   store: telemetryStore,
   getPricingConfig: () => cfg.userEnergyPricing || {}
@@ -2029,20 +2093,35 @@ historyApi = createHistoryApiHandlers({
 });
 refreshTelemetryStatus();
 
-if (RUNTIME_WORKER_ENABLED) {
+if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
   runtimeWorker = startDedicatedRuntimeWorker();
 }
 
-web.listen(cfg.httpPort, () => {
-  console.log(`Web server listening on :${cfg.httpPort}`);
-});
+if (IS_WEB_PROCESS) {
+  web.listen(cfg.httpPort, () => {
+    console.log(`Web server listening on :${cfg.httpPort}`);
+  });
+}
 
-loadEnergy();
-startModbusServer();
-setInterval(expireLeaseIfNeeded, 1000);
-setInterval(() => {
-  liveTelemetryBuffer?.flush();
-}, 1000);
+if (IS_RUNTIME_PROCESS) {
+  loadEnergy();
+  startModbusServer();
+  setInterval(expireLeaseIfNeeded, 1000);
+  setInterval(() => {
+    liveTelemetryBuffer?.flush();
+  }, 1000);
+  setInterval(() => {
+    publishRuntimeSnapshot();
+  }, 1000);
+}
+
+if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
+  process.send({
+    type: RUNTIME_MESSAGE_TYPES.RUNTIME_READY,
+    pid: process.pid
+  });
+  publishRuntimeSnapshot();
+}
 
 const pollMeterRunner = createSerialTaskRunner({
   queueWhileRunning: false,
@@ -2053,35 +2132,37 @@ function requestPollMeter() {
   return pollMeterRunner.run();
 }
 
-// Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
-transport.init().then(() => {
-  console.log(`Transport initialisiert: ${transport.type}`);
-  requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+if (IS_RUNTIME_PROCESS) {
+  // Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
+  transport.init().then(() => {
+    console.log(`Transport initialisiert: ${transport.type}`);
+    requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+    setInterval(() => {
+      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+    }, effectivePollIntervalMs());
+    setInterval(() => {
+      evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
+    }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
+  }).catch((e) => {
+    console.error('Transport init fehlgeschlagen:', e.message);
+    console.error('Polling/Schedule starten ohne Transport...');
+  });
+  fetchEpexDay();
   setInterval(() => {
-    requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
-  }, effectivePollIntervalMs());
+    const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
+    if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
+  }, 5 * 60 * 1000);
   setInterval(() => {
-    evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
-  }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
-}).catch((e) => {
-  console.error('Transport init fehlgeschlagen:', e.message);
-  console.error('Polling/Schedule starten ohne Transport...');
-});
-fetchEpexDay();
-setInterval(() => {
-  const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
-  if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
-}, 5 * 60 * 1000);
-setInterval(() => {
-  flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
-}, INFLUX_FLUSH_MS);
-setInterval(persistEnergy, 60000);
-setInterval(() => {
-  telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
-}, 5 * 60 * 1000);
-setInterval(() => {
-  telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
-}, 6 * 60 * 60 * 1000);
+    flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
+  }, INFLUX_FLUSH_MS);
+  setInterval(persistEnergy, 60000);
+  setInterval(() => {
+    telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
+  }, 5 * 60 * 1000);
+  setInterval(() => {
+    telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
+  }, 6 * 60 * 60 * 1000);
+}
 
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
@@ -2092,13 +2173,14 @@ function gracefulShutdown(signal) {
   scanTransport.destroy();
   if (telemetryStore) telemetryStore.close();
   if (mbServer) mbServer.close();
-  web.close();
+  if (IS_WEB_PROCESS) web.close();
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 console.log('Config loaded:', {
+  processRole: PROCESS_ROLE,
   httpPort: cfg.httpPort,
   modbusListenPort: cfg.modbusListenPort,
   meterPollMs: cfg.meterPollMs,

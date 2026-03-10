@@ -171,3 +171,51 @@ export function buildWebStatusResponse({
     runtime: pickFields(runtime, RUNTIME_FIELDS)
   };
 }
+
+export function buildWorkerBackedStatusResponse({
+  cachedStatus = null,
+  fallbackStatus = {},
+  setup = null,
+  runtime = {}
+} = {}) {
+  const base = sanitizeValue(
+    cachedStatus && typeof cachedStatus === 'object'
+      ? cachedStatus
+      : fallbackStatus
+  ) || {};
+
+  const response = {
+    ...base,
+    runtime: pickFields(runtime, RUNTIME_FIELDS)
+  };
+
+  if (setup != null) {
+    response.setup = sanitizeValue(setup);
+  }
+
+  return response;
+}
+
+export function buildHistoryImportStatusResponse({
+  cachedStatus = null,
+  fallbackTelemetryEnabled = false,
+  fallbackHistoryImport = null
+} = {}) {
+  const cachedTelemetry = cachedStatus && typeof cachedStatus === 'object'
+    ? sanitizeValue(cachedStatus.telemetry)
+    : null;
+
+  if (cachedTelemetry && typeof cachedTelemetry === 'object') {
+    return {
+      ok: true,
+      telemetryEnabled: Boolean(cachedTelemetry.enabled),
+      historyImport: cachedTelemetry.historyImport ?? null
+    };
+  }
+
+  return {
+    ok: true,
+    telemetryEnabled: Boolean(fallbackTelemetryEnabled),
+    historyImport: sanitizeValue(fallbackHistoryImport)
+  };
+}

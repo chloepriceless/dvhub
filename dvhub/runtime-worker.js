@@ -12,7 +12,7 @@ function sendMessage(message) {
   }
 }
 
-function publishSnapshot() {
+function publishTestSnapshot() {
   sendMessage({
     type: RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT,
     snapshot: buildRuntimeSnapshot({
@@ -50,48 +50,57 @@ function publishSnapshot() {
   });
 }
 
-async function handleCommand(command = {}) {
-  const type = String(command.type || '');
-  const payload = command && typeof command === 'object' ? command.payload || {} : {};
+async function startTestWorker() {
+  async function handleCommand(command = {}) {
+    const type = String(command.type || '');
+    const payload = command && typeof command === 'object' ? command.payload || {} : {};
 
-  if (Number.isFinite(Number(payload.delayMs)) && Number(payload.delayMs) > 0) {
-    await delay(Number(payload.delayMs));
+    if (Number.isFinite(Number(payload.delayMs)) && Number(payload.delayMs) > 0) {
+      await delay(Number(payload.delayMs));
+    }
+
+    if (payload.fail) {
+      throw new Error(`runtime worker command failed: ${type}`);
+    }
+
+    publishTestSnapshot();
+    return {
+      commandType: type
+    };
   }
 
-  if (payload.fail) {
-    throw new Error(`runtime worker command failed: ${type}`);
-  }
+  const commandQueue = createRuntimeCommandQueue({
+    handleCommand,
+    sendMessage
+  });
 
-  publishSnapshot();
-  return {
-    commandType: type
-  };
+  process.on('message', (message) => {
+    if (!message || message.type !== RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST) return;
+    commandQueue.enqueue({
+      requestId: message.requestId,
+      command: message.command
+    });
+  });
+
+  process.on('uncaughtException', (error) => {
+    sendMessage({
+      type: RUNTIME_MESSAGE_TYPES.RUNTIME_ERROR,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  });
+
+  process.channel?.ref?.();
+
+  sendMessage({
+    type: RUNTIME_MESSAGE_TYPES.RUNTIME_READY,
+    pid: process.pid
+  });
+  publishTestSnapshot();
 }
 
-const commandQueue = createRuntimeCommandQueue({
-  handleCommand,
-  sendMessage
-});
-
-process.on('message', (message) => {
-  if (!message || message.type !== RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST) return;
-  commandQueue.enqueue({
-    requestId: message.requestId,
-    command: message.command
-  });
-});
-
-process.on('uncaughtException', (error) => {
-  sendMessage({
-    type: RUNTIME_MESSAGE_TYPES.RUNTIME_ERROR,
-    error: error instanceof Error ? error.message : String(error)
-  });
-});
-
-process.channel?.ref?.();
-
-sendMessage({
-  type: RUNTIME_MESSAGE_TYPES.RUNTIME_READY,
-  pid: process.pid
-});
-publishSnapshot();
+if (process.env.DVHUB_RUNTIME_WORKER_TEST === '1') {
+  await startTestWorker();
+} else {
+  process.env.DVHUB_PROCESS_ROLE = 'runtime-worker';
+  await import('./server.js');
+}

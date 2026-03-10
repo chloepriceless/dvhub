@@ -1630,7 +1630,7 @@ export function createDefaultConfig() {
     modbusListenHost: '0.0.0.0',
     modbusListenPort: 1502,
     offLeaseMs: 8 * 60 * 1000,
-    meterPollMs: 2000,
+    meterPollMs: 5000,
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',
     victron: {

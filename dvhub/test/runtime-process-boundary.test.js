@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   buildRuntimeSnapshot,
-  buildWebStatusResponse
+  buildWebStatusResponse,
+  buildWorkerBackedStatusResponse,
+  buildHistoryImportStatusResponse
 } from '../runtime-state.js';
 import {
   createRuntimeCommandRequest,
@@ -125,6 +127,106 @@ test('web process can serve a cached status response while the runtime worker is
     busy: true,
     queueDepth: 1,
     snapshotAgeMs: 250
+  });
+});
+
+test('web status responses prefer cached worker payloads over local fallback state', () => {
+  const cachedStatus = {
+    now: 1773117900000,
+    meter: { grid_total_w: 420 },
+    victron: { soc: 63 },
+    telemetry: {
+      enabled: true,
+      historyImport: {
+        enabled: true,
+        provider: 'vrm',
+        ready: true,
+        backfillRunning: false
+      }
+    },
+    epex: {
+      ok: true,
+      data: [{ ts: 1773117600000, ct_kwh: 4.2 }],
+      summary: { current: { ts: 1773117600000, ct_kwh: 4.2 } }
+    }
+  };
+
+  const fallbackStatus = {
+    now: 1773117912345,
+    meter: { grid_total_w: 9999 },
+    victron: { soc: 5 },
+    telemetry: {
+      enabled: false,
+      historyImport: {
+        enabled: false,
+        provider: 'vrm',
+        ready: false,
+        backfillRunning: true
+      }
+    },
+    epex: {
+      ok: false,
+      data: [],
+      summary: null
+    }
+  };
+
+  const response = buildWorkerBackedStatusResponse({
+    cachedStatus,
+    fallbackStatus,
+    setup: {
+      path: '/etc/dvhub/config.json',
+      exists: true,
+      valid: true
+    },
+    runtime: {
+      ready: true,
+      mode: 'worker',
+      snapshotAgeMs: 450
+    }
+  });
+
+  assert.equal(response.meter.grid_total_w, 420);
+  assert.equal(response.victron.soc, 63);
+  assert.equal(response.telemetry.enabled, true);
+  assert.equal(response.telemetry.historyImport.backfillRunning, false);
+  assert.equal(response.epex.ok, true);
+  assert.equal(response.epex.data.length, 1);
+  assert.equal(response.setup.path, '/etc/dvhub/config.json');
+  assert.equal(response.runtime.mode, 'worker');
+});
+
+test('history import status prefers cached worker telemetry state when available', () => {
+  const response = buildHistoryImportStatusResponse({
+    cachedStatus: {
+      telemetry: {
+        enabled: true,
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          ready: true,
+          backfillRunning: false
+        }
+      }
+    },
+    fallbackTelemetryEnabled: false,
+    fallbackHistoryImport: {
+      enabled: false,
+      provider: 'vrm',
+      ready: false,
+      backfillRunning: true
+    }
+  });
+
+  assert.deepEqual(response, {
+    ok: true,
+    telemetryEnabled: true,
+    historyImport: {
+      enabled: true,
+      provider: 'vrm',
+      ready: true,
+      backfillRunning: false
+    }
   });
 });
 
