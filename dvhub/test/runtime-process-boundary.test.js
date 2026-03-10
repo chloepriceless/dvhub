@@ -74,3 +74,127 @@ test('heavy runtime writes are converted into worker command requests before exe
   assert.equal(request.payload.requestedBy, 'tools_page');
   assert.equal(validateRuntimeCommand(request).ok, true);
 });
+
+test('runtime state snapshots stay serializable and drop transport-only objects', () => {
+  const snapshot = buildRuntimeSnapshot({
+    now: '2026-03-10T04:45:00.000Z',
+    meter: {
+      grid_total_w: 380,
+      raw: [1, 2, 3],
+      socket: { remoteAddress: '127.0.0.1' }
+    },
+    victron: {
+      soc: 57,
+      errors: {
+        batteryPowerW: 'timeout'
+      },
+      request: { method: 'POST' }
+    },
+    schedule: {
+      active: { gridSetpointW: 50 },
+      rules: [{ id: 'day-1', enabled: true }],
+      manualOverride: { gridSetpointW: { value: 1200 } }
+    },
+    telemetry: {
+      enabled: true,
+      dbPath: '/tmp/telemetry.sqlite',
+      lastWriteAt: '2026-03-10T04:44:59.000Z',
+      res: { statusCode: 200 }
+    },
+    historyImport: {
+      enabled: true,
+      provider: 'vrm',
+      ready: true,
+      backfillRunning: true,
+      req: { url: '/api/history/import' }
+    }
+  });
+
+  const plain = JSON.parse(JSON.stringify(snapshot));
+  assert.equal(plain.capturedAt, '2026-03-10T04:45:00.000Z');
+  assert.equal(plain.meter.grid_total_w, 380);
+  assert.equal(plain.victron.soc, 57);
+  assert.equal(plain.schedule.rules[0].id, 'day-1');
+  assert.equal(plain.telemetry.dbPath, '/tmp/telemetry.sqlite');
+  assert.equal(plain.historyImport.backfillRunning, true);
+  assert.equal('socket' in plain.meter, false);
+  assert.equal('request' in plain.victron, false);
+  assert.equal('res' in plain.telemetry, false);
+  assert.equal('req' in plain.historyImport, false);
+});
+
+test('command payloads are schema-checked before runtime execution', () => {
+  assert.equal(validateRuntimeCommand(createRuntimeCommandRequest('poll_now')).ok, true);
+  assert.equal(validateRuntimeCommand(createRuntimeCommandRequest('service_health_snapshot')).ok, true);
+
+  assert.deepEqual(
+    validateRuntimeCommand(createRuntimeCommandRequest('control_write', {
+      target: 'gridSetpointW',
+      value: 2500
+    })),
+    {
+      ok: true,
+      error: null
+    }
+  );
+
+  assert.deepEqual(
+    validateRuntimeCommand(createRuntimeCommandRequest('history_import', {
+      provider: 'vrm',
+      requestedFrom: '2026-03-01T00:00:00.000Z',
+      requestedTo: '2026-03-02T00:00:00.000Z',
+      interval: '15mins'
+    })),
+    {
+      ok: true,
+      error: null
+    }
+  );
+
+  assert.deepEqual(
+    validateRuntimeCommand(createRuntimeCommandRequest('history_backfill', {
+      mode: 'full',
+      requestedBy: 'tools_page'
+    })),
+    {
+      ok: true,
+      error: null
+    }
+  );
+
+  assert.deepEqual(
+    validateRuntimeCommand({
+      type: 'control_write',
+      route: 'runtime_worker',
+      payload: { target: 'gridSetpointW', value: Number.NaN }
+    }),
+    {
+      ok: false,
+      error: 'control_write value must be finite'
+    }
+  );
+
+  assert.deepEqual(
+    validateRuntimeCommand({
+      type: 'history_import',
+      route: 'runtime_worker',
+      payload: { provider: 'vrm', requestedFrom: 'not-a-date' }
+    }),
+    {
+      ok: false,
+      error: 'history_import requestedFrom/requestedTo must be valid ISO timestamps'
+    }
+  );
+
+  assert.deepEqual(
+    validateRuntimeCommand({
+      type: 'history_backfill',
+      route: 'runtime_worker',
+      payload: { mode: 'overnight' }
+    }),
+    {
+      ok: false,
+      error: 'history_backfill mode must be gap or full'
+    }
+  );
+});
