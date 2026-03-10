@@ -112,6 +112,40 @@ test('dashboard helpers mark schedule windows as expired based on the current lo
   );
 });
 
+test('dashboard refresh helper prevents overlapping refresh runs and coalesces one trailing rerun', async () => {
+  const helpers = loadDashboardHelpers();
+  const deferred = [];
+  let runs = 0;
+
+  assert.equal(typeof helpers.createRefreshCoordinator, 'function');
+
+  const coordinator = helpers.createRefreshCoordinator({
+    refreshTask: async () => {
+      runs += 1;
+      await new Promise((resolve) => deferred.push(resolve));
+    }
+  });
+
+  const first = coordinator.run();
+  const second = coordinator.run();
+  const third = coordinator.run();
+
+  assert.equal(runs, 1);
+  assert.equal(coordinator.isRunning(), true);
+
+  deferred.shift()();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(runs, 2);
+
+  deferred.shift()();
+  await first;
+  await second;
+  await third;
+
+  assert.equal(runs, 2);
+  assert.equal(coordinator.isRunning(), false);
+});
+
 test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
