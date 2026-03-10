@@ -37,6 +37,8 @@ function loadHistoryPageHelpers() {
     'historySummaryCard',
     'historyPremiumFields',
     'historyPremiumHint',
+    'historyPremiumScopeLabel',
+    'historyPremiumMarketValueLabel',
     'historyKpiCost',
     'historyKpiRevenue',
     'historyKpiAvoided',
@@ -321,9 +323,57 @@ test('history page renders year-only premium fields and a provisional note for r
   assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /185,00/);
   assert.match(elements.get('historyKpiMarketPremium').textContent, /410,20/);
   assert.match(elements.get('historyKpiVbh').textContent, /30,30/);
+  assert.match(elements.get('historyPremiumScopeLabel').textContent, /Jahresansicht/);
+  assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Jahresmarktwert/);
   assert.equal(elements.get('historyPremiumHint').hidden, false);
   assert.match(elements.get('historyPremiumHint').textContent, /Folgemonat/i);
   assert.match(elements.get('historyPremiumHint').textContent, /2 Monatswert/);
+});
+
+test('history page renders month premium fields with month-scoped labels and quantities', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'month',
+    date: '2026-02-24',
+    kpis: {
+      importCostEur: 76.29,
+      gridCostEur: 76.29,
+      pvCostEur: 19.19,
+      batteryCostEur: 34.1,
+      avoidedImportGrossEur: 180.04,
+      avoidedImportPvGrossEur: 81.14,
+      avoidedImportBatteryGrossEur: 98.9,
+      exportRevenueEur: 15.69,
+      importKwh: 290.74,
+      loadKwh: 937.53,
+      pvKwh: 1003.67,
+      exportKwh: 222.5,
+      pvFullLoadHours: 33.79,
+      weightedApplicableValueCtKwh: 8.2,
+      premiumEligibleExportKwh: 222.5,
+      marketPremiumCtKwh: 3.7,
+      marketPremiumEur: 8.23
+    },
+    rows: [],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.equal(elements.get('historyPremiumFields').hidden, false);
+  assert.match(elements.get('historyPremiumScopeLabel').textContent, /Monatsansicht/);
+  assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Monatsmarktwert/);
+  assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /4,50/);
+  assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /222,50/);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /8,23/);
+  assert.equal(elements.get('historyPremiumHint').hidden, true);
 });
 
 test('history page renders daily line charts and estimated markers from chart payloads', () => {
@@ -606,8 +656,8 @@ test('history page switches aggregated month view to summarized weekly table mod
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Brutto-Erlös/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
   assert.match(String(elements.get('historyAggregateOverviewBtn').ariaPressed), /false/);
   assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
   assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
@@ -670,8 +720,8 @@ test('history page renders yearly aggregate table with year total and month rows
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-02/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Brutto-Erlös/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /Marktprämie €/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /Marktprämie ct\/kWh/);
   assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
 });
 
