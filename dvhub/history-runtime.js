@@ -740,28 +740,14 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
       ? round2(weightedApplicableValueCtKwh - officialAnnualMarketValueCtKwh)
       : null;
   } else if (Number.isFinite(derivedRunningAnnualMarketValueCtKwh) && Number.isFinite(weightedApplicableValueCtKwh)) {
-    const provisional = slots.reduce((acc, slot) => {
-      const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
-      const exportKwh = Number(slot?.exportKwh || 0);
-      const monthKey = localMonthString(slot?.ts);
-      const monthlyMarketValueCtKwh = Number(monthlyCtKwhByMonth?.[monthKey]);
-      if (!Number.isFinite(monthlyMarketValueCtKwh) || !Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0 || exportKwh <= 0) {
-        return acc;
-      }
-      acc.premiumEligibleExportKwh += exportKwh;
-      acc.premiumValuedExportKwh += exportKwh;
-      acc.marketPremiumCt += exportKwh * (weightedApplicableValueCtKwh - monthlyMarketValueCtKwh);
-      return acc;
-    }, {
-      premiumEligibleExportKwh: 0,
-      premiumValuedExportKwh: 0,
-      marketPremiumCt: 0
-    });
-    marketPremiumEur = premiumEligibleExportKwh > 0 ? round2(provisional.marketPremiumCt / 100) : null;
-    premiumValuedExportKwh = provisional.premiumValuedExportKwh;
-    marketPremiumCtKwh = provisional.premiumValuedExportKwh > 0
-      ? round2(provisional.marketPremiumCt / provisional.premiumValuedExportKwh)
+    premiumValuedExportKwh = premiumEligibleExportKwh;
+    marketPremiumCtKwh = premiumEligibleExportKwh > 0
+      ? round2(weightedApplicableValueCtKwh - derivedRunningAnnualMarketValueCtKwh)
       : null;
+    marketPremiumEur =
+      premiumEligibleExportKwh > 0 && Number.isFinite(marketPremiumCtKwh)
+        ? round2((premiumEligibleExportKwh * marketPremiumCtKwh) / 100)
+        : null;
     source = premiumEligibleExportKwh > 0 ? 'derived_monthly_running' : null;
   }
 
@@ -774,7 +760,10 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
       premiumValuedExportKwh,
       marketPremiumEur,
       marketPremiumCtKwh,
-      marketPremiumCtTotal: premiumValuedExportKwh > 0 ? round2((marketPremiumEur || 0) * 100) : 0
+      marketPremiumCtTotal:
+        premiumValuedExportKwh > 0 && Number.isFinite(marketPremiumCtKwh)
+          ? round2(premiumValuedExportKwh * marketPremiumCtKwh)
+          : 0
     },
     meta: {
       ...meta,
