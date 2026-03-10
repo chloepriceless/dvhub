@@ -7,6 +7,7 @@ const historyState = {
   lastSummary: null,
   chartCursorByMount: {},
   opportunityBlendPct: 0,
+  aggregateModeByView: {},
   detailsExpanded: false,
   statusInfoExpanded: false,
   statusInfoHtml: ''
@@ -190,6 +191,299 @@ function actualNetEur(item) {
   const explicit = Number(item?.netEur);
   if (Number.isFinite(explicit)) return round2(explicit);
   return round2(valueOf(item, 'exportRevenueEur') - actualCostEur(item));
+}
+
+function isAggregateView(view) {
+  return String(view || '') !== 'day';
+}
+
+function defaultAggregateMode(view) {
+  return String(view || '') === 'week' ? 'overview' : 'table';
+}
+
+function aggregateModeForView(view) {
+  const normalizedView = String(view || '');
+  if (!isAggregateView(normalizedView)) return null;
+  if (!historyState.aggregateModeByView[normalizedView]) {
+    historyState.aggregateModeByView[normalizedView] = defaultAggregateMode(normalizedView);
+  }
+  return historyState.aggregateModeByView[normalizedView];
+}
+
+function setAggregateMode(view, mode) {
+  const normalizedView = String(view || '');
+  if (!isAggregateView(normalizedView)) return;
+  historyState.aggregateModeByView[normalizedView] = mode === 'table' ? 'table' : 'overview';
+}
+
+function parseIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return null;
+  const [year, month, day] = String(value).split('-').map(Number);
+  return { year, month, day };
+}
+
+function formatShortDate(value) {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return String(value || '-');
+  return `${String(parsed.day).padStart(2, '0')}.${String(parsed.month).padStart(2, '0')}.`;
+}
+
+function utcDateOnly(value) {
+  const parsed = parseIsoDate(value);
+  if (!parsed) return null;
+  return new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day));
+}
+
+function startOfWeekDateOnly(value) {
+  const date = utcDateOnly(value);
+  if (!date) return null;
+  const weekday = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - weekday);
+  return date.toISOString().slice(0, 10);
+}
+
+const aggregateTableColumns = [
+  { key: 'importKwh', label: 'Import', formatter: fmtKwh },
+  { key: 'loadKwh', label: 'Verbrauch', formatter: fmtKwh },
+  { key: 'pvShareKwh', label: 'Eigenverbrauch PV', formatter: fmtKwh },
+  { key: 'batteryShareKwh', label: 'Eigenverbrauch Akku', formatter: fmtKwh },
+  { key: 'exportKwh', label: 'Einspeisung', formatter: fmtKwh },
+  { key: 'exportRevenueEur', label: 'Erlös Einspeisung', formatter: fmtEur },
+  { key: 'gridCostEur', fallbackKey: 'importCostEur', label: 'Bezugskosten', formatter: fmtEur },
+  { key: 'pvCostEur', label: 'PV-Kosten', formatter: fmtEur },
+  { key: 'batteryCostEur', label: 'Akku-Kosten', formatter: fmtEur },
+  { key: 'avoidedImportGrossEur', label: 'Vermiedene Bezugskosten', formatter: fmtEur },
+  { key: 'netEur', derived: actualNetEur, label: 'Netto', formatter: fmtEur }
+];
+
+const aggregateMetricKeys = [
+  'importKwh',
+  'loadKwh',
+  'pvShareKwh',
+  'batteryShareKwh',
+  'exportKwh',
+  'exportRevenueEur',
+  'gridCostEur',
+  'importCostEur',
+  'pvCostEur',
+  'batteryCostEur',
+  'avoidedImportGrossEur',
+  'netEur',
+  'estimatedSlots',
+  'incompleteSlots'
+];
+
+function aggregateColumnValue(row, column) {
+  if (typeof column.derived === 'function') return column.derived(row);
+  if (column.fallbackKey != null) {
+    return row?.[column.key] ?? row?.[column.fallbackKey] ?? 0;
+  }
+  return row?.[column.key] ?? 0;
+}
+
+function buildAggregateRow(label, rows) {
+  const nextRow = { label };
+  for (const key of aggregateMetricKeys) nextRow[key] = 0;
+  for (const row of rows) {
+    for (const key of aggregateMetricKeys) {
+      nextRow[key] = round2(Number(nextRow[key] || 0) + Number(row?.[key] || 0));
+    }
+  }
+  return nextRow;
+}
+
+function aggregateSummaryLabel(view) {
+  if (view === 'month') return 'Gesamt Monat';
+  if (view === 'year') return 'Gesamt Jahr';
+  return 'Gesamt Woche';
+}
+
+function buildAggregateSummaryRow(summary) {
+  const view = String(summary?.view || '');
+  const kpis = summary?.kpis || {};
+  return {
+    label: aggregateSummaryLabel(view),
+    importKwh: Number(kpis.importKwh || 0),
+    loadKwh: Number(kpis.loadKwh || 0),
+    pvShareKwh: Number(kpis.selfConsumptionKwh || 0) ? Number(kpis.selfConsumptionKwh || 0) - Number(kpis.importKwh || 0) - Number(kpis.batteryShareKwh || 0) : Number(kpis.pvShareKwh || 0),
+    batteryShareKwh: Number(kpis.batteryShareKwh || 0),
+    exportKwh: Number(kpis.exportKwh || 0),
+    exportRevenueEur: Number(kpis.exportRevenueEur || 0),
+    gridCostEur: Number(kpis.gridCostEur ?? kpis.importCostEur ?? 0),
+    importCostEur: Number(kpis.importCostEur || kpis.gridCostEur || 0),
+    pvCostEur: Number(kpis.pvCostEur || 0),
+    batteryCostEur: Number(kpis.batteryCostEur || 0),
+    avoidedImportGrossEur: Number(kpis.avoidedImportGrossEur || 0),
+    netEur: Number(actualNetEur(kpis))
+  };
+}
+
+function buildAggregateDisplayRows(summary) {
+  const view = String(summary?.view || '');
+  const rows = Array.isArray(summary?.rows) ? summary.rows.slice() : [];
+  if (!rows.length) return [];
+  if (view === 'week' || view === 'year') {
+    return rows.map((row) => ({
+      ...row,
+      label: row.label || row.key || '-'
+    }));
+  }
+  if (view !== 'month') {
+    return rows;
+  }
+
+  const groups = new Map();
+  const sortedRows = rows.slice().sort((left, right) => String(left?.label || '').localeCompare(String(right?.label || '')));
+  for (const row of sortedRows) {
+    const rowLabel = String(row?.label || row?.key || '');
+    const groupKey = startOfWeekDateOnly(rowLabel) || rowLabel;
+    const group = groups.get(groupKey) || {
+      key: groupKey,
+      start: rowLabel,
+      end: rowLabel,
+      rows: []
+    };
+    group.rows.push(row);
+    if (rowLabel < group.start) group.start = rowLabel;
+    if (rowLabel > group.end) group.end = rowLabel;
+    groups.set(groupKey, group);
+  }
+
+  return Array.from(groups.values())
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .map((group, index) => ({
+      ...buildAggregateRow(`Woche ${index + 1} · ${formatShortDate(group.start)}-${formatShortDate(group.end)}`, group.rows),
+      key: group.key
+    }));
+}
+
+function renderAggregateSummaryTable(summary) {
+  const summaryRow = buildAggregateSummaryRow(summary);
+  const summaryColumns = [
+    aggregateTableColumns[5],
+    aggregateTableColumns[6],
+    aggregateTableColumns[7],
+    aggregateTableColumns[8],
+    aggregateTableColumns[9],
+    aggregateTableColumns[10]
+  ];
+
+  return `
+    <table class="history-summary-table">
+      <thead>
+        <tr>
+          <th>Zeitraum</th>
+          ${summaryColumns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>${escapeHtml(summaryRow.label)}</th>
+          ${summaryColumns.map((column) => `<td>${column.formatter(aggregateColumnValue(summaryRow, column))}</td>`).join('')}
+        </tr>
+      </tbody>
+    </table>
+  `;
+}
+
+function renderAggregateTrend(items) {
+  if (!Array.isArray(items) || !items.length) return '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+  const width = 520;
+  const height = 180;
+  const marginLeft = 46;
+  const marginRight = 18;
+  const marginTop = 12;
+  const marginBottom = 30;
+  const innerWidth = width - marginLeft - marginRight;
+  const innerHeight = height - marginTop - marginBottom;
+  const series = [
+    { key: 'netEur', label: 'Netto', className: 'history-series-net', formatter: fmtEur, derived: actualNetEur },
+    { key: 'importKwh', label: 'Import', className: 'history-series-import', formatter: fmtKwh },
+    { key: 'exportKwh', label: 'Einspeisung', className: 'history-series-export', formatter: fmtKwh }
+  ];
+  const values = series.flatMap((entry) => items.map((item) => Number(typeof entry.derived === 'function' ? entry.derived(item) : item?.[entry.key] || 0)));
+  const min = Math.min(0, ...(values.length ? values : [0]));
+  const max = Math.max(1, ...(values.length ? values : [1]));
+  const ticks = axisTickMeta(min, max, 4, (value) => Number(value).toLocaleString('de-DE', { maximumFractionDigits: 1 }));
+  const xTicks = xAxisTickMeta(items, 6);
+
+  return `
+    <div class="history-aggregate-trend">
+      <div class="history-chart-legend">
+        ${series.map((entry) => `<span><i class="history-legend-swatch ${entry.className}"></i>${escapeHtml(entry.label)}</span>`).join('')}
+      </div>
+      <svg viewBox="0 0 ${width} ${height}" class="history-line-svg" aria-hidden="true">
+        ${ticks.map((tick) => {
+          const y = marginTop + (tick.ratio * innerHeight);
+          return `
+            <path class="history-grid-line" d="M${marginLeft},${y.toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${y.toFixed(2)}" />
+            <text class="history-axis-label" x="0" y="${(y + 4).toFixed(2)}">${escapeHtml(tick.label)}</text>
+          `;
+        }).join('')}
+        <path class="history-axis-baseline" d="M${marginLeft},${(marginTop + innerHeight).toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${(marginTop + innerHeight).toFixed(2)}" />
+        ${xTicks.map((tick) => {
+          const x = items.length === 1 ? marginLeft + (innerWidth / 2) : marginLeft + ((tick.index / Math.max(items.length - 1, 1)) * innerWidth);
+          return `<text class="history-axis-label history-x-axis-label" x="${x.toFixed(2)}" y="${(height - 6).toFixed(2)}">${escapeHtml(tick.label)}</text>`;
+        }).join('')}
+        ${series.map((entry) => {
+          const points = items.map((item) => Number(typeof entry.derived === 'function' ? entry.derived(item) : item?.[entry.key] || 0));
+          return `<path class="history-series-line ${entry.className}" d="${linePathWithOffset(points, innerWidth, innerHeight, min, max, marginLeft, marginTop)}" />`;
+        }).join('')}
+      </svg>
+    </div>
+  `;
+}
+
+function renderAggregateBreakdownTable(summary) {
+  const view = String(summary?.view || '');
+  const rows = buildAggregateDisplayRows(summary);
+  if (!rows.length) {
+    return '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+  }
+  const includeSummary = view === 'month' || view === 'year';
+  const summaryRow = buildAggregateSummaryRow(summary);
+  const displayRows = includeSummary ? [summaryRow, ...rows] : rows;
+
+  return `
+    <table class="history-aggregate-breakdown-table">
+      <thead>
+        <tr>
+          <th>Periode</th>
+          ${aggregateTableColumns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${displayRows.map((row, index) => `
+          <tr class="${index === 0 && includeSummary ? 'history-aggregate-summary-row' : ''}">
+            <th>${escapeHtml(row.label || '-')}</th>
+            ${aggregateTableColumns.map((column) => `<td>${column.formatter(aggregateColumnValue(row, column))}</td>`).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderAggregateOverview(mountId, summary) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  const rows = buildAggregateDisplayRows(summary);
+  if (!rows.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    return;
+  }
+  mount.innerHTML = `
+    <div class="history-aggregate-overview">
+      ${renderAggregateSummaryTable(summary)}
+      ${renderAggregateTrend(rows)}
+    </div>
+  `;
+}
+
+function renderAggregateTable(mountId, summary) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  mount.innerHTML = renderAggregateBreakdownTable(summary);
 }
 
 function updateOpportunityLabel() {
@@ -665,10 +959,9 @@ function renderCharts(summary) {
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
   const dayFinancialLines = Array.isArray(charts.dayFinancialLines) ? charts.dayFinancialLines : [];
   const dayPriceLines = Array.isArray(charts.dayPriceLines) ? charts.dayPriceLines : [];
-  const periodFinancialBars = Array.isArray(charts.periodFinancialBars) ? charts.periodFinancialBars : [];
-  const periodCombinedBars = Array.isArray(charts.periodCombinedBars) ? charts.periodCombinedBars : [];
+  const view = String(summary?.view || '');
 
-  if (String(summary?.view || '') === 'day') {
+  if (view === 'day') {
     renderLineChart('historyFinancialChart', dayFinancialLines.map((item) => ({
       ...item,
       actualCostEur: actualCostEur(item),
@@ -686,7 +979,11 @@ function renderCharts(summary) {
     return;
   }
 
-  renderCombinedPeriodBars('historyFinancialChart', periodCombinedBars.length ? periodCombinedBars : periodFinancialBars);
+  if (aggregateModeForView(view) === 'table') {
+    renderAggregateTable('historyFinancialChart', summary);
+  } else {
+    renderAggregateOverview('historyFinancialChart', summary);
+  }
   setHtml('historyEnergyChart', '');
   setHtml('historyPriceChart', '');
 }
@@ -774,11 +1071,15 @@ function renderRows(summary) {
 }
 
 function renderLayout(summary) {
-  const isDayView = String(summary?.view || '') === 'day';
+  const view = String(summary?.view || '');
+  const isDayView = view === 'day';
   const chartGrid = byId('historyChartGrid');
   const financialPanel = byId('historyFinancialPanel');
   const energyPanel = byId('historyEnergyPanel');
   const pricePanel = byId('historyPricePanel');
+  const aggregateMode = byId('historyAggregateMode');
+  const overviewButton = byId('historyAggregateOverviewBtn');
+  const tableButton = byId('historyAggregateTableBtn');
   if (chartGrid) {
     chartGrid.className = `history-chart-grid reveal ${isDayView ? 'history-chart-grid-day' : 'history-chart-grid-aggregated'}`;
   }
@@ -788,6 +1089,20 @@ function renderLayout(summary) {
   }
   if (energyPanel) energyPanel.hidden = !isDayView;
   if (pricePanel) pricePanel.hidden = !isDayView;
+  if (aggregateMode) {
+    aggregateMode.hidden = isDayView;
+    aggregateMode.className = `history-aggregate-mode ${isDayView ? '' : 'is-visible'}`.trim();
+  }
+  if (overviewButton) {
+    const isOverview = aggregateModeForView(view) === 'overview';
+    overviewButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isOverview ? 'is-active' : ''}`.trim();
+    overviewButton.ariaPressed = isOverview ? 'true' : 'false';
+  }
+  if (tableButton) {
+    const isTable = aggregateModeForView(view) === 'table';
+    tableButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isTable ? 'is-active' : ''}`.trim();
+    tableButton.ariaPressed = isTable ? 'true' : 'false';
+  }
 }
 
 function bindHistoryToggle(id, handler) {
@@ -852,6 +1167,18 @@ function renderSummary(summary) {
   bindHistoryToggle('historyStatusInfoToggle', () => {
     historyState.statusInfoExpanded = !historyState.statusInfoExpanded;
     renderStatusInfo();
+  });
+  bindHistoryToggle('historyAggregateOverviewBtn', () => {
+    const currentView = String(historyState.lastSummary?.view || '');
+    if (!isAggregateView(currentView)) return;
+    setAggregateMode(currentView, 'overview');
+    renderSummary(historyState.lastSummary);
+  });
+  bindHistoryToggle('historyAggregateTableBtn', () => {
+    const currentView = String(historyState.lastSummary?.view || '');
+    if (!isAggregateView(currentView)) return;
+    setAggregateMode(currentView, 'table');
+    renderSummary(historyState.lastSummary);
   });
 }
 
