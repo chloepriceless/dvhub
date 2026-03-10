@@ -6,7 +6,10 @@ const historyState = {
   backfillBusy: false,
   lastSummary: null,
   chartCursorByMount: {},
-  opportunityBlendPct: 0
+  opportunityBlendPct: 0,
+  detailsExpanded: false,
+  statusInfoExpanded: false,
+  statusInfoHtml: ''
 };
 
 function currentDateValue() {
@@ -23,6 +26,11 @@ function setText(id, value) {
   if (element) element.textContent = value;
 }
 
+function setHtml(id, value) {
+  const element = byId(id);
+  if (element) element.innerHTML = value;
+}
+
 function valueOf(item, key) {
   return Number(item?.[key] || 0);
 }
@@ -30,8 +38,27 @@ function valueOf(item, key) {
 function setBanner(text, kind = 'info') {
   const banner = byId('historyBanner');
   if (!banner) return;
-  banner.textContent = text;
   banner.className = `status-banner ${kind}`;
+  setText('historyBannerText', text);
+}
+
+function renderStatusInfo() {
+  const toggle = byId('historyStatusInfoToggle');
+  const info = byId('historyStatusInfo');
+  if (toggle) {
+    toggle.hidden = !historyState.statusInfoHtml;
+    toggle.textContent = historyState.statusInfoExpanded ? 'Info ausblenden' : 'Info';
+    toggle.ariaExpanded = historyState.statusInfoExpanded ? 'true' : 'false';
+  }
+  if (info) {
+    info.innerHTML = historyState.statusInfoHtml;
+    info.hidden = !historyState.statusInfoExpanded;
+  }
+}
+
+function setStatusInfo(html = '') {
+  historyState.statusInfoHtml = html;
+  renderStatusInfo();
 }
 
 function round2(value) {
@@ -72,14 +99,14 @@ function renderBackfillButtonState() {
 }
 
 function renderKpis(summary) {
-  setText('historyKpiCost', fmtEur(blendedCostEur(summary?.kpis)));
+  setText('historyKpiCost', fmtEur(actualCostEur(summary?.kpis)));
   setText('historyKpiRevenue', fmtEur(summary?.kpis?.exportRevenueEur));
   setText('historyKpiAvoided', fmtEur(summary?.kpis?.avoidedImportGrossEur));
   setText('historyKpiAvoidedPvGross', fmtEur(summary?.kpis?.avoidedImportPvGrossEur));
   setText('historyKpiAvoidedBatteryGross', fmtEur(summary?.kpis?.avoidedImportBatteryGrossEur));
   setText('historyKpiAvoidedPvCost', fmtEur(summary?.kpis?.pvCostEur));
   setText('historyKpiAvoidedBatteryCost', fmtEur(summary?.kpis?.batteryCostEur));
-  setText('historyKpiNet', fmtEur(blendedNetEur(summary?.kpis)));
+  setText('historyKpiNet', fmtEur(actualNetEur(summary?.kpis)));
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
   setText('historyKpiLoad', fmtKwh(summary?.kpis?.loadKwh));
   setText('historyKpiPv', fmtKwh(summary?.kpis?.pvKwh));
@@ -150,18 +177,19 @@ function opportunityBlendFactor() {
   return Math.max(0, Math.min(100, Number(historyState.opportunityBlendPct || 0))) / 100;
 }
 
-function blendedCostEur(item) {
+function actualCostEur(item) {
   if (!item) return 0;
-  const gridCost = valueOf(item, 'gridCostEur') || valueOf(item, 'importCostEur');
-  const localBaseCost = valueOf(item, 'pvCostEur') + valueOf(item, 'batteryCostEur');
-  const opportunityCost = Number.isFinite(Number(item?.opportunityCostEur))
-    ? Number(item.opportunityCostEur)
-    : localBaseCost;
-  return round2(gridCost + localBaseCost + ((opportunityCost - localBaseCost) * opportunityBlendFactor()));
+  return round2(
+    (valueOf(item, 'gridCostEur') || valueOf(item, 'importCostEur'))
+    + valueOf(item, 'pvCostEur')
+    + valueOf(item, 'batteryCostEur')
+  );
 }
 
-function blendedNetEur(item) {
-  return round2(valueOf(item, 'exportRevenueEur') - blendedCostEur(item));
+function actualNetEur(item) {
+  const explicit = Number(item?.netEur);
+  if (Number.isFinite(explicit)) return round2(explicit);
+  return round2(valueOf(item, 'exportRevenueEur') - actualCostEur(item));
 }
 
 function updateOpportunityLabel() {
@@ -457,8 +485,10 @@ function renderCombinedPeriodBars(mountId, items) {
   ]), 0.01);
   const financeMax = Math.max(...items.flatMap((item) => [
     Number(item?.exportRevenueEur || 0),
-    Number(item?.avoidedImportGrossEur || 0),
-    blendedCostEur(item)
+    Number(item?.gridCostEur ?? item?.importCostEur ?? 0),
+    Number(item?.pvCostEur || 0),
+    Number(item?.batteryCostEur || 0),
+    Math.abs(actualNetEur(item))
   ]), 0.01);
   const energyTicks = axisTickMeta(0, energyMax, 4, fmtKwh);
   const financeTicks = axisTickMeta(0, financeMax, 4, fmtEur);
@@ -468,12 +498,17 @@ function renderCombinedPeriodBars(mountId, items) {
   mount.innerHTML = `
     <div class="history-stack-chart history-stack-chart-combined">
       <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-revenue"></i>Einspeisung</span>
-        <span><i class="history-legend-swatch history-bar-avoided"></i>Vermiedener Bezug</span>
-        <span><i class="history-legend-swatch history-bar-cost"></i>Kosten</span>
+        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös Einspeisung</span>
+        <span><i class="history-legend-swatch history-bar-cost"></i>Bezugskosten</span>
+        <span><i class="history-legend-swatch history-bar-pv"></i>PV-Kosten</span>
+        <span><i class="history-legend-swatch history-bar-battery"></i>Akku-Kosten</span>
         <span><i class="history-legend-swatch history-bar-grid"></i>Import</span>
         <span><i class="history-legend-swatch history-bar-pv"></i>Eigenverbrauch PV</span>
         <span><i class="history-legend-swatch history-bar-battery"></i>Eigenverbrauch Akku</span>
+        <span><i class="history-legend-swatch history-bar-export"></i>Einspeisung</span>
+      </div>
+      <div class="history-chart-summary">
+        <span>Vermiedene Bezugskosten ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
       </div>
       <div class="history-comparison-chart" style="--history-bar-count:${items.length}; --history-x-label-count:${items.length};">
         <div class="history-comparison-section">
@@ -516,8 +551,9 @@ function renderCombinedPeriodBars(mountId, items) {
                   <div class="history-bar-group history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
                     <div class="history-stack history-stack-finance">
                       <div class="history-bar history-bar-revenue history-bar-slim" style="height:${stackHeight(item?.exportRevenueEur, financeMax)}px"></div>
-                      <div class="history-bar history-bar-avoided history-bar-slim" style="height:${stackHeight(item?.avoidedImportGrossEur, financeMax)}px"></div>
-                      <div class="history-bar history-bar-cost history-bar-slim" style="height:${stackHeight(blendedCostEur(item), financeMax)}px"></div>
+                      <div class="history-bar history-bar-cost history-bar-slim" style="height:${stackHeight(item?.gridCostEur ?? item?.importCostEur, financeMax)}px"></div>
+                      <div class="history-bar history-bar-pv history-bar-slim" style="height:${stackHeight(item?.pvCostEur, financeMax)}px"></div>
+                      <div class="history-bar history-bar-battery history-bar-slim" style="height:${stackHeight(item?.batteryCostEur, financeMax)}px"></div>
                     </div>
                   </div>
                 `).join('')}
@@ -535,10 +571,12 @@ function renderCombinedPeriodBars(mountId, items) {
         <span>Verbrauch ${fmtKwh(selectedItem?.loadKwh)}</span>
         <span>Eigenverbrauch PV ${fmtKwh(selectedItem?.pvShareKwh)}</span>
         <span>Eigenverbrauch Akku ${fmtKwh(selectedItem?.batteryShareKwh)}</span>
-        <span>Einspeisung ${fmtEur(selectedItem?.exportRevenueEur)}</span>
-        <span>Vermiedener Bezug ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
-        <span>Kosten ${fmtEur(blendedCostEur(selectedItem))}</span>
-        <span class="history-inspector-emphasis">Netto ${fmtEur(blendedNetEur(selectedItem))}</span>
+        <span>Erlös Einspeisung ${fmtEur(selectedItem?.exportRevenueEur)}</span>
+        <span>Vermiedene Bezugskosten ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
+        <span>Bezugskosten ${fmtEur(selectedItem?.gridCostEur ?? selectedItem?.importCostEur)}</span>
+        <span>PV-Kosten ${fmtEur(selectedItem?.pvCostEur)}</span>
+        <span>Akku-Kosten ${fmtEur(selectedItem?.batteryCostEur)}</span>
+        <span class="history-inspector-emphasis">Netto ${fmtEur(actualNetEur(selectedItem))}</span>
         ${chartBadge(selectedItem)}
       </div>
     </div>
@@ -631,17 +669,16 @@ function renderCharts(summary) {
   const dayPriceLines = Array.isArray(charts.dayPriceLines) ? charts.dayPriceLines : [];
   const periodFinancialBars = Array.isArray(charts.periodFinancialBars) ? charts.periodFinancialBars : [];
   const periodCombinedBars = Array.isArray(charts.periodCombinedBars) ? charts.periodCombinedBars : [];
-  const periodEnergyBars = Array.isArray(charts.periodEnergyBars) ? charts.periodEnergyBars : [];
 
   if (String(summary?.view || '') === 'day') {
     renderLineChart('historyFinancialChart', dayFinancialLines.map((item) => ({
       ...item,
-      blendedCostEur: blendedCostEur(item),
-      blendedNetEur: blendedNetEur(item)
+      actualCostEur: actualCostEur(item),
+      actualNetEur: actualNetEur(item)
     })), [
-      { key: 'blendedCostEur', label: 'Kosten', className: 'history-series-cost' },
+      { key: 'actualCostEur', label: 'Kosten', className: 'history-series-cost' },
       { key: 'exportRevenueEur', label: 'Erloese', className: 'history-series-revenue' },
-      { key: 'blendedNetEur', label: 'Netto', className: 'history-series-net' }
+      { key: 'actualNetEur', label: 'Netto', className: 'history-series-net' }
     ], fmtEur, 'EUR');
     renderDetailedDayChart('historyEnergyChart', dayEnergyLines);
     renderLineChart('historyPriceChart', dayPriceLines, [
@@ -652,17 +689,8 @@ function renderCharts(summary) {
   }
 
   renderCombinedPeriodBars('historyFinancialChart', periodCombinedBars.length ? periodCombinedBars : periodFinancialBars);
-  const energyMount = byId('historyEnergyChart');
-  if (energyMount) {
-    energyMount.innerHTML = '<div class="history-chart-empty">Energie- und Finanzbalken sind in der linken Anzeige zusammengefuehrt.</div>';
-  }
-
-  if (String(summary?.view || '') === 'year') {
-    renderSolarSummary('historyPriceChart', summary);
-    return;
-  }
-
-  renderAggregatePriceHint('historyPriceChart');
+  setHtml('historyEnergyChart', '');
+  setHtml('historyPriceChart', '');
 }
 
 function renderRows(summary) {
@@ -732,8 +760,8 @@ function renderRows(summary) {
             <td>${fmtEur(row.batteryCostEur)}</td>
             <td>${fmtEur(row.avoidedImportGrossEur)}</td>
             <td>${fmtEur(row.exportRevenueEur)}</td>
-            <td>${fmtEur(blendedCostEur(row))}</td>
-            <td>${fmtEur(blendedNetEur(row))}</td>
+            <td>${fmtEur(actualCostEur(row))}</td>
+            <td>${fmtEur(actualNetEur(row))}</td>
             ${includeSolar ? `<td>${fmtCt(row.solarMarketValueCtKwh)}</td><td>${fmtEur(row.solarCompensationEur)}</td>` : ''}
             <td>${[
               sourceStatusLabel(row),
@@ -747,30 +775,86 @@ function renderRows(summary) {
   `;
 }
 
-function renderSummary(summary) {
-  historyState.lastSummary = summary;
-  renderKpis(summary);
-  renderCharts(summary);
-  renderRows(summary);
+function renderLayout(summary) {
+  const isDayView = String(summary?.view || '') === 'day';
+  const chartGrid = byId('historyChartGrid');
+  const financialPanel = byId('historyFinancialPanel');
+  const energyPanel = byId('historyEnergyPanel');
+  const pricePanel = byId('historyPricePanel');
+  if (chartGrid) {
+    chartGrid.className = `history-chart-grid reveal ${isDayView ? 'history-chart-grid-day' : 'history-chart-grid-aggregated'}`;
+  }
+  if (financialPanel) {
+    financialPanel.hidden = false;
+    financialPanel.className = `panel history-chart-panel ${isDayView ? '' : 'history-chart-panel-wide'}`.trim();
+  }
+  if (energyPanel) energyPanel.hidden = !isDayView;
+  if (pricePanel) pricePanel.hidden = !isDayView;
+}
 
+function bindHistoryToggle(id, handler) {
+  const element = byId(id);
+  if (!element || element.__historyBound) return;
+  element.addEventListener('click', handler);
+  element.__historyBound = true;
+}
+
+function renderDetailsSection() {
+  const toggle = byId('historyDetailsToggle');
+  const content = byId('historyDetailsContent');
+  if (toggle) {
+    toggle.textContent = historyState.detailsExpanded ? 'Details ausblenden' : 'Details anzeigen';
+    toggle.ariaExpanded = historyState.detailsExpanded ? 'true' : 'false';
+  }
+  if (content) content.hidden = !historyState.detailsExpanded;
+}
+
+function slotLabel(count, singular) {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
+function renderSummaryStatus(summary) {
   const unresolved = summary?.meta?.unresolved || {};
   const warningCount = Number(unresolved.incompleteSlots || 0);
   const estimatedCount = Number(unresolved.estimatedSlots || 0);
   const sources = sourceSummary(summary);
-  const warningText = warningCount
-    ? `${warningCount} Slots sind unvollständig, ${estimatedCount} geschätzt.`
-    : estimatedCount
-      ? `${estimatedCount} Slots sind geschätzt.`
-      : 'Historie geladen.';
-  const sourceTextParts = [];
-  if (sources.localLiveSlots > 0) sourceTextParts.push(`${sources.localLiveSlots} lokal vorlaeufig`);
-  if (sources.vrmImportSlots > 0) sourceTextParts.push(`${sources.vrmImportSlots} durch VRM bestaetigt`);
-  const bannerText = sourceTextParts.length
-    ? `${warningText} Herkunft: ${sourceTextParts.join(', ')}.`
-    : warningText;
-  setBanner(bannerText, warningCount ? 'warn' : 'success');
+  const summaryParts = [];
+  if (warningCount > 0) summaryParts.push(`${slotLabel(warningCount, 'Slot')} unvollständig`);
+  if (estimatedCount > 0) summaryParts.push(`${slotLabel(estimatedCount, 'Slot')} geschätzt`);
+  setBanner(summaryParts.length ? `${summaryParts.join(', ')}.` : 'Historie geladen.', warningCount ? 'warn' : 'success');
+
+  const infoParts = [];
+  if (sources.localLiveSlots > 0) infoParts.push(`<span>${sources.localLiveSlots} lokal vorlaeufig</span>`);
+  if (sources.vrmImportSlots > 0) infoParts.push(`<span>${sources.vrmImportSlots} durch VRM bestaetigt</span>`);
+  if (Number(unresolved.missingImportPriceSlots || 0) > 0) {
+    infoParts.push(`<span>${unresolved.missingImportPriceSlots} ohne Bezugspreis</span>`);
+  }
+  if (Number(unresolved.missingMarketPriceSlots || 0) > 0) {
+    infoParts.push(`<span>${unresolved.missingMarketPriceSlots} ohne Marktpreis</span>`);
+  }
+  historyState.statusInfoExpanded = false;
+  setStatusInfo(infoParts.join(''));
+}
+
+function renderSummary(summary) {
+  historyState.lastSummary = summary;
+  historyState.detailsExpanded = false;
+  renderKpis(summary);
+  renderLayout(summary);
+  renderCharts(summary);
+  renderRows(summary);
+  renderDetailsSection();
+  renderSummaryStatus(summary);
   const versionLabel = summary?.app?.versionLabel ? ` · ${summary.app.versionLabel}` : '';
   setText('historyMeta', `${String(summary?.view || '').toUpperCase()} · ${summary?.date || currentDateValue()}${versionLabel}`);
+  bindHistoryToggle('historyDetailsToggle', () => {
+    historyState.detailsExpanded = !historyState.detailsExpanded;
+    renderDetailsSection();
+  });
+  bindHistoryToggle('historyStatusInfoToggle', () => {
+    historyState.statusInfoExpanded = !historyState.statusInfoExpanded;
+    renderStatusInfo();
+  });
 }
 
 async function loadHistorySummary() {

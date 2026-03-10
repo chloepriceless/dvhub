@@ -58,6 +58,13 @@ function roundOrZero(value) {
   return round2(Number(value || 0));
 }
 
+function bucketTimestamp(value, bucketSeconds = SLOT_BUCKET_SECONDS) {
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return String(value || '');
+  const bucketMs = bucketSeconds * 1000;
+  return new Date(Math.floor(ms / bucketMs) * bucketMs).toISOString();
+}
+
 function isDateOnly(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -558,6 +565,7 @@ export function createHistoryRuntime({
       end
     });
     const priceByTs = new Map(priceRows.map((row) => [row.ts, row]));
+    const priceByBucketTs = new Map(priceRows.map((row) => [bucketTimestamp(row.ts), row]));
     const pricingConfig = getPricingConfig() || {};
     const pvCostCtKwh = Number(pricingConfig?.costs?.pvCtKwh);
     const batteryCostCtKwh = effectiveBatteryCostCtKwh(pricingConfig?.costs || {});
@@ -568,7 +576,7 @@ export function createHistoryRuntime({
         return localDate >= range.startDate && localDate < range.endDateExclusive;
       })
       .map((slot) => {
-        const price = priceByTs.get(slot.ts) || {};
+        const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
         const marketPriceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
         const userImportPriceCtKwh = resolveUserImportPriceCtKwhForSlot({
           ts: slot.ts,
@@ -585,13 +593,15 @@ export function createHistoryRuntime({
           batteryDirectUseKwh: round2(Number(slot.batteryDirectUseKwh || 0)),
           batteryToGridKwh: round2(Number(slot.batteryToGridKwh || 0))
         };
+        const pvExportKwh = Math.max(Number(slot.solarToGridKwh || 0), 0);
+        const batteryExportKwh = Math.max(Number(slot.batteryToGridKwh || 0), 0);
         const localSelfConsumptionKwh = round2(Number(shares.pvShareKwh || 0) + Number(shares.batteryShareKwh || 0));
         const selfConsumptionKwh = round2(Number(shares.gridShareKwh || 0) + localSelfConsumptionKwh);
         const missingImportPrice = Number(slot.importKwh || 0) > 0 && !Number.isFinite(userImportPriceCtKwh);
         const missingMarketPrice = slot.exportKwh > 0 && !Number.isFinite(marketPriceCtKwh);
         const gridCostEur = costForShareEur(slot.importKwh, userImportPriceCtKwh);
-        const pvCostEur = costForShareEur(shares.pvShareKwh, pvCostCtKwh);
-        const batteryCostEur = costForShareEur(shares.batteryShareKwh, batteryCostCtKwh);
+        const pvCostEur = costForShareEur(Number(shares.pvShareKwh || 0) + pvExportKwh, pvCostCtKwh);
+        const batteryCostEur = costForShareEur(Number(shares.batteryShareKwh || 0) + batteryExportKwh, batteryCostCtKwh);
         const avoidedImportPvGrossEur = costForShareEur(shares.pvShareKwh, userImportPriceCtKwh);
         const avoidedImportBatteryGrossEur = costForShareEur(shares.batteryShareKwh, userImportPriceCtKwh);
         const avoidedImportGrossEur = round2((avoidedImportPvGrossEur || 0) + (avoidedImportBatteryGrossEur || 0));

@@ -269,6 +269,69 @@ test('history runtime computes avoided import gross values for slots, rows, and 
   assert.equal(summary.slots[0].avoidedImportBatteryGrossEur, 0.06);
 });
 
+test('history runtime matches export revenue per slot even when price timestamps only align by bucket', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-03-09T10:00:05.000Z',
+            importKwh: 0,
+            exportKwh: 0.5,
+            gridKwh: 0,
+            pvKwh: 0.5,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-03-09T10:15:05.000Z',
+            importKwh: 0,
+            exportKwh: 1.5,
+            gridKwh: 0,
+            pvKwh: 1.5,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          {
+            ts: '2026-03-09T10:00:00.000Z',
+            priceCtKwh: 10,
+            priceEurMwh: 100
+          },
+          {
+            ts: '2026-03-09T10:15:00.000Z',
+            priceCtKwh: 12,
+            priceEurMwh: 120
+          }
+        ];
+      }
+    },
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const summary = runtime.getSummary({
+    view: 'week',
+    date: '2026-03-09'
+  });
+
+  assert.equal(summary.slots[0].exportRevenueEur, 0.05);
+  assert.equal(summary.slots[1].exportRevenueEur, 0.18);
+  assert.equal(summary.kpis.exportRevenueEur, 0.23);
+  assert.equal(summary.rows[0].exportRevenueEur, 0.23);
+});
+
 test('history runtime prices all imported energy with the import tariff even when part of the slot is not direct load share', () => {
   const runtime = createHistoryRuntime({
     store: {
@@ -312,6 +375,137 @@ test('history runtime prices all imported energy with the import tariff even whe
   assert.equal(summary.kpis.gridShareKwh, 0.33);
   assert.equal(summary.kpis.importCostEur, 0.3);
   assert.equal(summary.kpis.gridCostEur, 0.3);
+});
+
+test('history runtime exposes aggregated net-analysis payloads with real export costs separated from avoided import', () => {
+  const pricing = {
+    mode: 'fixed',
+    fixedGrossImportCtKwh: 30,
+    costs: {
+      pvCtKwh: 6.38,
+      batteryBaseCtKwh: 2,
+      batteryLossMarkupPct: 20
+    },
+    periods: []
+  };
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-03-09T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 1,
+            gridKwh: 0,
+            pvKwh: 0.6,
+            batteryKwh: 0.4,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0.4,
+            batteryToGridKwh: 0.4,
+            solarToGridKwh: 0.6,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-03-10T10:00:00.000Z',
+            importKwh: 2,
+            exportKwh: 0,
+            gridKwh: 2,
+            pvKwh: 0.5,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            solarDirectUseKwh: 0.5,
+            loadKwh: 2.5,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          {
+            ts: '2026-03-09T10:00:00.000Z',
+            priceCtKwh: 12,
+            priceEurMwh: 120
+          },
+          {
+            ts: '2026-03-10T10:00:00.000Z',
+            priceCtKwh: 5,
+            priceEurMwh: 50
+          }
+        ];
+      }
+    },
+    getPricingConfig: () => pricing,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const week = runtime.getSummary({
+    view: 'week',
+    date: '2026-03-09'
+  });
+  const month = runtime.getSummary({
+    view: 'month',
+    date: '2026-03-09'
+  });
+  const year = runtime.getSummary({
+    view: 'year',
+    date: '2026-03-09'
+  });
+
+  assert.deepEqual(week.charts.periodCombinedBars[0], {
+    label: '2026-03-09',
+    importKwh: 0,
+    exportKwh: 1,
+    loadKwh: 0,
+    pvKwh: 0.6,
+    pvAcKwh: 0,
+    solarDirectUseKwh: 0,
+    solarToBatteryKwh: 0,
+    solarToGridKwh: 0.6,
+    gridDirectUseKwh: 0,
+    gridToBatteryKwh: 0,
+    batteryDirectUseKwh: 0,
+    batteryToGridKwh: 0.4,
+    batteryChargeKwh: 0,
+    batteryDischargeKwh: 0.4,
+    selfConsumptionKwh: 0,
+    gridShareKwh: 0,
+    pvShareKwh: 0,
+    batteryShareKwh: 0,
+    exportRevenueEur: 0.12,
+    gridCostEur: 0,
+    pvCostEur: 0.04,
+    batteryCostEur: 0.04,
+    avoidedImportGrossEur: 0,
+    avoidedImportPvGrossEur: 0,
+    avoidedImportBatteryGrossEur: 0,
+    opportunityCostEur: 0,
+    selfConsumptionCostEur: 0.08,
+    netEur: 0.04,
+    estimatedSlots: 0,
+    incompleteSlots: 0
+  });
+  assert.equal(week.charts.periodCombinedBars[1].gridCostEur, 0.6);
+  assert.equal(week.charts.periodCombinedBars[1].pvCostEur, 0.03);
+  assert.equal(week.charts.periodCombinedBars[1].batteryCostEur, 0);
+  assert.equal(week.charts.periodCombinedBars[1].avoidedImportGrossEur, 0.15);
+  assert.equal(week.charts.periodCombinedBars[1].netEur, -0.63);
+  assert.equal(week.kpis.exportRevenueEur, 0.12);
+  assert.equal(week.kpis.gridCostEur, 0.6);
+  assert.equal(week.kpis.pvCostEur, 0.07);
+  assert.equal(week.kpis.batteryCostEur, 0.04);
+  assert.equal(week.kpis.avoidedImportGrossEur, 0.15);
+  assert.equal(week.kpis.netEur, -0.59);
+  assert.equal(month.charts.periodCombinedBars[0].pvCostEur, 0.04);
+  assert.equal(month.charts.periodCombinedBars[1].netEur, -0.63);
+  assert.equal(year.charts.periodCombinedBars[0].exportRevenueEur, 0.12);
+  assert.equal(year.charts.periodCombinedBars[0].pvCostEur, 0.07);
+  assert.equal(year.charts.periodCombinedBars[0].batteryCostEur, 0.04);
+  assert.equal(year.charts.periodCombinedBars[0].avoidedImportGrossEur, 0.15);
+  assert.equal(year.charts.periodCombinedBars[0].netEur, -0.59);
 });
 
 test('history runtime groups day, week, month, and year views with correct totals', () => {

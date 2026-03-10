@@ -31,7 +31,9 @@ function loadHistoryPageHelpers() {
   const source = readPublic('history.js');
   const ids = [
     'historyBanner',
+    'historyBannerText',
     'historyMeta',
+    'historyChartGrid',
     'historyKpiCost',
     'historyKpiRevenue',
     'historyKpiAvoided',
@@ -44,10 +46,17 @@ function loadHistoryPageHelpers() {
     'historyKpiLoad',
     'historyKpiPv',
     'historyKpiExport',
+    'historyFinancialPanel',
+    'historyEnergyPanel',
+    'historyPricePanel',
     'historyFinancialChart',
     'historyEnergyChart',
     'historyPriceChart',
+    'historyDetailsToggle',
+    'historyDetailsContent',
     'historyRows',
+    'historyStatusInfoToggle',
+    'historyStatusInfo',
     'historyBackfillBtn',
     'historyView',
     'historyDate',
@@ -108,6 +117,10 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /id="historyKpiGrid"/);
+  assert.match(html, /id="historyChartGrid"/);
+  assert.match(html, /id="historyFinancialPanel"/);
+  assert.match(html, /id="historyEnergyPanel"/);
+  assert.match(html, /id="historyPricePanel"/);
   assert.match(html, /id="historyKpiLoad"/);
   assert.match(html, /id="historyKpiPv"/);
   assert.match(html, /Erlös Einspeisung/);
@@ -120,6 +133,10 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
+  assert.match(html, /id="historyDetailsToggle"/);
+  assert.match(html, /id="historyDetailsContent"/);
+  assert.match(html, /id="historyStatusInfoToggle"/);
+  assert.match(html, /id="historyStatusInfo"/);
   assert.match(html, /id="historyRows"/);
 });
 
@@ -216,7 +233,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
   assert.match(elements.get('historyRows').innerHTML, /Akku geladen/);
   assert.match(elements.get('historyRows').innerHTML, /Eigenverbrauch PV/);
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
-  assert.match(elements.get('historyBanner').textContent, /unvollständig/i);
+  assert.match(elements.get('historyBannerText').textContent, /unvollständig/i);
   assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
 });
 
@@ -327,11 +344,12 @@ test('history page shows local provisional and VRM confirmed origins in banner a
 
   assert.match(elements.get('historyRows').innerHTML, /lokal vorlaeufig/);
   assert.match(elements.get('historyRows').innerHTML, /durch VRM bestaetigt/);
-  assert.match(elements.get('historyBanner').textContent, /lokal vorlaeufig/i);
-  assert.match(elements.get('historyBanner').textContent, /VRM bestaetigt/i);
+  assert.doesNotMatch(elements.get('historyBannerText').textContent, /Herkunft/i);
+  assert.match(elements.get('historyStatusInfo').innerHTML, /lokal vorlaeufig/);
+  assert.match(elements.get('historyStatusInfo').innerHTML, /VRM bestaetigt/);
 });
 
-test('history page renders weekly revenue bars and a table instead of time block cards', () => {
+test('history page renders one aggregated net-analysis card, hides secondary cards, and keeps details collapsed by default', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
@@ -425,6 +443,10 @@ test('history page renders weekly revenue bars and a table instead of time block
       unresolved: {
         incompleteSlots: 1,
         estimatedSlots: 1
+      },
+      sourceSummary: {
+        localLiveSlots: 1,
+        vrmImportSlots: 3
       }
     }
   });
@@ -434,14 +456,28 @@ test('history page renders weekly revenue bars and a table instead of time block
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-y/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-x/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-chart-hover-surface/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Einspeisung/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Vermiedener Bezug/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Kosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Bezugskosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Akku-Kosten/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
-  assert.doesNotMatch(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
-  assert.match(elements.get('historyPriceChart').innerHTML, /nur in der Tagesansicht/i);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Vermiedene Bezugskosten/);
+  assert.match(elements.get('historyFinancialPanel').className, /history-chart-panel-wide/);
+  assert.equal(elements.get('historyEnergyPanel').hidden, true);
+  assert.equal(elements.get('historyPricePanel').hidden, true);
+  assert.equal(elements.get('historyDetailsContent').hidden, true);
+  assert.match(elements.get('historyDetailsToggle').textContent, /anzeigen/i);
+  assert.match(elements.get('historyBannerText').textContent, /1 Slot unvollständig/i);
+  assert.doesNotMatch(elements.get('historyBannerText').textContent, /Herkunft/i);
+  assert.match(elements.get('historyStatusInfo').innerHTML, /lokal vorlaeufig/);
+  assert.match(elements.get('historyStatusInfo').innerHTML, /durch VRM bestaetigt/);
+
+  elements.get('historyDetailsToggle').listeners.get('click')();
+
+  assert.equal(elements.get('historyDetailsContent').hidden, false);
+  assert.match(elements.get('historyDetailsToggle').textContent, /ausblenden/i);
   assert.match(elements.get('historyRows').innerHTML, /history-data-table/);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-10/);
   assert.doesNotMatch(elements.get('historyRows').innerHTML, /history-row-card/);

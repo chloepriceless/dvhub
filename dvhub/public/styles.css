@@ -405,6 +405,18 @@ a {
   gap: 12px;
 }
 
+.history-chart-grid-aggregated {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.history-chart-panel {
+  min-width: 0;
+}
+
+.history-chart-panel-wide {
+  grid-column: 1 / -1;
+}
+
 .history-chart-shell {
   min-height: 220px;
   display: grid;
@@ -422,6 +434,15 @@ a {
 .history-rows {
   display: grid;
   gap: 10px;
+}
+
+.history-chart-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
 }
 
 .history-row-card {
@@ -1524,6 +1545,22 @@ table th {
   color: var(--text-main);
   font-size: 0.84rem;
   line-height: 1.35;
+}
+
+.history-status-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.history-status-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .status-banner.success {

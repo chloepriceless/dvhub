@@ -66,7 +66,13 @@
         </div>
       </header>
 
-      <section id="historyBanner" class="status-banner reveal">Lade Historie...</section>
+      <section id="historyBanner" class="status-banner reveal">
+        <div class="history-status-main">
+          <span id="historyBannerText">Lade Historie...</span>
+          <button id="historyStatusInfoToggle" class="btn btn-ghost btn-inline" type="button">Info</button>
+        </div>
+        <div id="historyStatusInfo" class="history-status-info" hidden></div>
+      </section>
 
       <section id="historyKpiGrid" class="history-kpi-grid reveal">
         <article class="panel history-kpi-card">
@@ -109,26 +115,26 @@
         </article>
       </section>
 
-      <section class="history-chart-grid reveal">
-        <article class="panel">
+      <section id="historyChartGrid" class="history-chart-grid reveal">
+        <article id="historyFinancialPanel" class="panel history-chart-panel history-chart-panel-wide">
           <div class="panel-head">
             <div>
-              <p class="card-title">Finanzen</p>
-              <h2 class="section-title">Kosten, Einspeisung, vermiedener Bezug</h2>
+              <p class="card-title">Analyse</p>
+              <h2 class="section-title">Netto-Analyse</h2>
             </div>
           </div>
           <div id="historyFinancialChart" class="history-chart-shell"></div>
         </article>
-        <article class="panel">
+        <article id="historyEnergyPanel" class="panel history-chart-panel">
           <div class="panel-head">
-          <div>
-            <p class="card-title">Energie</p>
-            <h2 class="section-title">PV, Import, Akku, Export und Last</h2>
+            <div>
+              <p class="card-title">Energie</p>
+              <h2 class="section-title">PV, Import, Akku, Export und Last</h2>
+            </div>
           </div>
-        </div>
-        <div id="historyEnergyChart" class="history-chart-shell"></div>
+          <div id="historyEnergyChart" class="history-chart-shell"></div>
         </article>
-        <article class="panel">
+        <article id="historyPricePanel" class="panel history-chart-panel">
           <div class="panel-head">
             <div>
               <p class="card-title">Preise</p>
@@ -142,11 +148,14 @@
       <section class="panel reveal">
         <div class="panel-head">
           <div>
-            <p class="card-title">Perioden</p>
+            <p class="card-title">Details</p>
             <h2 class="section-title">Historie als Tabelle</h2>
           </div>
+          <button id="historyDetailsToggle" class="btn btn-secondary btn-inline" type="button">Details anzeigen</button>
         </div>
-        <div id="historyRows" class="history-rows"></div>
+        <div id="historyDetailsContent" hidden>
+          <div id="historyRows" class="history-rows"></div>
+        </div>
       </section>
     </div>
   </div>
