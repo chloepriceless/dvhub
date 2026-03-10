@@ -1359,6 +1359,22 @@ export function createHistoryImportManager({
     };
   }
 
+  async function maybeBackfillPricesForRange({ start, end }) {
+    try {
+      return await backfillMissingPriceHistory({ start, end });
+    } catch (error) {
+      return {
+        ok: false,
+        requestedDays: 0,
+        matchedBuckets: 0,
+        importedRows: 0,
+        skippedBuckets: 0,
+        days: [],
+        error: error?.message || String(error)
+      };
+    }
+  }
+
   async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
     const fetched = await fetchConfiguredVrmRows({ start, end, interval });
     if (!fetched.ok) return fetched;
@@ -1384,13 +1400,18 @@ export function createHistoryImportManager({
         types: [...VRM_HISTORY_TYPES]
       }
     });
+    const priceBackfill = await maybeBackfillPricesForRange({
+      start: fetched.requestedFrom,
+      end: fetched.requestedTo
+    });
 
     return {
       ok: true,
       provider: fetched.provider,
       jobId,
       importedRows: allRows.length,
-      seriesCount: fetched.seriesCount
+      seriesCount: fetched.seriesCount,
+      priceBackfill
     };
   }
 
@@ -1460,6 +1481,10 @@ export function createHistoryImportManager({
         emptyWindows: trailingEmptyWindows
       }
     });
+    const priceBackfill = await maybeBackfillPricesForRange({
+      start: requestedFrom,
+      end: requestedTo
+    });
 
     return {
       ok: true,
@@ -1473,7 +1498,8 @@ export function createHistoryImportManager({
       windowsVisited,
       importedWindows,
       emptyWindows: trailingEmptyWindows,
-      importedRows
+      importedRows,
+      priceBackfill
     };
   }
 
@@ -1556,6 +1582,10 @@ export function createHistoryImportManager({
         coveredWindows: plan.windows.length - gapWindows.length
       }
     });
+    const priceBackfill = await maybeBackfillPricesForRange({
+      start: requestedFrom,
+      end: requestedTo
+    });
 
     return {
       ok: true,
@@ -1569,7 +1599,8 @@ export function createHistoryImportManager({
       windowsVisited: gapWindows.length,
       importedWindows,
       emptyWindows,
-      importedRows
+      importedRows,
+      priceBackfill
     };
   }
 
