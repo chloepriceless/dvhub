@@ -501,6 +501,9 @@ function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValue
 function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary }) {
   const plants = Array.isArray(pvPlants) ? pvPlants : [];
   const applicableValueCtKwhByMonth = applicableValueSummary?.applicableValueCtKwhByMonth || {};
+  const applicableValueLookup = typeof applicableValueSummary?.getApplicableValueCtKwh === 'function'
+    ? applicableValueSummary.getApplicableValueCtKwh
+    : ({ commissionedAt }) => applicableValueCtKwhByMonth[String(commissionedAt || '').slice(0, 7)];
   if (!plants.length) {
     return {
       weightedApplicableValueCtKwh: null,
@@ -516,8 +519,10 @@ function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary }) 
   for (const plant of plants) {
     const kwp = Number(plant?.kwp);
     const commissionedAt = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt : '';
-    const monthKey = commissionedAt.slice(0, 7);
-    const applicableValueCtKwh = Number(applicableValueCtKwhByMonth[monthKey]);
+    const applicableValueCtKwh = Number(applicableValueLookup({
+      commissionedAt,
+      kwp
+    }));
     if (!Number.isFinite(kwp) || kwp <= 0) continue;
     if (!Number.isFinite(applicableValueCtKwh)) {
       return {

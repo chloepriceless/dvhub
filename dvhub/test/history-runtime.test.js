@@ -854,6 +854,55 @@ test('history runtime computes weighted applicable value and premium-eligible ex
   assert.equal(year.kpis.premiumEligibleExportKwh, 1.25);
 });
 
+test('history runtime resolves plant-specific applicable values via lookup function for equal commissioning months', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-01-10T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 1,
+            gridKwh: 0,
+            pvKwh: 1,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          { ts: '2026-01-10T10:00:00.000Z', priceCtKwh: 6, priceEurMwh: 60 }
+        ];
+      }
+    },
+    getPricingConfig: () => ({
+      ...pricingConfig,
+      pvPlants: [
+        { kwp: 5, commissionedAt: '2023-09-01' },
+        { kwp: 50, commissionedAt: '2023-09-20' }
+      ]
+    }),
+    getCurrentDate: () => FIXED_CURRENT_DATE,
+    getApplicableValueSummary: () => ({
+      getApplicableValueCtKwh({ commissionedAt, kwp }) {
+        assert.match(commissionedAt, /^2023-09-/);
+        return kwp <= 10 ? 8.2 : 6.8;
+      }
+    })
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+
+  assert.equal(year.kpis.weightedApplicableValueCtKwh, 6.93);
+  assert.equal(year.meta.marketPremium.configuredPlantCount, 2);
+  assert.equal(year.meta.marketPremium.resolvedPlantCount, 2);
+});
+
 test('history runtime computes annual market premium from official annual market value and weighted applicable value', () => {
   const runtime = createHistoryRuntime({
     store: {

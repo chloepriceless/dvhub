@@ -33,6 +33,7 @@ import {
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
+import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
   autoDisableExpiredScheduleRules,
@@ -57,6 +58,11 @@ const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 const DATA_DIR = process.env.DV_DATA_DIR || '';
 const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
+const APPLICABLE_VALUES_CACHE_PATH = path.join(
+  DATA_DIR || __dirname,
+  'reference-data',
+  'bundesnetzagentur-applicable-values.json'
+);
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
@@ -142,6 +148,9 @@ let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
 const energyChartsMarketValueService = createEnergyChartsMarketValueService();
+const applicableValueService = createBundesnetzagenturApplicableValueService({
+  cachePath: APPLICABLE_VALUES_CACHE_PATH
+});
 let liveTelemetryBuffer = null;
 let runtimeWorker = null;
 let runtimeWorkerSnapshot = null;
@@ -2081,7 +2090,8 @@ historyImportManager = telemetryStore ? createHistoryImportManager({
 if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
 historyRuntime = telemetryStore ? createHistoryRuntime({
   store: telemetryStore,
-  getPricingConfig: () => cfg.userEnergyPricing || {}
+  getPricingConfig: () => cfg.userEnergyPricing || {},
+  getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants })
 }) : null;
 historyApi = createHistoryApiHandlers({
   historyRuntime,
@@ -2092,6 +2102,11 @@ historyApi = createHistoryApiHandlers({
   getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
 });
 refreshTelemetryStatus();
+if (IS_RUNTIME_PROCESS) {
+  applicableValueService.refresh().catch((error) => {
+    pushLog('applicable_value_refresh_error', { error: error.message });
+  });
+}
 
 if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
   runtimeWorker = startDedicatedRuntimeWorker();
