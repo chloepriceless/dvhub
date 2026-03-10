@@ -9,6 +9,72 @@ import {
   createRuntimeCommandRequest,
   validateRuntimeCommand
 } from '../runtime-commands.js';
+import {
+  RUNTIME_MESSAGE_TYPES,
+  startRuntimeWorker
+} from '../runtime-worker-protocol.js';
+
+function waitForWorkerMessage(worker, predicate) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('worker message timeout'));
+    }, 2000);
+
+    function handleMessage(message) {
+      if (!predicate(message)) return;
+      cleanup();
+      resolve(message);
+    }
+
+    function handleExit(code, signal) {
+      cleanup();
+      reject(new Error(`worker exited before message (code=${code}, signal=${signal})`));
+    }
+
+    function cleanup() {
+      clearTimeout(timeout);
+      worker.off('message', handleMessage);
+      worker.off('exit', handleExit);
+    }
+
+    worker.on('message', handleMessage);
+    worker.on('exit', handleExit);
+  });
+}
+
+function waitForWorkerMessages(worker, predicate, expectedCount) {
+  return new Promise((resolve, reject) => {
+    const matches = [];
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`worker message timeout after ${matches.length}/${expectedCount} matches`));
+    }, 2000);
+
+    function handleMessage(message) {
+      if (!predicate(message)) return;
+      matches.push(message);
+      if (matches.length >= expectedCount) {
+        cleanup();
+        resolve(matches);
+      }
+    }
+
+    function handleExit(code, signal) {
+      cleanup();
+      reject(new Error(`worker exited before messages (code=${code}, signal=${signal})`));
+    }
+
+    function cleanup() {
+      clearTimeout(timeout);
+      worker.off('message', handleMessage);
+      worker.off('exit', handleExit);
+    }
+
+    worker.on('message', handleMessage);
+    worker.on('exit', handleExit);
+  });
+}
 
 test('web process can serve a cached status response while the runtime worker is busy', () => {
   const snapshot = buildRuntimeSnapshot({
@@ -197,4 +263,112 @@ test('command payloads are schema-checked before runtime execution', () => {
       error: 'history_backfill mode must be gap or full'
     }
   );
+});
+
+test('web process can spawn a dedicated runtime worker', async (t) => {
+  const worker = startRuntimeWorker({
+    env: {
+      DVHUB_RUNTIME_WORKER_TEST: '1'
+    }
+  });
+  t.after(() => worker.kill());
+
+  const readyMessage = await waitForWorkerMessage(
+    worker,
+    (message) => message?.type === RUNTIME_MESSAGE_TYPES.RUNTIME_READY
+  );
+
+  assert.equal(readyMessage.type, RUNTIME_MESSAGE_TYPES.RUNTIME_READY);
+  assert.equal(typeof readyMessage.pid, 'number');
+});
+
+test('runtime worker publishes status snapshots over ipc', async (t) => {
+  const worker = startRuntimeWorker({
+    env: {
+      DVHUB_RUNTIME_WORKER_TEST: '1'
+    }
+  });
+  t.after(() => worker.kill());
+
+  const snapshotMessage = await waitForWorkerMessage(
+    worker,
+    (message) => message?.type === RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT
+  );
+
+  assert.equal(snapshotMessage.type, RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT);
+  assert.equal(snapshotMessage.snapshot.telemetry.enabled, true);
+  assert.equal(typeof snapshotMessage.snapshot.capturedAt, 'string');
+});
+
+test('runtime worker handles one command at a time and reports structured success and error results', async (t) => {
+  const worker = startRuntimeWorker({
+    env: {
+      DVHUB_RUNTIME_WORKER_TEST: '1'
+    }
+  });
+  t.after(() => worker.kill());
+
+  await waitForWorkerMessage(worker, (message) => message?.type === RUNTIME_MESSAGE_TYPES.RUNTIME_READY);
+
+  worker.send({
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST,
+    requestId: 'cmd-1',
+    command: {
+      type: 'poll_now',
+      payload: {
+        delayMs: 30
+      }
+    }
+  });
+  worker.send({
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST,
+    requestId: 'cmd-2',
+    command: {
+      type: 'service_health_snapshot',
+      payload: {}
+    }
+  });
+  worker.send({
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST,
+    requestId: 'cmd-3',
+    command: {
+      type: 'poll_now',
+      payload: {
+        fail: true
+      }
+    }
+  });
+
+  const results = await waitForWorkerMessages(
+    worker,
+    (message) => message?.type === RUNTIME_MESSAGE_TYPES.COMMAND_RESULT,
+    3
+  );
+
+  assert.deepEqual(
+    results.map((message) => message.requestId),
+    ['cmd-1', 'cmd-2', 'cmd-3']
+  );
+  assert.deepEqual(results[0], {
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT,
+    requestId: 'cmd-1',
+    ok: true,
+    result: {
+      commandType: 'poll_now'
+    }
+  });
+  assert.deepEqual(results[1], {
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT,
+    requestId: 'cmd-2',
+    ok: true,
+    result: {
+      commandType: 'service_health_snapshot'
+    }
+  });
+  assert.deepEqual(results[2], {
+    type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT,
+    requestId: 'cmd-3',
+    ok: false,
+    error: 'runtime worker command failed: poll_now'
+  });
 });

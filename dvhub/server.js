@@ -26,6 +26,7 @@ import {
 } from './runtime-performance.js';
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import { buildRuntimeSnapshot } from './runtime-state.js';
+import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { readAppVersionInfo } from './app-version.js';
@@ -54,6 +55,7 @@ const DATA_DIR = process.env.DV_DATA_DIR || '';
 const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
+const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
@@ -134,6 +136,12 @@ let historyRuntime = null;
 let historyApi = null;
 const energyChartsMarketValueService = createEnergyChartsMarketValueService();
 let liveTelemetryBuffer = null;
+let runtimeWorker = null;
+let runtimeWorkerSnapshot = null;
+let runtimeWorkerState = {
+  ready: false,
+  lastError: null
+};
 const effectivePollIntervalMs = () => normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS);
 
 function applyLoadedConfig(nextLoadedConfig) {
@@ -248,6 +256,35 @@ function assertValidRuntimeCommand(type, payload) {
     throw error;
   }
   return request;
+}
+
+function startDedicatedRuntimeWorker() {
+  const worker = startRuntimeWorker({
+    cwd: __dirname
+  });
+
+  worker.on('message', (message) => {
+    if (!message || typeof message !== 'object') return;
+    if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_READY) {
+      runtimeWorkerState.ready = true;
+      runtimeWorkerState.lastError = null;
+      return;
+    }
+    if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT) {
+      runtimeWorkerSnapshot = message.snapshot;
+      return;
+    }
+    if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_ERROR) {
+      runtimeWorkerState.lastError = message.error || 'runtime worker error';
+    }
+  });
+
+  worker.on('exit', (code, signal) => {
+    runtimeWorkerState.ready = false;
+    runtimeWorkerState.lastError = `runtime worker exited (code=${code}, signal=${signal})`;
+  });
+
+  return worker;
 }
 
 function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
@@ -1983,6 +2020,10 @@ historyApi = createHistoryApiHandlers({
 });
 refreshTelemetryStatus();
 
+if (RUNTIME_WORKER_ENABLED) {
+  runtimeWorker = startDedicatedRuntimeWorker();
+}
+
 web.listen(cfg.httpPort, () => {
   console.log(`Web server listening on :${cfg.httpPort}`);
 });
@@ -2037,6 +2078,7 @@ function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
   liveTelemetryBuffer?.flush({ force: true });
+  if (runtimeWorker) runtimeWorker.kill();
   transport.destroy();
   scanTransport.destroy();
   if (telemetryStore) telemetryStore.close();
