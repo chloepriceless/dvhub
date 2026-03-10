@@ -86,6 +86,31 @@ function normalizeVrmInterval(interval = VRM_HISTORY_INTERVAL) {
   return VRM_SUPPORTED_INTERVALS.has(candidate) ? candidate : VRM_HISTORY_INTERVAL;
 }
 
+function floorIsoToInterval(value, seconds) {
+  return bucketIso(value, seconds);
+}
+
+function ceilIsoToInterval(value, seconds) {
+  const ms = new Date(value).getTime();
+  const bucketMs = Math.max(1, Number(seconds || 1)) * 1000;
+  return new Date(Math.ceil(ms / bucketMs) * bucketMs).toISOString();
+}
+
+function normalizeVrmRange({ start, end, interval = VRM_HISTORY_INTERVAL }) {
+  const normalizedInterval = normalizeVrmInterval(interval);
+  const seconds = intervalSeconds(normalizedInterval);
+  const normalizedStart = floorIsoToInterval(start, seconds);
+  let normalizedEnd = ceilIsoToInterval(end, seconds);
+  if (compareIso(normalizedEnd, normalizedStart) <= 0) {
+    normalizedEnd = new Date(new Date(normalizedStart).getTime() + (seconds * 1000)).toISOString();
+  }
+  return {
+    interval: normalizedInterval,
+    start: normalizedStart,
+    end: normalizedEnd
+  };
+}
+
 function berlinDateString(value) {
   const date = new Date(value);
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -1285,9 +1310,12 @@ export function createHistoryImportManager({
     const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
     if (!validation.ok) return validation;
     const importConfig = telemetryConfig.historyImport || {};
-    const normalizedInterval = normalizeVrmInterval(interval);
+    const normalizedRange = normalizeVrmRange({ start, end, interval });
+    const normalizedInterval = normalizedRange.interval;
+    const normalizedStart = normalizedRange.start;
+    const normalizedEnd = normalizedRange.end;
     const resolutionSeconds = intervalSeconds(normalizedInterval);
-    const rangeEndMs = new Date(toIso(end)).getTime();
+    const rangeEndMs = new Date(normalizedEnd).getTime();
     const rawRows = [];
     const slotBuckets = new Map();
 
@@ -1296,8 +1324,8 @@ export function createHistoryImportManager({
         portalId: importConfig.vrmPortalId,
         token: importConfig.vrmToken,
         type,
-        start,
-        end,
+        start: normalizedStart,
+        end: normalizedEnd,
         interval: normalizedInterval,
         fetchImpl,
         waitImpl
@@ -1324,8 +1352,8 @@ export function createHistoryImportManager({
       provider: 'vrm',
       normalizedInterval,
       requestedInterval: interval,
-      requestedFrom: toIso(start),
-      requestedTo: toIso(end),
+      requestedFrom: normalizedStart,
+      requestedTo: normalizedEnd,
       rows: allRows,
       seriesCount: new Set(allRows.map((row) => row.seriesKey)).size
     };

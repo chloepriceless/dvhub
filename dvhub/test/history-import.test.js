@@ -378,6 +378,93 @@ test('configured VRM import preserves hourly interval and stores extended flow m
   }
 });
 
+test('configured VRM import aligns request ranges to interval boundaries before fetching VRM data', async () => {
+  const store = createStore();
+  const captured = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    captured.push({
+      interval: parsed.searchParams.get('interval'),
+      start: new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString(),
+      end: new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString(),
+      type: parsed.searchParams.get('type')
+    });
+    return {
+      ok: true,
+      async json() {
+        return {
+          records: parsed.searchParams.get('type') === 'venus'
+            ? { Pdc: [[Date.parse('2026-03-08T23:00:00.000Z'), 1200]] }
+            : {}
+        };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const cases = [
+      {
+        interval: '15mins',
+        start: '2026-03-08T23:07:00.000Z',
+        end: '2026-03-09T00:02:00.000Z',
+        expectedStart: '2026-03-08T23:00:00.000Z',
+        expectedEnd: '2026-03-09T00:15:00.000Z'
+      },
+      {
+        interval: 'hours',
+        start: '2026-03-08T23:07:00.000Z',
+        end: '2026-03-09T00:02:00.000Z',
+        expectedStart: '2026-03-08T23:00:00.000Z',
+        expectedEnd: '2026-03-09T01:00:00.000Z'
+      },
+      {
+        interval: 'days',
+        start: '2026-03-08T11:07:00.000Z',
+        end: '2026-03-08T12:02:00.000Z',
+        expectedStart: '2026-03-08T00:00:00.000Z',
+        expectedEnd: '2026-03-09T00:00:00.000Z'
+      }
+    ];
+
+    for (const testCase of cases) {
+      captured.length = 0;
+      const result = await manager.importFromConfiguredSource({
+        start: testCase.start,
+        end: testCase.end,
+        interval: testCase.interval
+      });
+      assert.equal(result.ok, true);
+      assert.deepEqual(
+        captured.map((entry) => ({
+          interval: entry.interval,
+          start: entry.start,
+          end: entry.end
+        })),
+        [
+          { interval: testCase.interval, start: testCase.expectedStart, end: testCase.expectedEnd },
+          { interval: testCase.interval, start: testCase.expectedStart, end: testCase.expectedEnd },
+          { interval: testCase.interval, start: testCase.expectedStart, end: testCase.expectedEnd }
+        ]
+      );
+    }
+  } finally {
+    store.close();
+  }
+});
+
 test('configured VRM import derives pv totals for AC coupled PV from Pc Pb and Pg flows', async () => {
   const store = createStore();
   const fetchImpl = async (url) => {
