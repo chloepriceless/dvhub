@@ -148,8 +148,10 @@ test('history shell styles define dedicated layout classes', () => {
   assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*96px;/s);
   assert.match(css, /\.history-kpi-breakdown\s*\{/);
   assert.match(css, /\.history-chart-grid\s*\{/);
-  assert.match(css, /\.history-period-clusters\s*\{/);
-  assert.match(css, /\.history-period-cluster\s*\{/);
+  assert.match(css, /\.history-period-grid\s*\{/);
+  assert.match(css, /\.history-period-card\s*\{/);
+  assert.match(css, /\.history-period-bar-group\s*\{/);
+  assert.match(css, /\.history-period-value-list\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
   assert.doesNotMatch(css, /\.history-bars-compressed\s*\{[^}]*--history-bar-count:\s*1/s);
 });
@@ -454,16 +456,17 @@ test('history page renders one aggregated net-analysis card, hides secondary car
     }
   });
 
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-clusters/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-cluster/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-grid/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-header/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-section/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-metric-label/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-bar-group/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-value-list/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-chart-hover-surface/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-10/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Energie/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Finanzen/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-chart-legend/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Bezugskosten/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);

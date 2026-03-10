@@ -726,13 +726,13 @@ a {
   gap: 8px;
 }
 
-.history-period-clusters {
+.history-period-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 
-.history-period-cluster {
+.history-period-card {
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -742,8 +742,8 @@ a {
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
 }
 
-.history-period-cluster.is-active,
-.history-period-cluster:hover {
+.history-period-card.is-active,
+.history-period-card:hover {
   border-color: rgba(0, 168, 255, 0.62);
   background: rgba(10, 29, 52, 0.58);
   box-shadow: inset 0 0 0 1px rgba(0, 168, 255, 0.12);
@@ -759,7 +759,7 @@ a {
   letter-spacing: 0.04em;
 }
 
-.history-period-section {
+.history-period-bar-group {
   display: grid;
   gap: 8px;
 }
@@ -771,13 +771,14 @@ a {
   text-transform: uppercase;
 }
 
-.history-period-metrics {
+.history-period-bars {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  align-items: end;
 }
 
-.history-period-metric {
+.history-period-bar-slot {
   display: grid;
   gap: 6px;
   justify-items: center;
@@ -794,7 +795,7 @@ a {
   padding-top: 6px;
 }
 
-.history-period-metric-label {
+.history-period-bar-label {
   color: var(--text-muted);
   font-size: 0.68rem;
   line-height: 1.15;
@@ -802,11 +803,33 @@ a {
   text-wrap: balance;
 }
 
-.history-period-metric-value {
-  color: var(--text-main);
-  font-size: 0.74rem;
+.history-period-value-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+}
+
+.history-period-value-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.history-period-value-item dt {
+  color: var(--text-muted);
+  font-size: 0.66rem;
   line-height: 1.1;
-  text-align: center;
+  text-wrap: balance;
+}
+
+.history-period-value-item dd {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.76rem;
+  line-height: 1.15;
+  font-weight: 700;
 }
 
 .history-bar-card-combined {

@@ -503,56 +503,62 @@ function renderCombinedPeriodBars(mountId, items) {
     { key: 'pvCostEur', label: 'PV-Kosten', formatter: fmtEur, className: 'history-bar-pv' },
     { key: 'batteryCostEur', label: 'Akku-Kosten', formatter: fmtEur, className: 'history-bar-battery' }
   ];
-  const renderMetric = (item, metric, max) => {
+  const renderMetricBar = (item, metric, max) => {
     const rawValue = metric.fallbackKey != null
       ? (item?.[metric.key] ?? item?.[metric.fallbackKey] ?? 0)
       : (item?.[metric.key] ?? 0);
     return `
-      <div class="history-period-metric">
+      <div class="history-period-bar-slot" title="${escapeHtml(metric.label)} ${escapeHtml(metric.formatter(rawValue))}">
         <div class="history-period-bar-shell">
           <div class="history-bar history-bar-slim ${metric.className}" style="height:${stackHeight(rawValue, max)}px"></div>
         </div>
-        <span class="history-period-metric-label">${escapeHtml(metric.label)}</span>
-        <strong class="history-period-metric-value">${metric.formatter(rawValue)}</strong>
+        <span class="history-period-bar-label">${escapeHtml(metric.label)}</span>
       </div>
     `;
   };
+  const renderMetricValues = (item, metrics) => `
+    <dl class="history-period-value-list">
+      ${metrics.map((metric) => {
+        const rawValue = metric.fallbackKey != null
+          ? (item?.[metric.key] ?? item?.[metric.fallbackKey] ?? 0)
+          : (item?.[metric.key] ?? 0);
+        return `
+          <div class="history-period-value-item">
+            <dt>${escapeHtml(metric.label)}</dt>
+            <dd>${metric.formatter(rawValue)}</dd>
+          </div>
+        `;
+      }).join('')}
+    </dl>
+  `;
 
   mount.innerHTML = `
     <div class="history-stack-chart history-stack-chart-combined">
-      <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös Einspeisung</span>
-        <span><i class="history-legend-swatch history-bar-cost"></i>Bezugskosten</span>
-        <span><i class="history-legend-swatch history-bar-pv"></i>PV-Kosten</span>
-        <span><i class="history-legend-swatch history-bar-battery"></i>Akku-Kosten</span>
-        <span><i class="history-legend-swatch history-bar-grid"></i>Import</span>
-        <span><i class="history-legend-swatch history-bar-pv"></i>Eigenverbrauch PV</span>
-        <span><i class="history-legend-swatch history-bar-battery"></i>Eigenverbrauch Akku</span>
-        <span><i class="history-legend-swatch history-bar-export"></i>Einspeisung</span>
-      </div>
       <div class="history-chart-summary">
         <span>Vermiedene Bezugskosten ${fmtEur(selectedItem?.avoidedImportGrossEur)}</span>
         <span>Energie-Skala bis ${fmtKwh(energyMax)}</span>
         <span>Finanz-Skala bis ${fmtEur(financeMax)}</span>
       </div>
-      <div class="history-period-clusters">
+      <div class="history-period-grid">
         ${items.map((item, index) => `
-          <article class="history-period-cluster ${index === selectedIndex ? 'is-active' : ''} history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
+          <article class="history-period-card ${index === selectedIndex ? 'is-active' : ''} history-chart-hover-surface" data-history-index="${index}" aria-hidden="true">
             <div class="history-period-header">
               <strong>${escapeHtml(item.label || '-')}</strong>
               ${chartBadge(item)}
             </div>
-            <section class="history-period-section">
+            <section class="history-period-bar-group">
               <div class="history-period-section-title">Energie</div>
-              <div class="history-period-metrics">
-                ${energyMetrics.map((metric) => renderMetric(item, metric, energyMax)).join('')}
+              <div class="history-period-bars">
+                ${energyMetrics.map((metric) => renderMetricBar(item, metric, energyMax)).join('')}
               </div>
+              ${renderMetricValues(item, energyMetrics)}
             </section>
-            <section class="history-period-section">
+            <section class="history-period-bar-group">
               <div class="history-period-section-title">Finanzen</div>
-              <div class="history-period-metrics">
-                ${financeMetrics.map((metric) => renderMetric(item, metric, financeMax)).join('')}
+              <div class="history-period-bars">
+                ${financeMetrics.map((metric) => renderMetricBar(item, metric, financeMax)).join('')}
               </div>
+              ${renderMetricValues(item, financeMetrics)}
             </section>
           </article>
         `).join('')}
