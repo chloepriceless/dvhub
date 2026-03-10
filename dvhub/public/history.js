@@ -32,6 +32,11 @@ function setHtml(id, value) {
   if (element) element.innerHTML = value;
 }
 
+function setHidden(id, hidden) {
+  const element = byId(id);
+  if (element) element.hidden = Boolean(hidden);
+}
+
 function valueOf(item, key) {
   return Number(item?.[key] || 0);
 }
@@ -68,6 +73,10 @@ function round2(value) {
   return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
 }
 
+function hasFiniteNumber(value) {
+  return value !== null && value !== '' && Number.isFinite(Number(value));
+}
+
 function fmtEur(value) {
   if (!Number.isFinite(Number(value))) return '-';
   return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
@@ -100,18 +109,42 @@ function renderBackfillButtonState() {
 }
 
 function renderKpis(summary) {
-  setText('historyKpiCost', fmtEur(actualCostEur(summary?.kpis)));
+  setText('historyKpiCost', fmtEur(importCostEur(summary?.kpis)));
   setText('historyKpiRevenue', fmtEur(summary?.kpis?.exportRevenueEur));
   setText('historyKpiAvoided', fmtEur(summary?.kpis?.avoidedImportGrossEur));
   setText('historyKpiAvoidedPvGross', fmtEur(summary?.kpis?.avoidedImportPvGrossEur));
   setText('historyKpiAvoidedBatteryGross', fmtEur(summary?.kpis?.avoidedImportBatteryGrossEur));
   setText('historyKpiAvoidedPvCost', fmtEur(summary?.kpis?.pvCostEur));
   setText('historyKpiAvoidedBatteryCost', fmtEur(summary?.kpis?.batteryCostEur));
-  setText('historyKpiNet', fmtEur(actualNetEur(summary?.kpis)));
+  setText('historyKpiNet', fmtEur(cashNetEur(summary?.kpis)));
+  setText('historyKpiSavedMoney', fmtEur(savedMoneyEur(summary?.kpis)));
+  setText('historyKpiGrossReturn', fmtEur(grossReturnEur(summary?.kpis)));
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
   setText('historyKpiLoad', fmtKwh(summary?.kpis?.loadKwh));
   setText('historyKpiPv', fmtKwh(summary?.kpis?.pvKwh));
   setText('historyKpiExport', fmtKwh(summary?.kpis?.exportKwh));
+
+  const premiumVisible = String(summary?.view || '') === 'year';
+  setHidden('historyPremiumFields', !premiumVisible);
+  if (!premiumVisible) return;
+  setText(
+    'historyKpiAnnualMarketValue',
+    hasFiniteNumber(summary?.kpis?.annualMarketValueCtKwh)
+      ? fmtCt(summary?.kpis?.annualMarketValueCtKwh)
+      : 'noch nicht verfügbar'
+  );
+  setText(
+    'historyKpiPremiumEligibleExport',
+    hasFiniteNumber(summary?.kpis?.premiumEligibleExportKwh)
+      ? fmtKwh(summary?.kpis?.premiumEligibleExportKwh)
+      : 'noch nicht verfügbar'
+  );
+  setText(
+    'historyKpiMarketPremium',
+    hasFiniteNumber(summary?.kpis?.marketPremiumEur)
+      ? fmtEur(summary?.kpis?.marketPremiumEur)
+      : 'noch nicht verfügbar'
+  );
 }
 
 function chartBadge(item) {
@@ -185,6 +218,30 @@ function actualCostEur(item) {
     + valueOf(item, 'pvCostEur')
     + valueOf(item, 'batteryCostEur')
   );
+}
+
+function importCostEur(item) {
+  if (!item) return 0;
+  return round2(Number(item?.gridCostEur ?? item?.importCostEur ?? 0));
+}
+
+function cashNetEur(item) {
+  if (!item) return 0;
+  return round2(valueOf(item, 'exportRevenueEur') - importCostEur(item));
+}
+
+function savedMoneyEur(item) {
+  if (!item) return 0;
+  return round2(
+    valueOf(item, 'avoidedImportGrossEur')
+    - valueOf(item, 'pvCostEur')
+    - valueOf(item, 'batteryCostEur')
+  );
+}
+
+function grossReturnEur(item) {
+  if (!item) return 0;
+  return round2(cashNetEur(item) + savedMoneyEur(item));
 }
 
 function actualNetEur(item) {

@@ -34,6 +34,8 @@ function loadHistoryPageHelpers() {
     'historyBannerText',
     'historyMeta',
     'historyChartGrid',
+    'historySummaryCard',
+    'historyPremiumFields',
     'historyKpiCost',
     'historyKpiRevenue',
     'historyKpiAvoided',
@@ -42,10 +44,15 @@ function loadHistoryPageHelpers() {
     'historyKpiAvoidedPvCost',
     'historyKpiAvoidedBatteryCost',
     'historyKpiNet',
+    'historyKpiSavedMoney',
+    'historyKpiGrossReturn',
     'historyKpiImport',
     'historyKpiLoad',
     'historyKpiPv',
     'historyKpiExport',
+    'historyKpiAnnualMarketValue',
+    'historyKpiPremiumEligibleExport',
+    'historyKpiMarketPremium',
     'historyFinancialPanel',
     'historyEnergyPanel',
     'historyPricePanel',
@@ -110,7 +117,7 @@ test('tools page exposes separate gap and full VRM backfill controls', () => {
   assert.match(html, /Voll-Backfill/);
 });
 
-test('history page exposes view switcher, date navigation, KPI blocks, chart containers, and grouped rows mount', () => {
+test('history page exposes view switcher, unified summary card, chart containers, and grouped rows mount', () => {
   const html = readPublic('history.html');
 
   assert.match(html, /id="historyView"/);
@@ -119,20 +126,27 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyNextBtn"/);
   assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
-  assert.match(html, /id="historyKpiGrid"/);
+  assert.doesNotMatch(html, /id="historyKpiGrid"/);
+  assert.match(html, /id="historySummaryCard"/);
   assert.match(html, /id="historyChartGrid"/);
   assert.match(html, /id="historyFinancialPanel"/);
   assert.match(html, /id="historyEnergyPanel"/);
   assert.match(html, /id="historyPricePanel"/);
+  assert.match(html, /Bezugs-Kosten/);
+  assert.match(html, /Gespartes Geld/);
+  assert.match(html, /Brutto-"Erlös"/);
   assert.match(html, /id="historyKpiLoad"/);
   assert.match(html, /id="historyKpiPv"/);
-  assert.match(html, /Erlös Einspeisung/);
+  assert.match(html, /Erlös aus Einspeisung/);
   assert.match(html, /Vermiedene Bezugskosten/);
   assert.match(html, /id="historyKpiAvoided"/);
   assert.match(html, /id="historyKpiAvoidedPvGross"/);
   assert.match(html, /id="historyKpiAvoidedBatteryGross"/);
   assert.match(html, /id="historyKpiAvoidedPvCost"/);
   assert.match(html, /id="historyKpiAvoidedBatteryCost"/);
+  assert.match(html, /id="historyKpiSavedMoney"/);
+  assert.match(html, /id="historyKpiGrossReturn"/);
+  assert.match(html, /id="historyPremiumFields"/);
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
@@ -150,9 +164,12 @@ test('history shell styles define dedicated layout classes', () => {
   const css = readPublic('styles.css');
 
   assert.match(css, /\.history-layout\s*\{/);
-  assert.match(css, /\.history-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(8,\s*minmax\(0,\s*1fr\)\)/s);
-  assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*96px;/s);
-  assert.match(css, /\.history-kpi-breakdown\s*\{/);
+  assert.match(css, /\.history-summary-card\s*\{/);
+  assert.match(css, /\.history-summary-grid\s*\{/);
+  assert.match(css, /\.history-summary-block\s*\{/);
+  assert.match(css, /\.history-summary-breakdown\s*\{/);
+  assert.match(css, /\.history-summary-premium\s*\{/);
+  assert.doesNotMatch(css, /\.history-kpi-grid\s*\{/);
   assert.match(css, /\.history-chart-grid\s*\{/);
   assert.match(css, /\.history-aggregate-mode\s*\{/);
   assert.match(css, /\.history-aggregate-mode-btn\s*\{/);
@@ -163,7 +180,7 @@ test('history shell styles define dedicated layout classes', () => {
   assert.doesNotMatch(css, /\.history-bars-compressed\s*\{[^}]*--history-bar-count:\s*1/s);
 });
 
-test('history page renders KPI values, grouped rows, and unresolved warnings from the summary payload', () => {
+test('history page renders summary card values, grouped rows, and unresolved warnings from the summary payload', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
@@ -225,16 +242,20 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
     }
   });
 
-  assert.match(elements.get('historyKpiCost').textContent, /1,66/);
+  assert.match(elements.get('historyKpiCost').textContent, /1,23/);
   assert.match(elements.get('historyKpiRevenue').textContent, /0,45/);
   assert.match(elements.get('historyKpiAvoided').textContent, /2,91/);
   assert.match(elements.get('historyKpiAvoidedPvGross').textContent, /1,95/);
   assert.match(elements.get('historyKpiAvoidedBatteryGross').textContent, /0,96/);
   assert.match(elements.get('historyKpiAvoidedPvCost').textContent, /0,32/);
   assert.match(elements.get('historyKpiAvoidedBatteryCost').textContent, /0,11/);
+  assert.match(elements.get('historyKpiNet').textContent, /-0,78/);
+  assert.match(elements.get('historyKpiSavedMoney').textContent, /2,48/);
+  assert.match(elements.get('historyKpiGrossReturn').textContent, /1,70/);
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
   assert.match(elements.get('historyKpiLoad').textContent, /8,20/);
   assert.match(elements.get('historyKpiPv').textContent, /5,30/);
+  assert.equal(elements.get('historyPremiumFields').hidden, true);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);
   assert.match(elements.get('historyRows').innerHTML, /PV erzeugt/);
@@ -247,6 +268,47 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
   assert.match(elements.get('historyBannerText').textContent, /unvollständig/i);
   assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
+});
+
+test('history page renders year-only premium fields and falls back to not available when official values are missing', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'year',
+    date: '2026-03-09',
+    kpis: {
+      importCostEur: 42,
+      gridCostEur: 42,
+      pvCostEur: 6,
+      batteryCostEur: 3,
+      avoidedImportGrossEur: 30,
+      avoidedImportPvGrossEur: 18,
+      avoidedImportBatteryGrossEur: 12,
+      exportRevenueEur: 11,
+      importKwh: 300,
+      loadKwh: 820,
+      pvKwh: 900,
+      exportKwh: 220,
+      premiumEligibleExportKwh: 185,
+      annualMarketValueCtKwh: null,
+      marketPremiumEur: null
+    },
+    rows: [],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.equal(elements.get('historyPremiumFields').hidden, false);
+  assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /noch nicht verfügbar/i);
+  assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /185,00/);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /noch nicht verfügbar/i);
 });
 
 test('history page renders daily line charts and estimated markers from chart payloads', () => {

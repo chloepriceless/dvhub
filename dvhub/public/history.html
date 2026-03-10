@@ -74,45 +74,120 @@
         <div id="historyStatusInfo" class="history-status-info" hidden></div>
       </section>
 
-      <section id="historyKpiGrid" class="history-kpi-grid reveal">
-        <article class="panel history-kpi-card">
-          <p class="card-title">Kosten</p>
-          <strong id="historyKpiCost" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">Erlös Einspeisung</p>
-          <strong id="historyKpiRevenue" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card history-kpi-card-breakdown">
-          <p class="card-title">Vermiedene Bezugskosten</p>
-          <strong id="historyKpiAvoided" class="big-value">-</strong>
-          <div class="history-kpi-breakdown">
-            <span>PV brutto <strong id="historyKpiAvoidedPvGross">-</strong></span>
-            <span>Akku brutto <strong id="historyKpiAvoidedBatteryGross">-</strong></span>
-            <span>PV-Kosten <strong id="historyKpiAvoidedPvCost">-</strong></span>
-            <span>Akku-Kosten <strong id="historyKpiAvoidedBatteryCost">-</strong></span>
-          </div>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">Netto</p>
-          <strong id="historyKpiNet" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">Bezug</p>
-          <strong id="historyKpiImport" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">Verbrauch</p>
-          <strong id="historyKpiLoad" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">PV erzeugt</p>
-          <strong id="historyKpiPv" class="big-value">-</strong>
-        </article>
-        <article class="panel history-kpi-card">
-          <p class="card-title">Einspeisung</p>
-          <strong id="historyKpiExport" class="big-value">-</strong>
-        </article>
+      <section id="historySummaryCard" class="panel history-summary-card reveal">
+        <div class="history-summary-grid">
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Finanz-Kern</p>
+                <h2 class="section-title">Reale Geldbilanz</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span>Bezugs-Kosten</span>
+                <strong id="historyKpiCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Erlös aus Einspeisung</span>
+                <strong id="historyKpiRevenue">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Netto</span>
+                <strong id="historyKpiNet">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Gespart / Brutto</p>
+                <h2 class="section-title">Vermiedene Kosten transparent</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics history-summary-breakdown">
+              <div class="history-summary-item is-key">
+                <span>Vermiedene Bezugskosten</span>
+                <strong id="historyKpiAvoided">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV brutto</span>
+                <strong id="historyKpiAvoidedPvGross">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Akku brutto</span>
+                <strong id="historyKpiAvoidedBatteryGross">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV Kosten</span>
+                <strong id="historyKpiAvoidedPvCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Akku Kosten</span>
+                <strong id="historyKpiAvoidedBatteryCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Gespartes Geld</span>
+                <strong id="historyKpiSavedMoney">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Brutto-"Erlös"</span>
+                <strong id="historyKpiGrossReturn">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Energiemengen</p>
+                <h2 class="section-title">Bezug, Verbrauch und Erzeugung</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span>Bezug</span>
+                <strong id="historyKpiImport">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Verbrauch</span>
+                <strong id="historyKpiLoad">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV erzeugt</span>
+                <strong id="historyKpiPv">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Einspeisung</span>
+                <strong id="historyKpiExport">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article id="historyPremiumFields" class="history-summary-block history-summary-premium" hidden>
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Jahresansicht</p>
+                <h2 class="section-title">Marktprämie</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span>Jahresmarktwert</span>
+                <strong id="historyKpiAnnualMarketValue">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>förderfähige Einspeisemenge</span>
+                <strong id="historyKpiPremiumEligibleExport">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Marktprämie</span>
+                <strong id="historyKpiMarketPremium">-</strong>
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section id="historyChartGrid" class="history-chart-grid reveal">

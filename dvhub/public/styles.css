@@ -359,44 +359,90 @@ a {
   accent-color: #f5c451;
 }
 
-.history-kpi-grid {
+.history-summary-card {
+  padding: 14px;
+  border-color: rgba(0, 168, 255, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 28%),
+    linear-gradient(145deg, rgba(12, 37, 69, 0.96), rgba(9, 27, 49, 0.94));
+}
+
+.history-summary-grid {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.history-kpi-card {
-  min-height: 96px;
+.history-summary-block {
   display: grid;
-  align-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
+    rgba(7, 18, 30, 0.38);
 }
 
-.history-kpi-card-breakdown {
-  gap: 8px;
+.history-summary-block-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.history-kpi-card .card-title {
+.history-summary-block .card-title {
   font-size: 0.68rem;
   letter-spacing: 0.08em;
 }
 
-.history-kpi-breakdown {
+.history-summary-block .section-title {
+  font-size: 1.05rem;
+}
+
+.history-summary-metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 10px;
-  font-size: 0.72rem;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px 12px;
+}
+
+.history-summary-item {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+}
+
+.history-summary-item span {
   color: var(--text-muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.history-kpi-breakdown span {
-  display: grid;
-  gap: 2px;
-}
-
-.history-kpi-breakdown strong {
+.history-summary-item strong {
   color: var(--text-main);
-  font-size: 0.82rem;
-  letter-spacing: 0.01em;
+  font-size: 1rem;
+  line-height: 1.1;
+}
+
+.history-summary-item.is-key strong {
+  font-family: var(--font-title);
+  font-size: 1.55rem;
+  letter-spacing: 0.02em;
+}
+
+.history-summary-breakdown {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+}
+
+.history-summary-premium {
+  grid-column: 1 / -1;
+  border-style: dashed;
+  background:
+    linear-gradient(90deg, rgba(0, 168, 255, 0.08), rgba(168, 240, 0, 0.04)),
+    rgba(7, 18, 30, 0.34);
 }
 
 .history-chart-grid {
@@ -2714,7 +2760,7 @@ table th {
   }
 
   .history-chart-grid,
-  .history-kpi-grid {
+  .history-summary-grid {
     grid-template-columns: 1fr;
   }
 
