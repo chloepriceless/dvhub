@@ -244,7 +244,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
       }
     ],
     app: {
-      versionLabel: 'v0.2.5+ea104c9'
+      versionLabel: 'v3.0.0+ea104c9'
     },
     meta: {
       unresolved: {
@@ -279,7 +279,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyRows').innerHTML, /Eigenverbrauch PV/);
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
   assert.match(elements.get('historyBannerText').textContent, /unvollständig/i);
-  assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
+  assert.match(elements.get('historyMeta').textContent, /v3\.0\.0\+ea104c9/);
 });
 
 test('history page renders year-only premium fields and a provisional note for running-year monthly fallback', () => {

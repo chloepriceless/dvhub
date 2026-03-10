@@ -1820,9 +1820,9 @@ test('history summary API validates views and delegates to the runtime', async (
     defaultBzn: 'DE-LU',
     appVersion: {
       name: 'dvhub',
-      version: '0.2.5',
+      version: '3.0.0',
       revision: 'ea104c9',
-      versionLabel: 'v0.2.5+ea104c9'
+      versionLabel: 'v3.0.0+ea104c9'
     }
   });
 
@@ -1834,7 +1834,7 @@ test('history summary API validates views and delegates to the runtime', async (
   assert.match(invalid.body.error, /view/i);
   assert.equal(valid.status, 200);
   assert.deepEqual(valid.body.echo, { view: 'month', date: '2026-03-09', solarMarketValues: null });
-  assert.equal(valid.body.app.versionLabel, 'v0.2.5+ea104c9');
+  assert.equal(valid.body.app.versionLabel, 'v3.0.0+ea104c9');
   assert.equal(backfill.status, 200);
   assert.equal(backfill.body.requestedDays, 1);
   assert.deepEqual(backfillInput, {

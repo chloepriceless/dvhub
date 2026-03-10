@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.2.5 |
+| **Status** | `main` -- Version 3.0.0 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -41,6 +41,7 @@ DVhub auf `main` ist heute:
 - **DV-Schnittstelle und Web-Leitstand** in einer Anwendung
 - **Dashboard** für Live-Werte, Day-Ahead-Preise, Kosten und Steuerung
 - **History-Seite** für Tag/Woche/Monat/Jahr direkt aus der SQLite-Telemetrie
+- **Release 3.0 Schwerpunkt:** neue History-Analyse plus Backfill aus dem Victron VRM Portal
 - **Setup-Assistent** für den ersten Start mit blockierender Validierung
 - **Einstellungsoberfläche** statt roher `config.json`-Bearbeitung
 - **Victron-Anbindung per Modbus TCP oder MQTT**
