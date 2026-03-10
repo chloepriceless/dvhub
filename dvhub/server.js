@@ -24,6 +24,8 @@ import {
   createTelemetryWriteBuffer,
   normalizePollIntervalMs
 } from './runtime-performance.js';
+import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
+import { buildRuntimeSnapshot } from './runtime-state.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { readAppVersionInfo } from './app-version.js';
@@ -217,6 +219,35 @@ function refreshTelemetryStatus() {
   state.telemetry.dbPath = status.dbPath;
   state.telemetry.ok = true;
   state.telemetry.lastWriteAt = status.lastWriteAt;
+}
+
+function buildCurrentRuntimeSnapshot() {
+  return buildRuntimeSnapshot({
+    now: Date.now(),
+    meter: {
+      ...state.meter,
+      l1Dir: gridDirection(state.meter.grid_l1_w),
+      l2Dir: gridDirection(state.meter.grid_l2_w),
+      l3Dir: gridDirection(state.meter.grid_l3_w),
+      totalDir: gridDirection(state.meter.grid_total_w),
+      semantics: { positiveMeans: cfg.gridPositiveMeans }
+    },
+    victron: state.victron,
+    schedule: state.schedule,
+    telemetry: state.telemetry,
+    historyImport: historyImportManager ? historyImportManager.getStatus() : null
+  });
+}
+
+function assertValidRuntimeCommand(type, payload) {
+  const request = createRuntimeCommandRequest(type, payload);
+  const validation = validateRuntimeCommand(request);
+  if (!validation.ok) {
+    const error = new Error(validation.error);
+    error.statusCode = 400;
+    throw error;
+  }
+  return request;
 }
 
 function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
@@ -1705,30 +1736,24 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
+    const runtimeSnapshot = buildCurrentRuntimeSnapshot();
     return json(res, 200, {
       now: Date.now(),
       dvControlValue: controlValue(),
       dvRegs: state.dvRegs,
       ctrl: { ...state.ctrl, dvControl: state.ctrl.dvControl || null },
       keepalive: state.keepalive,
-      meter: {
-        ...state.meter,
-        l1Dir: gridDirection(state.meter.grid_l1_w),
-        l2Dir: gridDirection(state.meter.grid_l2_w),
-        l3Dir: gridDirection(state.meter.grid_l3_w),
-        totalDir: gridDirection(state.meter.grid_total_w),
-        semantics: { positiveMeans: cfg.gridPositiveMeans }
-      },
-      victron: state.victron,
+      meter: runtimeSnapshot.meter,
+      victron: runtimeSnapshot.victron,
       scan: state.scan,
-      schedule: state.schedule,
+      schedule: runtimeSnapshot.schedule,
       setup: configMetaPayload(),
       costs: costSummary(),
       userEnergyPricing: userEnergyPricingSummary(),
       epex: { ...state.epex, summary: epexNowNext() },
       telemetry: {
-        ...state.telemetry,
-        historyImport: historyImportManager ? historyImportManager.getStatus() : null
+        ...runtimeSnapshot.telemetry,
+        historyImport: runtimeSnapshot.historyImport
       }
     });
   }
@@ -1796,10 +1821,11 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/log' && req.method === 'GET') return json(res, 200, { rows: state.log.slice(-300) });
 
   if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
+    const runtimeSnapshot = buildCurrentRuntimeSnapshot();
     return json(res, 200, {
       ok: true,
       telemetryEnabled: !!cfg.telemetry?.enabled,
-      historyImport: historyImportManager ? historyImportManager.getStatus() : null
+      historyImport: runtimeSnapshot.historyImport
     });
   }
 
@@ -1807,10 +1833,17 @@ const web = http.createServer(async (req, res) => {
     if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
     const body = await parseBody(req);
     if (body.mode === 'backfill') {
+      assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
       const result = await historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
       return json(res, result.ok ? 200 : 400, result);
     }
     const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
+    assertValidRuntimeCommand('history_import', {
+      provider,
+      requestedFrom: body.requestedFrom ?? body.start ?? null,
+      requestedTo: body.requestedTo ?? body.end ?? null,
+      interval: body.interval || '15mins'
+    });
     const result = Array.isArray(body.rows) && body.rows.length
       ? historyImportManager.importSamples({
         provider,
@@ -1831,6 +1864,10 @@ const web = http.createServer(async (req, res) => {
     if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
     const body = await parseBody(req);
     const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
+    assertValidRuntimeCommand('history_backfill', {
+      mode: requestedMode,
+      requestedBy: 'history_backfill_endpoint'
+    });
     const result = await historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
     return json(res, result.ok ? 200 : 400, result);
   }
@@ -1904,9 +1941,7 @@ const web = http.createServer(async (req, res) => {
     const body = await parseBody(req);
     const target = String(body.target || '');
     const value = Number(body.value);
-    if (!['gridSetpointW', 'chargeCurrentA', 'minSocPct'].includes(target) || !Number.isFinite(value)) {
-      return json(res, 400, { ok: false, error: 'target/value invalid' });
-    }
+    assertValidRuntimeCommand('control_write', { target, value });
     state.schedule.manualOverride[target] = { value, at: Date.now() };
     const result = await applyControlTarget(target, value, 'api_manual_write');
     return json(res, result.ok ? 200 : 500, result);
@@ -1915,7 +1950,11 @@ const web = http.createServer(async (req, res) => {
   return serveStatic(req, res);
   } catch (e) {
     console.error('HTTP handler error:', e);
-    if (!res.headersSent) json(res, 500, { error: 'internal server error' });
+    if (!res.headersSent) {
+      json(res, Number.isInteger(e?.statusCode) ? e.statusCode : 500, {
+        error: e?.statusCode ? e.message : 'internal server error'
+      });
+    }
   }
 });
 
