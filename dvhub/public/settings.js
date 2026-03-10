@@ -16,6 +16,7 @@ let historyImportFormState = {
 };
 let pricingPeriodsDraft = [];
 let pricingPeriodsValidation = [];
+let marketValueModeDraft = 'annual';
 let pvPlantsDraft = [];
 let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
@@ -307,6 +308,14 @@ function createEmptyPvPlant(index = 0) {
   };
 }
 
+function serializeMarketValueMode(value) {
+  return value === 'monthly' ? 'monthly' : 'annual';
+}
+
+function getDraftMarketValueMode(config) {
+  return serializeMarketValueMode(config?.userEnergyPricing?.marketValueMode);
+}
+
 function addPvPlant(plants = []) {
   return [...plants, createEmptyPvPlant(plants.length)];
 }
@@ -343,11 +352,61 @@ function validatePvPlants(plants = []) {
   };
 }
 
+function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
+  const selectedMode = serializeMarketValueMode(marketValueMode);
+  return `
+    <div class="settings-subsection-head">
+      <p class="card-title">Marktprämie</p>
+      <h3>PV-Anlagen</h3>
+      <p class="settings-section-meta">${plants.length} konfigurierte Anlagen</p>
+      <p class="tools-note">Pflege hier global den Marktwert-Modus sowie pro Anlage nur die installierte Leistung und das Inbetriebnahmedatum. Die offiziellen Referenzwerte werden später daraus abgeleitet.</p>
+    </div>
+    ${validationHtml}
+    <div class="pricing-period-card">
+      <div class="pricing-period-grid">
+        <label class="settings-field">
+          <span class="settings-field-title">Marktwert-Modus</span>
+          <select id="marketValueModeSelect">
+            <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
+            <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
+          </select>
+          <small class="field-help">Jahresmarktwert nutzt das bisherige Verhalten. Monatsmarktwert erzwingt Monatswerte fuer Monats- und Jahresansichten.</small>
+        </label>
+      </div>
+    </div>
+    <div class="settings-inline-actions">
+      <button id="addPvPlantBtn" class="btn btn-ghost" type="button">PV-Anlage hinzufügen</button>
+    </div>
+    <div class="pricing-period-list">
+      ${plants.map((plant) => `
+        <article class="pricing-period-card" data-pv-plant-id="${plant.id}">
+          <div class="pricing-period-grid">
+            <label class="settings-field">
+              <span class="settings-field-title">Leistung (kWp)</span>
+              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Inbetriebnahme</span>
+              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" />
+            </label>
+          </div>
+          <div class="settings-inline-actions">
+            <button class="btn btn-danger" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsPvPlants = {
     addPvPlant,
+    buildMarketPremiumEditorMarkup,
     createEmptyPvPlant,
+    getDraftMarketValueMode,
     removePvPlant,
+    serializeMarketValueMode,
     serializePvPlants,
     validatePvPlants
   };
@@ -845,38 +904,15 @@ function renderPvPlantsEditor() {
   const validation = pvPlantsValidation.length
     ? `<div class="status-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
     : '<div class="status-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
+  section.innerHTML = buildMarketPremiumEditorMarkup({
+    marketValueMode: marketValueModeDraft,
+    plants: pvPlantsDraft,
+    validationHtml: validation
+  });
 
-  section.innerHTML = `
-    <div class="settings-subsection-head">
-      <p class="card-title">Marktprämie</p>
-      <h3>PV-Anlagen</h3>
-      <p class="settings-section-meta">${pvPlantsDraft.length} konfigurierte Anlagen</p>
-      <p class="tools-note">Pflege hier pro Anlage nur die installierte Leistung und das Inbetriebnahmedatum. Die offiziellen Referenzwerte werden später daraus abgeleitet.</p>
-    </div>
-    ${validation}
-    <div class="settings-inline-actions">
-      <button id="addPvPlantBtn" class="btn btn-ghost" type="button">PV-Anlage hinzufügen</button>
-    </div>
-    <div class="pricing-period-list">
-      ${pvPlantsDraft.map((plant) => `
-        <article class="pricing-period-card" data-pv-plant-id="${plant.id}">
-          <div class="pricing-period-grid">
-            <label class="settings-field">
-              <span class="settings-field-title">Leistung (kWp)</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Inbetriebnahme</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" />
-            </label>
-          </div>
-          <div class="settings-inline-actions">
-            <button class="btn btn-danger" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button>
-          </div>
-        </article>
-      `).join('')}
-    </div>
-  `;
+  section.querySelector('#marketValueModeSelect')?.addEventListener('change', (event) => {
+    marketValueModeDraft = serializeMarketValueMode(event.target.value);
+  });
 
   section.querySelector('#addPvPlantBtn')?.addEventListener('click', () => {
     pvPlantsDraft = addPvPlant(pvPlantsDraft);
@@ -1082,6 +1118,7 @@ function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
   const next = clone(currentDraftConfig || {});
   next.userEnergyPricing = next.userEnergyPricing || {};
+  next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
   next.userEnergyPricing.pvPlants = serializePvPlants(pvPlantsDraft);
   return next;
@@ -1094,6 +1131,7 @@ function applyConfigPayload(payload) {
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
+  marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
   pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
     ...createEmptyPvPlant(index),
     kwp: plant?.kwp ?? '',

@@ -24,8 +24,11 @@ function loadPvPlantHelpers() {
 
 const {
   addPvPlant,
+  buildMarketPremiumEditorMarkup,
   createEmptyPvPlant,
+  getDraftMarketValueMode,
   removePvPlant,
+  serializeMarketValueMode,
   serializePvPlants,
   validatePvPlants
 } = loadPvPlantHelpers();
@@ -65,6 +68,27 @@ test('pv plants serialize into premium config payload entries', () => {
       commissionedAt: '2023-09-01'
     }
   ]);
+});
+
+test('market value mode defaults to annual when missing and serializes valid values', () => {
+  assert.equal(getDraftMarketValueMode({ userEnergyPricing: {} }), 'annual');
+  assert.equal(getDraftMarketValueMode({ userEnergyPricing: { marketValueMode: 'monthly' } }), 'monthly');
+  assert.equal(serializeMarketValueMode('monthly'), 'monthly');
+  assert.equal(serializeMarketValueMode('invalid'), 'annual');
+});
+
+test('market premium editor markup keeps global mode separate from pv plants list', () => {
+  const markup = buildMarketPremiumEditorMarkup({
+    marketValueMode: 'monthly',
+    plants: [createEmptyPvPlant(0)],
+    validationHtml: '<div class="status-banner info">ok</div>'
+  });
+
+  assert.match(markup, /Marktwert-Modus/);
+  assert.match(markup, /Jahresmarktwert/);
+  assert.match(markup, /Monatsmarktwert/);
+  assert.match(markup, /<h3>PV-Anlagen<\/h3>/);
+  assert.match(markup, /1 konfigurierte Anlagen/);
 });
 
 test('pv plant validation reports missing commissioning date and invalid capacity', () => {

@@ -146,6 +146,8 @@ function renderKpis(summary) {
   } else if (view === 'week') {
     premiumScopeLabel = 'Wochenansicht';
     marketValueLabel = 'Monatsmarktwert';
+  } else if (displaySource === 'configured_monthly') {
+    marketValueLabel = 'Monatsmarktwert (gewichtet)';
   }
   setHidden('historyPremiumFields', !premiumVisible);
   setHidden('historyPremiumHint', true);

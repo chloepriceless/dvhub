@@ -1265,6 +1265,20 @@ function buildFieldDefinitions() {
       group: 'marketPremium',
       groupLabel: 'PV-Anlagen für Marktprämie',
       groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      path: 'userEnergyPricing.marketValueMode',
+      label: 'Marktwert-Modus',
+      type: 'select',
+      options: [
+        { value: 'annual', label: 'Jahresmarktwert' },
+        { value: 'monthly', label: 'Monatsmarktwert' }
+      ],
+      help: 'Legt global fest, ob DVhub die Marktprämie mit Jahres- oder Monatsmarktwerten berechnet.'
+    },
+    {
+      section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen für Marktprämie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
       path: 'userEnergyPricing.pvPlants',
       label: 'PV-Anlagen',
       type: 'array',
@@ -1695,6 +1709,7 @@ export function createDefaultConfig() {
       mode: 'fixed',
       fixedGrossImportCtKwh: null,
       periods: [],
+      marketValueMode: 'annual',
       pvPlants: [],
       dynamicComponents: {
         energyMarkupCtKwh: 0,

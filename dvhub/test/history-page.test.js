@@ -424,6 +424,76 @@ test('history page renders month premium fields with monthly source when no year
   assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /3,70/);
 });
 
+test('history page renders configured monthly source in month view as Monatsmarktwert', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'month',
+    date: '2026-02-15',
+    kpis: {
+      weightedApplicableValueCtKwh: 8.2,
+      premiumEligibleExportKwh: 2.5,
+      marketPremiumCtKwh: 3.7,
+      marketPremiumEur: 0.09,
+      periodMarketValueCtKwh: 4.5
+    },
+    rows: [],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      marketPremium: {
+        displaySource: 'official_monthly_configured'
+      },
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.equal(elements.get('historyPremiumFields').hidden, false);
+  assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Monatsmarktwert/);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /0,09/);
+  assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /3,70/);
+});
+
+test('history page renders configured monthly year source as weighted monthly label', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'year',
+    date: '2026-06-01',
+    kpis: {
+      weightedApplicableValueCtKwh: 8.2,
+      premiumEligibleExportKwh: 3.5,
+      marketPremiumCtKwh: 3.41,
+      marketPremiumEur: 0.12,
+      periodMarketValueCtKwh: 4.79
+    },
+    rows: [],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      marketPremium: {
+        displaySource: 'configured_monthly'
+      },
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.equal(elements.get('historyPremiumFields').hidden, false);
+  assert.match(elements.get('historyPremiumScopeLabel').textContent, /Jahresansicht/);
+  assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Monatsmarktwert/);
+  assert.doesNotMatch(elements.get('historyPremiumMarketValueLabel').textContent, /Jahresmarktwert/);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /0,12/);
+  assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /3,41/);
+});
+
 test('history page renders daily line charts and estimated markers from chart payloads', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 

@@ -16,6 +16,7 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.telemetry.historyImport.vrmToken, '');
   assert.equal(defaults.userEnergyPricing.mode, 'fixed');
   assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, null);
+  assert.equal(defaults.userEnergyPricing.marketValueMode, 'annual');
   assert.deepEqual(defaults.userEnergyPricing.periods, []);
   assert.deepEqual(defaults.userEnergyPricing.pvPlants, []);
   assert.equal(defaults.userEnergyPricing.dynamicComponents.vatPct, 19);
@@ -41,6 +42,7 @@ test('config definition exposes telemetry section and fields', () => {
   assert.ok(!fieldPaths.includes('telemetry.historyImport.gxPath'));
   assert.ok(fieldPaths.includes('userEnergyPricing.mode'));
   assert.ok(fieldPaths.includes('userEnergyPricing.periods'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.marketValueMode'));
   assert.ok(fieldPaths.includes('userEnergyPricing.pvPlants'));
   assert.ok(fieldPaths.includes('userEnergyPricing.fixedGrossImportCtKwh'));
   assert.ok(fieldPaths.includes('userEnergyPricing.dynamicComponents.gridChargesCtKwh'));
@@ -106,6 +108,28 @@ test('normalizeConfigInput coerces user energy pricing booleans and numbers', ()
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.pvCtKwh, 7.1);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryBaseCtKwh, 2.2);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+});
+
+test('normalizeConfigInput preserves monthly market value mode', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      marketValueMode: 'monthly'
+    }
+  });
+
+  assert.equal(normalized.rawConfig.userEnergyPricing.marketValueMode, 'monthly');
+  assert.equal(normalized.persistedConfig.userEnergyPricing.marketValueMode, 'monthly');
+});
+
+test('normalizeConfigInput falls back to annual market value mode for invalid values', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      marketValueMode: 'invalid'
+    }
+  });
+
+  assert.equal(normalized.rawConfig.userEnergyPricing.marketValueMode, undefined);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.marketValueMode, 'annual');
 });
 
 test('normalizeConfigInput preserves multiple pv plants for premium lookup metadata', () => {
