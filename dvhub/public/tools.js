@@ -44,6 +44,13 @@ function buildHistoryImportRequest(formState) {
   };
 }
 
+function buildHistoryBackfillRequest() {
+  return {
+    mode: 'backfill',
+    interval: '15mins'
+  };
+}
+
 function buildHistoryImportActionState({ status, form, busy }) {
   if (busy) return { disabled: true, reason: 'Import läuft bereits.' };
   if (!status?.enabled) return { disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
@@ -54,6 +61,22 @@ function buildHistoryImportActionState({ status, form, busy }) {
     return { disabled: true, reason: 'Das Ende muss nach dem Start liegen.' };
   }
   return { disabled: false, reason: '' };
+}
+
+function buildHistoryBackfillActionState({ status, busy }) {
+  if (busy) return { disabled: true, reason: 'Import läuft bereits.' };
+  if (!status?.enabled) return { disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
+  if (!status?.ready) return { disabled: true, reason: 'VRM-Zugang ist noch nicht vollständig konfiguriert.' };
+  return { disabled: false, reason: '' };
+}
+
+function formatHistoryImportResult(result) {
+  if (!result) return 'Noch kein Import gestartet.';
+  if (!result.ok) return `Import fehlgeschlagen: ${result.error}`;
+  if (result.windowsVisited != null) {
+    return `Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} Fenster mit Daten, Job ${result.jobId}.`;
+  }
+  return `Import erfolgreich: ${result.importedRows} Werte, Job ${result.jobId}.`;
 }
 
 function syncHistoryImportFormState() {
@@ -69,6 +92,10 @@ function renderHistoryImportState() {
     form: historyImportFormState,
     busy: historyImportBusy
   });
+  const backfillState = buildHistoryBackfillActionState({
+    status: currentHistoryImportStatus,
+    busy: historyImportBusy
+  });
   const bannerText = !currentHistoryImportStatus
     ? 'VRM-Status wird geladen...'
     : !currentHistoryImportStatus.enabled
@@ -82,16 +109,19 @@ function renderHistoryImportState() {
   const button = document.getElementById('historyImportBtn');
   if (button) {
     button.disabled = actionState.disabled;
-    button.textContent = historyImportBusy ? 'VRM-Import läuft...' : 'VRM-Historie importieren';
+    button.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren';
   }
-  setText('historyReason', actionState.reason || 'Der Import schreibt historische VRM-Zeitreihen direkt in die interne Telemetrie-Datenbank.');
+  const backfillButton = document.getElementById('historyBackfillBtn');
+  if (backfillButton) {
+    backfillButton.disabled = backfillState.disabled;
+    backfillButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten';
+  }
+  setText('historyReason', actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill bis zur ersten leeren Historie.');
 
   if (currentHistoryImportResult) {
     setBanner(
       'historyResult',
-      currentHistoryImportResult.ok
-        ? `Import erfolgreich: ${currentHistoryImportResult.importedRows} Werte, Job ${currentHistoryImportResult.jobId}.`
-        : `Import fehlgeschlagen: ${currentHistoryImportResult.error}`,
+      formatHistoryImportResult(currentHistoryImportResult),
       currentHistoryImportResult.ok ? 'success' : 'error'
     );
   }
@@ -276,6 +306,23 @@ async function triggerHistoryImport() {
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
+async function triggerHistoryBackfill() {
+  historyImportBusy = true;
+  renderHistoryImportState();
+  const payload = buildHistoryBackfillRequest();
+  const res = await apiFetch('/api/history/backfill/vrm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await res.json();
+  currentHistoryImportResult = body;
+  historyImportBusy = false;
+  await loadHistoryImportStatus();
+  renderHistoryImportState();
+  if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
+}
+
 function initToolsPage() {
   document.getElementById('startScan')?.addEventListener('click', () => {
     startScan().catch((error) => setText('scanMeta', `Scan fehlgeschlagen: ${error.message}`));
@@ -317,6 +364,13 @@ function initToolsPage() {
   });
   document.getElementById('historyImportBtn')?.addEventListener('click', () => {
     triggerHistoryImport().catch((error) => {
+      currentHistoryImportResult = { ok: false, error: error.message };
+      historyImportBusy = false;
+      renderHistoryImportState();
+    });
+  });
+  document.getElementById('historyBackfillBtn')?.addEventListener('click', () => {
+    triggerHistoryBackfill().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
       renderHistoryImportState();

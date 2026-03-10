@@ -1796,6 +1796,10 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/history/import' && req.method === 'POST') {
     if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
     const body = await parseBody(req);
+    if (body.mode === 'backfill') {
+      const result = await historyImportManager.backfillHistoryFromConfiguredSource({});
+      return json(res, result.ok ? 200 : 400, result);
+    }
     const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
     const result = Array.isArray(body.rows) && body.rows.length
       ? historyImportManager.importSamples({
@@ -1810,6 +1814,12 @@ const web = http.createServer(async (req, res) => {
         end: body.requestedTo ?? body.end,
         interval: body.interval || '15mins'
       });
+    return json(res, result.ok ? 200 : 400, result);
+  }
+
+  if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
+    if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    const result = await historyImportManager.backfillHistoryFromConfiguredSource({});
     return json(res, result.ok ? 200 : 400, result);
   }
 
@@ -1902,6 +1912,7 @@ historyImportManager = telemetryStore ? createHistoryImportManager({
   store: telemetryStore,
   telemetryConfig: cfg.telemetry || {}
 }) : null;
+if (historyImportManager) historyImportManager.startAutomaticBackfill();
 historyRuntime = telemetryStore ? createHistoryRuntime({
   store: telemetryStore,
   getPricingConfig: () => cfg.userEnergyPricing || {}

@@ -145,6 +145,13 @@ function buildHistoryImportRequest(formState) {
   };
 }
 
+function buildHistoryBackfillRequest() {
+  return {
+    mode: 'backfill',
+    interval: '15mins'
+  };
+}
+
 function buildHistoryImportActionState({ destinationId, status, form, busy }) {
   const visible = shouldRenderHistoryImportPanel(destinationId);
   if (!visible) return { visible: false, disabled: true, reason: '' };
@@ -159,9 +166,29 @@ function buildHistoryImportActionState({ destinationId, status, form, busy }) {
   return { visible: true, disabled: false, reason: '' };
 }
 
+function buildHistoryBackfillActionState({ destinationId, status, busy }) {
+  const visible = shouldRenderHistoryImportPanel(destinationId);
+  if (!visible) return { visible: false, disabled: true, reason: '' };
+  if (busy) return { visible: true, disabled: true, reason: 'Import läuft bereits.' };
+  if (!status?.enabled) return { visible: true, disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
+  if (!status?.ready) return { visible: true, disabled: true, reason: 'VRM-Zugang ist noch nicht vollständig konfiguriert.' };
+  return { visible: true, disabled: false, reason: '' };
+}
+
+function formatHistoryImportResult(result) {
+  if (!result) return 'Noch kein Import gestartet.';
+  if (!result.ok) return `Import fehlgeschlagen: ${result.error}`;
+  if (result.windowsVisited != null) {
+    return `Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} Fenster mit Daten, Job ${result.jobId}.`;
+  }
+  return `Import erfolgreich: ${result.importedRows} Werte, Job ${result.jobId}.`;
+}
+
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsHistory = {
     buildHistoryImportActionState,
+    buildHistoryBackfillActionState,
+    buildHistoryBackfillRequest,
     buildHistoryImportRequest,
     shouldRenderHistoryImportPanel
   };
@@ -690,31 +717,40 @@ function renderHistoryImportPanel(destinationId) {
     form: historyImportFormState,
     busy: historyImportBusy
   });
+  const backfillState = buildHistoryBackfillActionState({
+    destinationId,
+    status: currentHistoryImportStatus,
+    busy: historyImportBusy
+  });
 
   const actions = document.createElement('div');
   actions.className = 'settings-inline-actions';
-  const button = document.createElement('button');
-  button.id = 'historyImportBtn';
-  button.type = 'button';
-  button.className = 'btn btn-primary';
-  button.disabled = actionState.disabled;
-  button.textContent = historyImportBusy ? 'VRM-Import läuft...' : 'VRM-Historie importieren';
-  actions.appendChild(button);
+  const importButton = document.createElement('button');
+  importButton.id = 'historyImportBtn';
+  importButton.type = 'button';
+  importButton.className = 'btn btn-primary';
+  importButton.disabled = actionState.disabled;
+  importButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren';
+  actions.appendChild(importButton);
+
+  const backfillButton = document.createElement('button');
+  backfillButton.id = 'historyBackfillBtn';
+  backfillButton.type = 'button';
+  backfillButton.className = 'btn btn-secondary';
+  backfillButton.disabled = backfillState.disabled;
+  backfillButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten';
+  actions.appendChild(backfillButton);
 
   const note = document.createElement('small');
   note.className = 'tools-note';
-  note.textContent = actionState.reason || 'Der Import schreibt historische VRM-Zeitreihen direkt in die interne Telemetrie-Datenbank.';
+  note.textContent = actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill bis zur ersten leeren Historie.';
   actions.appendChild(note);
   panel.appendChild(actions);
 
   const result = document.createElement('div');
   result.id = 'historyImportResult';
   result.className = `status-banner ${currentHistoryImportResult?.ok ? 'success' : currentHistoryImportResult?.error ? 'error' : 'info'}`;
-  result.textContent = currentHistoryImportResult
-    ? (currentHistoryImportResult.ok
-      ? `Import erfolgreich: ${currentHistoryImportResult.importedRows} Werte, Job ${currentHistoryImportResult.jobId}.`
-      : `Import fehlgeschlagen: ${currentHistoryImportResult.error}`)
-    : 'Noch kein Import gestartet.';
+  result.textContent = formatHistoryImportResult(currentHistoryImportResult);
   panel.appendChild(result);
 
   bindHistoryImportControls(panel);
@@ -845,6 +881,13 @@ function bindHistoryImportControls(panel) {
   panel.querySelector('#historyImportEnd')?.addEventListener('change', handleChange);
   panel.querySelector('#historyImportBtn')?.addEventListener('click', () => {
     triggerHistoryImport().catch((error) => {
+      currentHistoryImportResult = { ok: false, error: error.message };
+      historyImportBusy = false;
+      renderActiveSettingsDestination();
+    });
+  });
+  panel.querySelector('#historyBackfillBtn')?.addEventListener('click', () => {
+    triggerHistoryBackfill().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
       renderActiveSettingsDestination();
@@ -1040,6 +1083,23 @@ async function triggerHistoryImport() {
   renderActiveSettingsDestination();
   const payload = buildHistoryImportRequest(historyImportFormState);
   const res = await apiFetch('/api/history/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const body = await res.json();
+  currentHistoryImportResult = body;
+  historyImportBusy = false;
+  await loadHistoryImportStatus();
+  renderActiveSettingsDestination();
+  if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
+}
+
+async function triggerHistoryBackfill() {
+  historyImportBusy = true;
+  renderActiveSettingsDestination();
+  const payload = buildHistoryBackfillRequest();
+  const res = await apiFetch('/api/history/backfill/vrm', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload)

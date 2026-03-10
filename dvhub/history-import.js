@@ -1,6 +1,12 @@
 const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
+const VRM_HISTORY_SLOT_SECONDS = 900;
+const VRM_BACKFILL_CHUNK_DAYS = 7;
+const VRM_BACKFILL_EMPTY_WINDOW_LIMIT = 2;
+const VRM_BACKFILL_DELAY_MS = 500;
+const VRM_BACKFILL_RETRY_ATTEMPTS = 3;
+const VRM_BACKFILL_RETRY_DELAY_MS = 1000;
 const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
 const PRICE_BUCKET_SECONDS = 900;
 
@@ -76,6 +82,12 @@ function addDays(dateString, days) {
   const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function shiftIsoByDays(value, days) {
+  const date = new Date(value);
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date.toISOString();
 }
 
 function bucketIso(value, seconds = PRICE_BUCKET_SECONDS) {
@@ -174,11 +186,76 @@ function getOrCreateSlotBucket(slotBuckets, ts, resolutionSeconds) {
       resolutionSeconds,
       values: {},
       metaByField: {},
-      samples: new Map()
+      samples: new Map(),
+      vrmAggregates: new Map()
     };
     slotBuckets.set(key, bucket);
   }
   return bucket;
+}
+
+function vrmAggregateMode(type, code) {
+  if (type === 'venus' && code !== 'tsT') return 'power';
+  if (type === 'consumption' || type === 'kwh') return 'energy';
+  return null;
+}
+
+function getOrCreateVrmAggregate(bucket, type, code) {
+  const key = `${type}:${code}`;
+  let aggregate = bucket.vrmAggregates.get(key);
+  if (!aggregate) {
+    aggregate = {
+      type,
+      code,
+      mode: vrmAggregateMode(type, code),
+      sampleCount: 0,
+      coverageSeconds: 0,
+      weightedValueSeconds: 0,
+      totalEnergyKwh: 0
+    };
+    bucket.vrmAggregates.set(key, aggregate);
+  }
+  return aggregate;
+}
+
+function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds }) {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) return;
+  const aggregate = getOrCreateVrmAggregate(bucket, type, code);
+  if (!aggregate.mode) return;
+  aggregate.sampleCount += 1;
+  if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+    aggregate.coverageSeconds += durationSeconds;
+  }
+  if (aggregate.mode === 'power') {
+    const seconds = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
+    aggregate.weightedValueSeconds += numeric * seconds;
+    return;
+  }
+  aggregate.totalEnergyKwh += numeric;
+}
+
+function addVrmValuesToSlotBuckets(slotBuckets, { type, code, values, slotResolutionSeconds }) {
+  if (!Array.isArray(values) || !values.length) return;
+  const sorted = values
+    .filter((item) => Array.isArray(item) && item.length >= 2 && Number.isFinite(Number(item[0])) && Number.isFinite(Number(item[1])))
+    .sort((left, right) => Number(left[0]) - Number(right[0]));
+  for (let index = 0; index < sorted.length; index += 1) {
+    const item = sorted[index];
+    const currentMs = Number(item[0]);
+    const slotStartIso = bucketIso(currentMs, slotResolutionSeconds);
+    const slotEndMs = new Date(slotStartIso).getTime() + slotResolutionSeconds * 1000;
+    const nextMs = index + 1 < sorted.length ? Number(sorted[index + 1][0]) : null;
+    const boundedNextMs = Number.isFinite(nextMs) ? Math.min(nextMs, slotEndMs) : slotEndMs;
+    const durationSeconds = Math.max(0, boundedNextMs - currentMs) / 1000;
+    const bucket = getOrCreateSlotBucket(slotBuckets, slotStartIso, slotResolutionSeconds);
+    accumulateVrmAggregate(bucket, {
+      type,
+      code,
+      rawValue: item[1],
+      durationSeconds
+    });
+  }
 }
 
 function setBucketField(bucket, field, value, meta) {
@@ -290,11 +367,12 @@ function mapBatterySamples(bucket, value, type, code) {
   });
 }
 
-function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSeconds }) {
+function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSeconds, meta: metaOverride = null }) {
   const mappedMeta = {
     provenance: 'mapped_from_vrm',
     vrmType: type,
-    vrmCode: code
+    vrmCode: code,
+    ...(metaOverride || {})
   };
 
   if (type === 'venus' && code === 'Pdc') {
@@ -619,6 +697,39 @@ function reconstructSlotBucket(bucket) {
   }));
 }
 
+function finalizeVrmSlotBucket(bucket) {
+  for (const aggregate of bucket.vrmAggregates.values()) {
+    if (!aggregate.mode || aggregate.sampleCount <= 0) continue;
+    const aggregateMeta = {
+      sampleCount: aggregate.sampleCount,
+      coverageSeconds: aggregate.coverageSeconds,
+      slotNormalized: true
+    };
+    if (aggregate.mode === 'power') {
+      const averagePowerW = aggregate.weightedValueSeconds / Number(bucket.resolutionSeconds || VRM_HISTORY_SLOT_SECONDS);
+      if (!Number.isFinite(averagePowerW)) continue;
+      mapCanonicalRowsFromVrm({
+        bucket,
+        type: aggregate.type,
+        code: aggregate.code,
+        rawValue: averagePowerW,
+        resolutionSeconds: bucket.resolutionSeconds,
+        meta: aggregateMeta
+      });
+      continue;
+    }
+    mapCanonicalRowsFromVrm({
+      bucket,
+      type: aggregate.type,
+      code: aggregate.code,
+      rawValue: aggregate.totalEnergyKwh,
+      resolutionSeconds: bucket.resolutionSeconds,
+      meta: aggregateMeta
+    });
+  }
+  return reconstructSlotBucket(bucket);
+}
+
 function parseVrmSeries(type, records, resolutionSeconds) {
   const rows = [];
   for (const [code, values] of Object.entries(records || {})) {
@@ -686,9 +797,49 @@ async function fetchVrmStats({ portalId, token, type, start, end, interval, fetc
     }
   });
   if (!response.ok) {
-    throw new Error(`VRM stats request failed for ${type}: HTTP ${response.status}`);
+    const error = new Error(`VRM stats request failed for ${type}: HTTP ${response.status}`);
+    error.status = Number(response.status);
+    error.type = type;
+    error.start = toIso(start);
+    error.end = toIso(end);
+    throw error;
   }
   return response.json();
+}
+
+async function fetchVrmStatsWithRetry({
+  portalId,
+  token,
+  type,
+  start,
+  end,
+  interval,
+  fetchImpl,
+  waitImpl,
+  maxAttempts = VRM_BACKFILL_RETRY_ATTEMPTS,
+  retryDelayMs = VRM_BACKFILL_RETRY_DELAY_MS
+}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetchVrmStats({
+        portalId,
+        token,
+        type,
+        start,
+        end,
+        interval,
+        fetchImpl
+      });
+    } catch (error) {
+      lastError = error;
+      const status = Number(error?.status || 0);
+      const retryable = status === 429 || status >= 500;
+      if (!retryable || attempt >= maxAttempts) break;
+      await waitImpl(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
 }
 
 export function createHistoryImportManager({
@@ -697,6 +848,8 @@ export function createHistoryImportManager({
   fetchImpl = globalThis.fetch,
   waitImpl = async () => {}
 }) {
+  let vrmBackfillPromise = null;
+
   function getStatus() {
     const importConfig = telemetryConfig.historyImport || {};
     const provider = 'vrm';
@@ -707,8 +860,18 @@ export function createHistoryImportManager({
       provider,
       mode: 'vrm_only',
       ready,
-      vrmPortalId: importConfig.vrmPortalId || ''
+      vrmPortalId: importConfig.vrmPortalId || '',
+      backfillRunning: Boolean(vrmBackfillPromise)
     };
+  }
+
+  function validateConfiguredVrmImport({ start = null, end = null, requireRange = true } = {}) {
+    const status = getStatus();
+    if (!status.enabled) return { ok: false, error: 'history import disabled' };
+    if (!status.ready) return { ok: false, error: 'history import not configured' };
+    if (status.provider !== 'vrm') return { ok: false, error: 'automatic import currently supports provider vrm only' };
+    if (requireRange && (!start || !end)) return { ok: false, error: 'start and end are required for configured imports' };
+    return { ok: true, status };
   }
 
   function importSamples({ provider = 'vrm', rows = [], requestedFrom = null, requestedTo = null, sourceAccount = null }) {
@@ -752,13 +915,9 @@ export function createHistoryImportManager({
     };
   }
 
-  async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
-    const status = getStatus();
-    if (!status.enabled) return { ok: false, error: 'history import disabled' };
-    if (!status.ready) return { ok: false, error: 'history import not configured' };
-    if (status.provider !== 'vrm') return { ok: false, error: 'automatic import currently supports provider vrm only' };
-    if (!start || !end) return { ok: false, error: 'start and end are required for configured imports' };
-
+  async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL }) {
+    const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
+    if (!validation.ok) return validation;
     const importConfig = telemetryConfig.historyImport || {};
     const normalizedInterval = VRM_HISTORY_INTERVAL;
     const resolutionSeconds = intervalSeconds(normalizedInterval);
@@ -766,57 +925,194 @@ export function createHistoryImportManager({
     const slotBuckets = new Map();
 
     for (const type of VRM_HISTORY_TYPES) {
-      const payload = await fetchVrmStats({
+      const payload = await fetchVrmStatsWithRetry({
         portalId: importConfig.vrmPortalId,
         token: importConfig.vrmToken,
         type,
         start,
         end,
         interval: normalizedInterval,
-        fetchImpl
+        fetchImpl,
+        waitImpl
       });
-      rawRows.push(...parseVrmSeries(type, payload.records || {}, resolutionSeconds));
-      for (const [code, values] of Object.entries(payload.records || {})) {
-        if (!Array.isArray(values)) continue;
-        for (const item of values) {
-          if (!Array.isArray(item) || item.length < 2) continue;
-          const ts = toIso(item[0]);
-          const bucket = getOrCreateSlotBucket(slotBuckets, ts, resolutionSeconds);
-          mapCanonicalRowsFromVrm({
-            bucket,
-            type,
-            code,
-            rawValue: item[1],
-            resolutionSeconds
-          });
-        }
+      const records = payload.records || {};
+      rawRows.push(...parseVrmSeries(type, records, resolutionSeconds));
+      for (const [code, values] of Object.entries(records)) {
+        addVrmValuesToSlotBuckets(slotBuckets, {
+          type,
+          code,
+          values,
+          slotResolutionSeconds: VRM_HISTORY_SLOT_SECONDS
+        });
       }
     }
 
-    const canonicalRows = [...slotBuckets.values()].flatMap((bucket) => reconstructSlotBucket(bucket));
+    const canonicalRows = [...slotBuckets.values()].flatMap((bucket) => finalizeVrmSlotBucket(bucket));
     const allRows = [...rawRows, ...canonicalRows];
+
+    return {
+      ok: true,
+      provider: 'vrm',
+      normalizedInterval,
+      requestedInterval: interval,
+      requestedFrom: toIso(start),
+      requestedTo: toIso(end),
+      rows: allRows,
+      seriesCount: new Set(allRows.map((row) => row.seriesKey)).size
+    };
+  }
+
+  async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
+    const fetched = await fetchConfiguredVrmRows({ start, end, interval });
+    if (!fetched.ok) return fetched;
+    const allRows = fetched.rows || [];
 
     if (!allRows.length) {
       return { ok: false, error: 'no importable rows returned from VRM' };
     }
 
     store.writeSamples(allRows);
+    const importConfig = telemetryConfig.historyImport || {};
     const jobId = store.writeImportJob({
       jobType: 'vrm_history_import',
       status: 'completed',
-      requestedFrom: toIso(start),
-      requestedTo: toIso(end),
+      requestedFrom: fetched.requestedFrom,
+      requestedTo: fetched.requestedTo,
       importedRows: allRows.length,
       sourceAccount: importConfig.vrmPortalId,
-      meta: { provider: 'vrm', interval: normalizedInterval, requestedInterval: interval, types: [...VRM_HISTORY_TYPES] }
+      meta: {
+        provider: 'vrm',
+        interval: fetched.normalizedInterval,
+        requestedInterval: fetched.requestedInterval,
+        types: [...VRM_HISTORY_TYPES]
+      }
     });
 
     return {
       ok: true,
-      provider: 'vrm',
+      provider: fetched.provider,
       jobId,
       importedRows: allRows.length,
-      seriesCount: new Set(allRows.map((row) => row.seriesKey)).size
+      seriesCount: fetched.seriesCount
+    };
+  }
+
+  async function runVrmBackfill({
+    now = null,
+    chunkDays = VRM_BACKFILL_CHUNK_DAYS,
+    delayMs = VRM_BACKFILL_DELAY_MS,
+    maxEmptyWindows = VRM_BACKFILL_EMPTY_WINDOW_LIMIT,
+    interval = VRM_HISTORY_INTERVAL,
+    auto = false
+  } = {}) {
+    const validation = validateConfiguredVrmImport({ requireRange: false });
+    if (!validation.ok) return validation;
+
+    let cursorEnd = now ? toIso(now) : new Date().toISOString();
+    let windowsVisited = 0;
+    let importedWindows = 0;
+    let trailingEmptyWindows = 0;
+    let importedRows = 0;
+    let requestedFrom = null;
+    const requestedTo = cursorEnd;
+
+    while (trailingEmptyWindows < maxEmptyWindows) {
+      const windowEnd = cursorEnd;
+      const windowStart = shiftIsoByDays(windowEnd, -Math.max(1, Number(chunkDays || VRM_BACKFILL_CHUNK_DAYS)));
+      requestedFrom = windowStart;
+      windowsVisited += 1;
+
+      const fetched = await fetchConfiguredVrmRows({
+        start: windowStart,
+        end: windowEnd,
+        interval
+      });
+      if (!fetched.ok) return fetched;
+
+      if ((fetched.rows || []).length > 0) {
+        store.writeSamples(fetched.rows);
+        importedWindows += 1;
+        importedRows += fetched.rows.length;
+        trailingEmptyWindows = 0;
+      } else {
+        trailingEmptyWindows += 1;
+      }
+
+      cursorEnd = windowStart;
+      if (trailingEmptyWindows >= maxEmptyWindows) break;
+      await waitImpl(delayMs);
+    }
+
+    const importConfig = telemetryConfig.historyImport || {};
+    const jobId = store.writeImportJob({
+      jobType: 'vrm_history_backfill',
+      status: 'completed',
+      requestedFrom,
+      requestedTo,
+      importedRows,
+      sourceAccount: importConfig.vrmPortalId,
+      meta: {
+        provider: 'vrm',
+        interval,
+        auto,
+        chunkDays,
+        maxEmptyWindows,
+        windowsVisited,
+        importedWindows,
+        emptyWindows: trailingEmptyWindows
+      }
+    });
+
+    return {
+      ok: true,
+      partial: false,
+      provider: 'vrm',
+      auto,
+      jobId,
+      requestedFrom,
+      requestedTo,
+      windowsVisited,
+      importedWindows,
+      emptyWindows: trailingEmptyWindows,
+      importedRows
+    };
+  }
+
+  async function backfillHistoryFromConfiguredSource(options = {}) {
+    if (vrmBackfillPromise) {
+      return {
+        ok: false,
+        error: 'vrm history backfill already running'
+      };
+    }
+    vrmBackfillPromise = runVrmBackfill(options);
+    try {
+      return await vrmBackfillPromise;
+    } finally {
+      vrmBackfillPromise = null;
+    }
+  }
+
+  function startAutomaticBackfill(options = {}) {
+    const status = getStatus();
+    if (!status.enabled || !status.ready || vrmBackfillPromise) {
+      return {
+        ok: false,
+        started: false
+      };
+    }
+    vrmBackfillPromise = runVrmBackfill({ auto: true, ...options })
+      .catch((error) => ({
+        ok: false,
+        auto: true,
+        error: error?.message || String(error)
+      }))
+      .finally(() => {
+        vrmBackfillPromise = null;
+      });
+    return {
+      ok: true,
+      started: true
     };
   }
 
@@ -921,6 +1217,8 @@ export function createHistoryImportManager({
     getStatus,
     importSamples,
     importFromConfiguredSource,
+    backfillHistoryFromConfiguredSource,
+    startAutomaticBackfill,
     backfillMissingPriceHistory
   };
 }

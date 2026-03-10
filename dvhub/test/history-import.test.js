@@ -35,7 +35,8 @@ test('history import status reports provider readiness', () => {
       provider: 'vrm',
       ready: true,
       mode: 'vrm_only',
-      vrmPortalId: 'abc123'
+      vrmPortalId: 'abc123',
+      backfillRunning: false
     });
   } finally {
     store.close();
@@ -923,6 +924,137 @@ test('price backfill reports partial success when one day fails but previous day
     assert.deepEqual(result.openDays, ['2026-01-02']);
     assert.match(result.error, /2026-01-02/);
     assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+  } finally {
+    store.close();
+  }
+});
+
+test('configured VRM import collapses off-quarter VRM samples into one final 15-minute slot', async () => {
+  const store = createStore();
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const payloads = {
+      venus: {
+        records: {
+          Pdc: [
+            [Date.UTC(2026, 2, 9, 0, 0, 0), 1200],
+            [Date.UTC(2026, 2, 9, 0, 3, 0), 1200],
+            [Date.UTC(2026, 2, 9, 0, 9, 0), 1200]
+          ]
+        }
+      },
+      consumption: { records: {} },
+      kwh: { records: {} }
+    };
+    return {
+      ok: true,
+      async json() {
+        return payloads[type];
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.importFromConfiguredSource({
+      start: '2026-03-09T00:00:00.000Z',
+      end: '2026-03-09T00:15:00.000Z',
+      interval: '15mins'
+    });
+    const slots = store.listAggregatedEnergySlots({
+      start: '2026-03-09T00:00:00.000Z',
+      end: '2026-03-09T00:15:00.000Z',
+      bucketSeconds: 900,
+      scopes: ['history']
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_total_w'"), 1);
+    assert.equal(slots.length, 1);
+    assert.equal(slots[0].ts, '2026-03-09T00:00:00.000Z');
+    assert.equal(slots[0].pvKwh, 0.3);
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM backfill job walks chunked windows until repeated empty history and waits between windows', async () => {
+  const store = createStore();
+  const waits = [];
+  const requests = [];
+  const windowsWithData = new Set([
+    '2026-03-03T00:00:00.000Z|2026-03-04T00:00:00.000Z',
+    '2026-03-02T00:00:00.000Z|2026-03-03T00:00:00.000Z'
+  ]);
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    const end = new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString();
+    const key = `${start}|${end}`;
+    requests.push(`${type}:${key}`);
+    const hasData = windowsWithData.has(key);
+    return {
+      ok: true,
+      async json() {
+        return hasData && type === 'venus'
+          ? {
+            records: {
+              Pdc: [[Date.parse(start), 1000]]
+            }
+          }
+          : { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async (ms) => {
+        waits.push(ms);
+      },
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      now: '2026-03-05T00:00:00.000Z',
+      chunkDays: 1,
+      delayMs: 50,
+      maxEmptyWindows: 2
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.partial, false);
+    assert.equal(result.windowsVisited, 5);
+    assert.equal(result.importedWindows, 2);
+    assert.equal(result.emptyWindows, 2);
+    assert.equal(result.importedRows > 0, true);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_total_w'"), 2);
+    assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_backfill'"), 1);
+    assert.deepEqual(waits, [50, 50, 50, 50]);
+    assert.equal(requests.length, 15);
   } finally {
     store.close();
   }
