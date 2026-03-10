@@ -59,6 +59,16 @@ function buildHistoryFullBackfillRequest() {
   };
 }
 
+function buildMaintenanceBootstrapPlan() {
+  return {
+    loadSchedule: true,
+    loadHistoryImportStatus: true,
+    loadHealth: false,
+    refreshScan: false,
+    scanRefreshMs: 0
+  };
+}
+
 function buildHistoryImportActionState({ status, form, busy }) {
   if (busy) return { disabled: true, reason: 'Import läuft bereits.' };
   if (!status?.enabled) return { disabled: true, reason: 'History-Import ist in der Konfiguration deaktiviert.' };
@@ -378,6 +388,7 @@ async function triggerHistoryBackfill(mode = 'gap') {
 }
 
 function initToolsPage() {
+  const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
     startScan().catch((error) => setText('scanMeta', `Scan fehlgeschlagen: ${error.message}`));
   });
@@ -451,16 +462,26 @@ function initToolsPage() {
   });
 
   syncHistoryImportFormState();
-  loadSchedule().catch((error) => setText('scheduleMeta', `Laden fehlgeschlagen: ${error.message}`));
-  refreshScan().catch((error) => setText('scanMeta', `Scan fehlgeschlagen: ${error.message}`));
-  loadHealth().catch((error) => setBanner('healthBanner', `Health-Status konnte nicht geladen werden: ${error.message}`, 'error'));
-  loadHistoryImportStatus().catch((error) => {
-    currentHistoryImportResult = { ok: false, error: error.message };
-    renderHistoryImportState();
-  });
-  window.setInterval(() => {
+  if (bootstrapPlan.loadSchedule) {
+    loadSchedule().catch((error) => setText('scheduleMeta', `Laden fehlgeschlagen: ${error.message}`));
+  }
+  if (bootstrapPlan.refreshScan) {
     refreshScan().catch((error) => setText('scanMeta', `Scan fehlgeschlagen: ${error.message}`));
-  }, 3000);
+  }
+  if (bootstrapPlan.loadHealth) {
+    loadHealth().catch((error) => setBanner('healthBanner', `Health-Status konnte nicht geladen werden: ${error.message}`, 'error'));
+  }
+  if (bootstrapPlan.loadHistoryImportStatus) {
+    loadHistoryImportStatus().catch((error) => {
+      currentHistoryImportResult = { ok: false, error: error.message };
+      renderHistoryImportState();
+    });
+  }
+  if (bootstrapPlan.scanRefreshMs > 0) {
+    window.setInterval(() => {
+      refreshScan().catch((error) => setText('scanMeta', `Scan fehlgeschlagen: ${error.message}`));
+    }, bootstrapPlan.scanRefreshMs);
+  }
 }
 
 if (typeof document !== 'undefined') {
@@ -469,6 +490,7 @@ if (typeof document !== 'undefined') {
 
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubToolsHistory = {
+    buildMaintenanceBootstrapPlan,
     buildHistoryImportRequest,
     buildHistoryGapBackfillRequest,
     buildHistoryFullBackfillRequest,

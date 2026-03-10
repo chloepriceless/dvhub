@@ -19,6 +19,11 @@ import {
   buildPriceTelemetrySamples,
   resolveTelemetryDbPath
 } from './telemetry-runtime.js';
+import {
+  createSerialTaskRunner,
+  createTelemetryWriteBuffer,
+  normalizePollIntervalMs
+} from './runtime-performance.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { readAppVersionInfo } from './app-version.js';
@@ -45,6 +50,8 @@ const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 const DATA_DIR = process.env.DV_DATA_DIR || '';
 const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
+const LIVE_TELEMETRY_FLUSH_MS = 5000;
+const MIN_POLL_INTERVAL_MS = 1000;
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
@@ -124,6 +131,8 @@ let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
 const energyChartsMarketValueService = createEnergyChartsMarketValueService();
+let liveTelemetryBuffer = null;
+const effectivePollIntervalMs = () => normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS);
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -848,12 +857,13 @@ async function pollMeter() {
   state.victron.batteryDirectUseW = batteryDirectUseW;
   state.victron.batteryToGridW = batteryToGridW;
 
-  telemetrySafeWrite(() => telemetryStore.writeSamples(buildLiveTelemetrySamples({
+  liveTelemetryBuffer?.capture({
     ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
-    resolutionSeconds: Math.max(1, Math.round(Number(cfg.meterPollMs || 1000) / 1000)),
-    meter: state.meter,
-    victron: state.victron
-  })));
+    resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),
+    meter: { ...state.meter },
+    victron: { ...state.victron }
+  });
+  liveTelemetryBuffer?.flush();
 
   bufferInflux(buildInfluxLines(Math.floor(Date.now() / 1000)));
 }
@@ -1910,6 +1920,11 @@ const web = http.createServer(async (req, res) => {
 });
 
 telemetryStore = createTelemetryStoreIfEnabled();
+liveTelemetryBuffer = telemetryStore ? createTelemetryWriteBuffer({
+  flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
+  buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
+  writeSamples: (rows) => telemetrySafeWrite(() => telemetryStore.writeSamples(rows))
+}) : null;
 historyImportManager = telemetryStore ? createHistoryImportManager({
   store: telemetryStore,
   telemetryConfig: cfg.telemetry || {}
@@ -1936,14 +1951,26 @@ web.listen(cfg.httpPort, () => {
 loadEnergy();
 startModbusServer();
 setInterval(expireLeaseIfNeeded, 1000);
+setInterval(() => {
+  liveTelemetryBuffer?.flush();
+}, 1000);
+
+const pollMeterRunner = createSerialTaskRunner({
+  queueWhileRunning: false,
+  task: () => pollMeter()
+});
+
+function requestPollMeter() {
+  return pollMeterRunner.run();
+}
 
 // Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
 transport.init().then(() => {
   console.log(`Transport initialisiert: ${transport.type}`);
-  pollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+  requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
   setInterval(() => {
-    pollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
-  }, Math.max(500, cfg.meterPollMs));
+    requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+  }, effectivePollIntervalMs());
   setInterval(() => {
     evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
   }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
@@ -1970,6 +1997,7 @@ setInterval(() => {
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
+  liveTelemetryBuffer?.flush({ force: true });
   transport.destroy();
   scanTransport.destroy();
   if (telemetryStore) telemetryStore.close();

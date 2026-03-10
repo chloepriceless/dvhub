@@ -25,6 +25,7 @@ const {
   buildHistoryFullBackfillRequest,
   buildHistoryBackfillActionState,
   buildHistoryFullBackfillActionState,
+  buildMaintenanceBootstrapPlan,
   formatHistoryImportResult
 } = loadToolsHelpers();
 
@@ -79,4 +80,14 @@ test('tools result text distinguishes gap and full backfills', () => {
     importedRows: 2400,
     jobId: 17
   }), /Voll-Backfill gestartet/);
+});
+
+test('maintenance bootstrap avoids automatic scan and health polling on page load', () => {
+  const plan = buildMaintenanceBootstrapPlan();
+
+  assert.equal(plan.loadSchedule, true);
+  assert.equal(plan.loadHistoryImportStatus, true);
+  assert.equal(plan.loadHealth, false);
+  assert.equal(plan.refreshScan, false);
+  assert.equal(plan.scanRefreshMs, 0);
 });
