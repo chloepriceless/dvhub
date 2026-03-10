@@ -361,14 +361,19 @@ a {
 
 .history-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .history-kpi-card {
-  min-height: 118px;
+  min-height: 104px;
   display: grid;
   align-content: space-between;
+}
+
+.history-kpi-card .card-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
 }
 
 .history-chart-grid {
@@ -1189,7 +1194,7 @@ label {
 .big-value {
   margin-top: 8px;
   font-family: var(--font-title);
-  font-size: clamp(1.85rem, 2.5vw, 2.45rem);
+  font-size: clamp(1.55rem, 1.9vw, 2.1rem);
   line-height: 1;
 }
 

@@ -113,7 +113,8 @@ test('history shell styles define dedicated layout classes', () => {
   const css = readPublic('styles.css');
 
   assert.match(css, /\.history-layout\s*\{/);
-  assert.match(css, /\.history-kpi-grid\s*\{/);
+  assert.match(css, /\.history-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*104px;/s);
   assert.match(css, /\.history-chart-grid\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
 });
