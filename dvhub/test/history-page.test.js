@@ -149,6 +149,7 @@ test('history shell styles define dedicated layout classes', () => {
   assert.match(css, /\.history-kpi-breakdown\s*\{/);
   assert.match(css, /\.history-chart-grid\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
+  assert.doesNotMatch(css, /\.history-bars-compressed\s*\{[^}]*--history-bar-count:\s*1/s);
 });
 
 test('history page renders KPI values, grouped rows, and unresolved warnings from the summary payload', () => {
