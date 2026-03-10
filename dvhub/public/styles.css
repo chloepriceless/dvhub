@@ -445,6 +445,13 @@ a {
     rgba(7, 18, 30, 0.34);
 }
 
+.history-summary-hint {
+  margin: 12px 0 0;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .history-chart-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

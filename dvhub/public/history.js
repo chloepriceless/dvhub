@@ -92,6 +92,11 @@ function fmtCt(value) {
   return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ct/kWh`;
 }
 
+function fmtHours(value) {
+  if (!Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -122,10 +127,18 @@ function renderKpis(summary) {
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
   setText('historyKpiLoad', fmtKwh(summary?.kpis?.loadKwh));
   setText('historyKpiPv', fmtKwh(summary?.kpis?.pvKwh));
+  setText(
+    'historyKpiVbh',
+    hasFiniteNumber(summary?.kpis?.pvFullLoadHours)
+      ? fmtHours(summary?.kpis?.pvFullLoadHours)
+      : 'noch nicht verfügbar'
+  );
   setText('historyKpiExport', fmtKwh(summary?.kpis?.exportKwh));
 
   const premiumVisible = String(summary?.view || '') === 'year';
   setHidden('historyPremiumFields', !premiumVisible);
+  setHidden('historyPremiumHint', true);
+  setText('historyPremiumHint', '');
   if (!premiumVisible) return;
   setText(
     'historyKpiAnnualMarketValue',
@@ -145,6 +158,16 @@ function renderKpis(summary) {
       ? fmtEur(summary?.kpis?.marketPremiumEur)
       : 'noch nicht verfügbar'
   );
+  const premiumMeta = summary?.meta?.marketPremium || {};
+  if (premiumMeta?.source === 'derived_monthly_running') {
+    const availableMonths = Number(premiumMeta?.availableMarketValueMonths || 0);
+    const monthLabel = `${availableMonths} Monatswert${availableMonths === 1 ? '' : 'e'}`;
+    setText(
+      'historyPremiumHint',
+      `Vorläufig aus verfügbaren Monatsmarktwerten berechnet. Monatswerte werden nachlaufend zu Beginn des Folgemonats veröffentlicht. Aktuell ${monthLabel} verfügbar.`
+    );
+    setHidden('historyPremiumHint', false);
+  }
 }
 
 function chartBadge(item) {

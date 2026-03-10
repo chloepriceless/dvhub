@@ -36,6 +36,7 @@ function loadHistoryPageHelpers() {
     'historyChartGrid',
     'historySummaryCard',
     'historyPremiumFields',
+    'historyPremiumHint',
     'historyKpiCost',
     'historyKpiRevenue',
     'historyKpiAvoided',
@@ -50,6 +51,7 @@ function loadHistoryPageHelpers() {
     'historyKpiLoad',
     'historyKpiPv',
     'historyKpiExport',
+    'historyKpiVbh',
     'historyKpiAnnualMarketValue',
     'historyKpiPremiumEligibleExport',
     'historyKpiMarketPremium',
@@ -137,6 +139,7 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /Brutto-"Erlös"/);
   assert.match(html, /id="historyKpiLoad"/);
   assert.match(html, /id="historyKpiPv"/);
+  assert.match(html, /id="historyKpiVbh"/);
   assert.match(html, /Erlös aus Einspeisung/);
   assert.match(html, /Vermiedene Bezugskosten/);
   assert.match(html, /id="historyKpiAvoided"/);
@@ -147,6 +150,7 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyKpiSavedMoney"/);
   assert.match(html, /id="historyKpiGrossReturn"/);
   assert.match(html, /id="historyPremiumFields"/);
+  assert.match(html, /id="historyPremiumHint"/);
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
@@ -200,7 +204,8 @@ test('history page renders summary card values, grouped rows, and unresolved war
       importKwh: 4.5,
       loadKwh: 8.2,
       pvKwh: 5.3,
-      exportKwh: 1.25
+      exportKwh: 1.25,
+      pvFullLoadHours: 0.18
     },
     rows: [
       {
@@ -255,6 +260,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
   assert.match(elements.get('historyKpiLoad').textContent, /8,20/);
   assert.match(elements.get('historyKpiPv').textContent, /5,30/);
+  assert.match(elements.get('historyKpiVbh').textContent, /0,18/);
   assert.equal(elements.get('historyPremiumFields').hidden, true);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);
@@ -270,7 +276,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyMeta').textContent, /v0\.2\.5\+ea104c9/);
 });
 
-test('history page renders year-only premium fields and falls back to not available when official values are missing', () => {
+test('history page renders year-only premium fields and a provisional note for running-year monthly fallback', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
@@ -289,15 +295,20 @@ test('history page renders year-only premium fields and falls back to not availa
       loadKwh: 820,
       pvKwh: 900,
       exportKwh: 220,
+      pvFullLoadHours: 30.3,
       premiumEligibleExportKwh: 185,
-      annualMarketValueCtKwh: null,
-      marketPremiumEur: null
+      annualMarketValueCtKwh: 5.17,
+      marketPremiumEur: 410.2
     },
     rows: [],
     charts: {
       periodCombinedBars: []
     },
     meta: {
+      marketPremium: {
+        source: 'derived_monthly_running',
+        availableMarketValueMonths: 2
+      },
       unresolved: {
         incompleteSlots: 0,
         estimatedSlots: 0
@@ -306,9 +317,13 @@ test('history page renders year-only premium fields and falls back to not availa
   });
 
   assert.equal(elements.get('historyPremiumFields').hidden, false);
-  assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /noch nicht verfügbar/i);
+  assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /5,17/);
   assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /185,00/);
-  assert.match(elements.get('historyKpiMarketPremium').textContent, /noch nicht verfügbar/i);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /410,20/);
+  assert.match(elements.get('historyKpiVbh').textContent, /30,30/);
+  assert.equal(elements.get('historyPremiumHint').hidden, false);
+  assert.match(elements.get('historyPremiumHint').textContent, /Folgemonat/i);
+  assert.match(elements.get('historyPremiumHint').textContent, /2 Monatswert/);
 });
 
 test('history page renders daily line charts and estimated markers from chart payloads', () => {

@@ -551,6 +551,31 @@ function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary }) 
   };
 }
 
+function summarizeConfiguredPvCapacity(pvPlants) {
+  const plants = Array.isArray(pvPlants) ? pvPlants : [];
+  const configuredPvCapacityKwp = round2(plants.reduce((sum, plant) => {
+    const kwp = Number(plant?.kwp);
+    if (!Number.isFinite(kwp) || kwp <= 0) return sum;
+    return sum + kwp;
+  }, 0));
+  return configuredPvCapacityKwp > 0 ? configuredPvCapacityKwp : null;
+}
+
+function applyPvFullLoadHours({ kpis, pricingConfig }) {
+  const configuredPvCapacityKwp = summarizeConfiguredPvCapacity(pricingConfig?.pvPlants);
+  const pvFullLoadHours =
+    Number.isFinite(configuredPvCapacityKwp)
+    && configuredPvCapacityKwp > 0
+    && Number(kpis?.pvKwh || 0) > 0
+      ? round2(Number(kpis.pvKwh || 0) / configuredPvCapacityKwp)
+      : null;
+  return {
+    ...kpis,
+    configuredPvCapacityKwp,
+    pvFullLoadHours
+  };
+}
+
 function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, applicableValueSummary }) {
   if (view !== 'year') {
     return { kpis, meta };
@@ -560,26 +585,62 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
     pvPlants: pricingConfig?.pvPlants,
     applicableValueSummary
   });
-  const premiumEligibleExportKwh = round2(slots.reduce((sum, slot) => {
+  const selectedYear = parseDateOnly(startOfYear(meta?.selectedDate || ''))?.year;
+  const currentYear = parseDateOnly(startOfYear(getCurrentDateValue(meta?.currentDate || '')))?.year;
+  const officialAnnualMarketValueCtKwh = meta?.solarMarketValue?.source === 'official_annual'
+    ? round2(Number(meta.solarMarketValue.annualCtKwh || 0))
+    : null;
+  const derivedRunningAnnualMarketValueCtKwh =
+    meta?.solarMarketValue?.source === 'derived_monthly_weighted'
+    && selectedYear != null
+    && currentYear != null
+    && selectedYear === currentYear
+      ? round2(Number(meta.solarMarketValue.annualCtKwh || 0))
+      : null;
+  const annualMarketValueCtKwh = Number.isFinite(officialAnnualMarketValueCtKwh)
+    ? officialAnnualMarketValueCtKwh
+    : derivedRunningAnnualMarketValueCtKwh;
+  const weightedApplicableValueCtKwh = weightedApplicableValue.weightedApplicableValueCtKwh;
+  const monthlyCtKwhByMonth = meta?.solarMarketValueMonthlyCtKwhByMonth || {};
+  const baselinePremiumEligibleExportKwh = round2(slots.reduce((sum, slot) => {
     const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
     if (!Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0) return sum;
     return sum + Number(slot?.exportKwh || 0);
   }, 0));
-  const officialAnnualMarketValueCtKwh = meta?.solarMarketValue?.source === 'official_annual'
-    ? round2(Number(meta.solarMarketValue.annualCtKwh || 0))
-    : null;
-  const weightedApplicableValueCtKwh = weightedApplicableValue.weightedApplicableValueCtKwh;
-  const marketPremiumEur =
-    Number.isFinite(officialAnnualMarketValueCtKwh)
-    && Number.isFinite(weightedApplicableValueCtKwh)
-    && premiumEligibleExportKwh > 0
+
+  let premiumEligibleExportKwh = baselinePremiumEligibleExportKwh;
+  let marketPremiumEur = null;
+  let source = Number.isFinite(officialAnnualMarketValueCtKwh) ? 'official_annual' : null;
+
+  if (Number.isFinite(officialAnnualMarketValueCtKwh) && Number.isFinite(weightedApplicableValueCtKwh)) {
+    marketPremiumEur = premiumEligibleExportKwh > 0
       ? round2((premiumEligibleExportKwh * (weightedApplicableValueCtKwh - officialAnnualMarketValueCtKwh)) / 100)
       : null;
+  } else if (Number.isFinite(derivedRunningAnnualMarketValueCtKwh) && Number.isFinite(weightedApplicableValueCtKwh)) {
+    const provisional = slots.reduce((acc, slot) => {
+      const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
+      const exportKwh = Number(slot?.exportKwh || 0);
+      const monthKey = localMonthString(slot?.ts);
+      const monthlyMarketValueCtKwh = Number(monthlyCtKwhByMonth?.[monthKey]);
+      if (!Number.isFinite(monthlyMarketValueCtKwh) || !Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0 || exportKwh <= 0) {
+        return acc;
+      }
+      acc.premiumEligibleExportKwh += exportKwh;
+      acc.marketPremiumCt += exportKwh * (weightedApplicableValueCtKwh - monthlyMarketValueCtKwh);
+      return acc;
+    }, {
+      premiumEligibleExportKwh: 0,
+      marketPremiumCt: 0
+    });
+    premiumEligibleExportKwh = round2(provisional.premiumEligibleExportKwh);
+    marketPremiumEur = premiumEligibleExportKwh > 0 ? round2(provisional.marketPremiumCt / 100) : null;
+    source = premiumEligibleExportKwh > 0 ? 'derived_monthly_running' : null;
+  }
 
   return {
     kpis: {
       ...kpis,
-      annualMarketValueCtKwh: officialAnnualMarketValueCtKwh,
+      annualMarketValueCtKwh: Number.isFinite(annualMarketValueCtKwh) ? annualMarketValueCtKwh : null,
       weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? weightedApplicableValueCtKwh : null,
       premiumEligibleExportKwh,
       marketPremiumEur
@@ -587,15 +648,22 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
     meta: {
       ...meta,
       marketPremium: {
-        annualMarketValueCtKwh: officialAnnualMarketValueCtKwh,
+        source,
+        annualMarketValueCtKwh: Number.isFinite(annualMarketValueCtKwh) ? annualMarketValueCtKwh : null,
         weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? weightedApplicableValueCtKwh : null,
         premiumEligibleExportKwh,
         marketPremiumEur,
+        availableMarketValueMonths: Number(meta?.solarMarketValue?.availableMonths || 0),
         configuredPlantCount: weightedApplicableValue.configuredPlantCount,
         resolvedPlantCount: weightedApplicableValue.resolvedPlantCount
       }
     }
   };
+}
+
+function getCurrentDateValue(value) {
+  if (isDateOnly(value)) return value;
+  return currentBerlinDate();
 }
 
 export function createHistoryRuntime({
@@ -770,6 +838,8 @@ export function createHistoryRuntime({
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
       solarCompensationEur: 0,
       netEur: round2(totals.netEur + slot.netEur),
+      configuredPvCapacityKwp: null,
+      pvFullLoadHours: null,
       annualMarketValueCtKwh: null,
       weightedApplicableValueCtKwh: null,
       premiumEligibleExportKwh: 0,
@@ -805,18 +875,29 @@ export function createHistoryRuntime({
       exportRevenueEur: 0,
       solarCompensationEur: 0,
       netEur: 0,
+      configuredPvCapacityKwp: null,
+      pvFullLoadHours: null,
       annualMarketValueCtKwh: null,
       weightedApplicableValueCtKwh: null,
       premiumEligibleExportKwh: 0,
       marketPremiumEur: null
+    });
+    const capacityAppliedKpis = applyPvFullLoadHours({
+      kpis,
+      pricingConfig
+    });
+    const solarMarketValueSummary = solarMarketValues || getSolarMarketValueSummary({
+      year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year
     });
     const baseRows = summarizeRows(slots, view);
     const solarApplied = applySolarMarketValues({
       rows: baseRows,
       view,
       date,
-      kpis,
+      kpis: capacityAppliedKpis,
       meta: {
+        selectedDate: date,
+        currentDate: getCurrentDate(),
         unresolved: {
           missingImportPriceSlots,
           missingMarketPriceSlots,
@@ -825,15 +906,17 @@ export function createHistoryRuntime({
           slotCount: slots.length
         }
       },
-      solarMarketValues: solarMarketValues || getSolarMarketValueSummary({
-        year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year
-      })
+      solarMarketValues: solarMarketValueSummary
     });
+    const solarMeta = {
+      ...solarApplied.meta,
+      solarMarketValueMonthlyCtKwhByMonth: solarMarketValueSummary?.monthlyCtKwhByMonth || {}
+    };
     const annualPremiumApplied = applyAnnualMarketPremium({
       view,
       slots,
       kpis: solarApplied.kpis,
-      meta: solarApplied.meta,
+      meta: solarMeta,
       pricingConfig,
       applicableValueSummary: getApplicableValueSummary({
         year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year,
