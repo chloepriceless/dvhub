@@ -591,6 +591,152 @@ test('history import reconstructs missing load and keeps incomplete slots visibl
   }
 });
 
+test('configured VRM import stores VRM reference blocks and normalizes slot flows to VRM anchors', async () => {
+  const store = createStore();
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const payloads = {
+      venus: {
+        records: {
+          solar_yield: [[Date.UTC(2026, 2, 8, 11, 0, 0), 2000]],
+          consumption: [[Date.UTC(2026, 2, 8, 11, 0, 0), 2400]],
+          from_to_grid: [[Date.UTC(2026, 2, 8, 11, 0, 0), 400]]
+        }
+      },
+      consumption: {
+        records: {}
+      },
+      kwh: {
+        records: {
+          Pc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.2]],
+          Gc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.1]],
+          Bc: [[Date.UTC(2026, 2, 8, 11, 0, 0), 0.3]]
+        }
+      }
+    };
+    return {
+      ok: true,
+      async json() {
+        return payloads[type];
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.importFromConfiguredSource({
+      start: '2026-03-08T11:00:00.000Z',
+      end: '2026-03-08T11:15:00.000Z',
+      interval: '15mins'
+    });
+    const [slot] = store.listAggregatedEnergySlots({
+      start: '2026-03-08T11:00:00.000Z',
+      end: '2026-03-08T11:15:00.000Z',
+      bucketSeconds: 900,
+      scopes: ['history']
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'vrm_solar_yield_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'vrm_site_consumption_w'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'vrm_grid_import_ref_w'"), 1);
+    assert.equal(slot.pvKwh, 0.5);
+    assert.equal(slot.loadKwh, 0.6);
+    assert.equal(slot.importKwh, 0.1);
+    assert.equal(slot.exportKwh, 0);
+    assert.equal(slot.solarDirectUseKwh, 0.5);
+    assert.equal(slot.gridDirectUseKwh, 0.1);
+    assert.equal(slot.batteryDirectUseKwh, 0);
+    assert.equal(slot.batteryDischargeKwh, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('configured VRM import uses VRM export anchor to normalize solar-to-grid flow blocks', async () => {
+  const store = createStore();
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const payloads = {
+      venus: {
+        records: {
+          solar_yield: [[Date.UTC(2026, 2, 8, 12, 0, 0), 3200]],
+          consumption: [[Date.UTC(2026, 2, 8, 12, 0, 0), 800]],
+          from_to_grid: [[Date.UTC(2026, 2, 8, 12, 0, 0), -2400]]
+        }
+      },
+      consumption: {
+        records: {}
+      },
+      kwh: {
+        records: {
+          Pc: [[Date.UTC(2026, 2, 8, 12, 0, 0), 0.1]],
+          Pg: [[Date.UTC(2026, 2, 8, 12, 0, 0), 0.1]]
+        }
+      }
+    };
+    return {
+      ok: true,
+      async json() {
+        return payloads[type];
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.importFromConfiguredSource({
+      start: '2026-03-08T12:00:00.000Z',
+      end: '2026-03-08T12:15:00.000Z',
+      interval: '15mins'
+    });
+    const [slot] = store.listAggregatedEnergySlots({
+      start: '2026-03-08T12:00:00.000Z',
+      end: '2026-03-08T12:15:00.000Z',
+      bucketSeconds: 900,
+      scopes: ['history']
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'vrm_grid_export_ref_w'"), 1);
+    assert.equal(slot.pvKwh, 0.8);
+    assert.equal(slot.loadKwh, 0.2);
+    assert.equal(slot.importKwh, 0);
+    assert.equal(slot.exportKwh, 0.6);
+    assert.equal(slot.solarDirectUseKwh, 0.2);
+    assert.equal(slot.solarToGridKwh, 0.6);
+    assert.equal(slot.batteryToGridKwh, 0);
+  } finally {
+    store.close();
+  }
+});
+
 test('price backfill imports only days with telemetry-backed missing buckets', async () => {
   const store = createStore();
   const calls = [];

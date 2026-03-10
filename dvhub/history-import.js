@@ -45,6 +45,15 @@ const FLOW_FIELD_TO_SERIES = {
   selfConsumptionW: 'self_consumption_w'
 };
 
+const VRM_REFERENCE_FIELD_TO_SERIES = {
+  vrmSolarYieldW: 'vrm_solar_yield_w',
+  vrmSiteConsumptionW: 'vrm_site_consumption_w',
+  vrmGridImportRefW: 'vrm_grid_import_ref_w',
+  vrmGridExportRefW: 'vrm_grid_export_ref_w',
+  vrmConsumptionInputW: 'vrm_consumption_input_w',
+  vrmConsumptionOutputW: 'vrm_consumption_output_w'
+};
+
 function toIso(value) {
   return new Date(value).toISOString();
 }
@@ -326,6 +335,17 @@ function addMappedFlowSample(bucket, { field, value, meta }) {
   });
 }
 
+function addMappedReferenceSample(bucket, { field, value, meta }) {
+  const seriesKey = VRM_REFERENCE_FIELD_TO_SERIES[field];
+  if (!seriesKey) return;
+  addMappedCanonicalSample(bucket, {
+    seriesKey,
+    field,
+    value,
+    meta
+  });
+}
+
 function mapBatterySamples(bucket, value, type, code) {
   const meta = {
     provenance: 'mapped_from_vrm',
@@ -395,7 +415,61 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Pc') {
+  if (type === 'venus' && code === 'solar_yield') {
+    addMappedReferenceSample(bucket, {
+      field: 'vrmSolarYieldW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'consumption') {
+    addMappedReferenceSample(bucket, {
+      field: 'vrmSiteConsumptionW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'ac_loads' && !Number.isFinite(bucket.values.vrmSiteConsumptionW)) {
+    addMappedReferenceSample(bucket, {
+      field: 'vrmSiteConsumptionW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'consumption_input') {
+    addMappedReferenceSample(bucket, {
+      field: 'vrmConsumptionInputW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'consumption_output') {
+    addMappedReferenceSample(bucket, {
+      field: 'vrmConsumptionOutputW',
+      value: rawValue,
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if (type === 'venus' && code === 'from_to_grid') {
+    addMappedReferenceSample(bucket, {
+      field: rawValue >= 0 ? 'vrmGridImportRefW' : 'vrmGridExportRefW',
+      value: Math.abs(rawValue),
+      meta: mappedMeta
+    });
+    return;
+  }
+
+  if ((type === 'consumption' || type === 'kwh') && code === 'Pc') {
     const value = kwhToAveragePower(rawValue, resolutionSeconds);
     addMappedFlowSample(bucket, {
       field: 'solarDirectUseW',
@@ -414,7 +488,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Gc') {
+  if ((type === 'consumption' || type === 'kwh') && code === 'Gc') {
     const value = kwhToAveragePower(rawValue, resolutionSeconds);
     addMappedFlowSample(bucket, {
       field: 'gridDirectUseW',
@@ -424,7 +498,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Gb') {
+  if ((type === 'consumption' || type === 'kwh') && code === 'Gb') {
     addMappedFlowSample(bucket, {
       field: 'gridToBatteryW',
       value: kwhToAveragePower(rawValue, resolutionSeconds),
@@ -433,7 +507,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Bc') {
+  if ((type === 'consumption' || type === 'kwh') && code === 'Bc') {
     addMappedFlowSample(bucket, {
       field: 'batteryDirectUseW',
       value: kwhToAveragePower(rawValue, resolutionSeconds),
@@ -442,7 +516,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && code === 'Bg') {
+  if ((type === 'consumption' || type === 'kwh') && code === 'Bg') {
     addMappedFlowSample(bucket, {
       field: 'batteryToGridW',
       value: kwhToAveragePower(rawValue, resolutionSeconds),
@@ -451,7 +525,7 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     return;
   }
 
-  if (type === 'consumption' && (code === 'Gs' || code === 'Pg')) {
+  if ((type === 'consumption' || type === 'kwh') && (code === 'Gs' || code === 'Pg')) {
     const value = kwhToAveragePower(rawValue, resolutionSeconds);
     addMappedFlowSample(bucket, {
       field: 'solarToGridW',
@@ -464,6 +538,79 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
   if (type === 'kwh' && code === 'Pb') {
     mapBatterySamples(bucket, kwhToAveragePower(rawValue, resolutionSeconds), type, code);
   }
+}
+
+function positiveFinite(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return numeric;
+}
+
+function allocateSourceTotal(total, candidates, remainingDemands) {
+  const allocations = Object.fromEntries(candidates.map((candidate) => [candidate.field, 0]));
+  let remaining = positiveFinite(total);
+  for (let iteration = 0; iteration < 6 && remaining > 1e-9; iteration += 1) {
+    const active = candidates.filter((candidate) => positiveFinite(remainingDemands[candidate.demandKey]) > 1e-9);
+    if (!active.length) break;
+    const weighted = active.map((candidate) => ({
+      ...candidate,
+      weight: positiveFinite(candidate.weight) > 0
+        ? positiveFinite(candidate.weight)
+        : positiveFinite(remainingDemands[candidate.demandKey])
+    }));
+    const totalWeight = weighted.reduce((sum, candidate) => sum + candidate.weight, 0);
+    let allocated = 0;
+    for (const candidate of weighted) {
+      const share = totalWeight > 0
+        ? remaining * (candidate.weight / totalWeight)
+        : remaining / weighted.length;
+      const amount = Math.min(share, positiveFinite(remainingDemands[candidate.demandKey]));
+      allocations[candidate.field] += amount;
+      remainingDemands[candidate.demandKey] = Math.max(0, positiveFinite(remainingDemands[candidate.demandKey]) - amount);
+      allocated += amount;
+    }
+    if (allocated <= 1e-9) {
+      const fallback = weighted[0];
+      const amount = Math.min(remaining, positiveFinite(remainingDemands[fallback.demandKey]));
+      allocations[fallback.field] += amount;
+      remainingDemands[fallback.demandKey] = Math.max(0, positiveFinite(remainingDemands[fallback.demandKey]) - amount);
+      allocated += amount;
+    }
+    remaining = Math.max(0, remaining - allocated);
+  }
+  return allocations;
+}
+
+function normalizeFlowValuesToVrmAnchors(flowValues, anchors) {
+  const batteryCharge = Math.max(0, anchors.pv + anchors.import - anchors.load - anchors.export);
+  const batteryDischarge = Math.max(0, anchors.load + anchors.export - anchors.pv - anchors.import);
+  const remainingDemands = {
+    load: anchors.load,
+    export: anchors.export,
+    charge: batteryCharge
+  };
+  const solar = allocateSourceTotal(anchors.pv, [
+    { field: 'solarDirectW', demandKey: 'load', weight: flowValues.solarDirectW },
+    { field: 'solarToGridW', demandKey: 'export', weight: flowValues.solarToGridW },
+    { field: 'solarToBatteryW', demandKey: 'charge', weight: flowValues.solarToBatteryW }
+  ], remainingDemands);
+  const grid = allocateSourceTotal(anchors.import, [
+    { field: 'gridDirectW', demandKey: 'load', weight: flowValues.gridDirectW },
+    { field: 'gridToBatteryW', demandKey: 'charge', weight: flowValues.gridToBatteryW }
+  ], remainingDemands);
+  const battery = allocateSourceTotal(batteryDischarge, [
+    { field: 'batteryDirectW', demandKey: 'load', weight: flowValues.batteryDirectW },
+    { field: 'batteryToGridW', demandKey: 'export', weight: flowValues.batteryToGridW }
+  ], remainingDemands);
+  return {
+    solarDirectW: positiveFinite(solar.solarDirectW),
+    solarToBatteryW: positiveFinite(solar.solarToBatteryW),
+    solarToGridW: positiveFinite(solar.solarToGridW),
+    gridDirectW: positiveFinite(grid.gridDirectW),
+    gridToBatteryW: positiveFinite(grid.gridToBatteryW),
+    batteryDirectW: positiveFinite(battery.batteryDirectW),
+    batteryToGridW: positiveFinite(battery.batteryToGridW)
+  };
 }
 
 function deriveMissingField(values, field) {
@@ -511,7 +658,7 @@ function deriveMissingField(values, field) {
 }
 
 function reconstructSlotBucket(bucket) {
-  const flowValues = {
+  let flowValues = {
     solarDirectW: Number(bucket.values.solarDirectUseW || 0),
     solarToBatteryW: Number(bucket.values.solarToBatteryW || 0),
     solarToGridW: Number(bucket.values.solarToGridW || 0),
@@ -520,11 +667,124 @@ function reconstructSlotBucket(bucket) {
     batteryDirectW: Number(bucket.values.batteryDirectUseW || 0),
     batteryToGridW: Number(bucket.values.batteryToGridW || 0)
   };
+  const vrmAnchors = {
+    pv: positiveFinite(bucket.values.vrmSolarYieldW),
+    load: positiveFinite(bucket.values.vrmSiteConsumptionW),
+    import: positiveFinite(bucket.values.vrmGridImportRefW),
+    export: positiveFinite(bucket.values.vrmGridExportRefW)
+  };
+  const hasVrmAnchors = vrmAnchors.pv > 0 || vrmAnchors.load > 0 || vrmAnchors.import > 0 || vrmAnchors.export > 0;
+
+  if (hasVrmAnchors) {
+    flowValues = normalizeFlowValuesToVrmAnchors(flowValues, vrmAnchors);
+    const normalizedMeta = {
+      provenance: 'normalized_from_vrm_reference',
+      derivedFrom: [
+        'vrm_solar_yield_w',
+        'vrm_site_consumption_w',
+        'vrm_grid_import_ref_w',
+        'vrm_grid_export_ref_w'
+      ]
+    };
+    addMappedFlowSample(bucket, {
+      field: 'solarDirectUseW',
+      value: flowValues.solarDirectW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'solarToBatteryW',
+      value: flowValues.solarToBatteryW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'solarToGridW',
+      value: flowValues.solarToGridW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'gridDirectUseW',
+      value: flowValues.gridDirectW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'gridToBatteryW',
+      value: flowValues.gridToBatteryW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'batteryDirectUseW',
+      value: flowValues.batteryDirectW,
+      meta: normalizedMeta
+    });
+    addMappedFlowSample(bucket, {
+      field: 'batteryToGridW',
+      value: flowValues.batteryToGridW,
+      meta: normalizedMeta
+    });
+  }
+
   const directUseFieldsPresent = [
     Number.isFinite(bucket.values.solarDirectUseW),
     Number.isFinite(bucket.values.gridDirectUseW),
     Number.isFinite(bucket.values.batteryDirectUseW)
   ].filter(Boolean).length;
+
+  if (hasVrmAnchors) {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'load_power_w',
+      field: 'loadPowerW',
+      value: vrmAnchors.load > 0 ? vrmAnchors.load : flowValues.solarDirectW + flowValues.gridDirectW + flowValues.batteryDirectW,
+      meta: {
+        provenance: 'mapped_from_vrm_reference',
+        derivedFrom: ['vrm_site_consumption_w']
+      }
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'grid_import_w',
+      field: 'gridImportW',
+      value: vrmAnchors.import,
+      meta: {
+        provenance: 'mapped_from_vrm_reference',
+        derivedFrom: ['vrm_grid_import_ref_w']
+      }
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'grid_export_w',
+      field: 'gridExportW',
+      value: vrmAnchors.export,
+      meta: {
+        provenance: 'mapped_from_vrm_reference',
+        derivedFrom: ['vrm_grid_export_ref_w']
+      }
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'pv_total_w',
+      field: 'pvTotalW',
+      value: vrmAnchors.pv,
+      meta: {
+        provenance: 'mapped_from_vrm_reference',
+        derivedFrom: ['vrm_solar_yield_w']
+      }
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'battery_charge_w',
+      field: 'batteryChargeW',
+      value: flowValues.solarToBatteryW + flowValues.gridToBatteryW,
+      meta: {
+        provenance: 'derived_from_vrm_flows',
+        derivedFrom: ['solar_to_battery_w', 'grid_to_battery_w']
+      }
+    });
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'battery_discharge_w',
+      field: 'batteryDischargeW',
+      value: flowValues.batteryDirectW + flowValues.batteryToGridW,
+      meta: {
+        provenance: 'derived_from_vrm_flows',
+        derivedFrom: ['battery_direct_use_w', 'battery_to_grid_w']
+      }
+    });
+  }
 
   if (!Number.isFinite(bucket.values.loadPowerW)) {
     const loadPower = flowValues.solarDirectW + flowValues.gridDirectW + flowValues.batteryDirectW;
@@ -626,23 +886,6 @@ function reconstructSlotBucket(bucket) {
       derivedFrom: ['solar_direct_use_w', 'grid_direct_use_w', 'battery_direct_use_w']
     }
   });
-
-  if (Number.isFinite(bucket.values.batteryPowerW)) {
-    if (!Number.isFinite(bucket.values.batteryChargeW) && bucket.values.batteryPowerW < 0) {
-      setBucketField(bucket, 'batteryChargeW', Math.abs(bucket.values.batteryPowerW), {
-        provenance: 'mapped_from_vrm',
-        vrmType: 'kwh',
-        vrmCode: 'Pb'
-      });
-    }
-    if (!Number.isFinite(bucket.values.batteryDischargeW) && bucket.values.batteryPowerW > 0) {
-      setBucketField(bucket, 'batteryDischargeW', bucket.values.batteryPowerW, {
-        provenance: 'mapped_from_vrm',
-        vrmType: 'kwh',
-        vrmCode: 'Pb'
-      });
-    }
-  }
 
   let changed = true;
   while (changed) {
