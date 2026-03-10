@@ -788,7 +788,6 @@ a {
 }
 
 .history-bars-compressed {
-  --history-bar-count: 1;
   min-height: 138px;
 }
 
