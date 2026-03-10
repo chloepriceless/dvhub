@@ -36,6 +36,7 @@ function loadHistoryPageHelpers() {
     'historyKpiRevenue',
     'historyKpiNet',
     'historyKpiImport',
+    'historyKpiPv',
     'historyKpiExport',
     'historyFinancialChart',
     'historyEnergyChart',
@@ -101,6 +102,7 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /id="historyKpiGrid"/);
+  assert.match(html, /id="historyKpiPv"/);
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
@@ -131,6 +133,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
       exportRevenueEur: 0.45,
       netEur: -0.78,
       importKwh: 4.5,
+      pvKwh: 5.3,
       exportKwh: 1.25
     },
     rows: [
@@ -175,6 +178,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
 
   assert.match(elements.get('historyKpiCost').textContent, /1,66/);
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
+  assert.match(elements.get('historyKpiPv').textContent, /5,30/);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);
   assert.match(elements.get('historyRows').innerHTML, /PV erzeugt/);

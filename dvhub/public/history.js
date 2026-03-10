@@ -76,6 +76,7 @@ function renderKpis(summary) {
   setText('historyKpiRevenue', fmtEur(summary?.kpis?.exportRevenueEur));
   setText('historyKpiNet', fmtEur(blendedNetEur(summary?.kpis)));
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
+  setText('historyKpiPv', fmtKwh(summary?.kpis?.pvKwh));
   setText('historyKpiExport', fmtKwh(summary?.kpis?.exportKwh));
 }
 
