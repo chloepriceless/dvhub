@@ -196,6 +196,9 @@ function buildRowAccumulator(key, label) {
     gridCostEur: 0,
     pvCostEur: 0,
     batteryCostEur: 0,
+    avoidedImportGrossEur: 0,
+    avoidedImportPvGrossEur: 0,
+    avoidedImportBatteryGrossEur: 0,
     opportunityCostEur: 0,
     selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
@@ -252,6 +255,9 @@ function summarizeRows(slots, view) {
     row.gridCostEur = round2(row.gridCostEur + (slot.gridCostEur || 0));
     row.pvCostEur = round2(row.pvCostEur + (slot.pvCostEur || 0));
     row.batteryCostEur = round2(row.batteryCostEur + (slot.batteryCostEur || 0));
+    row.avoidedImportGrossEur = round2(row.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0));
+    row.avoidedImportPvGrossEur = round2(row.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0));
+    row.avoidedImportBatteryGrossEur = round2(row.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0));
     row.opportunityCostEur = round2(row.opportunityCostEur + (slot.opportunityCostEur || 0));
     row.selfConsumptionCostEur = round2(row.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0));
     row.exportRevenueEur = round2(row.exportRevenueEur + (slot.exportRevenueEur || 0));
@@ -324,6 +330,9 @@ function buildDayCharts(slots) {
       gridCostEur: slot.gridCostEur,
       pvCostEur: slot.pvCostEur,
       batteryCostEur: slot.batteryCostEur,
+      avoidedImportGrossEur: slot.avoidedImportGrossEur,
+      avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
+      avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
       opportunityCostEur: slot.opportunityCostEur,
       selfConsumptionCostEur: slot.selfConsumptionCostEur,
       exportRevenueEur: slot.exportRevenueEur,
@@ -343,6 +352,9 @@ function buildPeriodCharts(rows) {
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
       batteryCostEur: row.batteryCostEur,
+      avoidedImportGrossEur: row.avoidedImportGrossEur,
+      avoidedImportPvGrossEur: row.avoidedImportPvGrossEur,
+      avoidedImportBatteryGrossEur: row.avoidedImportBatteryGrossEur,
       opportunityCostEur: row.opportunityCostEur,
       selfConsumptionCostEur: row.selfConsumptionCostEur,
       netEur: row.netEur,
@@ -373,6 +385,9 @@ function buildPeriodCharts(rows) {
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
       batteryCostEur: row.batteryCostEur,
+      avoidedImportGrossEur: row.avoidedImportGrossEur,
+      avoidedImportPvGrossEur: row.avoidedImportPvGrossEur,
+      avoidedImportBatteryGrossEur: row.avoidedImportBatteryGrossEur,
       opportunityCostEur: row.opportunityCostEur,
       selfConsumptionCostEur: row.selfConsumptionCostEur,
       netEur: row.netEur,
@@ -577,6 +592,9 @@ export function createHistoryRuntime({
         const gridCostEur = costForShareEur(slot.importKwh, userImportPriceCtKwh);
         const pvCostEur = costForShareEur(shares.pvShareKwh, pvCostCtKwh);
         const batteryCostEur = costForShareEur(shares.batteryShareKwh, batteryCostCtKwh);
+        const avoidedImportPvGrossEur = costForShareEur(shares.pvShareKwh, userImportPriceCtKwh);
+        const avoidedImportBatteryGrossEur = costForShareEur(shares.batteryShareKwh, userImportPriceCtKwh);
+        const avoidedImportGrossEur = round2((avoidedImportPvGrossEur || 0) + (avoidedImportBatteryGrossEur || 0));
         const importCostEur = gridCostEur;
         const opportunityCostEur = costForShareEur(localSelfConsumptionKwh, marketPriceCtKwh);
         const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
@@ -593,6 +611,9 @@ export function createHistoryRuntime({
           gridCostEur,
           pvCostEur,
           batteryCostEur,
+          avoidedImportGrossEur,
+          avoidedImportPvGrossEur,
+          avoidedImportBatteryGrossEur,
           opportunityCostEur,
           selfConsumptionCostEur,
           importCostEur,
@@ -630,6 +651,9 @@ export function createHistoryRuntime({
       gridCostEur: round2(totals.gridCostEur + (slot.gridCostEur || 0)),
       pvCostEur: round2(totals.pvCostEur + (slot.pvCostEur || 0)),
       batteryCostEur: round2(totals.batteryCostEur + (slot.batteryCostEur || 0)),
+      avoidedImportGrossEur: round2(totals.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0)),
+      avoidedImportPvGrossEur: round2(totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0)),
+      avoidedImportBatteryGrossEur: round2(totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0)),
       opportunityCostEur: round2(totals.opportunityCostEur + (slot.opportunityCostEur || 0)),
       selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
       exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
@@ -658,6 +682,9 @@ export function createHistoryRuntime({
       gridCostEur: 0,
       pvCostEur: 0,
       batteryCostEur: 0,
+      avoidedImportGrossEur: 0,
+      avoidedImportPvGrossEur: 0,
+      avoidedImportBatteryGrossEur: 0,
       opportunityCostEur: 0,
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
@@ -716,6 +743,9 @@ export function createHistoryRuntime({
           gridCostEur: slot.gridCostEur,
           pvCostEur: slot.pvCostEur,
           batteryCostEur: slot.batteryCostEur,
+          avoidedImportGrossEur: slot.avoidedImportGrossEur,
+          avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
+          avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
           opportunityCostEur: slot.opportunityCostEur,
           selfConsumptionCostEur: slot.selfConsumptionCostEur,
           importCostEur: slot.importCostEur,
