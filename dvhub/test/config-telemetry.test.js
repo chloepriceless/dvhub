@@ -17,6 +17,7 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.userEnergyPricing.mode, 'fixed');
   assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, null);
   assert.deepEqual(defaults.userEnergyPricing.periods, []);
+  assert.deepEqual(defaults.userEnergyPricing.pvPlants, []);
   assert.equal(defaults.userEnergyPricing.dynamicComponents.vatPct, 19);
   assert.equal(defaults.userEnergyPricing.usesParagraph14aModule3, false);
   assert.equal(defaults.userEnergyPricing.module3Windows.window1.enabled, false);
@@ -40,6 +41,7 @@ test('config definition exposes telemetry section and fields', () => {
   assert.ok(!fieldPaths.includes('telemetry.historyImport.gxPath'));
   assert.ok(fieldPaths.includes('userEnergyPricing.mode'));
   assert.ok(fieldPaths.includes('userEnergyPricing.periods'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.pvPlants'));
   assert.ok(fieldPaths.includes('userEnergyPricing.fixedGrossImportCtKwh'));
   assert.ok(fieldPaths.includes('userEnergyPricing.dynamicComponents.gridChargesCtKwh'));
   assert.ok(fieldPaths.includes('userEnergyPricing.module3Windows.window1.priceCtKwh'));
@@ -104,6 +106,44 @@ test('normalizeConfigInput coerces user energy pricing booleans and numbers', ()
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.pvCtKwh, 7.1);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryBaseCtKwh, 2.2);
   assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+});
+
+test('normalizeConfigInput preserves multiple pv plants for premium lookup metadata', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      pvPlants: [
+        {
+          kwp: '9.8',
+          commissionedAt: '2021-04-15'
+        },
+        {
+          kwp: '4.2',
+          commissionedAt: '2023-09-01'
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.userEnergyPricing.pvPlants, [
+    {
+      kwp: 9.8,
+      commissionedAt: '2021-04-15'
+    },
+    {
+      kwp: 4.2,
+      commissionedAt: '2023-09-01'
+    }
+  ]);
+  assert.deepEqual(normalized.persistedConfig.userEnergyPricing.pvPlants, [
+    {
+      kwp: 9.8,
+      commissionedAt: '2021-04-15'
+    },
+    {
+      kwp: 4.2,
+      commissionedAt: '2023-09-01'
+    }
+  ]);
 });
 
 test('dated pricing periods accept non-overlapping date ranges', () => {
