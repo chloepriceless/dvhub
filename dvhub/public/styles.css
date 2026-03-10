@@ -431,6 +431,33 @@ a {
   padding: 12px;
 }
 
+.history-aggregate-mode {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background: rgba(7, 18, 30, 0.44);
+}
+
+.history-aggregate-mode.is-visible {
+  display: inline-flex;
+}
+
+.history-aggregate-mode-btn {
+  min-height: 34px;
+  min-width: 112px;
+  border-radius: 999px;
+}
+
+.history-aggregate-mode-btn.is-active {
+  border-color: rgba(0, 168, 255, 0.85);
+  background: rgba(0, 119, 255, 0.28);
+  color: var(--text-main);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
 .history-rows {
   display: grid;
   gap: 10px;
@@ -549,6 +576,76 @@ a {
 
 .history-line-chart-detail {
   gap: 14px;
+}
+
+.history-aggregate-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.history-summary-table,
+.history-aggregate-breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(7, 18, 30, 0.34);
+}
+
+.history-summary-table th,
+.history-summary-table td,
+.history-aggregate-breakdown-table th,
+.history-aggregate-breakdown-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(31, 76, 122, 0.42);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.history-summary-table thead th,
+.history-aggregate-breakdown-table thead th {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.history-summary-table tbody tr:last-child th,
+.history-summary-table tbody tr:last-child td,
+.history-aggregate-breakdown-table tbody tr:last-child th,
+.history-aggregate-breakdown-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.history-summary-table tbody th,
+.history-aggregate-breakdown-table tbody th {
+  color: var(--text-main);
+  font-family: var(--font-title);
+  font-size: 0.92rem;
+}
+
+.history-summary-table tbody td,
+.history-aggregate-breakdown-table tbody td {
+  color: var(--text-main);
+  font-size: 0.84rem;
+}
+
+.history-aggregate-breakdown-table {
+  display: block;
+  overflow-x: auto;
+}
+
+.history-aggregate-summary-row {
+  background: rgba(0, 168, 255, 0.08);
+}
+
+.history-aggregate-trend {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(31, 76, 122, 0.72);
+  background: rgba(7, 18, 30, 0.34);
 }
 
 .history-chart-legend {

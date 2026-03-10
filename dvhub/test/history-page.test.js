@@ -52,6 +52,9 @@ function loadHistoryPageHelpers() {
     'historyFinancialChart',
     'historyEnergyChart',
     'historyPriceChart',
+    'historyAggregateMode',
+    'historyAggregateOverviewBtn',
+    'historyAggregateTableBtn',
     'historyDetailsToggle',
     'historyDetailsContent',
     'historyRows',
@@ -133,6 +136,9 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
+  assert.match(html, /id="historyAggregateMode"/);
+  assert.match(html, /id="historyAggregateOverviewBtn"/);
+  assert.match(html, /id="historyAggregateTableBtn"/);
   assert.match(html, /id="historyDetailsToggle"/);
   assert.match(html, /id="historyDetailsContent"/);
   assert.match(html, /id="historyStatusInfoToggle"/);
@@ -148,10 +154,11 @@ test('history shell styles define dedicated layout classes', () => {
   assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*96px;/s);
   assert.match(css, /\.history-kpi-breakdown\s*\{/);
   assert.match(css, /\.history-chart-grid\s*\{/);
-  assert.match(css, /\.history-period-grid\s*\{/);
-  assert.match(css, /\.history-period-card\s*\{/);
-  assert.match(css, /\.history-period-bar-group\s*\{/);
-  assert.match(css, /\.history-period-value-list\s*\{/);
+  assert.match(css, /\.history-aggregate-mode\s*\{/);
+  assert.match(css, /\.history-aggregate-mode-btn\s*\{/);
+  assert.match(css, /\.history-summary-table[^{]*\{/);
+  assert.match(css, /\.history-aggregate-trend\s*\{/);
+  assert.match(css, /\.history-aggregate-breakdown-table\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
   assert.doesNotMatch(css, /\.history-bars-compressed\s*\{[^}]*--history-bar-count:\s*1/s);
 });
@@ -354,7 +361,7 @@ test('history page shows local provisional and VRM confirmed origins in banner a
   assert.match(elements.get('historyStatusInfo').innerHTML, /VRM bestaetigt/);
 });
 
-test('history page renders one aggregated net-analysis card, hides secondary cards, and keeps details collapsed by default', () => {
+test('history page defaults aggregated week view to overview mode with summary and trend chart', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
@@ -456,27 +463,15 @@ test('history page renders one aggregated net-analysis card, hides secondary car
     }
   });
 
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-grid/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-header/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-bar-group/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-period-value-list/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-chart-hover-surface/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-09/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03-10/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Energie/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Finanzen/);
-  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-chart-legend/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Bezugskosten/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /PV-Kosten/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Akku-Kosten/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-summary-table/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-aggregate-trend/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch Akku/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Einspeisung/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /Vermiedene Bezugskosten/);
+  assert.match(elements.get('historyAggregateMode').className, /is-visible/);
+  assert.match(String(elements.get('historyAggregateOverviewBtn').ariaPressed), /true/);
+  assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /false/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
   assert.match(elements.get('historyFinancialPanel').className, /history-chart-panel-wide/);
   assert.equal(elements.get('historyEnergyPanel').hidden, true);
   assert.equal(elements.get('historyPricePanel').hidden, true);
@@ -486,14 +481,111 @@ test('history page renders one aggregated net-analysis card, hides secondary car
   assert.doesNotMatch(elements.get('historyBannerText').textContent, /Herkunft/i);
   assert.match(elements.get('historyStatusInfo').innerHTML, /lokal vorlaeufig/);
   assert.match(elements.get('historyStatusInfo').innerHTML, /durch VRM bestaetigt/);
+});
+
+test('history page switches aggregated month view to summarized weekly table mode', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'month',
+    date: '2026-02-16',
+    kpis: {
+      importCostEur: 12.4,
+      gridCostEur: 12.4,
+      pvCostEur: 1.2,
+      batteryCostEur: 0.8,
+      avoidedImportGrossEur: 8.1,
+      exportRevenueEur: 2.6,
+      netEur: -11.8,
+      importKwh: 60,
+      loadKwh: 120,
+      pvKwh: 90,
+      exportKwh: 18
+    },
+    rows: [
+      { label: '2026-02-01', importKwh: 4, loadKwh: 8, pvShareKwh: 3, batteryShareKwh: 1, exportKwh: 0.5, exportRevenueEur: 0.1, gridCostEur: 1.2, pvCostEur: 0.1, batteryCostEur: 0.05, avoidedImportGrossEur: 0.7, netEur: -1.25 },
+      { label: '2026-02-02', importKwh: 5, loadKwh: 9, pvShareKwh: 2, batteryShareKwh: 1, exportKwh: 0.6, exportRevenueEur: 0.15, gridCostEur: 1.4, pvCostEur: 0.11, batteryCostEur: 0.06, avoidedImportGrossEur: 0.8, netEur: -1.42 },
+      { label: '2026-02-08', importKwh: 6, loadKwh: 10, pvShareKwh: 2.5, batteryShareKwh: 1.2, exportKwh: 0.7, exportRevenueEur: 0.18, gridCostEur: 1.5, pvCostEur: 0.12, batteryCostEur: 0.07, avoidedImportGrossEur: 0.9, netEur: -1.51 },
+      { label: '2026-02-15', importKwh: 7, loadKwh: 11, pvShareKwh: 3.1, batteryShareKwh: 1.3, exportKwh: 0.9, exportRevenueEur: 0.2, gridCostEur: 1.6, pvCostEur: 0.14, batteryCostEur: 0.08, avoidedImportGrossEur: 1.1, netEur: -1.62 }
+    ],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-aggregate-breakdown-table/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Gesamt Monat/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Woche 1/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Woche 2/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Verbrauch/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Eigenverbrauch PV/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Erlös Einspeisung/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
+  assert.match(String(elements.get('historyAggregateOverviewBtn').ariaPressed), /false/);
+  assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
+  assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
+
+  elements.get('historyAggregateOverviewBtn').listeners.get('click')();
+
+  assert.match(String(elements.get('historyAggregateOverviewBtn').ariaPressed), /true/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /history-aggregate-trend/);
 
   elements.get('historyDetailsToggle').listeners.get('click')();
 
   assert.equal(elements.get('historyDetailsContent').hidden, false);
   assert.match(elements.get('historyDetailsToggle').textContent, /ausblenden/i);
   assert.match(elements.get('historyRows').innerHTML, /history-data-table/);
-  assert.match(elements.get('historyRows').innerHTML, /2026-03-10/);
+  assert.match(elements.get('historyRows').innerHTML, /2026-02-15/);
   assert.doesNotMatch(elements.get('historyRows').innerHTML, /history-row-card/);
+});
+
+test('history page renders yearly aggregate table with year total and month rows', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'year',
+    date: '2026-03-09',
+    kpis: {
+      importCostEur: 42,
+      gridCostEur: 42,
+      pvCostEur: 6,
+      batteryCostEur: 3,
+      avoidedImportGrossEur: 30,
+      exportRevenueEur: 11,
+      netEur: -40,
+      importKwh: 300,
+      loadKwh: 820,
+      pvKwh: 900,
+      exportKwh: 220
+    },
+    rows: [
+      { label: '2026-01', importKwh: 80, loadKwh: 200, pvShareKwh: 40, batteryShareKwh: 18, exportKwh: 20, exportRevenueEur: 1.5, gridCostEur: 10, pvCostEur: 1.2, batteryCostEur: 0.5, avoidedImportGrossEur: 7, netEur: -10.2 },
+      { label: '2026-02', importKwh: 70, loadKwh: 210, pvShareKwh: 45, batteryShareKwh: 16, exportKwh: 30, exportRevenueEur: 2.2, gridCostEur: 9, pvCostEur: 1.3, batteryCostEur: 0.6, avoidedImportGrossEur: 8, netEur: -8.7 },
+      { label: '2026-03', importKwh: 60, loadKwh: 190, pvShareKwh: 50, batteryShareKwh: 14, exportKwh: 40, exportRevenueEur: 2.8, gridCostEur: 8, pvCostEur: 1.1, batteryCostEur: 0.4, avoidedImportGrossEur: 6, netEur: -6.7 }
+    ],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.match(elements.get('historyFinancialChart').innerHTML, /Gesamt Jahr/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-01/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-02/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03/);
+  assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /true/);
 });
 
 test('history page toggles the backfill button label and disabled state while loading', () => {
