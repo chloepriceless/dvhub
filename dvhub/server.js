@@ -351,6 +351,12 @@ function pushLog(event, details = {}) {
   if (state.log.length > 1000) state.log.shift();
 }
 
+function resolveLogLimit(rawLimit, defaultLimit = 20, maxLimit = 200) {
+  const limit = Number(rawLimit);
+  if (!Number.isFinite(limit) || limit <= 0) return defaultLimit;
+  return Math.min(Math.floor(limit), maxLimit);
+}
+
 function u16(v) {
   let x = Math.trunc(Number(v) || 0);
   if (x < 0) x += 0x10000;
@@ -1855,7 +1861,10 @@ const web = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, results });
   }
 
-  if (url.pathname === '/api/log' && req.method === 'GET') return json(res, 200, { rows: state.log.slice(-300) });
+  if (url.pathname === '/api/log' && req.method === 'GET') {
+    const limit = resolveLogLimit(url.searchParams.get('limit'));
+    return json(res, 200, { rows: state.log.slice(-limit) });
+  }
 
   if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
     const runtimeSnapshot = buildCurrentRuntimeSnapshot();
