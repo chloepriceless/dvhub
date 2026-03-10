@@ -1,6 +1,7 @@
 const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
+const VRM_SUPPORTED_INTERVALS = new Set(['15mins', 'hours', '2hours', 'days']);
 const VRM_HISTORY_SLOT_SECONDS = 900;
 const VRM_BACKFILL_CHUNK_DAYS = 7;
 const VRM_GAP_BACKFILL_LOOKBACK_DAYS = 7;
@@ -78,6 +79,11 @@ function intervalSeconds(interval = '15mins') {
     days: 86400
   };
   return map[interval] || 900;
+}
+
+function normalizeVrmInterval(interval = VRM_HISTORY_INTERVAL) {
+  const candidate = String(interval || VRM_HISTORY_INTERVAL);
+  return VRM_SUPPORTED_INTERVALS.has(candidate) ? candidate : VRM_HISTORY_INTERVAL;
 }
 
 function berlinDateString(value) {
@@ -302,7 +308,14 @@ function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds 
   aggregate.totalEnergyKwh += numeric;
 }
 
-function addVrmValuesToSlotBuckets(slotBuckets, { type, code, values, slotResolutionSeconds }) {
+function addVrmValuesToSlotBuckets(slotBuckets, {
+  type,
+  code,
+  values,
+  slotResolutionSeconds,
+  sourceResolutionSeconds,
+  rangeEndMs = null
+}) {
   if (!Array.isArray(values) || !values.length) return;
   const sorted = values
     .filter((item) => Array.isArray(item) && item.length >= 2 && Number.isFinite(Number(item[0])) && Number.isFinite(Number(item[1])))
@@ -310,18 +323,28 @@ function addVrmValuesToSlotBuckets(slotBuckets, { type, code, values, slotResolu
   for (let index = 0; index < sorted.length; index += 1) {
     const item = sorted[index];
     const currentMs = Number(item[0]);
-    const slotStartIso = bucketIso(currentMs, slotResolutionSeconds);
-    const slotEndMs = new Date(slotStartIso).getTime() + slotResolutionSeconds * 1000;
     const nextMs = index + 1 < sorted.length ? Number(sorted[index + 1][0]) : null;
-    const boundedNextMs = Number.isFinite(nextMs) ? Math.min(nextMs, slotEndMs) : slotEndMs;
-    const durationSeconds = Math.max(0, boundedNextMs - currentMs) / 1000;
-    const bucket = getOrCreateSlotBucket(slotBuckets, slotStartIso, slotResolutionSeconds);
-    accumulateVrmAggregate(bucket, {
-      type,
-      code,
-      rawValue: item[1],
-      durationSeconds
-    });
+    const sampleEndMs = currentMs + (Math.max(1, Number(sourceResolutionSeconds || slotResolutionSeconds)) * 1000);
+    const boundedEndMs = [nextMs, sampleEndMs, rangeEndMs]
+      .filter((value) => Number.isFinite(value))
+      .reduce((min, value) => Math.min(min, value), sampleEndMs);
+    let segmentStartMs = currentMs;
+    while (segmentStartMs < boundedEndMs) {
+      const slotStartIso = bucketIso(segmentStartMs, slotResolutionSeconds);
+      const slotEndMs = new Date(slotStartIso).getTime() + slotResolutionSeconds * 1000;
+      const segmentEndMs = Math.min(slotEndMs, boundedEndMs);
+      const durationSeconds = Math.max(0, segmentEndMs - segmentStartMs) / 1000;
+      if (durationSeconds > 0) {
+        const bucket = getOrCreateSlotBucket(slotBuckets, slotStartIso, slotResolutionSeconds);
+        accumulateVrmAggregate(bucket, {
+          type,
+          code,
+          rawValue: item[1],
+          durationSeconds
+        });
+      }
+      segmentStartMs = segmentEndMs;
+    }
   }
 }
 
@@ -1262,8 +1285,9 @@ export function createHistoryImportManager({
     const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
     if (!validation.ok) return validation;
     const importConfig = telemetryConfig.historyImport || {};
-    const normalizedInterval = VRM_HISTORY_INTERVAL;
+    const normalizedInterval = normalizeVrmInterval(interval);
     const resolutionSeconds = intervalSeconds(normalizedInterval);
+    const rangeEndMs = new Date(toIso(end)).getTime();
     const rawRows = [];
     const slotBuckets = new Map();
 
@@ -1285,7 +1309,9 @@ export function createHistoryImportManager({
           type,
           code,
           values,
-          slotResolutionSeconds: VRM_HISTORY_SLOT_SECONDS
+          slotResolutionSeconds: VRM_HISTORY_SLOT_SECONDS,
+          sourceResolutionSeconds: resolutionSeconds,
+          rangeEndMs
         });
       }
     }
@@ -1351,7 +1377,7 @@ export function createHistoryImportManager({
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
 
-    let cursorEnd = now ? toIso(now) : new Date().toISOString();
+    let cursorEnd = startOfUtcDayIso(now ? toIso(now) : new Date().toISOString());
     let windowsVisited = 0;
     let importedWindows = 0;
     let trailingEmptyWindows = 0;

@@ -36,6 +36,7 @@ function loadHistoryPageHelpers() {
     'historyKpiRevenue',
     'historyKpiNet',
     'historyKpiImport',
+    'historyKpiLoad',
     'historyKpiPv',
     'historyKpiExport',
     'historyFinancialChart',
@@ -102,6 +103,7 @@ test('history page exposes view switcher, date navigation, KPI blocks, chart con
   assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /id="historyKpiGrid"/);
+  assert.match(html, /id="historyKpiLoad"/);
   assert.match(html, /id="historyKpiPv"/);
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
@@ -113,8 +115,8 @@ test('history shell styles define dedicated layout classes', () => {
   const css = readPublic('styles.css');
 
   assert.match(css, /\.history-layout\s*\{/);
-  assert.match(css, /\.history-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/s);
-  assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*104px;/s);
+  assert.match(css, /\.history-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(css, /\.history-kpi-card\s*\{[^}]*min-height:\s*96px;/s);
   assert.match(css, /\.history-chart-grid\s*\{/);
   assert.match(css, /\.history-rows\s*\{/);
 });
@@ -134,6 +136,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
       exportRevenueEur: 0.45,
       netEur: -0.78,
       importKwh: 4.5,
+      loadKwh: 8.2,
       pvKwh: 5.3,
       exportKwh: 1.25
     },
@@ -179,6 +182,7 @@ test('history page renders KPI values, grouped rows, and unresolved warnings fro
 
   assert.match(elements.get('historyKpiCost').textContent, /1,66/);
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
+  assert.match(elements.get('historyKpiLoad').textContent, /8,20/);
   assert.match(elements.get('historyKpiPv').textContent, /5,30/);
   assert.match(elements.get('historyRows').innerHTML, /2026-03-09/);
   assert.match(elements.get('historyRows').innerHTML, /Verbrauch/);

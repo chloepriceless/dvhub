@@ -303,7 +303,7 @@ test('configured VRM import writes canonical history series from VRM stats paylo
   }
 });
 
-test('configured VRM import normalizes interval to 15 minutes and stores extended flow mappings', async () => {
+test('configured VRM import preserves hourly interval and stores extended flow mappings across quarter-hour slots', async () => {
   const store = createStore();
   const calls = [];
   const fetchImpl = async (url) => {
@@ -360,19 +360,19 @@ test('configured VRM import normalizes interval to 15 minutes and stores extende
     });
 
     assert.equal(result.ok, true);
-    assert.match(calls[0], /interval=15mins/);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_direct_use_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_battery_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_grid_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_direct_use_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_to_battery_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_direct_use_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_to_grid_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'load_power_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_import_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_export_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_charge_w'"), 1);
-    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_discharge_w'"), 1);
+    assert.match(calls[0], /interval=hours/);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_direct_use_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_battery_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'solar_to_grid_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_direct_use_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_to_battery_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_direct_use_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_to_grid_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'load_power_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_import_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'grid_export_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_charge_w'"), 4);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'battery_discharge_w'"), 4);
   } finally {
     store.close();
   }
@@ -1202,6 +1202,102 @@ test('VRM backfill job walks chunked windows until repeated empty history and wa
     assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_full_backfill'"), 1);
     assert.deepEqual(waits, [50, 50, 50, 50]);
     assert.equal(requests.length, 15);
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM full backfill aligns windows to UTC day boundaries even from a mid-day now', async () => {
+  const store = createStore();
+  const venusRequests = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    const end = new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString();
+    if (type === 'venus') venusRequests.push(`${start}|${end}`);
+    return {
+      ok: true,
+      async json() {
+        return { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'full',
+      now: '2026-03-05T11:55:30.047Z',
+      chunkDays: 1,
+      maxEmptyWindows: 2
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(venusRequests, [
+      '2026-03-04T00:00:00.000Z|2026-03-05T00:00:00.000Z',
+      '2026-03-03T00:00:00.000Z|2026-03-04T00:00:00.000Z'
+    ]);
+    assert.equal(result.requestedTo, '2026-03-05T00:00:00.000Z');
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM full backfill forwards requested interval to VRM fetches', async () => {
+  const store = createStore();
+  const seenIntervals = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    seenIntervals.push(parsed.searchParams.get('interval'));
+    return {
+      ok: true,
+      async json() {
+        return { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    for (const interval of ['days', 'hours', '15mins']) {
+      seenIntervals.length = 0;
+      const result = await manager.backfillHistoryFromConfiguredSource({
+        mode: 'full',
+        now: '2026-03-05T00:00:00.000Z',
+        chunkDays: 1,
+        maxEmptyWindows: 1,
+        interval
+      });
+      assert.equal(result.ok, true);
+      assert.deepEqual(seenIntervals, [interval, interval, interval]);
+    }
   } finally {
     store.close();
   }
