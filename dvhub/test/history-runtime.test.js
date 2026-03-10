@@ -624,6 +624,7 @@ test('history runtime omits slot-level series payloads for annual responses', ()
     energy: [],
     prices: []
   });
+  assert.deepEqual(year.slots, []);
   assert.equal(year.charts.periodCombinedBars.length, 2);
 });
 
