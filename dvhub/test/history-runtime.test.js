@@ -1637,6 +1637,75 @@ test('history runtime counts current-year premium-eligible export for all non-ne
   assert.equal(year.kpis.marketPremiumEur, 0.05);
 });
 
+test('history runtime derives annual premium eur from the displayed annual premium rate for all eligible export in running annual mode', () => {
+  const energySlots = [
+    {
+      ts: '2027-01-10T10:00:00.000Z',
+      importKwh: 0,
+      exportKwh: 1,
+      gridKwh: 0,
+      pvKwh: 1,
+      batteryKwh: 0,
+      batteryChargeKwh: 0,
+      batteryDischargeKwh: 0,
+      loadKwh: 0,
+      estimated: false,
+      incomplete: false
+    },
+    {
+      ts: '2027-02-10T10:00:00.000Z',
+      importKwh: 0,
+      exportKwh: 9,
+      gridKwh: 0,
+      pvKwh: 9,
+      batteryKwh: 0,
+      batteryChargeKwh: 0,
+      batteryDischargeKwh: 0,
+      loadKwh: 0,
+      estimated: false,
+      incomplete: false
+    }
+  ];
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots({ start, end }) {
+        return energySlots.filter((slot) => slot.ts >= start && slot.ts < end);
+      },
+      listPriceSlots() {
+        return [
+          { ts: '2027-01-10T10:00:00.000Z', priceCtKwh: 6, priceEurMwh: 60 },
+          { ts: '2027-02-10T10:00:00.000Z', priceCtKwh: 4, priceEurMwh: 40 }
+        ];
+      }
+    },
+    getPricingConfig: () => ({
+      ...pricingConfig,
+      pvPlants: [
+        { kwp: 10, commissionedAt: '2021-04-15' }
+      ]
+    }),
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: {
+        '2027-01': 11.02
+      },
+      annualCtKwhByYear: {}
+    }),
+    getCurrentDate: () => FIXED_CURRENT_DATE,
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {
+        '2021-04': 7.2
+      }
+    })
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2027-06-01' });
+
+  assert.equal(year.meta.marketPremium.source, 'derived_monthly_running');
+  assert.equal(year.kpis.premiumEligibleExportKwh, 10);
+  assert.equal(year.kpis.marketPremiumCtKwh, -3.82);
+  assert.equal(year.kpis.marketPremiumEur, -0.38);
+});
+
 test('history runtime does not produce market premium for past years when the official annual market value is missing', () => {
   const runtime = createHistoryRuntime({
     store: {
