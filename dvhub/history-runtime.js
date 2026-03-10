@@ -811,7 +811,7 @@ export function createHistoryApiHandlers({
       const explicitEnd = body.end ?? body.requestedTo ?? null;
       let start = explicitStart;
       let end = explicitEnd;
-      if (!start || !end) {
+      if ((!start || !end) && (body.view || body.date)) {
         const view = SUPPORTED_VIEWS.has(String(body.view || '')) ? String(body.view) : 'day';
         const date = isDateOnly(String(body.date || '')) ? String(body.date) : currentBerlinDate();
         const range = normalizeViewRange(view, date);

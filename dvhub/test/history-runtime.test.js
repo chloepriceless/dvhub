@@ -575,3 +575,32 @@ test('history summary API validates views and delegates to the runtime', async (
   });
   assert.equal(called, 1);
 });
+
+test('history price backfill API without a range delegates bounds selection to the import manager', async () => {
+  let backfillInput = null;
+  const handlers = createHistoryApiHandlers({
+    historyRuntime: {
+      getSummary() {
+        return { ok: true };
+      }
+    },
+    historyImportManager: {
+      async backfillMissingPriceHistory(input) {
+        backfillInput = input;
+        return { ok: true, requestedDays: 3 };
+      }
+    },
+    telemetryEnabled: true,
+    defaultBzn: 'DE-LU'
+  });
+
+  const backfill = await handlers.postPriceBackfill({});
+
+  assert.equal(backfill.status, 200);
+  assert.equal(backfill.body.requestedDays, 3);
+  assert.deepEqual(backfillInput, {
+    bzn: 'DE-LU',
+    start: null,
+    end: null
+  });
+});

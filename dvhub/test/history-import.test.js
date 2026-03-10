@@ -219,7 +219,8 @@ test('configured VRM import fetches official stats endpoints and normalizes rows
     });
 
     assert.equal(result.ok, true);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 4);
+    assert.equal(calls.some((url) => url.includes('api.energy-charts.info/price')), true);
     assert.equal(store.countRows('timeseries_samples', "source = 'vrm_import'"), 17);
     assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_dc_w'"), 1);
     assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_import'"), 1);
@@ -1162,6 +1163,77 @@ test('price backfill reports partial success when one day fails but previous day
   }
 });
 
+test('configured VRM import backfills missing prices for the imported range', async () => {
+  const store = createStore();
+  const jan2Noon = Date.UTC(2026, 0, 2, 12, 0, 0);
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const parsed = new URL(url);
+    if (parsed.hostname === 'api.energy-charts.info') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            unix_seconds: [Math.floor(jan2Noon / 1000)],
+            price: [44]
+          };
+        }
+      };
+    }
+    const type = parsed.searchParams.get('type');
+    const payloads = {
+      venus: {
+        records: {
+          Pdc: [[jan2Noon, 800]]
+        }
+      },
+      consumption: {
+        records: {
+          Pg: [[jan2Noon, 0.25]]
+        }
+      },
+      kwh: {
+        records: {}
+      }
+    };
+    return {
+      ok: true,
+      async json() {
+        return payloads[type];
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.importFromConfiguredSource({
+      start: '2026-01-02T12:00:00.000Z',
+      end: '2026-01-02T12:15:00.000Z',
+      interval: '15mins'
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+    assert.equal(store.countRows('import_jobs', "job_type = 'price_backfill'"), 1);
+    assert.equal(calls.some((url) => url.includes('api.energy-charts.info/price')), true);
+  } finally {
+    store.close();
+  }
+});
+
 test('configured VRM import collapses off-quarter VRM samples into one final 15-minute slot', async () => {
   const store = createStore();
   const fetchImpl = async (url) => {
@@ -1385,6 +1457,80 @@ test('VRM full backfill forwards requested interval to VRM fetches', async () =>
       assert.equal(result.ok, true);
       assert.deepEqual(seenIntervals, [interval, interval, interval]);
     }
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM full backfill backfills missing prices for the imported range', async () => {
+  const store = createStore();
+  const priceDay = Date.UTC(2026, 2, 4, 12, 0, 0);
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const parsed = new URL(url);
+    if (parsed.hostname === 'api.energy-charts.info') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            unix_seconds: [Math.floor(priceDay / 1000)],
+            price: [41]
+          };
+        }
+      };
+    }
+    const type = parsed.searchParams.get('type');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    return {
+      ok: true,
+      async json() {
+        if (type === 'venus' && start === '2026-03-04T00:00:00.000Z') {
+          return {
+            records: {
+              Pdc: [[priceDay, 1200]]
+            }
+          };
+        }
+        if (type === 'consumption' && start === '2026-03-04T00:00:00.000Z') {
+          return {
+            records: {
+              Pg: [[priceDay, 0.2]]
+            }
+          };
+        }
+        return { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'full',
+      now: '2026-03-05T00:00:00.000Z',
+      chunkDays: 1,
+      maxEmptyWindows: 1,
+      interval: '15mins'
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(store.countRows('timeseries_samples', "source = 'price_backfill'"), 2);
+    assert.equal(store.countRows('import_jobs', "job_type = 'price_backfill'"), 1);
+    assert.equal(calls.some((url) => url.includes('api.energy-charts.info/price')), true);
   } finally {
     store.close();
   }
