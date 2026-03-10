@@ -806,11 +806,28 @@ export function createHistoryRuntime({
     return listRawFallbackSlotsForRange({ start, end });
   }
 
+  function listYearEnergySlotsByMonth(date) {
+    const yearStart = startOfYear(date);
+    const year = parseDateOnly(yearStart)?.year;
+    if (!Number.isFinite(year)) return [];
+    const slots = [];
+    for (let month = 1; month <= 12; month += 1) {
+      const monthDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-01`;
+      const monthRange = normalizeViewRange('month', monthDate);
+      const start = localDateTimeToUtcIso(monthRange.startDate, 0, 0);
+      const end = localDateTimeToUtcIso(monthRange.endDateExclusive, 0, 0);
+      slots.push(...listEnergySlotsForRange({ start, end }));
+    }
+    return slots;
+  }
+
   function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
-    const energySlots = listEnergySlotsForRange({ start, end });
+    const energySlots = view === 'year' && typeof store.listMaterializedEnergySlots === 'function'
+      ? listYearEnergySlotsByMonth(date)
+      : listEnergySlotsForRange({ start, end });
     const priceRows = store.listPriceSlots({
       start,
       end

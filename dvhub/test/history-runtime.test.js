@@ -628,6 +628,45 @@ test('history runtime omits slot-level series payloads for annual responses', ()
   assert.equal(year.charts.periodCombinedBars.length, 2);
 });
 
+test('history runtime reads annual energy slots in monthly chunks to limit peak memory', () => {
+  const calls = [];
+  const runtime = createHistoryRuntime({
+    store: {
+      listMaterializedEnergySlots(args) {
+        calls.push(args);
+        return [];
+      },
+      listPriceSlots() {
+        return [];
+      }
+    },
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  runtime.getSummary({
+    view: 'year',
+    date: '2026-03-09',
+    solarMarketValues: {
+      annualCtKwhByYear: {},
+      monthlyCtKwhByMonth: {},
+      availableMonthsByYear: {}
+    }
+  });
+
+  assert.equal(calls.length, 12);
+  assert.deepEqual(calls[0], {
+    start: '2025-12-31T23:00:00.000Z',
+    end: '2026-01-31T23:00:00.000Z',
+    sourceKinds: ['vrm_import', 'local_live']
+  });
+  assert.deepEqual(calls[11], {
+    start: '2026-11-30T23:00:00.000Z',
+    end: '2026-12-31T23:00:00.000Z',
+    sourceKinds: ['vrm_import', 'local_live']
+  });
+});
+
 test('history runtime exposes chart-ready series with split costs and estimation metadata', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
