@@ -39,6 +39,7 @@ function loadHistoryPageHelpers() {
     'historyPremiumHint',
     'historyPremiumScopeLabel',
     'historyPremiumMarketValueLabel',
+    'historyPremiumRateLabel',
     'historyKpiCost',
     'historyKpiRevenue',
     'historyKpiAvoided',
@@ -57,6 +58,7 @@ function loadHistoryPageHelpers() {
     'historyKpiAnnualMarketValue',
     'historyKpiPremiumEligibleExport',
     'historyKpiMarketPremium',
+    'historyKpiMarketPremiumRate',
     'historyFinancialPanel',
     'historyEnergyPanel',
     'historyPricePanel',
@@ -153,6 +155,8 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyKpiGrossReturn"/);
   assert.match(html, /id="historyPremiumFields"/);
   assert.match(html, /id="historyPremiumHint"/);
+  assert.match(html, /id="historyPremiumRateLabel"/);
+  assert.match(html, /id="historyKpiMarketPremiumRate"/);
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
@@ -300,7 +304,9 @@ test('history page renders year-only premium fields and a provisional note for r
       pvFullLoadHours: 30.3,
       premiumEligibleExportKwh: 185,
       annualMarketValueCtKwh: 5.17,
-      marketPremiumEur: 410.2
+      marketPremiumEur: 410.2,
+      marketPremiumCtKwh: 2.8,
+      periodMarketValueCtKwh: 5.17
     },
     rows: [],
     charts: {
@@ -322,44 +328,88 @@ test('history page renders year-only premium fields and a provisional note for r
   assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /5,17/);
   assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /185,00/);
   assert.match(elements.get('historyKpiMarketPremium').textContent, /410,20/);
+  assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /2,80/);
   assert.match(elements.get('historyKpiVbh').textContent, /30,30/);
   assert.match(elements.get('historyPremiumScopeLabel').textContent, /Jahresansicht/);
   assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Jahresmarktwert/);
+  assert.match(elements.get('historyPremiumRateLabel').textContent, /Marktprämie ct\/kWh/);
   assert.equal(elements.get('historyPremiumHint').hidden, false);
   assert.match(elements.get('historyPremiumHint').textContent, /Folgemonat/i);
   assert.match(elements.get('historyPremiumHint').textContent, /2 Monatswert/);
 });
 
-test('history page renders month premium fields with month-scoped labels and quantities', () => {
+test('history page renders month premium fields with annual source when yearly market value exists', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.renderSummary({
     view: 'month',
-    date: '2026-02-24',
+    date: '2025-12-30',
     kpis: {
-      importCostEur: 76.29,
-      gridCostEur: 76.29,
-      pvCostEur: 19.19,
-      batteryCostEur: 34.1,
-      avoidedImportGrossEur: 180.04,
-      avoidedImportPvGrossEur: 81.14,
-      avoidedImportBatteryGrossEur: 98.9,
-      exportRevenueEur: 15.69,
-      importKwh: 290.74,
-      loadKwh: 937.53,
-      pvKwh: 1003.67,
-      exportKwh: 222.5,
-      pvFullLoadHours: 33.79,
+      importCostEur: 219.78,
+      gridCostEur: 219.78,
+      pvCostEur: 9.71,
+      batteryCostEur: 14.45,
+      avoidedImportGrossEur: 111.11,
+      avoidedImportPvGrossEur: 60.66,
+      avoidedImportBatteryGrossEur: 50.45,
+      exportRevenueEur: 0.26,
+      importKwh: 802.61,
+      loadKwh: 1153.8,
+      pvKwh: 471.37,
+      exportKwh: 3.5,
+      pvFullLoadHours: 15.87,
       weightedApplicableValueCtKwh: 8.2,
-      premiumEligibleExportKwh: 222.5,
-      marketPremiumCtKwh: 3.7,
-      marketPremiumEur: 8.23
+      premiumEligibleExportKwh: 3.43,
+      marketPremiumCtKwh: 3.69,
+      marketPremiumEur: 0.13,
+      periodMarketValueCtKwh: 4.51
     },
     rows: [],
     charts: {
       periodCombinedBars: []
     },
     meta: {
+      marketPremium: {
+        displaySource: 'official_annual'
+      },
+      unresolved: {
+        incompleteSlots: 0,
+        estimatedSlots: 0
+      }
+    }
+  });
+
+  assert.equal(elements.get('historyPremiumFields').hidden, false);
+  assert.match(elements.get('historyPremiumScopeLabel').textContent, /Monatsansicht/);
+  assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Jahresmarktwert/);
+  assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /4,51/);
+  assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /3,43/);
+  assert.match(elements.get('historyKpiMarketPremium').textContent, /0,13/);
+  assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /3,69/);
+  assert.equal(elements.get('historyPremiumHint').hidden, true);
+});
+
+test('history page renders month premium fields with monthly source when no yearly market value exists yet', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.renderSummary({
+    view: 'month',
+    date: '2027-02-10',
+    kpis: {
+      weightedApplicableValueCtKwh: 8.2,
+      premiumEligibleExportKwh: 0.5,
+      marketPremiumCtKwh: 3.7,
+      marketPremiumEur: 0.02,
+      periodMarketValueCtKwh: 4.5
+    },
+    rows: [],
+    charts: {
+      periodCombinedBars: []
+    },
+    meta: {
+      marketPremium: {
+        displaySource: 'official_monthly'
+      },
       unresolved: {
         incompleteSlots: 0,
         estimatedSlots: 0
@@ -371,9 +421,7 @@ test('history page renders month premium fields with month-scoped labels and qua
   assert.match(elements.get('historyPremiumScopeLabel').textContent, /Monatsansicht/);
   assert.match(elements.get('historyPremiumMarketValueLabel').textContent, /Monatsmarktwert/);
   assert.match(elements.get('historyKpiAnnualMarketValue').textContent, /4,50/);
-  assert.match(elements.get('historyKpiPremiumEligibleExport').textContent, /222,50/);
-  assert.match(elements.get('historyKpiMarketPremium').textContent, /8,23/);
-  assert.equal(elements.get('historyPremiumHint').hidden, true);
+  assert.match(elements.get('historyKpiMarketPremiumRate').textContent, /3,70/);
 });
 
 test('history page renders daily line charts and estimated markers from chart payloads', () => {

@@ -137,36 +137,27 @@ function renderKpis(summary) {
 
   const view = String(summary?.view || '');
   const premiumVisible = view === 'week' || view === 'month' || view === 'year';
-  const weightedApplicableValueCtKwh = Number(summary?.kpis?.weightedApplicableValueCtKwh);
-  const marketPremiumCtKwh = Number(summary?.kpis?.marketPremiumCtKwh);
+  const displaySource = String(summary?.meta?.marketPremium?.displaySource || summary?.meta?.marketPremium?.source || '');
   let premiumScopeLabel = 'Jahresansicht';
   let marketValueLabel = 'Jahresmarktwert';
   if (view === 'month') {
     premiumScopeLabel = 'Monatsansicht';
-    marketValueLabel = 'Monatsmarktwert';
+    marketValueLabel = displaySource === 'official_annual' ? 'Jahresmarktwert' : 'Monatsmarktwert';
   } else if (view === 'week') {
     premiumScopeLabel = 'Wochenansicht';
-    marketValueLabel = 'Marktwert (gewichtet)';
+    marketValueLabel = 'Monatsmarktwert';
   }
   setHidden('historyPremiumFields', !premiumVisible);
   setHidden('historyPremiumHint', true);
   setText('historyPremiumHint', '');
   setText('historyPremiumScopeLabel', premiumScopeLabel);
   setText('historyPremiumMarketValueLabel', marketValueLabel);
+  setText('historyPremiumRateLabel', 'Marktprämie ct/kWh');
   if (!premiumVisible) return;
-  const periodMarketValueCtKwh =
-    hasFiniteNumber(summary?.kpis?.annualMarketValueCtKwh)
-      ? Number(summary.kpis.annualMarketValueCtKwh)
-      : (
-          Number.isFinite(weightedApplicableValueCtKwh)
-          && Number.isFinite(marketPremiumCtKwh)
-            ? round2(weightedApplicableValueCtKwh - marketPremiumCtKwh)
-            : null
-        );
   setText(
     'historyKpiAnnualMarketValue',
-    hasFiniteNumber(periodMarketValueCtKwh)
-      ? fmtCt(periodMarketValueCtKwh)
+    hasFiniteNumber(summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh)
+      ? fmtCt(summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh)
       : 'noch nicht verfügbar'
   );
   setText(
@@ -179,6 +170,12 @@ function renderKpis(summary) {
     'historyKpiMarketPremium',
     hasFiniteNumber(summary?.kpis?.marketPremiumEur)
       ? fmtEur(summary?.kpis?.marketPremiumEur)
+      : 'noch nicht verfügbar'
+  );
+  setText(
+    'historyKpiMarketPremiumRate',
+    hasFiniteNumber(summary?.kpis?.marketPremiumCtKwh)
+      ? fmtCt(summary?.kpis?.marketPremiumCtKwh)
       : 'noch nicht verfügbar'
   );
   const premiumMeta = summary?.meta?.marketPremium || {};

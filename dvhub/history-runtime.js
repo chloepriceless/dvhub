@@ -734,6 +734,170 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
   };
 }
 
+function applyPeriodPremiumDisplay({ view, date, slots, kpis, meta, weightedApplicableValueCtKwh = null }) {
+  if (view === 'day') {
+    return { kpis, meta };
+  }
+
+  const annualCtKwhByYear = meta?.solarMarketValueAnnualCtKwhByYear || {};
+  const monthlyCtKwhByMonth = meta?.solarMarketValueMonthlyCtKwhByMonth || {};
+  const premiumEligibleExportKwh = round2(slots.reduce((sum, slot) => {
+    const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
+    if (!Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0) return sum;
+    return sum + Number(slot?.exportKwh || 0);
+  }, 0));
+
+  if (view === 'year') {
+    return {
+      kpis: {
+        ...kpis,
+        weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? round2(weightedApplicableValueCtKwh) : null,
+        periodMarketValueCtKwh: Number.isFinite(Number(kpis?.annualMarketValueCtKwh))
+          ? round2(Number(kpis.annualMarketValueCtKwh))
+          : null
+      },
+      meta: {
+        ...meta,
+        marketPremium: {
+          ...(meta?.marketPremium || {}),
+          displaySource: meta?.marketPremium?.source || null
+        }
+      }
+    };
+  }
+
+  if (!Number.isFinite(weightedApplicableValueCtKwh)) {
+    return {
+      kpis: {
+        ...kpis,
+        weightedApplicableValueCtKwh: null,
+        premiumEligibleExportKwh,
+        periodMarketValueCtKwh: null,
+        marketPremiumEur: null,
+        marketPremiumCtKwh: null
+      },
+      meta: {
+        ...meta,
+        marketPremium: {
+          ...(meta?.marketPremium || {}),
+          premiumEligibleExportKwh,
+          displaySource: null
+        }
+      }
+    };
+  }
+
+  const selectedYear = parseDateOnly(startOfYear(date))?.year;
+  if (view === 'month') {
+    const officialAnnualMarketValueCtKwh = Number(annualCtKwhByYear?.[selectedYear]);
+    if (Number.isFinite(officialAnnualMarketValueCtKwh)) {
+      const marketPremiumCtKwh = round2(weightedApplicableValueCtKwh - officialAnnualMarketValueCtKwh);
+      const marketPremiumEur = premiumEligibleExportKwh > 0
+        ? round2((premiumEligibleExportKwh * marketPremiumCtKwh) / 100)
+        : null;
+      return {
+        kpis: {
+          ...kpis,
+          weightedApplicableValueCtKwh: round2(weightedApplicableValueCtKwh),
+          premiumEligibleExportKwh,
+          periodMarketValueCtKwh: round2(officialAnnualMarketValueCtKwh),
+          marketPremiumEur,
+          marketPremiumCtKwh
+        },
+        meta: {
+          ...meta,
+          marketPremium: {
+            ...(meta?.marketPremium || {}),
+            premiumEligibleExportKwh,
+            displaySource: 'official_annual'
+          }
+        }
+      };
+    }
+
+    const selectedMonth = startOfMonth(date)?.slice(0, 7);
+    const monthlyMarketValueCtKwh = Number(monthlyCtKwhByMonth?.[selectedMonth]);
+    const marketPremiumCtKwh = Number.isFinite(monthlyMarketValueCtKwh)
+      ? round2(weightedApplicableValueCtKwh - monthlyMarketValueCtKwh)
+      : null;
+    const marketPremiumEur =
+      premiumEligibleExportKwh > 0 && Number.isFinite(marketPremiumCtKwh)
+        ? round2((premiumEligibleExportKwh * marketPremiumCtKwh) / 100)
+        : null;
+    return {
+      kpis: {
+        ...kpis,
+        weightedApplicableValueCtKwh: round2(weightedApplicableValueCtKwh),
+        premiumEligibleExportKwh,
+        periodMarketValueCtKwh: Number.isFinite(monthlyMarketValueCtKwh) ? round2(monthlyMarketValueCtKwh) : null,
+        marketPremiumEur,
+        marketPremiumCtKwh
+      },
+      meta: {
+        ...meta,
+        marketPremium: {
+          ...(meta?.marketPremium || {}),
+          premiumEligibleExportKwh,
+          displaySource: Number.isFinite(monthlyMarketValueCtKwh) ? 'official_monthly' : null
+        }
+      }
+    };
+  }
+
+  if (view === 'week') {
+    const eligibleSlots = slots.filter((slot) => {
+      const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
+      return Number.isFinite(marketPriceCtKwh) && marketPriceCtKwh >= 0 && Number(slot?.exportKwh || 0) > 0;
+    });
+    const weightedMonthly = eligibleSlots.reduce((acc, slot) => {
+      const monthlyMarketValueCtKwh = Number(monthlyCtKwhByMonth?.[localMonthString(slot?.ts)]);
+      const exportKwh = Number(slot?.exportKwh || 0);
+      if (!Number.isFinite(monthlyMarketValueCtKwh)) {
+        acc.missingValue = true;
+        return acc;
+      }
+      acc.exportKwh += exportKwh;
+      acc.weightedCt += exportKwh * monthlyMarketValueCtKwh;
+      return acc;
+    }, {
+      exportKwh: 0,
+      weightedCt: 0,
+      missingValue: false
+    });
+    const periodMarketValueCtKwh =
+      !weightedMonthly.missingValue && weightedMonthly.exportKwh > 0
+        ? round2(weightedMonthly.weightedCt / weightedMonthly.exportKwh)
+        : null;
+    const marketPremiumCtKwh = Number.isFinite(periodMarketValueCtKwh)
+      ? round2(weightedApplicableValueCtKwh - periodMarketValueCtKwh)
+      : null;
+    const marketPremiumEur =
+      premiumEligibleExportKwh > 0 && Number.isFinite(marketPremiumCtKwh)
+        ? round2((premiumEligibleExportKwh * marketPremiumCtKwh) / 100)
+        : null;
+    return {
+      kpis: {
+        ...kpis,
+        weightedApplicableValueCtKwh: round2(weightedApplicableValueCtKwh),
+        premiumEligibleExportKwh,
+        periodMarketValueCtKwh,
+        marketPremiumEur,
+        marketPremiumCtKwh
+      },
+      meta: {
+        ...meta,
+        marketPremium: {
+          ...(meta?.marketPremium || {}),
+          premiumEligibleExportKwh,
+          displaySource: Number.isFinite(periodMarketValueCtKwh) ? 'weighted_monthly' : null
+        }
+      }
+    };
+  }
+
+  return { kpis, meta };
+}
+
 function getCurrentDateValue(value) {
   if (isDateOnly(value)) return value;
   return currentBerlinDate();
@@ -1094,7 +1258,8 @@ export function createHistoryRuntime({
     });
     const solarMeta = {
       ...solarApplied.meta,
-      solarMarketValueMonthlyCtKwhByMonth: solarMarketValueSummary?.monthlyCtKwhByMonth || {}
+      solarMarketValueMonthlyCtKwhByMonth: solarMarketValueSummary?.monthlyCtKwhByMonth || {},
+      solarMarketValueAnnualCtKwhByYear: solarMarketValueSummary?.annualCtKwhByYear || {}
     };
     const annualPremiumApplied = applyAnnualMarketPremium({
       view,
@@ -1103,6 +1268,14 @@ export function createHistoryRuntime({
       meta: solarMeta,
       pricingConfig,
       applicableValueSummary
+    });
+    const periodPremiumApplied = applyPeriodPremiumDisplay({
+      view,
+      date,
+      slots,
+      kpis: annualPremiumApplied.kpis,
+      meta: annualPremiumApplied.meta,
+      weightedApplicableValueCtKwh
     });
     const rows = solarApplied.rows;
     const charts = view === 'day'
@@ -1130,13 +1303,13 @@ export function createHistoryRuntime({
         start,
         end
       },
-      kpis: annualPremiumApplied.kpis,
+      kpis: periodPremiumApplied.kpis,
       series: buildSummarySeries(view, slots),
       charts,
       rows,
       slots: view === 'year' ? [] : slots,
       meta: {
-        ...annualPremiumApplied.meta,
+        ...periodPremiumApplied.meta,
         sourceSummary
       }
     };
