@@ -210,7 +210,9 @@ function buildRowAccumulator(key, label) {
     netEur: 0,
     slotCount: 0,
     incompleteSlots: 0,
-    estimatedSlots: 0
+    estimatedSlots: 0,
+    sourceKind: null,
+    sourceKinds: []
   };
 }
 
@@ -269,6 +271,16 @@ function summarizeRows(slots, view) {
     row.slotCount += 1;
     if (slot.incomplete) row.incompleteSlots += 1;
     if (slot.estimated) row.estimatedSlots += 1;
+    const sourceKinds = new Set(Array.isArray(row.sourceKinds) ? row.sourceKinds : []);
+    if (slot.sourceKind === 'local_live') sourceKinds.add('local_live');
+    if (slot.sourceKind === 'vrm_import') sourceKinds.add('vrm_import');
+    for (const kind of (Array.isArray(slot.sourceKinds) ? slot.sourceKinds : [])) {
+      if (kind) sourceKinds.add(kind);
+    }
+    row.sourceKinds = [...sourceKinds].sort();
+    row.sourceKind = row.sourceKinds.length === 1
+      ? row.sourceKinds[0]
+      : (row.sourceKinds.length > 1 ? 'mixed' : null);
     groups.set(key, row);
   }
   return [...groups.values()];
@@ -470,7 +482,7 @@ export function createHistoryRuntime({
   getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} }),
   getCurrentDate = currentBerlinDate
 }) {
-  function listEnergySlotsForRange({ start, end }) {
+  function listRawFallbackSlotsForRange({ start, end }) {
     const today = getCurrentDate();
     const todayStart = localDateTimeToUtcIso(today, 0, 0);
 
@@ -505,6 +517,20 @@ export function createHistoryRuntime({
       scopes: ['live']
     });
     return [...historySlots, ...liveSlots].sort((left, right) => left.ts.localeCompare(right.ts));
+  }
+
+  function listEnergySlotsForRange({ start, end }) {
+    if (typeof store.listMaterializedEnergySlots === 'function') {
+      const materialized = store.listMaterializedEnergySlots({
+        start,
+        end,
+        sourceKinds: ['vrm_import', 'local_live']
+      });
+      if (materialized.length > 0 || typeof store.listAggregatedEnergySlots !== 'function') {
+        return materialized;
+      }
+    }
+    return listRawFallbackSlotsForRange({ start, end });
   }
 
   function getSummary({ view = 'day', date, solarMarketValues = null }) {
@@ -661,6 +687,18 @@ export function createHistoryRuntime({
     const charts = view === 'day'
       ? buildDayCharts(slots)
       : buildPeriodCharts(rows);
+    const sourceSummary = slots.reduce((summary, slot) => {
+      const sourceKinds = new Set(Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : []);
+      if (slot?.sourceKind === 'local_live') sourceKinds.add('local_live');
+      if (slot?.sourceKind === 'vrm_import') sourceKinds.add('vrm_import');
+      return {
+        localLiveSlots: summary.localLiveSlots + (sourceKinds.has('local_live') ? 1 : 0),
+        vrmImportSlots: summary.vrmImportSlots + (sourceKinds.has('vrm_import') ? 1 : 0)
+      };
+    }, {
+      localLiveSlots: 0,
+      vrmImportSlots: 0
+    });
 
     return {
       view,
@@ -714,7 +752,10 @@ export function createHistoryRuntime({
       charts,
       rows,
       slots,
-      meta: solarApplied.meta
+      meta: {
+        ...solarApplied.meta,
+        sourceSummary
+      }
     };
   }
 

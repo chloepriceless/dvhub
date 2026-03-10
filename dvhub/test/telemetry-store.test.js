@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { createTelemetryStore } from '../telemetry-store.js';
 
@@ -78,6 +79,53 @@ test('telemetry store initializes schema and persists records', () => {
     assert.equal(store.countRows('control_events'), 1);
     assert.equal(store.countRows('optimizer_runs'), 1);
     assert.equal(store.countRows('optimizer_run_series'), 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store creates materialized 15 minute slot table with uniqueness by slot series and source', () => {
+  const dbPath = createTempDbPath();
+  const store = createTelemetryStore({
+    dbPath,
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    assert.ok(store.listTables().includes('energy_slots_15m'));
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const columns = db.prepare(`PRAGMA table_info('energy_slots_15m')`).all();
+      assert.deepEqual(
+        columns.map((column) => column.name),
+        [
+          'id',
+          'slot_start_utc',
+          'series_key',
+          'source_kind',
+          'quality',
+          'value_num',
+          'unit',
+          'meta_json',
+          'created_at',
+          'updated_at'
+        ]
+      );
+
+      const uniqueIndexes = db.prepare(`PRAGMA index_list('energy_slots_15m')`).all()
+        .filter((index) => Number(index.unique) === 1);
+      assert.ok(uniqueIndexes.length >= 1);
+
+      const uniqueColumns = uniqueIndexes.flatMap((index) => db.prepare(`PRAGMA index_info('${index.name}')`).all());
+      assert.deepEqual(
+        uniqueColumns.map((column) => column.name),
+        ['slot_start_utc', 'series_key', 'source_kind']
+      );
+    } finally {
+      db.close();
+    }
   } finally {
     store.close();
   }
@@ -438,6 +486,215 @@ test('telemetry store can aggregate energy slots for a selected scope only', () 
 
     assert.equal(historySlot.importKwh, 0.25);
     assert.equal(liveSlot.importKwh, 0.5);
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store materializes live samples into the open 15 minute slot', () => {
+  const dbPath = createTempDbPath();
+  const store = createTelemetryStore({
+    dbPath,
+    rawRetentionDays: 30,
+    rollupIntervals: [900]
+  });
+
+  try {
+    store.writeSamples([
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:02:00.000Z',
+        value: 1200,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:07:00.000Z',
+        value: 1800,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'grid_export_w',
+        ts: '2026-03-09T12:02:00.000Z',
+        value: 1200,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'pv_total_w',
+        ts: '2026-03-09T12:02:00.000Z',
+        value: 2400,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'battery_discharge_w',
+        ts: '2026-03-09T12:02:00.000Z',
+        value: 1200,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'load_power_w',
+        ts: '2026-03-09T12:02:00.000Z',
+        value: 3600,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 300,
+        unit: 'W'
+      }
+    ]);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const rows = db.prepare(`
+        SELECT slot_start_utc, series_key, source_kind, quality, value_num, unit
+        FROM energy_slots_15m
+        WHERE slot_start_utc = '2026-03-09T12:00:00.000Z'
+        ORDER BY series_key ASC
+      `).all().map((row) => ({ ...row }));
+
+      assert.deepEqual(rows, [
+        {
+          slot_start_utc: '2026-03-09T12:00:00.000Z',
+          series_key: 'battery_discharge_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.1,
+          unit: 'kWh'
+        },
+        {
+          slot_start_utc: '2026-03-09T12:00:00.000Z',
+          series_key: 'grid_export_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.1,
+          unit: 'kWh'
+        },
+        {
+          slot_start_utc: '2026-03-09T12:00:00.000Z',
+          series_key: 'grid_import_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.25,
+          unit: 'kWh'
+        },
+        {
+          slot_start_utc: '2026-03-09T12:00:00.000Z',
+          series_key: 'load_power_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.3,
+          unit: 'kWh'
+        },
+        {
+          slot_start_utc: '2026-03-09T12:00:00.000Z',
+          series_key: 'pv_total_w',
+          source_kind: 'local_live',
+          quality: 'raw_derived',
+          value_num: 0.2,
+          unit: 'kWh'
+        }
+      ]);
+    } finally {
+      db.close();
+    }
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store prefers vrm materialized slots over local live slots for the same bucket', () => {
+  const store = createTelemetryStore({
+    dbPath: createTempDbPath(),
+    rawRetentionDays: 30,
+    rollupIntervals: [900]
+  });
+
+  try {
+    store.writeSamples([
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 1000,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 900,
+        unit: 'W'
+      },
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 1600,
+        scope: 'history',
+        source: 'vrm_import',
+        quality: 'backfilled',
+        resolutionSeconds: 900,
+        unit: 'W'
+      }
+    ]);
+
+    const [slot] = store.listMaterializedEnergySlots({
+      start: '2026-03-09T12:00:00.000Z',
+      end: '2026-03-09T12:15:00.000Z'
+    });
+
+    assert.equal(slot.importKwh, 0.4);
+    assert.equal(slot.sourceKind, 'vrm_import');
+    assert.deepEqual(slot.sourceKinds, ['local_live', 'vrm_import']);
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store falls back to local live materialized slots when vrm data is absent', () => {
+  const store = createTelemetryStore({
+    dbPath: createTempDbPath(),
+    rawRetentionDays: 30,
+    rollupIntervals: [900]
+  });
+
+  try {
+    store.writeSamples([
+      {
+        seriesKey: 'grid_import_w',
+        ts: '2026-03-09T12:00:00.000Z',
+        value: 1000,
+        scope: 'live',
+        source: 'local_poll',
+        quality: 'raw',
+        resolutionSeconds: 900,
+        unit: 'W'
+      }
+    ]);
+
+    const [slot] = store.listMaterializedEnergySlots({
+      start: '2026-03-09T12:00:00.000Z',
+      end: '2026-03-09T12:15:00.000Z'
+    });
+
+    assert.equal(slot.importKwh, 0.25);
+    assert.equal(slot.sourceKind, 'local_live');
+    assert.deepEqual(slot.sourceKinds, ['local_live']);
   } finally {
     store.close();
   }

@@ -86,6 +86,44 @@ function chartBadge(item) {
   return badges.join('');
 }
 
+function sourceStatusLabel(item) {
+  const explicit = String(item?.sourceKind || '').trim();
+  const sourceKinds = Array.isArray(item?.sourceKinds)
+    ? item.sourceKinds.map((entry) => String(entry || '').trim()).filter(Boolean)
+    : [];
+  if (explicit === 'local_live') return 'lokal vorlaeufig';
+  if (explicit === 'vrm_import') return 'durch VRM bestaetigt';
+  if (explicit === 'mixed') return 'teils lokal, teils VRM bestaetigt';
+  if (sourceKinds.includes('local_live') && sourceKinds.includes('vrm_import')) return 'teils lokal, teils VRM bestaetigt';
+  if (sourceKinds.includes('vrm_import')) return 'durch VRM bestaetigt';
+  if (sourceKinds.includes('local_live')) return 'lokal vorlaeufig';
+  return '';
+}
+
+function sourceSummary(summary) {
+  const metaSummary = summary?.meta?.sourceSummary;
+  if (metaSummary && (metaSummary.localLiveSlots != null || metaSummary.vrmImportSlots != null)) {
+    return {
+      localLiveSlots: Number(metaSummary.localLiveSlots || 0),
+      vrmImportSlots: Number(metaSummary.vrmImportSlots || 0)
+    };
+  }
+  const slots = Array.isArray(summary?.slots) ? summary.slots : [];
+  let localLiveSlots = 0;
+  let vrmImportSlots = 0;
+  for (const slot of slots) {
+    const kinds = new Set(Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : []);
+    if (slot?.sourceKind === 'local_live') kinds.add('local_live');
+    if (slot?.sourceKind === 'vrm_import') kinds.add('vrm_import');
+    if (kinds.has('local_live')) localLiveSlots += 1;
+    if (kinds.has('vrm_import')) vrmImportSlots += 1;
+  }
+  return {
+    localLiveSlots,
+    vrmImportSlots
+  };
+}
+
 function dateParts(dateString) {
   const [year, month, day] = String(dateString).split('-').map(Number);
   return { year, month, day };
@@ -683,7 +721,11 @@ function renderRows(summary) {
             <td>${fmtEur(blendedCostEur(row))}</td>
             <td>${fmtEur(blendedNetEur(row))}</td>
             ${includeSolar ? `<td>${fmtCt(row.solarMarketValueCtKwh)}</td><td>${fmtEur(row.solarCompensationEur)}</td>` : ''}
-            <td>${row.incompleteSlots ? `${row.incompleteSlots} offen` : 'vollstaendig'}${row.estimatedSlots ? ` · ${row.estimatedSlots} geschätzt` : ''}</td>
+            <td>${[
+              sourceStatusLabel(row),
+              row.incompleteSlots ? `${row.incompleteSlots} offen` : 'vollstaendig',
+              row.estimatedSlots ? `${row.estimatedSlots} geschätzt` : ''
+            ].filter(Boolean).join(' · ')}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -700,12 +742,19 @@ function renderSummary(summary) {
   const unresolved = summary?.meta?.unresolved || {};
   const warningCount = Number(unresolved.incompleteSlots || 0);
   const estimatedCount = Number(unresolved.estimatedSlots || 0);
+  const sources = sourceSummary(summary);
   const warningText = warningCount
     ? `${warningCount} Slots sind unvollständig, ${estimatedCount} geschätzt.`
     : estimatedCount
       ? `${estimatedCount} Slots sind geschätzt.`
       : 'Historie geladen.';
-  setBanner(warningText, warningCount ? 'warn' : 'success');
+  const sourceTextParts = [];
+  if (sources.localLiveSlots > 0) sourceTextParts.push(`${sources.localLiveSlots} lokal vorlaeufig`);
+  if (sources.vrmImportSlots > 0) sourceTextParts.push(`${sources.vrmImportSlots} durch VRM bestaetigt`);
+  const bannerText = sourceTextParts.length
+    ? `${warningText} Herkunft: ${sourceTextParts.join(', ')}.`
+    : warningText;
+  setBanner(bannerText, warningCount ? 'warn' : 'success');
   const versionLabel = summary?.app?.versionLabel ? ` · ${summary.app.versionLabel}` : '';
   setText('historyMeta', `${String(summary?.view || '').toUpperCase()} · ${summary?.date || currentDateValue()}${versionLabel}`);
 }

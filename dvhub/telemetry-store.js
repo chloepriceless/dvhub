@@ -13,6 +13,7 @@ function floorToInterval(date, seconds) {
 }
 
 const DEFAULT_PRICE_BUCKET_SECONDS = 900;
+const MATERIALIZED_SLOT_BUCKET_SECONDS = 900;
 const DEFAULT_TELEMETRY_BACKFILL_SERIES = [
   'grid_import_w',
   'grid_export_w',
@@ -20,6 +21,25 @@ const DEFAULT_TELEMETRY_BACKFILL_SERIES = [
   'pv_total_w',
   'battery_power_w'
 ];
+const MATERIALIZED_ENERGY_SERIES = new Set([
+  'grid_import_w',
+  'grid_export_w',
+  'grid_total_w',
+  'pv_total_w',
+  'pv_ac_w',
+  'battery_power_w',
+  'battery_charge_w',
+  'battery_discharge_w',
+  'load_power_w',
+  'self_consumption_w',
+  'solar_direct_use_w',
+  'solar_to_battery_w',
+  'solar_to_grid_w',
+  'grid_direct_use_w',
+  'grid_to_battery_w',
+  'battery_direct_use_w',
+  'battery_to_grid_w'
+]);
 
 function roundKwh(value) {
   const numeric = Number(value || 0);
@@ -29,6 +49,13 @@ function roundKwh(value) {
 
 function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
+}
+
+function energyKwhForSample(value, resolutionSeconds) {
+  const numeric = Number(value);
+  const seconds = Number(resolutionSeconds || 0);
+  if (!Number.isFinite(numeric) || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return (numeric * seconds) / 3600000;
 }
 
 function weightedAverage(entries) {
@@ -52,6 +79,27 @@ function parseMetaJson(value) {
   } catch {
     return null;
   }
+}
+
+function normalizeMaterializedMeta(meta) {
+  if (!meta || typeof meta !== 'object') return null;
+  const estimated = meta.estimated === true || meta.provenance === 'estimated';
+  const incomplete = meta.incomplete === true;
+  if (!estimated && !incomplete) return null;
+  return {
+    estimated,
+    incomplete
+  };
+}
+
+function mergeMaterializedMeta(current, incoming) {
+  const left = normalizeMaterializedMeta(current);
+  const right = normalizeMaterializedMeta(incoming);
+  if (!left && !right) return null;
+  return {
+    estimated: Boolean(left?.estimated || right?.estimated),
+    incomplete: Boolean(left?.incomplete || right?.incomplete)
+  };
 }
 
 export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupIntervals = [300, 900, 3600] }) {
@@ -145,6 +193,21 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       status TEXT NOT NULL,
       fill_source TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS energy_slots_15m (
+      id INTEGER PRIMARY KEY,
+      slot_start_utc TEXT NOT NULL,
+      series_key TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      quality TEXT NOT NULL,
+      value_num REAL,
+      unit TEXT,
+      meta_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(slot_start_utc, series_key, source_kind)
+    );
+    CREATE INDEX IF NOT EXISTS idx_energy_slots_15m_slot_start ON energy_slots_15m(slot_start_utc);
   `);
 
   const insertSampleStmt = db.prepare(`
@@ -174,6 +237,77 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     INSERT INTO import_jobs (job_type, started_at, finished_at, status, requested_from, requested_to, imported_rows, source_account, meta_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const insertAccumulatedEnergySlotStmt = db.prepare(`
+    INSERT INTO energy_slots_15m (
+      slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(slot_start_utc, series_key, source_kind)
+    DO UPDATE SET
+      quality=excluded.quality,
+      value_num=COALESCE(energy_slots_15m.value_num, 0) + COALESCE(excluded.value_num, 0),
+      unit=excluded.unit,
+      meta_json=excluded.meta_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+  const insertReplacedEnergySlotStmt = db.prepare(`
+    INSERT INTO energy_slots_15m (
+      slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(slot_start_utc, series_key, source_kind)
+    DO UPDATE SET
+      quality=excluded.quality,
+      value_num=excluded.value_num,
+      unit=excluded.unit,
+      meta_json=excluded.meta_json,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+
+  function buildMaterializedEnergySlotWrites(rows) {
+    const writes = new Map();
+    for (const row of rows) {
+      const seriesKey = String(row.seriesKey || '').trim();
+      if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
+
+      let sourceKind = null;
+      let writeMode = null;
+      let quality = null;
+
+      if ((row.scope || 'live') === 'live' && (row.source || 'local_poll') === 'local_poll') {
+        sourceKind = 'local_live';
+        writeMode = 'accumulate';
+        quality = 'raw_derived';
+      } else if ((row.scope || '') === 'history' && (row.source || '') === 'vrm_import') {
+        sourceKind = 'vrm_import';
+        writeMode = 'replace';
+        quality = row.quality || 'backfilled';
+      }
+
+      if (!sourceKind || !writeMode) continue;
+
+      const valueNum = energyKwhForSample(row.value, row.resolutionSeconds);
+      if (!Number.isFinite(valueNum)) continue;
+
+      const slotStartUtc = bucketIso(row.ts, MATERIALIZED_SLOT_BUCKET_SECONDS);
+      const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
+      const existing = writes.get(key);
+      if (existing) {
+        existing.valueNum += valueNum;
+        existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+        continue;
+      }
+      writes.set(key, {
+        slotStartUtc,
+        seriesKey,
+        sourceKind,
+        quality,
+        valueNum,
+        unit: 'kWh',
+        meta: mergeMaterializedMeta(null, row.meta),
+        writeMode
+      });
+    }
+    return [...writes.values()];
+  }
 
   function writeSamples(rows) {
     db.exec('BEGIN');
@@ -190,6 +324,20 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           row.valueText ?? null,
           row.unit ?? null,
           row.meta == null ? null : JSON.stringify(row.meta)
+        );
+      }
+      for (const slotRow of buildMaterializedEnergySlotWrites(rows)) {
+        const stmt = slotRow.writeMode === 'replace'
+          ? insertReplacedEnergySlotStmt
+          : insertAccumulatedEnergySlotStmt;
+        stmt.run(
+          slotRow.slotStartUtc,
+          slotRow.seriesKey,
+          slotRow.sourceKind,
+          slotRow.quality,
+          slotRow.valueNum,
+          slotRow.unit,
+          slotRow.meta == null ? null : JSON.stringify(slotRow.meta)
         );
       }
       db.exec('COMMIT');
@@ -470,6 +618,117 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       .filter((row) => row.priceCtKwh != null || row.priceEurMwh != null);
   }
 
+  function listMaterializedEnergySlots({
+    start,
+    end,
+    sourceKinds = ['vrm_import', 'local_live']
+  }) {
+    const preferredSourceKinds = Array.isArray(sourceKinds)
+      ? sourceKinds.map((kind) => String(kind || '').trim()).filter(Boolean)
+      : ['vrm_import', 'local_live'];
+    const sourceClause = preferredSourceKinds.length
+      ? ` AND source_kind IN (${preferredSourceKinds.map(() => '?').join(', ')})`
+      : '';
+    const seriesList = [...MATERIALIZED_ENERGY_SERIES];
+    const rows = db.prepare(`
+      SELECT slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json
+      FROM energy_slots_15m
+      WHERE series_key IN (${seriesList.map(() => '?').join(', ')})
+        AND slot_start_utc >= ?
+        AND slot_start_utc < ?
+        ${sourceClause}
+      ORDER BY slot_start_utc ASC, series_key ASC, source_kind ASC
+    `).all(
+      ...seriesList,
+      isoTimestamp(start),
+      isoTimestamp(end),
+      ...preferredSourceKinds
+    );
+
+    const buckets = new Map();
+    for (const row of rows) {
+      const bucket = buckets.get(row.slot_start_utc) || new Map();
+      const bySeries = bucket.get(row.series_key) || new Map();
+      bySeries.set(row.source_kind, row);
+      bucket.set(row.series_key, bySeries);
+      buckets.set(row.slot_start_utc, bucket);
+    }
+
+    return [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([ts, bucket]) => {
+        const selectedSourceKinds = new Set();
+        const availableSourceKinds = new Set();
+        const pickSeriesRow = (seriesKey) => {
+          const bySource = bucket.get(seriesKey);
+          if (!bySource) return null;
+          for (const sourceKind of preferredSourceKinds) {
+            const row = bySource.get(sourceKind);
+            if (row) {
+              selectedSourceKinds.add(sourceKind);
+              for (const key of bySource.keys()) availableSourceKinds.add(key);
+              return row;
+            }
+          }
+          const fallbackRow = [...bySource.values()][0] || null;
+          if (fallbackRow) {
+            selectedSourceKinds.add(fallbackRow.source_kind);
+            for (const key of bySource.keys()) availableSourceKinds.add(key);
+          }
+          return fallbackRow;
+        };
+        const energyForSeries = (seriesKey) => Number(pickSeriesRow(seriesKey)?.value_num || 0);
+        const flagsForSeries = (seriesKey) => {
+          const meta = parseMetaJson(pickSeriesRow(seriesKey)?.meta_json);
+          return {
+            estimated: meta?.estimated === true,
+            incomplete: meta?.incomplete === true
+          };
+        };
+        const trackedSeries = [
+          'grid_import_w',
+          'grid_export_w',
+          'pv_total_w',
+          'battery_power_w',
+          'battery_charge_w',
+          'battery_discharge_w',
+          'load_power_w'
+        ];
+        const estimatedSeriesKeys = trackedSeries.filter((seriesKey) => flagsForSeries(seriesKey).estimated);
+        const incompleteSeriesKeys = trackedSeries.filter((seriesKey) => flagsForSeries(seriesKey).incomplete);
+        const selectedKinds = [...selectedSourceKinds];
+        const overallSourceKind = selectedKinds.length === 1 ? selectedKinds[0] : (selectedKinds.length > 1 ? 'mixed' : null);
+        return {
+          ts,
+          importKwh: energyForSeries('grid_import_w'),
+          exportKwh: energyForSeries('grid_export_w'),
+          gridKwh: energyForSeries('grid_total_w'),
+          pvKwh: energyForSeries('pv_total_w'),
+          pvAcKwh: energyForSeries('pv_ac_w'),
+          batteryKwh: energyForSeries('battery_power_w'),
+          batteryChargeKwh: energyForSeries('battery_charge_w'),
+          batteryDischargeKwh: energyForSeries('battery_discharge_w'),
+          loadKwh: energyForSeries('load_power_w'),
+          selfConsumptionKwh: energyForSeries('self_consumption_w'),
+          solarDirectUseKwh: energyForSeries('solar_direct_use_w'),
+          solarToBatteryKwh: energyForSeries('solar_to_battery_w'),
+          solarToGridKwh: energyForSeries('solar_to_grid_w'),
+          gridDirectUseKwh: energyForSeries('grid_direct_use_w'),
+          gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
+          batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
+          batteryToGridKwh: energyForSeries('battery_to_grid_w'),
+          sourceKind: overallSourceKind,
+          sourceKinds: [...availableSourceKinds].sort(),
+          estimated: estimatedSeriesKeys.length > 0,
+          incomplete: incompleteSeriesKeys.length > 0,
+          estimatedSeriesCount: estimatedSeriesKeys.length,
+          incompleteSeriesCount: incompleteSeriesKeys.length,
+          estimatedSeriesKeys,
+          incompleteSeriesKeys
+        };
+      });
+  }
+
   return {
     dbPath,
     listTables() {
@@ -501,6 +760,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     getTelemetryBounds,
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
+    listMaterializedEnergySlots,
     listPriceSlots,
     getStatus() {
       const lastSample = db.prepare(`SELECT MAX(ts_utc) AS value FROM timeseries_samples`).get().value;

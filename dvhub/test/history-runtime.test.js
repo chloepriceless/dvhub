@@ -416,6 +416,48 @@ test('history runtime splits ranges that span today into history and live querie
   assert.equal(calls[1].end, '2026-03-15T23:00:00.000Z');
 });
 
+test('history runtime reads materialized slots first and falls back to aggregated raw slots only when needed', () => {
+  let materializedCalls = 0;
+  let rawCalls = 0;
+  const runtime = createHistoryRuntime({
+    store: {
+      listMaterializedEnergySlots() {
+        materializedCalls += 1;
+        return [];
+      },
+      listAggregatedEnergySlots() {
+        rawCalls += 1;
+        return [
+          {
+            ts: '2026-03-09T11:00:00.000Z',
+            importKwh: 1,
+            exportKwh: 0,
+            gridKwh: 1,
+            pvKwh: 0,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 1,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [];
+      }
+    },
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => '2026-03-10'
+  });
+
+  const summary = runtime.getSummary({ view: 'day', date: '2026-03-09' });
+
+  assert.equal(materializedCalls, 1);
+  assert.equal(rawCalls, 1);
+  assert.equal(summary.rows.length, 1);
+});
+
 test('history runtime derives current-year solar market value from monthly values weighted by exported energy', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
