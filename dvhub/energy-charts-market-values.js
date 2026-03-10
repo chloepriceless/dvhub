@@ -23,8 +23,10 @@ function isAnnualSolarSeries(names) {
 }
 
 function monthlyMap(year, series) {
-  const months = Array.isArray(series?.xAxisValues) ? series.xAxisValues : [];
   const data = Array.isArray(series?.data) ? series.data : [];
+  const months = Array.isArray(series?.xAxisValues) && series.xAxisValues.length > 0
+    ? series.xAxisValues
+    : data.map((_, index) => index + 1);
   return months.reduce((out, monthValue, index) => {
     const month = Number(monthValue);
     const ctKwh = Number(data[index]);
@@ -34,9 +36,16 @@ function monthlyMap(year, series) {
   }, {});
 }
 
-function annualMap(series) {
-  const years = Array.isArray(series?.xAxisValues) ? series.xAxisValues : [];
+function annualMap(series, requestedYear) {
   const data = Array.isArray(series?.data) ? series.data : [];
+  const currentYear = new Date().getUTCFullYear();
+  const latestCompleteYear = Math.min(
+    Number.isInteger(Number(requestedYear)) ? Number(requestedYear) : currentYear - 1,
+    currentYear - 1
+  );
+  const years = Array.isArray(series?.xAxisValues) && series.xAxisValues.length > 0
+    ? series.xAxisValues
+    : data.map((_, index) => latestCompleteYear - data.length + index + 1);
   return years.reduce((out, yearValue, index) => {
     const year = Number(yearValue);
     const ctKwh = Number(data[index]);
@@ -69,7 +78,7 @@ export async function fetchEnergyChartsSolarMarketValues({ year, fetchImpl = glo
   const annualSeries = findSeriesByName(annualPayload, isAnnualSolarSeries);
   return {
     monthlyCtKwhByMonth: monthlyMap(numericYear, monthlySeries),
-    annualCtKwhByYear: annualMap(annualSeries)
+    annualCtKwhByYear: annualMap(annualSeries, numericYear)
   };
 }
 

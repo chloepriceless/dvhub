@@ -18,6 +18,7 @@ const VRM_COVERAGE_JOB_TYPES = [
 ];
 const ENERGY_CHARTS_PRICE_API_BASE = 'https://api.energy-charts.info/price';
 const PRICE_BUCKET_SECONDS = 900;
+const PRICE_BACKFILL_FETCH_CHUNK_DAYS = 30;
 
 import {
   buildHistoricalPriceTelemetrySamples,
@@ -213,19 +214,30 @@ function parseEnergyChartsPriceRows(payload = {}) {
 }
 
 async function fetchEnergyChartsDay({ bzn, day, fetchImpl }) {
-  const nextDay = addDays(day, 1);
+  return fetchEnergyChartsRange({
+    bzn,
+    startDay: day,
+    endDayExclusive: addDays(day, 1),
+    fetchImpl
+  });
+}
+
+async function fetchEnergyChartsRange({ bzn, startDay, endDayExclusive, fetchImpl }) {
   const params = new URLSearchParams({
     bzn,
-    start: day,
-    end: nextDay
+    start: startDay,
+    end: endDayExclusive
   });
   const response = await fetchImpl(`${ENERGY_CHARTS_PRICE_API_BASE}?${params.toString()}`, {
     headers: { accept: 'application/json' }
   });
   if (!response.ok) {
-    const error = new Error(`Energy Charts price request failed for ${day}: HTTP ${response.status}`);
+    const rangeLabel = startDay === addDays(endDayExclusive, -1)
+      ? startDay
+      : `${startDay}..${addDays(endDayExclusive, -1)}`;
+    const error = new Error(`Energy Charts price request failed for ${rangeLabel}: HTTP ${response.status}`);
     error.status = Number(response.status);
-    error.day = day;
+    error.day = startDay;
     throw error;
   }
   return parseEnergyChartsPriceRows(await response.json());
@@ -239,10 +251,30 @@ async function fetchEnergyChartsDayWithRetry({
   maxAttempts = 3,
   retryDelayMs = 250
 }) {
+  return fetchEnergyChartsRangeWithRetry({
+    bzn,
+    startDay: day,
+    endDayExclusive: addDays(day, 1),
+    fetchImpl,
+    waitImpl,
+    maxAttempts,
+    retryDelayMs
+  });
+}
+
+async function fetchEnergyChartsRangeWithRetry({
+  bzn,
+  startDay,
+  endDayExclusive,
+  fetchImpl,
+  waitImpl,
+  maxAttempts = 3,
+  retryDelayMs = 250
+}) {
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await fetchEnergyChartsDay({ bzn, day, fetchImpl });
+      return await fetchEnergyChartsRange({ bzn, startDay, endDayExclusive, fetchImpl });
     } catch (error) {
       lastError = error;
       if (Number(error?.status) !== 429 || attempt >= maxAttempts) break;
@@ -250,6 +282,38 @@ async function fetchEnergyChartsDayWithRetry({
     }
   }
   throw lastError;
+}
+
+function buildPriceBackfillDayWindows(days, maxDays = PRICE_BACKFILL_FETCH_CHUNK_DAYS) {
+  const normalized = Array.isArray(days) ? days.filter(Boolean).sort() : [];
+  if (!normalized.length) return [];
+  const windows = [];
+  let startDay = normalized[0];
+  let previousDay = normalized[0];
+  let count = 1;
+  for (let index = 1; index < normalized.length; index += 1) {
+    const day = normalized[index];
+    const contiguous = addDays(previousDay, 1) === day;
+    if (contiguous && count < maxDays) {
+      previousDay = day;
+      count += 1;
+      continue;
+    }
+    windows.push({
+      startDay,
+      endDayExclusive: addDays(previousDay, 1),
+      days: normalized.slice(index - count, index)
+    });
+    startDay = day;
+    previousDay = day;
+    count = 1;
+  }
+  windows.push({
+    startDay,
+    endDayExclusive: addDays(previousDay, 1),
+    days: normalized.slice(normalized.length - count)
+  });
+  return windows;
 }
 
 function pushSeriesRow(rows, entry) {
@@ -1694,15 +1758,17 @@ export function createHistoryImportManager({
 
     const missingSet = new Set(missingBuckets.map((ts) => bucketIso(ts)));
     const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
+    const dayWindows = buildPriceBackfillDayWindows(days);
     const matchedRows = [];
     const openDays = [];
     const errors = [];
 
-    for (const day of days) {
+    for (const window of dayWindows) {
       try {
-        const rows = await fetchEnergyChartsDayWithRetry({
+        const rows = await fetchEnergyChartsRangeWithRetry({
           bzn,
-          day,
+          startDay: window.startDay,
+          endDayExclusive: window.endDayExclusive,
           fetchImpl,
           waitImpl
         });
@@ -1711,7 +1777,7 @@ export function createHistoryImportManager({
           matchedRows.push(row);
         }
       } catch (error) {
-        openDays.push(day);
+        openDays.push(...window.days);
         errors.push(error?.message || String(error));
       }
     }
@@ -1732,6 +1798,11 @@ export function createHistoryImportManager({
       meta: {
         provider: 'energy_charts',
         requestedDays: days,
+        requestedWindows: dayWindows.map((window) => ({
+          startDay: window.startDay,
+          endDayExclusive: window.endDayExclusive,
+          days: window.days
+        })),
         matchedBuckets: matchedRows.length,
         skippedBuckets,
         openDays,
