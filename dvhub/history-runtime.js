@@ -3,6 +3,39 @@ import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year']);
 const SLOT_BUCKET_SECONDS = 900;
+const AGGREGATE_SUM_FIELDS = [
+  'importKwh',
+  'exportKwh',
+  'loadKwh',
+  'pvKwh',
+  'pvAcKwh',
+  'solarDirectUseKwh',
+  'solarToBatteryKwh',
+  'solarToGridKwh',
+  'gridDirectUseKwh',
+  'gridToBatteryKwh',
+  'batteryDirectUseKwh',
+  'batteryToGridKwh',
+  'batteryChargeKwh',
+  'batteryDischargeKwh',
+  'selfConsumptionKwh',
+  'gridShareKwh',
+  'pvShareKwh',
+  'batteryShareKwh',
+  'importCostEur',
+  'gridCostEur',
+  'pvCostEur',
+  'batteryCostEur',
+  'avoidedImportGrossEur',
+  'avoidedImportPvGrossEur',
+  'avoidedImportBatteryGrossEur',
+  'opportunityCostEur',
+  'selfConsumptionCostEur',
+  'exportRevenueEur',
+  'solarCompensationEur',
+  'netEur',
+  'premiumEligibleExportKwh'
+];
 
 function round2(value) {
   const numeric = Number(value || 0);
@@ -226,6 +259,30 @@ function buildRowAccumulator(key, label) {
   };
 }
 
+function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
+  for (const field of fields) {
+    if (field in target) target[field] = round2(Number(target[field] || 0));
+  }
+  if ('marketPriceWeightKwh' in target) target.marketPriceWeightKwh = round2(Number(target.marketPriceWeightKwh || 0));
+  if ('userImportPriceWeightKwh' in target) target.userImportPriceWeightKwh = round2(Number(target.userImportPriceWeightKwh || 0));
+  if ('marketPriceWeightedCtTotal' in target) target.marketPriceWeightedCtTotal = round2(Number(target.marketPriceWeightedCtTotal || 0));
+  if ('userImportPriceWeightedCtTotal' in target) target.userImportPriceWeightedCtTotal = round2(Number(target.userImportPriceWeightedCtTotal || 0));
+  if ('marketPriceWeightedCtKwh' in target) {
+    target.marketPriceWeightedCtKwh = Number(target.marketPriceWeightKwh || 0) > 0
+      ? round2(Number(target.marketPriceWeightedCtTotal || 0) / Number(target.marketPriceWeightKwh || 1))
+      : null;
+  }
+  if ('userImportPriceWeightedCtKwh' in target) {
+    target.userImportPriceWeightedCtKwh = Number(target.userImportPriceWeightKwh || 0) > 0
+      ? round2(Number(target.userImportPriceWeightedCtTotal || 0) / Number(target.userImportPriceWeightKwh || 1))
+      : null;
+  }
+  if ('netEur' in target) {
+    target.netEur = round2(Number(target.exportRevenueEur || 0) - Number(target.selfConsumptionCostEur || 0));
+  }
+  return target;
+}
+
 function summarizeRows(slots, view) {
   const groups = new Map();
   for (const slot of slots) {
@@ -240,46 +297,19 @@ function summarizeRows(slots, view) {
       label = key;
     }
     const row = groups.get(key) || buildRowAccumulator(key, label);
-    row.importKwh = round2(row.importKwh + slot.importKwh);
-    row.exportKwh = round2(row.exportKwh + slot.exportKwh);
-    row.loadKwh = round2(row.loadKwh + Number(slot.loadKwh || 0));
-    row.pvKwh = round2(row.pvKwh + Number(slot.pvKwh || 0));
-    row.pvAcKwh = round2(row.pvAcKwh + Number(slot.pvAcKwh || 0));
-    row.solarDirectUseKwh = round2(row.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0));
-    row.solarToBatteryKwh = round2(row.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0));
-    row.solarToGridKwh = round2(row.solarToGridKwh + Number(slot.solarToGridKwh || 0));
-    row.gridDirectUseKwh = round2(row.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0));
-    row.gridToBatteryKwh = round2(row.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0));
-    row.batteryDirectUseKwh = round2(row.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0));
-    row.batteryToGridKwh = round2(row.batteryToGridKwh + Number(slot.batteryToGridKwh || 0));
-    row.batteryChargeKwh = round2(row.batteryChargeKwh + Number(slot.batteryChargeKwh || 0));
-    row.batteryDischargeKwh = round2(row.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0));
-    row.selfConsumptionKwh = round2(row.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0));
-    row.gridShareKwh = round2(row.gridShareKwh + Number(slot.gridShareKwh || 0));
-    row.pvShareKwh = round2(row.pvShareKwh + Number(slot.pvShareKwh || 0));
-    row.batteryShareKwh = round2(row.batteryShareKwh + Number(slot.batteryShareKwh || 0));
-    row.importCostEur = round2(row.importCostEur + (slot.importCostEur || 0));
-    row.gridCostEur = round2(row.gridCostEur + (slot.gridCostEur || 0));
-    row.pvCostEur = round2(row.pvCostEur + (slot.pvCostEur || 0));
-    row.batteryCostEur = round2(row.batteryCostEur + (slot.batteryCostEur || 0));
-    row.avoidedImportGrossEur = round2(row.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0));
-    row.avoidedImportPvGrossEur = round2(row.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0));
-    row.avoidedImportBatteryGrossEur = round2(row.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0));
-    row.opportunityCostEur = round2(row.opportunityCostEur + (slot.opportunityCostEur || 0));
-    row.selfConsumptionCostEur = round2(row.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0));
-    row.exportRevenueEur = round2(row.exportRevenueEur + (slot.exportRevenueEur || 0));
-    row.netEur = round2(row.exportRevenueEur - row.selfConsumptionCostEur);
+    for (const field of AGGREGATE_SUM_FIELDS) {
+      if (field === 'solarCompensationEur' || field === 'netEur' || field === 'premiumEligibleExportKwh') continue;
+      row[field] += Number(slot[field] || 0);
+    }
     const marketWeight = Number(slot.pvShareKwh || 0) + Number(slot.batteryShareKwh || 0) + Number(slot.exportKwh || 0);
     if (Number.isFinite(Number(slot.marketPriceCtKwh)) && marketWeight > 0) {
-      row.marketPriceWeightKwh = round2(row.marketPriceWeightKwh + marketWeight);
-      row.marketPriceWeightedCtTotal = round2(row.marketPriceWeightedCtTotal + (marketWeight * Number(slot.marketPriceCtKwh)));
-      row.marketPriceWeightedCtKwh = round2(row.marketPriceWeightedCtTotal / row.marketPriceWeightKwh);
+      row.marketPriceWeightKwh += marketWeight;
+      row.marketPriceWeightedCtTotal += marketWeight * Number(slot.marketPriceCtKwh);
     }
     const importWeight = Number(slot.importKwh || 0);
     if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
-      row.userImportPriceWeightKwh = round2(row.userImportPriceWeightKwh + importWeight);
-      row.userImportPriceWeightedCtTotal = round2(row.userImportPriceWeightedCtTotal + (importWeight * Number(slot.userImportPriceCtKwh)));
-      row.userImportPriceWeightedCtKwh = round2(row.userImportPriceWeightedCtTotal / row.userImportPriceWeightKwh);
+      row.userImportPriceWeightKwh += importWeight;
+      row.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
     }
     row.slotCount += 1;
     if (slot.incomplete) row.incompleteSlots += 1;
@@ -296,7 +326,7 @@ function summarizeRows(slots, view) {
       : (row.sourceKinds.length > 1 ? 'mixed' : null);
     groups.set(key, row);
   }
-  return [...groups.values()];
+  return [...groups.values()].map((row) => finalizeAggregateSums(row));
 }
 
 function buildDayCharts(slots) {
@@ -666,6 +696,58 @@ function getCurrentDateValue(value) {
   return currentBerlinDate();
 }
 
+function buildSummarySeries(view, slots) {
+  if (view === 'year') {
+    return {
+      financial: [],
+      energy: [],
+      prices: []
+    };
+  }
+  return {
+    financial: slots.map((slot) => ({
+      ts: slot.ts,
+      gridCostEur: slot.gridCostEur,
+      pvCostEur: slot.pvCostEur,
+      batteryCostEur: slot.batteryCostEur,
+      avoidedImportGrossEur: slot.avoidedImportGrossEur,
+      avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
+      avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
+      opportunityCostEur: slot.opportunityCostEur,
+      selfConsumptionCostEur: slot.selfConsumptionCostEur,
+      importCostEur: slot.importCostEur,
+      exportRevenueEur: slot.exportRevenueEur,
+      netEur: slot.netEur
+    })),
+    energy: slots.map((slot) => ({
+      ts: slot.ts,
+      importKwh: slot.importKwh,
+      exportKwh: slot.exportKwh,
+      loadKwh: slot.loadKwh,
+      pvKwh: roundOrZero(slot.pvKwh),
+      pvAcKwh: roundOrZero(slot.pvAcKwh),
+      solarDirectUseKwh: roundOrZero(slot.solarDirectUseKwh),
+      solarToBatteryKwh: roundOrZero(slot.solarToBatteryKwh),
+      solarToGridKwh: roundOrZero(slot.solarToGridKwh),
+      gridDirectUseKwh: roundOrZero(slot.gridDirectUseKwh),
+      gridToBatteryKwh: roundOrZero(slot.gridToBatteryKwh),
+      batteryDirectUseKwh: roundOrZero(slot.batteryDirectUseKwh),
+      batteryToGridKwh: roundOrZero(slot.batteryToGridKwh),
+      batteryChargeKwh: roundOrZero(slot.batteryChargeKwh),
+      batteryDischargeKwh: roundOrZero(slot.batteryDischargeKwh),
+      selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
+      gridShareKwh: round2(slot.gridShareKwh || 0),
+      pvShareKwh: round2(slot.pvShareKwh || 0),
+      batteryShareKwh: round2(slot.batteryShareKwh || 0)
+    })),
+    prices: slots.map((slot) => ({
+      ts: slot.ts,
+      marketPriceCtKwh: slot.marketPriceCtKwh,
+      userImportPriceCtKwh: slot.userImportPriceCtKwh
+    }))
+  };
+}
+
 export function createHistoryRuntime({
   store,
   getPricingConfig = () => ({}),
@@ -807,37 +889,37 @@ export function createHistoryRuntime({
     const missingMarketPriceSlots = slots.filter((slot) => slot.exportKwh > 0 && !Number.isFinite(slot.marketPriceCtKwh)).length;
     const incompleteSlots = slots.filter((slot) => slot.incomplete).length;
     const estimatedSlots = slots.filter((slot) => slot.estimated).length;
-    const kpis = slots.reduce((totals, slot) => ({
-      importKwh: round2(totals.importKwh + slot.importKwh),
-      exportKwh: round2(totals.exportKwh + slot.exportKwh),
-      loadKwh: round2(totals.loadKwh + Number(slot.loadKwh || 0)),
-      pvKwh: round2(totals.pvKwh + Number(slot.pvKwh || 0)),
-      pvAcKwh: round2(totals.pvAcKwh + Number(slot.pvAcKwh || 0)),
-      solarDirectUseKwh: round2(totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0)),
-      solarToBatteryKwh: round2(totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0)),
-      solarToGridKwh: round2(totals.solarToGridKwh + Number(slot.solarToGridKwh || 0)),
-      gridDirectUseKwh: round2(totals.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0)),
-      gridToBatteryKwh: round2(totals.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0)),
-      batteryDirectUseKwh: round2(totals.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0)),
-      batteryToGridKwh: round2(totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0)),
-      batteryChargeKwh: round2(totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0)),
-      batteryDischargeKwh: round2(totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0)),
-      selfConsumptionKwh: round2(totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0)),
-      gridShareKwh: round2(totals.gridShareKwh + Number(slot.gridShareKwh || 0)),
-      pvShareKwh: round2(totals.pvShareKwh + Number(slot.pvShareKwh || 0)),
-      batteryShareKwh: round2(totals.batteryShareKwh + Number(slot.batteryShareKwh || 0)),
-      importCostEur: round2(totals.importCostEur + (slot.importCostEur || 0)),
-      gridCostEur: round2(totals.gridCostEur + (slot.gridCostEur || 0)),
-      pvCostEur: round2(totals.pvCostEur + (slot.pvCostEur || 0)),
-      batteryCostEur: round2(totals.batteryCostEur + (slot.batteryCostEur || 0)),
-      avoidedImportGrossEur: round2(totals.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0)),
-      avoidedImportPvGrossEur: round2(totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0)),
-      avoidedImportBatteryGrossEur: round2(totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0)),
-      opportunityCostEur: round2(totals.opportunityCostEur + (slot.opportunityCostEur || 0)),
-      selfConsumptionCostEur: round2(totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0)),
-      exportRevenueEur: round2(totals.exportRevenueEur + (slot.exportRevenueEur || 0)),
+    const kpis = finalizeAggregateSums(slots.reduce((totals, slot) => ({
+      importKwh: totals.importKwh + slot.importKwh,
+      exportKwh: totals.exportKwh + slot.exportKwh,
+      loadKwh: totals.loadKwh + Number(slot.loadKwh || 0),
+      pvKwh: totals.pvKwh + Number(slot.pvKwh || 0),
+      pvAcKwh: totals.pvAcKwh + Number(slot.pvAcKwh || 0),
+      solarDirectUseKwh: totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0),
+      solarToBatteryKwh: totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0),
+      solarToGridKwh: totals.solarToGridKwh + Number(slot.solarToGridKwh || 0),
+      gridDirectUseKwh: totals.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0),
+      gridToBatteryKwh: totals.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0),
+      batteryDirectUseKwh: totals.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0),
+      batteryToGridKwh: totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0),
+      batteryChargeKwh: totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0),
+      batteryDischargeKwh: totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0),
+      selfConsumptionKwh: totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0),
+      gridShareKwh: totals.gridShareKwh + Number(slot.gridShareKwh || 0),
+      pvShareKwh: totals.pvShareKwh + Number(slot.pvShareKwh || 0),
+      batteryShareKwh: totals.batteryShareKwh + Number(slot.batteryShareKwh || 0),
+      importCostEur: totals.importCostEur + (slot.importCostEur || 0),
+      gridCostEur: totals.gridCostEur + (slot.gridCostEur || 0),
+      pvCostEur: totals.pvCostEur + (slot.pvCostEur || 0),
+      batteryCostEur: totals.batteryCostEur + (slot.batteryCostEur || 0),
+      avoidedImportGrossEur: totals.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0),
+      avoidedImportPvGrossEur: totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0),
+      avoidedImportBatteryGrossEur: totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0),
+      opportunityCostEur: totals.opportunityCostEur + (slot.opportunityCostEur || 0),
+      selfConsumptionCostEur: totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0),
+      exportRevenueEur: totals.exportRevenueEur + (slot.exportRevenueEur || 0),
       solarCompensationEur: 0,
-      netEur: round2(totals.netEur + slot.netEur),
+      netEur: totals.netEur + slot.netEur,
       configuredPvCapacityKwp: null,
       pvFullLoadHours: null,
       annualMarketValueCtKwh: null,
@@ -881,7 +963,7 @@ export function createHistoryRuntime({
       weightedApplicableValueCtKwh: null,
       premiumEligibleExportKwh: 0,
       marketPremiumEur: null
-    });
+    }));
     const capacityAppliedKpis = applyPvFullLoadHours({
       kpis,
       pricingConfig
@@ -950,48 +1032,7 @@ export function createHistoryRuntime({
         end
       },
       kpis: annualPremiumApplied.kpis,
-      series: {
-        financial: slots.map((slot) => ({
-          ts: slot.ts,
-          gridCostEur: slot.gridCostEur,
-          pvCostEur: slot.pvCostEur,
-          batteryCostEur: slot.batteryCostEur,
-          avoidedImportGrossEur: slot.avoidedImportGrossEur,
-          avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
-          avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
-          opportunityCostEur: slot.opportunityCostEur,
-          selfConsumptionCostEur: slot.selfConsumptionCostEur,
-          importCostEur: slot.importCostEur,
-          exportRevenueEur: slot.exportRevenueEur,
-          netEur: slot.netEur
-        })),
-        energy: slots.map((slot) => ({
-          ts: slot.ts,
-          importKwh: slot.importKwh,
-          exportKwh: slot.exportKwh,
-          loadKwh: slot.loadKwh,
-          pvKwh: roundOrZero(slot.pvKwh),
-          pvAcKwh: roundOrZero(slot.pvAcKwh),
-          solarDirectUseKwh: roundOrZero(slot.solarDirectUseKwh),
-          solarToBatteryKwh: roundOrZero(slot.solarToBatteryKwh),
-          solarToGridKwh: roundOrZero(slot.solarToGridKwh),
-          gridDirectUseKwh: roundOrZero(slot.gridDirectUseKwh),
-          gridToBatteryKwh: roundOrZero(slot.gridToBatteryKwh),
-          batteryDirectUseKwh: roundOrZero(slot.batteryDirectUseKwh),
-          batteryToGridKwh: roundOrZero(slot.batteryToGridKwh),
-          batteryChargeKwh: roundOrZero(slot.batteryChargeKwh),
-          batteryDischargeKwh: roundOrZero(slot.batteryDischargeKwh),
-          selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
-          gridShareKwh: round2(slot.gridShareKwh || 0),
-          pvShareKwh: round2(slot.pvShareKwh || 0),
-          batteryShareKwh: round2(slot.batteryShareKwh || 0)
-        })),
-        prices: slots.map((slot) => ({
-          ts: slot.ts,
-          marketPriceCtKwh: slot.marketPriceCtKwh,
-          userImportPriceCtKwh: slot.userImportPriceCtKwh
-        }))
-      },
+      series: buildSummarySeries(view, slots),
       charts,
       rows,
       slots,

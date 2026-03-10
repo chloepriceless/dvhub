@@ -529,6 +529,104 @@ test('history runtime groups day, week, month, and year views with correct total
   assert.equal(year.rows[1].label, '2026-04');
 });
 
+test('history runtime aggregates export and premium-eligible energy without cumulative rounding loss', () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          {
+            ts: '2026-01-10T10:00:00.000Z',
+            importKwh: 0,
+            exportKwh: 0.335,
+            gridKwh: 0,
+            pvKwh: 0.335,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-01-10T10:15:00.000Z',
+            importKwh: 0,
+            exportKwh: 0.335,
+            gridKwh: 0,
+            pvKwh: 0.335,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          },
+          {
+            ts: '2026-01-10T10:30:00.000Z',
+            importKwh: 0,
+            exportKwh: 0.335,
+            gridKwh: 0,
+            pvKwh: 0.335,
+            batteryKwh: 0,
+            batteryChargeKwh: 0,
+            batteryDischargeKwh: 0,
+            loadKwh: 0,
+            estimated: false,
+            incomplete: false
+          }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          { ts: '2026-01-10T10:00:00.000Z', priceCtKwh: 6, priceEurMwh: 60 },
+          { ts: '2026-01-10T10:15:00.000Z', priceCtKwh: 6, priceEurMwh: 60 },
+          { ts: '2026-01-10T10:30:00.000Z', priceCtKwh: 6, priceEurMwh: 60 }
+        ];
+      }
+    },
+    getPricingConfig: () => ({
+      ...pricingConfig,
+      pvPlants: [
+        { kwp: 10, commissionedAt: '2021-04-15' }
+      ]
+    }),
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: {},
+      annualCtKwhByYear: {
+        2026: 5.5
+      }
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {
+        '2021-04': 8.2
+      }
+    }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+
+  assert.equal(year.kpis.exportKwh, 1.01);
+  assert.equal(year.rows[0].exportKwh, 1.01);
+  assert.equal(year.kpis.premiumEligibleExportKwh, 1.01);
+});
+
+test('history runtime omits slot-level series payloads for annual responses', () => {
+  const runtime = createHistoryRuntime({
+    store: createStoreFixture(),
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const year = runtime.getSummary({ view: 'year', date: '2026-03-09' });
+
+  assert.deepEqual(year.series, {
+    financial: [],
+    energy: [],
+    prices: []
+  });
+  assert.equal(year.charts.periodCombinedBars.length, 2);
+});
+
 test('history runtime exposes chart-ready series with split costs and estimation metadata', () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
