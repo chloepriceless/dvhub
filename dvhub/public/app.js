@@ -89,6 +89,34 @@ function isScheduleWindowExpired(windowLike, nowTs = Date.now()) {
   return nowMin >= endMin && nowMin < startMin;
 }
 
+function createRefreshCoordinator({ refreshTask }) {
+  let inFlight = null;
+  let queued = false;
+
+  async function runLoop() {
+    do {
+      queued = false;
+      await refreshTask();
+    } while (queued);
+  }
+
+  return {
+    async run() {
+      if (inFlight) {
+        queued = true;
+        return inFlight;
+      }
+      inFlight = runLoop().finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
+    },
+    isRunning() {
+      return Boolean(inFlight);
+    }
+  };
+}
+
 const CHART_DEFAULT_SLOT_MS = 60 * 60 * 1000;
 const chartSelectionState = {
   data: [],
@@ -590,9 +618,17 @@ async function refresh() {
   document.getElementById('logBox').textContent = rows.map((r) => JSON.stringify(r)).join('\n') || '-';
 }
 
+const dashboardRefreshCoordinator = createRefreshCoordinator({
+  refreshTask: refresh
+});
+
+function requestDashboardRefresh() {
+  return dashboardRefreshCoordinator.run();
+}
+
 async function refreshEpex() {
   await apiFetch('/api/epex/refresh', { method: 'POST' });
-  await refresh();
+  await requestDashboardRefresh();
 }
 
 /* --- Manual Write (separate buttons) --- */
@@ -608,7 +644,7 @@ async function manualWriteGrid() {
   const out = await res.json();
   if (!res.ok || !out.ok) return setControlMsg(`Grid Write Fehler: ${out.error || res.status}`, true);
   setControlMsg(`Grid Setpoint geschrieben: ${value} W`);
-  await refresh();
+  await requestDashboardRefresh();
 }
 
 async function manualWriteCharge() {
@@ -622,7 +658,7 @@ async function manualWriteCharge() {
   const out = await res.json();
   if (!res.ok || !out.ok) return setControlMsg(`Charge Write Fehler: ${out.error || res.status}`, true);
   setControlMsg(`Charge Current geschrieben: ${value} A`);
-  await refresh();
+  await requestDashboardRefresh();
 }
 
 async function manualWriteMinSoc() {
@@ -636,7 +672,7 @@ async function manualWriteMinSoc() {
   const out = await res.json();
   if (!res.ok || !out.ok) return setControlMsg(`MinSOC Write Fehler: ${out.error || res.status}`, true);
   setControlMsg(`Min SOC geschrieben: ${value} %`);
-  await refresh();
+  await requestDashboardRefresh();
 }
 
 /* --- Schedule --- */
@@ -874,13 +910,16 @@ function initDashboard() {
 
   updateChartSelectionCallout();
   loadScheduleDash().catch(() => {});
-  refresh();
-  setInterval(refresh, 3000);
+  requestDashboardRefresh().catch(() => {});
+  setInterval(() => {
+    requestDashboardRefresh().catch(() => {});
+  }, 3000);
 }
 
 const dashboardApi = {
   buildScheduleWindowsFromSelection,
   computeDynamicGrossImportCtKwh,
+  createRefreshCoordinator,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices
