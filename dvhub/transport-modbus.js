@@ -54,6 +54,10 @@ export function createModbusTransport() {
         }
       },
       _fail(err) {
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = null;
+        }
         const p = this.pending;
         if (p) {
           this.pending = null;
@@ -71,6 +75,10 @@ export function createModbusTransport() {
       },
       destroy() {
         this.destroyed = true;
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = null;
+        }
         this._fail(new Error('pool cleanup'));
         mbPool.delete(this.key);
       },
@@ -156,7 +164,9 @@ export function createModbusTransport() {
       const pid = frame.readUInt16BE(2);
       const unit = frame.readUInt8(6);
       const fc = frame.readUInt8(7);
-      if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 6) throw new Error('invalid write ack');
+      if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid write ack');
+      if ((fc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
+      if (fc !== 6) throw new Error('invalid write ack');
       return { addr: frame.readUInt16BE(8), value: frame.readUInt16BE(10) };
     });
   }
@@ -186,7 +196,9 @@ export function createModbusTransport() {
       const pid = frame.readUInt16BE(2);
       const unit = frame.readUInt8(6);
       const fc = frame.readUInt8(7);
-      if (pid !== 0 || unit !== unitId || rTid !== tid || fc !== 16) throw new Error('invalid write ack');
+      if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid write ack');
+      if ((fc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
+      if (fc !== 16) throw new Error('invalid write ack');
       return { addr: frame.readUInt16BE(8), quantity: frame.readUInt16BE(10) };
     });
   }

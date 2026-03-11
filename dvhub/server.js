@@ -65,6 +65,8 @@ const APPLICABLE_VALUES_CACHE_PATH = path.join(
 );
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
+const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
+const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
 const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
@@ -147,7 +149,7 @@ let telemetryStore = null;
 let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
-const energyChartsMarketValueService = createEnergyChartsMarketValueService();
+let energyChartsMarketValueService = null;
 const applicableValueService = createBundesnetzagenturApplicableValueService({
   cachePath: APPLICABLE_VALUES_CACHE_PATH
 });
@@ -320,6 +322,32 @@ function buildApiHistoryImportStatusResponse() {
     cachedStatus: getCachedRuntimeStatusPayload(),
     fallbackTelemetryEnabled: !!cfg.telemetry?.enabled,
     fallbackHistoryImport: runtimeSnapshot.historyImport
+  });
+}
+
+function historicalMarketValueBackfillYears({ bounds, now = new Date() } = {}) {
+  const currentYear = new Date(now).getUTCFullYear();
+  const earliestYear = Number(String(bounds?.earliest || '').slice(0, 4));
+  const latestYear = Number(String(bounds?.latest || '').slice(0, 4));
+  if (!Number.isInteger(earliestYear) || !Number.isInteger(latestYear)) return [];
+  const endYear = Math.min(latestYear, currentYear - 1);
+  if (endYear < earliestYear) return [];
+  return Array.from({ length: endYear - earliestYear + 1 }, (_, index) => earliestYear + index);
+}
+
+function startAutomaticMarketValueBackfill() {
+  if (!IS_RUNTIME_PROCESS || !telemetryStore || !energyChartsMarketValueService?.backfillMissingSolarMarketValues) {
+    return;
+  }
+  const years = historicalMarketValueBackfillYears({
+    bounds: telemetryStore.getTelemetryBounds()
+  });
+  if (!years.length) return;
+  energyChartsMarketValueService.backfillMissingSolarMarketValues({
+    years,
+    maxYearsPerRun: MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN
+  }).catch((error) => {
+    pushLog('market_value_backfill_error', { error: error.message });
   });
 }
 
@@ -2078,6 +2106,9 @@ const web = http.createServer(async (req, res) => {
 });
 
 telemetryStore = createTelemetryStoreIfEnabled();
+energyChartsMarketValueService = createEnergyChartsMarketValueService({
+  marketValueStore: telemetryStore
+});
 liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
   flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
   buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
@@ -2106,6 +2137,7 @@ if (IS_RUNTIME_PROCESS) {
   applicableValueService.refresh().catch((error) => {
     pushLog('applicable_value_refresh_error', { error: error.message });
   });
+  startAutomaticMarketValueBackfill();
 }
 
 if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
@@ -2177,6 +2209,7 @@ if (IS_RUNTIME_PROCESS) {
   setInterval(() => {
     telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
   }, 6 * 60 * 60 * 1000);
+  setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 }
 
 function gracefulShutdown(signal) {

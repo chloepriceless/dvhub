@@ -84,6 +84,99 @@ test('telemetry store initializes schema and persists records', () => {
   }
 });
 
+test('telemetry store persists monthly and annual solar market values by key', () => {
+  const dbPath = createTempDbPath();
+  const store = createTelemetryStore({
+    dbPath,
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    store.upsertSolarMarketValue({
+      scope: 'monthly',
+      key: '2026-03',
+      ctKwh: 5.1,
+      source: 'energy_charts'
+    });
+    store.upsertSolarMarketValue({
+      scope: 'annual',
+      key: '2025',
+      ctKwh: 4.508,
+      source: 'energy_charts'
+    });
+
+    assert.equal(store.getSolarMarketValue({ scope: 'monthly', key: '2026-03' }).ctKwh, 5.1);
+    assert.equal(store.getSolarMarketValue({ scope: 'annual', key: '2025' }).ctKwh, 4.508);
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store persists solar market value attempt cooldowns by year', () => {
+  const store = createTelemetryStore({
+    dbPath: createTempDbPath(),
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    store.markSolarMarketValueAttempt({
+      year: 2026,
+      attemptedAt: '2026-03-11T06:00:00.000Z',
+      status: 'error',
+      error: 'HTTP 429',
+      cooldownUntil: '2026-03-11T12:00:00.000Z'
+    });
+
+    assert.deepEqual(store.getSolarMarketValueAttempt({ year: 2026 }), {
+      year: 2026,
+      lastAttemptAt: '2026-03-11T06:00:00.000Z',
+      cooldownUntil: '2026-03-11T12:00:00.000Z',
+      status: 'error',
+      error: 'HTTP 429'
+    });
+  } finally {
+    store.close();
+  }
+});
+
+test('telemetry store detects complete historical solar market value years', () => {
+  const store = createTelemetryStore({
+    dbPath: createTempDbPath(),
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    for (let month = 1; month <= 12; month += 1) {
+      store.upsertSolarMarketValue({
+        scope: 'monthly',
+        key: `2025-${String(month).padStart(2, '0')}`,
+        ctKwh: month,
+        source: 'energy_charts'
+      });
+    }
+    store.upsertSolarMarketValue({
+      scope: 'annual',
+      key: '2025',
+      ctKwh: 4.508,
+      source: 'energy_charts'
+    });
+    store.upsertSolarMarketValue({
+      scope: 'monthly',
+      key: '2026-01',
+      ctKwh: 11.5,
+      source: 'energy_charts'
+    });
+
+    assert.equal(store.hasCompleteSolarMarketValueYear({ year: 2025 }), true);
+    assert.equal(store.hasCompleteSolarMarketValueYear({ year: 2026 }), false);
+  } finally {
+    store.close();
+  }
+});
+
 test('telemetry store creates materialized 15 minute slot table with uniqueness by slot series and source', () => {
   const dbPath = createTempDbPath();
   const store = createTelemetryStore({

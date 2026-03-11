@@ -108,6 +108,13 @@ function mergeMaterializedMeta(current, incoming) {
   };
 }
 
+function isCompleteHistoricalSolarMarketValueYear({ year, monthlyKeys = [], annualKeys = [] }) {
+  const numericYear = Number(year);
+  const currentYear = new Date().getUTCFullYear();
+  if (!Number.isInteger(numericYear) || numericYear >= currentYear) return false;
+  return monthlyKeys.length >= 12 && annualKeys.includes(String(numericYear));
+}
+
 export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupIntervals = [300, 900, 3600] }) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -214,6 +221,29 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       UNIQUE(slot_start_utc, series_key, source_kind)
     );
     CREATE INDEX IF NOT EXISTS idx_energy_slots_15m_slot_start ON energy_slots_15m(slot_start_utc);
+
+    CREATE TABLE IF NOT EXISTS solar_market_values (
+      id INTEGER PRIMARY KEY,
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      ct_kwh REAL NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      last_attempt_at TEXT,
+      cooldown_until TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+      error TEXT,
+      UNIQUE(scope, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_solar_market_values_scope_key ON solar_market_values(scope, key);
+
+    CREATE TABLE IF NOT EXISTS solar_market_value_year_attempts (
+      year INTEGER PRIMARY KEY,
+      last_attempt_at TEXT NOT NULL,
+      cooldown_until TEXT,
+      status TEXT NOT NULL,
+      error TEXT
+    );
   `);
 
   const insertSampleStmt = db.prepare(`
@@ -266,6 +296,50 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       unit=excluded.unit,
       meta_json=excluded.meta_json,
       updated_at=CURRENT_TIMESTAMP
+  `);
+  const upsertSolarMarketValueStmt = db.prepare(`
+    INSERT INTO solar_market_values (
+      scope, key, ct_kwh, source, fetched_at, last_attempt_at, cooldown_until, status, error
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope, key)
+    DO UPDATE SET
+      ct_kwh=excluded.ct_kwh,
+      source=excluded.source,
+      fetched_at=excluded.fetched_at,
+      last_attempt_at=excluded.last_attempt_at,
+      cooldown_until=excluded.cooldown_until,
+      status=excluded.status,
+      error=excluded.error
+  `);
+  const getSolarMarketValueStmt = db.prepare(`
+    SELECT scope, key, ct_kwh, source, fetched_at, last_attempt_at, cooldown_until, status, error
+    FROM solar_market_values
+    WHERE scope = ? AND key = ?
+  `);
+  const listSolarMarketValuesForYearStmt = db.prepare(`
+    SELECT scope, key, ct_kwh, source, fetched_at, last_attempt_at, cooldown_until, status, error
+    FROM solar_market_values
+    WHERE status = 'ready'
+      AND (
+        (scope = 'monthly' AND key >= ? AND key < ?)
+        OR (scope = 'annual' AND CAST(key AS INTEGER) <= ?)
+      )
+    ORDER BY scope ASC, key ASC
+  `);
+  const upsertSolarMarketValueAttemptStmt = db.prepare(`
+    INSERT INTO solar_market_value_year_attempts (year, last_attempt_at, cooldown_until, status, error)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(year)
+    DO UPDATE SET
+      last_attempt_at=excluded.last_attempt_at,
+      cooldown_until=excluded.cooldown_until,
+      status=excluded.status,
+      error=excluded.error
+  `);
+  const getSolarMarketValueAttemptStmt = db.prepare(`
+    SELECT year, last_attempt_at, cooldown_until, status, error
+    FROM solar_market_value_year_attempts
+    WHERE year = ?
   `);
 
   function buildMaterializedEnergySlotWrites(rows) {
@@ -806,6 +880,32 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     }));
   }
 
+  function mapSolarMarketValueRow(row) {
+    if (!row) return null;
+    return {
+      scope: row.scope,
+      key: row.key,
+      ctKwh: Number(row.ct_kwh),
+      source: row.source,
+      fetchedAt: row.fetched_at,
+      lastAttemptAt: row.last_attempt_at || null,
+      cooldownUntil: row.cooldown_until || null,
+      status: row.status,
+      error: row.error || null
+    };
+  }
+
+  function mapSolarMarketValueAttemptRow(row) {
+    if (!row) return null;
+    return {
+      year: Number(row.year),
+      lastAttemptAt: row.last_attempt_at,
+      cooldownUntil: row.cooldown_until || null,
+      status: row.status,
+      error: row.error || null
+    };
+  }
+
   return {
     dbPath,
     listTables() {
@@ -840,6 +940,81 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     listMaterializedEnergySlots,
     listImportJobRanges,
     listPriceSlots,
+    upsertSolarMarketValue(entry = {}) {
+      const fetchedAt = isoTimestamp(entry.fetchedAt || new Date());
+      upsertSolarMarketValueStmt.run(
+        String(entry.scope || ''),
+        String(entry.key || ''),
+        Number(entry.ctKwh),
+        String(entry.source || 'energy_charts'),
+        fetchedAt,
+        entry.lastAttemptAt ? isoTimestamp(entry.lastAttemptAt) : fetchedAt,
+        entry.cooldownUntil ? isoTimestamp(entry.cooldownUntil) : null,
+        entry.status || 'ready',
+        entry.error ?? null
+      );
+    },
+    getSolarMarketValue({ scope, key } = {}) {
+      return mapSolarMarketValueRow(getSolarMarketValueStmt.get(String(scope || ''), String(key || '')));
+    },
+    listSolarMarketValuesForYear({ year } = {}) {
+      const numericYear = Number(year);
+      if (!Number.isInteger(numericYear)) {
+        return {
+          hasAny: false,
+          summary: { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} },
+          cooldownUntil: null
+        };
+      }
+      const yearPrefix = `${numericYear}-`;
+      const nextYearPrefix = `${numericYear + 1}-`;
+      const rows = listSolarMarketValuesForYearStmt.all(yearPrefix, nextYearPrefix, numericYear);
+      const summary = {
+        monthlyCtKwhByMonth: {},
+        annualCtKwhByYear: {}
+      };
+      for (const row of rows) {
+        const entry = mapSolarMarketValueRow(row);
+        if (entry.scope === 'monthly') {
+          summary.monthlyCtKwhByMonth[entry.key] = entry.ctKwh;
+        } else if (entry.scope === 'annual') {
+          summary.annualCtKwhByYear[entry.key] = entry.ctKwh;
+        }
+      }
+      const attempt = mapSolarMarketValueAttemptRow(getSolarMarketValueAttemptStmt.get(numericYear));
+      const monthlyKeys = Object.keys(summary.monthlyCtKwhByMonth);
+      const annualKeys = Object.keys(summary.annualCtKwhByYear);
+      return {
+        hasAny: rows.length > 0,
+        hasComplete: isCompleteHistoricalSolarMarketValueYear({
+          year: numericYear,
+          monthlyKeys,
+          annualKeys
+        }),
+        summary,
+        cooldownUntil: attempt?.cooldownUntil || null,
+        attempt
+      };
+    },
+    markSolarMarketValueAttempt(entry = {}) {
+      const numericYear = Number(entry.year);
+      if (!Number.isInteger(numericYear)) return;
+      upsertSolarMarketValueAttemptStmt.run(
+        numericYear,
+        isoTimestamp(entry.attemptedAt || new Date()),
+        entry.cooldownUntil ? isoTimestamp(entry.cooldownUntil) : null,
+        String(entry.status || 'ready'),
+        entry.error ?? null
+      );
+    },
+    getSolarMarketValueAttempt({ year } = {}) {
+      const numericYear = Number(year);
+      if (!Number.isInteger(numericYear)) return null;
+      return mapSolarMarketValueAttemptRow(getSolarMarketValueAttemptStmt.get(numericYear));
+    },
+    hasCompleteSolarMarketValueYear({ year } = {}) {
+      return this.listSolarMarketValuesForYear({ year }).hasComplete === true;
+    },
     getStatus() {
       const lastSample = db.prepare(`SELECT MAX(ts_utc) AS value FROM timeseries_samples`).get().value;
       const lastEvent = db.prepare(`SELECT MAX(ts_utc) AS value FROM control_events`).get().value;
