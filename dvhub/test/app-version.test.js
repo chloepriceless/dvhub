@@ -18,7 +18,7 @@ test('readAppVersionInfo returns package version and git short sha for a regular
 
   fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({
     name: 'dvhub',
-    version: '3.0.0'
+    version: '0.3.0'
   }));
   fs.mkdirSync(path.join(root, '.git', 'refs', 'heads'), { recursive: true });
   fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
@@ -26,9 +26,9 @@ test('readAppVersionInfo returns package version and git short sha for a regular
 
   assert.deepEqual(readAppVersionInfo({ appDir }), {
     name: 'dvhub',
-    version: '3.0.0',
+    version: '0.3.0',
     revision: 'ea104c9',
-    versionLabel: 'v3.0.0+ea104c9'
+    versionLabel: 'v0.3.0+ea104c9'
   });
 });
 
@@ -37,13 +37,13 @@ test('readAppVersionInfo falls back to package version when no git metadata is p
 
   fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({
     name: 'dvhub',
-    version: '3.0.0'
+    version: '0.3.0'
   }));
 
   assert.deepEqual(readAppVersionInfo({ appDir }), {
     name: 'dvhub',
-    version: '3.0.0',
+    version: '0.3.0',
     revision: null,
-    versionLabel: 'v3.0.0'
+    versionLabel: 'v0.3.0'
   });
 });

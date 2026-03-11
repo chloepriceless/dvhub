@@ -21,12 +21,17 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 3.0.0 |
+| **Status** | `main` -- Version 0.3.0 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
 <p align="center">
-  <img src="assets/dvhub-fullpage-192.168.1.66-8080.png" alt="DVhub Dashboard — Desktop" width="900" />
+  <a href="assets/screenshots/dashboard-live-full-2026-03-11.png"><img src="assets/screenshots/dashboard-live-full-2026-03-11.png" alt="DVhub Leitstand live" width="440" /></a>
+  <a href="assets/screenshots/history-day-2026-03-10-full.png"><img src="assets/screenshots/history-day-2026-03-10-full.png" alt="DVhub History Tag 10.03.2026" width="440" /></a>
+</p>
+<p align="center">
+  <a href="assets/screenshots/history-month-2026-03-full.png"><img src="assets/screenshots/history-month-2026-03-full.png" alt="DVhub History März 2026" width="440" /></a>
+  <a href="assets/screenshots/history-year-2025-full.png"><img src="assets/screenshots/history-year-2025-full.png" alt="DVhub History Jahr 2025" width="440" /></a>
 </p>
 
 ---
@@ -41,7 +46,7 @@ DVhub auf `main` ist heute:
 - **DV-Schnittstelle und Web-Leitstand** in einer Anwendung
 - **Dashboard** für Live-Werte, Day-Ahead-Preise, Kosten und Steuerung
 - **History-Seite** für Tag/Woche/Monat/Jahr direkt aus der SQLite-Telemetrie
-- **Release 3.0 Schwerpunkt:** neue History-Analyse plus Backfill aus dem Victron VRM Portal
+- **Release 0.3.0 Schwerpunkt:** neue History-Analyse plus Backfill aus dem Victron VRM Portal
 - **Setup-Assistent** für den ersten Start mit blockierender Validierung
 - **Einstellungsoberfläche** statt roher `config.json`-Bearbeitung
 - **Victron-Anbindung per Modbus TCP oder MQTT**
@@ -335,6 +340,10 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 - `POST /api/history/backfill/prices`
 - `GET /api/history/import/status`
 - `POST /api/history/import`
+- `POST /api/history/backfill/vrm`
+
+`/api/history/import` startet einen konfigurierten oder expliziten Importlauf.
+`/api/history/backfill/vrm` nutzt die in `telemetry.historyImport` hinterlegte VRM-Quelle fuer Gap- oder Full-Backfills.
 
 ### Bezugspreise nach Zeitraum
 
@@ -344,6 +353,15 @@ Unter `userEnergyPricing.periods` lassen sich mehrere Tarifzeiträume definieren
 - Zeiträume dürfen sich nicht überschneiden
 - pro Zeitraum ist `fixed` oder `dynamic` möglich
 - wenn kein Zeitraum passt, greift die bestehende Legacy-Preislogik als Fallback
+
+### Marktwert- und Marktprämien-Modus
+
+Unter `userEnergyPricing` stehen fuer die History-Marktprämie zwei zusätzliche Felder bereit:
+
+- `marketValueMode`: `annual` fuer das bisherige Verhalten oder `monthly` fuer Monatsmarktwerte auch in Monats- und Jahresansichten
+- `pvPlants`: Liste der PV-Anlagen mit `kwp` und `commissionedAt`, damit die offiziellen anzulegenden Referenzwerte pro Anlage abgeleitet werden koennen
+
+Die Einstellungsseite pflegt diese Werte zentral im Bereich Marktprämie.
 
 ### Wichtige API-Endpunkte
 
@@ -384,8 +402,8 @@ Unter `userEnergyPricing.periods` lassen sich mehrere Tarifzeiträume definieren
 | `schedule` | Zeitplan-Regeln und Defaults |
 | `epex` | Preiszone und Zeitzone |
 | `influx` | InfluxDB-Anbindung |
-| `telemetry` | Lokale SQLite-Historie, Rollups und VRM-Nachimport |
-| `userEnergyPricing` | Eigene Preislogik für Netz, PV und Akku |
+| `telemetry` | Lokale SQLite-Historie, Rollups, Preis-Backfill und VRM-History-Import |
+| `userEnergyPricing` | Eigene Preislogik für Netz, PV und Akku plus Marktwert-/PV-Anlagen-Metadaten |
 | `scan` | Modbus Scan-Parameter |
 
 ### Hinweise
