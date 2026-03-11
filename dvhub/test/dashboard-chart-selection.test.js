@@ -196,6 +196,27 @@ test('dashboard refresh task applies status before log resolution and requests o
   assert.deepEqual(calls, ['/api/log?limit=20', 'status:123', 'log:1']);
 });
 
+test('dashboard dv control helper prefers live GX readback over the last write result', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.resolveDvControlIndicators, 'function');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(helpers.resolveDvControlIndicators({
+      victron: {
+        feedExcessDcPv: 1,
+        dontFeedExcessAcPv: 0
+      },
+      ctrl: {
+        dvControl: null
+      }
+    }))),
+    {
+      dc: { text: 'EIN', tone: 'ok' },
+      ac: { text: 'Nein', tone: 'ok' }
+    }
+  );
+});
+
 test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');

@@ -91,6 +91,8 @@ const state = {
     pvTotalW: null,
     gridSetpointW: null,
     minSocPct: null,
+    feedExcessDcPv: null,
+    dontFeedExcessAcPv: null,
     gridImportW: null,
     gridExportW: null,
     selfConsumptionW: null,
@@ -855,6 +857,44 @@ async function pollPoint(name, conf) {
   }
 }
 
+function buildDvControlReadbackPollConfig(conf, victronConf) {
+  const address = Number(conf?.address);
+  if (!conf?.enabled || !Number.isFinite(address) || address <= 0) return null;
+  return {
+    enabled: true,
+    fc: 3,
+    address,
+    quantity: 1,
+    signed: false,
+    scale: 1,
+    offset: 0,
+    host: conf.host || victronConf?.host,
+    port: conf.port || victronConf?.port,
+    unitId: conf.unitId ?? victronConf?.unitId,
+    timeoutMs: conf.timeoutMs || victronConf?.timeoutMs
+  };
+}
+
+function buildDvControlReadbackPolls(cfg) {
+  return [
+    ['feedExcessDcPv', buildDvControlReadbackPollConfig(cfg?.dvControl?.feedExcessDcPv, cfg?.victron)],
+    ['dontFeedExcessAcPv', buildDvControlReadbackPollConfig(cfg?.dvControl?.dontFeedExcessAcPv, cfg?.victron)]
+  ].filter(([, conf]) => !!conf);
+}
+
+async function pollDvControlReadback(name, conf) {
+  if (transport.type !== 'modbus' || !conf?.enabled) return;
+  try {
+    const regs = await transport.mbRequest(conf);
+    state.victron[name] = pointFromRegs(regs, conf);
+    delete state.victron.errors[name];
+    state.victron.updatedAt = Date.now();
+  } catch (e) {
+    state.victron.errors[name] = e.message;
+    state.victron.updatedAt = Date.now();
+  }
+}
+
 function updateEnergyIntegrals(nowMs, totalW) {
   const day = berlinDateString(new Date(nowMs));
   if (state.energy.day !== day) {
@@ -1013,7 +1053,8 @@ async function pollMeter() {
     pollPoint('acPvL3W', cfg.points.acPvL3W),
     pollPoint('gridSetpointW', cfg.points.gridSetpointW),
     pollPoint('minSocPct', cfg.points.minSocPct),
-    pollPoint('selfConsumptionW', cfg.points.selfConsumptionW)
+    pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
+    ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
   ]);
 
   const pvDc = Number(state.victron.pvPowerW || 0);

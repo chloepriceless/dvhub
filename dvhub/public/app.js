@@ -529,6 +529,39 @@ function drawPriceChart(data, nowTs, comparisons = []) {
   updateChartBarStates();
 }
 
+function resolveDvControlIndicators(status) {
+  const dcReadback = status.victron?.feedExcessDcPv;
+  const acReadback = status.victron?.dontFeedExcessAcPv;
+  if (dcReadback != null || acReadback != null) {
+    return {
+      dc: {
+        text: dcReadback == null ? '-' : (Number(dcReadback) === 1 ? 'EIN' : 'AUS'),
+        tone: dcReadback == null ? undefined : (Number(dcReadback) === 1 ? 'ok' : 'off')
+      },
+      ac: {
+        text: acReadback == null ? '-' : (Number(acReadback) === 1 ? 'Ja' : 'Nein'),
+        tone: acReadback == null ? undefined : (Number(acReadback) === 1 ? 'off' : 'ok')
+      }
+    };
+  }
+
+  const dvc = status.ctrl?.dvControl;
+  if (!dvc) return { dc: { text: '-', tone: undefined }, ac: { text: '-', tone: undefined } };
+
+  const dcOk = dvc.feedExcessDcPv?.ok;
+  const acOk = dvc.dontFeedExcessAcPv?.ok;
+  return {
+    dc: {
+      text: dcOk != null ? (dvc.feedIn ? 'EIN' : 'AUS') : '-',
+      tone: dcOk != null ? (dvc.feedIn ? 'ok' : 'off') : undefined
+    },
+    ac: {
+      text: acOk != null ? (dvc.feedIn ? 'Nein' : 'Ja') : '-',
+      tone: acOk != null ? (dvc.feedIn ? 'ok' : 'off') : undefined
+    }
+  };
+}
+
 function renderDashboardStatus(status) {
   const dvOn = Number(status.dvControlValue) === 1;
   setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
@@ -537,16 +570,9 @@ function renderDashboardStatus(status) {
   setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
   setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
 
-  const dvc = status.ctrl?.dvControl;
-  if (dvc) {
-    const dcOk = dvc.feedExcessDcPv?.ok;
-    setText('dvDcPv', dcOk != null ? (dvc.feedIn ? 'EIN' : 'AUS') : '-', dcOk != null ? (dvc.feedIn ? 'ok' : 'off') : undefined);
-    const acOk = dvc.dontFeedExcessAcPv?.ok;
-    setText('dvAcPv', acOk != null ? (dvc.feedIn ? 'Nein' : 'Ja') : '-', acOk != null ? (dvc.feedIn ? 'ok' : 'off') : undefined);
-  } else {
-    setText('dvDcPv', '-');
-    setText('dvAcPv', '-');
-  }
+  const dvIndicators = resolveDvControlIndicators(status);
+  setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
+  setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
 
   const s = status.epex?.summary;
   setText('priceNow', s?.current ? `${fmtEuroFromCt(s.current.ct_kwh)}/kWh` : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
@@ -959,7 +985,8 @@ const dashboardApi = {
   getDashboardLogUrl,
   inferChartSlotMs,
   isScheduleWindowExpired,
-  normalizeChartSelectionIndices
+  normalizeChartSelectionIndices,
+  resolveDvControlIndicators
 };
 
 if (typeof window !== 'undefined') {
