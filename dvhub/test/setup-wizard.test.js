@@ -311,6 +311,18 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
         ...defaults.meter,
         host: 'venus-gx.local'
       },
+      dvControl: {
+        ...defaults.dvControl,
+        enabled: true,
+        feedExcessDcPv: {
+          ...defaults.dvControl.feedExcessDcPv,
+          host: 'venus-gx.local'
+        },
+        dontFeedExcessAcPv: {
+          ...defaults.dvControl.dontFeedExcessAcPv,
+          host: 'venus-gx.local'
+        }
+      },
       modbusListenHost: '0.0.0.0',
       modbusListenPort: 1502,
       schedule: {
@@ -334,13 +346,20 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
 
   const review = buildSetupReviewSnapshot(state);
   const sectionTitles = Array.from(review.map((section) => section.title));
-  assert.deepEqual(sectionTitles, ['Webzugriff', 'Victron Verbindung', 'DV & Meter', 'Dienste']);
+  assert.deepEqual(sectionTitles, ['Webzugriff', 'Victron Verbindung', 'DV & Meter', 'DV Steuerung', 'Dienste']);
 
   const transportSection = review.find((section) => section.id === 'transport');
   assert.equal(getReviewEntryValue(transportSection, 'Transport'), 'MQTT');
   assert.equal(getReviewEntryValue(transportSection, 'GX Host'), 'venus-gx.local');
   assert.equal(getReviewEntryValue(transportSection, 'Portal ID'), 'VRM123456');
   assert.match(transportSection.notes.join(' '), /GX-Host/i);
+
+  const dvControlSection = review.find((section) => section.id === 'dvControl');
+  assert.equal(getReviewEntryValue(dvControlSection, 'DV Steuerung'), 'Aktiv');
+  assert.equal(getReviewEntryValue(dvControlSection, 'DC-PV Register'), '2848');
+  assert.equal(getReviewEntryValue(dvControlSection, 'AC-PV Register'), '2850');
+  assert.equal(getReviewEntryValue(dvControlSection, 'Negativpreis-Schutz'), 'Aktiv');
+  assert.match(dvControlSection.notes.join(' '), /Victron-Verbindung/i);
 
   const servicesSection = review.find((section) => section.id === 'services');
   assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');

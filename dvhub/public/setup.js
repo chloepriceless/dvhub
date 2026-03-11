@@ -411,6 +411,28 @@ function collectInheritedMeterNotes(state) {
   return notes;
 }
 
+function collectInheritedDvControlNotes(state) {
+  const effectiveHost = resolveWizardValue(state, 'dvControl.feedExcessDcPv.host', '');
+  const effectivePort = resolveWizardValue(state, 'dvControl.feedExcessDcPv.port', '');
+  const effectiveUnitId = resolveWizardValue(state, 'dvControl.feedExcessDcPv.unitId', '');
+  const notes = [];
+
+  const usesInheritedConnection = !hasOwnDraftValue(state, 'dvControl.feedExcessDcPv.host')
+    && !hasOwnDraftValue(state, 'dvControl.feedExcessDcPv.port')
+    && !hasOwnDraftValue(state, 'dvControl.feedExcessDcPv.unitId')
+    && !hasOwnDraftValue(state, 'dvControl.dontFeedExcessAcPv.host')
+    && !hasOwnDraftValue(state, 'dvControl.dontFeedExcessAcPv.port')
+    && !hasOwnDraftValue(state, 'dvControl.dontFeedExcessAcPv.unitId');
+
+  if (usesInheritedConnection && !isBlankValue(effectiveHost)) {
+    const target = `${effectiveHost}${isBlankValue(effectivePort) ? '' : `:${effectivePort}`}`;
+    const unit = isBlankValue(effectiveUnitId) ? '' : ` (Unit ${effectiveUnitId})`;
+    notes.push(`Die DV-Register folgen automatisch der wirksamen Victron-Verbindung ${target}${unit}.`);
+  }
+
+  return notes;
+}
+
 function buildSetupReviewSnapshot(state) {
   const transportMode = getSetupTransportMode(state);
   const host = resolveWizardValue(state, 'victron.host', '');
@@ -475,6 +497,17 @@ function buildSetupReviewSnapshot(state) {
         { label: 'Register', value: formatReviewValue(resolveWizardValue(state, 'meter.quantity', '')) }
       ],
       notes: collectInheritedMeterNotes(state)
+    },
+    {
+      id: 'dvControl',
+      title: 'DV Steuerung',
+      entries: [
+        { label: 'DV Steuerung', value: formatReviewValue(resolveWizardValue(state, 'dvControl.enabled', false)) },
+        { label: 'DC-PV Register', value: formatReviewValue(resolveWizardValue(state, 'dvControl.feedExcessDcPv.address', '')) },
+        { label: 'AC-PV Register', value: formatReviewValue(resolveWizardValue(state, 'dvControl.dontFeedExcessAcPv.address', '')) },
+        { label: 'Negativpreis-Schutz', value: formatReviewValue(resolveWizardValue(state, 'dvControl.negativePriceProtection.enabled', false)) }
+      ],
+      notes: collectInheritedDvControlNotes(state)
     },
     {
       id: 'services',

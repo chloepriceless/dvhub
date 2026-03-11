@@ -1693,7 +1693,7 @@ export function createDefaultConfig() {
       minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' }
     },
     dvControl: {
-      enabled: false,
+      enabled: true,
       feedExcessDcPv: { enabled: true, fc: 6, address: 2848, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
       dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2850, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
       negativePriceProtection: { enabled: true, gridSetpointW: -40 }
@@ -2053,6 +2053,52 @@ function sanitizeUserEnergyPricing(value, warnings) {
   return next;
 }
 
+function isLegacyPlaceholderRegisterEntry(entry) {
+  if (!isPlainObject(entry)) return false;
+
+  const address = entry.address == null || entry.address === '' ? 0 : Number(entry.address);
+  const quantity = entry.quantity == null || entry.quantity === '' ? 0 : Number(entry.quantity);
+  const scale = entry.scale == null || entry.scale === '' ? 0 : Number(entry.scale);
+  const offset = entry.offset == null || entry.offset === '' ? 0 : Number(entry.offset);
+  const signed = coerceBoolean(entry.signed ?? false);
+  const fc = entry.fc == null || entry.fc === '' ? null : Number(entry.fc);
+  const writeType = entry.writeType == null ? '' : String(entry.writeType).trim();
+  const wordOrder = entry.wordOrder == null ? '' : String(entry.wordOrder).trim();
+  const allowAddressZero = entry.allowAddressZero == null ? false : coerceBoolean(entry.allowAddressZero);
+
+  return address === 0
+    && quantity === 0
+    && scale === 0
+    && offset === 0
+    && signed === false
+    && (fc == null || fc === 0)
+    && writeType === ''
+    && wordOrder === ''
+    && allowAddressZero === false;
+}
+
+function resetLegacyPlaceholderRegisters(raw, warnings) {
+  const resetEntry = (path) => {
+    const entry = getPath(raw, path);
+    if (!isLegacyPlaceholderRegisterEntry(entry)) return false;
+    deletePath(raw, path);
+    warnings.push(`${path}: legacy placeholder register was reset to default`);
+    return true;
+  };
+
+  resetEntry('controlWrite.gridSetpointW');
+  resetEntry('controlWrite.chargeCurrentA');
+  resetEntry('controlWrite.minSocPct');
+
+  const dvFeedReset = resetEntry('dvControl.feedExcessDcPv');
+  const dvAcReset = resetEntry('dvControl.dontFeedExcessAcPv');
+  const negativePricePath = 'dvControl.negativePriceProtection.gridSetpointW';
+  if ((dvFeedReset || dvAcReset) && Number(getPath(raw, negativePricePath)) === 0) {
+    deletePath(raw, negativePricePath);
+    warnings.push(`${negativePricePath}: legacy placeholder register was reset to default`);
+  }
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -2075,10 +2121,14 @@ function sanitizeRawConfig(rawInput) {
 
     if (field.type === 'number') {
       const num = Number(currentValue);
-      if (Number.isFinite(num)) setPath(raw, field.path, num);
-      else {
+      if (!Number.isFinite(num)) {
         warnings.push(`${field.path}: invalid number, field was reset to default`);
         deletePath(raw, field.path);
+      } else if ((field.min !== undefined && num < field.min) || (field.max !== undefined && num > field.max)) {
+        warnings.push(`${field.path}: out of range, field was reset to default`);
+        deletePath(raw, field.path);
+      } else {
+        setPath(raw, field.path, num);
       }
       continue;
     }
@@ -2107,6 +2157,7 @@ function sanitizeRawConfig(rawInput) {
   if (hasPath(raw, 'userEnergyPricing')) {
     raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
   }
+  resetLegacyPlaceholderRegisters(raw, warnings);
   return { raw, warnings };
 }
 

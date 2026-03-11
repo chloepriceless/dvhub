@@ -26,6 +26,91 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.userEnergyPricing.costs.pvCtKwh, null);
   assert.equal(defaults.userEnergyPricing.costs.batteryBaseCtKwh, null);
   assert.equal(defaults.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+  assert.equal(defaults.dvControl.enabled, true);
+  assert.equal(defaults.dvControl.negativePriceProtection.enabled, true);
+  assert.equal(defaults.dvControl.feedExcessDcPv.address, 2848);
+  assert.equal(defaults.dvControl.dontFeedExcessAcPv.address, 2850);
+});
+
+test('normalizeConfigInput restores legacy placeholder write registers to Victron defaults', () => {
+  const normalized = normalizeConfigInput({
+    victron: {
+      host: 'venus-gx.local',
+      port: 1502,
+      unitId: 1,
+      timeoutMs: 2500
+    },
+    controlWrite: {
+      gridSetpointW: {
+        enabled: false,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      }
+    },
+    dvControl: {
+      enabled: true,
+      feedExcessDcPv: {
+        enabled: true,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      },
+      dontFeedExcessAcPv: {
+        enabled: true,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      },
+      negativePriceProtection: {
+        enabled: true,
+        gridSetpointW: 0
+      }
+    }
+  });
+
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.enabled, true);
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.address, 2700);
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.scale, 1);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.port, 1502);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.unitId, 1);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.timeoutMs, 2500);
+
+  assert.equal(normalized.persistedConfig.dvControl.enabled, true);
+  assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2848);
+  assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2850);
+  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, -40);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 1502);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.unitId, 1);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.timeoutMs, 2500);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.port, 1502);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.unitId, 1);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.timeoutMs, 2500);
+  assert.match(normalized.warnings.join('\n'), /legacy placeholder/i);
+});
+
+test('normalizeConfigInput resets out-of-range runtime intervals to defaults', () => {
+  const normalized = normalizeConfigInput({
+    meterPollMs: 0,
+    keepalivePulseSec: 0,
+    schedule: {
+      evaluateMs: 0
+    }
+  });
+
+  assert.equal(normalized.persistedConfig.meterPollMs, 5000);
+  assert.equal(normalized.persistedConfig.keepalivePulseSec, 60);
+  assert.equal(normalized.persistedConfig.schedule.evaluateMs, 15000);
+  assert.match(normalized.warnings.join('\n'), /out of range/i);
 });
 
 test('config definition exposes telemetry section and fields', () => {
