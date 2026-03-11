@@ -32,8 +32,9 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.dvControl.dontFeedExcessAcPv.address, 2708);
 });
 
-test('normalizeConfigInput restores legacy placeholder write registers to Victron defaults', () => {
+test('normalizeConfigInput restores legacy placeholder write registers while ignoring manufacturer-managed raw overrides', () => {
   const normalized = normalizeConfigInput({
+    manufacturer: 'victron',
     victron: {
       host: 'venus-gx.local',
       port: 1502,
@@ -79,23 +80,26 @@ test('normalizeConfigInput restores legacy placeholder write registers to Victro
   assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.address, 2700);
   assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.scale, 1);
   assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.host, 'venus-gx.local');
-  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.port, 1502);
-  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.unitId, 1);
-  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.timeoutMs, 2500);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.port, 502);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.unitId, 100);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.timeoutMs, 1000);
 
   assert.equal(normalized.persistedConfig.dvControl.enabled, true);
   assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2707);
   assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2708);
   assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, -40);
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.host, 'venus-gx.local');
-  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 1502);
-  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.unitId, 1);
-  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.timeoutMs, 2500);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 502);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.unitId, 100);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.timeoutMs, 1000);
   assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.host, 'venus-gx.local');
-  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.port, 1502);
-  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.unitId, 1);
-  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.timeoutMs, 2500);
-  assert.match(normalized.warnings.join('\n'), /legacy placeholder/i);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.port, 502);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.unitId, 100);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.timeoutMs, 1000);
+  assert.ok(!('controlWrite' in normalized.rawConfig));
+  assert.ok(!('dvControl' in normalized.rawConfig));
+  assert.ok(!('port' in normalized.rawConfig.victron));
+  assert.match(normalized.warnings.join('\n'), /legacy placeholder|manufacturer profile/i);
 });
 
 test('normalizeConfigInput resets out-of-range runtime intervals to defaults', () => {

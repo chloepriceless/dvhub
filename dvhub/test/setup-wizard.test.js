@@ -184,22 +184,8 @@ test('draft values survive forward and backward navigation', () => {
 });
 
 test('navigation is blocked when required transport values are missing', () => {
-  const defaults = createDefaultConfig();
   let state = createSampleState({
-    config: { victron: { transport: 'mqtt', host: '', mqtt: { broker: '' } } },
-    effectiveConfig: {
-      ...defaults,
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt',
-        host: '',
-        mqtt: {
-          ...defaults.victron.mqtt,
-          broker: '',
-          portalId: ''
-        }
-      }
-    }
+    config: { manufacturer: 'victron', victron: { host: '' } }
   });
 
   state = setActiveSetupStep(state, 'transport');
@@ -207,95 +193,46 @@ test('navigation is blocked when required transport values are missing', () => {
 
   assert.equal(state.activeStepId, 'transport');
   assert.equal(state.validation.steps.transport.valid, false);
-  assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.mqtt.broker'));
-  assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.mqtt.portalId'));
+  assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.host'));
 });
 
-test('transport step guidance and visible fields change between modbus and mqtt', () => {
-  const defaults = createDefaultConfig();
-  const modbusState = setActiveSetupStep(createSampleState(), 'transport');
-  const mqttState = setActiveSetupStep(createSampleState({
-    config: {
-      victron: { transport: 'mqtt' },
-      schedule: {},
-      epex: {},
-      influx: {},
-      meter: {},
-      dvControl: {}
-    },
-    effectiveConfig: {
-      ...defaults,
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt'
-      }
-    }
-  }), 'transport');
+test('transport step guidance explains the manufacturer profile flow', () => {
+  const state = setActiveSetupStep(createSampleState(), 'transport');
+  const copy = describeSetupStep(state);
 
-  const modbusFields = getVisibleSetupFieldsForStep(modbusState, 'transport').map((field) => field.path);
-  const mqttFields = getVisibleSetupFieldsForStep(mqttState, 'transport').map((field) => field.path);
-  const modbusCopy = describeSetupStep(modbusState);
-  const mqttCopy = describeSetupStep(mqttState);
-
-  assert.deepEqual(Array.from(modbusFields), [
-    'victron.transport',
-    'victron.host',
-    'victron.port',
-    'victron.unitId',
-    'victron.timeoutMs'
-  ]);
-  assert.deepEqual(Array.from(mqttFields), [
-    'victron.transport',
-    'victron.host',
-    'victron.mqtt.portalId',
-    'victron.mqtt.broker',
-    'victron.mqtt.keepaliveIntervalMs'
-  ]);
-  assert.match(modbusCopy.highlight.title, /Modbus/i);
-  assert.match(mqttCopy.highlight.title, /MQTT/i);
-  assert.match(mqttCopy.highlight.body, /Broker/i);
-  assert.match(mqttCopy.highlight.body, /GX-Host/i);
-  assert.equal(mqttCopy.progressLabel, 'Schritt 2 von 5');
+  assert.match(copy.highlight.title, /Hersteller|Anlagenadresse/i);
+  assert.match(copy.highlight.body, /Herstellerdatei/i);
+  assert.match(copy.note, /Herstellerdatei/i);
+  assert.equal(copy.progressLabel, 'Schritt 2 von 5');
 });
 
-test('mqtt validation accepts broker fallback but blocks when neither broker nor host is present', () => {
-  const defaults = createDefaultConfig();
-  const validWithBroker = validateSetupWizardState(createSampleState({
+test('plant setup step only exposes manufacturer selection and host for the active Victron profile', () => {
+  const state = setActiveSetupStep(createSampleState(), 'transport');
+  const fieldPaths = getVisibleSetupFieldsForStep(state, 'transport').map((field) => field.path);
+
+  assert.deepEqual(Array.from(fieldPaths), [
+    'manufacturer',
+    'victron.host'
+  ]);
+});
+
+test('manufacturer validation accepts victron and blocks unsupported manufacturers', () => {
+  const valid = validateSetupWizardState(createSampleState({
     config: {
-      ...defaults,
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt',
-        host: '',
-        mqtt: {
-          ...defaults.victron.mqtt,
-          broker: 'mqtt://venus-broker.local:1883',
-          portalId: 'VRM123456',
-          keepaliveIntervalMs: 30000
-        }
-      }
+      manufacturer: 'victron',
+      victron: { host: 'venus-gx.local' }
     }
   }));
-  const invalidWithoutBrokerOrHost = validateSetupWizardState(createSampleState({
+  const invalid = validateSetupWizardState(createSampleState({
     config: {
-      ...defaults,
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt',
-        host: '',
-        mqtt: {
-          ...defaults.victron.mqtt,
-          broker: '',
-          portalId: 'VRM123456',
-          keepaliveIntervalMs: 30000
-        }
-      }
+      manufacturer: 'unknown',
+      victron: { host: 'venus-gx.local' }
     }
   }));
 
-  assert.equal(validWithBroker.validation.steps.transport.valid, true);
-  assert.equal(invalidWithoutBrokerOrHost.validation.steps.transport.valid, false);
-  assert.match(invalidWithoutBrokerOrHost.validation.fields['victron.mqtt.broker'][0], /Broker URL oder den GX-Host/i);
+  assert.equal(valid.validation.steps.transport.valid, true);
+  assert.equal(invalid.validation.steps.transport.valid, false);
+  assert.match(invalid.validation.fields.manufacturer[0], /Hersteller/i);
 });
 
 test('blank numeric fields stay invalid instead of coercing to zero defaults', () => {
@@ -303,22 +240,12 @@ test('blank numeric fields stay invalid instead of coercing to zero defaults', (
   const state = validateSetupWizardState(createSampleState({
     config: {
       ...defaults,
-      victron: {
-        ...defaults.victron,
-        transport: 'modbus',
-        unitId: ''
-      },
-      meter: {
-        ...defaults.meter,
-        address: ''
-      }
+      modbusListenPort: ''
     }
   }));
 
-  assert.equal(state.validation.steps.transport.valid, false);
   assert.equal(state.validation.steps.dv.valid, false);
-  assert.match(state.validation.fields['victron.unitId'][0], /Unit ID/i);
-  assert.match(state.validation.fields['meter.address'][0], /Startadresse/i);
+  assert.match(state.validation.fields.modbusListenPort[0], /Port/i);
 });
 
 test('validateSetupWizardState returns per-step and per-field blocking feedback', () => {
@@ -326,22 +253,20 @@ test('validateSetupWizardState returns per-step and per-field blocking feedback'
   const state = validateSetupWizardState(createSampleState({
     config: {
       ...defaults,
-      modbusListenPort: '',
-      meter: {
-        ...defaults.meter,
-        quantity: 0
-      }
+      manufacturer: '',
+      modbusListenPort: ''
     }
   }));
 
+  assert.equal(state.validation.steps.transport.valid, false);
   assert.equal(state.validation.steps.dv.valid, false);
+  assert.deepEqual(
+    Array.from(state.validation.fields.manufacturer),
+    ['Bitte einen gültigen Hersteller wählen.']
+  );
   assert.deepEqual(
     Array.from(state.validation.fields.modbusListenPort),
     ['Bitte einen gültigen Port zwischen 1 und 65535 eingeben.']
-  );
-  assert.deepEqual(
-    Array.from(state.validation.fields['meter.quantity']),
-    ['Bitte eine gültige Registeranzahl zwischen 1 und 125 eingeben.']
   );
 });
 
@@ -352,20 +277,12 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
 
   const review = buildSetupReviewSnapshot(state);
   const sectionTitles = Array.from(review.map((section) => section.title));
-  assert.deepEqual(sectionTitles, ['Webzugriff', 'Victron Verbindung', 'DV & Meter', 'DV Steuerung', 'Dienste']);
+  assert.deepEqual(sectionTitles, ['Webzugriff', 'Anlage', 'DV', 'Dienste']);
 
   const transportSection = review.find((section) => section.id === 'transport');
-  assert.equal(getReviewEntryValue(transportSection, 'Transport'), 'MQTT');
-  assert.equal(getReviewEntryValue(transportSection, 'GX Host'), 'venus-gx.local');
-  assert.equal(getReviewEntryValue(transportSection, 'Portal ID'), 'VRM123456');
-  assert.match(transportSection.notes.join(' '), /GX-Host/i);
-
-  const dvControlSection = review.find((section) => section.id === 'dvControl');
-  assert.equal(getReviewEntryValue(dvControlSection, 'DV Steuerung'), 'Aktiv');
-  assert.equal(getReviewEntryValue(dvControlSection, 'DC-PV Register'), '2707');
-  assert.equal(getReviewEntryValue(dvControlSection, 'AC-PV Register'), '2708');
-  assert.equal(getReviewEntryValue(dvControlSection, 'Negativpreis-Schutz'), 'Aktiv');
-  assert.match(dvControlSection.notes.join(' '), /Victron-Verbindung/i);
+  assert.equal(getReviewEntryValue(transportSection, 'Hersteller'), 'victron');
+  assert.equal(getReviewEntryValue(transportSection, 'Anlagenadresse'), 'venus-gx.local');
+  assert.match(transportSection.notes.join(' '), /Herstellerprofil/i);
 
   const servicesSection = review.find((section) => section.id === 'services');
   assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');
@@ -420,15 +337,10 @@ test('import validation rejects configs that still miss required setup fields', 
   const imported = validateSetupSubmissionConfig({
     ...defaults,
     httpPort: 8080,
+    manufacturer: 'victron',
     victron: {
       ...defaults.victron,
-      transport: 'mqtt',
-      host: '',
-      mqtt: {
-        ...defaults.victron.mqtt,
-        broker: '',
-        portalId: ''
-      }
+      host: ''
     },
     modbusListenPort: '',
     schedule: {
@@ -441,29 +353,29 @@ test('import validation rejects configs that still miss required setup fields', 
   assert.equal(imported.validation.steps.transport.valid, false);
   assert.equal(imported.validation.steps.dv.valid, false);
   assert.equal(imported.validation.steps.services.valid, false);
-  assert.match(imported.validation.fields['victron.mqtt.portalId'][0], /Portal ID/i);
+  assert.match(imported.validation.fields['victron.host'][0], /Anlagen-Host/i);
 });
 
-test('save outcome highlights warnings and restart-sensitive transport changes', () => {
+test('save outcome highlights warnings and restart-sensitive manufacturer changes', () => {
   const outcome = buildSetupSaveOutcome({
     meta: {
       warnings: [
-        'victron.mqtt.portalId wurde normalisiert',
+        'manufacturer wurde normalisiert',
         'influx.db wurde auf den Standardwert gesetzt'
       ]
     },
     restartRequired: true,
-    restartRequiredPaths: ['victron.transport', 'victron.mqtt.portalId', 'modbusListenPort']
+    restartRequiredPaths: ['manufacturer', 'victron.host', 'modbusListenPort']
   }, 'setup');
 
   assert.equal(outcome.kind, 'warn');
   assert.match(outcome.banner, /Dienst-Neustart/i);
   assert.match(outcome.summary, /erst nach einem Dienst-Neustart/i);
   assert.deepEqual(Array.from(outcome.warnings), [
-    'victron.mqtt.portalId wurde normalisiert',
+    'manufacturer wurde normalisiert',
     'influx.db wurde auf den Standardwert gesetzt'
   ]);
-  assert.match(outcome.restartItems.join(' '), /Victron-Transport/i);
+  assert.match(outcome.restartItems.join(' '), /Herstellerprofil/i);
   assert.match(outcome.restartItems.join(' '), /DV Modbus Proxy/i);
   assert.equal(outcome.redirectUrl, '/settings.html?setup=done');
   assert.match(outcome.banner, /Weiterleitung zur Einrichtung/i);

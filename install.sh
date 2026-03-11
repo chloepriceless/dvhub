@@ -292,7 +292,14 @@ npm install --omit=dev
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
+mkdir -p "$CONFIG_DIR/hersteller"
 mkdir -p "$DATA_DIR"
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
+fi
+if [[ ! -f "$CONFIG_DIR/hersteller/victron.json" ]]; then
+  cp "$APP_DIR/hersteller/victron.json" "$CONFIG_DIR/hersteller/victron.json"
+fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
@@ -346,11 +353,12 @@ echo
 echo "DVhub wurde installiert."
 echo "Service: systemctl status ${SERVICE_NAME}.service"
 echo "Config-Datei: ${CONFIG_PATH}"
+echo "Herstellerprofil: ${CONFIG_DIR}/hersteller/victron.json"
 echo "Datenverzeichnis: ${DATA_DIR}"
 echo "Interne Historie: ${DATA_DIR}/telemetry.sqlite"
 echo "Setup-Oberfläche: http://${PRIMARY_IP}:8080/"
 echo
-echo "Da der Service eine externe Config-Datei nutzt, erscheint beim ersten Aufruf automatisch der Setup-Assistent,"
-echo "solange ${CONFIG_PATH} noch nicht angelegt wurde."
+echo "DVhub nutzt eine externe Betriebs-Config und ein separates Herstellerprofil."
+echo "Technische Register und Victron-spezifische Kommunikationswerte liegen in ${CONFIG_DIR}/hersteller/victron.json."
 echo "Restart-Button und Health-Check sind über die Einstellungen aktiv."
 echo "Die interne Telemetrie-Datenbank wird automatisch aufgebaut und schreibt ab dem ersten Start alle relevanten Daten mit."

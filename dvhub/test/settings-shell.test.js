@@ -124,10 +124,8 @@ test('real config workspace stays section-focused and does not reopen unrelated 
   const definition = getConfigDefinition();
   const workspace = buildDestinationWorkspace(definition, 'connection');
 
-  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron', 'meter']);
+  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron']);
   assert.equal(workspace.sections[0].groups[0].openByDefault, true);
-  assert.equal(workspace.sections[0].groups[1].openByDefault, false);
-  assert.equal(workspace.sections[1].groups[0].openByDefault, false);
 });
 
 test('real config definition maps technical sections into Erweitert instead of exposing raw technical destinations', () => {
@@ -135,8 +133,19 @@ test('real config definition maps technical sections into Erweitert instead of e
   const workspace = buildDestinationWorkspace(definition, 'advanced');
   const destinationLabels = buildSettingsDestinations(definition).map((destination) => destination.label);
 
-  assert.ok(workspace.sections.some((section) => section.id === 'points'));
   assert.ok(workspace.sections.some((section) => section.id === 'scan'));
   assert.ok(!destinationLabels.includes('Lese-Register'));
   assert.ok(!destinationLabels.includes('Scan Tool'));
+  assert.ok(!workspace.sections.some((section) => section.id === 'points'));
+});
+
+test('real config definition exposes manufacturer selection and keeps Victron registers out of the editable workspace', () => {
+  const definition = getConfigDefinition();
+  const fieldPaths = definition.fields.map((field) => field.path).filter(Boolean);
+  const advancedWorkspace = buildDestinationWorkspace(definition, 'advanced');
+
+  assert.ok(fieldPaths.includes('manufacturer'));
+  assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'points'));
+  assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'controlWrite'));
+  assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'dvControl'));
 });

@@ -169,7 +169,6 @@ function validateIntegerInRange(value, min, max) {
 function validateSetupWizardState(state) {
   const steps = buildSetupSteps(state?.definition || setupDefinition);
   const summary = [];
-  const transport = getSetupTransportMode(state);
   const requireText = (stepId, path, message) => {
     if (String(resolveWizardValue(state, path, '') || '').trim()) return;
     pushValidationError(summary, stepId, path, message);
@@ -185,26 +184,12 @@ function validateSetupWizardState(state) {
 
   requireInteger('basics', 'httpPort', 1, 65535, 'Bitte einen gültigen Port zwischen 1 und 65535 eingeben.');
 
-  requireOption('transport', 'victron.transport', ['modbus', 'mqtt'], 'Bitte einen gültigen Victron-Transport wählen.');
-  if (transport === 'modbus') {
-    requireText('transport', 'victron.host', 'Bitte den GX-Host oder DNS-Namen angeben.');
-    requireInteger('transport', 'victron.port', 1, 65535, 'Bitte einen gültigen GX-Port zwischen 1 und 65535 eingeben.');
-    requireInteger('transport', 'victron.unitId', 0, 255, 'Bitte eine gültige Unit ID zwischen 0 und 255 eingeben.');
-    requireInteger('transport', 'victron.timeoutMs', 100, 60000, 'Bitte einen gültigen Timeout zwischen 100 und 60000 ms eingeben.');
-  } else {
-    if (isBlankValue(resolveWizardValue(state, 'victron.host', '')) && isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', ''))) {
-      pushValidationError(summary, 'transport', 'victron.mqtt.broker', 'Bitte entweder eine MQTT Broker URL oder den GX-Host angeben.');
-    }
-    requireText('transport', 'victron.mqtt.portalId', 'Bitte die Victron Portal ID für MQTT angeben.');
-    requireInteger('transport', 'victron.mqtt.keepaliveIntervalMs', 1000, 600000, 'Bitte ein gültiges Keepalive zwischen 1000 und 600000 ms eingeben.');
-  }
+  requireOption('transport', 'manufacturer', ['victron'], 'Bitte einen gültigen Hersteller wählen.');
+  requireText('transport', 'victron.host', 'Bitte den Anlagen-Host oder DNS-Namen angeben.');
 
   requireText('dv', 'modbusListenHost', 'Bitte den Modbus-Listen-Host angeben.');
   requireInteger('dv', 'modbusListenPort', 1, 65535, 'Bitte einen gültigen Port zwischen 1 und 65535 eingeben.');
   requireOption('dv', 'gridPositiveMeans', ['feed_in', 'grid_import'], 'Bitte eine gültige Vorzeichenlogik wählen.');
-  requireOption('dv', 'meter.fc', [3, 4], 'Bitte einen gültigen Meter Function Code wählen.');
-  requireInteger('dv', 'meter.address', 0, 65535, 'Bitte eine gültige Meter-Startadresse zwischen 0 und 65535 eingeben.');
-  requireInteger('dv', 'meter.quantity', 1, 125, 'Bitte eine gültige Registeranzahl zwischen 1 und 125 eingeben.');
 
   requireText('services', 'schedule.timezone', 'Bitte eine Zeitzone für den Zeitplan angeben.');
   if (resolveWizardValue(state, 'epex.enabled', false)) {
@@ -221,7 +206,7 @@ function validateSetupWizardState(state) {
     steps,
     stepOrder: steps.map((step) => step.id),
     activeStepId: resolveSetupStepId(state?.activeStepId, steps),
-    transportMode: transport,
+    transportMode: getSetupTransportMode(state),
     validation: buildValidationResult(summary, steps)
   };
 }
@@ -304,35 +289,24 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         note: 'Alles Weitere bleibt später in der Einrichtung verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
       };
     case 'transport':
-      if (getSetupTransportMode(state) === 'mqtt') {
-        return {
-          ...baseDescription,
-          highlight: {
-            eyebrow: 'Venus MQTT',
-            title: 'MQTT mit Portal ID und optionalem Broker',
-            body: 'Portal ID ist Pflicht. Einen Broker trennst du nur dann ein, wenn DVhub nicht direkt über den GX-Host verbinden soll.'
-          },
-          note: 'Wenn das Broker-Feld leer bleibt, verwendet DVhub den GX-Host als MQTT-Fallback. Unpassende Modbus-Felder verschwinden aus diesem Schritt.'
-        };
-      }
       return {
         ...baseDescription,
         highlight: {
-          eyebrow: 'Direkte Registerverbindung',
-          title: 'Modbus TCP direkt zum GX',
-          body: 'Für Modbus brauchst du nur Host, Port, Unit ID und Timeout für die erste stabile Registerverbindung.'
+          eyebrow: 'Herstellerprofil',
+          title: 'Nur Hersteller und Anlagenadresse werden im Setup gepflegt',
+          body: 'Technische Kommunikations- und Registerwerte kommen aus der Herstellerdatei. Im Setup bleibt nur die Auswahl des Profils und die Adresse der Anlage.'
         },
-        note: 'MQTT-spezifische Felder werden ausgeblendet, damit der Schritt ruhig und eindeutig bleibt.'
+        note: 'Wenn spezielle Register oder Kommunikationswerte nötig sind, werden sie bewusst außerhalb des normalen Setups in der Herstellerdatei gepflegt.'
       };
     case 'dv':
       return {
         ...baseDescription,
         highlight: {
-          eyebrow: 'Proxy & Meter',
-          title: 'DV-Port, Meterblock und Vorzeichen an einem Ort',
-          body: 'In diesem Schritt definierst du, wie DVhub Netzwerte liest und später an externe Systeme weiterreicht.'
+          eyebrow: 'Proxy & Richtung',
+          title: 'DV-Port und Vorzeichenlogik an einem Ort',
+          body: 'In diesem Schritt definierst du nur noch, wie DVhub den lokalen Proxy anbietet und wie Netzwerte interpretiert werden.'
         },
-        note: 'Nur der Kernblock für den Start bleibt sichtbar. Host- oder Timeout-Overrides des Meters folgen später in der Einrichtung.'
+        note: 'Meter- und Registerdetails bleiben im Herstellerprofil, damit sie nicht versehentlich überschrieben werden.'
       };
     case 'services':
       return {
@@ -434,7 +408,7 @@ function collectInheritedDvControlNotes(state) {
 }
 
 function buildSetupReviewSnapshot(state) {
-  const transportMode = getSetupTransportMode(state);
+  const manufacturer = resolveWizardValue(state, 'manufacturer', 'victron');
   const host = resolveWizardValue(state, 'victron.host', '');
   const scheduleTimezone = resolveWizardValue(state, 'schedule.timezone', '');
   const epexEnabled = Boolean(resolveWizardValue(state, 'epex.enabled', false));
@@ -442,30 +416,13 @@ function buildSetupReviewSnapshot(state) {
 
   const transportSection = {
     id: 'transport',
-    title: 'Victron Verbindung',
+    title: 'Anlage',
     entries: [
-      { label: 'Transport', value: transportMode === 'mqtt' ? 'MQTT' : 'Modbus TCP' },
-      { label: 'GX Host', value: formatReviewValue(host) }
+      { label: 'Hersteller', value: formatReviewValue(manufacturer) },
+      { label: 'Anlagenadresse', value: formatReviewValue(host) }
     ],
-    notes: []
+    notes: ['Register- und Kommunikationswerte werden aus dem aktiven Herstellerprofil geladen.']
   };
-
-  if (transportMode === 'mqtt') {
-    transportSection.entries.push(
-      { label: 'Portal ID', value: formatReviewValue(resolveWizardValue(state, 'victron.mqtt.portalId', '')) },
-      { label: 'Broker', value: formatReviewValue(resolveWizardValue(state, 'victron.mqtt.broker', ''), 'GX-Host als Fallback') },
-      { label: 'Keepalive', value: `${formatReviewValue(resolveWizardValue(state, 'victron.mqtt.keepaliveIntervalMs', ''))} ms` }
-    );
-    if (isBlankValue(resolveWizardValue(state, 'victron.mqtt.broker', '')) && !isBlankValue(host)) {
-      transportSection.notes.push(`Kein eigener Broker gespeichert. DVhub nutzt beim Verbinden automatisch den GX-Host ${host} auf MQTT-Port 1883.`);
-    }
-  } else {
-    transportSection.entries.push(
-      { label: 'GX Port', value: formatReviewValue(resolveWizardValue(state, 'victron.port', '')) },
-      { label: 'Unit ID', value: formatReviewValue(resolveWizardValue(state, 'victron.unitId', '')) },
-      { label: 'Timeout', value: `${formatReviewValue(resolveWizardValue(state, 'victron.timeoutMs', ''))} ms` }
-    );
-  }
 
   const serviceNotes = [];
   if (epexEnabled && !hasOwnDraftValue(state, 'epex.timezone') && !isBlankValue(scheduleTimezone)) {
@@ -487,27 +444,13 @@ function buildSetupReviewSnapshot(state) {
     transportSection,
     {
       id: 'dv',
-      title: 'DV & Meter',
+      title: 'DV',
       entries: [
         { label: 'Proxy Host', value: formatReviewValue(resolveWizardValue(state, 'modbusListenHost', '')) },
         { label: 'Proxy Port', value: formatReviewValue(resolveWizardValue(state, 'modbusListenPort', '')) },
-        { label: 'Vorzeichenlogik', value: resolveWizardValue(state, 'gridPositiveMeans', '') === 'grid_import' ? 'Positiv = Netzbezug' : 'Positiv = Einspeisung' },
-        { label: 'Meter FC', value: formatReviewValue(resolveWizardValue(state, 'meter.fc', '')) },
-        { label: 'Meter Start', value: formatReviewValue(resolveWizardValue(state, 'meter.address', '')) },
-        { label: 'Register', value: formatReviewValue(resolveWizardValue(state, 'meter.quantity', '')) }
+        { label: 'Vorzeichenlogik', value: resolveWizardValue(state, 'gridPositiveMeans', '') === 'grid_import' ? 'Positiv = Netzbezug' : 'Positiv = Einspeisung' }
       ],
-      notes: collectInheritedMeterNotes(state)
-    },
-    {
-      id: 'dvControl',
-      title: 'DV Steuerung',
-      entries: [
-        { label: 'DV Steuerung', value: formatReviewValue(resolveWizardValue(state, 'dvControl.enabled', false)) },
-        { label: 'DC-PV Register', value: formatReviewValue(resolveWizardValue(state, 'dvControl.feedExcessDcPv.address', '')) },
-        { label: 'AC-PV Register', value: formatReviewValue(resolveWizardValue(state, 'dvControl.dontFeedExcessAcPv.address', '')) },
-        { label: 'Negativpreis-Schutz', value: formatReviewValue(resolveWizardValue(state, 'dvControl.negativePriceProtection.enabled', false)) }
-      ],
-      notes: collectInheritedDvControlNotes(state)
+      notes: ['Meter- und DV-Register kommen aus dem Herstellerprofil und sind hier bewusst nicht editierbar.']
     },
     {
       id: 'services',
@@ -539,11 +482,8 @@ function validateSetupSubmissionConfig(config, state = setupWizardState) {
 function describeRestartPath(path) {
   if (path === 'httpPort') return 'Webserver-Port';
   if (path === 'modbusListenHost' || path === 'modbusListenPort') return 'DV Modbus Proxy';
-  if (path === 'victron.transport') return 'Victron-Transport';
-  if (path.startsWith('victron.mqtt.broker')) return 'MQTT Broker';
-  if (path.startsWith('victron.mqtt.portalId')) return 'MQTT Portal ID';
-  if (path.startsWith('victron.mqtt.keepaliveIntervalMs')) return 'MQTT Keepalive';
-  if (path.startsWith('victron.mqtt.qos')) return 'MQTT QoS';
+  if (path === 'manufacturer') return 'Herstellerprofil';
+  if (path === 'victron.host') return 'Anlagenadresse';
   return path;
 }
 

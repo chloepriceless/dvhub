@@ -25,6 +25,18 @@ const DV_CONTROL_META = {
 };
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
+const SUPPORTED_MANUFACTURERS = ['victron'];
+const MANUFACTURER_MANAGED_PATHS = [
+  'meter',
+  'points',
+  'controlWrite',
+  'dvControl',
+  'victron.transport',
+  'victron.port',
+  'victron.unitId',
+  'victron.timeoutMs',
+  'victron.mqtt'
+];
 
 const SETTINGS_DESTINATIONS = [
   {
@@ -36,14 +48,14 @@ const SETTINGS_DESTINATIONS = [
   {
     id: 'connection',
     label: 'Anlage verbinden',
-    description: 'Victron-System und Netzzaehler verständlich anbinden.',
-    intro: 'Hier legst du fest, wie DVhub mit deiner Anlage spricht und wo die Kernmesswerte herkommen.'
+    description: 'Herstellerprofil und Anlagenadresse für die Verbindung.',
+    intro: 'Hier legst du fest, welches Herstellerprofil aktiv ist und unter welcher Adresse die Anlage erreichbar ist.'
   },
   {
     id: 'control',
     label: 'Steuerung',
-    description: 'Regelung, Schreibwerte und Zeitplan-Basis für DVhub.',
-    intro: 'Diese Einstellungen steuern Sollwerte, DV-Logik und die Basis des Zeitplans.'
+    description: 'Zeitplan-Basis und globale Steuerwerte für DVhub.',
+    intro: 'Diese Einstellungen steuern Zeitplan, Defaults und DVhub-eigene Regelungslogik.'
   },
   {
     id: 'services',
@@ -54,8 +66,8 @@ const SETTINGS_DESTINATIONS = [
   {
     id: 'advanced',
     label: 'Erweitert',
-    description: 'Register-nahe und technische Bereiche für Spezialfaelle.',
-    intro: 'Hier liegen tiefergehende Register- und Scan-Einstellungen, die meist nur bei Sonderfaellen noetig sind.'
+    description: 'Technische Diagnose und Spezialwerkzeuge.',
+    intro: 'Hier liegen nur noch technische Diagnose- und Servicewerkzeuge. Hersteller-Register werden bewusst nicht im Alltags-UI gepflegt.'
   }
 ];
 
@@ -68,33 +80,9 @@ const SECTIONS = [
   },
   {
     id: 'victron',
-    label: 'Victron Verbindung',
-    description: 'Basisverbindung zum GX-System per Modbus TCP oder MQTT.',
+    label: 'Anlagenprofil',
+    description: 'Aktiver Hersteller und die Anlagenadresse.',
     destination: 'connection'
-  },
-  {
-    id: 'meter',
-    label: 'Netzzaehler',
-    description: 'Register- und Verbindungsdaten für den Netzleistungsblock.',
-    destination: 'connection'
-  },
-  {
-    id: 'points',
-    label: 'Lese-Register',
-    description: 'Alle Lesepunkte für SOC, PV, Batterie, Setpoints und Hausverbrauch.',
-    destination: 'advanced'
-  },
-  {
-    id: 'controlWrite',
-    label: 'Schreib-Register',
-    description: 'Register für Grid Setpoint, Charge Current und Minimum SOC.',
-    destination: 'control'
-  },
-  {
-    id: 'dvControl',
-    label: 'DV Steuerung',
-    description: 'Victron-Register für DC/AC-PV-Freigabe und Negativpreis-Schutz.',
-    destination: 'control'
   },
   {
     id: 'schedule',
@@ -146,8 +134,8 @@ const SETUP_WIZARD_STEPS = [
     id: 'transport',
     index: 1,
     label: 'Schritt 2',
-    title: 'Victron Verbindung',
-    description: 'Wähle den passenden Victron-Transport und zeige nur die Felder, die für Modbus oder MQTT wirklich noetig sind.'
+    title: 'Anlage',
+    description: 'Wähle das aktive Herstellerprofil und trage die Adresse deiner Anlage ein.'
   },
   {
     id: 'dv',
@@ -176,51 +164,15 @@ const SETUP_WIZARD_FIELD_META = {
     order: 20,
     help: 'Optional. Schuetzt die API direkt ab dem ersten Start, wenn du extern auf DVhub zugreifst.'
   },
-  'victron.transport': {
+  manufacturer: {
     stepId: 'transport',
     order: 10,
-    help: 'Modbus ist die direkte GX-Verbindung. MQTT eignet sich für Venus-OS-Daten mit Portal-ID.'
+    help: 'Aktuell ist Victron vorbereitet. Weitere Hersteller koennen spaeter ergänzt werden.'
   },
   'victron.host': {
     stepId: 'transport',
     order: 20,
-    help: 'Adresse deines GX. Bei MQTT dient sie auch als Fallback, wenn kein eigener Broker eingetragen ist.'
-  },
-  'victron.port': {
-    stepId: 'transport',
-    order: 30,
-    visibleWhenTransport: ['modbus'],
-    help: 'Nur für Modbus. In den meisten Installationen bleibt das 502.'
-  },
-  'victron.unitId': {
-    stepId: 'transport',
-    order: 40,
-    visibleWhenTransport: ['modbus'],
-    help: 'Nur für Modbus. Der GX nutzt typischerweise die Unit ID 100.'
-  },
-  'victron.timeoutMs': {
-    stepId: 'transport',
-    order: 50,
-    visibleWhenTransport: ['modbus'],
-    help: 'Nur für Modbus. Definiert, wie lange DVhub auf eine Register-Antwort wartet.'
-  },
-  'victron.mqtt.portalId': {
-    stepId: 'transport',
-    order: 60,
-    visibleWhenTransport: ['mqtt'],
-    help: 'Pflicht für Victron MQTT, damit DVhub die richtigen Venus-Topics lesen kann.'
-  },
-  'victron.mqtt.broker': {
-    stepId: 'transport',
-    order: 70,
-    visibleWhenTransport: ['mqtt'],
-    help: 'Optionaler eigener Broker. Leer bedeutet: DVhub nutzt den GX-Host als MQTT-Ziel.'
-  },
-  'victron.mqtt.keepaliveIntervalMs': {
-    stepId: 'transport',
-    order: 80,
-    visibleWhenTransport: ['mqtt'],
-    help: 'Nur für MQTT. Haelt die Verbindung aktiv, wenn laenger keine Daten eingehen.'
+    help: 'IP-Adresse oder Hostname der Anlage. Technische Register- und Kommunikationswerte kommen aus dem Herstellerprofil.'
   },
   modbusListenHost: {
     stepId: 'dv',
@@ -236,26 +188,6 @@ const SETUP_WIZARD_FIELD_META = {
     stepId: 'dv',
     order: 30,
     help: 'Hier legst du fest, ob positive Netzwerte Einspeisung oder Netzbezug bedeuten.'
-  },
-  'meter.fc': {
-    stepId: 'dv',
-    order: 40,
-    help: 'Function Code für den Netzleistungsblock. Bei vielen Victron-Setups ist das 4.'
-  },
-  'meter.address': {
-    stepId: 'dv',
-    order: 50,
-    help: 'Startadresse des Meterblocks für L1, L2 und L3.'
-  },
-  'meter.quantity': {
-    stepId: 'dv',
-    order: 60,
-    help: 'Wie viele Register DVhub für den Meterblock am Stueck liest.'
-  },
-  'dvControl.enabled': {
-    stepId: 'dv',
-    order: 70,
-    help: 'Aktiviert die DV-Schreiblogik, sobald später Signale oder Preise darauf reagieren.'
   },
   'schedule.timezone': {
     stepId: 'services',
@@ -303,11 +235,8 @@ const restartSensitivePrefixes = [
   'telemetry.historyImport.enabled',
   'telemetry.historyImport.provider',
   'schedule.evaluateMs',
-  'victron.transport',
-  'victron.mqtt.broker',
-  'victron.mqtt.portalId',
-  'victron.mqtt.keepaliveIntervalMs',
-  'victron.mqtt.qos'
+  'manufacturer',
+  'victron.host'
 ];
 
 function addSetupWizardMetadata(fields) {
@@ -386,6 +315,42 @@ export function deletePath(obj, path) {
     cur = cur[part];
   }
   delete cur[parts[0]];
+}
+
+function stripManufacturerManagedFields(raw, warnings) {
+  for (const managedPath of MANUFACTURER_MANAGED_PATHS) {
+    if (!hasPath(raw, managedPath)) continue;
+    deletePath(raw, managedPath);
+    warnings.push(`${managedPath}: managed by manufacturer profile and ignored in config.json`);
+  }
+}
+
+function resolveManufacturerProfilePath(configPath, manufacturer) {
+  return path.join(path.dirname(configPath), 'hersteller', `${manufacturer}.json`);
+}
+
+function loadManufacturerProfile(profilePath) {
+  const text = fs.readFileSync(profilePath, 'utf8');
+  const parsed = text.trim() ? JSON.parse(text) : {};
+  if (!isPlainObject(parsed)) {
+    throw new Error('manufacturer profile root must be an object');
+  }
+  return parsed;
+}
+
+function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
+  const effectiveConfig = clone(persistedConfig);
+  const persistedVictron = isPlainObject(persistedConfig?.victron) ? persistedConfig.victron : {};
+  const profileVictron = isPlainObject(manufacturerProfile?.victron) ? manufacturerProfile.victron : {};
+
+  effectiveConfig.victron = deepMerge(profileVictron, { host: persistedVictron.host ?? '' });
+
+  if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
+  if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
+  if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
+  if (isPlainObject(manufacturerProfile?.dvControl)) effectiveConfig.dvControl = clone(manufacturerProfile.dvControl);
+
+  return applyVictronDefaults(effectiveConfig);
 }
 
 function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {}) {
@@ -786,200 +751,24 @@ function buildFieldDefinitions() {
       section: 'victron',
       group: 'connection',
       groupLabel: 'Verbindung',
-      groupDescription: 'Zentrale Verbindung zum GX oder Venus OS.',
-      path: 'victron.transport',
-      label: 'Transport',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'manufacturer',
+      label: 'Hersteller',
       type: 'select',
       options: [
-        { value: 'modbus', label: 'Modbus TCP' },
-        { value: 'mqtt', label: 'MQTT (Venus OS)' }
+        { value: 'victron', label: 'Victron' }
       ],
-      help: 'Waehlt den Kommunikationsweg zum Victron-System.'
+      help: 'Aktuell ist nur Victron auswählbar. Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',
       group: 'connection',
       groupLabel: 'Verbindung',
-      groupDescription: 'Zentrale Verbindung zum GX oder Venus OS.',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
       path: 'victron.host',
-      label: 'GX Host',
+      label: 'Anlagenadresse',
       type: 'text',
-      help: 'IP-Adresse oder Hostname des GX.'
-    },
-    {
-      section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Zentrale Verbindung zum GX oder Venus OS.',
-      path: 'victron.port',
-      label: 'GX Port',
-      type: 'number',
-      min: 1,
-      max: 65535,
-      help: 'Standard ist 502 für Modbus TCP.'
-    },
-    {
-      section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Zentrale Verbindung zum GX oder Venus OS.',
-      path: 'victron.unitId',
-      label: 'GX Unit ID',
-      type: 'number',
-      min: 0,
-      max: 255,
-      help: 'Modbus Unit ID des GX.'
-    },
-    {
-      section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Zentrale Verbindung zum GX oder Venus OS.',
-      path: 'victron.timeoutMs',
-      label: 'GX Timeout (ms)',
-      type: 'number',
-      min: 100,
-      max: 60000,
-      step: 100,
-      help: 'Timeout für Modbus-Requests.'
-    },
-    {
-      section: 'victron',
-      group: 'mqtt',
-      groupLabel: 'MQTT',
-      groupDescription: 'Nur relevant, wenn als Transport MQTT gewaehlt ist.',
-      path: 'victron.mqtt.broker',
-      label: 'MQTT Broker URL',
-      type: 'text',
-      help: 'Zum Beispiel mqtt://192.168.1.10:1883'
-    },
-    {
-      section: 'victron',
-      group: 'mqtt',
-      groupLabel: 'MQTT',
-      groupDescription: 'Nur relevant, wenn als Transport MQTT gewaehlt ist.',
-      path: 'victron.mqtt.portalId',
-      label: 'Portal ID',
-      type: 'text',
-      help: 'Victron Portal ID für Venus MQTT Topics.'
-    },
-    {
-      section: 'victron',
-      group: 'mqtt',
-      groupLabel: 'MQTT',
-      groupDescription: 'Nur relevant, wenn als Transport MQTT gewaehlt ist.',
-      path: 'victron.mqtt.keepaliveIntervalMs',
-      label: 'MQTT Keepalive (ms)',
-      type: 'number',
-      min: 1000,
-      max: 600000,
-      step: 1000,
-      help: 'Intervall für MQTT Keepalive-Pakete.'
-    },
-    {
-      section: 'victron',
-      group: 'mqtt',
-      groupLabel: 'MQTT',
-      groupDescription: 'Nur relevant, wenn als Transport MQTT gewaehlt ist.',
-      path: 'victron.mqtt.qos',
-      label: 'MQTT QoS',
-      type: 'select',
-      options: [
-        { value: 0, label: '0 - At most once' },
-        { value: 1, label: '1 - At least once' },
-        { value: 2, label: '2 - Exactly once' }
-      ],
-      help: 'QoS für MQTT Subscribe/Publish.'
-    },
-
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.fc',
-      label: 'Function Code',
-      type: 'select',
-      options: [
-        { value: 3, label: '3 - Holding Register' },
-        { value: 4, label: '4 - Input Register' }
-      ],
-      help: 'Typischerweise 4 für Input Register.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.address',
-      label: 'Startadresse',
-      type: 'number',
-      min: 0,
-      max: 65535,
-      help: 'Erstes Register des Netzleistungsblocks.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.quantity',
-      label: 'Anzahl Register',
-      type: 'number',
-      min: 1,
-      max: 125,
-      help: 'Typischerweise 3 Register für L1/L2/L3.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.timeoutMs',
-      label: 'Timeout (ms)',
-      type: 'number',
-      min: 100,
-      max: 60000,
-      step: 100,
-      empty: 'delete',
-      help: 'Leer lassen für Victron-Timeout.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.host',
-      label: 'Host Override',
-      type: 'text',
-      empty: 'delete',
-      help: 'Leer lassen, um den Victron-Host zu verwenden.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.port',
-      label: 'Port Override',
-      type: 'number',
-      min: 1,
-      max: 65535,
-      empty: 'delete',
-      help: 'Leer lassen, um den Victron-Port zu verwenden.'
-    },
-    {
-      section: 'meter',
-      group: 'main',
-      groupLabel: 'Hauptmeter',
-      groupDescription: 'Netzleistungsblock für L1/L2/L3.',
-      path: 'meter.unitId',
-      label: 'Unit ID Override',
-      type: 'number',
-      min: 0,
-      max: 255,
-      empty: 'delete',
-      help: 'Leer lassen, um die Victron Unit ID zu verwenden.'
+      help: 'IP-Adresse oder Hostname der Anlage. Register und weitere Kommunikationswerte kommen aus der Herstellerdatei.'
     },
 
     {
@@ -1590,58 +1379,6 @@ function buildFieldDefinitions() {
     }
   ];
 
-  for (const [key, meta] of Object.entries(POINT_META)) {
-    fields.push(...buildRegisterFieldGroup('points', key, 'points', meta, {
-      includeSumRegisters: key === 'selfConsumptionW'
-    }));
-  }
-
-  for (const [key, meta] of Object.entries(CONTROL_WRITE_META)) {
-    fields.push(...buildRegisterFieldGroup('controlWrite', key, 'controlWrite', meta, {
-      includeWriteType: true,
-      allowAddressZero: key === 'gridSetpointW'
-    }));
-  }
-
-  for (const [key, meta] of Object.entries(DV_CONTROL_META)) {
-    fields.push(...buildRegisterFieldGroup('dvControl', key, 'dvControl', meta, {
-      includeWriteType: true
-    }));
-  }
-
-  fields.push(
-    {
-      section: 'dvControl',
-      group: 'safety',
-      groupLabel: 'Negativpreis-Schutz',
-      groupDescription: 'Automatische Schutzlogik bei negativen Preisen.',
-      path: 'dvControl.enabled',
-      label: 'DV Control aktiv',
-      type: 'boolean',
-      help: 'Aktiviert die automatische Umschaltung für DV-Signale.'
-    },
-    {
-      section: 'dvControl',
-      group: 'safety',
-      groupLabel: 'Negativpreis-Schutz',
-      groupDescription: 'Automatische Schutzlogik bei negativen Preisen.',
-      path: 'dvControl.negativePriceProtection.enabled',
-      label: 'Negativpreis-Schutz aktiv',
-      type: 'boolean',
-      help: 'Aktiviert die Schutzlogik bei negativen Preisen.'
-    },
-    {
-      section: 'dvControl',
-      group: 'safety',
-      groupLabel: 'Negativpreis-Schutz',
-      groupDescription: 'Automatische Schutzlogik bei negativen Preisen.',
-      path: 'dvControl.negativePriceProtection.gridSetpointW',
-      label: 'Negativpreis Grid Setpoint (W)',
-      type: 'number',
-      help: 'Setpoint, der bei negativen Preisen geschrieben wird.'
-    }
-  );
-
   return addSetupWizardMetadata(fields.filter((entry) => entry.path));
 }
 
@@ -1649,6 +1386,7 @@ const FIELD_DEFINITIONS = buildFieldDefinitions();
 
 export function createDefaultConfig() {
   return {
+    manufacturer: 'victron',
     httpPort: 8080,
     apiToken: '',
     modbusListenHost: '0.0.0.0',
@@ -2158,6 +1896,7 @@ function sanitizeRawConfig(rawInput) {
     raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
   }
   resetLegacyPlaceholderRegisters(raw, warnings);
+  stripManufacturerManagedFields(raw, warnings);
   return { raw, warnings };
 }
 
@@ -2243,6 +1982,9 @@ export function loadConfigFile(configPath) {
   let parsed = {};
   let valid = true;
   let parseError = null;
+  let manufacturerProfile = null;
+  let manufacturerProfilePath = null;
+  let manufacturerProfileError = null;
 
   if (exists) {
     try {
@@ -2261,6 +2003,19 @@ export function loadConfigFile(configPath) {
   }
 
   const normalized = normalizeConfigInput(parsed);
+  const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
+  manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
+  let effectiveConfig = normalized.effectiveConfig;
+
+  try {
+    manufacturerProfile = loadManufacturerProfile(manufacturerProfilePath);
+    effectiveConfig = applyManufacturerProfile(normalized.persistedConfig, manufacturerProfile);
+  } catch (error) {
+    manufacturerProfileError = error.message;
+    valid = false;
+    if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
+  }
+
   return {
     path: configPath,
     exists,
@@ -2269,8 +2024,11 @@ export function loadConfigFile(configPath) {
     needsSetup: !exists || !valid,
     rawConfig: normalized.rawConfig,
     persistedConfig: normalized.persistedConfig,
-    effectiveConfig: normalized.effectiveConfig,
-    warnings: normalized.warnings
+    effectiveConfig,
+    warnings: normalized.warnings,
+    manufacturerProfile,
+    manufacturerProfilePath,
+    manufacturerProfileError
   };
 }
 

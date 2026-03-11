@@ -268,8 +268,13 @@ sudo chown -R dvhub:dvhub /opt/dvhub /etc/dvhub /var/lib/dvhub
 cd /opt/dvhub/dvhub
 npm install --omit=dev
 sudo cp config.example.json /etc/dvhub/config.json
+sudo mkdir -p /etc/dvhub/hersteller
+sudo cp hersteller/victron.json /etc/dvhub/hersteller/victron.json
 sudo nano /etc/dvhub/config.json
 ```
+
+Technische Victron-Werte wie Register, Port, Unit-ID oder Timeout werden nicht mehr in `/etc/dvhub/config.json` gepflegt.
+Diese Werte liegen im Herstellerprofil unter `/etc/dvhub/hersteller/victron.json`.
 
 Nur bei MQTT-Nutzung zusätzlich:
 
@@ -394,11 +399,8 @@ Die Einstellungsseite pflegt diese Werte zentral im Bereich Marktprämie.
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `victron` | GX-Verbindung via Host, Port, Unit-ID, Transport, MQTT |
-| `meter` | Grid-Meter Register |
-| `points` | Lesepunkte für SOC, Batterie, PV und weitere Werte |
-| `controlWrite` | Schreibbare Register |
-| `dvControl` | DV-Steuerung und Negativpreis-Schutz |
+| `manufacturer` | Aktives Herstellerprofil, aktuell `victron` |
+| `victron` | Anlagenadresse (`host`) |
 | `schedule` | Zeitplan-Regeln und Defaults |
 | `epex` | Preiszone und Zeitzone |
 | `influx` | InfluxDB-Anbindung |
@@ -406,11 +408,16 @@ Die Einstellungsseite pflegt diese Werte zentral im Bereich Marktprämie.
 | `userEnergyPricing` | Eigene Preislogik für Netz, PV und Akku plus Marktwert-/PV-Anlagen-Metadaten |
 | `scan` | Modbus Scan-Parameter |
 
+Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
+
+| Datei | Zweck |
+|-------|-------|
+| `/etc/dvhub/hersteller/victron.json` | Victron-spezifische Kommunikations- und Registerwerte |
+
 ### Hinweise
 
-- `controlWrite.<target>.writeType` kann `int16`, `uint16`, `int32` oder `uint32` sein
-- für ESS Mode 2/3 wird Grid-Setpoint über `unitId 100`, `address 2700`, `fc 16`, `writeType int16` empfohlen
-- Legacy-Fallback für Grid-Setpoint bleibt mit `fc 6` auf `address 2700` möglich
+- Änderungen an Victron-Registern, Port, Unit-ID oder Timeout erfolgen bewusst nur in `/etc/dvhub/hersteller/victron.json`
+- Die normale `config.json` bleibt damit klein und sicher und enthält nur Betriebs- und Anlagenwerte
 - **InfluxDB v3** ist Default, v2 bleibt kompatibel
 - `dvControl.enabled` ist standardmäßig deaktiviert und muss aktiv gesetzt werden
 - `userEnergyPricing` erlaubt festen Endkundenpreis oder dynamische Preisbestandteile auf Basis von EPEX
