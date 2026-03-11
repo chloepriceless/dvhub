@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVhub Historie</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-history">
+  <div class="app-shell shell-layout">
+    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
+      <div class="app-nav-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
+        <div>
+          <p class="app-nav-eyebrow">Direktvermarktung</p>
+          <strong class="app-nav-title">DVhub</strong>
+        </div>
+      </div>
+      <nav class="app-nav-links">
+        <a class="app-nav-link" href="/">Leitstand</a>
+        <a class="app-nav-link is-active" href="/history.html">Historie</a>
+        <a class="app-nav-link" href="/settings.html">Einrichtung</a>
+        <a class="app-nav-link" href="/tools.html">Wartung</a>
+        <a class="app-nav-link" href="/setup.html">Einrichtung starten</a>
+      </nav>
+      <div class="app-nav-meta">
+        <p class="card-title">Historie</p>
+        <p class="tools-note">Zeitreihen, Kosten und Erlöse aus der internen SQLite-Historie.</p>
+      </div>
+    </aside>
+
+    <div class="app-main history-layout">
+      <header class="panel compact-topbar reveal">
+        <div class="compact-topbar-copy">
+          <p class="page-kicker">Historie</p>
+          <h1 class="page-title">DVhub History Analytics</h1>
+          <p class="page-subtitle">Rückblick auf Energieflüsse, Marktpreise, Kosten und Erlöse auf Basis der internen Telemetrie-Datenbank.</p>
+          <div id="historyMeta" class="meta compact-meta">Historienansicht wird vorbereitet...</div>
+        </div>
+        <div class="page-actions history-actions">
+          <div class="history-nav-buttons" aria-label="Zeitraum wechseln">
+            <button id="historyPrevBtn" class="btn btn-secondary history-arrow-btn" type="button" aria-label="Vorheriger Zeitraum">&#8592;</button>
+            <button id="historyNextBtn" class="btn btn-secondary history-arrow-btn" type="button" aria-label="Naechster Zeitraum">&#8594;</button>
+          </div>
+          <label class="history-control">
+            <span>Ansicht</span>
+            <select id="historyView">
+              <option value="day">Tag</option>
+              <option value="week">Woche</option>
+              <option value="month">Monat</option>
+              <option value="year">Jahr</option>
+            </select>
+          </label>
+          <label class="history-control">
+            <span>Datum</span>
+            <input id="historyDate" type="date" />
+          </label>
+          <label class="history-control history-control-wide">
+            <span id="historyOpportunityLabel">Vergleich Marktwert 0 %</span>
+            <input id="historyOpportunityBlend" type="range" min="0" max="100" step="5" value="0" />
+          </label>
+          <button id="historyBackfillBtn" class="btn btn-primary" type="button">Preise nachladen</button>
+        </div>
+      </header>
+
+      <section id="historyBanner" class="status-banner reveal">
+        <div class="history-status-main">
+          <span id="historyBannerText">Lade Historie...</span>
+          <button id="historyStatusInfoToggle" class="btn btn-ghost btn-inline" type="button">Info</button>
+        </div>
+        <div id="historyStatusInfo" class="history-status-info" hidden></div>
+      </section>
+
+      <section id="historySummaryCard" class="panel history-summary-card reveal">
+        <div class="history-summary-grid">
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Finanz-Kern</p>
+                <h2 class="section-title">Reale Geldbilanz</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span>Bezugs-Kosten</span>
+                <strong id="historyKpiCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Erlös aus Einspeisung</span>
+                <strong id="historyKpiRevenue">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Netto</span>
+                <strong id="historyKpiNet">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Gespart / Brutto</p>
+                <h2 class="section-title">Vermiedene Kosten transparent</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics history-summary-breakdown">
+              <div class="history-summary-item is-key">
+                <span>Vermiedene Bezugskosten</span>
+                <strong id="historyKpiAvoided">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV brutto</span>
+                <strong id="historyKpiAvoidedPvGross">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Akku brutto</span>
+                <strong id="historyKpiAvoidedBatteryGross">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV Kosten</span>
+                <strong id="historyKpiAvoidedPvCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Akku Kosten</span>
+                <strong id="historyKpiAvoidedBatteryCost">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Gespartes Geld</span>
+                <strong id="historyKpiSavedMoney">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Brutto-"Erlös"</span>
+                <strong id="historyKpiGrossReturn">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="history-summary-block">
+            <div class="history-summary-block-head">
+              <div>
+                <p class="card-title">Energiemengen</p>
+                <h2 class="section-title">Bezug, Verbrauch und Erzeugung</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span>Bezug</span>
+                <strong id="historyKpiImport">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Verbrauch</span>
+                <strong id="historyKpiLoad">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>PV erzeugt</span>
+                <strong id="historyKpiPv">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>VBH</span>
+                <strong id="historyKpiVbh">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>Einspeisung</span>
+                <strong id="historyKpiExport">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article id="historyPremiumFields" class="history-summary-block history-summary-premium" hidden>
+            <div class="history-summary-block-head">
+              <div>
+                <p id="historyPremiumScopeLabel" class="card-title">Jahresansicht</p>
+                <h2 class="section-title">Marktprämie</h2>
+              </div>
+            </div>
+            <div class="history-summary-metrics">
+              <div class="history-summary-item">
+                <span id="historyPremiumMarketValueLabel">Jahresmarktwert</span>
+                <strong id="historyKpiAnnualMarketValue">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span>förderfähige Einspeisemenge</span>
+                <strong id="historyKpiPremiumEligibleExport">-</strong>
+              </div>
+              <div class="history-summary-item is-key">
+                <span>Marktprämie</span>
+                <strong id="historyKpiMarketPremium">-</strong>
+              </div>
+              <div class="history-summary-item">
+                <span id="historyPremiumRateLabel">Marktprämie ct/kWh</span>
+                <strong id="historyKpiMarketPremiumRate">-</strong>
+              </div>
+            </div>
+            <p id="historyPremiumHint" class="history-summary-hint" hidden></p>
+          </article>
+        </div>
+      </section>
+
+      <section id="historyChartGrid" class="history-chart-grid reveal">
+        <article id="historyFinancialPanel" class="panel history-chart-panel history-chart-panel-wide">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Analyse</p>
+              <h2 class="section-title">Netto-Analyse</h2>
+            </div>
+            <div id="historyAggregateMode" class="history-aggregate-mode" hidden>
+              <button id="historyAggregateOverviewBtn" class="btn btn-secondary btn-inline history-aggregate-mode-btn" type="button">Übersicht</button>
+              <button id="historyAggregateTableBtn" class="btn btn-secondary btn-inline history-aggregate-mode-btn" type="button">Tabelle</button>
+            </div>
+          </div>
+          <div id="historyFinancialChart" class="history-chart-shell"></div>
+        </article>
+        <article id="historyEnergyPanel" class="panel history-chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Energie</p>
+              <h2 class="section-title">PV, Import, Akku, Export und Last</h2>
+            </div>
+          </div>
+          <div id="historyEnergyChart" class="history-chart-shell"></div>
+        </article>
+        <article id="historyPricePanel" class="panel history-chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">Preise</p>
+              <h2 class="section-title">Tagespreise und Hinweise</h2>
+            </div>
+          </div>
+          <div id="historyPriceChart" class="history-chart-shell"></div>
+        </article>
+      </section>
+
+      <section class="panel reveal">
+        <div class="panel-head">
+          <div>
+            <p class="card-title">Details</p>
+            <h2 class="section-title">Historie als Tabelle</h2>
+          </div>
+          <button id="historyDetailsToggle" class="btn btn-secondary btn-inline" type="button">Details anzeigen</button>
+        </div>
+        <div id="historyDetailsContent" hidden>
+          <div id="historyRows" class="history-rows"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script src="/history.js"></script>
+</body>
+</html>

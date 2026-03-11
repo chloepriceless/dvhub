@@ -1,0 +1,139 @@
+{
+  "httpPort": 8080,
+  "modbusListenHost": "0.0.0.0",
+  "modbusListenPort": 1502,
+  "offLeaseMs": 480000,
+  "meterPollMs": 2000,
+  "keepalivePulseSec": 60,
+  "gridPositiveMeans": "feed_in",
+  "victron": {
+    "transport": "modbus",
+    "host": "192.168.x.x",
+    "port": 502,
+    "unitId": 100,
+    "timeoutMs": 1000,
+    "mqtt": {
+      "broker": "mqtt://192.168.x.x:1883",
+      "portalId": "",
+      "keepaliveIntervalMs": 30000
+    }
+  },
+  "meter": {
+    "fc": 4,
+    "address": 820,
+    "quantity": 3,
+    "timeoutMs": 1200
+  },
+  "points": {
+    "soc": { "enabled": true, "fc": 4, "address": 843, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
+    "batteryPowerW": { "enabled": true, "fc": 4, "address": 842, "quantity": 1, "signed": true, "scale": 1, "offset": 0 },
+    "pvPowerW": { "enabled": true, "fc": 4, "address": 850, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
+    "acPvL1W": { "enabled": true, "fc": 4, "address": 808, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
+    "acPvL2W": { "enabled": true, "fc": 4, "address": 809, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
+    "acPvL3W": { "enabled": true, "fc": 4, "address": 810, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
+    "gridSetpointW": { "enabled": true, "fc": 4, "address": 2700, "quantity": 1, "signed": true, "scale": 1, "offset": 0 },
+    "minSocPct": { "enabled": true, "fc": 4, "address": 2901, "quantity": 1, "signed": false, "scale": 0.1, "offset": 0 },
+    "selfConsumptionW": { "enabled": true, "fc": 4, "address": 817, "quantity": 3, "signed": false, "scale": 1, "offset": 0, "sumRegisters": true }
+  },
+  "controlWrite": {
+    "gridSetpointW": { "enabled": true, "fc": 6, "address": 2700, "writeType": "int16", "signed": true, "scale": 1, "offset": 0 },
+    "chargeCurrentA": { "enabled": true, "fc": 6, "address": 2705, "writeType": "int16", "signed": true, "scale": 1, "offset": 0 },
+    "minSocPct": { "enabled": true, "fc": 6, "address": 2901, "writeType": "uint16", "signed": false, "scale": 0.1, "offset": 0 }
+  },
+  "dvControl": {
+    "enabled": true,
+    "feedExcessDcPv": { "enabled": true, "fc": 6, "address": 2848, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0 },
+    "dontFeedExcessAcPv": { "enabled": true, "fc": 6, "address": 2850, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0 },
+    "negativePriceProtection": { "enabled": true, "gridSetpointW": -40 }
+  },
+  "schedule": {
+    "timezone": "Europe/Berlin",
+    "evaluateMs": 15000,
+    "defaultGridSetpointW": -40,
+    "defaultChargeCurrentA": null,
+    "rules": [
+      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "start": "18:00", "end": "23:59", "value": -40 }
+    ]
+  },
+  "userEnergyPricing": {
+    "mode": "fixed",
+    "fixedGrossImportCtKwh": 31.5,
+    "periods": [
+      {
+        "id": "winter-2026",
+        "label": "Fixpreis Winter",
+        "startDate": "2026-01-01",
+        "endDate": "2026-04-30",
+        "mode": "fixed",
+        "fixedGrossImportCtKwh": 31.5
+      },
+      {
+        "id": "summer-2026",
+        "label": "Dynamisch Sommer",
+        "startDate": "2026-05-01",
+        "endDate": "2026-12-31",
+        "mode": "dynamic",
+        "dynamicComponents": {
+          "energyMarkupCtKwh": 0,
+          "gridChargesCtKwh": 8.5,
+          "leviesAndFeesCtKwh": 3,
+          "vatPct": 19
+        }
+      }
+    ],
+    "dynamicComponents": {
+      "energyMarkupCtKwh": 0,
+      "gridChargesCtKwh": 8.5,
+      "leviesAndFeesCtKwh": 3,
+      "vatPct": 19
+    },
+    "usesParagraph14aModule3": false,
+    "module3Windows": {
+      "window1": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window2": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
+      "window3": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null }
+    },
+    "costs": {
+      "pvCtKwh": 6,
+      "batteryBaseCtKwh": 2,
+      "batteryLossMarkupPct": 20
+    }
+  },
+  "scan": {
+    "host": "192.168.x.x",
+    "port": 502,
+    "unitId": 0,
+    "fc": 4,
+    "start": 2500,
+    "end": 2700,
+    "step": 10,
+    "quantity": 10,
+    "timeoutMs": 700,
+    "onlyNonZero": true
+  },
+  "influx": {
+    "enabled": false,
+    "apiVersion": "v3",
+    "url": "http://127.0.0.1:8086",
+    "db": "dvhub",
+    "token": "",
+    "measurement": "dv"
+  },
+  "telemetry": {
+    "enabled": true,
+    "dbPath": "",
+    "rawRetentionDays": 45,
+    "rollupIntervals": [300, 900, 3600],
+    "historyImport": {
+      "enabled": false,
+      "provider": "vrm",
+      "vrmPortalId": "",
+      "vrmToken": ""
+    }
+  },
+  "epex": {
+    "enabled": true,
+    "bzn": "DE-LU",
+    "timezone": "Europe/Berlin"
+  }
+}
