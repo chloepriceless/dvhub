@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { buildVictronSnapshot } from '../runtime-state.js';
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -65,4 +66,20 @@ test('dv control readback polls reuse the configured GX connection and ESS regis
     ['feedExcessDcPv', { enabled: true, fc: 3, address: 2707, quantity: 1, signed: false, scale: 1, offset: 0, host: 'venus-gx.local', port: 502, unitId: 100, timeoutMs: 1200 }],
     ['dontFeedExcessAcPv', { enabled: true, fc: 3, address: 2708, quantity: 1, signed: false, scale: 1, offset: 0, host: 'venus-gx.local', port: 502, unitId: 100, timeoutMs: 1200 }]
   ]);
+});
+
+test('victron runtime snapshots retain dv control readback fields', () => {
+  const snapshot = buildVictronSnapshot({
+    updatedAt: 123,
+    feedExcessDcPv: 1,
+    dontFeedExcessAcPv: 0,
+    errors: {}
+  });
+
+  assert.deepEqual(snapshot, {
+    updatedAt: 123,
+    feedExcessDcPv: 1,
+    dontFeedExcessAcPv: 0,
+    errors: {}
+  });
 });
