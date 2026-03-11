@@ -28,8 +28,8 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.userEnergyPricing.costs.batteryLossMarkupPct, 20);
   assert.equal(defaults.dvControl.enabled, true);
   assert.equal(defaults.dvControl.negativePriceProtection.enabled, true);
-  assert.equal(defaults.dvControl.feedExcessDcPv.address, 2848);
-  assert.equal(defaults.dvControl.dontFeedExcessAcPv.address, 2850);
+  assert.equal(defaults.dvControl.feedExcessDcPv.address, 2707);
+  assert.equal(defaults.dvControl.dontFeedExcessAcPv.address, 2708);
 });
 
 test('normalizeConfigInput restores legacy placeholder write registers to Victron defaults', () => {
@@ -84,8 +84,8 @@ test('normalizeConfigInput restores legacy placeholder write registers to Victro
   assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.timeoutMs, 2500);
 
   assert.equal(normalized.persistedConfig.dvControl.enabled, true);
-  assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2848);
-  assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2850);
+  assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2707);
+  assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2708);
   assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, -40);
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.host, 'venus-gx.local');
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 1502);

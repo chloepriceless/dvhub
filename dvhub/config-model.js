@@ -1694,8 +1694,8 @@ export function createDefaultConfig() {
     },
     dvControl: {
       enabled: true,
-      feedExcessDcPv: { enabled: true, fc: 6, address: 2848, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
-      dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2850, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
+      feedExcessDcPv: { enabled: true, fc: 6, address: 2707, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
+      dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2708, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
       negativePriceProtection: { enabled: true, gridSetpointW: -40 }
     },
     schedule: {

@@ -362,8 +362,8 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
 
   const dvControlSection = review.find((section) => section.id === 'dvControl');
   assert.equal(getReviewEntryValue(dvControlSection, 'DV Steuerung'), 'Aktiv');
-  assert.equal(getReviewEntryValue(dvControlSection, 'DC-PV Register'), '2848');
-  assert.equal(getReviewEntryValue(dvControlSection, 'AC-PV Register'), '2850');
+  assert.equal(getReviewEntryValue(dvControlSection, 'DC-PV Register'), '2707');
+  assert.equal(getReviewEntryValue(dvControlSection, 'AC-PV Register'), '2708');
   assert.equal(getReviewEntryValue(dvControlSection, 'Negativpreis-Schutz'), 'Aktiv');
   assert.match(dvControlSection.notes.join(' '), /Victron-Verbindung/i);
 
