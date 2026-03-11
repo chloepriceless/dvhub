@@ -111,6 +111,35 @@ test('public pages use compact topbars instead of large hero-style headers', () 
   }
 });
 
+test('setup review flow no longer uses the review öffnen wording', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'setup.html'), 'utf8');
+  const js = fs.readFileSync(path.join(publicDir, 'setup.js'), 'utf8');
+
+  assert.doesNotMatch(html, /Review öffnen/);
+  assert.doesNotMatch(js, /Review öffnen/);
+});
+
+test('setup review copy makes clear that the summary is not saved yet and saving is still required', () => {
+  const js = fs.readFileSync(path.join(publicDir, 'setup.js'), 'utf8');
+
+  assert.match(js, /noch nicht gespeichert/i);
+  assert.match(js, /Jetzt speichern/i);
+});
+
+test('setup page positions itself as guided entry into the full Einrichtung workspace', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'setup.html'), 'utf8');
+
+  assert.match(html, /Geführter Einstieg/);
+  assert.match(html, /Zur Einrichtung/);
+  assert.match(html, /vollständige Einrichtung|vollstaendige Einrichtung/);
+});
+
+test('setup validation copy explains when the review step is still locked', () => {
+  const js = fs.readFileSync(path.join(publicDir, 'setup.js'), 'utf8');
+
+  assert.match(js, /Prüfung ist erst verfügbar|Pruefung ist erst verfuegbar/);
+});
+
 test('settings page moves the status block into the top row and removes the permanent start panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'settings.html'), 'utf8');
   const settingsJs = fs.readFileSync(path.join(publicDir, 'settings.js'), 'utf8');

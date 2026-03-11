@@ -28,6 +28,7 @@ const {
   buildSetupReviewSnapshot,
   createSetupWizardState,
   describeSetupStep,
+  getPrimarySetupActionLabel,
   getVisibleSetupFieldsForStep,
   goToNextSetupStep,
   goToPreviousSetupStep,
@@ -53,6 +54,93 @@ function createSampleState(overrides = {}) {
     meta: { needsSetup: true },
     ...overrides
   });
+}
+
+function createValidSetupState(overrides = {}) {
+  const defaults = createDefaultConfig();
+  return validateSetupWizardState(createSampleState({
+    config: {
+      ...defaults,
+      httpPort: 9090,
+      apiToken: 'secret-token',
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: 'venus-gx.local',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: '',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 45000
+        }
+      },
+      modbusListenHost: '0.0.0.0',
+      modbusListenPort: 1502,
+      schedule: {
+        ...defaults.schedule,
+        timezone: 'Europe/Berlin'
+      },
+      epex: {
+        ...defaults.epex,
+        enabled: true,
+        bzn: 'DE-LU',
+        timezone: 'Europe/Berlin'
+      },
+      influx: {
+        ...defaults.influx,
+        enabled: false
+      }
+    },
+    effectiveConfig: {
+      ...defaults,
+      httpPort: 9090,
+      apiToken: 'secret-token',
+      victron: {
+        ...defaults.victron,
+        transport: 'mqtt',
+        host: 'venus-gx.local',
+        mqtt: {
+          ...defaults.victron.mqtt,
+          broker: '',
+          portalId: 'VRM123456',
+          keepaliveIntervalMs: 45000
+        }
+      },
+      meter: {
+        ...defaults.meter,
+        host: 'venus-gx.local'
+      },
+      dvControl: {
+        ...defaults.dvControl,
+        enabled: true,
+        feedExcessDcPv: {
+          ...defaults.dvControl.feedExcessDcPv,
+          host: 'venus-gx.local'
+        },
+        dontFeedExcessAcPv: {
+          ...defaults.dvControl.dontFeedExcessAcPv,
+          host: 'venus-gx.local'
+        }
+      },
+      modbusListenHost: '0.0.0.0',
+      modbusListenPort: 1502,
+      schedule: {
+        ...defaults.schedule,
+        timezone: 'Europe/Berlin'
+      },
+      epex: {
+        ...defaults.epex,
+        enabled: true,
+        bzn: 'DE-LU',
+        timezone: 'Europe/Berlin'
+      },
+      influx: {
+        ...defaults.influx,
+        enabled: false
+      }
+    },
+    ...overrides
+  }));
 }
 
 function getReviewEntryValue(section, label) {
@@ -258,89 +346,7 @@ test('validateSetupWizardState returns per-step and per-field blocking feedback'
 });
 
 test('review step extends the wizard flow and summarizes key setup outcomes', () => {
-  const defaults = createDefaultConfig();
-  const state = validateSetupWizardState(createSampleState({
-    config: {
-      ...defaults,
-      httpPort: 9090,
-      apiToken: 'secret-token',
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt',
-        host: 'venus-gx.local',
-        mqtt: {
-          ...defaults.victron.mqtt,
-          broker: '',
-          portalId: 'VRM123456',
-          keepaliveIntervalMs: 45000
-        }
-      },
-      modbusListenHost: '0.0.0.0',
-      modbusListenPort: 1502,
-      schedule: {
-        ...defaults.schedule,
-        timezone: 'Europe/Berlin'
-      },
-      epex: {
-        ...defaults.epex,
-        enabled: true,
-        bzn: 'DE-LU',
-        timezone: 'Europe/Berlin'
-      },
-      influx: {
-        ...defaults.influx,
-        enabled: false
-      }
-    },
-    effectiveConfig: {
-      ...defaults,
-      httpPort: 9090,
-      apiToken: 'secret-token',
-      victron: {
-        ...defaults.victron,
-        transport: 'mqtt',
-        host: 'venus-gx.local',
-        mqtt: {
-          ...defaults.victron.mqtt,
-          broker: '',
-          portalId: 'VRM123456',
-          keepaliveIntervalMs: 45000
-        }
-      },
-      meter: {
-        ...defaults.meter,
-        host: 'venus-gx.local'
-      },
-      dvControl: {
-        ...defaults.dvControl,
-        enabled: true,
-        feedExcessDcPv: {
-          ...defaults.dvControl.feedExcessDcPv,
-          host: 'venus-gx.local'
-        },
-        dontFeedExcessAcPv: {
-          ...defaults.dvControl.dontFeedExcessAcPv,
-          host: 'venus-gx.local'
-        }
-      },
-      modbusListenHost: '0.0.0.0',
-      modbusListenPort: 1502,
-      schedule: {
-        ...defaults.schedule,
-        timezone: 'Europe/Berlin'
-      },
-      epex: {
-        ...defaults.epex,
-        enabled: true,
-        bzn: 'DE-LU',
-        timezone: 'Europe/Berlin'
-      },
-      influx: {
-        ...defaults.influx,
-        enabled: false
-      }
-    }
-  }));
+  const state = createValidSetupState();
 
   assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services', 'review']);
 
@@ -369,6 +375,22 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
   const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
   assert.match(reviewStep.highlight.title, /Prüfen|Review/i);
   assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
+});
+
+test('review step copy distinguishes review from opening the review', () => {
+  const reviewStep = describeSetupStep(setActiveSetupStep(createValidSetupState(), 'review'));
+
+  assert.match(reviewStep.note, /speichern/i);
+  assert.doesNotMatch(reviewStep.note, /Review öffnen/i);
+});
+
+test('primary setup action switches from review to save on the review step', () => {
+  const validState = createValidSetupState();
+  const servicesState = setActiveSetupStep(validState, 'services');
+  const reviewState = setActiveSetupStep(validState, 'review');
+
+  assert.equal(getPrimarySetupActionLabel(servicesState), 'Zur Prüfung');
+  assert.equal(getPrimarySetupActionLabel(reviewState), 'Jetzt speichern');
 });
 
 test('review step is blocked until the full draft validates', () => {

@@ -581,6 +581,7 @@ const setupWizardHelpers = {
   buildSetupSteps,
   createSetupWizardState,
   describeSetupStep,
+  getPrimarySetupActionLabel,
   getSetupFieldsForStep,
   getSetupFieldDefinitions,
   getSetupStepDefinitions,
@@ -646,6 +647,20 @@ function summarizeBlockingErrors(state) {
     .slice(0, 2)
     .map((entry) => entry.message)
     .join(' ');
+}
+
+function buildReviewLockedMessage(state) {
+  return `Die Prüfung ist erst verfügbar, wenn alle Pflichtangaben vollständig sind. ${summarizeBlockingErrors(state)}`;
+}
+
+function getPrimarySetupActionLabel(state = setupWizardState) {
+  return state?.activeStepId === REVIEW_STEP_ID ? 'Jetzt speichern' : 'Zur Prüfung';
+}
+
+function renderPrimarySetupAction() {
+  const button = document.getElementById('setupSaveBtn');
+  if (!button) return;
+  button.textContent = getPrimarySetupActionLabel(setupWizardState);
 }
 
 function renderSetupSteps() {
@@ -829,6 +844,11 @@ function renderSetupWorkspace() {
   if (activeStep.id === REVIEW_STEP_ID) {
     const review = document.createElement('section');
     review.className = 'setup-review';
+
+    const reminder = document.createElement('div');
+    reminder.className = 'status-banner warn setup-review-reminder';
+    reminder.textContent = 'Diese Zusammenfassung ist noch nicht gespeichert. Prüfe die Werte und klicke danach auf "Jetzt speichern".';
+    review.appendChild(reminder);
 
     for (const section of buildSetupReviewSnapshot(setupWizardState)) {
       const card = document.createElement('article');
@@ -1021,12 +1041,13 @@ function renderSetupNav() {
   nextButton.className = 'btn btn-primary';
   nextButton.dataset.action = 'next';
   nextButton.hidden = isReviewStep;
-  nextButton.textContent = isLastStep ? 'Review öffnen' : 'Weiter';
+  nextButton.textContent = isLastStep ? 'Weiter zur Prüfung' : 'Weiter';
 
   container.append(copy, backButton, nextButton);
 }
 
 function renderSetupWizard() {
+  renderPrimarySetupAction();
   renderSetupSteps();
   renderSetupWorkspace();
   renderSetupErrors();
@@ -1141,7 +1162,10 @@ function handleWizardStepNavigation(requestedStepId) {
     if (nextState.activeStepId !== requestedStepId && nextState.activeStepId === setupWizardState.activeStepId) {
       moveToFirstInvalidStep(nextState);
       renderSetupWizard();
-      setBanner(`Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
+      const message = requestedStepId === REVIEW_STEP_ID
+        ? buildReviewLockedMessage(setupWizardState)
+        : `Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(setupWizardState)}`;
+      setBanner(message, 'error');
       return;
     }
   } else {
@@ -1165,7 +1189,10 @@ function handleWizardNav(action) {
     const requestedStepId = syncedState.stepOrder[getCurrentStepIndex(syncedState) + 1];
     if (requestedStepId === REVIEW_STEP_ID && nextState.validation.isBlocking) moveToFirstInvalidStep(nextState);
     renderSetupWizard();
-    setBanner(`Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(nextState)}`, 'error');
+    const message = requestedStepId === REVIEW_STEP_ID
+      ? buildReviewLockedMessage(nextState)
+      : `Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(nextState)}`;
+    setBanner(message, 'error');
     return;
   }
 
