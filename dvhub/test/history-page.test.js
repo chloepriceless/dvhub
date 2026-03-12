@@ -281,7 +281,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyMeta').textContent, /v0\.3\.0\+ea104c9/);
 });
 
-test('history page renders actual cost and net values without market value comparison slider', () => {
+test('history page shows cash net in the finance core card while keeping detailed net values unchanged', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.historyState.opportunityBlendPct = 100;
@@ -328,7 +328,7 @@ test('history page renders actual cost and net values without market value compa
     }
   });
 
-  assert.match(elements.get('historyKpiNet').textContent, /0,18/);
+  assert.match(elements.get('historyKpiNet').textContent, /0,20/);
   assert.match(elements.get('historyRows').innerHTML, /0,32/);
   assert.match(elements.get('historyRows').innerHTML, /0,18/);
 });

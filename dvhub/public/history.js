@@ -120,7 +120,7 @@ function renderKpis(summary) {
   setText('historyKpiAvoidedBatteryGross', fmtEur(summary?.kpis?.avoidedImportBatteryGrossEur));
   setText('historyKpiAvoidedPvCost', fmtEur(summary?.kpis?.pvCostEur));
   setText('historyKpiAvoidedBatteryCost', fmtEur(summary?.kpis?.batteryCostEur));
-  setText('historyKpiNet', fmtEur(actualNetEur(summary?.kpis)));
+  setText('historyKpiNet', fmtEur(cashNetEur(summary?.kpis)));
   setText('historyKpiSavedMoney', fmtEur(savedMoneyEur(summary?.kpis)));
   setText('historyKpiGrossReturn', fmtEur(grossReturnEur(summary?.kpis)));
   setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
