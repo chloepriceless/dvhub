@@ -377,10 +377,12 @@ test('review step copy distinguishes review from opening the review', () => {
 
 test('primary setup action switches from review to save on the review step', () => {
   const validState = createValidSetupState();
+  const basicsState = setActiveSetupStep(validState, 'basics');
   const servicesState = setActiveSetupStep(validState, 'services');
   const reviewState = setActiveSetupStep(validState, 'review');
 
-  assert.equal(getPrimarySetupActionLabel(servicesState), 'Zur Prüfung');
+  assert.equal(getPrimarySetupActionLabel(basicsState), 'Zur Prüfung');
+  assert.equal(getPrimarySetupActionLabel(servicesState), 'Jetzt speichern');
   assert.equal(getPrimarySetupActionLabel(reviewState), 'Jetzt speichern');
 });
 
