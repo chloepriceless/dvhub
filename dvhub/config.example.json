@@ -15,6 +15,21 @@
     "evaluateMs": 15000,
     "defaultGridSetpointW": -40,
     "defaultChargeCurrentA": null,
+    "smallMarketAutomation": {
+      "enabled": false,
+      "searchWindowStart": "14:00",
+      "searchWindowEnd": "09:00",
+      "targetSlotCount": 4,
+      "maxDischargeW": -12000,
+      "minSocPct": 30,
+      "aggressivePremiumPct": 20,
+      "location": {
+        "label": "",
+        "latitude": null,
+        "longitude": null
+      },
+      "stages": []
+    },
     "rules": [
       { "id": "fallback", "enabled": false, "target": "gridSetpointW", "start": "18:00", "end": "23:59", "value": -40 }
     ]

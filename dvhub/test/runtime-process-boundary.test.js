@@ -15,6 +15,10 @@ import {
   RUNTIME_MESSAGE_TYPES,
   startRuntimeWorker
 } from '../runtime-worker-protocol.js';
+import fs from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+const serverPath = fileURLToPath(new URL('../server.js', import.meta.url));
 
 function waitForWorkerMessage(worker, predicate) {
   return new Promise((resolve, reject) => {
@@ -228,6 +232,13 @@ test('history import status prefers cached worker telemetry state when available
       backfillRunning: false
     }
   });
+});
+
+test('server source wires small-market automation regeneration before schedule evaluation', async () => {
+  const source = await fs.readFile(serverPath, 'utf8');
+  assert.match(source, /regenerateSmallMarketAutomationRules/);
+  assert.match(source, /small_market_automation/);
+  assert.match(source, /autoManaged/);
 });
 
 test('heavy runtime writes are converted into worker command requests before execution', () => {

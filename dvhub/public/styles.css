@@ -42,6 +42,7 @@
   --chart-positive-highlight: var(--dvhub-lime);
   --chart-negative-highlight: #ff7a59;
   --chart-now: var(--dvhub-orange);
+  --schedule-automation-yellow: #f2c94c;
   --shadow-soft: 0 18px 36px rgba(0, 0, 0, 0.28);
   --shadow-hard: 0 24px 54px rgba(0, 0, 0, 0.34);
   --radius-lg: 16px;
@@ -1801,6 +1802,15 @@ table th {
 
 .sched-row-expired td {
   color: var(--text-muted);
+}
+
+.sched-row-automation {
+  background: color-mix(in srgb, var(--schedule-automation-yellow) 18%, transparent);
+}
+
+.sched-row-automation td {
+  border-top-color: color-mix(in srgb, var(--schedule-automation-yellow) 38%, rgba(31, 76, 122, 0.7));
+  border-bottom-color: color-mix(in srgb, var(--schedule-automation-yellow) 38%, rgba(31, 76, 122, 0.7));
 }
 
 

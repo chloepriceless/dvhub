@@ -301,3 +301,15 @@ test('dashboard places the schedule panel directly after the price engine panel'
   assert.ok(scheduleIndex > priceIndex);
   assert.ok(controlIndex > scheduleIndex);
 });
+
+test('dashboard source preserves automation metadata and yellow rule styling', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+
+  assert.match(html, /kleine Börsenautomatik/);
+  assert.match(css, /\.sched-row-automation/);
+  assert.match(css, /--schedule-automation-yellow/);
+  assert.match(app, /displayTone/);
+  assert.match(app, /small_market_automation/);
+});

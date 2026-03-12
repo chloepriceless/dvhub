@@ -19,6 +19,7 @@ let pricingPeriodsValidation = [];
 let marketValueModeDraft = 'annual';
 let pvPlantsDraft = [];
 let pvPlantsValidation = [];
+let smallMarketAutomationStagesDraft = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 
@@ -313,6 +314,16 @@ function createEmptyPvPlant(index = 0) {
   };
 }
 
+function createEmptySmallMarketAutomationStage(index = 0) {
+  return {
+    id: `sma-stage-${index + 1}`,
+    dischargeW: '',
+    dischargeSlots: '',
+    cooldownW: '',
+    cooldownSlots: ''
+  };
+}
+
 function serializeMarketValueMode(value) {
   return value === 'monthly' ? 'monthly' : 'annual';
 }
@@ -325,14 +336,31 @@ function addPvPlant(plants = []) {
   return [...plants, createEmptyPvPlant(plants.length)];
 }
 
+function addSmallMarketAutomationStage(stages = []) {
+  return [...stages, createEmptySmallMarketAutomationStage(stages.length)];
+}
+
 function removePvPlant(plants = [], plantId) {
   return plants.filter((plant) => plant.id !== plantId);
+}
+
+function removeSmallMarketAutomationStage(stages = [], stageId) {
+  return stages.filter((stage) => stage.id !== stageId);
 }
 
 function serializePvPlants(plants = []) {
   return plants.map((plant) => ({
     kwp: plant.kwp === '' || plant.kwp == null ? null : Number(plant.kwp),
     commissionedAt: plant.commissionedAt || ''
+  }));
+}
+
+function serializeSmallMarketAutomationStages(stages = []) {
+  return stages.map((stage) => ({
+    dischargeW: stage.dischargeW === '' || stage.dischargeW == null ? null : Number(stage.dischargeW),
+    dischargeSlots: stage.dischargeSlots === '' || stage.dischargeSlots == null ? null : Number(stage.dischargeSlots),
+    cooldownW: stage.cooldownW === '' || stage.cooldownW == null ? null : Number(stage.cooldownW),
+    cooldownSlots: stage.cooldownSlots === '' || stage.cooldownSlots == null ? null : Number(stage.cooldownSlots)
   }));
 }
 
@@ -677,7 +705,7 @@ function renderField(field) {
     input.value = String(value);
   } else {
     input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : 'text';
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
@@ -917,6 +945,9 @@ function renderSectionWorkspace(sectionId) {
     }
 
     sectionShell.appendChild(groupList);
+    if (section.id === 'schedule') {
+      sectionShell.appendChild(renderSmallMarketAutomationStagesEditor());
+    }
     if (section.id === 'pricing') {
       sectionShell.appendChild(renderPvPlantsEditor());
       sectionShell.appendChild(renderPricingPeriodsEditor());
@@ -1051,6 +1082,15 @@ function updatePvPlantField(plantId, path, value) {
   pvPlantsDraft = pvPlantsDraft.map((plant) => {
     if (plant.id !== plantId) return plant;
     const next = clone(plant);
+    setPath(next, path, value);
+    return next;
+  });
+}
+
+function updateSmallMarketAutomationStageField(stageId, path, value) {
+  smallMarketAutomationStagesDraft = smallMarketAutomationStagesDraft.map((stage) => {
+    if (stage.id !== stageId) return stage;
+    const next = clone(stage);
     setPath(next, path, value);
     return next;
   });
@@ -1195,6 +1235,78 @@ function renderPricingPeriodsEditor() {
   return section;
 }
 
+function renderSmallMarketAutomationStagesEditor() {
+  const section = document.createElement('section');
+  section.className = 'settings-pricing-periods';
+  section.innerHTML = `
+    <div class="settings-subsection-head">
+      <p class="card-title">Kleine Börsenautomatik</p>
+      <h3>Erweiterte Stufen</h3>
+      <p class="settings-section-meta">${smallMarketAutomationStagesDraft.length} definierte Stufen</p>
+      <p class="tools-note">Optional können Entlade- und Cooldown-Ketten je Stufe hinterlegt werden. Leere Werte bleiben ungesetzt.</p>
+    </div>
+    <div class="status-banner info">Die globale Maximalleistung bleibt immer die harte Obergrenze. Einzelne Stufen können sie nur reduzieren.</div>
+    <div class="settings-inline-actions">
+      <button id="addSmallMarketAutomationStageBtn" class="btn btn-ghost" type="button">Stufe hinzufügen</button>
+    </div>
+    <div class="pricing-period-list">
+      ${smallMarketAutomationStagesDraft.map((stage) => `
+        <article class="pricing-period-card" data-small-market-stage-id="${stage.id}">
+          <div class="pricing-period-grid">
+            <label class="settings-field">
+              <span class="settings-field-title">Entladeleistung (W)</span>
+              <input data-small-market-stage-id="${stage.id}" data-small-market-stage-path="dischargeW" type="number" step="1" value="${stage.dischargeW ?? ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Entlade-Slots</span>
+              <input data-small-market-stage-id="${stage.id}" data-small-market-stage-path="dischargeSlots" type="number" min="0" step="1" value="${stage.dischargeSlots ?? ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Cooldown-Leistung (W)</span>
+              <input data-small-market-stage-id="${stage.id}" data-small-market-stage-path="cooldownW" type="number" step="1" value="${stage.cooldownW ?? ''}" />
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-title">Cooldown-Slots</span>
+              <input data-small-market-stage-id="${stage.id}" data-small-market-stage-path="cooldownSlots" type="number" min="0" step="1" value="${stage.cooldownSlots ?? ''}" />
+            </label>
+          </div>
+          <div class="settings-inline-actions">
+            <button class="btn btn-secondary" type="button" data-remove-small-market-stage="${stage.id}">Stufe entfernen</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+
+  section.querySelector('#addSmallMarketAutomationStageBtn')?.addEventListener('click', () => {
+    smallMarketAutomationStagesDraft = addSmallMarketAutomationStage(smallMarketAutomationStagesDraft);
+    renderActiveSettingsDestination();
+  });
+
+  section.querySelectorAll('[data-remove-small-market-stage]').forEach((button) => {
+    button.addEventListener('click', () => {
+      smallMarketAutomationStagesDraft = removeSmallMarketAutomationStage(
+        smallMarketAutomationStagesDraft,
+        button.dataset.removeSmallMarketStage
+      );
+      renderActiveSettingsDestination();
+    });
+  });
+
+  section.querySelectorAll('[data-small-market-stage-id][data-small-market-stage-path]').forEach((input) => {
+    input.addEventListener('change', () => {
+      updateSmallMarketAutomationStageField(
+        input.dataset.smallMarketStageId,
+        input.dataset.smallMarketStagePath,
+        input.value
+      );
+      renderActiveSettingsDestination();
+    });
+  });
+
+  return section;
+}
+
 function bindHistoryImportControls(panel) {
   const handleChange = () => {
     syncHistoryImportForm(panel);
@@ -1275,6 +1387,9 @@ function parseFieldInput(field) {
 function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
   const next = clone(currentDraftConfig || {});
+  next.schedule = next.schedule || {};
+  next.schedule.smallMarketAutomation = next.schedule.smallMarketAutomation || {};
+  next.schedule.smallMarketAutomation.stages = serializeSmallMarketAutomationStages(smallMarketAutomationStagesDraft);
   next.userEnergyPricing = next.userEnergyPricing || {};
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
@@ -1295,6 +1410,13 @@ function applyConfigPayload(payload) {
     ...createEmptyPvPlant(index),
     kwp: plant?.kwp ?? '',
     commissionedAt: plant?.commissionedAt || ''
+  }));
+  smallMarketAutomationStagesDraft = (currentRawConfig?.schedule?.smallMarketAutomation?.stages || []).map((stage, index) => ({
+    ...createEmptySmallMarketAutomationStage(index),
+    dischargeW: stage?.dischargeW ?? '',
+    dischargeSlots: stage?.dischargeSlots ?? '',
+    cooldownW: stage?.cooldownW ?? '',
+    cooldownSlots: stage?.cooldownSlots ?? ''
   }));
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];

@@ -259,6 +259,58 @@ test('normalizeConfigInput preserves multiple pv plants for premium lookup metad
   ]);
 });
 
+test('normalizeConfigInput preserves small market automation settings and advanced stages', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      smallMarketAutomation: {
+        enabled: true,
+        searchWindowStart: '14:00',
+        searchWindowEnd: '09:00',
+        targetSlotCount: '5',
+        maxDischargeW: '-18000',
+        minSocPct: '30',
+        aggressivePremiumPct: '20',
+        location: {
+          label: 'Berlin',
+          latitude: '52.52',
+          longitude: '13.405'
+        },
+        stages: [
+          {
+            dischargeW: '-18000',
+            dischargeSlots: '1',
+            cooldownW: '-8000',
+            cooldownSlots: '1'
+          }
+        ]
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.smallMarketAutomation, {
+    enabled: true,
+    searchWindowStart: '14:00',
+    searchWindowEnd: '09:00',
+    targetSlotCount: 5,
+    maxDischargeW: -18000,
+    minSocPct: 30,
+    aggressivePremiumPct: 20,
+    location: {
+      label: 'Berlin',
+      latitude: 52.52,
+      longitude: 13.405
+    },
+    stages: [
+      {
+        dischargeW: -18000,
+        dischargeSlots: 1,
+        cooldownW: -8000,
+        cooldownSlots: 1
+      }
+    ]
+  });
+});
+
 test('dated pricing periods accept non-overlapping date ranges', () => {
   const normalized = normalizeConfigInput({
     userEnergyPricing: {

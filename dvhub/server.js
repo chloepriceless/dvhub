@@ -36,6 +36,16 @@ import { createEnergyChartsMarketValueService } from './energy-charts-market-val
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
+  buildAutomationRuleChain,
+  filterFreeAutomationSlots,
+  pickBestAutomationPlan
+} from './small-market-automation.js';
+import {
+  buildSunTimesCacheKey,
+  isSunTimesCacheStale,
+  readSunTimesCacheStore
+} from './sun-times-cache.js';
+import {
   autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
   parseHHMM,
@@ -65,10 +75,17 @@ const APPLICABLE_VALUES_CACHE_PATH = path.join(
   'reference-data',
   'bundesnetzagentur-applicable-values.json'
 );
+const SUN_TIMES_CACHE_PATH = path.join(
+  DATA_DIR || __dirname,
+  'reference-data',
+  'sun-times-cache.json'
+);
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
+const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
+const SMALL_MARKET_AUTOMATION_DISPLAY_TONE = 'yellow';
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
 const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
@@ -119,7 +136,12 @@ const state = {
     active: { gridSetpointW: null, chargeCurrentA: null },
     lastWrite: { gridSetpointW: null, chargeCurrentA: null },
     manualOverride: {},
-    lastEvalAt: 0
+    lastEvalAt: 0,
+    smallMarketAutomation: {
+      lastRunDate: null,
+      lastOutcome: 'idle',
+      generatedRuleCount: 0
+    }
   },
   energy: {
     day: null,
@@ -162,11 +184,172 @@ let runtimeWorker = null;
 let runtimeWorkerSnapshot = null;
 let runtimeWorkerStatusPayload = null;
 let runtimeWorkerHeartbeatAt = 0;
+let sunTimesCacheState = null;
 let runtimeWorkerState = {
   ready: false,
   lastError: null
 };
 const effectivePollIntervalMs = () => normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS);
+
+function getSmallMarketAutomationLocation(config = cfg) {
+  return config?.schedule?.smallMarketAutomation?.location || null;
+}
+
+function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
+  const location = getSmallMarketAutomationLocation(config);
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  const year = new Date(now).getUTCFullYear();
+  const requestedLocation = { latitude, longitude };
+  const cachedEntry = sunTimesCacheState?.entry || null;
+  const cacheIsStale = isSunTimesCacheStale({
+    cachedLocation: cachedEntry?.location,
+    requestedLocation,
+    cachedYear: cachedEntry?.year,
+    requestedYear: year
+  });
+  if (cachedEntry && !cacheIsStale) return cachedEntry;
+
+  const store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
+  const cacheKey = buildSunTimesCacheKey({ latitude, longitude, year });
+  const nextEntry = {
+    key: cacheKey,
+    year,
+    location: requestedLocation,
+    cachePath: SUN_TIMES_CACHE_PATH,
+    cache: store?.entries?.[cacheKey]?.cache || {}
+  };
+  sunTimesCacheState = { entry: nextEntry, loadedAt: Date.now() };
+  return nextEntry;
+}
+
+function buildDefaultAutomationChain(automationConfig = {}) {
+  const stages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length
+    ? automationConfig.stages
+    : [{
+      dischargeW: automationConfig?.maxDischargeW,
+      dischargeSlots: automationConfig?.targetSlotCount,
+      cooldownSlots: 0
+    }];
+  return buildAutomationRuleChain({
+    maxDischargeW: automationConfig?.maxDischargeW,
+    stages
+  });
+}
+
+function buildSearchWindowBounds({ data = [], automationConfig = {}, timeZone = cfg.schedule?.timezone || 'Europe/Berlin' } = {}) {
+  const startMin = parseHHMM(automationConfig?.searchWindowStart);
+  const endMin = parseHHMM(automationConfig?.searchWindowEnd);
+  if (startMin == null || endMin == null) return [];
+
+  return (Array.isArray(data) ? data : []).filter((slot) => {
+    const minuteOfDay = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(new Date(slot.ts));
+    const hours = Number(minuteOfDay.find((part) => part.type === 'hour')?.value);
+    const minutes = Number(minuteOfDay.find((part) => part.type === 'minute')?.value);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return false;
+    const slotMin = hours * 60 + minutes;
+    if (startMin <= endMin) return slotMin >= startMin && slotMin < endMin;
+    return slotMin >= startMin || slotMin < endMin;
+  });
+}
+
+function buildSmallMarketAutomationRules({
+  now = Date.now(),
+  automationConfig = cfg.schedule?.smallMarketAutomation,
+  priceSlots = state.epex?.data,
+  occupiedRules = state.schedule.rules,
+  sunTimesCache = getSunTimesCacheForPlanning({ now })
+} = {}) {
+  if (!automationConfig?.enabled || !sunTimesCache) return [];
+
+  const filteredPriceSlots = buildSearchWindowBounds({
+    data: priceSlots,
+    automationConfig
+  });
+  const occupiedWindows = (Array.isArray(occupiedRules) ? occupiedRules : [])
+    .filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE)
+    .map((rule) => ({
+      startTs: Date.parse(`${berlinDateString(new Date(now))}T${rule.start || '00:00'}:00+01:00`),
+      endTs: Date.parse(`${berlinDateString(new Date(now))}T${rule.end || '00:00'}:00+01:00`),
+      source: rule?.source || 'manual'
+    }))
+    .filter((window) => Number.isFinite(window.startTs) && Number.isFinite(window.endTs));
+
+  const freeSlots = filterFreeAutomationSlots({
+    slots: filteredPriceSlots,
+    occupiedWindows
+  });
+  const chain = buildDefaultAutomationChain(automationConfig);
+  const plan = pickBestAutomationPlan({
+    slots: freeSlots,
+    targetSlotCount: Number(automationConfig?.targetSlotCount || chain.length || 0),
+    chainOptions: [chain]
+  });
+
+  return (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
+    const slot = freeSlots.find((entry) => Number(entry?.ts) === Number(slotTs));
+    if (!slot) return null;
+    const start = new Date(slot.ts);
+    const end = new Date(slot.ts + (60 * 60 * 1000));
+    return {
+      id: `sma-${slotTs}-${index + 1}`,
+      enabled: true,
+      target: 'gridSetpointW',
+      start: start.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      end: end.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      value: Number(chain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
+      activeDate: berlinDateString(new Date(now)),
+      source: SMALL_MARKET_AUTOMATION_SOURCE,
+      autoManaged: true,
+      displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
+    };
+  }).filter(Boolean);
+}
+
+function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
+  const automationConfig = cfg.schedule?.smallMarketAutomation;
+  const runDate = berlinDateString(new Date(now));
+  const manualRules = state.schedule.rules.filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE);
+  const previousAutomationRules = state.schedule.rules.filter((rule) => rule?.source === SMALL_MARKET_AUTOMATION_SOURCE);
+
+  if (!automationConfig?.enabled) {
+    state.schedule.smallMarketAutomation = {
+      lastRunDate: runDate,
+      lastOutcome: 'disabled',
+      generatedRuleCount: 0
+    };
+    if (previousAutomationRules.length) {
+      state.schedule.rules = manualRules;
+      persistConfig();
+    }
+    return;
+  }
+
+  if (state.schedule.smallMarketAutomation?.lastRunDate === runDate && previousAutomationRules.length) return;
+
+  const sunTimesCache = getSunTimesCacheForPlanning({ now });
+  const generatedRules = buildSmallMarketAutomationRules({
+    now,
+    automationConfig,
+    priceSlots: state.epex?.data,
+    occupiedRules: manualRules,
+    sunTimesCache
+  });
+  state.schedule.rules = [...manualRules, ...generatedRules];
+  state.schedule.smallMarketAutomation = {
+    lastRunDate: runDate,
+    lastOutcome: sunTimesCache ? (generatedRules.length ? 'generated' : 'no_slots') : 'missing_sun_times_cache',
+    generatedRuleCount: generatedRules.length
+  };
+  persistConfig();
+}
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -1478,6 +1661,7 @@ async function applyControlTarget(target, value, source) {
 async function evaluateSchedule() {
   const now = Date.now();
   const nowMin = localMinutesOfDay(new Date(now));
+  regenerateSmallMarketAutomationRules({ now });
   state.schedule.lastEvalAt = now;
 
   const stopSocDisable = autoDisableStopSocScheduleRules({

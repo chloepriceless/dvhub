@@ -282,6 +282,58 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyMeta').textContent, /v0\.3\.0\+ea104c9/);
 });
 
+test('history page applies the market value slider to blended cost and net values', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.historyState.opportunityBlendPct = 100;
+  helpers.renderSummary({
+    view: 'day',
+    date: '2026-03-09',
+    kpis: {
+      gridCostEur: 0.3,
+      pvCostEur: 0.01,
+      batteryCostEur: 0.01,
+      opportunityCostEur: 0.1,
+      exportRevenueEur: 0.5,
+      avoidedImportGrossEur: 0.7,
+      importKwh: 1.2,
+      loadKwh: 1.2,
+      pvKwh: 0.4,
+      exportKwh: 0.5
+    },
+    rows: [
+      {
+        label: '11:00',
+        gridCostEur: 0.3,
+        pvCostEur: 0.01,
+        batteryCostEur: 0.01,
+        opportunityCostEur: 0.1,
+        exportRevenueEur: 0.5,
+        importKwh: 1.2,
+        loadKwh: 1.2,
+        pvKwh: 0.4,
+        exportKwh: 0.5
+      }
+    ],
+    charts: {
+      dayFinancialLines: [
+        {
+          label: '11:00',
+          gridCostEur: 0.3,
+          pvCostEur: 0.01,
+          batteryCostEur: 0.01,
+          opportunityCostEur: 0.1,
+          exportRevenueEur: 0.5
+        }
+      ]
+    }
+  });
+
+  assert.match(elements.get('historyKpiNet').textContent, /0,10/);
+  assert.match(elements.get('historyRows').innerHTML, /0,40/);
+  assert.match(elements.get('historyRows').innerHTML, /0,10/);
+});
+
 test('history page renders year-only premium fields and a provisional note for running-year monthly fallback', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 

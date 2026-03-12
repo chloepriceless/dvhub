@@ -66,6 +66,28 @@ test('sanitizePersistedScheduleRules keeps stopSocPct while removing transient f
   ]);
 });
 
+test('sanitizePersistedScheduleRules keeps automation metadata for dated one-shot rules', () => {
+  const cleaned = sanitizePersistedScheduleRules([
+    {
+      id: 'sma-1',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '18:15',
+      end: '18:30',
+      value: -12000,
+      activeDate: '2026-06-02',
+      source: 'small_market_automation',
+      autoManaged: true,
+      displayTone: 'yellow'
+    }
+  ]);
+
+  assert.equal(cleaned[0].source, 'small_market_automation');
+  assert.equal(cleaned[0].autoManaged, true);
+  assert.equal(cleaned[0].displayTone, 'yellow');
+  assert.equal(cleaned[0].activeDate, '2026-06-02');
+});
+
 test('autoDisableExpiredScheduleRules disables a previously active one-shot rule after the window ends', () => {
   const result = autoDisableExpiredScheduleRules([
     {

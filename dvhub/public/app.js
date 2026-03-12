@@ -1,4 +1,6 @@
 const { apiFetch } = window.DVhubCommon || {};
+const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
+const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
@@ -1014,6 +1016,10 @@ function collectScheduleRulesFromRowState(rows) {
         end,
         value: gridVal
       };
+      if (row?.source) gridRule.source = row.source;
+      if (row?.autoManaged != null) gridRule.autoManaged = Boolean(row.autoManaged);
+      if (row?.displayTone) gridRule.displayTone = row.displayTone;
+      if (row?.activeDate) gridRule.activeDate = row.activeDate;
       if (stopSocEnabled && Number.isFinite(stopSocVal)) {
         gridRule.stopSocPct = stopSocVal;
       }
@@ -1021,14 +1027,19 @@ function collectScheduleRulesFromRowState(rows) {
     }
 
     if (chargeEnabled && Number.isFinite(chargeVal)) {
-      rules.push({
+      const chargeRule = {
         id: `charge_${idx}`,
         enabled: rowEnabled,
         target: 'chargeCurrentA',
         start,
         end,
         value: chargeVal
-      });
+      };
+      if (row?.source) chargeRule.source = row.source;
+      if (row?.autoManaged != null) chargeRule.autoManaged = Boolean(row.autoManaged);
+      if (row?.displayTone) chargeRule.displayTone = row.displayTone;
+      if (row?.activeDate) chargeRule.activeDate = row.activeDate;
+      rules.push(chargeRule);
     }
 
     idx++;
@@ -1062,6 +1073,10 @@ function groupScheduleRulesForDashboard(rules) {
     }
     if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
     if (rule.enabled === false) slot.enabled = false;
+    if (!slot.source && rule.source) slot.source = rule.source;
+    if (!slot.displayTone && rule.displayTone) slot.displayTone = rule.displayTone;
+    if (slot.autoManaged !== true && rule.autoManaged === true) slot.autoManaged = true;
+    if (!slot.activeDate && rule.activeDate) slot.activeDate = rule.activeDate;
   }
 
   return Array.from(timeSlots.values());
@@ -1074,8 +1089,12 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
     start: tr.dataset.start || tr.querySelector('.sched-start')?.value,
     end: tr.dataset.end || tr.querySelector('.sched-end')?.value
   }, nowTs);
+  const isAutomationRule =
+    tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
+    || tr.dataset.displayTone === 'yellow';
 
   tr.classList.toggle('sched-row-expired', expired);
+  tr.classList.toggle('sched-row-automation', isAutomationRule);
   tr.style.opacity = enabled ? (expired ? '0.55' : '1') : '0.4';
   return expired;
 }
@@ -1095,11 +1114,22 @@ function addScheduleRow(opts = {}) {
     start = '06:45', end = '07:15',
     gridVal = -40, chargeVal = '', stopSocVal = '',
     gridEnabled = true, chargeEnabled = false, stopSocEnabled = false,
-    rowEnabled = true
+    rowEnabled = true,
+    source = '',
+    displayTone = '',
+    autoManaged = false,
+    activeDate = ''
   } = opts;
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
   const tr = document.createElement('tr');
+  tr.dataset.ruleSource = source || '';
+  tr.dataset.displayTone = displayTone || '';
+  tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
+  tr.dataset.activeDate = activeDate || '';
+  if (source === SMALL_MARKET_AUTOMATION_SOURCE) {
+    tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''}`;
+  }
 
   tr.innerHTML = `
     <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} title="Aktiv" /></td>
@@ -1149,7 +1179,11 @@ function collectScheduleRows() {
       chargeEnabled: tr.querySelector('.sched-charge-en')?.checked,
       chargeVal: tr.querySelector('.sched-charge-val')?.value,
       stopSocEnabled: tr.querySelector('.sched-stop-soc-en')?.checked,
-      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value
+      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value,
+      source: tr.dataset.ruleSource || '',
+      displayTone: tr.dataset.displayTone || '',
+      autoManaged: tr.dataset.autoManaged === 'true',
+      activeDate: tr.dataset.activeDate || ''
     });
   }
   return collectScheduleRulesFromRowState(rowState);
@@ -1176,7 +1210,11 @@ async function loadScheduleDash() {
         gridEnabled: slot.grid != null,
         chargeEnabled: slot.charge != null,
         stopSocEnabled: slot.stopSocPct != null,
-        rowEnabled: slot.enabled
+        rowEnabled: slot.enabled,
+        source: slot.source,
+        displayTone: slot.displayTone,
+        autoManaged: slot.autoManaged,
+        activeDate: slot.activeDate
       });
     }
   }

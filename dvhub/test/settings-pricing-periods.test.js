@@ -105,3 +105,15 @@ test('pricing period validation reports overlaps and missing fields before save'
   assert.match(result.messages.join('\n'), /Bruttopreis fehlt/i);
   assert.match(result.messages.join('\n'), /überschneidet/i);
 });
+
+test('config definition exposes the small market automation fields and advanced stages', async () => {
+  const { getConfigDefinition } = await import('../config-model.js');
+  const definition = getConfigDefinition();
+  const paths = definition.fields.map((field) => field.path).filter(Boolean);
+
+  assert.ok(paths.includes('schedule.smallMarketAutomation.enabled'));
+  assert.ok(paths.includes('schedule.smallMarketAutomation.searchWindowStart'));
+  assert.ok(paths.includes('schedule.smallMarketAutomation.location.latitude'));
+  assert.ok(paths.includes('schedule.smallMarketAutomation.aggressivePremiumPct'));
+  assert.ok(paths.includes('schedule.smallMarketAutomation.stages'));
+});

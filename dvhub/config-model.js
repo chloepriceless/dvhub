@@ -820,6 +820,128 @@ function buildFieldDefinitions() {
       empty: 'null',
       help: 'Leer lassen, wenn kein Default geschrieben werden soll.'
     },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.enabled',
+      label: 'Kleine Börsenautomatik aktiv',
+      type: 'boolean',
+      help: 'Aktiviert die tägliche Regelgenerierung für freie Marktfenster.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.searchWindowStart',
+      label: 'Suchfenster Start',
+      type: 'time',
+      help: 'Lokale Startzeit des Suchfensters.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.searchWindowEnd',
+      label: 'Suchfenster Ende',
+      type: 'time',
+      help: 'Lokale Endzeit des Suchfensters.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.targetSlotCount',
+      label: 'Maximale Ziel-Slots',
+      type: 'number',
+      min: 1,
+      max: 24,
+      help: 'Wie viele freie Slots maximal belegt werden dürfen.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.maxDischargeW',
+      label: 'Maximale Entladeleistung (W)',
+      type: 'number',
+      help: 'Harte Obergrenze für die Automatik.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.minSocPct',
+      label: 'Automatik Minimum-SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      help: 'Standard-SOC-Untergrenze der Automatik.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.aggressivePremiumPct',
+      label: 'Aggressiver Preisaufschlag (%)',
+      type: 'number',
+      min: 0,
+      max: 500,
+      help: 'Ab diesem Aufschlag darf bis zum globalen Minimum-SOC entladen werden.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.label',
+      label: 'Standort Bezeichnung',
+      type: 'text',
+      help: 'Freier Name für den Anlagenstandort.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.latitude',
+      label: 'Breitengrad',
+      type: 'number',
+      min: -90,
+      max: 90,
+      step: 0.000001,
+      help: 'Breitengrad des Anlagenstandorts.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.longitude',
+      label: 'Längengrad',
+      type: 'number',
+      min: -180,
+      max: 180,
+      step: 0.000001,
+      help: 'Längengrad des Anlagenstandorts.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Optionale Ketten aus Entlade- und Cooldown-Stufen.',
+      path: 'schedule.smallMarketAutomation.stages',
+      label: 'Erweiterte Stufen',
+      type: 'array',
+      help: 'Definiert optionale Entlade- und Cooldown-Stufen für die Automatik.'
+    },
 
     {
       section: 'scan',
@@ -1445,7 +1567,22 @@ export function createDefaultConfig() {
       evaluateMs: 15000,
       defaultGridSetpointW: null,
       defaultChargeCurrentA: null,
-      rules: []
+      rules: [],
+      smallMarketAutomation: {
+        enabled: false,
+        searchWindowStart: '14:00',
+        searchWindowEnd: '09:00',
+        targetSlotCount: 4,
+        maxDischargeW: -12000,
+        minSocPct: 30,
+        aggressivePremiumPct: 20,
+        location: {
+          label: '',
+          latitude: null,
+          longitude: null
+        },
+        stages: []
+      }
     },
     userEnergyPricing: {
       mode: 'fixed',
@@ -1648,6 +1785,67 @@ function sanitizeScheduleRules(value, warnings) {
     rules.push(next);
   }
   return rules;
+}
+
+function sanitizeSmallMarketAutomationStages(value, warnings) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        warnings.push(`schedule.smallMarketAutomation.stages.${index}: invalid entry ignored`);
+        return null;
+      }
+
+      const next = {};
+      for (const key of ['dischargeW', 'dischargeSlots', 'cooldownW', 'cooldownSlots']) {
+        if (entry[key] == null || entry[key] === '') continue;
+        const numericValue = Number(entry[key]);
+        if (!Number.isFinite(numericValue)) {
+          warnings.push(`schedule.smallMarketAutomation.stages.${index}.${key}: invalid number, field was reset`);
+          continue;
+        }
+        next[key] = numericValue;
+      }
+      return next;
+    })
+    .filter(Boolean);
+}
+
+function sanitizeSmallMarketAutomation(value, warnings) {
+  if (!isPlainObject(value)) return {};
+
+  const next = clone(value);
+  if (next.enabled != null) next.enabled = coerceBoolean(next.enabled);
+  if (next.searchWindowStart != null) next.searchWindowStart = String(next.searchWindowStart);
+  if (next.searchWindowEnd != null) next.searchWindowEnd = String(next.searchWindowEnd);
+
+  for (const key of ['targetSlotCount', 'maxDischargeW', 'minSocPct', 'aggressivePremiumPct']) {
+    if (next[key] == null || next[key] === '') continue;
+    const numericValue = Number(next[key]);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push(`schedule.smallMarketAutomation.${key}: invalid number, field was reset`);
+      delete next[key];
+      continue;
+    }
+    next[key] = numericValue;
+  }
+
+  const location = isPlainObject(next.location) ? clone(next.location) : {};
+  if (location.label != null) location.label = String(location.label);
+  for (const key of ['latitude', 'longitude']) {
+    if (location[key] == null || location[key] === '') continue;
+    const numericValue = Number(location[key]);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push(`schedule.smallMarketAutomation.location.${key}: invalid number, field was reset`);
+      delete location[key];
+      continue;
+    }
+    location[key] = numericValue;
+  }
+  next.location = location;
+  next.stages = sanitizeSmallMarketAutomationStages(next.stages, warnings);
+  return next;
 }
 
 function sanitizeUserEnergyPricingWindows(value, warnings) {
@@ -1901,6 +2099,9 @@ function sanitizeRawConfig(rawInput) {
 
   raw.schedule = raw.schedule || {};
   raw.schedule.rules = sanitizeScheduleRules(raw.schedule.rules, warnings);
+  if (hasPath(raw, 'schedule.smallMarketAutomation')) {
+    raw.schedule.smallMarketAutomation = sanitizeSmallMarketAutomation(raw.schedule.smallMarketAutomation, warnings);
+  }
   if (hasPath(raw, 'userEnergyPricing')) {
     raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
   }
