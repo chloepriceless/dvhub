@@ -624,6 +624,7 @@ const setupWizardHelpers = {
   describeSetupStep,
   formatSetupDiscoveredSystemOption,
   getPrimarySetupActionLabel,
+  shouldPrimarySetupActionSave,
   getSetupFieldsForStep,
   getSetupFieldDefinitions,
   getSetupStepDefinitions,
@@ -695,8 +696,14 @@ function buildReviewLockedMessage(state) {
   return `Die Prüfung ist erst verfügbar, wenn alle Pflichtangaben vollständig sind. ${summarizeBlockingErrors(state)}`;
 }
 
+function shouldPrimarySetupActionSave(state = setupWizardState) {
+  const currentIndex = getCurrentStepIndex(state);
+  const firstSaveStepIndex = (state?.stepOrder || []).length - 2;
+  return currentIndex >= Math.max(0, firstSaveStepIndex);
+}
+
 function getPrimarySetupActionLabel(state = setupWizardState) {
-  return state?.activeStepId === REVIEW_STEP_ID ? 'Jetzt speichern' : 'Zur Prüfung';
+  return shouldPrimarySetupActionSave(state) ? 'Jetzt speichern' : 'Zur Prüfung';
 }
 
 function renderPrimarySetupAction() {
@@ -1348,7 +1355,7 @@ if (typeof document !== 'undefined') {
       return;
     }
 
-    if (nextState.activeStepId !== REVIEW_STEP_ID) {
+    if (!shouldPrimarySetupActionSave(nextState)) {
       setSetupWizardState(setActiveSetupStep(nextState, REVIEW_STEP_ID));
       renderSetupWizard();
       setBanner('Alle Pflichtangaben sind bereit. Bitte pruefe jetzt die Zusammenfassung vor dem Speichern.', 'info');
