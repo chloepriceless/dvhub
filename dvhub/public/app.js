@@ -60,6 +60,105 @@ function roundCt(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
+function formatChartEuroValue(value) {
+  if (!Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} \u20ac`;
+}
+
+function getChartHighlightSets(values, { highCount = 4, lowCount = 8 } = {}) {
+  const ranked = (Array.isArray(values) ? values : [])
+    .map((value, index) => ({ value: Number(value), index }))
+    .filter((entry) => Number.isFinite(entry.value));
+
+  const high = new Set(
+    ranked
+      .slice()
+      .sort((left, right) => right.value - left.value)
+      .slice(0, highCount)
+      .map((entry) => entry.index)
+  );
+  const low = new Set(
+    ranked
+      .slice()
+      .filter((entry) => entry.value < 0)
+      .sort((left, right) => left.value - right.value)
+      .slice(0, lowCount)
+      .map((entry) => entry.index)
+  );
+  return { high, low };
+}
+
+function createPriceChartScale({
+  min,
+  max,
+  top,
+  bottom,
+  focusBandCeiling = 0.01,
+  focusBandFloor = -0.01
+} = {}) {
+  const chartTop = Number(top);
+  const chartBottom = Number(bottom);
+  const minValue = Number(min);
+  const maxValue = Number(max);
+  const chartHeight = chartBottom - chartTop;
+
+  const linearY = (value) => {
+    if (maxValue === minValue) return chartTop + (chartHeight / 2);
+    return chartTop + ((maxValue - value) * chartHeight) / (maxValue - minValue);
+  };
+
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || !Number.isFinite(chartHeight) || chartHeight <= 0) {
+    return { y: () => chartTop };
+  }
+  if (maxValue <= minValue) return { y: linearY };
+
+  const hasFocusBand = maxValue > focusBandFloor && minValue < focusBandCeiling && focusBandCeiling > focusBandFloor;
+  if (!hasFocusBand) return { y: linearY };
+
+  const ceiling = Math.min(Math.max(focusBandCeiling, minValue), maxValue);
+  const floor = Math.max(Math.min(focusBandFloor, maxValue), minValue);
+  if (ceiling <= floor) return { y: linearY };
+
+  const upperSpan = Math.max(maxValue - ceiling, 0);
+  const focusSpan = Math.max(ceiling - floor, 0);
+  const lowerSpan = Math.max(floor - minValue, 0);
+  if (focusSpan <= 0) return { y: linearY };
+
+  const bothOuterBands = upperSpan > 0 && lowerSpan > 0;
+  const singleOuterBand = (upperSpan > 0) !== (lowerSpan > 0);
+  const focusRatio = bothOuterBands ? 0.54 : (singleOuterBand ? 0.7 : 1);
+  const focusHeight = chartHeight * focusRatio;
+  const remainingHeight = Math.max(chartHeight - focusHeight, 0);
+  const outerSpan = upperSpan + lowerSpan;
+  const upperHeight = outerSpan > 0 ? remainingHeight * (upperSpan / outerSpan) : 0;
+  const lowerHeight = outerSpan > 0 ? remainingHeight * (lowerSpan / outerSpan) : 0;
+  const focusTop = chartTop + upperHeight;
+  const focusBottom = chartBottom - lowerHeight;
+
+  const mapSegment = (value, fromValue, toValue, fromY, toY) => {
+    if (fromValue === toValue) return (fromY + toY) / 2;
+    return fromY + ((value - fromValue) * (toY - fromY)) / (toValue - fromValue);
+  };
+
+  return {
+    y(value) {
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) return chartBottom;
+      if (numericValue >= ceiling) {
+        return upperSpan > 0
+          ? mapSegment(Math.min(numericValue, maxValue), maxValue, ceiling, chartTop, focusTop)
+          : focusTop;
+      }
+      if (numericValue <= floor) {
+        return lowerSpan > 0
+          ? mapSegment(Math.max(numericValue, minValue), floor, minValue, focusBottom, chartBottom)
+          : focusBottom;
+      }
+      return mapSegment(numericValue, ceiling, floor, focusTop, focusBottom);
+    }
+  };
+}
+
 function hhmmToMinutes(value) {
   if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) return null;
   const [hours, minutes] = value.split(':').map((part) => Number(part));
@@ -266,15 +365,15 @@ function buildChartSelectionRange(startIndex, endIndex) {
   return range;
 }
 
-function fmtCt(value) {
+function fmtCt(value, digits = 2) {
   if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ct/kWh`;
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ct/kWh`;
 }
 
-function fmtSignedCt(value) {
+function fmtSignedCt(value, digits = 2) {
   if (!Number.isFinite(Number(value))) return '-';
   const prefix = Number(value) > 0 ? '+' : '';
-  return `${prefix}${fmtCt(value)}`;
+  return `${prefix}${fmtCt(value, digits)}`;
 }
 
 function updateChartComparisonSummary(pricing) {
@@ -308,12 +407,12 @@ function updateChartComparisonSummary(pricing) {
 function showChartTooltip(tooltip, row, event, comparison) {
   if (!tooltip || !row || !event) return;
   tooltip.style.display = 'block';
-  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh)}`];
+  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 4)}`];
   if (comparison) {
-    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh)}`);
-    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh)}`);
-    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh)}`);
-    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh)}`);
+    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 4)}`);
+    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 4)}`);
+    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 4)}`);
+    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 4)}`);
   }
   tooltip.textContent = parts.join(' | ');
   tooltip.style.left = `${event.clientX + 12}px`;
@@ -371,6 +470,8 @@ function drawPriceChart(data, nowTs, comparisons = []) {
   const chartLabel = cssVar('--chart-label', '#6b7280');
   const chartPositive = cssVar('--chart-positive', '#1d4ed8');
   const chartNegative = cssVar('--chart-negative', '#ef4444');
+  const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
+  const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartNow = cssVar('--chart-now', '#facc15');
   const chartImport = cssVar('--chart-import', '#22c55e');
 
@@ -389,7 +490,15 @@ function drawPriceChart(data, nowTs, comparisons = []) {
 
   const barW = (W - padL - padR) / data.length;
   const x = (i) => padL + i * barW;
-  const y = (v) => padT + ((max - v) * (H - padT - padB)) / (max - min);
+  const y = createPriceChartScale({
+    min,
+    max,
+    top: padT,
+    bottom: H - padB,
+    focusBandCeiling: 0.01,
+    focusBandFloor: -0.01
+  }).y;
+  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals);
 
   for (let i = 0; i <= 6; i++) {
     const vv = min + ((max - min) * i) / 6;
@@ -407,7 +516,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     label.setAttribute('y', yy + 4);
     label.setAttribute('font-size', '11');
     label.setAttribute('fill', chartLabel);
-    label.textContent = `${vv.toFixed(2)} \u20ac`;
+    label.textContent = formatChartEuroValue(vv);
     svg.appendChild(label);
   }
 
@@ -460,9 +569,18 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     rect.setAttribute('y', Math.min(by, baseY));
     rect.setAttribute('width', Math.max(barW - 2, 1));
     rect.setAttribute('height', bh || 1);
-    rect.setAttribute('fill', val < 0 ? chartNegative : chartPositive);
+    rect.setAttribute(
+      'fill',
+      lowHighlights.has(index)
+        ? chartNegativeHighlight
+        : highHighlights.has(index)
+          ? chartPositiveHighlight
+          : (val < 0 ? chartNegative : chartPositive)
+    );
     rect.classList.add('price-bar');
     rect.classList.add(val < 0 ? 'is-negative' : 'is-positive');
+    if (highHighlights.has(index)) rect.classList.add('is-highlight-positive');
+    if (lowHighlights.has(index)) rect.classList.add('is-highlight-negative');
     rect.addEventListener('mousedown', (event) => {
       event.preventDefault();
       chartSelectionState.pointerDown = true;
@@ -1103,10 +1221,13 @@ const dashboardApi = {
   buildScheduleWindowsFromSelection,
   computeMinSocRenderState,
   computeDynamicGrossImportCtKwh,
+  createPriceChartScale,
   createMinSocPendingState,
   createDashboardRefreshTask,
   createRefreshCoordinator,
+  formatChartEuroValue,
   getDashboardLogUrl,
+  getChartHighlightSets,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices,

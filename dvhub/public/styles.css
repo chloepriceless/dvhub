@@ -39,6 +39,8 @@
   --chart-label: #a8c4e8;
   --chart-positive: var(--dvhub-blue);
   --chart-negative: var(--dvhub-red);
+  --chart-positive-highlight: var(--dvhub-lime);
+  --chart-negative-highlight: #ff7a59;
   --chart-now: var(--dvhub-orange);
   --shadow-soft: 0 18px 36px rgba(0, 0, 0, 0.28);
   --shadow-hard: 0 24px 54px rgba(0, 0, 0, 0.34);

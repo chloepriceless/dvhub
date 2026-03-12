@@ -1,0 +1,106 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const publicDir = path.join(repoRoot, 'public');
+const appPath = path.join(publicDir, 'app.js');
+const stylesPath = path.join(publicDir, 'styles.css');
+
+function loadDashboardHelpers() {
+  const source = fs.readFileSync(appPath, 'utf8');
+  const sandbox = {
+    console,
+    Date,
+    Math,
+    Number,
+    JSON,
+    Intl,
+    Set,
+    Map,
+    globalThis: {},
+    window: {
+      DVhubCommon: {
+        apiFetch: async () => ({
+          ok: true,
+          json: async () => ({ rules: [], config: {} })
+        })
+      },
+      addEventListener() {},
+      setInterval() {},
+      clearInterval() {}
+    },
+    setInterval() {},
+    clearInterval() {}
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(source, sandbox, { filename: path.basename(appPath) });
+  return sandbox.DVhubDashboard || sandbox.window.DVhubDashboard;
+}
+
+test('formatChartEuroValue renders four decimal places', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.formatChartEuroValue, 'function');
+  assert.equal(helpers.formatChartEuroValue(0.123456), '0,1235 €');
+});
+
+test('getChartHighlightSets returns the four highest and eight lowest slot indices', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.getChartHighlightSets, 'function');
+  const result = helpers.getChartHighlightSets([2, 7, -1, -3, 5, 1, -2, 8, -5, 4, -4, 6]);
+
+  assert.deepEqual([...result.high].sort((left, right) => left - right), [1, 4, 7, 11]);
+  assert.deepEqual([...result.low].sort((left, right) => left - right), [2, 3, 6, 8, 10]);
+});
+
+test('createPriceChartScale expands the band between plus one and minus one cent', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.createPriceChartScale, 'function');
+  const scale = helpers.createPriceChartScale({
+    min: -0.08,
+    max: 0.12,
+    top: 16,
+    bottom: 260,
+    focusBandCeiling: 0.01,
+    focusBandFloor: -0.01
+  });
+
+  const upperSmallGap = Math.abs(scale.y(0.01) - scale.y(0));
+  const lowerSmallGap = Math.abs(scale.y(0) - scale.y(-0.01));
+  const upperFarGap = Math.abs(scale.y(0.12) - scale.y(0.02));
+  const lowerFarGap = Math.abs(scale.y(-0.02) - scale.y(-0.08));
+
+  assert.ok(upperSmallGap > 0);
+  assert.ok(lowerSmallGap > 0);
+  assert.ok(upperSmallGap > upperFarGap / 2);
+  assert.ok(lowerSmallGap > lowerFarGap / 2);
+});
+
+test('dashboard chart styles expose highlight signal colors', () => {
+  const css = fs.readFileSync(stylesPath, 'utf8');
+
+  assert.match(css, /--chart-positive-highlight:/);
+  assert.match(css, /--chart-negative-highlight:/);
+});
+
+test('dashboard source uses four-decimal chart labels and highlight fills', () => {
+  const app = fs.readFileSync(appPath, 'utf8');
+
+  assert.match(app, /formatChartEuroValue\(vv\)/);
+  assert.match(app, /getChartHighlightSets\(vals\)/);
+  assert.match(app, /chartPositiveHighlight/);
+  assert.match(app, /chartNegativeHighlight/);
+  assert.match(app, /createPriceChartScale\(/);
+});
+
+test('dashboard source formats tooltip market prices with four decimals', () => {
+  const app = fs.readFileSync(appPath, 'utf8');
+
+  assert.match(app, /fmtCt\(row\.ct_kwh,\s*4\)/);
+});
