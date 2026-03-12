@@ -78,8 +78,6 @@ function loadHistoryPageHelpers() {
     'historyDate',
     'historyPrevBtn',
     'historyNextBtn',
-    'historyOpportunityBlend',
-    'historyOpportunityLabel'
   ];
   const elements = new Map(ids.map((id) => [id, createElement()]));
   elements.get('historyView').value = 'day';
@@ -130,7 +128,8 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyDate"/);
   assert.match(html, /id="historyPrevBtn"/);
   assert.match(html, /id="historyNextBtn"/);
-  assert.match(html, /id="historyOpportunityBlend"/);
+  assert.doesNotMatch(html, /id="historyOpportunityBlend"/);
+  assert.doesNotMatch(html, /id="historyOpportunityLabel"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.doesNotMatch(html, /id="historyKpiGrid"/);
   assert.match(html, /id="historySummaryCard"/);
@@ -282,7 +281,7 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyMeta').textContent, /v0\.3\.0\+ea104c9/);
 });
 
-test('history page applies the market value slider to blended cost and net values', () => {
+test('history page renders actual cost and net values without market value comparison slider', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
 
   helpers.historyState.opportunityBlendPct = 100;
@@ -329,9 +328,9 @@ test('history page applies the market value slider to blended cost and net value
     }
   });
 
-  assert.match(elements.get('historyKpiNet').textContent, /0,10/);
-  assert.match(elements.get('historyRows').innerHTML, /0,40/);
-  assert.match(elements.get('historyRows').innerHTML, /0,10/);
+  assert.match(elements.get('historyKpiNet').textContent, /0,18/);
+  assert.match(elements.get('historyRows').innerHTML, /0,32/);
+  assert.match(elements.get('historyRows').innerHTML, /0,18/);
 });
 
 test('history page renders year-only premium fields and a provisional note for running-year monthly fallback', () => {
