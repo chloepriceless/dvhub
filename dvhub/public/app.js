@@ -93,8 +93,10 @@ function createPriceChartScale({
   max,
   top,
   bottom,
+  enableFocusBand = true,
   focusBandCeiling = 0.01,
-  focusBandFloor = -0.01
+  focusBandFloor = -0.01,
+  focusBandHeightRatio
 } = {}) {
   const chartTop = Number(top);
   const chartBottom = Number(bottom);
@@ -112,7 +114,11 @@ function createPriceChartScale({
   }
   if (maxValue <= minValue) return { y: linearY };
 
-  const hasFocusBand = maxValue > focusBandFloor && minValue < focusBandCeiling && focusBandCeiling > focusBandFloor;
+  const hasFocusBand =
+    enableFocusBand &&
+    maxValue > focusBandFloor &&
+    minValue < focusBandCeiling &&
+    focusBandCeiling > focusBandFloor;
   if (!hasFocusBand) return { y: linearY };
 
   const ceiling = Math.min(Math.max(focusBandCeiling, minValue), maxValue);
@@ -126,7 +132,9 @@ function createPriceChartScale({
 
   const bothOuterBands = upperSpan > 0 && lowerSpan > 0;
   const singleOuterBand = (upperSpan > 0) !== (lowerSpan > 0);
-  const focusRatio = bothOuterBands ? 0.54 : (singleOuterBand ? 0.7 : 1);
+  const focusRatio = Number.isFinite(focusBandHeightRatio)
+    ? Math.max(0, Math.min(Number(focusBandHeightRatio), 1))
+    : (bothOuterBands ? 0.18 : (singleOuterBand ? 0.24 : 1));
   const focusHeight = chartHeight * focusRatio;
   const remainingHeight = Math.max(chartHeight - focusHeight, 0);
   const outerSpan = upperSpan + lowerSpan;
@@ -495,6 +503,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     max,
     top: padT,
     bottom: H - padB,
+    enableFocusBand: vals.some((value) => Number.isFinite(value) && value >= -0.01 && value <= 0.01),
     focusBandCeiling: 0.01,
     focusBandFloor: -0.01
   }).y;

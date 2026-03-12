@@ -58,7 +58,7 @@ test('getChartHighlightSets returns the four highest and eight lowest slot indic
   assert.deepEqual([...result.low].sort((left, right) => left - right), [2, 3, 6, 8, 10]);
 });
 
-test('createPriceChartScale expands the band between plus one and minus one cent', () => {
+test('createPriceChartScale keeps the near-zero band as a narrow strip', () => {
   const helpers = loadDashboardHelpers();
 
   assert.equal(typeof helpers.createPriceChartScale, 'function');
@@ -67,19 +67,20 @@ test('createPriceChartScale expands the band between plus one and minus one cent
     max: 0.12,
     top: 16,
     bottom: 260,
+    enableFocusBand: true,
     focusBandCeiling: 0.01,
     focusBandFloor: -0.01
   });
 
   const upperSmallGap = Math.abs(scale.y(0.01) - scale.y(0));
   const lowerSmallGap = Math.abs(scale.y(0) - scale.y(-0.01));
-  const upperFarGap = Math.abs(scale.y(0.12) - scale.y(0.02));
-  const lowerFarGap = Math.abs(scale.y(-0.02) - scale.y(-0.08));
+  const nearZeroBandHeight = Math.abs(scale.y(0.01) - scale.y(-0.01));
+  const fullChartHeight = Math.abs(scale.y(0.12) - scale.y(-0.08));
 
   assert.ok(upperSmallGap > 0);
   assert.ok(lowerSmallGap > 0);
-  assert.ok(upperSmallGap > upperFarGap / 2);
-  assert.ok(lowerSmallGap > lowerFarGap / 2);
+  assert.ok(nearZeroBandHeight < fullChartHeight / 4);
+  assert.ok(nearZeroBandHeight > fullChartHeight / 12);
 });
 
 test('dashboard chart styles expose highlight signal colors', () => {
@@ -94,6 +95,7 @@ test('dashboard source uses four-decimal chart labels and highlight fills', () =
 
   assert.match(app, /formatChartEuroValue\(vv\)/);
   assert.match(app, /getChartHighlightSets\(vals\)/);
+  assert.match(app, /enableFocusBand:\s*vals\.some\(\(value\)\s*=>\s*Number\.isFinite\(value\)\s*&&\s*value\s*>=\s*-0\.01\s*&&\s*value\s*<=\s*0\.01\)/);
   assert.match(app, /chartPositiveHighlight/);
   assert.match(app, /chartNegativeHighlight/);
   assert.match(app, /createPriceChartScale\(/);
