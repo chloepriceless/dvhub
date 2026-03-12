@@ -322,13 +322,21 @@ function updateSetupDraftValue(state, path, value) {
 }
 
 function applyDiscoveredSystemToSetupState({ state, fieldPath, selectedSystem } = {}) {
-  const nextState = updateSetupDraftValue(state, fieldPath, selectedSystem?.ip || '');
+  const nextState = updateSetupDraftValue(state, fieldPath, selectedSystem?.ipv4 || selectedSystem?.ip || selectedSystem?.ipv6 || '');
   setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
     ...getSetupFieldDiscoveryState(fieldPath),
     manufacturer: resolveWizardValue(nextState, 'manufacturer', ''),
     selectedSystemId: selectedSystem?.id || ''
   }));
   return nextState;
+}
+
+function formatSetupDiscoveredSystemOption(system = {}) {
+  const parts = [system.label || 'System', system.host || '-'];
+  if (system.ipv4) parts.push(`IPv4: ${system.ipv4}`);
+  if (system.ipv6) parts.push(`IPv6: ${system.ipv6}`);
+  if (!system.ipv4 && !system.ipv6 && system.ip) parts.push(system.ip);
+  return parts.join(' • ');
 }
 
 function setActiveSetupStep(state, requestedStepId) {
@@ -614,6 +622,7 @@ const setupWizardHelpers = {
   createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
+  formatSetupDiscoveredSystemOption,
   getPrimarySetupActionLabel,
   getSetupFieldsForStep,
   getSetupFieldDefinitions,
@@ -824,7 +833,7 @@ function renderField(field) {
         applyButton.className = 'btn btn-ghost';
         applyButton.dataset.discoveryFieldPath = field.path;
         applyButton.dataset.discoverySelectSystem = system.id;
-        applyButton.textContent = `${system.label || 'System'} • ${system.host || '-'} • ${system.ip || '-'}`;
+        applyButton.textContent = formatSetupDiscoveredSystemOption(system);
         if (system.id === model.discovery.selectedSystemId) {
           applyButton.classList.add('is-active');
         }

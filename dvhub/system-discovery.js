@@ -23,17 +23,33 @@ function normalizeIp(value) {
   return String(value || '').trim();
 }
 
+function isIpv4(value) {
+  const text = normalizeIp(value);
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(text);
+}
+
+function isIpv6(value) {
+  const text = normalizeIp(value);
+  return text.includes(':');
+}
+
+function preferSystemIp({ ip = '', ipv4 = '', ipv6 = '' } = {}) {
+  return normalizeIp(ipv4) || normalizeIp(ip) || normalizeIp(ipv6);
+}
+
 function buildDiscoveryKey(system) {
   return [
     String(system.manufacturer || '').trim().toLowerCase(),
     normalizeHost(system.host),
+    normalizeIp(system.ipv4),
+    normalizeIp(system.ipv6),
     normalizeIp(system.ip),
     String(system.label || '').trim().toLowerCase()
   ].join('|');
 }
 
 function buildDiscoveryId(system) {
-  const preferredHost = normalizeIp(system.ip) || normalizeHost(system.host) || 'unknown';
+  const preferredHost = preferSystemIp(system) || normalizeHost(system.host) || 'unknown';
   const preferredLabel = String(system.label || 'system')
     .trim()
     .toLowerCase()
@@ -65,14 +81,19 @@ function upsertCandidate(candidates, key, patch) {
     label: '',
     host: '',
     ip: '',
+    ipv4: '',
+    ipv6: '',
     meta: {}
   };
   if (patch.label) candidate.label = patch.label;
   if (patch.host) candidate.host = normalizeHost(patch.host);
   if (patch.ip) candidate.ip = normalizeIp(patch.ip);
+  if (patch.ipv4) candidate.ipv4 = normalizeIp(patch.ipv4);
+  if (patch.ipv6) candidate.ipv6 = normalizeIp(patch.ipv6);
   if (isPlainObject(patch.meta)) {
     candidate.meta = { ...candidate.meta, ...patch.meta };
   }
+  candidate.ip = preferSystemIp(candidate);
   candidates.set(key, candidate);
 }
 
@@ -82,7 +103,11 @@ function updateVictronCandidates(candidates, records) {
     if (record.type !== 'A' && record.type !== 'AAAA') continue;
     const host = normalizeHost(record.name);
     const ip = normalizeIp(record.data);
-    if (host && ip) ipsByHost.set(host, ip);
+    if (!host || !ip) continue;
+    const entry = ipsByHost.get(host) || { ipv4: '', ipv6: '' };
+    if (record.type === 'A') entry.ipv4 = ip;
+    if (record.type === 'AAAA') entry.ipv6 = ip;
+    ipsByHost.set(host, entry);
   }
 
   for (const record of records) {
@@ -104,7 +129,8 @@ function updateVictronCandidates(candidates, records) {
     upsertCandidate(candidates, target || serviceName, {
       label: label || target,
       host: target,
-      ip: ipsByHost.get(target) || '',
+      ipv4: ipsByHost.get(target)?.ipv4 || '',
+      ipv6: ipsByHost.get(target)?.ipv6 || '',
       meta: { serviceName }
     });
   }
@@ -117,14 +143,18 @@ function updateVictronCandidates(candidates, records) {
     upsertCandidate(candidates, host, {
       label: extractServiceLabel(host),
       host,
-      ip,
+      ipv4: record.type === 'A' ? ip : '',
+      ipv6: record.type === 'AAAA' ? ip : '',
       meta: { serviceName: host }
     });
   }
 
   for (const candidate of candidates.values()) {
-    if (!candidate.ip && candidate.host && ipsByHost.has(candidate.host)) {
-      candidate.ip = ipsByHost.get(candidate.host);
+    if (candidate.host && ipsByHost.has(candidate.host)) {
+      const hostIps = ipsByHost.get(candidate.host);
+      candidate.ipv4 = candidate.ipv4 || hostIps.ipv4 || '';
+      candidate.ipv6 = candidate.ipv6 || hostIps.ipv6 || '';
+      candidate.ip = preferSystemIp(candidate);
     }
   }
 }
@@ -137,13 +167,17 @@ function normalizeAndDedupe(systems, { manufacturer = '' } = {}) {
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
     const host = normalizeHost(entry.host);
-    const ip = normalizeIp(entry.ip);
-    if (!host && !ip) continue;
+    const ipv4 = normalizeIp(entry.ipv4 || (isIpv4(entry.ip) ? entry.ip : ''));
+    const ipv6 = normalizeIp(entry.ipv6 || (isIpv6(entry.ip) ? entry.ip : ''));
+    const ip = preferSystemIp({ ip: entry.ip, ipv4, ipv6 });
+    if (!host && !ip && !ipv4 && !ipv6) continue;
     const system = {
-      id: entry.id || buildDiscoveryId({ ...entry, manufacturer, host, ip }),
+      id: entry.id || buildDiscoveryId({ ...entry, manufacturer, host, ip, ipv4, ipv6 }),
       label: String(entry.label || host || ip || 'System').trim(),
       host,
-      ip
+      ip,
+      ipv4,
+      ipv6
     };
     if (isPlainObject(entry.meta) && Object.keys(entry.meta).length) {
       system.meta = entry.meta;

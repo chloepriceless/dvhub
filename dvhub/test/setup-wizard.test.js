@@ -31,6 +31,7 @@ const {
   createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
+  formatSetupDiscoveredSystemOption,
   getPrimarySetupActionLabel,
   getVisibleSetupFieldsForStep,
   goToNextSetupStep,
@@ -235,11 +236,23 @@ test('setup discovery helper fills the host field from the selected system witho
       config: { manufacturer: 'victron', victron: { host: '' } }
     }),
     fieldPath: 'victron.host',
-    selectedSystem: { id: 'a', ip: '192.168.1.20' }
+    selectedSystem: { id: 'a', ipv4: '192.168.1.20', ipv6: 'fe80::20', ip: '192.168.1.20' }
   });
 
   assert.equal(nextState.draftConfig.victron.host, '192.168.1.20');
   assert.equal(nextState.validation.steps.transport.valid, true);
+});
+
+test('setup discovery helper prefers ipv4 when a system exposes both address families', () => {
+  const nextState = applyDiscoveredSystemToSetupState({
+    state: createSampleState({
+      config: { manufacturer: 'victron', victron: { host: '' } }
+    }),
+    fieldPath: 'victron.host',
+    selectedSystem: { id: 'a', ipv4: '192.168.1.20', ipv6: 'fe80::20', ip: 'fe80::20' }
+  });
+
+  assert.equal(nextState.draftConfig.victron.host, '192.168.1.20');
 });
 
 test('setup transport field rendering exposes discovery UI for the host field', () => {
@@ -253,6 +266,18 @@ test('setup transport field rendering exposes discovery UI for the host field', 
 
   assert.equal(model.discovery.visible, true);
   assert.equal(model.discovery.manufacturer, 'victron');
+});
+
+test('setup discovery option text includes both ipv4 and ipv6 when available', () => {
+  const text = formatSetupDiscoveredSystemOption({
+    label: 'Venus GX',
+    host: 'venus.local',
+    ipv4: '192.168.1.20',
+    ipv6: 'fe80::20'
+  });
+
+  assert.match(text, /IPv4:\s*192\.168\.1\.20/);
+  assert.match(text, /IPv6:\s*fe80::20/);
 });
 
 test('setup discovery errors leave manual host entry available', () => {
