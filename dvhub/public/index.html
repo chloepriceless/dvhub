@@ -89,7 +89,16 @@
           <div class="metric-row"><span>PV-Leistung</span><strong id="pvP">-</strong></div>
           <div class="metric-row"><span>PV gesamt (DC+AC)</span><strong id="pvTotal">-</strong></div>
           <div class="metric-row"><span>Grid Setpoint</span><strong id="gridSetpoint">-</strong></div>
-          <div class="metric-row"><span>Minimum-SOC</span><strong id="minSoc">-</strong></div>
+          <div id="minSocRow" class="metric-row metric-row-action" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor">
+            <span>Minimum-SOC <small class="metric-row-hint">Anpassen</small></span>
+            <strong id="minSoc">-</strong>
+          </div>
+          <div id="minSocEditor" class="min-soc-editor" hidden>
+            <label class="min-soc-editor-label" for="minSocSlider">Minimum-SOC</label>
+            <strong id="minSocEditorValue" class="min-soc-editor-value">20 %</strong>
+            <input id="minSocSlider" class="min-soc-editor-slider" type="range" min="0" max="100" step="1" value="20" />
+            <button id="minSocSubmitBtn" class="btn btn-primary" type="button">Absenden</button>
+          </div>
         </section>
 
         <section class="panel span-3 reveal">
@@ -172,11 +181,6 @@
             <label>Charge Current (A) <input id="manualChargeValue" type="number" value="100" /></label>
             <button id="manualChargeBtn">Schreiben</button>
           </div>
-          <div class="controls">
-            <label>Minimum-SOC (%) <input id="manualMinSocValue" type="number" value="20" /></label>
-            <button id="manualMinSocBtn">Schreiben</button>
-          </div>
-
           <p class="card-title" style="margin-top: 16px;">Standards nach Zeitplan</p>
           <div class="controls">
             <label>Default Grid Setpoint (W)

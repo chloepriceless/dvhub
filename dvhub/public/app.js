@@ -127,6 +127,11 @@ const chartSelectionState = {
   anchorIndex: null,
   didDrag: false
 };
+const dashboardState = {
+  lastMinSocReadback: null,
+  minSocEditorOpen: false,
+  pendingMinSocWrite: null
+};
 
 function normalizeChartSelectionIndices(data, indices) {
   if (!Array.isArray(data) || !Array.isArray(indices)) return [];
@@ -562,6 +567,123 @@ function resolveDvControlIndicators(status) {
   };
 }
 
+function createMinSocPendingState({ currentReadback, submittedValue, submittedAt = Date.now() }) {
+  return {
+    previousReadback: currentReadback,
+    targetValue: submittedValue,
+    submittedAt
+  };
+}
+
+function resolveMinSocPendingState({ pendingState, readbackValue }) {
+  if (!pendingState) return null;
+  if (readbackValue == null) return pendingState;
+  if (readbackValue === pendingState.targetValue) return null;
+  if (readbackValue !== pendingState.previousReadback) return null;
+  return pendingState;
+}
+
+function computeMinSocRenderState({ readbackValue, pendingState }) {
+  const nextPendingState = resolveMinSocPendingState({ pendingState, readbackValue });
+  return {
+    pendingState: nextPendingState,
+    shouldBlink: Boolean(nextPendingState)
+  };
+}
+
+function syncMinSocEditorPreview(value) {
+  const numericValue = Number(value);
+  const preview = document.getElementById('minSocEditorValue');
+  if (!preview) return;
+  preview.textContent = Number.isFinite(numericValue) ? `${Math.round(numericValue)} %` : '-';
+}
+
+function syncMinSocEditorFromReadback(value) {
+  const slider = document.getElementById('minSocSlider');
+  if (!slider) return;
+  const fallbackValue = Number(slider.value);
+  const normalizedValue = Number.isFinite(Number(value))
+    ? Math.round(Number(value))
+    : (Number.isFinite(fallbackValue) ? fallbackValue : 20);
+  slider.value = String(normalizedValue);
+  syncMinSocEditorPreview(normalizedValue);
+}
+
+function setMinSocEditorOpen(isOpen) {
+  dashboardState.minSocEditorOpen = Boolean(isOpen);
+  const row = document.getElementById('minSocRow');
+  const editor = document.getElementById('minSocEditor');
+  if (row) row.setAttribute('aria-expanded', dashboardState.minSocEditorOpen ? 'true' : 'false');
+  if (editor) editor.hidden = !dashboardState.minSocEditorOpen;
+}
+
+function openMinSocEditor() {
+  syncMinSocEditorFromReadback(dashboardState.lastMinSocReadback);
+  setMinSocEditorOpen(true);
+}
+
+function closeMinSocEditor() {
+  setMinSocEditorOpen(false);
+}
+
+function toggleMinSocEditor() {
+  if (dashboardState.minSocEditorOpen) {
+    closeMinSocEditor();
+    return;
+  }
+  openMinSocEditor();
+}
+
+function handleMinSocRowKeydown(event) {
+  if (!event) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  toggleMinSocEditor();
+}
+
+function applyMinSocPendingVisualState(shouldBlink) {
+  document.getElementById('minSoc')?.classList.toggle('min-soc-pending', Boolean(shouldBlink));
+}
+
+async function submitMinSocUpdate({ sliderValue, currentReadback, apiFetchImpl = apiFetch }) {
+  const value = Number(sliderValue);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: 'Min SOC: Ungültiger Wert' };
+  }
+  const request = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: 'minSocPct', value })
+  };
+  const response = await apiFetchImpl('/api/control/write', request);
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    return { ok: false, error: `MinSOC Write Fehler: ${payload.error || response.status}` };
+  }
+  return {
+    ok: true,
+    closeEditor: true,
+    pendingState: createMinSocPendingState({ currentReadback, submittedValue: value }),
+    request
+  };
+}
+
+async function handleMinSocSubmit() {
+  const slider = document.getElementById('minSocSlider');
+  const outcome = await submitMinSocUpdate({
+    sliderValue: slider?.value,
+    currentReadback: dashboardState.lastMinSocReadback
+  });
+  if (!outcome.ok) {
+    setControlMsg(outcome.error, true);
+    return;
+  }
+  dashboardState.pendingMinSocWrite = outcome.pendingState;
+  closeMinSocEditor();
+  setControlMsg(`Min SOC geschrieben: ${outcome.pendingState.targetValue} %`);
+  await requestDashboardRefresh();
+}
+
 function renderDashboardStatus(status) {
   const dvOn = Number(status.dvControlValue) === 1;
   setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
@@ -606,7 +728,15 @@ function renderDashboardStatus(status) {
   setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
   setText('pvTotal', vic.pvTotalW == null ? '-' : `${vic.pvTotalW} W`);
   setText('gridSetpoint', vic.gridSetpointW == null ? '-' : `${vic.gridSetpointW} W`);
+  const minSocRenderState = computeMinSocRenderState({
+    readbackValue: vic.minSocPct,
+    pendingState: dashboardState.pendingMinSocWrite
+  });
+  dashboardState.pendingMinSocWrite = minSocRenderState.pendingState;
+  dashboardState.lastMinSocReadback = vic.minSocPct;
   setText('minSoc', vic.minSocPct == null ? '-' : `${vic.minSocPct} %`);
+  applyMinSocPendingVisualState(minSocRenderState.shouldBlink);
+  if (!dashboardState.minSocEditorOpen) syncMinSocEditorFromReadback(vic.minSocPct);
 
   const c = status.costs || {};
   setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);
@@ -719,20 +849,6 @@ async function manualWriteCharge() {
   const out = await res.json();
   if (!res.ok || !out.ok) return setControlMsg(`Charge Write Fehler: ${out.error || res.status}`, true);
   setControlMsg(`Charge Current geschrieben: ${value} A`);
-  await requestDashboardRefresh();
-}
-
-async function manualWriteMinSoc() {
-  const value = Number(document.getElementById('manualMinSocValue')?.value);
-  if (!Number.isFinite(value)) return setControlMsg('Min SOC: Ungültiger Wert', true);
-  const res = await apiFetch('/api/control/write', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ target: 'minSocPct', value })
-  });
-  const out = await res.json();
-  if (!res.ok || !out.ok) return setControlMsg(`MinSOC Write Fehler: ${out.error || res.status}`, true);
-  setControlMsg(`Min SOC geschrieben: ${value} %`);
   await requestDashboardRefresh();
 }
 
@@ -959,7 +1075,12 @@ function initDashboard() {
   document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => addScheduleRow());
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
-  document.getElementById('manualMinSocBtn')?.addEventListener('click', manualWriteMinSoc);
+  document.getElementById('minSocRow')?.addEventListener('click', toggleMinSocEditor);
+  document.getElementById('minSocRow')?.addEventListener('keydown', handleMinSocRowKeydown);
+  document.getElementById('minSocSlider')?.addEventListener('input', (event) => {
+    syncMinSocEditorPreview(event?.target?.value);
+  });
+  document.getElementById('minSocSubmitBtn')?.addEventListener('click', handleMinSocSubmit);
   document.getElementById('createSelectionScheduleBtn')?.addEventListener('click', () => {
     createScheduleRowsFromChartSelection();
   });
@@ -970,6 +1091,7 @@ function initDashboard() {
   });
 
   updateChartSelectionCallout();
+  syncMinSocEditorPreview(document.getElementById('minSocSlider')?.value);
   loadScheduleDash().catch(() => {});
   requestDashboardRefresh().catch(() => {});
   setInterval(() => {
@@ -979,14 +1101,18 @@ function initDashboard() {
 
 const dashboardApi = {
   buildScheduleWindowsFromSelection,
+  computeMinSocRenderState,
   computeDynamicGrossImportCtKwh,
+  createMinSocPendingState,
   createDashboardRefreshTask,
   createRefreshCoordinator,
   getDashboardLogUrl,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices,
-  resolveDvControlIndicators
+  resolveMinSocPendingState,
+  resolveDvControlIndicators,
+  submitMinSocUpdate
 };
 
 if (typeof window !== 'undefined') {
