@@ -37,6 +37,7 @@ import { createBundesnetzagenturApplicableValueService } from './bundesnetzagent
 import { readAppVersionInfo } from './app-version.js';
 import {
   buildAutomationRuleChain,
+  expandChainSlots,
   filterFreeAutomationSlots,
   pickBestAutomationPlan
 } from './small-market-automation.js';
@@ -273,7 +274,7 @@ function buildSmallMarketAutomationRules({
   const filteredPriceSlots = buildSearchWindowBounds({
     data: priceSlots,
     automationConfig
-  });
+  }).filter((slot) => Number(slot?.ts) >= now);
   const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
   const dateStr = berlinDateString(new Date(now));
   const refDate = new Date(`${dateStr}T12:00:00Z`);
@@ -306,12 +307,51 @@ function buildSmallMarketAutomationRules({
     slots: filteredPriceSlots,
     occupiedWindows
   });
-  const chain = buildDefaultAutomationChain(automationConfig);
-  const plan = pickBestAutomationPlan({
-    slots: freeSlots,
-    targetSlotCount: Number(automationConfig?.targetSlotCount || chain.length || 0),
-    chainOptions: [chain]
-  });
+  const baseChain = buildDefaultAutomationChain(automationConfig);
+  const baseTargetSlots = Number(automationConfig?.targetSlotCount || baseChain.length || 0);
+  const maxW = Math.abs(Number(automationConfig?.maxDischargeW || 12000));
+
+  // Try multiple slot counts and pick the most profitable plan
+  let bestPlan = { selectedSlotTimestamps: [], totalRevenueCt: -Infinity, chain: [], peakDischargeW: Infinity };
+
+  const minSlots = Math.max(1, baseTargetSlots - 1);
+  const maxSlots = Math.min(freeSlots.length, baseTargetSlots + 2);
+
+  for (let slotCount = minSlots; slotCount <= maxSlots; slotCount++) {
+    // Scale power: keep total energy constant → power * baseSlots = scaledPower * slotCount
+    const scaledPowerW = -Math.round(maxW * baseTargetSlots / slotCount);
+    const variantChain = buildAutomationRuleChain({
+      maxDischargeW: automationConfig?.maxDischargeW,
+      stages: [{ dischargeW: scaledPowerW, dischargeSlots: slotCount, cooldownSlots: 0 }]
+    });
+
+    const candidate = pickBestAutomationPlan({
+      slots: freeSlots,
+      targetSlotCount: slotCount,
+      chainOptions: [variantChain]
+    });
+
+    if (candidate.totalRevenueCt > bestPlan.totalRevenueCt
+        || (candidate.totalRevenueCt === bestPlan.totalRevenueCt && candidate.peakDischargeW < bestPlan.peakDischargeW)) {
+      bestPlan = candidate;
+    }
+  }
+
+  // Also test the original configured chain (custom stages may differ from uniform variants)
+  if (baseChain.length > 0 && baseChain.length >= minSlots && baseChain.length <= maxSlots) {
+    const originalPlan = pickBestAutomationPlan({
+      slots: freeSlots,
+      targetSlotCount: baseTargetSlots,
+      chainOptions: [baseChain]
+    });
+    if (originalPlan.totalRevenueCt > bestPlan.totalRevenueCt
+        || (originalPlan.totalRevenueCt === bestPlan.totalRevenueCt && originalPlan.peakDischargeW < bestPlan.peakDischargeW)) {
+      bestPlan = originalPlan;
+    }
+  }
+
+  const plan = bestPlan;
+  const expandedBestChain = expandChainSlots(plan.chain);
 
   return (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
     const slot = freeSlots.find((entry) => Number(entry?.ts) === Number(slotTs));
@@ -324,7 +364,7 @@ function buildSmallMarketAutomationRules({
       target: 'gridSetpointW',
       start: start.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
       end: end.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      value: Number(chain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
+      value: Number(expandedBestChain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
       activeDate: berlinDateString(new Date(now)),
       source: SMALL_MARKET_AUTOMATION_SOURCE,
       autoManaged: true,
@@ -370,7 +410,13 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     lastRunDate: runDate,
     lastOutcome: sunTimesCache ? (generatedRules.length ? 'generated' : 'no_slots') : 'missing_sun_times_cache',
     generatedRuleCount: generatedRules.length,
-    lastPriceSlotCount: priceSlotCount
+    lastPriceSlotCount: priceSlotCount,
+    selectedSlotTimestamps: generatedRules
+      .map((r) => {
+        const match = r?.id?.match(/^sma-(\d+)-/);
+        return match ? Number(match[1]) : null;
+      })
+      .filter((ts) => ts != null)
   };
   persistConfig();
 }

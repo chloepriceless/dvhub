@@ -1813,6 +1813,11 @@ table th {
   border-bottom-color: color-mix(in srgb, var(--schedule-automation-yellow) 38%, rgba(31, 76, 122, 0.7));
 }
 
+.price-bar.is-automation {
+  stroke: var(--schedule-automation-yellow);
+  stroke-width: 1.5;
+}
+
 /* --- Kleine Börsenautomatik Panel --- */
 .automation-status-bar {
   display: flex;
