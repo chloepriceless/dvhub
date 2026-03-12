@@ -86,6 +86,7 @@ const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 const SMALL_MARKET_AUTOMATION_DISPLAY_TONE = 'yellow';
+const SLOT_DURATION_MS = 15 * 60 * 1000;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
 const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
@@ -316,7 +317,7 @@ function buildSmallMarketAutomationRules({
     const slot = freeSlots.find((entry) => Number(entry?.ts) === Number(slotTs));
     if (!slot) return null;
     const start = new Date(slot.ts);
-    const end = new Date(slot.ts + (60 * 60 * 1000));
+    const end = new Date(slot.ts + SLOT_DURATION_MS);
     return {
       id: `sma-${slotTs}-${index + 1}`,
       enabled: true,

@@ -3,6 +3,8 @@ function toFiniteNumber(value, fallback = null) {
   return Number.isFinite(numericValue) ? numericValue : fallback;
 }
 
+export const SLOT_DURATION_HOURS = 0.25; // 15 minutes
+
 function expandChainSlots(chain = []) {
   const expanded = [];
   for (const entry of chain) {
@@ -17,7 +19,7 @@ function expandChainSlots(chain = []) {
 
 function estimateSlotRevenueCt(slot, powerW) {
   const priceCtKwh = toFiniteNumber(slot?.ct_kwh, 0);
-  return (Math.abs(toFiniteNumber(powerW, 0)) / 1000) * 0.25 * priceCtKwh;
+  return (Math.abs(toFiniteNumber(powerW, 0)) / 1000) * SLOT_DURATION_HOURS * priceCtKwh;
 }
 
 function ensureNegative(value, fallback) {

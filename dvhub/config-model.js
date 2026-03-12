@@ -869,7 +869,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 24,
-      help: 'Wie viele freie Slots maximal belegt werden dürfen.'
+      help: 'Wie viele freie Slots (je 15 Min.) maximal belegt werden dürfen.'
     },
     {
       section: 'schedule',

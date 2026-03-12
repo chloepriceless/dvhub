@@ -201,3 +201,13 @@ test('revenue calculation uses kW not W (18kW * 0.25h * 28ct/kWh = 126ct)', () =
   // 18000W / 1000 * 0.25h * 28ct/kWh = 126ct
   assert.equal(plan.totalRevenueCt, 126);
 });
+
+test('estimateSlotRevenueCt uses 15-minute (0.25h) slot duration', () => {
+  // A single 15-min slot at 10kW and 40ct/kWh should yield: 10 * 0.25 * 40 = 100ct
+  const plan = pickBestAutomationPlan({
+    slots: [{ ts: 1000, ct_kwh: 40 }],
+    targetSlotCount: 1,
+    chainOptions: [[{ powerW: -10000, slots: 1 }]]
+  });
+  assert.equal(plan.totalRevenueCt, 100);
+});
