@@ -1813,6 +1813,45 @@ table th {
   border-bottom-color: color-mix(in srgb, var(--schedule-automation-yellow) 38%, rgba(31, 76, 122, 0.7));
 }
 
+/* --- Kleine Börsenautomatik Panel --- */
+.automation-status-bar {
+  display: flex;
+  gap: 18px;
+  margin: 8px 0 14px;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.automation-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.automation-config-grid .settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.automation-config-grid .settings-field span {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.automation-config-grid input[type="number"],
+.automation-config-grid input[type="time"] {
+  width: 100%;
+}
+
+#automationStagesContainer {
+  margin-bottom: 10px;
+}
+
+#automationStagesContainer .pricing-period-card {
+  margin-bottom: 8px;
+}
 
 .icon-btn {
   border-radius: 50%;

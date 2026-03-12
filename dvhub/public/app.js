@@ -903,6 +903,8 @@ function renderDashboardStatus(status) {
 
   drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || []);
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
+
+  renderAutomationStatus(status.schedule);
 }
 
 function renderDashboardLog(logs) {
@@ -1294,6 +1296,168 @@ function handleGlobalChartMouseUp() {
   updateChartSelectionCallout();
 }
 
+// --- Kleine Börsenautomatik Dashboard Panel ---
+let automationStagesDraft = [];
+
+function createEmptyAutomationStage(index = 0) {
+  return {
+    id: `sma-stage-${index + 1}`,
+    dischargeW: '',
+    dischargeSlots: '',
+    cooldownW: '',
+    cooldownSlots: ''
+  };
+}
+
+function addAutomationStage() {
+  automationStagesDraft = [...automationStagesDraft, createEmptyAutomationStage(automationStagesDraft.length)];
+  renderAutomationStages();
+}
+
+function removeAutomationStage(stageId) {
+  automationStagesDraft = automationStagesDraft.filter((s) => s.id !== stageId);
+  renderAutomationStages();
+}
+
+function serializeAutomationStages(stages = []) {
+  return stages.map((stage) => ({
+    dischargeW: stage.dischargeW === '' || stage.dischargeW == null ? null : Number(stage.dischargeW),
+    dischargeSlots: stage.dischargeSlots === '' || stage.dischargeSlots == null ? null : Number(stage.dischargeSlots),
+    cooldownW: stage.cooldownW === '' || stage.cooldownW == null ? null : Number(stage.cooldownW),
+    cooldownSlots: stage.cooldownSlots === '' || stage.cooldownSlots == null ? null : Number(stage.cooldownSlots)
+  }));
+}
+
+function renderAutomationStages() {
+  const container = document.getElementById('automationStagesContainer');
+  if (!container) return;
+  container.innerHTML = '';
+
+  automationStagesDraft.forEach((stage, index) => {
+    const card = document.createElement('article');
+    card.className = 'pricing-period-card';
+    card.dataset.automationStageId = stage.id;
+    card.innerHTML = `
+      <div class="pricing-period-grid">
+        <label class="settings-field">
+          <span>Entladeleistung (W)</span>
+          <input type="number" data-stage-field="dischargeW" value="${stage.dischargeW}" />
+        </label>
+        <label class="settings-field">
+          <span>Entlade-Slots</span>
+          <input type="number" min="0" data-stage-field="dischargeSlots" value="${stage.dischargeSlots}" />
+        </label>
+        <label class="settings-field">
+          <span>Cooldown-Leistung (W)</span>
+          <input type="number" data-stage-field="cooldownW" value="${stage.cooldownW}" />
+        </label>
+        <label class="settings-field">
+          <span>Cooldown-Slots</span>
+          <input type="number" min="0" data-stage-field="cooldownSlots" value="${stage.cooldownSlots}" />
+        </label>
+      </div>
+      <button class="btn-small btn-danger remove-stage-btn" data-remove-stage="${stage.id}">Stufe entfernen</button>
+    `;
+    container.appendChild(card);
+  });
+
+  // Bind events
+  container.querySelectorAll('.remove-stage-btn').forEach((btn) => {
+    btn.addEventListener('click', () => removeAutomationStage(btn.dataset.removeStage));
+  });
+  container.querySelectorAll('[data-stage-field]').forEach((input) => {
+    input.addEventListener('change', (e) => {
+      const card = e.target.closest('[data-automation-stage-id]');
+      const stageId = card?.dataset.automationStageId;
+      const field = e.target.dataset.stageField;
+      const stage = automationStagesDraft.find((s) => s.id === stageId);
+      if (stage) { stage[field] = e.target.value; }
+    });
+  });
+}
+
+async function loadAutomationConfig() {
+  try {
+    const res = await apiFetch('/api/schedule/automation/config');
+    const data = await res.json();
+    if (!data.ok) return;
+    const c = data.config || {};
+
+    const el = (id) => document.getElementById(id);
+    if (el('automationEnabled')) el('automationEnabled').checked = !!c.enabled;
+    if (el('automationSearchStart')) el('automationSearchStart').value = c.searchWindowStart || '14:00';
+    if (el('automationSearchEnd')) el('automationSearchEnd').value = c.searchWindowEnd || '09:00';
+    if (el('automationTargetSlots')) el('automationTargetSlots').value = c.targetSlotCount ?? 4;
+    if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
+    if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
+
+    // Load stages
+    automationStagesDraft = (c.stages || []).map((s, i) => ({
+      id: `sma-stage-${i + 1}`,
+      dischargeW: s.dischargeW ?? '',
+      dischargeSlots: s.dischargeSlots ?? '',
+      cooldownW: s.cooldownW ?? '',
+      cooldownSlots: s.cooldownSlots ?? ''
+    }));
+    renderAutomationStages();
+  } catch (e) {
+    console.error('Failed to load automation config:', e);
+  }
+}
+
+async function saveAutomationConfig() {
+  const el = (id) => document.getElementById(id);
+  const config = {
+    enabled: el('automationEnabled')?.checked ?? false,
+    searchWindowStart: el('automationSearchStart')?.value || '14:00',
+    searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
+    targetSlotCount: Number(el('automationTargetSlots')?.value) || 4,
+    maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000,
+    minSocPct: Number(el('automationMinSocPct')?.value) || 30,
+    stages: serializeAutomationStages(automationStagesDraft)
+  };
+
+  try {
+    const res = await apiFetch('/api/schedule/automation/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setControlMsg('Automation gespeichert \u2713 ' + new Date().toLocaleTimeString('de-DE'));
+      // Reload schedule to see regenerated rules
+      loadScheduleDash();
+    }
+  } catch (e) {
+    console.error('Failed to save automation config:', e);
+  }
+}
+
+function renderAutomationStatus(scheduleData) {
+  const sma = scheduleData?.smallMarketAutomation;
+  if (!sma) return;
+
+  const titleEl = document.getElementById('automationStatusTitle');
+  const outcomeEl = document.getElementById('automationOutcome');
+  const countEl = document.getElementById('automationRuleCount');
+
+  const enabledEl = document.getElementById('automationEnabled');
+  const isEnabled = enabledEl?.checked;
+
+  if (titleEl) titleEl.textContent = isEnabled ? 'Aktiv' : 'Inaktiv';
+
+  const outcomeLabels = {
+    idle: 'Warte auf Ausführung',
+    disabled: 'Deaktiviert',
+    generated: 'Regeln generiert',
+    no_slots: 'Keine passenden Slots',
+    missing_sun_times_cache: 'Sonnendaten fehlen'
+  };
+  if (outcomeEl) outcomeEl.textContent = outcomeLabels[sma.lastOutcome] || sma.lastOutcome || '\u2014';
+  if (countEl) countEl.textContent = sma.generatedRuleCount != null ? `${sma.generatedRuleCount} Regeln aktiv` : '';
+}
+
 function initDashboard() {
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
@@ -1316,8 +1480,12 @@ function initDashboard() {
     setControlMsg('API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN öffnen.', true);
   });
 
+  document.getElementById('addAutomationStageBtn')?.addEventListener('click', addAutomationStage);
+  document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
+
   updateChartSelectionCallout();
   syncMinSocEditorPreview(document.getElementById('minSocSlider')?.value);
+  loadAutomationConfig();
   loadScheduleDash().catch(() => {});
   requestDashboardRefresh().catch(() => {});
   setInterval(() => {

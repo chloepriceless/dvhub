@@ -2407,6 +2407,29 @@ const web = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, config: state.schedule.config });
   }
 
+  // GET /api/schedule/automation/config
+  if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+    return json(res, 200, { ok: true, config: cfg.schedule?.smallMarketAutomation || {} });
+  }
+
+  // POST /api/schedule/automation/config
+  if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
+    const body = await parseBody(req);
+    if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'invalid body' });
+
+    // Merge automation config into raw config and persist
+    const current = JSON.parse(JSON.stringify(rawCfg || {}));
+    current.schedule = current.schedule || {};
+    current.schedule.smallMarketAutomation = {
+      ...current.schedule.smallMarketAutomation,
+      ...body
+    };
+    saveAndApplyConfig(current);
+    regenerateSmallMarketAutomationRules();
+
+    return json(res, 200, { ok: true, config: cfg.schedule.smallMarketAutomation });
+  }
+
   if (url.pathname === '/api/control/write' && req.method === 'POST') {
     const body = await parseBody(req);
     const target = String(body.target || '');
