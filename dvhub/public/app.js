@@ -5,9 +5,18 @@ const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
 function fmtDmHm(ts) { return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
-function fmtEuroFromCt(ct) {
-  const eur = Number(ct) / 100;
-  return `${eur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`;
+function fmtCentValue(value, maximumFractionDigits = 2) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return '-';
+  return `${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits })} Cent`;
+}
+
+function fmtCentFromCt(ct) {
+  return fmtCentValue(ct);
+}
+
+function fmtCentFromTenthCt(value) {
+  return fmtCentValue(Number(value) / 10);
 }
 function setText(id, text, cls) {
   const el = document.getElementById(id);
@@ -62,9 +71,9 @@ function roundCt(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
-function formatChartEuroValue(value) {
+function formatChartCentValue(value) {
   if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} \u20ac`;
+  return fmtCentValue(Number(value) * 100);
 }
 
 function getChartHighlightSets(values, { highCount = 4, lowCount = 8 } = {}) {
@@ -377,7 +386,7 @@ function buildChartSelectionRange(startIndex, endIndex) {
 
 function fmtCt(value, digits = 2) {
   if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ct/kWh`;
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: digits })} ct/kWh`;
 }
 
 function fmtSignedCt(value, digits = 2) {
@@ -417,12 +426,12 @@ function updateChartComparisonSummary(pricing) {
 function showChartTooltip(tooltip, row, event, comparison) {
   if (!tooltip || !row || !event) return;
   tooltip.style.display = 'block';
-  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 4)}`];
+  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 2)}`];
   if (comparison) {
-    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 4)}`);
-    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 4)}`);
-    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 4)}`);
-    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 4)}`);
+    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 2)}`);
+    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 2)}`);
+    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 2)}`);
+    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 2)}`);
   }
   tooltip.textContent = parts.join(' | ');
   tooltip.style.left = `${event.clientX + 12}px`;
@@ -527,7 +536,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     label.setAttribute('y', yy + 4);
     label.setAttribute('font-size', '11');
     label.setAttribute('fill', chartLabel);
-    label.textContent = formatChartEuroValue(vv);
+    label.textContent = formatChartCentValue(vv);
     svg.appendChild(label);
   }
 
@@ -826,14 +835,14 @@ function renderDashboardStatus(status) {
   setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
 
   const s = status.epex?.summary;
-  setText('priceNow', s?.current ? `${fmtEuroFromCt(s.current.ct_kwh)}/kWh` : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
-  setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtEuroFromCt(s.next.ct_kwh)}/kWh)` : '-');
+  setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
+  setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtCentFromCt(s.next.ct_kwh)})` : '-');
   setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
   setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
   setText(
     'todayMinMax',
     s && s.todayMin != null && s.todayMax != null
-      ? `${fmtEuroFromCt(Number(s.todayMin) / 10)} / ${fmtEuroFromCt(Number(s.todayMax) / 10)}`
+      ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
       : '-'
   );
   const negActive = status.ctrl?.negativePriceActive;
@@ -841,7 +850,7 @@ function renderDashboardStatus(status) {
   setText(
     'tomorrowMinMax',
     s && s.tomorrowMin != null && s.tomorrowMax != null
-      ? `${fmtEuroFromCt(Number(s.tomorrowMin) / 10)} / ${fmtEuroFromCt(Number(s.tomorrowMax) / 10)}`
+      ? `${fmtCentFromTenthCt(Number(s.tomorrowMin))} / ${fmtCentFromTenthCt(Number(s.tomorrowMax))}`
       : '-'
   );
 
@@ -1325,7 +1334,7 @@ const dashboardApi = {
   createMinSocPendingState,
   createDashboardRefreshTask,
   createRefreshCoordinator,
-  formatChartEuroValue,
+  formatChartCentValue,
   getDashboardLogUrl,
   getChartHighlightSets,
   groupScheduleRulesForDashboard,

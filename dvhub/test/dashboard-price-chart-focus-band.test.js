@@ -41,11 +41,11 @@ function loadDashboardHelpers() {
   return sandbox.DVhubDashboard || sandbox.window.DVhubDashboard;
 }
 
-test('formatChartEuroValue renders four decimal places', () => {
+test('formatChartCentValue renders cent labels with two decimal places', () => {
   const helpers = loadDashboardHelpers();
 
-  assert.equal(typeof helpers.formatChartEuroValue, 'function');
-  assert.equal(helpers.formatChartEuroValue(0.123456), '0,1235 €');
+  assert.equal(typeof helpers.formatChartCentValue, 'function');
+  assert.equal(helpers.formatChartCentValue(0.08123), '8,12 Cent');
 });
 
 test('getChartHighlightSets returns the four highest and eight lowest slot indices', () => {
@@ -90,10 +90,10 @@ test('dashboard chart styles expose highlight signal colors', () => {
   assert.match(css, /--chart-negative-highlight:/);
 });
 
-test('dashboard source uses four-decimal chart labels and highlight fills', () => {
+test('dashboard source uses cent chart labels and highlight fills', () => {
   const app = fs.readFileSync(appPath, 'utf8');
 
-  assert.match(app, /formatChartEuroValue\(vv\)/);
+  assert.match(app, /formatChartCentValue\(vv\)/);
   assert.match(app, /getChartHighlightSets\(vals\)/);
   assert.match(app, /enableFocusBand:\s*vals\.some\(\(value\)\s*=>\s*Number\.isFinite\(value\)\s*&&\s*value\s*>=\s*-0\.01\s*&&\s*value\s*<=\s*0\.01\)/);
   assert.match(app, /chartPositiveHighlight/);
@@ -101,8 +101,15 @@ test('dashboard source uses four-decimal chart labels and highlight fills', () =
   assert.match(app, /createPriceChartScale\(/);
 });
 
-test('dashboard source formats tooltip market prices with four decimals', () => {
+test('dashboard source formats tooltip market prices with two cent decimals', () => {
   const app = fs.readFileSync(appPath, 'utf8');
 
-  assert.match(app, /fmtCt\(row\.ct_kwh,\s*4\)/);
+  assert.match(app, /fmtCt\(row\.ct_kwh,\s*2\)/);
+});
+
+test('dashboard markup labels the price chart as ct per kwh', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+
+  assert.match(html, /Day-Ahead-Preise \(ct\/kWh\)/);
+  assert.doesNotMatch(html, /EUR\/kWh/);
 });

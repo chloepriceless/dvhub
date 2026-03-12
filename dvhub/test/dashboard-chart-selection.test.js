@@ -76,8 +76,9 @@ test('dashboard exposes and renders today min max with the same scaling as tomor
 
   assert.match(html, /id="todayMinMax"/);
   assert.match(app, /'todayMinMax'/);
-  assert.match(app, /Number\(s\.todayMin\) \/ 10/);
-  assert.match(app, /Number\(s\.todayMax\) \/ 10/);
+  assert.match(app, /fmtCentFromTenthCt\(Number\(s\.todayMin\)\)/);
+  assert.match(app, /fmtCentFromTenthCt\(Number\(s\.todayMax\)\)/);
+  assert.match(app, /Cent/);
 });
 
 test('dashboard helpers compute dynamic gross import prices from market price and surcharges', () => {
