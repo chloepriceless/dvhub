@@ -226,6 +226,71 @@ test('dashboard markup and styles expose user price comparison summary and expir
   assert.match(css, /\.sched-row-expired/);
 });
 
+test('dashboard schedule table exposes a stop-soc column', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  assert.match(html, /STOP-SOC \(%\)/);
+});
+
+test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back from grouped rules', () => {
+  const helpers = loadDashboardHelpers();
+
+  assert.equal(typeof helpers.collectScheduleRulesFromRowState, 'function');
+  assert.equal(typeof helpers.groupScheduleRulesForDashboard, 'function');
+
+  const rules = JSON.parse(JSON.stringify(helpers.collectScheduleRulesFromRowState([
+    {
+      start: '08:00',
+      end: '09:00',
+      rowEnabled: true,
+      gridEnabled: true,
+      gridVal: -40,
+      chargeEnabled: true,
+      chargeVal: 80,
+      stopSocEnabled: true,
+      stopSocVal: 25
+    }
+  ])));
+
+  assert.deepEqual(rules, [
+    {
+      id: 'grid_1',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '08:00',
+      end: '09:00',
+      value: -40,
+      stopSocPct: 25
+    },
+    {
+      id: 'charge_1',
+      enabled: true,
+      target: 'chargeCurrentA',
+      start: '08:00',
+      end: '09:00',
+      value: 80
+    }
+  ]);
+
+  const grouped = JSON.parse(JSON.stringify(helpers.groupScheduleRulesForDashboard(rules)));
+  assert.deepEqual(grouped, [
+    {
+      start: '08:00',
+      end: '09:00',
+      enabled: true,
+      grid: -40,
+      charge: 80,
+      stopSocPct: 25
+    }
+  ]);
+});
+
+test('dashboard schedule row template includes stop-soc controls', () => {
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+
+  assert.match(app, /sched-stop-soc-en/);
+  assert.match(app, /sched-stop-soc-val/);
+});
+
 test('dashboard places the schedule panel directly after the price engine panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const priceIndex = html.indexOf('Preis-Engine');

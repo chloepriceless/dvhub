@@ -39,3 +39,29 @@ export function autoDisableExpiredScheduleRules(rules, nowMin) {
 
   return { changed, rules: nextRules };
 }
+
+export function autoDisableStopSocScheduleRules({ rules, nowMin, batterySocPct }) {
+  if (!Array.isArray(rules)) return { changed: false, disabledRuleIds: [], rules: [] };
+  if (batterySocPct == null || batterySocPct === '' || !Number.isFinite(Number(batterySocPct))) {
+    return { changed: false, disabledRuleIds: [], rules };
+  }
+
+  let changed = false;
+  const disabledRuleIds = [];
+  const nextRules = rules.map((rule) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return rule;
+    if (rule.enabled === false) return rule;
+    if (rule.target !== 'gridSetpointW') return rule;
+    if (!scheduleMatch(rule, nowMin)) return rule;
+
+    const stopSocPct = Number(rule.stopSocPct);
+    if (!Number.isFinite(stopSocPct)) return rule;
+    if (Number(batterySocPct) > stopSocPct) return rule;
+
+    changed = true;
+    disabledRuleIds.push(rule.id);
+    return { ...rule, enabled: false };
+  });
+
+  return { changed, disabledRuleIds, rules: nextRules };
+}

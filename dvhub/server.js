@@ -36,6 +36,7 @@ import { createEnergyChartsMarketValueService } from './energy-charts-market-val
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
+  autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
   parseHHMM,
   sanitizePersistedScheduleRules,
@@ -1476,7 +1477,21 @@ async function applyControlTarget(target, value, source) {
 
 async function evaluateSchedule() {
   const now = Date.now();
+  const nowMin = localMinutesOfDay(new Date(now));
   state.schedule.lastEvalAt = now;
+
+  const stopSocDisable = autoDisableStopSocScheduleRules({
+    rules: state.schedule.rules,
+    nowMin,
+    batterySocPct: state.victron.soc
+  });
+  if (stopSocDisable.changed) {
+    state.schedule.rules = stopSocDisable.rules;
+    for (const ruleId of stopSocDisable.disabledRuleIds) {
+      pushLog('schedule_stop_soc_reached', { id: ruleId, target: 'gridSetpointW', soc: state.victron.soc });
+    }
+    persistConfig();
+  }
 
   const npp = cfg.dvControl?.negativePriceProtection;
   const priceNow = epexNowNext()?.current;
@@ -1506,7 +1521,6 @@ async function evaluateSchedule() {
   }
 
   // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
-  const nowMin = localMinutesOfDay(new Date());
   const autoDisable = autoDisableExpiredScheduleRules(state.schedule.rules, nowMin);
   if (autoDisable.changed) {
     for (const rule of state.schedule.rules) {
