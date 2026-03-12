@@ -1429,12 +1429,141 @@ test('VRM backfill job walks chunked windows until repeated empty history and wa
     assert.equal(result.partial, false);
     assert.equal(result.windowsVisited, 5);
     assert.equal(result.importedWindows, 2);
-    assert.equal(result.emptyWindows, 2);
+    assert.equal(result.emptyWindows, 3);
     assert.equal(result.importedRows > 0, true);
     assert.equal(store.countRows('timeseries_samples', "series_key = 'pv_total_w'"), 2);
     assert.equal(store.countRows('import_jobs', "job_type = 'vrm_history_full_backfill'"), 1);
-    assert.deepEqual(waits, [50, 50, 50, 50]);
+    assert.deepEqual(waits, [50, 50, 50]);
     assert.equal(requests.length, 15);
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM full backfill continues past initial empty windows and can still find older VRM data', async () => {
+  const store = createStore();
+  const waits = [];
+  const windowsWithData = new Set([
+    '2026-03-02T00:00:00.000Z|2026-03-03T00:00:00.000Z'
+  ]);
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    const end = new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString();
+    const key = `${start}|${end}`;
+    const hasData = windowsWithData.has(key);
+    return {
+      ok: true,
+      async json() {
+        return hasData && type === 'venus'
+          ? {
+            records: {
+              Pdc: [[Date.parse(start), 1000]]
+            }
+          }
+          : { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async (ms) => {
+        waits.push(ms);
+      },
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'full',
+      now: '2026-03-05T00:00:00.000Z',
+      chunkDays: 1,
+      delayMs: 50,
+      maxEmptyWindows: 2,
+      maxLookbackDays: 10
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.importedWindows, 1);
+    assert.equal(result.importedRows > 0, true);
+    assert.equal(result.windowsVisited, 5);
+    assert.equal(result.emptyWindows, 4);
+    assert.deepEqual(waits, [50, 50]);
+  } finally {
+    store.close();
+  }
+});
+
+test('VRM full backfill falls back to days interval when 15mins returns no rows', async () => {
+  const store = createStore();
+  const seenIntervals = [];
+  const windowsWithData = new Set([
+    '2026-03-02T00:00:00.000Z|2026-03-03T00:00:00.000Z'
+  ]);
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const type = parsed.searchParams.get('type');
+    const interval = parsed.searchParams.get('interval');
+    const start = new Date(Number(parsed.searchParams.get('start')) * 1000).toISOString();
+    const end = new Date(Number(parsed.searchParams.get('end')) * 1000).toISOString();
+    const key = `${start}|${end}`;
+    seenIntervals.push(interval);
+
+    const hasData = interval === 'days' && windowsWithData.has(key);
+    return {
+      ok: true,
+      async json() {
+        return hasData && type === 'venus'
+          ? {
+            records: {
+              Pdc: [[Date.parse(start), 1000]]
+            }
+          }
+          : { records: {} };
+      }
+    };
+  };
+
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: {
+        historyImport: {
+          enabled: true,
+          provider: 'vrm',
+          vrmPortalId: '12345',
+          vrmToken: 'token123'
+        }
+      }
+    });
+
+    const result = await manager.backfillHistoryFromConfiguredSource({
+      mode: 'full',
+      now: '2026-03-05T00:00:00.000Z',
+      chunkDays: 1,
+      maxEmptyWindows: 2,
+      maxLookbackDays: 10,
+      interval: '15mins'
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.importedWindows, 1);
+    assert.equal(result.importedRows > 0, true);
+    assert.equal(seenIntervals.includes('15mins'), true);
+    assert.equal(seenIntervals.includes('days'), true);
   } finally {
     store.close();
   }
@@ -1476,7 +1605,9 @@ test('VRM full backfill aligns windows to UTC day boundaries even from a mid-day
       mode: 'full',
       now: '2026-03-05T11:55:30.047Z',
       chunkDays: 1,
-      maxEmptyWindows: 2
+      maxEmptyWindows: 2,
+      maxLookbackDays: 2,
+      allowIntervalFallback: false
     });
 
     assert.equal(result.ok, true);
@@ -1526,7 +1657,9 @@ test('VRM full backfill forwards requested interval to VRM fetches', async () =>
         now: '2026-03-05T00:00:00.000Z',
         chunkDays: 1,
         maxEmptyWindows: 1,
-        interval
+        maxLookbackDays: 1,
+        interval,
+        allowIntervalFallback: false
       });
       assert.equal(result.ok, true);
       assert.deepEqual(seenIntervals, [interval, interval, interval]);
