@@ -463,7 +463,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
   return windows;
 }
 
-function drawPriceChart(data, nowTs, comparisons = []) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = []) {
   const svg = document.getElementById('priceChart');
   const tooltip = document.getElementById('tooltip');
   if (!svg) return;
@@ -493,6 +493,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartNow = cssVar('--chart-now', '#facc15');
   const chartImport = cssVar('--chart-import', '#22c55e');
+  const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
 
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
@@ -518,6 +519,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     focusBandCeiling: 0.01,
     focusBandFloor: -0.01
   }).y;
+  const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals);
 
   for (let i = 0; i <= 6; i++) {
@@ -589,16 +591,20 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     rect.setAttribute('y', Math.min(by, baseY));
     rect.setAttribute('width', Math.max(barW - 2, 1));
     rect.setAttribute('height', bh || 1);
+    const isAutomation = automationSlots.has(Number(row.ts));
     rect.setAttribute(
       'fill',
-      lowHighlights.has(index)
-        ? chartNegativeHighlight
-        : highHighlights.has(index)
-          ? chartPositiveHighlight
-          : (val < 0 ? chartNegative : chartPositive)
+      isAutomation
+        ? chartAutomation
+        : lowHighlights.has(index)
+          ? chartNegativeHighlight
+          : highHighlights.has(index)
+            ? chartPositiveHighlight
+            : (val < 0 ? chartNegative : chartPositive)
     );
     rect.classList.add('price-bar');
     rect.classList.add(val < 0 ? 'is-negative' : 'is-positive');
+    if (isAutomation) rect.classList.add('is-automation');
     if (highHighlights.has(index)) rect.classList.add('is-highlight-positive');
     if (lowHighlights.has(index)) rect.classList.add('is-highlight-negative');
     rect.addEventListener('mousedown', (event) => {
@@ -901,7 +907,7 @@ function renderDashboardStatus(status) {
   applyScheduleRowStates(status.now);
   updateChartComparisonSummary(status.userEnergyPricing);
 
-  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || []);
+  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []);
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
   renderAutomationStatus(status.schedule);

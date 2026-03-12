@@ -5,7 +5,7 @@ function toFiniteNumber(value, fallback = null) {
 
 export const SLOT_DURATION_HOURS = 0.25; // 15 minutes
 
-function expandChainSlots(chain = []) {
+export function expandChainSlots(chain = []) {
   const expanded = [];
   for (const entry of chain) {
     const slots = Math.max(0, toFiniteNumber(entry?.slots, 0));
