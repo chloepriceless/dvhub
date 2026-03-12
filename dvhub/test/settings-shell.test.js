@@ -30,6 +30,7 @@ const {
   buildSettingsDestinations,
   createDiscoveryState,
   createSettingsShellState,
+  formatDiscoveredSystemOption,
   setActiveSettingsSection,
   shouldOpenSettingsGroup
 } = loadShellHelpers();
@@ -156,7 +157,23 @@ test('real config definition exposes manufacturer selection and keeps Victron re
 test('settings discovery helper fills the host field from a selected system', async () => {
   const state = createDiscoveryState({
     manufacturer: 'victron',
-    systems: [{ id: 'a', label: 'Venus GX', host: 'venus.local', ip: '192.168.1.20' }]
+    systems: [{ id: 'a', label: 'Venus GX', host: 'venus.local', ipv4: '192.168.1.20', ipv6: 'fe80::20', ip: '192.168.1.20' }]
+  });
+
+  const next = applyDiscoveredSystemToDraft({
+    draftConfig: { manufacturer: 'victron', victron: { host: '' } },
+    fieldPath: 'victron.host',
+    selectedSystemId: 'a',
+    discoveryState: state
+  });
+
+  assert.equal(next.victron.host, '192.168.1.20');
+});
+
+test('settings discovery helper prefers ipv4 when a system exposes both address families', () => {
+  const state = createDiscoveryState({
+    manufacturer: 'victron',
+    systems: [{ id: 'a', label: 'Venus GX', host: 'venus.local', ipv4: '192.168.1.20', ipv6: 'fe80::20', ip: 'fe80::20' }]
   });
 
   const next = applyDiscoveredSystemToDraft({
@@ -184,6 +201,18 @@ test('settings field rendering exposes discovery UI for discovery-capable host f
 
   assert.equal(model.discovery.visible, true);
   assert.equal(model.discovery.manufacturer, 'victron');
+});
+
+test('settings discovery option text includes both ipv4 and ipv6 when available', () => {
+  const text = formatDiscoveredSystemOption({
+    label: 'Venus GX',
+    host: 'venus.local',
+    ipv4: '192.168.1.20',
+    ipv6: 'fe80::20'
+  });
+
+  assert.match(text, /IPv4:\s*192\.168\.1\.20/);
+  assert.match(text, /IPv6:\s*fe80::20/);
 });
 
 test('settings discovery errors leave manual host entry available', () => {

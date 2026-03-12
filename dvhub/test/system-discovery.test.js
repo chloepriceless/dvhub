@@ -53,8 +53,8 @@ test('discoverSystems dispatches by manufacturer and deduplicates normalized res
       victron: async () => {
         calls.push('victron');
         return [
-          { label: 'Venus GX', host: 'venus.local', ip: '192.168.1.20' },
-          { label: 'Venus GX', host: 'venus.local', ip: '192.168.1.20' }
+          { label: 'Venus GX', host: 'venus.local', ipv4: '192.168.1.20', ipv6: 'fe80::20' },
+          { label: 'Venus GX', host: 'venus.local', ipv4: '192.168.1.20', ipv6: 'fe80::20' }
         ];
       }
     }
@@ -62,6 +62,8 @@ test('discoverSystems dispatches by manufacturer and deduplicates normalized res
 
   assert.deepEqual(calls, ['victron']);
   assert.equal(systems.length, 1);
+  assert.equal(systems[0].ipv4, '192.168.1.20');
+  assert.equal(systems[0].ipv6, 'fe80::20');
   assert.equal(systems[0].ip, '192.168.1.20');
 });
 
@@ -97,11 +99,20 @@ test('buildSystemDiscoveryPayload returns manufacturer-scoped API responses', as
 
   const payload = await buildSystemDiscoveryPayload({
     query: { manufacturer: 'victron' },
-    discoverSystems: async () => [{ id: 'a', label: 'Venus GX', host: 'venus.local', ip: '192.168.1.20' }]
+    discoverSystems: async () => [{
+      id: 'a',
+      label: 'Venus GX',
+      host: 'venus.local',
+      ipv4: '192.168.1.20',
+      ipv6: 'fe80::20',
+      ip: '192.168.1.20'
+    }]
   });
 
   assert.equal(payload.ok, true);
   assert.equal(payload.manufacturer, 'victron');
+  assert.equal(payload.systems[0].ipv4, '192.168.1.20');
+  assert.equal(payload.systems[0].ipv6, 'fe80::20');
   assert.equal(payload.systems[0].ip, '192.168.1.20');
 });
 
