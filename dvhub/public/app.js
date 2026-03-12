@@ -983,6 +983,90 @@ async function manualWriteCharge() {
 
 let scheduleCache = { rules: [], config: {} };
 
+function collectScheduleRulesFromRowState(rows) {
+  if (!Array.isArray(rows)) return [];
+  const rules = [];
+  let idx = 1;
+
+  for (const row of rows) {
+    const start = row?.start;
+    const end = row?.end;
+    if (!start || !end) {
+      idx++;
+      continue;
+    }
+
+    const rowEnabled = row?.rowEnabled ?? row?.enabled ?? true;
+    const gridEnabled = row?.gridEnabled ?? row?.grid != null;
+    const chargeEnabled = row?.chargeEnabled ?? row?.charge != null;
+    const stopSocEnabled = row?.stopSocEnabled ?? row?.stopSocPct != null;
+
+    const gridVal = Number(row?.gridVal ?? row?.grid);
+    const chargeVal = Number(row?.chargeVal ?? row?.charge);
+    const stopSocVal = Number(row?.stopSocVal ?? row?.stopSocPct);
+
+    if (gridEnabled && Number.isFinite(gridVal)) {
+      const gridRule = {
+        id: `grid_${idx}`,
+        enabled: rowEnabled,
+        target: 'gridSetpointW',
+        start,
+        end,
+        value: gridVal
+      };
+      if (stopSocEnabled && Number.isFinite(stopSocVal)) {
+        gridRule.stopSocPct = stopSocVal;
+      }
+      rules.push(gridRule);
+    }
+
+    if (chargeEnabled && Number.isFinite(chargeVal)) {
+      rules.push({
+        id: `charge_${idx}`,
+        enabled: rowEnabled,
+        target: 'chargeCurrentA',
+        start,
+        end,
+        value: chargeVal
+      });
+    }
+
+    idx++;
+  }
+
+  return rules;
+}
+
+function groupScheduleRulesForDashboard(rules) {
+  if (!Array.isArray(rules)) return [];
+
+  const timeSlots = new Map();
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    const key = `${rule.start}|${rule.end}`;
+    if (!timeSlots.has(key)) {
+      timeSlots.set(key, {
+        start: rule.start,
+        end: rule.end,
+        grid: null,
+        charge: null,
+        stopSocPct: null,
+        enabled: rule.enabled !== false
+      });
+    }
+    const slot = timeSlots.get(key);
+    if (rule.target === 'gridSetpointW') {
+      slot.grid = rule.value;
+      const stopSocPct = Number(rule.stopSocPct);
+      slot.stopSocPct = Number.isFinite(stopSocPct) ? stopSocPct : null;
+    }
+    if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
+    if (rule.enabled === false) slot.enabled = false;
+  }
+
+  return Array.from(timeSlots.values());
+}
+
 function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
   if (!tr) return false;
   const enabled = tr.querySelector('.sched-row-enabled')?.checked ?? true;
@@ -1009,8 +1093,8 @@ function applyScheduleRowStates(nowTs = Date.now()) {
 function addScheduleRow(opts = {}) {
   const {
     start = '06:45', end = '07:15',
-    gridVal = -40, chargeVal = '',
-    gridEnabled = true, chargeEnabled = false,
+    gridVal = -40, chargeVal = '', stopSocVal = '',
+    gridEnabled = true, chargeEnabled = false, stopSocEnabled = false,
     rowEnabled = true
   } = opts;
   const tbody = document.getElementById('scheduleRowsDash');
@@ -1023,6 +1107,7 @@ function addScheduleRow(opts = {}) {
     <td><input type="time" class="sched-end" value="${end}" /></td>
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} /> <input type="number" class="sched-grid-val" value="${gridVal}" /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} /> <input type="number" class="sched-charge-val" value="${chargeVal}" /></label></td>
+    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} /> <input type="number" class="sched-stop-soc-val" value="${stopSocVal}" min="0" max="100" step="1" /></label></td>
     <td><button class="icon-btn sched-remove" title="Zeile entfernen">-</button></td>
   `;
   tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
@@ -1049,43 +1134,25 @@ function clearScheduleRows() {
 function collectScheduleRows() {
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return [];
-  const rules = [];
-  let idx = 1;
+  const rowState = [];
   for (const tr of tbody.querySelectorAll('tr')) {
     const start = tr.querySelector('.sched-start')?.value;
     const end = tr.querySelector('.sched-end')?.value;
     if (!start || !end) continue;
 
-    const rowEnabled = tr.querySelector('.sched-row-enabled')?.checked ?? true;
-
-    const gridEn = tr.querySelector('.sched-grid-en')?.checked;
-    const gridVal = Number(tr.querySelector('.sched-grid-val')?.value);
-    const chargeEn = tr.querySelector('.sched-charge-en')?.checked;
-    const chargeVal = Number(tr.querySelector('.sched-charge-val')?.value);
-
-    if (gridEn && Number.isFinite(gridVal)) {
-      rules.push({
-        id: `grid_${idx}`,
-        enabled: rowEnabled,
-        target: 'gridSetpointW',
-        start,
-        end,
-        value: gridVal
-      });
-    }
-    if (chargeEn && Number.isFinite(chargeVal)) {
-      rules.push({
-        id: `charge_${idx}`,
-        enabled: rowEnabled,
-        target: 'chargeCurrentA',
-        start,
-        end,
-        value: chargeVal
-      });
-    }
-    idx++;
+    rowState.push({
+      start,
+      end,
+      rowEnabled: tr.querySelector('.sched-row-enabled')?.checked ?? true,
+      gridEnabled: tr.querySelector('.sched-grid-en')?.checked,
+      gridVal: tr.querySelector('.sched-grid-val')?.value,
+      chargeEnabled: tr.querySelector('.sched-charge-en')?.checked,
+      chargeVal: tr.querySelector('.sched-charge-val')?.value,
+      stopSocEnabled: tr.querySelector('.sched-stop-soc-en')?.checked,
+      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value
+    });
   }
-  return rules;
+  return collectScheduleRulesFromRowState(rowState);
 }
 
 async function loadScheduleDash() {
@@ -1094,36 +1161,21 @@ async function loadScheduleDash() {
   scheduleCache = data || { rules: [], config: {} };
   clearScheduleRows();
   const rules = Array.isArray(data.rules) ? data.rules : [];
+  const timeSlots = groupScheduleRulesForDashboard(rules);
 
-  const timeSlots = new Map();
-  for (const r of rules) {
-    const key = `${r.start}|${r.end}`;
-    if (!timeSlots.has(key)) {
-      timeSlots.set(key, {
-        start: r.start,
-        end: r.end,
-        grid: null,
-        charge: null,
-        enabled: r.enabled !== false
-      });
-    }
-    const slot = timeSlots.get(key);
-    if (r.target === 'gridSetpointW') slot.grid = r.value;
-    if (r.target === 'chargeCurrentA') slot.charge = r.value;
-    if (r.enabled === false) slot.enabled = false;
-  }
-
-  if (!timeSlots.size) {
+  if (!timeSlots.length) {
     addScheduleRow();
   } else {
-    for (const slot of timeSlots.values()) {
+    for (const slot of timeSlots) {
       addScheduleRow({
         start: slot.start || '06:45',
         end: slot.end || '07:15',
         gridVal: slot.grid ?? -40,
         chargeVal: slot.charge ?? '',
+        stopSocVal: slot.stopSocPct ?? '',
         gridEnabled: slot.grid != null,
         chargeEnabled: slot.charge != null,
+        stopSocEnabled: slot.stopSocPct != null,
         rowEnabled: slot.enabled
       });
     }
@@ -1228,6 +1280,7 @@ function initDashboard() {
 
 const dashboardApi = {
   buildScheduleWindowsFromSelection,
+  collectScheduleRulesFromRowState,
   computeMinSocRenderState,
   computeDynamicGrossImportCtKwh,
   createPriceChartScale,
@@ -1237,6 +1290,7 @@ const dashboardApi = {
   formatChartEuroValue,
   getDashboardLogUrl,
   getChartHighlightSets,
+  groupScheduleRulesForDashboard,
   inferChartSlotMs,
   isScheduleWindowExpired,
   normalizeChartSelectionIndices,

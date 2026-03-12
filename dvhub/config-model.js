@@ -1635,10 +1635,15 @@ function sanitizeScheduleRules(value, warnings) {
     if (item.start != null) next.start = String(item.start);
     if (item.end != null) next.end = String(item.end);
     if (item.value != null) next.value = Number(item.value);
+    if (item.stopSocPct != null && item.stopSocPct !== '') next.stopSocPct = Number(item.stopSocPct);
     if (item.enabled != null) next.enabled = coerceBoolean(item.enabled);
     if (next.value != null && !Number.isFinite(next.value)) {
       warnings.push(`schedule.rules.${next.id || rules.length}: value ignored because it is not numeric`);
       continue;
+    }
+    if (next.stopSocPct != null && !Number.isFinite(next.stopSocPct)) {
+      warnings.push(`schedule.rules.${next.id || rules.length}: stopSocPct ignored because it is not numeric`);
+      delete next.stopSocPct;
     }
     rules.push(next);
   }

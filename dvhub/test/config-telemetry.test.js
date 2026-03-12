@@ -356,3 +356,33 @@ test('normalizeConfigInput strips legacy schedule rule fields', () => {
     }
   ]);
 });
+
+test('normalizeConfigInput preserves numeric stopSocPct on schedule rules', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      rules: [
+        {
+          id: 'grid-stop',
+          enabled: true,
+          target: 'gridSetpointW',
+          start: '08:00',
+          end: '09:00',
+          value: '-40',
+          stopSocPct: '25'
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.rules, [
+    {
+      id: 'grid-stop',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '08:00',
+      end: '09:00',
+      value: -40,
+      stopSocPct: 25
+    }
+  ]);
+});
