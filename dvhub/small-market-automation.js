@@ -28,6 +28,45 @@ function ensureNegative(value, fallback) {
   return -Math.abs(num);
 }
 
+export function computeAvailableEnergyKwh({
+  batteryCapacityKwh,
+  currentSocPct,
+  minSocPct,
+  inverterEfficiencyPct = 85,
+  safetyMarginPct = 5
+} = {}) {
+  const capacity = toFiniteNumber(batteryCapacityKwh, null);
+  if (capacity == null || capacity <= 0) return null;
+  const currentSoc = Math.max(0, Math.min(100, toFiniteNumber(currentSocPct, 0)));
+  const minSoc = Math.max(0, Math.min(100, toFiniteNumber(minSocPct, 0)));
+  const efficiency = Math.max(1, Math.min(100, toFiniteNumber(inverterEfficiencyPct, 85)));
+  const safety = Math.max(0, Math.min(50, toFiniteNumber(safetyMarginPct, 5)));
+
+  const usableCapacity = capacity * (1 - safety / 100);
+  const socDelta = Math.max(0, currentSoc - minSoc);
+  const dcEnergy = usableCapacity * (socDelta / 100);
+  const acEnergy = dcEnergy * (efficiency / 100);
+  return Math.round(acEnergy * 100) / 100;
+}
+
+export function computeEnergyBasedSlotAllocation({
+  availableKwh,
+  maxDischargeW,
+  slotDurationH = SLOT_DURATION_HOURS
+} = {}) {
+  const energy = toFiniteNumber(availableKwh, 0);
+  const maxW = Math.abs(toFiniteNumber(maxDischargeW, 0));
+  if (energy <= 0 || maxW <= 0) return { fullSlots: 0, partialSlotW: 0, totalSlots: 0 };
+
+  const energyPerFullSlot = (maxW / 1000) * slotDurationH;
+  const fullSlots = Math.floor(energy / energyPerFullSlot);
+  const remainingKwh = energy - fullSlots * energyPerFullSlot;
+  const partialSlotW = Math.round((remainingKwh / slotDurationH) * 1000);
+  const totalSlots = partialSlotW > 0 ? fullSlots + 1 : fullSlots;
+
+  return { fullSlots, partialSlotW: partialSlotW > 0 ? -partialSlotW : 0, totalSlots };
+}
+
 export function buildAutomationRuleChain({ maxDischargeW, stages = [] }) {
   const cappedMaxW = ensureNegative(maxDischargeW, 0);
   if (!Array.isArray(stages)) return [];

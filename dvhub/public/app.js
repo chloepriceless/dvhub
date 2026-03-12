@@ -1393,7 +1393,8 @@ async function loadAutomationConfig() {
     if (el('automationEnabled')) el('automationEnabled').checked = !!c.enabled;
     if (el('automationSearchStart')) el('automationSearchStart').value = c.searchWindowStart || '14:00';
     if (el('automationSearchEnd')) el('automationSearchEnd').value = c.searchWindowEnd || '09:00';
-    if (el('automationTargetSlots')) el('automationTargetSlots').value = c.targetSlotCount ?? 4;
+    if (el('automationBatteryCapacity')) el('automationBatteryCapacity').value = c.batteryCapacityKwh ?? '';
+    if (el('automationInverterEfficiency')) el('automationInverterEfficiency').value = c.inverterEfficiencyPct ?? 85;
     if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
     if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
 
@@ -1417,7 +1418,8 @@ async function saveAutomationConfig() {
     enabled: el('automationEnabled')?.checked ?? false,
     searchWindowStart: el('automationSearchStart')?.value || '14:00',
     searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
-    targetSlotCount: Number(el('automationTargetSlots')?.value) || 4,
+    batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null,
+    inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85,
     maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000,
     minSocPct: Number(el('automationMinSocPct')?.value) || 30,
     stages: serializeAutomationStages(automationStagesDraft)
@@ -1447,6 +1449,7 @@ function renderAutomationStatus(scheduleData) {
   const titleEl = document.getElementById('automationStatusTitle');
   const outcomeEl = document.getElementById('automationOutcome');
   const countEl = document.getElementById('automationRuleCount');
+  const energyEl = document.getElementById('automationAvailableEnergy');
 
   const enabledEl = document.getElementById('automationEnabled');
   const isEnabled = enabledEl?.checked;
@@ -1462,6 +1465,11 @@ function renderAutomationStatus(scheduleData) {
   };
   if (outcomeEl) outcomeEl.textContent = outcomeLabels[sma.lastOutcome] || sma.lastOutcome || '\u2014';
   if (countEl) countEl.textContent = sma.generatedRuleCount != null ? `${sma.generatedRuleCount} Regeln aktiv` : '';
+  if (energyEl) {
+    energyEl.textContent = sma.availableEnergyKwh != null
+      ? `${sma.availableEnergyKwh} kWh verfügbar`
+      : '';
+  }
 }
 
 function initDashboard() {
