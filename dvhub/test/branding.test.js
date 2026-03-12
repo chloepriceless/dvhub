@@ -185,6 +185,19 @@ test('styles define compact settings and maintenance layout primitives', () => {
   assert.doesNotMatch(css, /\.settings-topbar-side\s*\{/);
 });
 
+test('settings disclosures use explicit affordance styling for hover, focus, and open states', () => {
+  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+
+  assert.match(css, /\.settings-group-accent\s*\{/);
+  assert.match(css, /\.settings-group-copy\s*\{/);
+  assert.match(css, /\.settings-group-hint\s*\{/);
+  assert.match(css, /\.settings-group-chevron\s*\{/);
+  assert.match(css, /\.settings-group summary:hover\s*\{/);
+  assert.match(css, /\.settings-group summary:focus-visible\s*\{/);
+  assert.match(css, /\.settings-group\[open\]\s*\{/);
+  assert.match(css, /\.settings-group\[open\]\s+\.settings-group-chevron\s*\{/);
+});
+
 test('readme references the DVhub assets folder for logo and screenshot gallery', () => {
   const readme = fs.readFileSync(readmePath, 'utf8');
 

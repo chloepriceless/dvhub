@@ -116,8 +116,21 @@ function setActiveSettingsSection(state, requestedId) {
   };
 }
 
+function buildDisclosureSummaryMarkup(group) {
+  return `
+    <span class="settings-group-accent" aria-hidden="true"></span>
+    <span class="settings-group-copy">
+      <span class="settings-group-title">${group.label}</span>
+      ${group.description ? `<small class="settings-group-description">${group.description}</small>` : ''}
+      <small class="settings-group-hint">Weitere Einstellungen ausklappen</small>
+    </span>
+    <span class="settings-group-chevron" aria-hidden="true">⌄</span>
+  `;
+}
+
 const settingsShellHelpers = {
   applyDiscoveredSystemToDraft,
+  buildDisclosureSummaryMarkup,
   buildDestinationWorkspace,
   buildFieldRenderModel,
   buildSettingsDestinations,
@@ -934,7 +947,7 @@ function renderSectionWorkspace(sectionId) {
       details.open = group.openByDefault;
 
       const summary = document.createElement('summary');
-      summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
+      summary.innerHTML = buildDisclosureSummaryMarkup(group);
       details.appendChild(summary);
 
       const grid = document.createElement('div');
