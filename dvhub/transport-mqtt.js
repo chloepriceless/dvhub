@@ -70,29 +70,57 @@ export function createMqttTransport(victronConfig) {
 
     async init() {
       const mqtt = await import('mqtt');
-      const connect = mqtt.default?.connect || mqtt.connect;
+      const connectFn = mqtt.default?.connect || mqtt.connect;
+
+      // Clean up any existing connection first
+      this.destroy();
 
       return new Promise((resolve, reject) => {
-        client = connect(broker, { clean: true, connectTimeout: 5000 });
+        let settled = false;
+        
+        client = connectFn(broker, { clean: true, connectTimeout: 5000 });
+
+        const timeoutHandle = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+          if (client) { client.end(true); client = null; }
+          reject(new Error(`MQTT connect timeout (${broker})`));
+        }, 8000);
 
         client.on('connect', () => {
+          if (settled) return;
           console.log(`[MQTT] Verbunden mit ${broker}`);
           const topics = Object.values(READ_TOPICS);
           client.subscribe(topics, { qos }, (err) => {
-            if (err) return reject(err);
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutHandle);
+            if (err) {
+              if (client) { client.end(true); client = null; }
+              return reject(err);
+            }
             // Keepalive starten — sorgt dafür, dass Settings-Topics gepublished werden
             sendKeepalive();
+            if (keepaliveTimer) clearInterval(keepaliveTimer);
             keepaliveTimer = setInterval(sendKeepalive, keepaliveMs);
             resolve();
           });
         });
 
-        client.on('message', onMessage);
-        client.on('error', (err) => console.error('[MQTT] Fehler:', err.message));
+        client.on('message', (topic, payload) => onMessage(topic, payload));
+        client.on('error', (err) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeoutHandle);
+            if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+            if (client) { client.end(true); client = null; }
+            reject(err);
+          } else {
+            console.error('[MQTT] Fehler:', err?.message || err);
+          }
+        });
         client.on('reconnect', () => console.log('[MQTT] Reconnecting...'));
-
-        // Timeout falls Broker nicht erreichbar
-        setTimeout(() => reject(new Error(`MQTT connect timeout (${broker})`)), 8000);
       });
     },
 
@@ -141,11 +169,8 @@ export function createMqttTransport(victronConfig) {
     },
 
     async destroy() {
-      if (keepaliveTimer) clearInterval(keepaliveTimer);
-      if (client) {
-        client.end(true);
-        client = null;
-      }
+      if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+      if (client) { client.removeAllListeners(); client.end(true); client = null; }
     }
   };
 }

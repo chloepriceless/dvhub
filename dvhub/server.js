@@ -2313,6 +2313,9 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/history/summary' && req.method === 'GET') {
+    if (!historyApi || typeof historyApi.getSummary !== 'function') {
+      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    }
     const result = await historyApi.getSummary({
       view: url.searchParams.get('view'),
       date: url.searchParams.get('date')
@@ -2321,6 +2324,9 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
+    if (!historyApi || typeof historyApi.postPriceBackfill !== 'function') {
+      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    }
     const body = await parseBody(req);
     const result = await historyApi.postPriceBackfill(body || {});
     return json(res, result.status, result.body);
@@ -2474,19 +2480,41 @@ function requestPollMeter() {
 
 if (IS_RUNTIME_PROCESS) {
   // Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
-  transport.init().then(() => {
-    console.log(`Transport initialisiert: ${transport.type}`);
-    requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
-    setInterval(() => {
-      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+  let transportRetryDelayMs = 5000;
+  function scheduleTransportRetry() {
+    const retryDelayMs = transportRetryDelayMs;
+    setTimeout(() => {
+      initTransport();
+    }, retryDelayMs);
+    transportRetryDelayMs = Math.min(60000, transportRetryDelayMs * 2);
+  }
+  function initTransport() {
+    transport.init().then(() => {
+      transportRetryDelayMs = 5000;
+      console.log(`Transport initialisiert: ${transport.type}`);
+    }).catch((e) => {
+      console.error('Transport init fehlgeschlagen:', e.message);
+      scheduleTransportRetry();
+    });
+  }
+  function schedulePollLoop() {
+    setTimeout(() => {
+      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message })).finally(() => {
+        schedulePollLoop();
+      });
     }, effectivePollIntervalMs());
-    setInterval(() => {
-      evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
+  }
+  function scheduleEvaluateLoop() {
+    setTimeout(() => {
+      evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message })).finally(() => {
+        scheduleEvaluateLoop();
+      });
     }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
-  }).catch((e) => {
-    console.error('Transport init fehlgeschlagen:', e.message);
-    console.error('Polling/Schedule starten ohne Transport...');
-  });
+  }
+  initTransport();
+  requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+  schedulePollLoop();
+  scheduleEvaluateLoop();
   fetchEpexDay();
   setInterval(() => {
     const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();

@@ -37,6 +37,7 @@ const MANUFACTURER_MANAGED_PATHS = [
   'victron.timeoutMs',
   'victron.mqtt'
 ];
+const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 
 const SETTINGS_DESTINATIONS = [
   {
@@ -272,7 +273,11 @@ export function deepMerge(base, override) {
 }
 
 function getPathParts(path) {
-  return String(path).split('.').filter(Boolean);
+  const parts = String(path).split('.').filter(Boolean);
+  if (parts.some((p) => FORBIDDEN_PATH_SEGMENTS.has(p))) {
+    throw new Error(`unsafe config path: ${path}`);
+  }
+  return parts;
 }
 
 export function hasPath(obj, path) {
@@ -297,24 +302,28 @@ export function getPath(obj, path, fallback = undefined) {
 
 export function setPath(obj, path, value) {
   const parts = getPathParts(path);
+  if (!parts.length) return;
   let cur = obj;
-  while (parts.length > 1) {
-    const part = parts.shift();
-    if (!isPlainObject(cur[part])) cur[part] = {};
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i];
+    if (!Object.prototype.hasOwnProperty.call(cur, part) || !isPlainObject(cur[part])) {
+      cur[part] = {};
+    }
     cur = cur[part];
   }
-  cur[parts[0]] = value;
+  cur[parts[parts.length - 1]] = value;
 }
 
 export function deletePath(obj, path) {
   const parts = getPathParts(path);
+  if (!parts.length) return;
   let cur = obj;
-  while (parts.length > 1) {
-    const part = parts.shift();
-    if (!isPlainObject(cur[part])) return;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i];
+    if (!Object.prototype.hasOwnProperty.call(cur, part) || !isPlainObject(cur[part])) return;
     cur = cur[part];
   }
-  delete cur[parts[0]];
+  delete cur[parts[parts.length - 1]];
 }
 
 function stripManufacturerManagedFields(raw, warnings) {
