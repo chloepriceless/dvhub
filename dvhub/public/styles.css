@@ -2310,6 +2310,15 @@ table th {
   margin-top: 2px;
 }
 
+.history-full-backfill-advanced {
+  display: grid;
+  gap: 10px;
+}
+
+.history-full-backfill-lookback {
+  max-width: 320px;
+}
+
 .wizard-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

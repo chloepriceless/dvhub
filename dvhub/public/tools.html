@@ -126,6 +126,20 @@
               <small class="field-help">Ich bestaetige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur fuer Reparaturfaelle gedacht ist.</small>
             </div>
           </label>
+          <div class="history-full-backfill-advanced">
+            <label class="settings-field" for="historyFullBackfillExtendedLookback">
+              <span class="settings-field-title">Laengeren Rueckblick aktivieren</span>
+              <div class="toggle-row">
+                <input id="historyFullBackfillExtendedLookback" type="checkbox" />
+                <small class="field-help">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurueck suchen, wenn vor den eigentlichen VRM-Daten laengere leere Zeitraeume liegen.</small>
+              </div>
+            </label>
+            <label id="historyFullBackfillLookbackField" class="settings-field history-full-backfill-lookback" for="historyFullBackfillLookbackDays" hidden>
+              <span class="settings-field-title">Max. Rueckblick (Tage)</span>
+              <input id="historyFullBackfillLookbackDays" type="number" min="1" max="365" step="1" inputmode="numeric" value="365" />
+              <small class="field-help">Nur fuer Reparaturfaelle. Mit dieser Obergrenze stoppt der Voll-Backfill spaetestens nach dem eingestellten Rueckblick.</small>
+            </label>
+          </div>
           <div class="settings-inline-actions">
             <button id="historyFullBackfillBtn" class="btn btn-danger" type="button">Voll-Backfill starten</button>
           </div>
