@@ -273,11 +273,30 @@ function buildSmallMarketAutomationRules({
     data: priceSlots,
     automationConfig
   });
+  const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
+  const dateStr = berlinDateString(new Date(now));
+  const refDate = new Date(`${dateStr}T12:00:00Z`);
+  const utcMs = refDate.getTime();
+  const localStr = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  }).format(refDate);
+  const [dPart, tPart] = localStr.split(', ');
+  const [dd, mm, yyyy] = dPart.split('/');
+  const localRef = new Date(`${yyyy}-${mm}-${dd}T${tPart}Z`);
+  const offsetMs = localRef.getTime() - utcMs;
+  const offsetSign = offsetMs >= 0 ? '+' : '-';
+  const absOffset = Math.abs(offsetMs);
+  const offsetH = String(Math.floor(absOffset / 3600000)).padStart(2, '0');
+  const offsetM = String(Math.floor((absOffset % 3600000) / 60000)).padStart(2, '0');
+  const tzSuffix = `${offsetSign}${offsetH}:${offsetM}`;
   const occupiedWindows = (Array.isArray(occupiedRules) ? occupiedRules : [])
     .filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE)
     .map((rule) => ({
-      startTs: Date.parse(`${berlinDateString(new Date(now))}T${rule.start || '00:00'}:00+01:00`),
-      endTs: Date.parse(`${berlinDateString(new Date(now))}T${rule.end || '00:00'}:00+01:00`),
+      startTs: Date.parse(`${dateStr}T${rule.start || '00:00'}:00${tzSuffix}`),
+      endTs: Date.parse(`${dateStr}T${rule.end || '00:00'}:00${tzSuffix}`),
       source: rule?.source || 'manual'
     }))
     .filter((window) => Number.isFinite(window.startTs) && Number.isFinite(window.endTs));
@@ -332,7 +351,10 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     return;
   }
 
-  if (state.schedule.smallMarketAutomation?.lastRunDate === runDate && previousAutomationRules.length) return;
+  const lastState = state.schedule.smallMarketAutomation;
+  const priceSlotCount = Array.isArray(state.epex?.data) ? state.epex.data.length : 0;
+  const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
+  if (lastState?.lastRunDate === runDate && previousAutomationRules.length && !priceDataChanged) return;
 
   const sunTimesCache = getSunTimesCacheForPlanning({ now });
   const generatedRules = buildSmallMarketAutomationRules({
@@ -346,7 +368,8 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   state.schedule.smallMarketAutomation = {
     lastRunDate: runDate,
     lastOutcome: sunTimesCache ? (generatedRules.length ? 'generated' : 'no_slots') : 'missing_sun_times_cache',
-    generatedRuleCount: generatedRules.length
+    generatedRuleCount: generatedRules.length,
+    lastPriceSlotCount: priceSlotCount
   };
   persistConfig();
 }

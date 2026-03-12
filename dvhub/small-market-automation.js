@@ -17,23 +17,31 @@ function expandChainSlots(chain = []) {
 
 function estimateSlotRevenueCt(slot, powerW) {
   const priceCtKwh = toFiniteNumber(slot?.ct_kwh, 0);
-  return Math.abs(toFiniteNumber(powerW, 0)) * 0.25 * priceCtKwh / 100;
+  return (Math.abs(toFiniteNumber(powerW, 0)) / 1000) * 0.25 * priceCtKwh;
+}
+
+function ensureNegative(value, fallback) {
+  const num = toFiniteNumber(value, fallback);
+  if (num == null) return fallback;
+  return -Math.abs(num);
 }
 
 export function buildAutomationRuleChain({ maxDischargeW, stages = [] }) {
-  const cappedMaxDischargeW = toFiniteNumber(maxDischargeW, 0);
+  const cappedMaxW = ensureNegative(maxDischargeW, 0);
   if (!Array.isArray(stages)) return [];
 
   return stages.flatMap((stage) => {
     const entries = [];
     const dischargeSlots = Math.max(0, toFiniteNumber(stage?.dischargeSlots, 0));
-    const dischargeW = Math.max(toFiniteNumber(stage?.dischargeW, cappedMaxDischargeW), cappedMaxDischargeW);
+    const rawDischargeW = ensureNegative(stage?.dischargeW, cappedMaxW);
+    const dischargeW = Math.max(rawDischargeW, cappedMaxW);
     if (dischargeSlots > 0) {
       entries.push({ powerW: dischargeW, slots: dischargeSlots });
     }
 
     const cooldownSlots = Math.max(0, toFiniteNumber(stage?.cooldownSlots, 0));
-    const cooldownW = Math.max(toFiniteNumber(stage?.cooldownW, cappedMaxDischargeW), cappedMaxDischargeW);
+    const rawCooldownW = ensureNegative(stage?.cooldownW, cappedMaxW);
+    const cooldownW = Math.max(rawCooldownW, cappedMaxW);
     if (cooldownSlots > 0) {
       entries.push({ powerW: cooldownW, slots: cooldownSlots });
     }
@@ -89,9 +97,8 @@ export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainO
       .map((slot) => slot?.ts)
       .filter((slotTs) => slotTs != null)
       .sort((left, right) => left - right),
-    totalRevenueCt: 0,
+    totalRevenueCt: -Infinity,
     chain: [],
-    score: -Infinity,
     peakDischargeW: Infinity
   };
 
@@ -107,13 +114,8 @@ export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainO
     ), 0);
 
     if (
-      slotValueScore > bestPlan.score
-      || (slotValueScore === bestPlan.score && peakDischargeW < bestPlan.peakDischargeW)
-      || (
-        slotValueScore === bestPlan.score
-        && peakDischargeW === bestPlan.peakDischargeW
-        && totalRevenueCt > bestPlan.totalRevenueCt
-      )
+      totalRevenueCt > bestPlan.totalRevenueCt
+      || (totalRevenueCt === bestPlan.totalRevenueCt && peakDischargeW < bestPlan.peakDischargeW)
     ) {
       bestPlan = {
         selectedSlotTimestamps: candidateSlots
@@ -122,7 +124,6 @@ export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainO
           .sort((left, right) => left - right),
         totalRevenueCt,
         chain: cloneChain(chainOption),
-        score: slotValueScore,
         peakDischargeW
       };
     }
