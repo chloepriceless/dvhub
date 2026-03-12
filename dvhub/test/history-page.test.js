@@ -117,6 +117,8 @@ test('tools page exposes separate gap and full VRM backfill controls', () => {
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /VRM-Luecken schliessen/);
   assert.match(html, /id="historyFullBackfillAck"/);
+  assert.match(html, /id="historyFullBackfillExtendedLookback"/);
+  assert.match(html, /id="historyFullBackfillLookbackDays"/);
   assert.match(html, /id="historyFullBackfillBtn"/);
   assert.match(html, /Voll-Backfill/);
 });

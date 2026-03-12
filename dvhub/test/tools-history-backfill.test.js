@@ -57,10 +57,25 @@ test('full backfill stays locked until the warning is acknowledged', () => {
 
   assert.equal(payload.mode, 'full');
   assert.equal(payload.interval, '15mins');
+  assert.equal(payload.maxLookbackDays, 14);
   assert.equal(lockedState.disabled, true);
   assert.match(lockedState.reason, /Warnung/);
   assert.equal(unlockedState.disabled, false);
   assert.equal(unlockedState.reason, '');
+});
+
+test('full backfill request uses a custom lookback only when the advanced option is active', () => {
+  const defaultPayload = buildHistoryFullBackfillRequest({
+    extendedLookbackEnabled: false,
+    maxLookbackDays: '365'
+  });
+  const customPayload = buildHistoryFullBackfillRequest({
+    extendedLookbackEnabled: true,
+    maxLookbackDays: '365'
+  });
+
+  assert.equal(defaultPayload.maxLookbackDays, 14);
+  assert.equal(customPayload.maxLookbackDays, 365);
 });
 
 test('tools result text distinguishes gap and full backfills', () => {
