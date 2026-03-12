@@ -1346,19 +1346,19 @@ function renderAutomationStages() {
     card.innerHTML = `
       <div class="pricing-period-grid">
         <label class="settings-field">
-          <span>Entladeleistung (W)</span>
+          <span>Entladeleistung (W, negativ = Einspeisung)</span>
           <input type="number" data-stage-field="dischargeW" value="${stage.dischargeW}" />
         </label>
         <label class="settings-field">
-          <span>Entlade-Slots</span>
+          <span>Entlade-Slots (je 15 Min.)</span>
           <input type="number" min="0" data-stage-field="dischargeSlots" value="${stage.dischargeSlots}" />
         </label>
         <label class="settings-field">
-          <span>Cooldown-Leistung (W)</span>
+          <span>Cooldown-Leistung (W, negativ = Einspeisung)</span>
           <input type="number" data-stage-field="cooldownW" value="${stage.cooldownW}" />
         </label>
         <label class="settings-field">
-          <span>Cooldown-Slots</span>
+          <span>Cooldown-Slots (je 15 Min.)</span>
           <input type="number" min="0" data-stage-field="cooldownSlots" value="${stage.cooldownSlots}" />
         </label>
       </div>
