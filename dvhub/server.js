@@ -37,6 +37,8 @@ import { createBundesnetzagenturApplicableValueService } from './bundesnetzagent
 import { readAppVersionInfo } from './app-version.js';
 import {
   buildAutomationRuleChain,
+  computeAvailableEnergyKwh,
+  computeEnergyBasedSlotAllocation,
   expandChainSlots,
   filterFreeAutomationSlots,
   pickBestAutomationPlan
@@ -307,8 +309,34 @@ function buildSmallMarketAutomationRules({
     slots: filteredPriceSlots,
     occupiedWindows
   });
+  // Energy-based slot allocation (if battery capacity is configured)
+  const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
+  const currentSocPct = state.victron?.soc;
+  let energyBasedTargetSlots = null;
+  let energyBasedPartialW = 0;
+  let availableEnergyKwh = null;
+
+  if (batteryCapacityKwh > 0 && currentSocPct != null) {
+    availableEnergyKwh = computeAvailableEnergyKwh({
+      batteryCapacityKwh,
+      currentSocPct,
+      minSocPct: automationConfig?.minSocPct,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+    });
+    if (availableEnergyKwh != null && availableEnergyKwh > 0) {
+      const allocation = computeEnergyBasedSlotAllocation({
+        availableKwh: availableEnergyKwh,
+        maxDischargeW: automationConfig?.maxDischargeW
+      });
+      energyBasedTargetSlots = allocation.totalSlots;
+      energyBasedPartialW = allocation.partialSlotW;
+    }
+  }
+
   const baseChain = buildDefaultAutomationChain(automationConfig);
-  const baseTargetSlots = Number(automationConfig?.targetSlotCount || baseChain.length || 0);
+  const baseTargetSlots = energyBasedTargetSlots != null
+    ? energyBasedTargetSlots
+    : Number(automationConfig?.targetSlotCount || baseChain.length || 0);
   const maxW = Math.abs(Number(automationConfig?.maxDischargeW || 12000));
 
   // Try multiple slot counts and pick the most profitable plan
@@ -320,10 +348,25 @@ function buildSmallMarketAutomationRules({
   for (let slotCount = minSlots; slotCount <= maxSlots; slotCount++) {
     // Scale power: keep total energy constant → power * baseSlots = scaledPower * slotCount
     const scaledPowerW = -Math.round(maxW * baseTargetSlots / slotCount);
-    const variantChain = buildAutomationRuleChain({
-      maxDischargeW: automationConfig?.maxDischargeW,
-      stages: [{ dischargeW: scaledPowerW, dischargeSlots: slotCount, cooldownSlots: 0 }]
-    });
+    let variantChain;
+    if (energyBasedTargetSlots != null && slotCount === energyBasedTargetSlots && energyBasedPartialW !== 0) {
+      // Full power for all slots except the last one which gets partial
+      const fullSlots = slotCount - 1;
+      variantChain = buildAutomationRuleChain({
+        maxDischargeW: automationConfig?.maxDischargeW,
+        stages: fullSlots > 0
+          ? [
+              { dischargeW: scaledPowerW, dischargeSlots: fullSlots, cooldownSlots: 0 },
+              { dischargeW: energyBasedPartialW, dischargeSlots: 1, cooldownSlots: 0 }
+            ]
+          : [{ dischargeW: energyBasedPartialW, dischargeSlots: 1, cooldownSlots: 0 }]
+      });
+    } else {
+      variantChain = buildAutomationRuleChain({
+        maxDischargeW: automationConfig?.maxDischargeW,
+        stages: [{ dischargeW: scaledPowerW, dischargeSlots: slotCount, cooldownSlots: 0 }]
+      });
+    }
 
     const candidate = pickBestAutomationPlan({
       slots: freeSlots,
@@ -378,12 +421,23 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const runDate = berlinDateString(new Date(now));
   const manualRules = state.schedule.rules.filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE);
   const previousAutomationRules = state.schedule.rules.filter((rule) => rule?.source === SMALL_MARKET_AUTOMATION_SOURCE);
+  const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
+  const currentSocPct = state.victron?.soc;
+  const availableEnergyKwh = (batteryCapacityKwh > 0 && currentSocPct != null)
+    ? computeAvailableEnergyKwh({
+      batteryCapacityKwh,
+      currentSocPct,
+      minSocPct: automationConfig?.minSocPct,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+    })
+    : null;
 
   if (!automationConfig?.enabled) {
     state.schedule.smallMarketAutomation = {
       lastRunDate: runDate,
       lastOutcome: 'disabled',
-      generatedRuleCount: 0
+      generatedRuleCount: 0,
+      availableEnergyKwh
     };
     if (previousAutomationRules.length) {
       state.schedule.rules = manualRules;
@@ -411,6 +465,7 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     lastOutcome: sunTimesCache ? (generatedRules.length ? 'generated' : 'no_slots') : 'missing_sun_times_cache',
     generatedRuleCount: generatedRules.length,
     lastPriceSlotCount: priceSlotCount,
+    availableEnergyKwh,
     selectedSlotTimestamps: generatedRules
       .map((r) => {
         const match = r?.id?.match(/^sma-(\d+)-/);

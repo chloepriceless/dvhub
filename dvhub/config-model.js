@@ -886,6 +886,27 @@ function buildFieldDefinitions() {
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
+      label: 'Akkukapazität (kWh)',
+      type: 'number',
+      empty: 'null',
+      help: 'Akkukapazität in kWh. Wenn gesetzt, wird die Slot-Anzahl automatisch aus der verfügbaren Energie berechnet.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
+      label: 'Wechselrichter-Effizienz (%)',
+      type: 'number',
+      help: 'Wechselrichter-Effizienz in Prozent (Standard: 85%). Wird für die Berechnung der Netz-Energie abgezogen.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.minSocPct',
       label: 'Automatik Minimum-SOC (%)',
       type: 'number',
@@ -1583,6 +1604,8 @@ export function createDefaultConfig() {
         searchWindowEnd: '09:00',
         targetSlotCount: 4,
         maxDischargeW: -12000,
+        batteryCapacityKwh: null,
+        inverterEfficiencyPct: 85,
         minSocPct: 30,
         aggressivePremiumPct: 20,
         location: {
@@ -1687,6 +1710,19 @@ function coerceBoolean(value) {
     if (['false', '0', 'no', 'nein', 'off'].includes(normalized)) return false;
   }
   return Boolean(value);
+}
+
+function toFiniteNumber(value, fallback = null) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function toFiniteNumberOrNull(value) {
+  return toFiniteNumber(value, null);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function roundCtKwh(value) {
@@ -1838,6 +1874,26 @@ function sanitizeSmallMarketAutomation(value, warnings) {
       continue;
     }
     next[key] = numericValue;
+  }
+
+  if (next.batteryCapacityKwh != null && next.batteryCapacityKwh !== '') {
+    const numericValue = toFiniteNumberOrNull(next.batteryCapacityKwh);
+    if (numericValue == null || numericValue <= 0) {
+      warnings.push('schedule.smallMarketAutomation.batteryCapacityKwh: invalid number, field was reset');
+      delete next.batteryCapacityKwh;
+    } else {
+      next.batteryCapacityKwh = numericValue;
+    }
+  }
+
+  if (next.inverterEfficiencyPct != null && next.inverterEfficiencyPct !== '') {
+    const numericValue = Number(next.inverterEfficiencyPct);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push('schedule.smallMarketAutomation.inverterEfficiencyPct: invalid number, field was reset');
+      delete next.inverterEfficiencyPct;
+    } else {
+      next.inverterEfficiencyPct = clamp(toFiniteNumber(next.inverterEfficiencyPct, 85), 1, 100);
+    }
   }
 
   const location = isPlainObject(next.location) ? clone(next.location) : {};

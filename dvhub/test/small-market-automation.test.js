@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   buildAutomationRuleChain,
+  computeAvailableEnergyKwh,
+  computeEnergyBasedSlotAllocation,
   computeDynamicAutomationMinSocPct,
   filterFreeAutomationSlots,
   pickBestAutomationPlan
@@ -210,4 +212,92 @@ test('estimateSlotRevenueCt uses 15-minute (0.25h) slot duration', () => {
     chainOptions: [[{ powerW: -10000, slots: 1 }]]
   });
   assert.equal(plan.totalRevenueCt, 100);
+});
+
+// --- computeAvailableEnergyKwh ---
+
+test('computeAvailableEnergyKwh calculates correctly (25.6kWh, SOC95→30, eff85)', () => {
+  const result = computeAvailableEnergyKwh({
+    batteryCapacityKwh: 25.6,
+    currentSocPct: 95,
+    minSocPct: 30,
+    inverterEfficiencyPct: 85
+  });
+  // 25.6 * 0.95 * 0.65 * 0.85 = 13.4368 → rounded to 13.44
+  assert.equal(result, 13.44);
+});
+
+test('computeAvailableEnergyKwh returns null when capacity is not set', () => {
+  assert.equal(computeAvailableEnergyKwh({ batteryCapacityKwh: null, currentSocPct: 80, minSocPct: 20 }), null);
+  assert.equal(computeAvailableEnergyKwh({ batteryCapacityKwh: 0, currentSocPct: 80, minSocPct: 20 }), null);
+  assert.equal(computeAvailableEnergyKwh({}), null);
+});
+
+test('computeAvailableEnergyKwh returns 0 when SOC equals minSoc', () => {
+  assert.equal(computeAvailableEnergyKwh({
+    batteryCapacityKwh: 20,
+    currentSocPct: 30,
+    minSocPct: 30,
+    inverterEfficiencyPct: 85
+  }), 0);
+});
+
+test('computeAvailableEnergyKwh returns 0 when SOC below minSoc', () => {
+  assert.equal(computeAvailableEnergyKwh({
+    batteryCapacityKwh: 20,
+    currentSocPct: 10,
+    minSocPct: 30,
+    inverterEfficiencyPct: 85
+  }), 0);
+});
+
+test('computeAvailableEnergyKwh uses default 5% safety and 85% efficiency', () => {
+  const result = computeAvailableEnergyKwh({
+    batteryCapacityKwh: 10,
+    currentSocPct: 100,
+    minSocPct: 0
+  });
+  // 10 * 0.95 * 1.0 * 0.85 = 8.075 → rounded to 8.07
+  assert.equal(result, 8.07);
+});
+
+// --- computeEnergyBasedSlotAllocation ---
+
+test('computeEnergyBasedSlotAllocation splits energy into full + partial slots', () => {
+  const result = computeEnergyBasedSlotAllocation({
+    availableKwh: 13.44,
+    maxDischargeW: -12000
+  });
+  // 12kW * 0.25h = 3kWh per slot, 13.44 / 3 = 4.48
+  assert.equal(result.fullSlots, 4);
+  assert.equal(result.partialSlotW, -5760); // 0.48 * 3kWh... 1.44kWh / 0.25h = 5760W
+  assert.equal(result.totalSlots, 5);
+});
+
+test('computeEnergyBasedSlotAllocation with exact multiple returns no partial', () => {
+  const result = computeEnergyBasedSlotAllocation({
+    availableKwh: 9.0,
+    maxDischargeW: -12000
+  });
+  // 9.0 / 3.0 = exactly 3 slots
+  assert.equal(result.fullSlots, 3);
+  assert.equal(result.partialSlotW, 0);
+  assert.equal(result.totalSlots, 3);
+});
+
+test('computeEnergyBasedSlotAllocation returns zeros with no energy', () => {
+  const result = computeEnergyBasedSlotAllocation({ availableKwh: 0, maxDischargeW: -12000 });
+  assert.equal(result.totalSlots, 0);
+  assert.equal(result.fullSlots, 0);
+});
+
+test('computeEnergyBasedSlotAllocation handles very small energy (partial only)', () => {
+  const result = computeEnergyBasedSlotAllocation({
+    availableKwh: 1.0,
+    maxDischargeW: -12000
+  });
+  // 1.0 / 3.0 = 0.33 → 0 full slots, 1 partial at 1.0/0.25 = 4000W
+  assert.equal(result.fullSlots, 0);
+  assert.equal(result.partialSlotW, -4000);
+  assert.equal(result.totalSlots, 1);
 });
