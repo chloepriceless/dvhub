@@ -1342,9 +1342,9 @@ function epexNowNext() {
     else { next = row; break; }
   }
 
-  const hasFutureNegative = rec.data.some((r) => r.ts > now && Number(r.eur_mwh) < 0);
   const tomorrowRows = rec.data.filter((r) => r.day === rec.nextDate);
   const todayRows = rec.data.filter((r) => r.day === rec.date);
+  const hasFutureNegative = todayRows.some((r) => r.ts > now && Number(r.eur_mwh) < 0);
 
   return {
     current,
