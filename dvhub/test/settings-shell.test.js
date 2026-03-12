@@ -24,8 +24,11 @@ function loadShellHelpers() {
 }
 
 const {
+  applyDiscoveredSystemToDraft,
   buildDestinationWorkspace,
+  buildFieldRenderModel,
   buildSettingsDestinations,
+  createDiscoveryState,
   createSettingsShellState,
   setActiveSettingsSection,
   shouldOpenSettingsGroup
@@ -148,4 +151,47 @@ test('real config definition exposes manufacturer selection and keeps Victron re
   assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'points'));
   assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'controlWrite'));
   assert.ok(!advancedWorkspace.sections.some((section) => section.id === 'dvControl'));
+});
+
+test('settings discovery helper fills the host field from a selected system', async () => {
+  const state = createDiscoveryState({
+    manufacturer: 'victron',
+    systems: [{ id: 'a', label: 'Venus GX', host: 'venus.local', ip: '192.168.1.20' }]
+  });
+
+  const next = applyDiscoveredSystemToDraft({
+    draftConfig: { manufacturer: 'victron', victron: { host: '' } },
+    fieldPath: 'victron.host',
+    selectedSystemId: 'a',
+    discoveryState: state
+  });
+
+  assert.equal(next.victron.host, '192.168.1.20');
+});
+
+test('settings field rendering exposes discovery UI for discovery-capable host fields', () => {
+  const field = {
+    path: 'victron.host',
+    label: 'Anlagenadresse',
+    type: 'text',
+    discovery: { manufacturerPath: 'manufacturer', actionLabel: 'Find System IP' }
+  };
+
+  const model = buildFieldRenderModel(field, {
+    draftConfig: { manufacturer: 'victron', victron: { host: '' } },
+    effectiveConfig: {}
+  });
+
+  assert.equal(model.discovery.visible, true);
+  assert.equal(model.discovery.manufacturer, 'victron');
+});
+
+test('settings discovery errors leave manual host entry available', () => {
+  const state = createDiscoveryState({
+    manufacturer: 'victron',
+    error: 'network unavailable'
+  });
+
+  assert.equal(state.disabled, false);
+  assert.match(state.message, /manuell/i);
 });

@@ -24,8 +24,11 @@ function loadSetupWizardHelpers() {
 }
 
 const {
+  applyDiscoveredSystemToSetupState,
+  buildSetupFieldRenderModel,
   buildSetupSaveOutcome,
   buildSetupReviewSnapshot,
+  createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
   getPrimarySetupActionLabel,
@@ -214,6 +217,52 @@ test('plant setup step only exposes manufacturer selection and host for the acti
     'manufacturer',
     'victron.host'
   ]);
+});
+
+test('transport host field declares manufacturer-aware discovery metadata', () => {
+  const definition = getConfigDefinition();
+  const hostField = definition.fields.find((field) => field.path === 'victron.host');
+
+  assert.deepEqual(hostField.discovery, {
+    manufacturerPath: 'manufacturer',
+    actionLabel: 'Find System IP'
+  });
+});
+
+test('setup discovery helper fills the host field from the selected system without changing validation rules', () => {
+  const nextState = applyDiscoveredSystemToSetupState({
+    state: createSampleState({
+      config: { manufacturer: 'victron', victron: { host: '' } }
+    }),
+    fieldPath: 'victron.host',
+    selectedSystem: { id: 'a', ip: '192.168.1.20' }
+  });
+
+  assert.equal(nextState.draftConfig.victron.host, '192.168.1.20');
+  assert.equal(nextState.validation.steps.transport.valid, true);
+});
+
+test('setup transport field rendering exposes discovery UI for the host field', () => {
+  const state = setActiveSetupStep(createSampleState({
+    config: { manufacturer: 'victron', victron: { host: '' } }
+  }), 'transport');
+  const field = getVisibleSetupFieldsForStep(state, 'transport')
+    .find((entry) => entry.path === 'victron.host');
+
+  const model = buildSetupFieldRenderModel(state, field);
+
+  assert.equal(model.discovery.visible, true);
+  assert.equal(model.discovery.manufacturer, 'victron');
+});
+
+test('setup discovery errors leave manual host entry available', () => {
+  const state = createSetupDiscoveryState({
+    manufacturer: 'victron',
+    error: 'network unavailable'
+  });
+
+  assert.equal(state.disabled, false);
+  assert.match(state.message, /manuell/i);
 });
 
 test('manufacturer validation accepts victron and blocks unsupported manufacturers', () => {

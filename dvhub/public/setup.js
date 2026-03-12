@@ -6,6 +6,7 @@ let setupDefinition = null;
 const REVIEW_STEP_ID = 'review';
 
 let setupWizardState = createSetupWizardState();
+let setupDiscoveryStates = {};
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -127,6 +128,85 @@ function resolveWizardValue(state, path, fallback = undefined) {
   return fallback;
 }
 
+function createSetupDiscoveryState({
+  manufacturer = '',
+  systems = [],
+  loading = false,
+  error = '',
+  selectedSystemId = ''
+} = {}) {
+  const normalizedSystems = Array.isArray(systems) ? systems.filter((system) => system && typeof system === 'object') : [];
+  const normalizedError = String(error || '').trim();
+  let message = '';
+  if (loading) message = 'Suche nach Systemen läuft...';
+  else if (normalizedError) message = 'Discovery fehlgeschlagen. Du kannst die Adresse weiter manuell eintragen.';
+  else if (normalizedSystems.length) message = `${normalizedSystems.length} System${normalizedSystems.length === 1 ? '' : 'e'} gefunden.`;
+  else if (manufacturer) message = 'Kein System gefunden. Du kannst die Adresse weiter manuell eintragen.';
+  else message = 'Wähle zuerst einen Hersteller. Du kannst die Adresse weiter manuell eintragen.';
+
+  return {
+    manufacturer: String(manufacturer || '').trim(),
+    systems: normalizedSystems,
+    loading: Boolean(loading),
+    error: normalizedError,
+    selectedSystemId: selectedSystemId || '',
+    disabled: false,
+    message
+  };
+}
+
+function getSetupFieldDiscoveryState(fieldPath) {
+  return setupDiscoveryStates[fieldPath] || createSetupDiscoveryState();
+}
+
+function setSetupFieldDiscoveryState(fieldPath, state) {
+  setupDiscoveryStates = {
+    ...setupDiscoveryStates,
+    [fieldPath]: state
+  };
+}
+
+function resolveSetupDiscoveryManufacturer(state, field) {
+  const manufacturerPath = field?.discovery?.manufacturerPath;
+  if (!manufacturerPath) return '';
+  return String(resolveWizardValue(state, manufacturerPath, '') || '').trim();
+}
+
+function buildSetupFieldRenderModel(state, field) {
+  const value = resolveWizardValue(state, field.path, field.type === 'boolean' ? false : '');
+  if (!field?.discovery) {
+    return {
+      value,
+      discovery: {
+        visible: false,
+        manufacturer: '',
+        actionLabel: '',
+        systems: [],
+        loading: false,
+        error: '',
+        selectedSystemId: '',
+        disabled: false,
+        message: ''
+      }
+    };
+  }
+
+  const manufacturer = resolveSetupDiscoveryManufacturer(state, field);
+  const discoveryState = createSetupDiscoveryState({
+    ...getSetupFieldDiscoveryState(field.path),
+    manufacturer
+  });
+
+  return {
+    value,
+    discovery: {
+      ...discoveryState,
+      visible: true,
+      actionLabel: field.discovery.actionLabel || 'Find System IP'
+    }
+  };
+}
+
 function getSetupTransportMode(state) {
   return resolveWizardValue(state, 'victron.transport', 'modbus') === 'mqtt' ? 'mqtt' : 'modbus';
 }
@@ -239,6 +319,16 @@ function updateSetupDraftValue(state, path, value) {
     ...state,
     draftConfig: nextDraft
   });
+}
+
+function applyDiscoveredSystemToSetupState({ state, fieldPath, selectedSystem } = {}) {
+  const nextState = updateSetupDraftValue(state, fieldPath, selectedSystem?.ip || '');
+  setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
+    ...getSetupFieldDiscoveryState(fieldPath),
+    manufacturer: resolveWizardValue(nextState, 'manufacturer', ''),
+    selectedSystemId: selectedSystem?.id || ''
+  }));
+  return nextState;
 }
 
 function setActiveSetupStep(state, requestedStepId) {
@@ -516,9 +606,12 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
 }
 
 const setupWizardHelpers = {
+  applyDiscoveredSystemToSetupState,
+  buildSetupFieldRenderModel,
   buildSetupReviewSnapshot,
   buildSetupSaveOutcome,
   buildSetupSteps,
+  createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
   getPrimarySetupActionLabel,
@@ -669,7 +762,8 @@ function renderField(field) {
   wrapper.appendChild(title);
 
   let input;
-  const value = resolveWizardValue(setupWizardState, field.path, field.type === 'boolean' ? false : '');
+  const model = buildSetupFieldRenderModel(setupWizardState, field);
+  const { value } = model;
   if (field.type === 'boolean') {
     input = document.createElement('input');
     input.type = 'checkbox';
@@ -702,6 +796,43 @@ function renderField(field) {
   if (fieldErrors.length) wrapper.classList.add('has-error');
   help.textContent = fieldErrors.length ? fieldErrors[0] : field.help || '';
   wrapper.appendChild(help);
+
+  if (model.discovery.visible) {
+    const actions = document.createElement('div');
+    actions.className = 'settings-inline-actions settings-discovery-actions';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-secondary';
+    button.dataset.discoveryRun = field.path;
+    button.disabled = model.discovery.loading || !model.discovery.manufacturer;
+    button.textContent = model.discovery.loading ? 'Suche läuft...' : model.discovery.actionLabel;
+    actions.appendChild(button);
+
+    const note = document.createElement('small');
+    note.className = 'tools-note';
+    note.textContent = model.discovery.message;
+    actions.appendChild(note);
+    wrapper.appendChild(actions);
+
+    if (model.discovery.systems.length) {
+      const picker = document.createElement('div');
+      picker.className = 'settings-inline-actions settings-discovery-picker';
+      for (const system of model.discovery.systems) {
+        const applyButton = document.createElement('button');
+        applyButton.type = 'button';
+        applyButton.className = 'btn btn-ghost';
+        applyButton.dataset.discoveryFieldPath = field.path;
+        applyButton.dataset.discoverySelectSystem = system.id;
+        applyButton.textContent = `${system.label || 'System'} • ${system.host || '-'} • ${system.ip || '-'}`;
+        if (system.id === model.discovery.selectedSystemId) {
+          applyButton.classList.add('is-active');
+        }
+        picker.appendChild(applyButton);
+      }
+      wrapper.appendChild(picker);
+    }
+  }
 
   return wrapper;
 }
@@ -1012,6 +1143,56 @@ function syncActiveWorkspaceFieldsToDraft() {
   });
 }
 
+async function triggerSetupFieldDiscovery(fieldPath) {
+  const field = getSetupFieldDefinitions(setupWizardState.definition).find((entry) => entry.path === fieldPath);
+  if (!field?.discovery) return;
+  const manufacturer = resolveSetupDiscoveryManufacturer(setupWizardState, field);
+  if (!manufacturer) {
+    setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
+      manufacturer: '',
+      error: 'manufacturer required'
+    }));
+    renderSetupWizard();
+    return;
+  }
+
+  setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
+    manufacturer,
+    loading: true
+  }));
+  renderSetupWizard();
+
+  try {
+    const response = await apiFetch(`/api/discovery/systems?manufacturer=${encodeURIComponent(manufacturer)}`);
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || String(response.status));
+    }
+    setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
+      manufacturer,
+      systems: payload.systems || []
+    }));
+  } catch (error) {
+    setSetupFieldDiscoveryState(fieldPath, createSetupDiscoveryState({
+      manufacturer,
+      error: error.message || 'Discovery failed'
+    }));
+  }
+
+  renderSetupWizard();
+}
+
+function applySetupFieldDiscoverySelection(fieldPath, selectedSystemId) {
+  const discoveryState = getSetupFieldDiscoveryState(fieldPath);
+  const selectedSystem = discoveryState.systems.find((system) => system.id === selectedSystemId) || null;
+  setSetupWizardState(applyDiscoveredSystemToSetupState({
+    state: setupWizardState,
+    fieldPath,
+    selectedSystem
+  }));
+  renderSetupWizard();
+}
+
 function moveToFirstInvalidStep(state) {
   const firstInvalid = state.stepOrder.find((stepId) => !state.validation.steps[stepId].valid);
   if (!firstInvalid) return state;
@@ -1019,6 +1200,7 @@ function moveToFirstInvalidStep(state) {
 }
 
 function hydrateSetupWizardState(payload) {
+  setupDiscoveryStates = {};
   setSetupWizardState(createSetupWizardState({
     definition: payload?.definition || setupDefinition,
     config: payload?.config || {},
@@ -1191,12 +1373,30 @@ if (typeof document !== 'undefined') {
     const path = event.target?.dataset?.path;
     if (!path) return;
     syncActiveWorkspaceFieldsToDraft();
+    if (path === 'manufacturer') setupDiscoveryStates = {};
     if (path === 'victron.transport') {
       renderSetupWizard();
       return;
     }
     renderSetupErrors();
     renderSetupSteps();
+  });
+
+  document.getElementById('setup-workspace')?.addEventListener('click', (event) => {
+    const runButton = event.target.closest('[data-discovery-run]');
+    if (runButton) {
+      triggerSetupFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
+        setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
+      });
+      return;
+    }
+
+    const selectionButton = event.target.closest('[data-discovery-select-system]');
+    if (!selectionButton) return;
+    applySetupFieldDiscoverySelection(
+      selectionButton.dataset.discoveryFieldPath,
+      selectionButton.dataset.discoverySelectSystem
+    );
   });
 
   document.getElementById('setup-steps')?.addEventListener('click', (event) => {

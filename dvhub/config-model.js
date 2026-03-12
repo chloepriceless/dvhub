@@ -768,6 +768,10 @@ function buildFieldDefinitions() {
       path: 'victron.host',
       label: 'Anlagenadresse',
       type: 'text',
+      discovery: {
+        manufacturerPath: 'manufacturer',
+        actionLabel: 'Find System IP'
+      },
       help: 'IP-Adresse oder Hostname der Anlage. Register und weitere Kommunikationswerte kommen aus der Herstellerdatei.'
     },
 

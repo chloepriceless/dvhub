@@ -20,6 +20,7 @@ let marketValueModeDraft = 'annual';
 let pvPlantsDraft = [];
 let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
+let settingsDiscoveryStates = {};
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -115,8 +116,11 @@ function setActiveSettingsSection(state, requestedId) {
 }
 
 const settingsShellHelpers = {
+  applyDiscoveredSystemToDraft,
   buildDestinationWorkspace,
+  buildFieldRenderModel,
   buildSettingsDestinations,
+  createDiscoveryState,
   createSettingsShellState,
   getDestinationMeta,
   getSettingsSectionFields,
@@ -484,9 +488,19 @@ function buildMetaText(meta) {
 }
 
 function renderFieldValue(field) {
-  const draftDefined = hasPath(currentDraftConfig, field.path);
-  const draftValue = draftDefined ? getPath(currentDraftConfig, field.path) : undefined;
-  const effectiveValue = getPath(currentEffectiveConfig, field.path);
+  return renderFieldValueFromConfigs(field, {
+    draftConfig: currentDraftConfig,
+    effectiveConfig: currentEffectiveConfig
+  });
+}
+
+function renderFieldValueFromConfigs(field, {
+  draftConfig = currentDraftConfig,
+  effectiveConfig = currentEffectiveConfig
+} = {}) {
+  const draftDefined = hasPath(draftConfig, field.path);
+  const draftValue = draftDefined ? getPath(draftConfig, field.path) : undefined;
+  const effectiveValue = getPath(effectiveConfig, field.path);
   const optionalOverride = field.empty === 'delete';
 
   if (optionalOverride && !draftDefined) {
@@ -528,6 +542,103 @@ function fieldAffectsVisibility(path) {
   ));
 }
 
+function createDiscoveryState({
+  manufacturer = '',
+  systems = [],
+  loading = false,
+  error = '',
+  selectedSystemId = ''
+} = {}) {
+  const normalizedSystems = Array.isArray(systems) ? systems.filter((system) => system && typeof system === 'object') : [];
+  const normalizedError = String(error || '').trim();
+  let message = '';
+  if (loading) message = 'Suche nach Systemen läuft...';
+  else if (normalizedError) message = 'Discovery fehlgeschlagen. Du kannst die Adresse weiter manuell eintragen.';
+  else if (normalizedSystems.length) message = `${normalizedSystems.length} System${normalizedSystems.length === 1 ? '' : 'e'} gefunden.`;
+  else if (manufacturer) message = 'Kein System gefunden. Du kannst die Adresse weiter manuell eintragen.';
+  else message = 'Wähle zuerst einen Hersteller. Du kannst die Adresse weiter manuell eintragen.';
+
+  return {
+    manufacturer: String(manufacturer || '').trim(),
+    systems: normalizedSystems,
+    loading: Boolean(loading),
+    error: normalizedError,
+    selectedSystemId: selectedSystemId || '',
+    disabled: false,
+    message
+  };
+}
+
+function getFieldDiscoveryState(fieldPath) {
+  return settingsDiscoveryStates[fieldPath] || createDiscoveryState();
+}
+
+function setFieldDiscoveryState(fieldPath, state) {
+  settingsDiscoveryStates = {
+    ...settingsDiscoveryStates,
+    [fieldPath]: state
+  };
+}
+
+function resolveDiscoveryManufacturer(field, {
+  draftConfig = currentDraftConfig,
+  effectiveConfig = currentEffectiveConfig
+} = {}) {
+  const manufacturerPath = field?.discovery?.manufacturerPath;
+  if (!manufacturerPath) return '';
+  return String(
+    getPath(draftConfig, manufacturerPath, '')
+    || getPath(effectiveConfig, manufacturerPath, '')
+    || ''
+  ).trim();
+}
+
+function buildFieldRenderModel(field, {
+  draftConfig = currentDraftConfig,
+  effectiveConfig = currentEffectiveConfig,
+  discoveryState = getFieldDiscoveryState(field.path)
+} = {}) {
+  const valueModel = renderFieldValueFromConfigs(field, { draftConfig, effectiveConfig });
+  if (!field?.discovery) {
+    return {
+      ...valueModel,
+      discovery: {
+        visible: false,
+        manufacturer: '',
+        actionLabel: '',
+        systems: [],
+        loading: false,
+        error: '',
+        selectedSystemId: '',
+        disabled: false,
+        message: ''
+      }
+    };
+  }
+
+  const manufacturer = resolveDiscoveryManufacturer(field, { draftConfig, effectiveConfig });
+  const nextDiscoveryState = createDiscoveryState({
+    ...discoveryState,
+    manufacturer
+  });
+
+  return {
+    ...valueModel,
+    discovery: {
+      ...nextDiscoveryState,
+      visible: true,
+      actionLabel: field.discovery.actionLabel || 'Find System IP'
+    }
+  };
+}
+
+function applyDiscoveredSystemToDraft({ draftConfig, fieldPath, selectedSystemId, discoveryState } = {}) {
+  const selected = (discoveryState?.systems || []).find((system) => system.id === selectedSystemId);
+  const next = clone(draftConfig || {});
+  setPath(next, fieldPath, selected?.ip || '');
+  return next;
+}
+
 function renderField(field) {
   const wrapper = document.createElement('label');
   wrapper.className = 'settings-field';
@@ -538,7 +649,8 @@ function renderField(field) {
   title.textContent = field.label;
   wrapper.appendChild(title);
 
-  const { value, inherited } = renderFieldValue(field);
+  const model = buildFieldRenderModel(field);
+  const { value, inherited } = model;
   let input;
   if (field.type === 'boolean') {
     wrapper.classList.add('checkbox-field');
@@ -579,6 +691,43 @@ function renderField(field) {
   if (field.empty === 'null') helpParts.push('Leer lassen setzt diesen Wert auf "kein Default".');
   help.textContent = helpParts.join(' ');
   wrapper.appendChild(help);
+
+  if (model.discovery.visible) {
+    const actions = document.createElement('div');
+    actions.className = 'settings-inline-actions settings-discovery-actions';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-secondary';
+    button.dataset.discoveryRun = field.path;
+    button.disabled = model.discovery.loading || !model.discovery.manufacturer;
+    button.textContent = model.discovery.loading ? 'Suche läuft...' : model.discovery.actionLabel;
+    actions.appendChild(button);
+
+    const note = document.createElement('small');
+    note.className = 'tools-note';
+    note.textContent = model.discovery.message;
+    actions.appendChild(note);
+    wrapper.appendChild(actions);
+
+    if (model.discovery.systems.length) {
+      const picker = document.createElement('div');
+      picker.className = 'settings-inline-actions settings-discovery-picker';
+      for (const system of model.discovery.systems) {
+        const applyButton = document.createElement('button');
+        applyButton.type = 'button';
+        applyButton.className = 'btn btn-ghost';
+        applyButton.dataset.discoveryFieldPath = field.path;
+        applyButton.dataset.discoverySelectSystem = system.id;
+        applyButton.textContent = `${system.label || 'System'} • ${system.host || '-'} • ${system.ip || '-'}`;
+        if (system.id === model.discovery.selectedSystemId) {
+          applyButton.classList.add('is-active');
+        }
+        picker.appendChild(applyButton);
+      }
+      wrapper.appendChild(picker);
+    }
+  }
 
   return wrapper;
 }
@@ -1130,6 +1279,7 @@ function applyConfigPayload(payload) {
   currentDraftConfig = clone(currentRawConfig);
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
+  settingsDiscoveryStates = {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
   marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
   pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
@@ -1287,6 +1437,60 @@ async function triggerHistoryBackfill() {
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
+async function triggerFieldDiscovery(fieldPath) {
+  const field = (definition?.fields || []).find((entry) => entry.path === fieldPath);
+  if (!field?.discovery) return;
+  const manufacturer = resolveDiscoveryManufacturer(field);
+  if (!manufacturer) {
+    setFieldDiscoveryState(fieldPath, createDiscoveryState({
+      manufacturer: '',
+      error: 'manufacturer required'
+    }));
+    renderActiveSettingsDestination();
+    return;
+  }
+
+  setFieldDiscoveryState(fieldPath, createDiscoveryState({
+    manufacturer,
+    loading: true
+  }));
+  renderActiveSettingsDestination();
+
+  try {
+    const res = await apiFetch(`/api/discovery/systems?manufacturer=${encodeURIComponent(manufacturer)}`);
+    const payload = await res.json();
+    if (!res.ok || !payload.ok) {
+      throw new Error(payload.error || String(res.status));
+    }
+    setFieldDiscoveryState(fieldPath, createDiscoveryState({
+      manufacturer,
+      systems: payload.systems || []
+    }));
+  } catch (error) {
+    setFieldDiscoveryState(fieldPath, createDiscoveryState({
+      manufacturer,
+      error: error.message || 'Discovery failed'
+    }));
+  }
+
+  renderActiveSettingsDestination();
+}
+
+function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
+  const discoveryState = getFieldDiscoveryState(fieldPath);
+  currentDraftConfig = applyDiscoveredSystemToDraft({
+    draftConfig: currentDraftConfig,
+    fieldPath,
+    selectedSystemId,
+    discoveryState
+  });
+  setFieldDiscoveryState(fieldPath, createDiscoveryState({
+    ...discoveryState,
+    selectedSystemId
+  }));
+  renderActiveSettingsDestination();
+}
+
 async function saveCurrentForm() {
   const config = collectConfigFromForm();
   const pricingValidation = validatePricingPeriods(pricingPeriodsDraft);
@@ -1333,7 +1537,25 @@ function initSettingsPage() {
     const input = event.target;
     if (!input?.dataset?.path) return;
     syncRenderedFieldsToDraft();
+    if (input.dataset.path === 'manufacturer') settingsDiscoveryStates = {};
     if (fieldAffectsVisibility(input.dataset.path)) renderActiveSettingsDestination();
+  });
+
+  document.getElementById('settingsSections')?.addEventListener('click', (event) => {
+    const runButton = event.target.closest('[data-discovery-run]');
+    if (runButton) {
+      triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
+        setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
+      });
+      return;
+    }
+
+    const selectionButton = event.target.closest('[data-discovery-select-system]');
+    if (!selectionButton) return;
+    applyFieldDiscoverySelection(
+      selectionButton.dataset.discoveryFieldPath,
+      selectionButton.dataset.discoverySelectSystem
+    );
   });
 
   document.getElementById('settingsNavTree')?.addEventListener('click', (event) => {

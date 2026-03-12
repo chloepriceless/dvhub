@@ -44,6 +44,7 @@ import {
 import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
+import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1718,6 +1719,52 @@ function configApiPayload() {
   };
 }
 
+export async function buildSystemDiscoveryPayload({
+  query = {},
+  discoverSystems = discoverConfiguredSystems,
+  now = () => Date.now()
+} = {}) {
+  const manufacturer = String(query?.manufacturer || '').trim().toLowerCase();
+  const startedAt = now();
+
+  if (!manufacturer) {
+    return {
+      ok: false,
+      manufacturer: '',
+      systems: [],
+      error: 'manufacturer query required',
+      meta: {
+        durationMs: Math.max(0, now() - startedAt),
+        cached: false
+      }
+    };
+  }
+
+  try {
+    const systems = await discoverSystems({ manufacturer });
+    return {
+      ok: true,
+      manufacturer,
+      systems,
+      meta: {
+        durationMs: Math.max(0, now() - startedAt),
+        cached: false
+      }
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      manufacturer,
+      systems: [],
+      error: error?.message || 'system discovery failed',
+      meta: {
+        durationMs: Math.max(0, now() - startedAt),
+        cached: false
+      }
+    };
+  }
+}
+
 function serviceCommandParts(args) {
   if (SERVICE_USE_SUDO) return { command: 'sudo', args: ['-n', 'systemctl', ...args] };
   return { command: 'systemctl', args };
@@ -1919,6 +1966,13 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/config/export' && req.method === 'GET') {
     return downloadJson(res, 'dvhub-config.json', rawCfg);
+  }
+
+  if (url.pathname === '/api/discovery/systems' && req.method === 'GET') {
+    const payload = await buildSystemDiscoveryPayload({
+      query: Object.fromEntries(url.searchParams)
+    });
+    return json(res, payload.ok ? 200 : 400, payload);
   }
 
   if (url.pathname === '/api/admin/health' && req.method === 'GET') {
