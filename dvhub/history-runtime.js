@@ -1421,7 +1421,7 @@ export function createHistoryApiHandlers({
         return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
       }
       let solarMarketValues = null;
-      if (view === 'year' && typeof getSolarMarketValueSummary === 'function') {
+      if (view !== 'day' && typeof getSolarMarketValueSummary === 'function') {
         try {
           solarMarketValues = await getSolarMarketValueSummary({
             year: parseDateOnly(startOfYear(date))?.year
