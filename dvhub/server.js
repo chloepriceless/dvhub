@@ -454,10 +454,11 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     computedAt: new Date(now).toISOString(),
     slotsConsidered: Array.isArray(state.epex?.data) ? state.epex.data.length : 0,
     futureSlots: generatedRules.length > 0 ? selectedSlotTimestamps.length : 0,
-    selectedSlots: selectedSlotTimestamps.map((ts) => ({
+    selectedSlots: selectedSlotTimestamps.map((ts, index) => ({
       ts,
       time: new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null
+      priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null,
+      powerW: generatedRules[index]?.value ?? null
     })),
     availableEnergyKwh,
     currentSocPct,

@@ -141,6 +141,23 @@
             <label><input type="checkbox" id="schedColGrid" checked /> Grid-Spalte</label>
             <label><input type="checkbox" id="schedColCharge" /> Charge-Spalte</label>
           </div>
+          <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
+            <p class="card-title">Aktueller Automationsplan</p>
+            <div class="automation-plan-meta">
+              <span id="planComputedAt">—</span>
+              <span id="planEnergyBudget">—</span>
+              <span id="planEstimatedRevenue">—</span>
+            </div>
+            <table class="sched-table automation-plan-table">
+              <thead><tr>
+                <th>Uhrzeit</th>
+                <th>Leistung (W)</th>
+                <th>Preis (ct/kWh)</th>
+              </tr></thead>
+              <tbody id="planSlotRows"></tbody>
+            </table>
+          </div>
+
           <div class="meta">Gelb markierte Zeilen gehören zur kleine Börsenautomatik und werden automatisch verwaltet.</div>
           <table class="sched-table">
             <thead>
@@ -213,21 +230,6 @@
             <button id="saveAutomationConfigBtn" class="btn-small btn-accent">Speichern</button>
           </div>
 
-          <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
-            <p class="card-title">Aktueller Plan</p>
-            <div class="automation-plan-meta">
-              <span id="planComputedAt">—</span>
-              <span id="planEnergyBudget">—</span>
-              <span id="planEstimatedRevenue">—</span>
-            </div>
-            <table class="sched-table automation-plan-table">
-              <thead><tr>
-                <th>Uhrzeit</th>
-                <th>Preis (ct/kWh)</th>
-              </tr></thead>
-              <tbody id="planSlotRows"></tbody>
-            </table>
-          </div>
         </section>
 
         <section class="panel span-12 reveal">

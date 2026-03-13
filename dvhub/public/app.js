@@ -1526,7 +1526,8 @@ function renderAutomationStatus(scheduleData) {
     for (const slot of plan.selectedSlots) {
       const tr = document.createElement('tr');
       tr.className = 'sched-row-automation';
-      tr.innerHTML = `<td>${slot.time || '\u2014'}</td><td>${slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014'} ct/kWh</td>`;
+      const powerLabel = slot.powerW != null ? `${Number(slot.powerW).toLocaleString('de-DE')} W` : '\u2014';
+      tr.innerHTML = `<td>${slot.time || '\u2014'}</td><td>${powerLabel}</td><td>${slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014'} ct/kWh</td>`;
       tbody.appendChild(tr);
     }
   }
