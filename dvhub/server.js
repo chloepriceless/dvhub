@@ -463,29 +463,85 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   if (!needsRegeneration) return;
 
   const sunTimesCache = getSunTimesCacheForPlanning({ now });
-  const generatedRules = buildSmallMarketAutomationRules({
+
+  // --- Planning phase: compute plan first, then apply ---
+  const planInput = {
     now,
     automationConfig,
     priceSlots: state.epex?.data,
     occupiedRules: manualRules,
     sunTimesCache
-  });
+  };
+
+  if (!sunTimesCache) {
+    state.schedule.smallMarketAutomation = {
+      lastRunDate: runDate,
+      lastOutcome: 'missing_sun_times_cache',
+      generatedRuleCount: 0,
+      lastPriceSlotCount: priceSlotCount,
+      availableEnergyKwh,
+      lastSocPct: currentSocPct,
+      plan: null
+    };
+    // Remove stale automation rules when planning fails
+    if (previousAutomationRules.length) {
+      state.schedule.rules = manualRules;
+      persistConfig();
+    }
+    return;
+  }
+
+  const generatedRules = buildSmallMarketAutomationRules(planInput);
+
+  // Build transparent plan summary for the UI
+  const selectedSlotTimestamps = generatedRules
+    .map((r) => {
+      const match = r?.id?.match(/^sma-(\d+)-/);
+      return match ? Number(match[1]) : null;
+    })
+    .filter((ts) => ts != null);
+
+  const planSummary = {
+    computedAt: new Date(now).toISOString(),
+    slotsConsidered: Array.isArray(state.epex?.data) ? state.epex.data.length : 0,
+    futureSlots: generatedRules.length > 0 ? selectedSlotTimestamps.length : 0,
+    selectedSlots: selectedSlotTimestamps.map((ts) => ({
+      ts,
+      time: new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null
+    })),
+    availableEnergyKwh,
+    currentSocPct,
+    minSocPct: automationConfig?.minSocPct,
+    maxDischargeW: automationConfig?.maxDischargeW,
+    estimatedRevenueCt: generatedRules.reduce((sum, r) => {
+      const slot = state.epex?.data?.find((s) => {
+        const match = r?.id?.match(/^sma-(\d+)-/);
+        return match && Number(s.ts) === Number(match[1]);
+      });
+      if (!slot) return sum;
+      return sum + (Math.abs(Number(r.value)) / 1000) * SLOT_DURATION_HOURS * Number(slot.ct_kwh || 0) / 100;
+    }, 0)
+  };
+
+  // Apply rules
   state.schedule.rules = [...manualRules, ...generatedRules];
   state.schedule.smallMarketAutomation = {
     lastRunDate: runDate,
-    lastOutcome: sunTimesCache ? (generatedRules.length ? 'generated' : 'no_slots') : 'missing_sun_times_cache',
+    lastOutcome: generatedRules.length ? 'generated' : 'no_slots',
     generatedRuleCount: generatedRules.length,
     lastPriceSlotCount: priceSlotCount,
     availableEnergyKwh,
     lastSocPct: currentSocPct,
-    selectedSlotTimestamps: generatedRules
-      .map((r) => {
-        const match = r?.id?.match(/^sma-(\d+)-/);
-        return match ? Number(match[1]) : null;
-      })
-      .filter((ts) => ts != null)
+    selectedSlotTimestamps,
+    plan: planSummary
   };
   persistConfig();
+  pushLog('sma_plan_applied', {
+    slots: planSummary.futureSlots,
+    energyKwh: availableEnergyKwh,
+    estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt) / 100
+  });
 }
 
 function applyLoadedConfig(nextLoadedConfig) {
