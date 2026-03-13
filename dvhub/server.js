@@ -1272,10 +1272,18 @@ function updateEnergyIntegrals(nowMs, totalW) {
   state.energy.importWh += importW * dtH;
   state.energy.exportWh += exportW * dtH;
 
-  const priceCt = Number(epexNowNext()?.current?.ct_kwh ?? 0);
-  const priceEurKwh = priceCt / 100;
-  state.energy.costEur += (importW / 1000) * dtH * priceEurKwh;
-  state.energy.revenueEur += (exportW / 1000) * dtH * priceEurKwh;
+  const currentEpex = epexNowNext()?.current;
+  const epexCtKwh = Number(currentEpex?.ct_kwh ?? 0);
+
+  // Import cost: use the user's configured electricity price (Bezugspreis),
+  // not the raw EPEX price. resolveImportPriceCtKwhForSlot handles fixed,
+  // dynamic, and Paragraph 14a Module 3 pricing modes.
+  const importSlot = { ts: nowMs, ct_kwh: epexCtKwh };
+  const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot) ?? epexCtKwh;
+  state.energy.costEur += (importW / 1000) * dtH * (importCtKwh / 100);
+
+  // Export revenue: EPEX price is the actual feed-in compensation
+  state.energy.revenueEur += (exportW / 1000) * dtH * (epexCtKwh / 100);
 }
 
 let influxBuffer = [];
