@@ -1144,20 +1144,24 @@ function addScheduleRow(opts = {}) {
   tr.dataset.displayTone = displayTone || '';
   tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
   tr.dataset.activeDate = activeDate || '';
-  if (source === SMALL_MARKET_AUTOMATION_SOURCE) {
-    tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''}`;
+  const isAutomation = source === SMALL_MARKET_AUTOMATION_SOURCE;
+  if (isAutomation) {
+    tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''} — automatisch verwaltet`;
   }
 
+  const disabled = isAutomation ? 'disabled' : '';
   tr.innerHTML = `
-    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} title="Aktiv" /></td>
-    <td><input type="time" class="sched-start" value="${start}" /></td>
-    <td><input type="time" class="sched-end" value="${end}" /></td>
-    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} /> <input type="number" class="sched-grid-val" value="${gridVal}" /></label></td>
-    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} /> <input type="number" class="sched-charge-val" value="${chargeVal}" /></label></td>
-    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} /> <input type="number" class="sched-stop-soc-val" value="${stopSocVal}" min="0" max="100" step="1" /></label></td>
-    <td><button class="icon-btn sched-remove" title="Zeile entfernen">-</button></td>
+    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} ${disabled} title="${isAutomation ? 'Automatisch verwaltet' : 'Aktiv'}" /></td>
+    <td><input type="time" class="sched-start" value="${start}" ${disabled} /></td>
+    <td><input type="time" class="sched-end" value="${end}" ${disabled} /></td>
+    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${gridVal}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${chargeVal}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${stopSocVal}" min="0" max="100" step="1" ${disabled} /></label></td>
+    <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
-  tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
+  if (!isAutomation) {
+    tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
+  }
 
   const enableCb = tr.querySelector('.sched-row-enabled');
   const syncRowState = () => {
@@ -1183,6 +1187,8 @@ function collectScheduleRows() {
   if (!tbody) return [];
   const rowState = [];
   for (const tr of tbody.querySelectorAll('tr')) {
+    // Skip automation-managed rows — they are handled server-side
+    if (tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE) continue;
     const start = tr.querySelector('.sched-start')?.value;
     const end = tr.querySelector('.sched-end')?.value;
     if (!start || !end) continue;

@@ -437,7 +437,8 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
       lastRunDate: runDate,
       lastOutcome: 'disabled',
       generatedRuleCount: 0,
-      availableEnergyKwh
+      availableEnergyKwh,
+      lastSocPct: currentSocPct
     };
     if (previousAutomationRules.length) {
       state.schedule.rules = manualRules;
@@ -449,7 +450,17 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const lastState = state.schedule.smallMarketAutomation;
   const priceSlotCount = Array.isArray(state.epex?.data) ? state.epex.data.length : 0;
   const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
-  if (lastState?.lastRunDate === runDate && previousAutomationRules.length && !priceDataChanged) return;
+  // Regenerate when SOC changed significantly (>5%) — energy budget may have shifted
+  const socChanged = automationConfig?.batteryCapacityKwh > 0
+    && currentSocPct != null
+    && lastState?.lastSocPct != null
+    && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
+  const needsRegeneration = !lastState?.lastRunDate
+    || lastState.lastRunDate !== runDate
+    || !previousAutomationRules.length
+    || priceDataChanged
+    || socChanged;
+  if (!needsRegeneration) return;
 
   const sunTimesCache = getSunTimesCacheForPlanning({ now });
   const generatedRules = buildSmallMarketAutomationRules({
@@ -466,6 +477,7 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     generatedRuleCount: generatedRules.length,
     lastPriceSlotCount: priceSlotCount,
     availableEnergyKwh,
+    lastSocPct: currentSocPct,
     selectedSlotTimestamps: generatedRules
       .map((r) => {
         const match = r?.id?.match(/^sma-(\d+)-/);
@@ -2485,10 +2497,13 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
     const body = await parseBody(req);
     if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
-    state.schedule.rules = body.rules;
-    pushLog('schedule_rules_updated', { count: body.rules.length });
+    // Preserve automation-managed rules — manual save only replaces manual rules
+    const incomingManualRules = body.rules.filter((r) => r?.source !== SMALL_MARKET_AUTOMATION_SOURCE);
+    const existingAutomationRules = state.schedule.rules.filter((r) => r?.source === SMALL_MARKET_AUTOMATION_SOURCE);
+    state.schedule.rules = [...incomingManualRules, ...existingAutomationRules];
+    pushLog('schedule_rules_updated', { manual: incomingManualRules.length, automation: existingAutomationRules.length });
     persistConfig();
-    return json(res, 200, { ok: true, count: body.rules.length });
+    return json(res, 200, { ok: true, count: state.schedule.rules.length });
   }
 
   if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
