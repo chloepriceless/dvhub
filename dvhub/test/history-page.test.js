@@ -65,6 +65,9 @@ function loadHistoryPageHelpers() {
     'historyFinancialChart',
     'historyEnergyChart',
     'historyPriceChart',
+    'historySolarSummary',
+    'historyPriceList',
+    'historyAggregatePriceHint',
     'historyAggregateMode',
     'historyAggregateOverviewBtn',
     'historyAggregateTableBtn',
@@ -78,8 +81,6 @@ function loadHistoryPageHelpers() {
     'historyDate',
     'historyPrevBtn',
     'historyNextBtn',
-    'historyOpportunityBlend',
-    'historyOpportunityLabel'
   ];
   const elements = new Map(ids.map((id) => [id, createElement()]));
   elements.get('historyView').value = 'day';
@@ -130,7 +131,6 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyDate"/);
   assert.match(html, /id="historyPrevBtn"/);
   assert.match(html, /id="historyNextBtn"/);
-  assert.match(html, /id="historyOpportunityBlend"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.doesNotMatch(html, /id="historyKpiGrid"/);
   assert.match(html, /id="historySummaryCard"/);
@@ -160,6 +160,9 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyFinancialChart"/);
   assert.match(html, /id="historyEnergyChart"/);
   assert.match(html, /id="historyPriceChart"/);
+  assert.match(html, /id="historySolarSummary"/);
+  assert.match(html, /id="historyPriceList"/);
+  assert.match(html, /id="historyAggregatePriceHint"/);
   assert.match(html, /id="historyAggregateMode"/);
   assert.match(html, /id="historyAggregateOverviewBtn"/);
   assert.match(html, /id="historyAggregateTableBtn"/);
@@ -541,6 +544,9 @@ test('history page renders daily line charts and estimated markers from chart pa
   assert.match(elements.get('historyEnergyChart').innerHTML, /PV AC/);
   assert.match(elements.get('historyEnergyChart').innerHTML, /PV direkt/);
   assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
+  assert.match(elements.get('historyPriceList').innerHTML, /11:00/);
+  assert.match(elements.get('historyPriceList').innerHTML, /offen/);
+  assert.equal(elements.get('historyAggregatePriceHint').innerHTML, '');
   assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
 });
 
@@ -710,6 +716,8 @@ test('history page defaults aggregated week view to overview mode with summary a
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-summary-table/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /history-aggregate-trend/);
+  assert.match(elements.get('historyAggregatePriceHint').innerHTML, /Preisvergleich nur in der Tagesansicht/i);
+  assert.equal(elements.get('historyPriceList').innerHTML, '');
   assert.match(elements.get('historyFinancialChart').innerHTML, /Netto/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Import/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /Einspeisung/);
@@ -826,6 +834,10 @@ test('history page renders yearly aggregate table with year total and month rows
       periodCombinedBars: []
     },
     meta: {
+      solarMarketValue: {
+        annualCtKwh: 5.17,
+        source: 'official_annual'
+      },
       unresolved: {
         incompleteSlots: 0,
         estimatedSlots: 0
@@ -834,6 +846,8 @@ test('history page renders yearly aggregate table with year total and month rows
   });
 
   assert.match(elements.get('historyFinancialChart').innerHTML, /Gesamt Jahr/);
+  assert.match(elements.get('historySolarSummary').innerHTML, /Jahres-Marktwert Solar/);
+  assert.match(elements.get('historySolarSummary').innerHTML, /offiziell/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-01/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-02/);
   assert.match(elements.get('historyFinancialChart').innerHTML, /2026-03/);

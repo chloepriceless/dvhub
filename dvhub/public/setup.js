@@ -505,12 +505,37 @@ function collectInheritedDvControlNotes(state) {
   return notes;
 }
 
+function buildInheritedSetupInfoSections(state) {
+  const sections = [];
+  const meterNotes = collectInheritedMeterNotes(state);
+  const dvControlNotes = collectInheritedDvControlNotes(state);
+
+  if (meterNotes.length) {
+    sections.push({
+      id: 'meter',
+      title: 'Meter-Verbindung',
+      notes: meterNotes
+    });
+  }
+  if (dvControlNotes.length) {
+    sections.push({
+      id: 'dvControl',
+      title: 'DV-Register',
+      notes: dvControlNotes
+    });
+  }
+
+  return sections;
+}
+
 function buildSetupReviewSnapshot(state) {
   const manufacturer = resolveWizardValue(state, 'manufacturer', 'victron');
   const host = resolveWizardValue(state, 'victron.host', '');
   const scheduleTimezone = resolveWizardValue(state, 'schedule.timezone', '');
   const epexEnabled = Boolean(resolveWizardValue(state, 'epex.enabled', false));
   const influxEnabled = Boolean(resolveWizardValue(state, 'influx.enabled', false));
+  const inheritedConnectionSections = buildInheritedSetupInfoSections(state);
+  const inheritedConnectionNotes = inheritedConnectionSections.flatMap((section) => section.notes);
 
   const transportSection = {
     id: 'transport',
@@ -548,7 +573,10 @@ function buildSetupReviewSnapshot(state) {
         { label: 'Proxy Port', value: formatReviewValue(resolveWizardValue(state, 'modbusListenPort', '')) },
         { label: 'Vorzeichenlogik', value: resolveWizardValue(state, 'gridPositiveMeans', '') === 'grid_import' ? 'Positiv = Netzbezug' : 'Positiv = Einspeisung' }
       ],
-      notes: ['Meter- und DV-Register kommen aus dem Herstellerprofil und sind hier bewusst nicht editierbar.']
+      notes: [
+        'Meter- und DV-Register kommen aus dem Herstellerprofil und sind hier bewusst nicht editierbar.',
+        ...inheritedConnectionNotes
+      ]
     },
     {
       id: 'services',
@@ -619,6 +647,8 @@ const setupWizardHelpers = {
   buildSetupReviewSnapshot,
   buildSetupSaveOutcome,
   buildSetupSteps,
+  collectInheritedDvControlNotes,
+  collectInheritedMeterNotes,
   createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
@@ -853,6 +883,34 @@ function renderField(field) {
   return wrapper;
 }
 
+function renderSetupInheritedInfo(stepId, state = setupWizardState) {
+  if (stepId !== 'dv') return null;
+  const sections = buildInheritedSetupInfoSections(state);
+  if (!sections.length) return null;
+
+  const container = document.createElement('section');
+  container.className = 'compact-note-list setup-inherited-notes';
+
+  for (const section of sections) {
+    const card = document.createElement('article');
+    card.className = 'compact-note';
+
+    const title = document.createElement('strong');
+    title.textContent = section.title;
+    card.appendChild(title);
+
+    for (const note of section.notes) {
+      const line = document.createElement('span');
+      line.textContent = note;
+      card.appendChild(line);
+    }
+
+    container.appendChild(card);
+  }
+
+  return container;
+}
+
 function renderSetupWorkspace() {
   const container = document.getElementById('setup-workspace');
   const reviewPanel = document.getElementById('setup-review-panel');
@@ -990,6 +1048,12 @@ function renderSetupWorkspace() {
   fields.className = 'settings-fields compact setup-fields';
   for (const field of getVisibleSetupFieldsForStep(setupWizardState, activeStep.id)) {
     fields.appendChild(renderField(field));
+  }
+
+  const inheritedInfo = renderSetupInheritedInfo(activeStep.id, setupWizardState);
+  if (inheritedInfo) {
+    container.append(progress, header, callout, fields, inheritedInfo);
+    return;
   }
 
   container.append(progress, header, callout, fields);
@@ -1336,11 +1400,6 @@ function handleWizardNav(action) {
 
   renderSetupWizard();
   setBanner('Schritt gespeichert. Du kannst weiter zur naechsten Setup-Seite gehen.', 'info');
-}
-
-function collectConfig() {
-  const syncedState = syncActiveWorkspaceFieldsToDraft();
-  return clone(syncedState.draftConfig || {});
 }
 
 if (typeof document !== 'undefined') {

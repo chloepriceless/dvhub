@@ -26,10 +26,6 @@ function setBanner(id, text, kind = 'info') {
   el.className = `status-banner ${kind}`;
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 function parseDateTimeLocal(value) {
   if (!value) return null;
   const date = new Date(value);

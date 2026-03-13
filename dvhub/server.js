@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import * as crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -513,6 +514,13 @@ function parseBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+function validateScheduleRule(rule) {
+  if (typeof rule !== 'object' || rule === null) return false;
+  if (typeof rule.target !== 'string') return false;
+  if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
+  return true;
 }
 
 function berlinDateString(d = new Date()) {
@@ -1678,10 +1686,17 @@ function epexPriceArray() {
 
 function checkAuth(req, res) {
   if (!cfg.apiToken) return true;
+  const expected = Buffer.from(cfg.apiToken);
   const auth = req.headers.authorization || '';
-  if (auth === `Bearer ${cfg.apiToken}`) return true;
+  if (auth.startsWith('Bearer ')) {
+    const token = Buffer.from(auth.slice(7));
+    if (token.length === expected.length && crypto.timingSafeEqual(token, expected)) return true;
+  }
   const urlToken = new URL(req.url, `http://${req.headers.host}`).searchParams.get('token');
-  if (urlToken === cfg.apiToken) return true;
+  if (urlToken) {
+    const urlBuf = Buffer.from(urlToken);
+    if (urlBuf.length === expected.length && crypto.timingSafeEqual(urlBuf, expected)) return true;
+  }
   res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
   res.end(JSON.stringify({ error: 'unauthorized' }));
   return false;
@@ -1690,7 +1705,8 @@ function checkAuth(req, res) {
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer'
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
 };
 
 function json(res, code, payload) {
@@ -1712,6 +1728,19 @@ function downloadJson(res, filename, payload) {
   res.end(JSON.stringify(payload, null, 2));
 }
 
+const REDACTED_PATHS = ['apiToken', 'influx.token', 'telemetry.historyImport.vrmToken'];
+
+function redactConfig(config) {
+  const copy = JSON.parse(JSON.stringify(config));
+  for (const dotPath of REDACTED_PATHS) {
+    const parts = dotPath.split('.');
+    let obj = copy;
+    for (let i = 0; i < parts.length - 1; i++) { obj = obj?.[parts[i]]; if (!obj) break; }
+    if (obj && parts[parts.length - 1] in obj) obj[parts[parts.length - 1]] = '***';
+  }
+  return copy;
+}
+
 function configMetaPayload() {
   return {
     path: CONFIG_PATH,
@@ -1727,8 +1756,8 @@ function configApiPayload() {
   return {
     ok: true,
     meta: configMetaPayload(),
-    config: rawCfg,
-    effectiveConfig: cfg,
+    config: redactConfig(rawCfg),
+    effectiveConfig: redactConfig(cfg),
     definition: CONFIG_DEFINITION
   };
 }
@@ -1952,8 +1981,6 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/keepalive/modbus' && req.method === 'GET') return json(res, 200, keepaliveModbusPayload());
   if (url.pathname === '/api/keepalive/pulse' && req.method === 'GET') return json(res, 200, keepalivePulsePayload());
-  if (url.pathname === '/api/setup/status' && req.method === 'GET') return json(res, 200, configMetaPayload());
-
   if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
 
   if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
@@ -2170,10 +2197,12 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
     const body = await parseBody(req);
     if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
-    state.schedule.rules = body.rules;
-    pushLog('schedule_rules_updated', { count: body.rules.length });
+    const validRules = body.rules.filter(validateScheduleRule);
+    if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
+    state.schedule.rules = validRules;
+    pushLog('schedule_rules_updated', { count: validRules.length });
     persistConfig();
-    return json(res, 200, { ok: true, count: body.rules.length });
+    return json(res, 200, { ok: true, count: validRules.length });
   }
 
   if (url.pathname === '/api/schedule/config' && req.method === 'POST') {

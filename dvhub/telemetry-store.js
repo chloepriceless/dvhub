@@ -912,7 +912,9 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       return db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((row) => row.name);
     },
     countRows(table, where = '1=1') {
-      return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get().count);
+      const ALLOWED_TABLES = ['telemetry', 'control_events', 'schedule_snapshots', 'optimizer_runs', 'import_jobs', 'timeseries_samples', 'optimizer_run_series'];
+      if (!ALLOWED_TABLES.includes(table)) throw new Error(`countRows: unknown table "${table}"`);
+      return Number(db.prepare(`SELECT COUNT(*) AS count FROM "${table}" WHERE ${where}`).get().count);
     },
     writeSamples,
     writeControlEvent,

@@ -6,7 +6,6 @@ const historyState = {
   backfillBusy: false,
   lastSummary: null,
   chartCursorByMount: {},
-  opportunityBlendPct: 0,
   aggregateModeByView: {},
   detailsExpanded: false,
   statusInfoExpanded: false,
@@ -252,17 +251,9 @@ function shiftDate(dateString, view, delta) {
   return date.toISOString().slice(0, 10);
 }
 
-function opportunityBlendFactor() {
-  return Math.max(0, Math.min(100, Number(historyState.opportunityBlendPct || 0))) / 100;
-}
-
 function actualCostEur(item) {
   if (!item) return 0;
-  return round2(
-    (valueOf(item, 'gridCostEur') || valueOf(item, 'importCostEur'))
-    + valueOf(item, 'pvCostEur')
-    + valueOf(item, 'batteryCostEur')
-  );
+  return round2(importCostEur(item) + valueOf(item, 'pvCostEur') + valueOf(item, 'batteryCostEur'));
 }
 
 function importCostEur(item) {
@@ -277,33 +268,13 @@ function cashNetEur(item) {
 
 function savedMoneyEur(item) {
   if (!item) return 0;
-  return round2(
-    valueOf(item, 'avoidedImportGrossEur')
-    - valueOf(item, 'pvCostEur')
-    - valueOf(item, 'batteryCostEur')
-  );
+  return round2(valueOf(item, 'avoidedImportGrossEur') - valueOf(item, 'pvCostEur') - valueOf(item, 'batteryCostEur'));
 }
 
 function grossReturnEur(item) {
   if (!item) return 0;
   if (hasFiniteNumber(item?.grossReturnEur)) return round2(Number(item.grossReturnEur));
   return round2(cashNetEur(item) + savedMoneyEur(item));
-}
-
-function marketPremiumValueEur(item) {
-  if (!item) return null;
-  if (hasFiniteNumber(item?.marketPremiumEur)) return round2(Number(item.marketPremiumEur));
-  const premiumValuedExportKwh = Number(item?.premiumValuedExportKwh || 0);
-  if (premiumValuedExportKwh <= 0) return null;
-  return round2(Number(item?.marketPremiumCtTotal || 0) / 100);
-}
-
-function marketPremiumRateCtKwh(item) {
-  if (!item) return null;
-  if (hasFiniteNumber(item?.marketPremiumCtKwh)) return round2(Number(item.marketPremiumCtKwh));
-  const premiumValuedExportKwh = Number(item?.premiumValuedExportKwh || 0);
-  if (premiumValuedExportKwh <= 0) return null;
-  return round2(Number(item?.marketPremiumCtTotal || 0) / premiumValuedExportKwh);
 }
 
 function actualNetEur(item) {
@@ -616,9 +587,6 @@ function renderAggregateTable(mountId, summary) {
   mount.innerHTML = renderAggregateBreakdownTable(summary);
 }
 
-function updateOpportunityLabel() {
-  setText('historyOpportunityLabel', `Vergleich Marktwert ${Math.round(Number(historyState.opportunityBlendPct || 0))} %`);
-}
 
 function linePath(points, width, height, min, max) {
   if (!points.length) return '';
@@ -638,15 +606,6 @@ function linePathWithOffset(points, width, height, min, max, xOffset, yOffset = 
     const y = yOffset + height - (((point - min) / span) * height);
     return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(' ');
-}
-
-function axisTicks(min, max, count, formatter) {
-  const span = max - min || 1;
-  return Array.from({ length: count }, (_, index) => {
-    const ratio = index / Math.max(count - 1, 1);
-    const value = max - (span * ratio);
-    return formatter(value);
-  });
 }
 
 function axisTickMeta(min, max, count, formatter) {
@@ -811,11 +770,6 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
   }
 }
 
-function yFor(value, min, max, height) {
-  const span = max - min || 1;
-  return height - (((value - min) / span) * height);
-}
-
 function renderDetailedDayChart(mountId, items) {
   const series = [
     { key: 'pvKwh', label: 'PV', className: 'history-series-pv', formatter: fmtKwh },
@@ -853,43 +807,6 @@ function renderDetailedDayChart(mountId, items) {
 function stackHeight(value, max) {
   if (!Number.isFinite(Number(value)) || max <= 0) return 0;
   return Math.max(12, Math.round((Number(value) / max) * 128));
-}
-
-function renderRevenueCostBars(mountId, items) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
-    return;
-  }
-
-  const max = Math.max(...items.flatMap((item) => [
-    Number(item?.exportRevenueEur || 0),
-    Number(item?.selfConsumptionCostEur || 0)
-  ]), 0.01);
-
-  mount.innerHTML = `
-    <div class="history-stack-chart">
-      <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös</span>
-        <span><i class="history-legend-swatch history-bar-cost"></i>Kosten</span>
-      </div>
-      <div class="history-bars">
-        ${items.map((item) => `
-          <div class="history-bar-card">
-            <div class="history-stack history-stack-compare">
-              <div class="history-bar history-bar-revenue" style="height:${stackHeight(item?.exportRevenueEur, max)}px"></div>
-              <div class="history-bar history-bar-cost" style="height:${stackHeight(item?.selfConsumptionCostEur, max)}px"></div>
-            </div>
-            <strong>${escapeHtml(item.label || '-')}</strong>
-            <span>Export ${fmtKwh(item?.exportKwh)}</span>
-            <span>Erlös ${fmtEur(item?.exportRevenueEur)}</span>
-            <span>Kosten ${fmtEur(item?.selfConsumptionCostEur)}</span>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
 }
 
 function renderCombinedPeriodBars(mountId, items) {
@@ -1007,34 +924,6 @@ function renderCombinedPeriodBars(mountId, items) {
   bindBarChartPointer(mount, mountId, items, () => renderCombinedPeriodBars(mountId, items));
 }
 
-function renderExportBars(mountId, items) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
-    return;
-  }
-  const max = Math.max(...items.map((item) => Number(item?.exportKwh || 0)), 0.01);
-  mount.innerHTML = `
-    <div class="history-stack-chart">
-      <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-export"></i>Export</span>
-      </div>
-      <div class="history-bars">
-        ${items.map((item) => `
-          <div class="history-bar-card">
-            <div class="history-stack">
-              <div class="history-bar history-bar-export" style="height:${stackHeight(item?.exportKwh, max)}px"></div>
-            </div>
-            <strong>${fmtKwh(item?.exportKwh)}</strong>
-            <span>${escapeHtml(item.label || '-')}</span>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
 function renderSolarSummary(mountId, summary) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -1089,6 +978,7 @@ function renderCharts(summary) {
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
   const dayFinancialLines = Array.isArray(charts.dayFinancialLines) ? charts.dayFinancialLines : [];
   const dayPriceLines = Array.isArray(charts.dayPriceLines) ? charts.dayPriceLines : [];
+  const periodCombinedBars = Array.isArray(charts.periodCombinedBars) ? charts.periodCombinedBars : [];
   const view = String(summary?.view || '');
 
   if (view === 'day') {
@@ -1106,6 +996,9 @@ function renderCharts(summary) {
       { key: 'marketPriceCtKwh', label: 'Marktpreis', className: 'history-series-market' },
       { key: 'userImportPriceCtKwh', label: 'Bezugspreis', className: 'history-series-user' }
     ], fmtCt, 'ct/kWh');
+    renderPriceList('historyPriceList', dayPriceLines);
+    setHtml('historyAggregatePriceHint', '');
+    setHtml('historySolarSummary', '');
     return;
   }
 
@@ -1114,8 +1007,15 @@ function renderCharts(summary) {
   } else {
     renderAggregateOverview('historyFinancialChart', summary);
   }
-  setHtml('historyEnergyChart', '');
+  renderCombinedPeriodBars('historyEnergyChart', periodCombinedBars);
   setHtml('historyPriceChart', '');
+  setHtml('historyPriceList', '');
+  renderAggregatePriceHint('historyAggregatePriceHint');
+  if (view === 'year') {
+    renderSolarSummary('historySolarSummary', summary);
+    return;
+  }
+  setHtml('historySolarSummary', '');
 }
 
 function renderRows(summary) {
@@ -1380,27 +1280,16 @@ function bindHistoryControls() {
   const backfill = byId('historyBackfillBtn');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
-  const opportunityBlend = byId('historyOpportunityBlend');
   if (view) view.addEventListener('change', loadHistorySummary);
   if (date) date.addEventListener('change', loadHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
-  if (opportunityBlend) {
-    opportunityBlend.addEventListener('input', (event) => {
-      historyState.opportunityBlendPct = Number(event.target?.value || 0);
-      updateOpportunityLabel();
-      if (historyState.lastSummary) renderSummary(historyState.lastSummary);
-    });
-  }
 }
 
 function initHistoryPage() {
   const date = byId('historyDate');
-  const opportunityBlend = byId('historyOpportunityBlend');
   if (date && !date.value) date.value = currentDateValue();
-  if (opportunityBlend) historyState.opportunityBlendPct = Number(opportunityBlend.value || 0);
-  updateOpportunityLabel();
   renderBackfillButtonState();
   bindHistoryControls();
   loadHistorySummary().catch((error) => setBanner(`Historie konnte nicht initialisiert werden: ${error.message}`, 'error'));

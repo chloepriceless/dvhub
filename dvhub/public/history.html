@@ -58,10 +58,6 @@
             <span>Datum</span>
             <input id="historyDate" type="date" />
           </label>
-          <label class="history-control history-control-wide">
-            <span id="historyOpportunityLabel">Vergleich Marktwert 0 %</span>
-            <input id="historyOpportunityBlend" type="range" min="0" max="100" step="5" value="0" />
-          </label>
           <button id="historyBackfillBtn" class="btn btn-primary" type="button">Preise nachladen</button>
         </div>
       </header>
@@ -212,6 +208,7 @@
             </div>
           </div>
           <div id="historyFinancialChart" class="history-chart-shell"></div>
+          <div id="historySolarSummary"></div>
         </article>
         <article id="historyEnergyPanel" class="panel history-chart-panel">
           <div class="panel-head">
@@ -230,6 +227,8 @@
             </div>
           </div>
           <div id="historyPriceChart" class="history-chart-shell"></div>
+          <div id="historyPriceList"></div>
+          <div id="historyAggregatePriceHint"></div>
         </article>
       </section>
 

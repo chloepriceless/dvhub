@@ -28,6 +28,8 @@ const {
   buildSetupFieldRenderModel,
   buildSetupSaveOutcome,
   buildSetupReviewSnapshot,
+  collectInheritedDvControlNotes,
+  collectInheritedMeterNotes,
   createSetupDiscoveryState,
   createSetupWizardState,
   describeSetupStep,
@@ -344,6 +346,78 @@ test('validateSetupWizardState returns per-step and per-field blocking feedback'
   );
 });
 
+test('collectInheritedMeterNotes describes effective inherited meter connection values', () => {
+  const defaults = createDefaultConfig();
+  const state = createSampleState({
+    config: {
+      ...defaults,
+      meter: {}
+    },
+    effectiveConfig: {
+      ...defaults,
+      meter: {
+        ...defaults.meter,
+        host: '192.168.1.21',
+        port: 502,
+        unitId: 100,
+        timeoutMs: 1200
+      }
+    }
+  });
+
+  const notes = collectInheritedMeterNotes(state);
+  const summary = notes.join(' ');
+
+  assert.match(summary, /Meter Host folgt automatisch/i);
+  assert.match(summary, /192\.168\.1\.21/);
+  assert.match(summary, /Port.*502/i);
+  assert.match(summary, /Unit ID.*100/i);
+  assert.match(summary, /Timeout.*1200/i);
+});
+
+test('collectInheritedDvControlNotes reports inherited victron target when no own register connection is set', () => {
+  const defaults = createDefaultConfig();
+  const state = createSampleState({
+    config: {
+      ...defaults,
+      dvControl: {
+        ...defaults.dvControl,
+        feedExcessDcPv: {
+          ...defaults.dvControl.feedExcessDcPv
+        },
+        dontFeedExcessAcPv: {
+          ...defaults.dvControl.dontFeedExcessAcPv
+        }
+      }
+    },
+    effectiveConfig: {
+      ...defaults,
+      dvControl: {
+        ...defaults.dvControl,
+        feedExcessDcPv: {
+          ...defaults.dvControl.feedExcessDcPv,
+          host: '192.168.1.30',
+          port: 502,
+          unitId: 100
+        },
+        dontFeedExcessAcPv: {
+          ...defaults.dvControl.dontFeedExcessAcPv,
+          host: '192.168.1.30',
+          port: 502,
+          unitId: 100
+        }
+      }
+    }
+  });
+
+  const notes = collectInheritedDvControlNotes(state);
+
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /DV-Register folgen automatisch/i);
+  assert.match(notes[0], /192\.168\.1\.30:502/);
+  assert.match(notes[0], /Unit 100/);
+});
+
 test('review step extends the wizard flow and summarizes key setup outcomes', () => {
   const state = createValidSetupState();
 
@@ -357,6 +431,10 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
   assert.equal(getReviewEntryValue(transportSection, 'Hersteller'), 'victron');
   assert.equal(getReviewEntryValue(transportSection, 'Anlagenadresse'), 'venus-gx.local');
   assert.match(transportSection.notes.join(' '), /Herstellerprofil/i);
+
+  const dvSection = review.find((section) => section.id === 'dv');
+  assert.match(dvSection.notes.join(' '), /Meter Host folgt automatisch/i);
+  assert.match(dvSection.notes.join(' '), /DV-Register folgen automatisch/i);
 
   const servicesSection = review.find((section) => section.id === 'services');
   assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');

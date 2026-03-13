@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.3.0 |
+| **Status** | `main` -- Version 0.3.5.1 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -46,7 +46,7 @@ DVhub auf `main` ist heute:
 - **DV-Schnittstelle und Web-Leitstand** in einer Anwendung
 - **Dashboard** für Live-Werte, Day-Ahead-Preise, Kosten und Steuerung
 - **History-Seite** für Tag/Woche/Monat/Jahr direkt aus der SQLite-Telemetrie
-- **Release 0.3.0 Schwerpunkt:** neue History-Analyse plus Backfill aus dem Victron VRM Portal
+- **Release 0.3.5.1 Schwerpunkt:** Kleine Börsenautomatik, Security-Hardening, History-Verbesserungen und Code-Bereinigung
 - **Setup-Assistent** für den ersten Start mit blockierender Validierung
 - **Einstellungsoberfläche** statt roher `config.json`-Bearbeitung
 - **Victron-Anbindung per Modbus TCP oder MQTT**
@@ -111,6 +111,7 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 - **Schedule-System** mit Defaults, manuellen Writes und Chart-zu-Schedule-Auswahl
 - **Kosten- und Preislogik** für Netz, PV und Akku über `userEnergyPricing`
 - **Datumsbasierte Bezugspreise** über `userEnergyPricing.periods`
+- **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen mit energiebasierter Slot-Allokation
 - **Lokale Telemetrie** mit Persistenz, Rollups, historischem Nachimport und SQLite-basierter History-Analyse
 
 ### Betriebsmodell
@@ -134,6 +135,7 @@ Das Dashboard bündelt die laufenden Betriebsdaten:
 - Victron-Zusatzwerte wie SOC, Akku-Leistung und PV
 - Kostenübersicht für den aktuellen Tag
 - Day-Ahead-Chart mit Hover, Highlight und Schedule-Auswahl
+- Kleine Börsenautomatik mit Planungsanzeige, Chart-Highlighting und Statusübersicht
 - Steuerung mit aktiven Werten, Defaults und manuellen Writes
 - letzte Events aus dem Systemlog
 
@@ -158,6 +160,7 @@ Der First-Run-Setup-Assistent führt Schritt für Schritt durch:
 - Meter- und DV-Basiswerte
 - EPEX- und Influx-Grunddaten
 - Review-Schritt mit Validierung vor dem Speichern
+- Anzeige vererbter Meter- und DV-Register-Verbindungen im Review
 
 ### Tools
 
@@ -175,6 +178,9 @@ Die History-Seite bündelt die interne SQLite-Historie zu einer eigenen Analysea
 - Tag-, Wochen-, Monats- und Jahresansicht
 - Bezug, Einspeisung, Kosten, Erlöse und Netto je Zeitraum
 - Preisvergleich zwischen historischem Marktpreis und eigenem Bezugspreis
+- Preisliste und Aggregat-Preishinweis in der Tagesansicht
+- Solar-Zusammenfassung mit Jahres-Marktwert in der Jahresansicht
+- Energie-Balkendiagramme in Wochen-/Monats-/Jahresansicht
 - Kennzeichnung unvollständiger Slots bei fehlenden Marktpreisen oder Tarifzeiträumen
 - gezielter Preis-Backfill nur für Telemetrie-Buckets ohne historischen Marktpreis
 
@@ -401,7 +407,7 @@ Die Einstellungsseite pflegt diese Werte zentral im Bereich Marktprämie.
 |---------|--------------|
 | `manufacturer` | Aktives Herstellerprofil, aktuell `victron` |
 | `victron` | Anlagenadresse (`host`) |
-| `schedule` | Zeitplan-Regeln und Defaults |
+| `schedule` | Zeitplan-Regeln, Defaults und Kleine Börsenautomatik (`smallMarketAutomation`) |
 | `epex` | Preiszone und Zeitzone |
 | `influx` | InfluxDB-Anbindung |
 | `telemetry` | Lokale SQLite-Historie, Rollups, Preis-Backfill und VRM-History-Import |
@@ -423,6 +429,63 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 - `userEnergyPricing` erlaubt festen Endkundenpreis oder dynamische Preisbestandteile auf Basis von EPEX
 - im MQTT-Modus wird `victron.mqtt.portalId` benötigt; ohne eigenen Broker nutzt DVhub den GX-Host
 - `npm install mqtt` wird nur für MQTT-Betrieb benötigt
+
+---
+
+## Changelog
+
+### 0.3.5.1 (2026-03-13)
+
+**Kleine Börsenautomatik (neu):**
+
+- Automatische Entladung in Hochpreisphasen basierend auf Day-Ahead-Preisen
+- Energiebasierte Slot-Allokation statt fester Slot-Anzahl (verfügbare kWh aus SOC, Kapazität, Wirkungsgrad)
+- Multi-Stage Chain-Varianten für mehrstufige Entladestrategien
+- Transparente Planungsphase mit Statusanzeige im Dashboard
+- Chart-Highlighting der geplanten Entlade-Slots im Day-Ahead-Chart
+- Konfigurierbares Suchfenster, Min-SOC, Max-Entladeleistung und Aggressivitätsprämie
+- Geschützte Automationsregeln (read-only, automatisch regeneriert)
+- Sonnenauf-/untergangszeiten-Cache für standortbasierte Optimierung
+- Vollständige Konfiguration unter `schedule.smallMarketAutomation`
+
+**History und Marktwerte:**
+
+- Marktwerte für Wochen- und Monatsansichten nachladen
+- Lokale Persistenz der Marktwert-Referenzdaten
+- Preisliste und Aggregat-Preishinweis in der Tagesansicht
+- Solar-Zusammenfassung mit Jahres-Marktwert in der Jahresansicht
+- Energie-Balkendiagramme in Wochen-/Monats-/Jahresansicht
+- Cash-Netto in History-Summary wiederhergestellt
+- VRM Full-Backfill durchläuft jetzt auch alte Lücken am Anfang
+- Konfigurierbarer Lookback-Zeitraum für Full-Backfill
+
+**Security-Hardening:**
+
+- Timing-Safe Token-Vergleich (`crypto.timingSafeEqual`) statt String-Vergleich
+- Content-Security-Policy Header zum Schutz vor XSS
+- API-Responses redaktieren sensible Felder (`apiToken`, `influx.token`, `vrmToken`)
+- Config-Datei wird mit `0600`-Berechtigung geschrieben
+- SQL-Injection-Schutz in `countRows()` per Table-Allowlist
+- Eingabevalidierung für Schedule-Regeln (`validateScheduleRule`)
+
+**Weitere Verbesserungen:**
+
+- `schedule.manualOverrideTtlMs` als neues Konfigurationsfeld
+- Setup-Wizard: Anzeige vererbter Meter- und DV-Register-Verbindungen im Review-Schritt
+- Einstellungen: Klappbare Gruppen klarer beschriftet
+- kWh-Preise werden jetzt in Cent angezeigt
+- Korrekte Import-Kostenberechnung mit konfiguriertem Bezugspreis
+- Umfangreiche neue Tests (SMA Unit, Integration, Zeitformat, Sun-Times, History, Setup)
+
+**Entfernt:**
+
+- Opportunity-Blend-Slider aus der History-Seite (UI und Logik)
+- `marketPremiumValueEur()` / `marketPremiumRateCtKwh()` Hilfsfunktionen
+- `renderRevenueCostBars()` / `renderExportBars()` Chart-Funktionen
+- `buildRegisterFieldGroup()` und zugehörige Meta-Konstanten (`POINT_META`, `CONTROL_WRITE_META`, `DV_CONTROL_META`)
+- `buildWorkspaceDefaultCopy()` aus Settings, `collectConfig()` aus Setup, `escHtml()` Duplikat aus Tools
+- `/api/setup/status` Endpunkt (redundant zu `/api/config`)
+- Diverse Hilfsfunktionen internalisiert (nicht mehr exportiert)
 
 ---
 

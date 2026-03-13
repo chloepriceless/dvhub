@@ -792,14 +792,6 @@ function buildDestinationWorkspace(definitionLike, destinationId) {
   };
 }
 
-function buildWorkspaceDefaultCopy(destination) {
-  if (!destination) return '';
-  if (destination.sections.length === 1 && destination.sections[0].groupCount <= 1) {
-    return 'Die relevanten Felder sind direkt sichtbar, ohne weitere Bereiche aufzuklappen.';
-  }
-  return 'Die erste Gruppe ist geöffnet. Weitere Gruppen bleiben kompakt, bis du sie wirklich brauchst.';
-}
-
 function createSummaryCard(title, text) {
   const card = document.createElement('div');
   card.className = 'summary-card';

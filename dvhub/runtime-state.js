@@ -117,7 +117,7 @@ function pickFields(source, fields) {
   return snapshot;
 }
 
-export function buildMeterSnapshot(meter = {}) {
+function buildMeterSnapshot(meter = {}) {
   return pickFields(meter, METER_FIELDS);
 }
 
@@ -125,15 +125,15 @@ export function buildVictronSnapshot(victron = {}) {
   return pickFields(victron, VICTRON_FIELDS);
 }
 
-export function buildScheduleSnapshot(schedule = {}) {
+function buildScheduleSnapshot(schedule = {}) {
   return pickFields(schedule, SCHEDULE_FIELDS);
 }
 
-export function buildTelemetrySnapshot(telemetry = {}) {
+function buildTelemetrySnapshot(telemetry = {}) {
   return pickFields(telemetry, TELEMETRY_FIELDS);
 }
 
-export function buildHistoryImportSnapshot(historyImport = null) {
+function buildHistoryImportSnapshot(historyImport = null) {
   if (!historyImport || typeof historyImport !== 'object') return null;
   return pickFields(historyImport, HISTORY_IMPORT_FIELDS);
 }

@@ -1,31 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const POINT_META = {
-  soc: { label: 'Battery SOC', description: 'Liest den Ladezustand der Batterie.' },
-  batteryPowerW: { label: 'Battery Power', description: 'Liest Lade- oder Entladeleistung der Batterie.' },
-  pvPowerW: { label: 'DC PV Power', description: 'Liest die DC-PV-Leistung.' },
-  acPvL1W: { label: 'AC PV L1', description: 'Liest AC-PV auf Phase L1.' },
-  acPvL2W: { label: 'AC PV L2', description: 'Liest AC-PV auf Phase L2.' },
-  acPvL3W: { label: 'AC PV L3', description: 'Liest AC-PV auf Phase L3.' },
-  gridSetpointW: { label: 'Grid Setpoint Readback', description: 'Liest den aktuellen Netz-Sollwert aus dem GX.' },
-  minSocPct: { label: 'Minimum SOC Readback', description: 'Liest den Minimum-SOC als Rueckmeldung.' },
-  selfConsumptionW: { label: 'Self Consumption', description: 'Summiert den Hausverbrauch über mehrere Register.' }
-};
-
-const CONTROL_WRITE_META = {
-  gridSetpointW: { label: 'Grid Setpoint Write', description: 'Schreibt den Netz-Sollwert.' },
-  chargeCurrentA: { label: 'Charge Current Write', description: 'Schreibt den maximalen Ladestrom.' },
-  minSocPct: { label: 'Minimum SOC Write', description: 'Schreibt den Minimum-SOC.' }
-};
-
-const DV_CONTROL_META = {
-  feedExcessDcPv: { label: 'DC PV Feed-In Flag', description: 'Steuert, ob DC-PV eingespeist werden darf.' },
-  dontFeedExcessAcPv: { label: 'AC PV Block Flag', description: 'Steuert, ob AC-PV-Einspeisung blockiert wird.' }
-};
-
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
-const SUPPORTED_MANUFACTURERS = ['victron'];
 const MANUFACTURER_MANAGED_PATHS = [
   'meter',
   'points',
@@ -259,7 +235,7 @@ function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function deepMerge(base, override) {
+function deepMerge(base, override) {
   if (!isPlainObject(base)) return clone(override);
   if (!isPlainObject(override)) return clone(base);
   const out = { ...clone(base) };
@@ -275,7 +251,7 @@ function getPathParts(path) {
   return String(path).split('.').filter(Boolean);
 }
 
-export function hasPath(obj, path) {
+function hasPath(obj, path) {
   let cur = obj;
   for (const part of getPathParts(path)) {
     if (!isPlainObject(cur) && !Array.isArray(cur)) return false;
@@ -285,7 +261,7 @@ export function hasPath(obj, path) {
   return true;
 }
 
-export function getPath(obj, path, fallback = undefined) {
+function getPath(obj, path, fallback = undefined) {
   let cur = obj;
   for (const part of getPathParts(path)) {
     if (!isPlainObject(cur) && !Array.isArray(cur)) return fallback;
@@ -295,7 +271,7 @@ export function getPath(obj, path, fallback = undefined) {
   return cur;
 }
 
-export function setPath(obj, path, value) {
+function setPath(obj, path, value) {
   const parts = getPathParts(path);
   let cur = obj;
   while (parts.length > 1) {
@@ -306,7 +282,7 @@ export function setPath(obj, path, value) {
   cur[parts[0]] = value;
 }
 
-export function deletePath(obj, path) {
+function deletePath(obj, path) {
   const parts = getPathParts(path);
   let cur = obj;
   while (parts.length > 1) {
@@ -351,215 +327,6 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   if (isPlainObject(manufacturerProfile?.dvControl)) effectiveConfig.dvControl = clone(manufacturerProfile.dvControl);
 
   return applyVictronDefaults(effectiveConfig);
-}
-
-function buildRegisterFieldGroup(sectionId, groupId, prefix, meta, options = {}) {
-  const basePath = `${prefix}.${groupId}`;
-  const groupLabel = meta.label;
-  const description = meta.description;
-  const fields = [
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.enabled`,
-      label: 'Aktiv',
-      type: 'boolean',
-      help: 'Schaltet diesen Punkt oder dieses Register ein bzw. aus.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.fc`,
-      label: 'Function Code',
-      type: 'select',
-      options: [
-        { value: 3, label: '3 - Holding Register' },
-        { value: 4, label: '4 - Input Register' },
-        { value: 6, label: '6 - Write Single' },
-        { value: 16, label: '16 - Write Multiple' }
-      ],
-      help: 'Modbus Function Code für diesen Eintrag.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.address`,
-      label: 'Startadresse',
-      type: 'number',
-      min: 0,
-      max: 65535,
-      help: 'Modbus Registeradresse.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.quantity`,
-      label: 'Anzahl Register',
-      type: 'number',
-      min: 1,
-      max: 125,
-      help: 'Wie viele Register gelesen oder geschrieben werden.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.signed`,
-      label: 'Vorzeichenbehaftet',
-      type: 'boolean',
-      help: 'Aktivieren, wenn der Wert als signed interpretiert werden soll.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.scale`,
-      label: 'Skalierung',
-      type: 'number',
-      step: 0.001,
-      help: 'Multiplikator zur Umrechnung in Engineering-Einheiten.'
-    },
-    {
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.offset`,
-      label: 'Offset',
-      type: 'number',
-      step: 0.001,
-      help: 'Additiver Offset nach der Skalierung.'
-    }
-  ];
-
-  if (options.includeWriteType) {
-    fields.push(
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.writeType`,
-        label: 'Write Type',
-        type: 'select',
-        options: [
-          { value: 'int16', label: 'int16' },
-          { value: 'uint16', label: 'uint16' },
-          { value: 'int32', label: 'int32' },
-          { value: 'uint32', label: 'uint32' }
-        ],
-        help: 'Datentyp für Schreibzugriffe.'
-      },
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.wordOrder`,
-        label: 'Word Order',
-        type: 'select',
-        options: [
-          { value: 'be', label: 'Big Endian (Standard)' },
-          { value: 'le', label: 'Little Endian / Swapped' }
-        ],
-        help: 'Nur relevant für 32-Bit-Werte.'
-      }
-    );
-  }
-
-  if (options.includeSumRegisters) {
-    fields.push({
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.sumRegisters`,
-      label: 'Register summieren',
-      type: 'boolean',
-      help: 'Addiert mehrere Register zu einem Gesamtwert.'
-    });
-  }
-
-  if (options.allowAddressZero) {
-    fields.push({
-      section: sectionId,
-      group: groupId,
-      groupLabel,
-      groupDescription: description,
-      path: `${basePath}.allowAddressZero`,
-      label: 'Adresse 0 zulassen',
-      type: 'boolean',
-      help: 'Sicherheitsfreigabe für Adresse 0 bei Schreibzugriffen.'
-    });
-  }
-
-  if (options.includeTransportOverride !== false) {
-    fields.push(
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.host`,
-        label: 'Host Override',
-        type: 'text',
-        empty: 'delete',
-        help: 'Leer lassen, um den Victron-Host zu verwenden.'
-      },
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.port`,
-        label: 'Port Override',
-        type: 'number',
-        min: 1,
-        max: 65535,
-        empty: 'delete',
-        help: 'Leer lassen, um den Victron-Port zu verwenden.'
-      },
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.unitId`,
-        label: 'Unit ID Override',
-        type: 'number',
-        min: 0,
-        max: 255,
-        empty: 'delete',
-        help: 'Leer lassen, um die Victron Unit ID zu verwenden.'
-      },
-      {
-        section: sectionId,
-        group: groupId,
-        groupLabel,
-        groupDescription: description,
-        path: `${basePath}.timeoutMs`,
-        label: 'Timeout Override (ms)',
-        type: 'number',
-        min: 100,
-        max: 60000,
-        step: 100,
-        empty: 'delete',
-        help: 'Leer lassen, um den Victron Timeout zu verwenden.'
-      }
-    );
-  }
-
-  return fields;
 }
 
 function buildFieldDefinitions() {
@@ -797,6 +564,17 @@ function buildFieldDefinitions() {
       max: 600000,
       step: 1000,
       help: 'Wie oft der Zeitplan ausgewertet wird.'
+    },
+    {
+      section: 'schedule',
+      group: 'defaults',
+      groupLabel: 'Zeitplan Basis',
+      groupDescription: 'Globale Zeitplan-Parameter. Einzelregeln bleiben im Dashboard editierbar.',
+      path: 'schedule.manualOverrideTtlMs',
+      label: 'Manual Override TTL',
+      type: 'number',
+      default: 300000,
+      help: 'Wie lange ein manueller Override gilt (ms).'
     },
     {
       section: 'schedule',
@@ -1513,7 +1291,7 @@ export function createDefaultConfig() {
   };
 }
 
-export function applyVictronDefaults(config) {
+function applyVictronDefaults(config) {
   const next = clone(config);
   const victron = next.victron || {};
   const apply = (entry) => {
@@ -2045,6 +1823,7 @@ export function saveConfigFile(configPath, rawInput) {
   const normalized = normalizeConfigInput(rawInput);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
+  fs.chmodSync(configPath, 0o600);
   return loadConfigFile(configPath);
 }
 
