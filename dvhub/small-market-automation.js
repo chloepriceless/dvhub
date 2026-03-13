@@ -125,48 +125,75 @@ export function filterFreeAutomationSlots({ slots = [], occupiedWindows = [] }) 
   }));
 }
 
-export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainOptions = [] }) {
-  const normalizedTargetSlotCount = Math.max(0, toFiniteNumber(targetSlotCount, 0));
-  const rankedSlots = Array.isArray(slots)
-    ? [...slots].sort((left, right) => toFiniteNumber(right?.ct_kwh, 0) - toFiniteNumber(left?.ct_kwh, 0))
-    : [];
-  const candidateSlots = rankedSlots.slice(0, normalizedTargetSlotCount);
-  const slotValueScore = candidateSlots.reduce((sum, slot) => sum + toFiniteNumber(slot?.ct_kwh, 0), 0);
+/**
+ * Split chronologically sorted slots into contiguous segments.
+ * Two slots are contiguous when their timestamps differ by exactly slotDurationMs.
+ */
+export function splitIntoContiguousSegments(sortedSlots, slotDurationMs) {
+  if (!Array.isArray(sortedSlots) || !sortedSlots.length) return [];
+  const segments = [[sortedSlots[0]]];
+  for (let i = 1; i < sortedSlots.length; i++) {
+    const prevTs = toFiniteNumber(sortedSlots[i - 1]?.ts, 0);
+    const curTs = toFiniteNumber(sortedSlots[i]?.ts, 0);
+    if (curTs - prevTs === slotDurationMs) {
+      segments[segments.length - 1].push(sortedSlots[i]);
+    } else {
+      segments.push([sortedSlots[i]]);
+    }
+  }
+  return segments;
+}
+
+/**
+ * Find the best contiguous window of exactly `chainLength` slots.
+ * Slides each expanded chain over every contiguous segment, scores revenue
+ * in chronological order (index-aligned), and picks the highest-revenue window.
+ * This guarantees discharge/cooldown patterns stay intact.
+ */
+export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainOptions = [], slotDurationMs = 15 * 60 * 1000 }) {
+  const ordered = (Array.isArray(slots) ? [...slots] : [])
+    .filter((s) => s && toFiniteNumber(s?.ts, null) != null)
+    .sort((a, b) => toFiniteNumber(a.ts, 0) - toFiniteNumber(b.ts, 0));
+
+  const segments = splitIntoContiguousSegments(ordered, slotDurationMs);
 
   let bestPlan = {
-    selectedSlotTimestamps: candidateSlots
-      .map((slot) => slot?.ts)
-      .filter((slotTs) => slotTs != null)
-      .sort((left, right) => left - right),
+    selectedSlotTimestamps: [],
     totalRevenueCt: -Infinity,
     chain: [],
     peakDischargeW: Infinity
   };
 
   for (const chainOption of Array.isArray(chainOptions) ? chainOptions : []) {
-    const expandedChain = expandChainSlots(chainOption);
-    if (!expandedChain.length || expandedChain.length !== candidateSlots.length) continue;
+    const expanded = expandChainSlots(chainOption);
+    const len = expanded.length;
+    if (!len) continue;
 
-    const totalRevenueCt = candidateSlots.reduce((sum, slot, index) => (
-      sum + estimateSlotRevenueCt(slot, expandedChain[index]?.powerW)
-    ), 0);
-    const peakDischargeW = expandedChain.reduce((peak, entry) => (
-      Math.max(peak, Math.abs(toFiniteNumber(entry?.powerW, 0)))
-    ), 0);
+    for (const segment of segments) {
+      for (let i = 0; i + len <= segment.length; i++) {
+        const window = segment.slice(i, i + len);
 
-    if (
-      totalRevenueCt > bestPlan.totalRevenueCt
-      || (totalRevenueCt === bestPlan.totalRevenueCt && peakDischargeW < bestPlan.peakDischargeW)
-    ) {
-      bestPlan = {
-        selectedSlotTimestamps: candidateSlots
-          .map((slot) => slot?.ts)
-          .filter((slotTs) => slotTs != null)
-          .sort((left, right) => left - right),
-        totalRevenueCt,
-        chain: cloneChain(chainOption),
-        peakDischargeW
-      };
+        const totalRevenueCt = window.reduce((sum, slot, index) => (
+          sum + estimateSlotRevenueCt(slot, expanded[index]?.powerW)
+        ), 0);
+        const peakDischargeW = expanded.reduce((peak, entry) => (
+          Math.max(peak, Math.abs(toFiniteNumber(entry?.powerW, 0)))
+        ), 0);
+
+        if (
+          totalRevenueCt > bestPlan.totalRevenueCt
+          || (totalRevenueCt === bestPlan.totalRevenueCt && peakDischargeW < bestPlan.peakDischargeW)
+        ) {
+          bestPlan = {
+            selectedSlotTimestamps: window
+              .map((slot) => slot?.ts)
+              .filter((ts) => ts != null),
+            totalRevenueCt,
+            chain: cloneChain(chainOption),
+            peakDischargeW
+          };
+        }
+      }
     }
   }
 

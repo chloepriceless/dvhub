@@ -38,7 +38,6 @@ import { readAppVersionInfo } from './app-version.js';
 import {
   buildAutomationRuleChain,
   computeAvailableEnergyKwh,
-  computeEnergyBasedSlotAllocation,
   expandChainSlots,
   filterFreeAutomationSlots,
   pickBestAutomationPlan,
@@ -319,8 +318,6 @@ function buildSmallMarketAutomationRules({
   // Energy-based slot allocation (if battery capacity is configured)
   const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
   const currentSocPct = state.victron?.soc;
-  let energyBasedTargetSlots = null;
-  let energyBasedPartialW = 0;
   let availableEnergyKwh = null;
 
   if (batteryCapacityKwh > 0 && currentSocPct != null) {
@@ -330,77 +327,22 @@ function buildSmallMarketAutomationRules({
       minSocPct: automationConfig?.minSocPct,
       inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
     });
-    if (availableEnergyKwh != null && availableEnergyKwh > 0) {
-      const allocation = computeEnergyBasedSlotAllocation({
-        availableKwh: availableEnergyKwh,
-        maxDischargeW: automationConfig?.maxDischargeW
-      });
-      energyBasedTargetSlots = allocation.totalSlots;
-      energyBasedPartialW = allocation.partialSlotW;
-    }
   }
+
+  // Hard energy gate: if battery capacity is known and no energy available, skip planning
+  if (availableEnergyKwh != null && availableEnergyKwh <= 0) return [];
 
   const baseChain = buildDefaultAutomationChain(automationConfig);
-  const baseTargetSlots = energyBasedTargetSlots != null
-    ? energyBasedTargetSlots
-    : Number(automationConfig?.targetSlotCount || baseChain.length || 0);
-  const maxW = Math.abs(Number(automationConfig?.maxDischargeW || 12000));
+  const expandedBaseChain = expandChainSlots(baseChain);
 
-  // Try multiple slot counts and pick the most profitable plan
-  let bestPlan = { selectedSlotTimestamps: [], totalRevenueCt: -Infinity, chain: [], peakDischargeW: Infinity };
+  // Use the configured stage chain — it defines the discharge/cooldown pattern.
+  // The contiguous window optimizer will find the best placement for it.
+  const plan = pickBestAutomationPlan({
+    slots: freeSlots,
+    chainOptions: [baseChain],
+    slotDurationMs: SLOT_DURATION_MS
+  });
 
-  const minSlots = Math.max(1, baseTargetSlots - 1);
-  const maxSlots = Math.min(freeSlots.length, baseTargetSlots + 2);
-
-  for (let slotCount = minSlots; slotCount <= maxSlots; slotCount++) {
-    // Scale power: keep total energy constant → power * baseSlots = scaledPower * slotCount
-    const scaledPowerW = -Math.round(maxW * baseTargetSlots / slotCount);
-    let variantChain;
-    if (energyBasedTargetSlots != null && slotCount === energyBasedTargetSlots && energyBasedPartialW !== 0) {
-      // Full power for all slots except the last one which gets partial
-      const fullSlots = slotCount - 1;
-      variantChain = buildAutomationRuleChain({
-        maxDischargeW: automationConfig?.maxDischargeW,
-        stages: fullSlots > 0
-          ? [
-              { dischargeW: scaledPowerW, dischargeSlots: fullSlots, cooldownSlots: 0 },
-              { dischargeW: energyBasedPartialW, dischargeSlots: 1, cooldownSlots: 0 }
-            ]
-          : [{ dischargeW: energyBasedPartialW, dischargeSlots: 1, cooldownSlots: 0 }]
-      });
-    } else {
-      variantChain = buildAutomationRuleChain({
-        maxDischargeW: automationConfig?.maxDischargeW,
-        stages: [{ dischargeW: scaledPowerW, dischargeSlots: slotCount, cooldownSlots: 0 }]
-      });
-    }
-
-    const candidate = pickBestAutomationPlan({
-      slots: freeSlots,
-      targetSlotCount: slotCount,
-      chainOptions: [variantChain]
-    });
-
-    if (candidate.totalRevenueCt > bestPlan.totalRevenueCt
-        || (candidate.totalRevenueCt === bestPlan.totalRevenueCt && candidate.peakDischargeW < bestPlan.peakDischargeW)) {
-      bestPlan = candidate;
-    }
-  }
-
-  // Also test the original configured chain (custom stages may differ from uniform variants)
-  if (baseChain.length > 0 && baseChain.length >= minSlots && baseChain.length <= maxSlots) {
-    const originalPlan = pickBestAutomationPlan({
-      slots: freeSlots,
-      targetSlotCount: baseTargetSlots,
-      chainOptions: [baseChain]
-    });
-    if (originalPlan.totalRevenueCt > bestPlan.totalRevenueCt
-        || (originalPlan.totalRevenueCt === bestPlan.totalRevenueCt && originalPlan.peakDischargeW < bestPlan.peakDischargeW)) {
-      bestPlan = originalPlan;
-    }
-  }
-
-  const plan = bestPlan;
   const expandedBestChain = expandChainSlots(plan.chain);
 
   return (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
