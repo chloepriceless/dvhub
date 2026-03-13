@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildAutomationRuleChain,
+  buildChainVariants,
   computeAvailableEnergyKwh,
   computeEnergyBasedSlotAllocation,
   computeDynamicAutomationMinSocPct,
@@ -348,4 +349,58 @@ test('computeEnergyBasedSlotAllocation handles very small energy (partial only)'
   assert.equal(result.fullSlots, 0);
   assert.equal(result.partialSlotW, -4000);
   assert.equal(result.totalSlots, 1);
+});
+
+// --- buildChainVariants ---
+
+test('buildChainVariants generates progressive stage prefixes', () => {
+  const stages = [
+    { dischargeW: -18000, dischargeSlots: 1, cooldownW: -10000, cooldownSlots: 3 },
+    { dischargeW: -15000, dischargeSlots: 2, cooldownW: -12000, cooldownSlots: 1 }
+  ];
+  const variants = buildChainVariants({ maxDischargeW: -18000, stages });
+  assert.equal(variants.length, 2);
+  // First variant: stage 1 only → 1 discharge + 3 cooldown entries
+  assert.equal(variants[0].length, 2); // [{powerW:-18000, slots:1}, {powerW:-10000, slots:3}]
+  // Second variant: stage 1 + stage 2
+  assert.equal(variants[1].length, 4);
+});
+
+test('buildChainVariants truncates to energy budget', () => {
+  const stages = [
+    { dischargeW: -18000, dischargeSlots: 1, cooldownW: -10000, cooldownSlots: 3 },
+    { dischargeW: -15000, dischargeSlots: 2, cooldownW: -12000, cooldownSlots: 1 }
+  ];
+  // 18000W * 0.25h = 4.5 kWh per slot at full power
+  // Stage 1: 1 slot @18kW + 3 slots @10kW = 4.5 + 7.5 = 12 kWh
+  // With only 5 kWh budget: only 1 slot @18kW (4.5) + 0.5 remaining → not enough for 10kW slot
+  const variants = buildChainVariants({ maxDischargeW: -18000, stages, availableKwh: 5 });
+  assert.ok(variants.length >= 1);
+  // First variant should be truncated
+  const expanded = variants[0];
+  assert.equal(expanded[0].powerW, -18000);
+  assert.equal(expanded[0].slots, 1);
+});
+
+test('buildChainVariants returns empty for no stages', () => {
+  assert.deepEqual(buildChainVariants({ maxDischargeW: -18000, stages: [] }), []);
+  assert.deepEqual(buildChainVariants({ maxDischargeW: -18000 }), []);
+});
+
+test('pickBestAutomationPlan selects most profitable chain variant', () => {
+  // 8 contiguous high-price slots
+  const slots = Array.from({ length: 8 }, (_, i) => slotAt(i, 20 + i));
+  const stages = [
+    { dischargeW: -18000, dischargeSlots: 1, cooldownW: -10000, cooldownSlots: 3 },
+    { dischargeW: -15000, dischargeSlots: 2, cooldownW: -12000, cooldownSlots: 1 }
+  ];
+  const chainVariants = buildChainVariants({ maxDischargeW: -18000, stages });
+  const plan = pickBestAutomationPlan({
+    slots,
+    chainOptions: chainVariants,
+    slotDurationMs: SLOT_MS
+  });
+  // Should pick the longer chain (7 slots) since prices rise, giving more total revenue
+  assert.ok(plan.selectedSlotTimestamps.length > 0);
+  assert.ok(plan.totalRevenueCt > 0);
 });

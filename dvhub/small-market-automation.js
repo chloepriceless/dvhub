@@ -90,6 +90,61 @@ export function buildAutomationRuleChain({ maxDischargeW, stages = [] }) {
   });
 }
 
+/**
+ * Generate progressive chain variants by taking 1-stage, 2-stage, … N-stage prefixes.
+ * Each variant is a chain produced by buildAutomationRuleChain with that prefix of stages.
+ * Optionally truncates chains to fit within an energy budget (kWh).
+ */
+export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = null, slotDurationH = SLOT_DURATION_HOURS }) {
+  if (!Array.isArray(stages) || !stages.length) return [];
+
+  const variants = [];
+  for (let count = 1; count <= stages.length; count++) {
+    const chain = buildAutomationRuleChain({
+      maxDischargeW,
+      stages: stages.slice(0, count)
+    });
+    if (!chain.length) continue;
+
+    if (availableKwh != null && availableKwh > 0) {
+      const truncated = truncateChainToEnergy(chain, availableKwh, slotDurationH);
+      if (truncated.length) variants.push(truncated);
+    } else {
+      variants.push(chain);
+    }
+  }
+
+  return variants;
+}
+
+/**
+ * Truncate a chain so its total energy consumption does not exceed availableKwh.
+ * Preserves entries in order; reduces the last entry's slot count if partial.
+ */
+function truncateChainToEnergy(chain, availableKwh, slotDurationH = SLOT_DURATION_HOURS) {
+  if (!Array.isArray(chain) || availableKwh <= 0) return [];
+
+  const result = [];
+  let remainingKwh = availableKwh;
+
+  for (const entry of chain) {
+    const powerW = Math.abs(toFiniteNumber(entry?.powerW, 0));
+    const slots = Math.max(0, toFiniteNumber(entry?.slots, 0));
+    if (!slots || !powerW) continue;
+
+    const energyPerSlot = (powerW / 1000) * slotDurationH;
+    const maxSlots = Math.floor(remainingKwh / energyPerSlot);
+    if (maxSlots <= 0) break;
+
+    const usedSlots = Math.min(slots, maxSlots);
+    result.push({ powerW: entry.powerW, slots: usedSlots });
+    remainingKwh -= usedSlots * energyPerSlot;
+    if (remainingKwh <= 0) break;
+  }
+
+  return result;
+}
+
 export function computeDynamicAutomationMinSocPct({
   automationMinSocPct,
   globalMinSocPct,

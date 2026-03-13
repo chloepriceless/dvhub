@@ -37,6 +37,7 @@ import { createBundesnetzagenturApplicableValueService } from './bundesnetzagent
 import { readAppVersionInfo } from './app-version.js';
 import {
   buildAutomationRuleChain,
+  buildChainVariants,
   computeAvailableEnergyKwh,
   expandChainSlots,
   filterFreeAutomationSlots,
@@ -332,14 +333,26 @@ function buildSmallMarketAutomationRules({
   // Hard energy gate: if battery capacity is known and no energy available, skip planning
   if (availableEnergyKwh != null && availableEnergyKwh <= 0) return [];
 
-  const baseChain = buildDefaultAutomationChain(automationConfig);
-  const expandedBaseChain = expandChainSlots(baseChain);
+  // Generate multiple chain variants (1-stage, 2-stage, … N-stage prefixes),
+  // each energy-truncated to the available battery budget.
+  const chainVariants = buildChainVariants({
+    maxDischargeW: automationConfig?.maxDischargeW,
+    stages: Array.isArray(automationConfig?.stages) && automationConfig.stages.length
+      ? automationConfig.stages
+      : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: automationConfig?.targetSlotCount, cooldownSlots: 0 }],
+    availableKwh: availableEnergyKwh,
+    slotDurationH: SLOT_DURATION_HOURS
+  });
 
-  // Use the configured stage chain — it defines the discharge/cooldown pattern.
-  // The contiguous window optimizer will find the best placement for it.
+  // Fall back to legacy single-chain if no stages are configured
+  if (!chainVariants.length) {
+    const fallback = buildDefaultAutomationChain(automationConfig);
+    if (fallback.length) chainVariants.push(fallback);
+  }
+
   const plan = pickBestAutomationPlan({
     slots: freeSlots,
-    chainOptions: [baseChain],
+    chainOptions: chainVariants,
     slotDurationMs: SLOT_DURATION_MS
   });
 
