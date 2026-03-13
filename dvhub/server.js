@@ -41,7 +41,8 @@ import {
   computeEnergyBasedSlotAllocation,
   expandChainSlots,
   filterFreeAutomationSlots,
-  pickBestAutomationPlan
+  pickBestAutomationPlan,
+  SLOT_DURATION_HOURS
 } from './small-market-automation.js';
 import {
   buildSunTimesCacheKey,
