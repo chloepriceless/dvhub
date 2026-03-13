@@ -1476,6 +1476,47 @@ function renderAutomationStatus(scheduleData) {
       ? `${sma.availableEnergyKwh} kWh verfügbar`
       : '';
   }
+
+  // Render plan summary
+  const planContainer = document.getElementById('automationPlanSummary');
+  const plan = sma.plan;
+  if (!planContainer) return;
+
+  if (!plan || !plan.selectedSlots?.length) {
+    planContainer.style.display = 'none';
+    return;
+  }
+
+  planContainer.style.display = '';
+  const computedEl = document.getElementById('planComputedAt');
+  const budgetEl = document.getElementById('planEnergyBudget');
+  const revenueEl = document.getElementById('planEstimatedRevenue');
+
+  if (computedEl) {
+    const d = new Date(plan.computedAt);
+    computedEl.textContent = `Berechnet: ${d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  if (budgetEl) {
+    const parts = [];
+    if (plan.availableEnergyKwh != null) parts.push(`${plan.availableEnergyKwh} kWh Energie`);
+    if (plan.currentSocPct != null) parts.push(`SOC ${plan.currentSocPct}% \u2192 ${plan.minSocPct ?? 0}%`);
+    budgetEl.textContent = parts.join(' \u2022 ') || '\u2014';
+  }
+  if (revenueEl) {
+    const eur = plan.estimatedRevenueCt != null ? (Math.round(plan.estimatedRevenueCt * 100) / 100).toFixed(2) : null;
+    revenueEl.textContent = eur != null ? `\u2248 ${eur} \u20ac Erl\u00f6s` : '';
+  }
+
+  const tbody = document.getElementById('planSlotRows');
+  if (tbody) {
+    tbody.innerHTML = '';
+    for (const slot of plan.selectedSlots) {
+      const tr = document.createElement('tr');
+      tr.className = 'sched-row-automation';
+      tr.innerHTML = `<td>${slot.time || '\u2014'}</td><td>${slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014'} ct/kWh</td>`;
+      tbody.appendChild(tr);
+    }
+  }
 }
 
 function initDashboard() {

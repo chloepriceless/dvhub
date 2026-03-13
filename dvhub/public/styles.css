@@ -1875,6 +1875,31 @@ table th {
   margin-bottom: 8px;
 }
 
+.automation-plan-summary {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--schedule-automation-yellow) 30%, transparent);
+  background: color-mix(in srgb, var(--schedule-automation-yellow) 6%, transparent);
+}
+
+.automation-plan-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 6px 0 10px;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.automation-plan-table {
+  font-size: 0.84rem;
+}
+
+.automation-plan-table td {
+  padding: 4px 12px;
+}
+
 .icon-btn {
   border-radius: 50%;
   width: 34px;
