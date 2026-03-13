@@ -1,6 +1,12 @@
 const { apiFetch } = window.DVhubCommon || {};
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
+const SMA_ID_PREFIX = 'sma-';
+function isSmallMarketAutomationRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
+}
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
@@ -1090,6 +1096,7 @@ function groupScheduleRulesForDashboard(rules) {
     }
     if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
     if (rule.enabled === false) slot.enabled = false;
+    if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
     if (!slot.source && rule.source) slot.source = rule.source;
     if (!slot.displayTone && rule.displayTone) slot.displayTone = rule.displayTone;
     if (slot.autoManaged !== true && rule.autoManaged === true) slot.autoManaged = true;
@@ -1108,7 +1115,8 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
   }, nowTs);
   const isAutomationRule =
     tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
-    || tr.dataset.displayTone === 'yellow';
+    || tr.dataset.displayTone === 'yellow'
+    || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX);
 
   tr.classList.toggle('sched-row-expired', expired);
   tr.classList.toggle('sched-row-automation', isAutomationRule);
@@ -1132,6 +1140,7 @@ function addScheduleRow(opts = {}) {
     gridVal = -40, chargeVal = '', stopSocVal = '',
     gridEnabled = true, chargeEnabled = false, stopSocEnabled = false,
     rowEnabled = true,
+    ruleId = '',
     source = '',
     displayTone = '',
     autoManaged = false,
@@ -1140,11 +1149,13 @@ function addScheduleRow(opts = {}) {
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
   const tr = document.createElement('tr');
+  tr.dataset.ruleId = ruleId || '';
   tr.dataset.ruleSource = source || '';
   tr.dataset.displayTone = displayTone || '';
   tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
   tr.dataset.activeDate = activeDate || '';
-  const isAutomation = source === SMALL_MARKET_AUTOMATION_SOURCE;
+  const isAutomation = source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof ruleId === 'string' && ruleId.startsWith(SMA_ID_PREFIX));
   if (isAutomation) {
     tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''} — automatisch verwaltet`;
   }
@@ -1188,7 +1199,8 @@ function collectScheduleRows() {
   const rowState = [];
   for (const tr of tbody.querySelectorAll('tr')) {
     // Skip automation-managed rows — they are handled server-side
-    if (tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE) continue;
+    if (tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
+      || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX)) continue;
     const start = tr.querySelector('.sched-start')?.value;
     const end = tr.querySelector('.sched-end')?.value;
     if (!start || !end) continue;
@@ -1234,6 +1246,7 @@ async function loadScheduleDash() {
         chargeEnabled: slot.charge != null,
         stopSocEnabled: slot.stopSocPct != null,
         rowEnabled: slot.enabled,
+        ruleId: slot.ruleId,
         source: slot.source,
         displayTone: slot.displayTone,
         autoManaged: slot.autoManaged,

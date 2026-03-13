@@ -90,6 +90,12 @@ const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 const SMALL_MARKET_AUTOMATION_DISPLAY_TONE = 'yellow';
+const SMA_ID_PREFIX = 'sma-';
+function isSmallMarketAutomationRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
+}
 const SLOT_DURATION_MS = 15 * 60 * 1000;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
@@ -298,7 +304,7 @@ function buildSmallMarketAutomationRules({
   const offsetM = String(Math.floor((absOffset % 3600000) / 60000)).padStart(2, '0');
   const tzSuffix = `${offsetSign}${offsetH}:${offsetM}`;
   const occupiedWindows = (Array.isArray(occupiedRules) ? occupiedRules : [])
-    .filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE)
+    .filter((rule) => !isSmallMarketAutomationRule(rule))
     .map((rule) => ({
       startTs: Date.parse(`${dateStr}T${rule.start || '00:00'}:00${tzSuffix}`),
       endTs: Date.parse(`${dateStr}T${rule.end || '00:00'}:00${tzSuffix}`),
@@ -420,8 +426,8 @@ function buildSmallMarketAutomationRules({
 function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const automationConfig = cfg.schedule?.smallMarketAutomation;
   const runDate = berlinDateString(new Date(now));
-  const manualRules = state.schedule.rules.filter((rule) => rule?.source !== SMALL_MARKET_AUTOMATION_SOURCE);
-  const previousAutomationRules = state.schedule.rules.filter((rule) => rule?.source === SMALL_MARKET_AUTOMATION_SOURCE);
+  const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
+  const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));
   const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
   const currentSocPct = state.victron?.soc;
   const availableEnergyKwh = (batteryCapacityKwh > 0 && currentSocPct != null)
@@ -2555,8 +2561,8 @@ const web = http.createServer(async (req, res) => {
     const body = await parseBody(req);
     if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
     // Preserve automation-managed rules — manual save only replaces manual rules
-    const incomingManualRules = body.rules.filter((r) => r?.source !== SMALL_MARKET_AUTOMATION_SOURCE);
-    const existingAutomationRules = state.schedule.rules.filter((r) => r?.source === SMALL_MARKET_AUTOMATION_SOURCE);
+    const incomingManualRules = body.rules.filter((r) => !isSmallMarketAutomationRule(r));
+    const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
     state.schedule.rules = [...incomingManualRules, ...existingAutomationRules];
     pushLog('schedule_rules_updated', { manual: incomingManualRules.length, automation: existingAutomationRules.length });
     persistConfig();
