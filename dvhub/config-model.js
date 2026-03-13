@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { toFiniteNumber } from './util.js';
 
 const POINT_META = {
   soc: { label: 'Battery SOC', description: 'Liest den Ladezustand der Batterie.' },
@@ -1710,11 +1711,6 @@ function coerceBoolean(value) {
     if (['false', '0', 'no', 'nein', 'off'].includes(normalized)) return false;
   }
   return Boolean(value);
-}
-
-function toFiniteNumber(value, fallback = null) {
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : fallback;
 }
 
 function toFiniteNumberOrNull(value) {

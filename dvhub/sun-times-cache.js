@@ -1,10 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-
-function toFiniteNumber(value, fallback = null) {
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : fallback;
-}
+import { toFiniteNumber } from './util.js';
 
 export function buildSunTimesCacheKey({ latitude, longitude, year }) {
   return `${latitude}:${longitude}:${year}`;

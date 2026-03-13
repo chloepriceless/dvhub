@@ -228,3 +228,9 @@ test('server schedule evaluator wires stop-soc auto-disable and dedicated loggin
   assert.match(source, /schedule_stop_soc_reached/);
   assert.match(source, /batterySocPct:\s*state\.victron\.soc/);
 });
+
+test('server delegates price-slot window filtering to shared automation helper', () => {
+  const source = fs.readFileSync(serverPath, 'utf8');
+  assert.match(source, /filterSlotsByTimeWindow/);
+  assert.doesNotMatch(source, /function buildSearchWindowBounds/);
+});

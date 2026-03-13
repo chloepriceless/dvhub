@@ -1,7 +1,5 @@
-function toFiniteNumber(value, fallback = null) {
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : fallback;
-}
+import { toFiniteNumber } from './util.js';
+import { parseHHMM } from './schedule-runtime.js';
 
 export const SLOT_DURATION_HOURS = 0.25; // 15 minutes
 
@@ -178,6 +176,36 @@ export function filterFreeAutomationSlots({ slots = [], occupiedWindows = [] }) 
     if (slotTs == null || startTs == null || endTs == null) return false;
     return slotTs >= startTs && slotTs < endTs;
   }));
+}
+
+export function filterSlotsByTimeWindow({
+  slots = [],
+  searchWindowStart,
+  searchWindowEnd,
+  timeZone = 'Europe/Berlin'
+} = {}) {
+  const startMin = parseHHMM(searchWindowStart);
+  const endMin = parseHHMM(searchWindowEnd);
+  if (startMin == null || endMin == null) return [];
+
+  const dtf = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  return (Array.isArray(slots) ? slots : []).filter((slot) => {
+    const ts = Number(slot?.ts);
+    if (!Number.isFinite(ts)) return false;
+    const minuteOfDay = dtf.formatToParts(new Date(ts));
+    const hours = Number(minuteOfDay.find((part) => part.type === 'hour')?.value);
+    const minutes = Number(minuteOfDay.find((part) => part.type === 'minute')?.value);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return false;
+    const slotMin = hours * 60 + minutes;
+    if (startMin <= endMin) return slotMin >= startMin && slotMin < endMin;
+    return slotMin >= startMin || slotMin < endMin;
+  });
 }
 
 /**

@@ -24,6 +24,15 @@ function fmtCentFromCt(ct) {
 function fmtCentFromTenthCt(value) {
   return fmtCentValue(Number(value) / 10);
 }
+
+function escapeAttr(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function setText(id, text, cls) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -1162,12 +1171,12 @@ function addScheduleRow(opts = {}) {
 
   const disabled = isAutomation ? 'disabled' : '';
   tr.innerHTML = `
-    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} ${disabled} title="${isAutomation ? 'Automatisch verwaltet' : 'Aktiv'}" /></td>
-    <td><input type="time" class="sched-start" value="${start}" ${disabled} /></td>
-    <td><input type="time" class="sched-end" value="${end}" ${disabled} /></td>
-    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${gridVal}" ${disabled} /></label></td>
-    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${chargeVal}" ${disabled} /></label></td>
-    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${stopSocVal}" min="0" max="100" step="1" ${disabled} /></label></td>
+    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} ${disabled} title="${escapeAttr(isAutomation ? 'Automatisch verwaltet' : 'Aktiv')}" /></td>
+    <td><input type="time" class="sched-start" value="${escapeAttr(start)}" ${disabled} /></td>
+    <td><input type="time" class="sched-end" value="${escapeAttr(end)}" ${disabled} /></td>
+    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="1" ${disabled} /></label></td>
     <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
   if (!isAutomation) {
@@ -1527,7 +1536,7 @@ function renderAutomationStatus(scheduleData) {
       const tr = document.createElement('tr');
       tr.className = 'sched-row-automation';
       const powerLabel = slot.powerW != null ? `${Number(slot.powerW).toLocaleString('de-DE')} W` : '\u2014';
-      tr.innerHTML = `<td>${slot.time || '\u2014'}</td><td>${powerLabel}</td><td>${slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014'} ct/kWh</td>`;
+      tr.innerHTML = `<td>${escapeAttr(slot.time || '\u2014')}</td><td>${escapeAttr(powerLabel)}</td><td>${escapeAttr(slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014')} ct/kWh</td>`;
       tbody.appendChild(tr);
     }
   }

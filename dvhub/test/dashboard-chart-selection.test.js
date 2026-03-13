@@ -293,6 +293,21 @@ test('dashboard schedule row template includes stop-soc controls', () => {
   assert.match(app, /sched-stop-soc-val/);
 });
 
+test('dashboard escapes dynamic schedule and plan row template values', () => {
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+
+  assert.match(app, /function escapeAttr\(value\)/);
+  assert.match(app, /value="\$\{escapeAttr\(start\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(end\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(gridVal\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(chargeVal\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(stopSocVal\)\}"/);
+  assert.match(app, /title="\$\{escapeAttr\(isAutomation \? 'Automatisch verwaltet' : 'Aktiv'\)\}"/);
+  assert.match(app, /<td>\$\{escapeAttr\(slot\.time \|\| '\\u2014'\)\}<\/td>/);
+  assert.match(app, /<td>\$\{escapeAttr\(powerLabel\)\}<\/td>/);
+  assert.match(app, /<td>\$\{escapeAttr\(slot\.priceCtKwh != null \? \(Number\(slot\.priceCtKwh\)\)\.toFixed\(2\) : '\\u2014'\)\} ct\/kWh<\/td>/);
+});
+
 test('dashboard places the schedule panel directly after the price engine panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const priceIndex = html.indexOf('Preis-Engine');

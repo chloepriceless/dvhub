@@ -40,6 +40,7 @@ import {
   buildChainVariants,
   computeAvailableEnergyKwh,
   expandChainSlots,
+  filterSlotsByTimeWindow,
   filterFreeAutomationSlots,
   pickBestAutomationPlan,
   SLOT_DURATION_HOURS
@@ -250,25 +251,16 @@ function buildDefaultAutomationChain(automationConfig = {}) {
   });
 }
 
-function buildSearchWindowBounds({ data = [], automationConfig = {}, timeZone = cfg.schedule?.timezone || 'Europe/Berlin' } = {}) {
-  const startMin = parseHHMM(automationConfig?.searchWindowStart);
-  const endMin = parseHHMM(automationConfig?.searchWindowEnd);
-  if (startMin == null || endMin == null) return [];
-
-  return (Array.isArray(data) ? data : []).filter((slot) => {
-    const minuteOfDay = new Intl.DateTimeFormat('en-GB', {
-      timeZone,
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23'
-    }).formatToParts(new Date(slot.ts));
-    const hours = Number(minuteOfDay.find((part) => part.type === 'hour')?.value);
-    const minutes = Number(minuteOfDay.find((part) => part.type === 'minute')?.value);
-    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return false;
-    const slotMin = hours * 60 + minutes;
-    if (startMin <= endMin) return slotMin >= startMin && slotMin < endMin;
-    return slotMin >= startMin || slotMin < endMin;
-  });
+function formatLocalHHMM(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const hours = parts.find((part) => part.type === 'hour')?.value || '00';
+  const minutes = parts.find((part) => part.type === 'minute')?.value || '00';
+  return `${hours}:${minutes}`;
 }
 
 function buildSmallMarketAutomationRules({
@@ -280,9 +272,11 @@ function buildSmallMarketAutomationRules({
 } = {}) {
   if (!automationConfig?.enabled || !sunTimesCache) return [];
 
-  const filteredPriceSlots = buildSearchWindowBounds({
-    data: priceSlots,
-    automationConfig
+  const filteredPriceSlots = filterSlotsByTimeWindow({
+    slots: priceSlots,
+    searchWindowStart: automationConfig?.searchWindowStart,
+    searchWindowEnd: automationConfig?.searchWindowEnd,
+    timeZone: cfg.schedule?.timezone || 'Europe/Berlin'
   }).filter((slot) => Number(slot?.ts) >= now);
   const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
   const dateStr = berlinDateString(new Date(now));
@@ -367,8 +361,8 @@ function buildSmallMarketAutomationRules({
       id: `sma-${slotTs}-${index + 1}`,
       enabled: true,
       target: 'gridSetpointW',
-      start: start.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      end: end.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      start: formatLocalHHMM(start, timeZone),
+      end: formatLocalHHMM(end, timeZone),
       value: Number(expandedBestChain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
       activeDate: berlinDateString(new Date(now)),
       source: SMALL_MARKET_AUTOMATION_SOURCE,
@@ -2558,14 +2552,33 @@ const web = http.createServer(async (req, res) => {
   // POST /api/schedule/automation/config
   if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
     const body = await parseBody(req);
-    if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'invalid body' });
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return json(res, 400, { ok: false, error: 'invalid body' });
+    }
+
+    const allowedKeys = new Set([
+      'enabled',
+      'searchWindowStart',
+      'searchWindowEnd',
+      'targetSlotCount',
+      'maxDischargeW',
+      'batteryCapacityKwh',
+      'inverterEfficiencyPct',
+      'minSocPct',
+      'aggressivePremiumPct',
+      'location',
+      'stages'
+    ]);
+    const filteredBody = Object.fromEntries(
+      Object.entries(body).filter(([key]) => allowedKeys.has(key))
+    );
 
     // Merge automation config into raw config and persist
     const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
     current.schedule.smallMarketAutomation = {
       ...current.schedule.smallMarketAutomation,
-      ...body
+      ...filteredBody
     };
     saveAndApplyConfig(current);
     regenerateSmallMarketAutomationRules();
