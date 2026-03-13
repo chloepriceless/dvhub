@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { toFiniteNumber } from './util.js';
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const MANUFACTURER_MANAGED_PATHS = [
@@ -13,6 +14,7 @@ const MANUFACTURER_MANAGED_PATHS = [
   'victron.timeoutMs',
   'victron.mqtt'
 ];
+const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 
 const SETTINGS_DESTINATIONS = [
   {
@@ -248,7 +250,11 @@ function deepMerge(base, override) {
 }
 
 function getPathParts(path) {
-  return String(path).split('.').filter(Boolean);
+  const parts = String(path).split('.').filter(Boolean);
+  if (parts.some((p) => FORBIDDEN_PATH_SEGMENTS.has(p))) {
+    throw new Error(`unsafe config path: ${path}`);
+  }
+  return parts;
 }
 
 function hasPath(obj, path) {
@@ -273,24 +279,28 @@ function getPath(obj, path, fallback = undefined) {
 
 function setPath(obj, path, value) {
   const parts = getPathParts(path);
+  if (!parts.length) return;
   let cur = obj;
-  while (parts.length > 1) {
-    const part = parts.shift();
-    if (!isPlainObject(cur[part])) cur[part] = {};
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i];
+    if (!Object.prototype.hasOwnProperty.call(cur, part) || !isPlainObject(cur[part])) {
+      cur[part] = {};
+    }
     cur = cur[part];
   }
-  cur[parts[0]] = value;
+  cur[parts[parts.length - 1]] = value;
 }
 
 function deletePath(obj, path) {
   const parts = getPathParts(path);
+  if (!parts.length) return;
   let cur = obj;
-  while (parts.length > 1) {
-    const part = parts.shift();
-    if (!isPlainObject(cur[part])) return;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i];
+    if (!Object.prototype.hasOwnProperty.call(cur, part) || !isPlainObject(cur[part])) return;
     cur = cur[part];
   }
-  delete cur[parts[0]];
+  delete cur[parts[parts.length - 1]];
 }
 
 function stripManufacturerManagedFields(raw, warnings) {
@@ -597,6 +607,149 @@ function buildFieldDefinitions() {
       type: 'number',
       empty: 'null',
       help: 'Leer lassen, wenn kein Default geschrieben werden soll.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.enabled',
+      label: 'Kleine Börsenautomatik aktiv',
+      type: 'boolean',
+      help: 'Aktiviert die tägliche Regelgenerierung für freie Marktfenster.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.searchWindowStart',
+      label: 'Suchfenster Start',
+      type: 'time',
+      help: 'Lokale Startzeit des Suchfensters.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.searchWindowEnd',
+      label: 'Suchfenster Ende',
+      type: 'time',
+      help: 'Lokale Endzeit des Suchfensters.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.targetSlotCount',
+      label: 'Maximale Ziel-Slots',
+      type: 'number',
+      min: 1,
+      max: 24,
+      help: 'Wie viele freie Slots (je 15 Min.) maximal belegt werden dürfen.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.maxDischargeW',
+      label: 'Maximale Entladeleistung (W)',
+      type: 'number',
+      help: 'Harte Obergrenze für die Automatik.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
+      label: 'Akkukapazität (kWh)',
+      type: 'number',
+      empty: 'null',
+      help: 'Akkukapazität in kWh. Wenn gesetzt, wird die Slot-Anzahl automatisch aus der verfügbaren Energie berechnet.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
+      label: 'Wechselrichter-Effizienz (%)',
+      type: 'number',
+      help: 'Wechselrichter-Effizienz in Prozent (Standard: 85%). Wird für die Berechnung der Netz-Energie abgezogen.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.minSocPct',
+      label: 'Automatik Minimum-SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      help: 'Standard-SOC-Untergrenze der Automatik.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.aggressivePremiumPct',
+      label: 'Aggressiver Preisaufschlag (%)',
+      type: 'number',
+      min: 0,
+      max: 500,
+      help: 'Ab diesem Aufschlag darf bis zum globalen Minimum-SOC entladen werden.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.label',
+      label: 'Standort Bezeichnung',
+      type: 'text',
+      help: 'Freier Name für den Anlagenstandort.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.latitude',
+      label: 'Breitengrad',
+      type: 'number',
+      min: -90,
+      max: 90,
+      step: 0.000001,
+      help: 'Breitengrad des Anlagenstandorts.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.location.longitude',
+      label: 'Längengrad',
+      type: 'number',
+      min: -180,
+      max: 180,
+      step: 0.000001,
+      help: 'Längengrad des Anlagenstandorts.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Optionale Ketten aus Entlade- und Cooldown-Stufen.',
+      path: 'schedule.smallMarketAutomation.stages',
+      label: 'Erweiterte Stufen',
+      type: 'array',
+      help: 'Definiert optionale Entlade- und Cooldown-Stufen für die Automatik.'
     },
 
     {
@@ -1223,7 +1376,24 @@ export function createDefaultConfig() {
       evaluateMs: 15000,
       defaultGridSetpointW: null,
       defaultChargeCurrentA: null,
-      rules: []
+      rules: [],
+      smallMarketAutomation: {
+        enabled: false,
+        searchWindowStart: '14:00',
+        searchWindowEnd: '09:00',
+        targetSlotCount: 4,
+        maxDischargeW: -12000,
+        batteryCapacityKwh: null,
+        inverterEfficiencyPct: 85,
+        minSocPct: 30,
+        aggressivePremiumPct: 20,
+        location: {
+          label: '',
+          latitude: null,
+          longitude: null
+        },
+        stages: []
+      }
     },
     userEnergyPricing: {
       mode: 'fixed',
@@ -1321,6 +1491,14 @@ function coerceBoolean(value) {
   return Boolean(value);
 }
 
+function toFiniteNumberOrNull(value) {
+  return toFiniteNumber(value, null);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function roundCtKwh(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
@@ -1415,6 +1593,10 @@ function sanitizeScheduleRules(value, warnings) {
     if (item.value != null) next.value = Number(item.value);
     if (item.stopSocPct != null && item.stopSocPct !== '') next.stopSocPct = Number(item.stopSocPct);
     if (item.enabled != null) next.enabled = coerceBoolean(item.enabled);
+    if (item.source != null) next.source = String(item.source);
+    if (item.autoManaged != null) next.autoManaged = coerceBoolean(item.autoManaged);
+    if (item.displayTone != null) next.displayTone = String(item.displayTone);
+    if (item.activeDate != null) next.activeDate = String(item.activeDate);
     if (next.value != null && !Number.isFinite(next.value)) {
       warnings.push(`schedule.rules.${next.id || rules.length}: value ignored because it is not numeric`);
       continue;
@@ -1426,6 +1608,87 @@ function sanitizeScheduleRules(value, warnings) {
     rules.push(next);
   }
   return rules;
+}
+
+function sanitizeSmallMarketAutomationStages(value, warnings) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        warnings.push(`schedule.smallMarketAutomation.stages.${index}: invalid entry ignored`);
+        return null;
+      }
+
+      const next = {};
+      for (const key of ['dischargeW', 'dischargeSlots', 'cooldownW', 'cooldownSlots']) {
+        if (entry[key] == null || entry[key] === '') continue;
+        const numericValue = Number(entry[key]);
+        if (!Number.isFinite(numericValue)) {
+          warnings.push(`schedule.smallMarketAutomation.stages.${index}.${key}: invalid number, field was reset`);
+          continue;
+        }
+        next[key] = numericValue;
+      }
+      return next;
+    })
+    .filter(Boolean);
+}
+
+function sanitizeSmallMarketAutomation(value, warnings) {
+  if (!isPlainObject(value)) return {};
+
+  const next = clone(value);
+  if (next.enabled != null) next.enabled = coerceBoolean(next.enabled);
+  if (next.searchWindowStart != null) next.searchWindowStart = String(next.searchWindowStart);
+  if (next.searchWindowEnd != null) next.searchWindowEnd = String(next.searchWindowEnd);
+
+  for (const key of ['targetSlotCount', 'maxDischargeW', 'minSocPct', 'aggressivePremiumPct']) {
+    if (next[key] == null || next[key] === '') continue;
+    const numericValue = Number(next[key]);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push(`schedule.smallMarketAutomation.${key}: invalid number, field was reset`);
+      delete next[key];
+      continue;
+    }
+    next[key] = numericValue;
+  }
+
+  if (next.batteryCapacityKwh != null && next.batteryCapacityKwh !== '') {
+    const numericValue = toFiniteNumberOrNull(next.batteryCapacityKwh);
+    if (numericValue == null || numericValue <= 0) {
+      warnings.push('schedule.smallMarketAutomation.batteryCapacityKwh: invalid number, field was reset');
+      delete next.batteryCapacityKwh;
+    } else {
+      next.batteryCapacityKwh = numericValue;
+    }
+  }
+
+  if (next.inverterEfficiencyPct != null && next.inverterEfficiencyPct !== '') {
+    const numericValue = Number(next.inverterEfficiencyPct);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push('schedule.smallMarketAutomation.inverterEfficiencyPct: invalid number, field was reset');
+      delete next.inverterEfficiencyPct;
+    } else {
+      next.inverterEfficiencyPct = clamp(toFiniteNumber(next.inverterEfficiencyPct, 85), 1, 100);
+    }
+  }
+
+  const location = isPlainObject(next.location) ? clone(next.location) : {};
+  if (location.label != null) location.label = String(location.label);
+  for (const key of ['latitude', 'longitude']) {
+    if (location[key] == null || location[key] === '') continue;
+    const numericValue = Number(location[key]);
+    if (!Number.isFinite(numericValue)) {
+      warnings.push(`schedule.smallMarketAutomation.location.${key}: invalid number, field was reset`);
+      delete location[key];
+      continue;
+    }
+    location[key] = numericValue;
+  }
+  next.location = location;
+  next.stages = sanitizeSmallMarketAutomationStages(next.stages, warnings);
+  return next;
 }
 
 function sanitizeUserEnergyPricingWindows(value, warnings) {
@@ -1679,6 +1942,9 @@ function sanitizeRawConfig(rawInput) {
 
   raw.schedule = raw.schedule || {};
   raw.schedule.rules = sanitizeScheduleRules(raw.schedule.rules, warnings);
+  if (hasPath(raw, 'schedule.smallMarketAutomation')) {
+    raw.schedule.smallMarketAutomation = sanitizeSmallMarketAutomation(raw.schedule.smallMarketAutomation, warnings);
+  }
   if (hasPath(raw, 'userEnergyPricing')) {
     raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
   }

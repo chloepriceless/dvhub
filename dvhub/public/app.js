@@ -1,12 +1,38 @@
 const { apiFetch } = window.DVhubCommon || {};
+const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
+const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
+const SMA_ID_PREFIX = 'sma-';
+function isSmallMarketAutomationRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
+}
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
 function fmtDmHm(ts) { return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
-function fmtEuroFromCt(ct) {
-  const eur = Number(ct) / 100;
-  return `${eur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`;
+function fmtCentValue(value, maximumFractionDigits = 2) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return '-';
+  return `${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits })} Cent`;
 }
+
+function fmtCentFromCt(ct) {
+  return fmtCentValue(ct);
+}
+
+function fmtCentFromTenthCt(value) {
+  return fmtCentValue(Number(value) / 10);
+}
+
+function escapeAttr(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function setText(id, text, cls) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -60,9 +86,9 @@ function roundCt(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
-function formatChartEuroValue(value) {
+function formatChartCentValue(value) {
   if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} \u20ac`;
+  return fmtCentValue(Number(value) * 100);
 }
 
 function getChartHighlightSets(values, { highCount = 4, lowCount = 8 } = {}) {
@@ -375,7 +401,7 @@ function buildChartSelectionRange(startIndex, endIndex) {
 
 function fmtCt(value, digits = 2) {
   if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ct/kWh`;
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: digits })} ct/kWh`;
 }
 
 function fmtSignedCt(value, digits = 2) {
@@ -415,12 +441,12 @@ function updateChartComparisonSummary(pricing) {
 function showChartTooltip(tooltip, row, event, comparison) {
   if (!tooltip || !row || !event) return;
   tooltip.style.display = 'block';
-  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 4)}`];
+  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 2)}`];
   if (comparison) {
-    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 4)}`);
-    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 4)}`);
-    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 4)}`);
-    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 4)}`);
+    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 2)}`);
+    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 2)}`);
+    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 2)}`);
+    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 2)}`);
   }
   tooltip.textContent = parts.join(' | ');
   tooltip.style.left = `${event.clientX + 12}px`;
@@ -452,7 +478,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
   return windows;
 }
 
-function drawPriceChart(data, nowTs, comparisons = []) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = []) {
   const svg = document.getElementById('priceChart');
   const tooltip = document.getElementById('tooltip');
   if (!svg) return;
@@ -482,6 +508,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartNow = cssVar('--chart-now', '#facc15');
   const chartImport = cssVar('--chart-import', '#22c55e');
+  const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
 
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
@@ -507,6 +534,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     focusBandCeiling: 0.01,
     focusBandFloor: -0.01
   }).y;
+  const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals);
 
   for (let i = 0; i <= 6; i++) {
@@ -525,7 +553,7 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     label.setAttribute('y', yy + 4);
     label.setAttribute('font-size', '11');
     label.setAttribute('fill', chartLabel);
-    label.textContent = formatChartEuroValue(vv);
+    label.textContent = formatChartCentValue(vv);
     svg.appendChild(label);
   }
 
@@ -578,16 +606,20 @@ function drawPriceChart(data, nowTs, comparisons = []) {
     rect.setAttribute('y', Math.min(by, baseY));
     rect.setAttribute('width', Math.max(barW - 2, 1));
     rect.setAttribute('height', bh || 1);
+    const isAutomation = automationSlots.has(Number(row.ts));
     rect.setAttribute(
       'fill',
-      lowHighlights.has(index)
-        ? chartNegativeHighlight
-        : highHighlights.has(index)
-          ? chartPositiveHighlight
-          : (val < 0 ? chartNegative : chartPositive)
+      isAutomation
+        ? chartAutomation
+        : lowHighlights.has(index)
+          ? chartNegativeHighlight
+          : highHighlights.has(index)
+            ? chartPositiveHighlight
+            : (val < 0 ? chartNegative : chartPositive)
     );
     rect.classList.add('price-bar');
     rect.classList.add(val < 0 ? 'is-negative' : 'is-positive');
+    if (isAutomation) rect.classList.add('is-automation');
     if (highHighlights.has(index)) rect.classList.add('is-highlight-positive');
     if (lowHighlights.has(index)) rect.classList.add('is-highlight-negative');
     rect.addEventListener('mousedown', (event) => {
@@ -824,14 +856,14 @@ function renderDashboardStatus(status) {
   setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
 
   const s = status.epex?.summary;
-  setText('priceNow', s?.current ? `${fmtEuroFromCt(s.current.ct_kwh)}/kWh` : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
-  setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtEuroFromCt(s.next.ct_kwh)}/kWh)` : '-');
+  setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
+  setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtCentFromCt(s.next.ct_kwh)})` : '-');
   setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
   setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
   setText(
     'todayMinMax',
     s && s.todayMin != null && s.todayMax != null
-      ? `${fmtEuroFromCt(Number(s.todayMin) / 10)} / ${fmtEuroFromCt(Number(s.todayMax) / 10)}`
+      ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
       : '-'
   );
   const negActive = status.ctrl?.negativePriceActive;
@@ -839,7 +871,7 @@ function renderDashboardStatus(status) {
   setText(
     'tomorrowMinMax',
     s && s.tomorrowMin != null && s.tomorrowMax != null
-      ? `${fmtEuroFromCt(Number(s.tomorrowMin) / 10)} / ${fmtEuroFromCt(Number(s.tomorrowMax) / 10)}`
+      ? `${fmtCentFromTenthCt(Number(s.tomorrowMin))} / ${fmtCentFromTenthCt(Number(s.tomorrowMax))}`
       : '-'
   );
 
@@ -890,8 +922,10 @@ function renderDashboardStatus(status) {
   applyScheduleRowStates(status.now);
   updateChartComparisonSummary(status.userEnergyPricing);
 
-  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || []);
+  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []);
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
+
+  renderAutomationStatus(status.schedule);
 }
 
 function renderDashboardLog(logs) {
@@ -1014,6 +1048,10 @@ function collectScheduleRulesFromRowState(rows) {
         end,
         value: gridVal
       };
+      if (row?.source) gridRule.source = row.source;
+      if (row?.autoManaged != null) gridRule.autoManaged = Boolean(row.autoManaged);
+      if (row?.displayTone) gridRule.displayTone = row.displayTone;
+      if (row?.activeDate) gridRule.activeDate = row.activeDate;
       if (stopSocEnabled && Number.isFinite(stopSocVal)) {
         gridRule.stopSocPct = stopSocVal;
       }
@@ -1021,14 +1059,19 @@ function collectScheduleRulesFromRowState(rows) {
     }
 
     if (chargeEnabled && Number.isFinite(chargeVal)) {
-      rules.push({
+      const chargeRule = {
         id: `charge_${idx}`,
         enabled: rowEnabled,
         target: 'chargeCurrentA',
         start,
         end,
         value: chargeVal
-      });
+      };
+      if (row?.source) chargeRule.source = row.source;
+      if (row?.autoManaged != null) chargeRule.autoManaged = Boolean(row.autoManaged);
+      if (row?.displayTone) chargeRule.displayTone = row.displayTone;
+      if (row?.activeDate) chargeRule.activeDate = row.activeDate;
+      rules.push(chargeRule);
     }
 
     idx++;
@@ -1062,6 +1105,11 @@ function groupScheduleRulesForDashboard(rules) {
     }
     if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
     if (rule.enabled === false) slot.enabled = false;
+    if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
+    if (!slot.source && rule.source) slot.source = rule.source;
+    if (!slot.displayTone && rule.displayTone) slot.displayTone = rule.displayTone;
+    if (slot.autoManaged !== true && rule.autoManaged === true) slot.autoManaged = true;
+    if (!slot.activeDate && rule.activeDate) slot.activeDate = rule.activeDate;
   }
 
   return Array.from(timeSlots.values());
@@ -1074,8 +1122,13 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
     start: tr.dataset.start || tr.querySelector('.sched-start')?.value,
     end: tr.dataset.end || tr.querySelector('.sched-end')?.value
   }, nowTs);
+  const isAutomationRule =
+    tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
+    || tr.dataset.displayTone === 'yellow'
+    || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX);
 
   tr.classList.toggle('sched-row-expired', expired);
+  tr.classList.toggle('sched-row-automation', isAutomationRule);
   tr.style.opacity = enabled ? (expired ? '0.55' : '1') : '0.4';
   return expired;
 }
@@ -1095,22 +1148,40 @@ function addScheduleRow(opts = {}) {
     start = '06:45', end = '07:15',
     gridVal = -40, chargeVal = '', stopSocVal = '',
     gridEnabled = true, chargeEnabled = false, stopSocEnabled = false,
-    rowEnabled = true
+    rowEnabled = true,
+    ruleId = '',
+    source = '',
+    displayTone = '',
+    autoManaged = false,
+    activeDate = ''
   } = opts;
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
   const tr = document.createElement('tr');
+  tr.dataset.ruleId = ruleId || '';
+  tr.dataset.ruleSource = source || '';
+  tr.dataset.displayTone = displayTone || '';
+  tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
+  tr.dataset.activeDate = activeDate || '';
+  const isAutomation = source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof ruleId === 'string' && ruleId.startsWith(SMA_ID_PREFIX));
+  if (isAutomation) {
+    tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''} — automatisch verwaltet`;
+  }
 
+  const disabled = isAutomation ? 'disabled' : '';
   tr.innerHTML = `
-    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} title="Aktiv" /></td>
-    <td><input type="time" class="sched-start" value="${start}" /></td>
-    <td><input type="time" class="sched-end" value="${end}" /></td>
-    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} /> <input type="number" class="sched-grid-val" value="${gridVal}" /></label></td>
-    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} /> <input type="number" class="sched-charge-val" value="${chargeVal}" /></label></td>
-    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} /> <input type="number" class="sched-stop-soc-val" value="${stopSocVal}" min="0" max="100" step="1" /></label></td>
-    <td><button class="icon-btn sched-remove" title="Zeile entfernen">-</button></td>
+    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} ${disabled} title="${escapeAttr(isAutomation ? 'Automatisch verwaltet' : 'Aktiv')}" /></td>
+    <td><input type="time" class="sched-start" value="${escapeAttr(start)}" ${disabled} /></td>
+    <td><input type="time" class="sched-end" value="${escapeAttr(end)}" ${disabled} /></td>
+    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="1" ${disabled} /></label></td>
+    <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
-  tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
+  if (!isAutomation) {
+    tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
+  }
 
   const enableCb = tr.querySelector('.sched-row-enabled');
   const syncRowState = () => {
@@ -1136,6 +1207,9 @@ function collectScheduleRows() {
   if (!tbody) return [];
   const rowState = [];
   for (const tr of tbody.querySelectorAll('tr')) {
+    // Skip automation-managed rows — they are handled server-side
+    if (tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
+      || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX)) continue;
     const start = tr.querySelector('.sched-start')?.value;
     const end = tr.querySelector('.sched-end')?.value;
     if (!start || !end) continue;
@@ -1149,7 +1223,11 @@ function collectScheduleRows() {
       chargeEnabled: tr.querySelector('.sched-charge-en')?.checked,
       chargeVal: tr.querySelector('.sched-charge-val')?.value,
       stopSocEnabled: tr.querySelector('.sched-stop-soc-en')?.checked,
-      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value
+      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value,
+      source: tr.dataset.ruleSource || '',
+      displayTone: tr.dataset.displayTone || '',
+      autoManaged: tr.dataset.autoManaged === 'true',
+      activeDate: tr.dataset.activeDate || ''
     });
   }
   return collectScheduleRulesFromRowState(rowState);
@@ -1176,7 +1254,12 @@ async function loadScheduleDash() {
         gridEnabled: slot.grid != null,
         chargeEnabled: slot.charge != null,
         stopSocEnabled: slot.stopSocPct != null,
-        rowEnabled: slot.enabled
+        rowEnabled: slot.enabled,
+        ruleId: slot.ruleId,
+        source: slot.source,
+        displayTone: slot.displayTone,
+        autoManaged: slot.autoManaged,
+        activeDate: slot.activeDate
       });
     }
   }
@@ -1247,6 +1330,218 @@ function handleGlobalChartMouseUp() {
   updateChartSelectionCallout();
 }
 
+// --- Kleine Börsenautomatik Dashboard Panel ---
+let automationStagesDraft = [];
+
+function createEmptyAutomationStage(index = 0) {
+  return {
+    id: `sma-stage-${index + 1}`,
+    dischargeW: '',
+    dischargeSlots: '',
+    cooldownW: '',
+    cooldownSlots: ''
+  };
+}
+
+function addAutomationStage() {
+  automationStagesDraft = [...automationStagesDraft, createEmptyAutomationStage(automationStagesDraft.length)];
+  renderAutomationStages();
+}
+
+function removeAutomationStage(stageId) {
+  automationStagesDraft = automationStagesDraft.filter((s) => s.id !== stageId);
+  renderAutomationStages();
+}
+
+function serializeAutomationStages(stages = []) {
+  return stages.map((stage) => ({
+    dischargeW: stage.dischargeW === '' || stage.dischargeW == null ? null : Number(stage.dischargeW),
+    dischargeSlots: stage.dischargeSlots === '' || stage.dischargeSlots == null ? null : Number(stage.dischargeSlots),
+    cooldownW: stage.cooldownW === '' || stage.cooldownW == null ? null : Number(stage.cooldownW),
+    cooldownSlots: stage.cooldownSlots === '' || stage.cooldownSlots == null ? null : Number(stage.cooldownSlots)
+  }));
+}
+
+function renderAutomationStages() {
+  const container = document.getElementById('automationStagesContainer');
+  if (!container) return;
+  container.innerHTML = '';
+
+  automationStagesDraft.forEach((stage, index) => {
+    const card = document.createElement('article');
+    card.className = 'pricing-period-card';
+    card.dataset.automationStageId = stage.id;
+    card.innerHTML = `
+      <div class="pricing-period-grid">
+        <label class="settings-field">
+          <span>Entladeleistung (W, negativ = Einspeisung)</span>
+          <input type="number" data-stage-field="dischargeW" value="${stage.dischargeW}" />
+        </label>
+        <label class="settings-field">
+          <span>Entlade-Slots (je 15 Min.)</span>
+          <input type="number" min="0" data-stage-field="dischargeSlots" value="${stage.dischargeSlots}" />
+        </label>
+        <label class="settings-field">
+          <span>Cooldown-Leistung (W, negativ = Einspeisung)</span>
+          <input type="number" data-stage-field="cooldownW" value="${stage.cooldownW}" />
+        </label>
+        <label class="settings-field">
+          <span>Cooldown-Slots (je 15 Min.)</span>
+          <input type="number" min="0" data-stage-field="cooldownSlots" value="${stage.cooldownSlots}" />
+        </label>
+      </div>
+      <button class="btn-small btn-danger remove-stage-btn" data-remove-stage="${stage.id}">Stufe entfernen</button>
+    `;
+    container.appendChild(card);
+  });
+
+  // Bind events
+  container.querySelectorAll('.remove-stage-btn').forEach((btn) => {
+    btn.addEventListener('click', () => removeAutomationStage(btn.dataset.removeStage));
+  });
+  container.querySelectorAll('[data-stage-field]').forEach((input) => {
+    input.addEventListener('change', (e) => {
+      const card = e.target.closest('[data-automation-stage-id]');
+      const stageId = card?.dataset.automationStageId;
+      const field = e.target.dataset.stageField;
+      const stage = automationStagesDraft.find((s) => s.id === stageId);
+      if (stage) { stage[field] = e.target.value; }
+    });
+  });
+}
+
+async function loadAutomationConfig() {
+  try {
+    const res = await apiFetch('/api/schedule/automation/config');
+    const data = await res.json();
+    if (!data.ok) return;
+    const c = data.config || {};
+
+    const el = (id) => document.getElementById(id);
+    if (el('automationEnabled')) el('automationEnabled').checked = !!c.enabled;
+    if (el('automationSearchStart')) el('automationSearchStart').value = c.searchWindowStart || '14:00';
+    if (el('automationSearchEnd')) el('automationSearchEnd').value = c.searchWindowEnd || '09:00';
+    if (el('automationBatteryCapacity')) el('automationBatteryCapacity').value = c.batteryCapacityKwh ?? '';
+    if (el('automationInverterEfficiency')) el('automationInverterEfficiency').value = c.inverterEfficiencyPct ?? 85;
+    if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
+    if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
+
+    // Load stages
+    automationStagesDraft = (c.stages || []).map((s, i) => ({
+      id: `sma-stage-${i + 1}`,
+      dischargeW: s.dischargeW ?? '',
+      dischargeSlots: s.dischargeSlots ?? '',
+      cooldownW: s.cooldownW ?? '',
+      cooldownSlots: s.cooldownSlots ?? ''
+    }));
+    renderAutomationStages();
+  } catch (e) {
+    console.error('Failed to load automation config:', e);
+  }
+}
+
+async function saveAutomationConfig() {
+  const el = (id) => document.getElementById(id);
+  const config = {
+    enabled: el('automationEnabled')?.checked ?? false,
+    searchWindowStart: el('automationSearchStart')?.value || '14:00',
+    searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
+    batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null,
+    inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85,
+    maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000,
+    minSocPct: Number(el('automationMinSocPct')?.value) || 30,
+    stages: serializeAutomationStages(automationStagesDraft)
+  };
+
+  try {
+    const res = await apiFetch('/api/schedule/automation/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setControlMsg('Automation gespeichert \u2713 ' + new Date().toLocaleTimeString('de-DE'));
+      // Reload schedule to see regenerated rules
+      loadScheduleDash();
+    }
+  } catch (e) {
+    console.error('Failed to save automation config:', e);
+  }
+}
+
+function renderAutomationStatus(scheduleData) {
+  const sma = scheduleData?.smallMarketAutomation;
+  if (!sma) return;
+
+  const titleEl = document.getElementById('automationStatusTitle');
+  const outcomeEl = document.getElementById('automationOutcome');
+  const countEl = document.getElementById('automationRuleCount');
+  const energyEl = document.getElementById('automationAvailableEnergy');
+
+  const enabledEl = document.getElementById('automationEnabled');
+  const isEnabled = enabledEl?.checked;
+
+  if (titleEl) titleEl.textContent = isEnabled ? 'Aktiv' : 'Inaktiv';
+
+  const outcomeLabels = {
+    idle: 'Warte auf Ausführung',
+    disabled: 'Deaktiviert',
+    generated: 'Regeln generiert',
+    no_slots: 'Keine passenden Slots',
+    missing_sun_times_cache: 'Sonnendaten fehlen'
+  };
+  if (outcomeEl) outcomeEl.textContent = outcomeLabels[sma.lastOutcome] || sma.lastOutcome || '\u2014';
+  if (countEl) countEl.textContent = sma.generatedRuleCount != null ? `${sma.generatedRuleCount} Regeln aktiv` : '';
+  if (energyEl) {
+    energyEl.textContent = sma.availableEnergyKwh != null
+      ? `${sma.availableEnergyKwh} kWh verfügbar`
+      : '';
+  }
+
+  // Render plan summary
+  const planContainer = document.getElementById('automationPlanSummary');
+  const plan = sma.plan;
+  if (!planContainer) return;
+
+  if (!plan || !plan.selectedSlots?.length) {
+    planContainer.style.display = 'none';
+    return;
+  }
+
+  planContainer.style.display = '';
+  const computedEl = document.getElementById('planComputedAt');
+  const budgetEl = document.getElementById('planEnergyBudget');
+  const revenueEl = document.getElementById('planEstimatedRevenue');
+
+  if (computedEl) {
+    const d = new Date(plan.computedAt);
+    computedEl.textContent = `Berechnet: ${d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  if (budgetEl) {
+    const parts = [];
+    if (plan.availableEnergyKwh != null) parts.push(`${plan.availableEnergyKwh} kWh Energie`);
+    if (plan.currentSocPct != null) parts.push(`SOC ${plan.currentSocPct}% \u2192 ${plan.minSocPct ?? 0}%`);
+    budgetEl.textContent = parts.join(' \u2022 ') || '\u2014';
+  }
+  if (revenueEl) {
+    const eur = plan.estimatedRevenueCt != null ? (Math.round(plan.estimatedRevenueCt * 100) / 100).toFixed(2) : null;
+    revenueEl.textContent = eur != null ? `\u2248 ${eur} \u20ac Erl\u00f6s` : '';
+  }
+
+  const tbody = document.getElementById('planSlotRows');
+  if (tbody) {
+    tbody.innerHTML = '';
+    for (const slot of plan.selectedSlots) {
+      const tr = document.createElement('tr');
+      tr.className = 'sched-row-automation';
+      const powerLabel = slot.powerW != null ? `${Number(slot.powerW).toLocaleString('de-DE')} W` : '\u2014';
+      tr.innerHTML = `<td>${escapeAttr(slot.time || '\u2014')}</td><td>${escapeAttr(powerLabel)}</td><td>${escapeAttr(slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014')} ct/kWh</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+}
+
 function initDashboard() {
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
@@ -1269,8 +1564,12 @@ function initDashboard() {
     setControlMsg('API-Zugriff verweigert. Falls ein API-Token gesetzt ist, Seite mit ?token=DEIN_TOKEN öffnen.', true);
   });
 
+  document.getElementById('addAutomationStageBtn')?.addEventListener('click', addAutomationStage);
+  document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
+
   updateChartSelectionCallout();
   syncMinSocEditorPreview(document.getElementById('minSocSlider')?.value);
+  loadAutomationConfig();
   loadScheduleDash().catch(() => {});
   requestDashboardRefresh().catch(() => {});
   setInterval(() => {
@@ -1287,7 +1586,7 @@ const dashboardApi = {
   createMinSocPendingState,
   createDashboardRefreshTask,
   createRefreshCoordinator,
-  formatChartEuroValue,
+  formatChartCentValue,
   getDashboardLogUrl,
   getChartHighlightSets,
   groupScheduleRulesForDashboard,

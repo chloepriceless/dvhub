@@ -120,6 +120,8 @@ test('tools page exposes separate gap and full VRM backfill controls', () => {
   assert.match(html, /id="historyBackfillBtn"/);
   assert.match(html, /VRM-Luecken schliessen/);
   assert.match(html, /id="historyFullBackfillAck"/);
+  assert.match(html, /id="historyFullBackfillExtendedLookback"/);
+  assert.match(html, /id="historyFullBackfillLookbackDays"/);
   assert.match(html, /id="historyFullBackfillBtn"/);
   assert.match(html, /Voll-Backfill/);
 });
@@ -131,6 +133,8 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.match(html, /id="historyDate"/);
   assert.match(html, /id="historyPrevBtn"/);
   assert.match(html, /id="historyNextBtn"/);
+  assert.doesNotMatch(html, /id="historyOpportunityBlend"/);
+  assert.doesNotMatch(html, /id="historyOpportunityLabel"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.doesNotMatch(html, /id="historyKpiGrid"/);
   assert.match(html, /id="historySummaryCard"/);
@@ -283,6 +287,58 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyRows').innerHTML, /2 offen/);
   assert.match(elements.get('historyBannerText').textContent, /unvollständig/i);
   assert.match(elements.get('historyMeta').textContent, /v0\.3\.0\+ea104c9/);
+});
+
+test('history page shows cash net in the finance core card while keeping detailed net values unchanged', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+
+  helpers.historyState.opportunityBlendPct = 100;
+  helpers.renderSummary({
+    view: 'day',
+    date: '2026-03-09',
+    kpis: {
+      gridCostEur: 0.3,
+      pvCostEur: 0.01,
+      batteryCostEur: 0.01,
+      opportunityCostEur: 0.1,
+      exportRevenueEur: 0.5,
+      avoidedImportGrossEur: 0.7,
+      importKwh: 1.2,
+      loadKwh: 1.2,
+      pvKwh: 0.4,
+      exportKwh: 0.5
+    },
+    rows: [
+      {
+        label: '11:00',
+        gridCostEur: 0.3,
+        pvCostEur: 0.01,
+        batteryCostEur: 0.01,
+        opportunityCostEur: 0.1,
+        exportRevenueEur: 0.5,
+        importKwh: 1.2,
+        loadKwh: 1.2,
+        pvKwh: 0.4,
+        exportKwh: 0.5
+      }
+    ],
+    charts: {
+      dayFinancialLines: [
+        {
+          label: '11:00',
+          gridCostEur: 0.3,
+          pvCostEur: 0.01,
+          batteryCostEur: 0.01,
+          opportunityCostEur: 0.1,
+          exportRevenueEur: 0.5
+        }
+      ]
+    }
+  });
+
+  assert.match(elements.get('historyKpiNet').textContent, /0,20/);
+  assert.match(elements.get('historyRows').innerHTML, /0,32/);
+  assert.match(elements.get('historyRows').innerHTML, /0,18/);
 });
 
 test('history page renders year-only premium fields and a provisional note for running-year monthly fallback', () => {

@@ -115,7 +115,7 @@
           <div class="panel-head">
             <div>
               <p class="card-title">Preis-Engine</p>
-              <h2 class="section-title">Day-Ahead-Preise (EUR/kWh)</h2>
+              <h2 class="section-title">Day-Ahead-Preise (ct/kWh)</h2>
             </div>
             <button id="refreshEpex" class="btn btn-primary">EPEX aktualisieren</button>
           </div>
@@ -141,6 +141,24 @@
             <label><input type="checkbox" id="schedColGrid" checked /> Grid-Spalte</label>
             <label><input type="checkbox" id="schedColCharge" /> Charge-Spalte</label>
           </div>
+          <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
+            <p class="card-title">Aktueller Automationsplan</p>
+            <div class="automation-plan-meta">
+              <span id="planComputedAt">—</span>
+              <span id="planEnergyBudget">—</span>
+              <span id="planEstimatedRevenue">—</span>
+            </div>
+            <table class="sched-table automation-plan-table">
+              <thead><tr>
+                <th>Uhrzeit</th>
+                <th>Leistung (W)</th>
+                <th>Preis (ct/kWh)</th>
+              </tr></thead>
+              <tbody id="planSlotRows"></tbody>
+            </table>
+          </div>
+
+          <div class="meta">Gelb markierte Zeilen gehören zur kleine Börsenautomatik und werden automatisch verwaltet.</div>
           <table class="sched-table">
             <thead>
               <tr>
@@ -162,6 +180,56 @@
             <button id="saveScheduleBtn">Zeitplan speichern</button>
           </div>
           <div class="meta" id="controlMsg">-</div>
+        </section>
+
+        <section class="panel span-12 reveal" id="automationPanel">
+          <p class="card-title">Kleine Börsenautomatik</p>
+          <h2 class="section-title" id="automationStatusTitle">—</h2>
+
+          <div class="automation-status-bar" id="automationStatusBar">
+            <span id="automationOutcome">—</span>
+            <span id="automationRuleCount">—</span>
+            <span id="automationAvailableEnergy">—</span>
+          </div>
+
+          <div class="automation-config-grid" id="automationConfigGrid">
+            <label class="settings-field">
+              <span>Aktiviert</span>
+              <input type="checkbox" id="automationEnabled" />
+            </label>
+            <label class="settings-field">
+              <span>Suchfenster Start</span>
+              <input type="time" id="automationSearchStart" value="14:00" />
+            </label>
+            <label class="settings-field">
+              <span>Suchfenster Ende</span>
+              <input type="time" id="automationSearchEnd" value="09:00" />
+            </label>
+            <label class="settings-field">
+              <span>Akkukapazität (kWh)</span>
+              <input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6" />
+            </label>
+            <label class="settings-field">
+              <span>WR-Effizienz (%)</span>
+              <input type="number" id="automationInverterEfficiency" min="1" max="100" value="85" />
+            </label>
+            <label class="settings-field">
+              <span>Max. Entladung (W) — negativ = Einspeisung</span>
+              <input type="number" id="automationMaxDischargeW" value="-12000" />
+            </label>
+            <label class="settings-field">
+              <span>Min. SOC (%)</span>
+              <input type="number" id="automationMinSocPct" min="0" max="100" value="30" />
+            </label>
+          </div>
+
+          <div id="automationStagesContainer"></div>
+
+          <div class="sched-controls">
+            <button id="addAutomationStageBtn" class="btn-small">+ Stufe</button>
+            <button id="saveAutomationConfigBtn" class="btn-small btn-accent">Speichern</button>
+          </div>
+
         </section>
 
         <section class="panel span-12 reveal">

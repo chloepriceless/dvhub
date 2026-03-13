@@ -37,6 +37,21 @@ import { createEnergyChartsMarketValueService } from './energy-charts-market-val
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
+  buildAutomationRuleChain,
+  buildChainVariants,
+  computeAvailableEnergyKwh,
+  expandChainSlots,
+  filterSlotsByTimeWindow,
+  filterFreeAutomationSlots,
+  pickBestAutomationPlan,
+  SLOT_DURATION_HOURS
+} from './small-market-automation.js';
+import {
+  buildSunTimesCacheKey,
+  isSunTimesCacheStale,
+  readSunTimesCacheStore
+} from './sun-times-cache.js';
+import {
   autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
   parseHHMM,
@@ -66,10 +81,24 @@ const APPLICABLE_VALUES_CACHE_PATH = path.join(
   'reference-data',
   'bundesnetzagentur-applicable-values.json'
 );
+const SUN_TIMES_CACHE_PATH = path.join(
+  DATA_DIR || __dirname,
+  'reference-data',
+  'sun-times-cache.json'
+);
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
+const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
+const SMALL_MARKET_AUTOMATION_DISPLAY_TONE = 'yellow';
+const SMA_ID_PREFIX = 'sma-';
+function isSmallMarketAutomationRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
+}
+const SLOT_DURATION_MS = 15 * 60 * 1000;
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
 const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
@@ -120,7 +149,12 @@ const state = {
     active: { gridSetpointW: null, chargeCurrentA: null },
     lastWrite: { gridSetpointW: null, chargeCurrentA: null },
     manualOverride: {},
-    lastEvalAt: 0
+    lastEvalAt: 0,
+    smallMarketAutomation: {
+      lastRunDate: null,
+      lastOutcome: 'idle',
+      generatedRuleCount: 0
+    }
   },
   energy: {
     day: null,
@@ -163,11 +197,310 @@ let runtimeWorker = null;
 let runtimeWorkerSnapshot = null;
 let runtimeWorkerStatusPayload = null;
 let runtimeWorkerHeartbeatAt = 0;
+let sunTimesCacheState = null;
 let runtimeWorkerState = {
   ready: false,
   lastError: null
 };
 const effectivePollIntervalMs = () => normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS);
+
+function getSmallMarketAutomationLocation(config = cfg) {
+  return config?.schedule?.smallMarketAutomation?.location || null;
+}
+
+function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
+  const location = getSmallMarketAutomationLocation(config);
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  const year = new Date(now).getUTCFullYear();
+  const requestedLocation = { latitude, longitude };
+  const cachedEntry = sunTimesCacheState?.entry || null;
+  const cacheIsStale = isSunTimesCacheStale({
+    cachedLocation: cachedEntry?.location,
+    requestedLocation,
+    cachedYear: cachedEntry?.year,
+    requestedYear: year
+  });
+  if (cachedEntry && !cacheIsStale) return cachedEntry;
+
+  const store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
+  const cacheKey = buildSunTimesCacheKey({ latitude, longitude, year });
+  const nextEntry = {
+    key: cacheKey,
+    year,
+    location: requestedLocation,
+    cachePath: SUN_TIMES_CACHE_PATH,
+    cache: store?.entries?.[cacheKey]?.cache || {}
+  };
+  sunTimesCacheState = { entry: nextEntry, loadedAt: Date.now() };
+  return nextEntry;
+}
+
+function buildDefaultAutomationChain(automationConfig = {}) {
+  const stages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length
+    ? automationConfig.stages
+    : [{
+      dischargeW: automationConfig?.maxDischargeW,
+      dischargeSlots: automationConfig?.targetSlotCount,
+      cooldownSlots: 0
+    }];
+  return buildAutomationRuleChain({
+    maxDischargeW: automationConfig?.maxDischargeW,
+    stages
+  });
+}
+
+function formatLocalHHMM(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const hours = parts.find((part) => part.type === 'hour')?.value || '00';
+  const minutes = parts.find((part) => part.type === 'minute')?.value || '00';
+  return `${hours}:${minutes}`;
+}
+
+function buildSmallMarketAutomationRules({
+  now = Date.now(),
+  automationConfig = cfg.schedule?.smallMarketAutomation,
+  priceSlots = state.epex?.data,
+  occupiedRules = state.schedule.rules,
+  sunTimesCache = getSunTimesCacheForPlanning({ now })
+} = {}) {
+  if (!automationConfig?.enabled || !sunTimesCache) return [];
+
+  const filteredPriceSlots = filterSlotsByTimeWindow({
+    slots: priceSlots,
+    searchWindowStart: automationConfig?.searchWindowStart,
+    searchWindowEnd: automationConfig?.searchWindowEnd,
+    timeZone: cfg.schedule?.timezone || 'Europe/Berlin'
+  }).filter((slot) => Number(slot?.ts) >= now);
+  const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
+  const dateStr = berlinDateString(new Date(now));
+  const refDate = new Date(`${dateStr}T12:00:00Z`);
+  const utcMs = refDate.getTime();
+  const localStr = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  }).format(refDate);
+  const [dPart, tPart] = localStr.split(', ');
+  const [dd, mm, yyyy] = dPart.split('/');
+  const localRef = new Date(`${yyyy}-${mm}-${dd}T${tPart}Z`);
+  const offsetMs = localRef.getTime() - utcMs;
+  const offsetSign = offsetMs >= 0 ? '+' : '-';
+  const absOffset = Math.abs(offsetMs);
+  const offsetH = String(Math.floor(absOffset / 3600000)).padStart(2, '0');
+  const offsetM = String(Math.floor((absOffset % 3600000) / 60000)).padStart(2, '0');
+  const tzSuffix = `${offsetSign}${offsetH}:${offsetM}`;
+  const occupiedWindows = (Array.isArray(occupiedRules) ? occupiedRules : [])
+    .filter((rule) => !isSmallMarketAutomationRule(rule))
+    .map((rule) => ({
+      startTs: Date.parse(`${dateStr}T${rule.start || '00:00'}:00${tzSuffix}`),
+      endTs: Date.parse(`${dateStr}T${rule.end || '00:00'}:00${tzSuffix}`),
+      source: rule?.source || 'manual'
+    }))
+    .filter((window) => Number.isFinite(window.startTs) && Number.isFinite(window.endTs));
+
+  const freeSlots = filterFreeAutomationSlots({
+    slots: filteredPriceSlots,
+    occupiedWindows
+  });
+  // Energy-based slot allocation (if battery capacity is configured)
+  const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
+  const currentSocPct = state.victron?.soc;
+  let availableEnergyKwh = null;
+
+  if (batteryCapacityKwh > 0 && currentSocPct != null) {
+    availableEnergyKwh = computeAvailableEnergyKwh({
+      batteryCapacityKwh,
+      currentSocPct,
+      minSocPct: automationConfig?.minSocPct,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+    });
+  }
+
+  // Hard energy gate: if battery capacity is known and no energy available, skip planning
+  if (availableEnergyKwh != null && availableEnergyKwh <= 0) return [];
+
+  // Generate multiple chain variants (1-stage, 2-stage, … N-stage prefixes),
+  // each energy-truncated to the available battery budget.
+  const chainVariants = buildChainVariants({
+    maxDischargeW: automationConfig?.maxDischargeW,
+    stages: Array.isArray(automationConfig?.stages) && automationConfig.stages.length
+      ? automationConfig.stages
+      : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: automationConfig?.targetSlotCount, cooldownSlots: 0 }],
+    availableKwh: availableEnergyKwh,
+    slotDurationH: SLOT_DURATION_HOURS
+  });
+
+  // Fall back to legacy single-chain if no stages are configured
+  if (!chainVariants.length) {
+    const fallback = buildDefaultAutomationChain(automationConfig);
+    if (fallback.length) chainVariants.push(fallback);
+  }
+
+  const plan = pickBestAutomationPlan({
+    slots: freeSlots,
+    chainOptions: chainVariants,
+    slotDurationMs: SLOT_DURATION_MS
+  });
+
+  const expandedBestChain = expandChainSlots(plan.chain);
+
+  return (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
+    const slot = freeSlots.find((entry) => Number(entry?.ts) === Number(slotTs));
+    if (!slot) return null;
+    const start = new Date(slot.ts);
+    const end = new Date(slot.ts + SLOT_DURATION_MS);
+    return {
+      id: `sma-${slotTs}-${index + 1}`,
+      enabled: true,
+      target: 'gridSetpointW',
+      start: formatLocalHHMM(start, timeZone),
+      end: formatLocalHHMM(end, timeZone),
+      value: Number(expandedBestChain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
+      activeDate: berlinDateString(new Date(now)),
+      source: SMALL_MARKET_AUTOMATION_SOURCE,
+      autoManaged: true,
+      displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
+    };
+  }).filter(Boolean);
+}
+
+function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
+  const automationConfig = cfg.schedule?.smallMarketAutomation;
+  const runDate = berlinDateString(new Date(now));
+  const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
+  const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));
+  const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
+  const currentSocPct = state.victron?.soc;
+  const availableEnergyKwh = (batteryCapacityKwh > 0 && currentSocPct != null)
+    ? computeAvailableEnergyKwh({
+      batteryCapacityKwh,
+      currentSocPct,
+      minSocPct: automationConfig?.minSocPct,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+    })
+    : null;
+
+  if (!automationConfig?.enabled) {
+    state.schedule.smallMarketAutomation = {
+      lastRunDate: runDate,
+      lastOutcome: 'disabled',
+      generatedRuleCount: 0,
+      availableEnergyKwh,
+      lastSocPct: currentSocPct
+    };
+    if (previousAutomationRules.length) {
+      state.schedule.rules = manualRules;
+      persistConfig();
+    }
+    return;
+  }
+
+  const lastState = state.schedule.smallMarketAutomation;
+  const priceSlotCount = Array.isArray(state.epex?.data) ? state.epex.data.length : 0;
+  const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
+  // Regenerate when SOC changed significantly (>5%) — energy budget may have shifted
+  const socChanged = automationConfig?.batteryCapacityKwh > 0
+    && currentSocPct != null
+    && lastState?.lastSocPct != null
+    && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
+  const needsRegeneration = !lastState?.lastRunDate
+    || lastState.lastRunDate !== runDate
+    || !previousAutomationRules.length
+    || priceDataChanged
+    || socChanged;
+  if (!needsRegeneration) return;
+
+  const sunTimesCache = getSunTimesCacheForPlanning({ now });
+
+  // --- Planning phase: compute plan first, then apply ---
+  const planInput = {
+    now,
+    automationConfig,
+    priceSlots: state.epex?.data,
+    occupiedRules: manualRules,
+    sunTimesCache
+  };
+
+  if (!sunTimesCache) {
+    state.schedule.smallMarketAutomation = {
+      lastRunDate: runDate,
+      lastOutcome: 'missing_sun_times_cache',
+      generatedRuleCount: 0,
+      lastPriceSlotCount: priceSlotCount,
+      availableEnergyKwh,
+      lastSocPct: currentSocPct,
+      plan: null
+    };
+    // Remove stale automation rules when planning fails
+    if (previousAutomationRules.length) {
+      state.schedule.rules = manualRules;
+      persistConfig();
+    }
+    return;
+  }
+
+  const generatedRules = buildSmallMarketAutomationRules(planInput);
+
+  // Build transparent plan summary for the UI
+  const selectedSlotTimestamps = generatedRules
+    .map((r) => {
+      const match = r?.id?.match(/^sma-(\d+)-/);
+      return match ? Number(match[1]) : null;
+    })
+    .filter((ts) => ts != null);
+
+  const planSummary = {
+    computedAt: new Date(now).toISOString(),
+    slotsConsidered: Array.isArray(state.epex?.data) ? state.epex.data.length : 0,
+    futureSlots: generatedRules.length > 0 ? selectedSlotTimestamps.length : 0,
+    selectedSlots: selectedSlotTimestamps.map((ts, index) => ({
+      ts,
+      time: new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null,
+      powerW: generatedRules[index]?.value ?? null
+    })),
+    availableEnergyKwh,
+    currentSocPct,
+    minSocPct: automationConfig?.minSocPct,
+    maxDischargeW: automationConfig?.maxDischargeW,
+    estimatedRevenueCt: generatedRules.reduce((sum, r) => {
+      const slot = state.epex?.data?.find((s) => {
+        const match = r?.id?.match(/^sma-(\d+)-/);
+        return match && Number(s.ts) === Number(match[1]);
+      });
+      if (!slot) return sum;
+      return sum + (Math.abs(Number(r.value)) / 1000) * SLOT_DURATION_HOURS * Number(slot.ct_kwh || 0) / 100;
+    }, 0)
+  };
+
+  // Apply rules
+  state.schedule.rules = [...manualRules, ...generatedRules];
+  state.schedule.smallMarketAutomation = {
+    lastRunDate: runDate,
+    lastOutcome: generatedRules.length ? 'generated' : 'no_slots',
+    generatedRuleCount: generatedRules.length,
+    lastPriceSlotCount: priceSlotCount,
+    availableEnergyKwh,
+    lastSocPct: currentSocPct,
+    selectedSlotTimestamps,
+    plan: planSummary
+  };
+  persistConfig();
+  pushLog('sma_plan_applied', {
+    slots: planSummary.futureSlots,
+    energyKwh: availableEnergyKwh,
+    estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt) / 100
+  });
+}
 
 function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
@@ -941,10 +1274,18 @@ function updateEnergyIntegrals(nowMs, totalW) {
   state.energy.importWh += importW * dtH;
   state.energy.exportWh += exportW * dtH;
 
-  const priceCt = Number(epexNowNext()?.current?.ct_kwh ?? 0);
-  const priceEurKwh = priceCt / 100;
-  state.energy.costEur += (importW / 1000) * dtH * priceEurKwh;
-  state.energy.revenueEur += (exportW / 1000) * dtH * priceEurKwh;
+  const currentEpex = epexNowNext()?.current;
+  const epexCtKwh = Number(currentEpex?.ct_kwh ?? 0);
+
+  // Import cost: use the user's configured electricity price (Bezugspreis),
+  // not the raw EPEX price. resolveImportPriceCtKwhForSlot handles fixed,
+  // dynamic, and Paragraph 14a Module 3 pricing modes.
+  const importSlot = { ts: nowMs, ct_kwh: epexCtKwh };
+  const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot) ?? epexCtKwh;
+  state.energy.costEur += (importW / 1000) * dtH * (importCtKwh / 100);
+
+  // Export revenue: EPEX price is the actual feed-in compensation
+  state.energy.revenueEur += (exportW / 1000) * dtH * (epexCtKwh / 100);
 }
 
 let influxBuffer = [];
@@ -1167,9 +1508,9 @@ function epexNowNext() {
     else { next = row; break; }
   }
 
-  const hasFutureNegative = rec.data.some((r) => r.ts > now && Number(r.eur_mwh) < 0);
   const tomorrowRows = rec.data.filter((r) => r.day === rec.nextDate);
   const todayRows = rec.data.filter((r) => r.day === rec.date);
+  const hasFutureNegative = todayRows.some((r) => r.ts > now && Number(r.eur_mwh) < 0);
 
   return {
     current,
@@ -1486,6 +1827,7 @@ async function applyControlTarget(target, value, source) {
 async function evaluateSchedule() {
   const now = Date.now();
   const nowMin = localMinutesOfDay(new Date(now));
+  regenerateSmallMarketAutomationRules({ now });
   state.schedule.lastEvalAt = now;
 
   const stopSocDisable = autoDisableStopSocScheduleRules({
@@ -2156,6 +2498,9 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/history/summary' && req.method === 'GET') {
+    if (!historyApi || typeof historyApi.getSummary !== 'function') {
+      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    }
     const result = await historyApi.getSummary({
       view: url.searchParams.get('view'),
       date: url.searchParams.get('date')
@@ -2164,6 +2509,9 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
+    if (!historyApi || typeof historyApi.postPriceBackfill !== 'function') {
+      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+    }
     const body = await parseBody(req);
     const result = await historyApi.postPriceBackfill(body || {});
     return json(res, result.status, result.body);
@@ -2199,10 +2547,13 @@ const web = http.createServer(async (req, res) => {
     if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
     const validRules = body.rules.filter(validateScheduleRule);
     if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
-    state.schedule.rules = validRules;
-    pushLog('schedule_rules_updated', { count: validRules.length });
+    // Preserve automation-managed rules — manual save only replaces manual rules
+    const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
+    const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
+    state.schedule.rules = [...incomingManualRules, ...existingAutomationRules];
+    pushLog('schedule_rules_updated', { manual: incomingManualRules.length, automation: existingAutomationRules.length });
     persistConfig();
-    return json(res, 200, { ok: true, count: validRules.length });
+    return json(res, 200, { ok: true, count: state.schedule.rules.length });
   }
 
   if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
@@ -2220,6 +2571,48 @@ const web = http.createServer(async (req, res) => {
     pushLog('schedule_config_updated', { config: state.schedule.config });
     persistConfig();
     return json(res, 200, { ok: true, config: state.schedule.config });
+  }
+
+  // GET /api/schedule/automation/config
+  if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+    return json(res, 200, { ok: true, config: cfg.schedule?.smallMarketAutomation || {} });
+  }
+
+  // POST /api/schedule/automation/config
+  if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
+    const body = await parseBody(req);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return json(res, 400, { ok: false, error: 'invalid body' });
+    }
+
+    const allowedKeys = new Set([
+      'enabled',
+      'searchWindowStart',
+      'searchWindowEnd',
+      'targetSlotCount',
+      'maxDischargeW',
+      'batteryCapacityKwh',
+      'inverterEfficiencyPct',
+      'minSocPct',
+      'aggressivePremiumPct',
+      'location',
+      'stages'
+    ]);
+    const filteredBody = Object.fromEntries(
+      Object.entries(body).filter(([key]) => allowedKeys.has(key))
+    );
+
+    // Merge automation config into raw config and persist
+    const current = JSON.parse(JSON.stringify(rawCfg || {}));
+    current.schedule = current.schedule || {};
+    current.schedule.smallMarketAutomation = {
+      ...current.schedule.smallMarketAutomation,
+      ...filteredBody
+    };
+    saveAndApplyConfig(current);
+    regenerateSmallMarketAutomationRules();
+
+    return json(res, 200, { ok: true, config: cfg.schedule.smallMarketAutomation });
   }
 
   if (url.pathname === '/api/control/write' && req.method === 'POST') {
@@ -2319,19 +2712,41 @@ function requestPollMeter() {
 
 if (IS_RUNTIME_PROCESS) {
   // Transport initialisieren (bei MQTT: Verbindung aufbauen, bei Modbus: no-op)
-  transport.init().then(() => {
-    console.log(`Transport initialisiert: ${transport.type}`);
-    requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
-    setInterval(() => {
-      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message }));
+  let transportRetryDelayMs = 5000;
+  function scheduleTransportRetry() {
+    const retryDelayMs = transportRetryDelayMs;
+    setTimeout(() => {
+      initTransport();
+    }, retryDelayMs);
+    transportRetryDelayMs = Math.min(60000, transportRetryDelayMs * 2);
+  }
+  function initTransport() {
+    transport.init().then(() => {
+      transportRetryDelayMs = 5000;
+      console.log(`Transport initialisiert: ${transport.type}`);
+    }).catch((e) => {
+      console.error('Transport init fehlgeschlagen:', e.message);
+      scheduleTransportRetry();
+    });
+  }
+  function schedulePollLoop() {
+    setTimeout(() => {
+      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message })).finally(() => {
+        schedulePollLoop();
+      });
     }, effectivePollIntervalMs());
-    setInterval(() => {
-      evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message }));
+  }
+  function scheduleEvaluateLoop() {
+    setTimeout(() => {
+      evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message })).finally(() => {
+        scheduleEvaluateLoop();
+      });
     }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
-  }).catch((e) => {
-    console.error('Transport init fehlgeschlagen:', e.message);
-    console.error('Polling/Schedule starten ohne Transport...');
-  });
+  }
+  initTransport();
+  requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
+  schedulePollLoop();
+  scheduleEvaluateLoop();
   fetchEpexDay();
   setInterval(() => {
     const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();

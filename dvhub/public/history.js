@@ -251,6 +251,12 @@ function shiftDate(dateString, view, delta) {
   return date.toISOString().slice(0, 10);
 }
 
+function baselineTotalCostEur(item) {
+  if (!item) return 0;
+  if (hasFiniteNumber(item?.selfConsumptionCostEur)) return round2(Number(item.selfConsumptionCostEur));
+  return actualCostEur(item);
+}
+
 function actualCostEur(item) {
   if (!item) return 0;
   return round2(importCostEur(item) + valueOf(item, 'pvCostEur') + valueOf(item, 'batteryCostEur'));
@@ -588,6 +594,7 @@ function renderAggregateTable(mountId, summary) {
 }
 
 
+
 function linePath(points, width, height, min, max) {
   if (!points.length) return '';
   const span = max - min || 1;
@@ -809,6 +816,43 @@ function stackHeight(value, max) {
   return Math.max(12, Math.round((Number(value) / max) * 128));
 }
 
+function renderRevenueCostBars(mountId, items) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  if (!Array.isArray(items) || !items.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    return;
+  }
+
+  const max = Math.max(...items.flatMap((item) => [
+    Number(item?.exportRevenueEur || 0),
+    baselineTotalCostEur(item)
+  ]), 0.01);
+
+  mount.innerHTML = `
+    <div class="history-stack-chart">
+      <div class="history-chart-legend">
+        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös</span>
+        <span><i class="history-legend-swatch history-bar-cost"></i>Kosten</span>
+      </div>
+      <div class="history-bars">
+        ${items.map((item) => `
+          <div class="history-bar-card">
+            <div class="history-stack history-stack-compare">
+              <div class="history-bar history-bar-revenue" style="height:${stackHeight(item?.exportRevenueEur, max)}px"></div>
+              <div class="history-bar history-bar-cost" style="height:${stackHeight(baselineTotalCostEur(item), max)}px"></div>
+            </div>
+            <strong>${escapeHtml(item.label || '-')}</strong>
+            <span>Export ${fmtKwh(item?.exportKwh)}</span>
+            <span>Erlös ${fmtEur(item?.exportRevenueEur)}</span>
+            <span>Kosten ${fmtEur(baselineTotalCostEur(item))}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderCombinedPeriodBars(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -828,6 +872,7 @@ function renderCombinedPeriodBars(mountId, items) {
     Number(item?.gridCostEur ?? item?.importCostEur ?? 0),
     Number(item?.pvCostEur || 0),
     Number(item?.batteryCostEur || 0),
+    baselineTotalCostEur(item),
     Math.abs(actualNetEur(item))
   ]), 0.01);
   const selectedIndex = selectedChartIndex(mountId, items);
@@ -984,7 +1029,7 @@ function renderCharts(summary) {
   if (view === 'day') {
     renderLineChart('historyFinancialChart', dayFinancialLines.map((item) => ({
       ...item,
-      actualCostEur: actualCostEur(item),
+      actualCostEur: baselineTotalCostEur(item),
       actualNetEur: actualNetEur(item)
     })), [
       { key: 'actualCostEur', label: 'Kosten', className: 'history-series-cost' },
@@ -1086,7 +1131,7 @@ function renderRows(summary) {
             <td>${fmtEur(row.batteryCostEur)}</td>
             <td>${fmtEur(row.avoidedImportGrossEur)}</td>
             <td>${fmtEur(row.exportRevenueEur)}</td>
-            <td>${fmtEur(actualCostEur(row))}</td>
+            <td>${fmtEur(baselineTotalCostEur(row))}</td>
             <td>${fmtEur(actualNetEur(row))}</td>
             <td>${fmtEur(grossReturnEur(row))}</td>
             ${includeSolar ? `<td>${fmtCt(row.solarMarketValueCtKwh)}</td><td>${fmtEur(row.solarCompensationEur)}</td>` : ''}

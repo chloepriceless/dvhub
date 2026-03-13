@@ -66,6 +66,28 @@ test('sanitizePersistedScheduleRules keeps stopSocPct while removing transient f
   ]);
 });
 
+test('sanitizePersistedScheduleRules keeps automation metadata for dated one-shot rules', () => {
+  const cleaned = sanitizePersistedScheduleRules([
+    {
+      id: 'sma-1',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '18:15',
+      end: '18:30',
+      value: -12000,
+      activeDate: '2026-06-02',
+      source: 'small_market_automation',
+      autoManaged: true,
+      displayTone: 'yellow'
+    }
+  ]);
+
+  assert.equal(cleaned[0].source, 'small_market_automation');
+  assert.equal(cleaned[0].autoManaged, true);
+  assert.equal(cleaned[0].displayTone, 'yellow');
+  assert.equal(cleaned[0].activeDate, '2026-06-02');
+});
+
 test('autoDisableExpiredScheduleRules disables a previously active one-shot rule after the window ends', () => {
   const result = autoDisableExpiredScheduleRules([
     {
@@ -205,4 +227,10 @@ test('server schedule evaluator wires stop-soc auto-disable and dedicated loggin
   assert.match(source, /autoDisableStopSocScheduleRules/);
   assert.match(source, /schedule_stop_soc_reached/);
   assert.match(source, /batterySocPct:\s*state\.victron\.soc/);
+});
+
+test('server delegates price-slot window filtering to shared automation helper', () => {
+  const source = fs.readFileSync(serverPath, 'utf8');
+  assert.match(source, /filterSlotsByTimeWindow/);
+  assert.doesNotMatch(source, /function buildSearchWindowBounds/);
 });

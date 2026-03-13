@@ -115,8 +115,21 @@ function setActiveSettingsSection(state, requestedId) {
   };
 }
 
+function buildDisclosureSummaryMarkup(group) {
+  return `
+    <span class="settings-group-accent" aria-hidden="true"></span>
+    <span class="settings-group-copy">
+      <span class="settings-group-title">${group.label}</span>
+      ${group.description ? `<small class="settings-group-description">${group.description}</small>` : ''}
+      <small class="settings-group-hint">Weitere Einstellungen ausklappen</small>
+    </span>
+    <span class="settings-group-chevron" aria-hidden="true">⌄</span>
+  `;
+}
+
 const settingsShellHelpers = {
   applyDiscoveredSystemToDraft,
+  buildDisclosureSummaryMarkup,
   buildDestinationWorkspace,
   buildFieldRenderModel,
   buildSettingsDestinations,
@@ -677,7 +690,7 @@ function renderField(field) {
     input.value = String(value);
   } else {
     input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : 'text';
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
@@ -898,7 +911,7 @@ function renderSectionWorkspace(sectionId) {
       details.open = group.openByDefault;
 
       const summary = document.createElement('summary');
-      summary.innerHTML = `<span>${group.label}</span><small>${group.description || ''}</small>`;
+      summary.innerHTML = buildDisclosureSummaryMarkup(group);
       details.appendChild(summary);
 
       const grid = document.createElement('div');

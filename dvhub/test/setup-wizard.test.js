@@ -34,6 +34,7 @@ const {
   createSetupWizardState,
   describeSetupStep,
   formatSetupDiscoveredSystemOption,
+  getSetupNavActionLabel,
   getPrimarySetupActionLabel,
   getVisibleSetupFieldsForStep,
   goToNextSetupStep,
@@ -462,6 +463,17 @@ test('primary setup action switches from review to save on the review step', () 
   assert.equal(getPrimarySetupActionLabel(basicsState), 'Zur Prüfung');
   assert.equal(getPrimarySetupActionLabel(servicesState), 'Jetzt speichern');
   assert.equal(getPrimarySetupActionLabel(reviewState), 'Jetzt speichern');
+});
+
+test('bottom setup navigation also switches to save on the final input step', () => {
+  const validState = createValidSetupState();
+  const basicsState = setActiveSetupStep(validState, 'basics');
+  const servicesState = setActiveSetupStep(validState, 'services');
+  const reviewState = setActiveSetupStep(validState, 'review');
+
+  assert.equal(getSetupNavActionLabel(basicsState), 'Weiter');
+  assert.equal(getSetupNavActionLabel(servicesState), 'Jetzt speichern');
+  assert.equal(getSetupNavActionLabel(reviewState), 'Jetzt speichern');
 });
 
 test('review step is blocked until the full draft validates', () => {

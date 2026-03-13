@@ -1,10 +1,16 @@
 const common = window.DVhubCommon || {};
 const { apiFetch, buildApiUrl } = common;
 
+const HISTORY_FULL_BACKFILL_DEFAULT_LOOKBACK_DAYS = 14;
+const HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS = 365;
+const HISTORY_FULL_BACKFILL_MAX_LOOKBACK_DAYS = 365;
+
 let currentHistoryImportStatus = null;
 let currentHistoryImportResult = null;
 let historyImportBusy = false;
 let historyFullBackfillAcknowledged = false;
+let historyFullBackfillExtendedLookbackEnabled = false;
+let historyFullBackfillLookbackDays = String(HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS);
 let historyImportFormState = {
   start: '',
   end: ''
@@ -48,10 +54,20 @@ function buildHistoryGapBackfillRequest() {
   };
 }
 
-function buildHistoryFullBackfillRequest() {
+function normalizeHistoryFullBackfillLookbackDays(value, fallback = HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(HISTORY_FULL_BACKFILL_MAX_LOOKBACK_DAYS, Math.max(1, numeric));
+}
+
+function buildHistoryFullBackfillRequest(options = {}) {
+  const extendedLookbackEnabled = options?.extendedLookbackEnabled === true;
   return {
     mode: 'full',
-    interval: '15mins'
+    interval: '15mins',
+    maxLookbackDays: extendedLookbackEnabled
+      ? normalizeHistoryFullBackfillLookbackDays(options?.maxLookbackDays)
+      : HISTORY_FULL_BACKFILL_DEFAULT_LOOKBACK_DAYS
   };
 }
 
@@ -167,6 +183,22 @@ function renderHistoryImportState() {
   if (fullAck) {
     fullAck.checked = historyFullBackfillAcknowledged;
     fullAck.disabled = historyImportBusy || Boolean(currentHistoryImportStatus?.backfillRunning);
+  }
+  const extendedLookbackToggle = document.getElementById('historyFullBackfillExtendedLookback');
+  if (extendedLookbackToggle) {
+    extendedLookbackToggle.checked = historyFullBackfillExtendedLookbackEnabled;
+    extendedLookbackToggle.disabled = historyImportBusy || Boolean(currentHistoryImportStatus?.backfillRunning);
+  }
+  const lookbackField = document.getElementById('historyFullBackfillLookbackField');
+  if (lookbackField) {
+    lookbackField.hidden = !historyFullBackfillExtendedLookbackEnabled;
+  }
+  const lookbackInput = document.getElementById('historyFullBackfillLookbackDays');
+  if (lookbackInput) {
+    lookbackInput.value = historyFullBackfillLookbackDays;
+    lookbackInput.disabled = !historyFullBackfillExtendedLookbackEnabled
+      || historyImportBusy
+      || Boolean(currentHistoryImportStatus?.backfillRunning);
   }
   setText(
     'historyReason',
@@ -368,7 +400,10 @@ async function triggerHistoryBackfill(mode = 'gap') {
   historyImportBusy = true;
   renderHistoryImportState();
   const payload = mode === 'full'
-    ? buildHistoryFullBackfillRequest()
+    ? buildHistoryFullBackfillRequest({
+      extendedLookbackEnabled: historyFullBackfillExtendedLookbackEnabled,
+      maxLookbackDays: historyFullBackfillLookbackDays
+    })
     : buildHistoryGapBackfillRequest();
   const res = await apiFetch('/api/history/backfill/vrm', {
     method: 'POST',
@@ -425,6 +460,22 @@ function initToolsPage() {
   });
   document.getElementById('historyFullBackfillAck')?.addEventListener('change', (event) => {
     historyFullBackfillAcknowledged = event.target.checked === true;
+    renderHistoryImportState();
+  });
+  document.getElementById('historyFullBackfillExtendedLookback')?.addEventListener('change', (event) => {
+    historyFullBackfillExtendedLookbackEnabled = event.target.checked === true;
+    if (historyFullBackfillExtendedLookbackEnabled && !historyFullBackfillLookbackDays) {
+      historyFullBackfillLookbackDays = String(HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS);
+    }
+    renderHistoryImportState();
+  });
+  document.getElementById('historyFullBackfillLookbackDays')?.addEventListener('change', (event) => {
+    historyFullBackfillLookbackDays = String(
+      normalizeHistoryFullBackfillLookbackDays(
+        event.target.value,
+        HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS
+      )
+    );
     renderHistoryImportState();
   });
   document.getElementById('historyImportBtn')?.addEventListener('click', () => {
@@ -490,6 +541,7 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryImportRequest,
     buildHistoryGapBackfillRequest,
     buildHistoryFullBackfillRequest,
+    normalizeHistoryFullBackfillLookbackDays,
     buildHistoryImportActionState,
     buildHistoryBackfillActionState,
     buildHistoryFullBackfillActionState,

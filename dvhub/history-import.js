@@ -7,6 +7,7 @@ const VRM_BACKFILL_CHUNK_DAYS = 7;
 const VRM_GAP_BACKFILL_LOOKBACK_DAYS = 7;
 const VRM_GAP_BACKFILL_CHUNK_DAYS = 1;
 const VRM_BACKFILL_EMPTY_WINDOW_LIMIT = 2;
+const VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS = 365;
 const VRM_BACKFILL_DELAY_MS = 500;
 const VRM_BACKFILL_RETRY_ATTEMPTS = 3;
 const VRM_BACKFILL_RETRY_DELAY_MS = 1000;
@@ -1484,8 +1485,10 @@ export function createHistoryImportManager({
     chunkDays = VRM_BACKFILL_CHUNK_DAYS,
     delayMs = VRM_BACKFILL_DELAY_MS,
     maxEmptyWindows = VRM_BACKFILL_EMPTY_WINDOW_LIMIT,
+    maxLookbackDays = VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS,
     interval = VRM_HISTORY_INTERVAL,
-    auto = false
+    auto = false,
+    allowIntervalFallback = true
   } = {}) {
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
@@ -1493,21 +1496,30 @@ export function createHistoryImportManager({
     let cursorEnd = startOfUtcDayIso(now ? toIso(now) : new Date().toISOString());
     let windowsVisited = 0;
     let importedWindows = 0;
+    let emptyWindows = 0;
     let trailingEmptyWindows = 0;
     let importedRows = 0;
     let requestedFrom = null;
     const requestedTo = cursorEnd;
+    const normalizedChunkDays = Math.max(1, Number(chunkDays || VRM_BACKFILL_CHUNK_DAYS));
+    const normalizedMaxLookbackDays = Math.max(1, Number(maxLookbackDays || VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS));
+    const normalizedInterval = normalizeVrmInterval(interval);
+    const oldestAllowed = shiftIsoByDays(requestedTo, -normalizedMaxLookbackDays);
+    let foundAnyData = false;
 
-    while (trailingEmptyWindows < maxEmptyWindows) {
+    while (new Date(cursorEnd).getTime() > new Date(oldestAllowed).getTime()) {
       const windowEnd = cursorEnd;
-      const windowStart = shiftIsoByDays(windowEnd, -Math.max(1, Number(chunkDays || VRM_BACKFILL_CHUNK_DAYS)));
+      let windowStart = shiftIsoByDays(windowEnd, -normalizedChunkDays);
+      if (new Date(windowStart).getTime() < new Date(oldestAllowed).getTime()) {
+        windowStart = oldestAllowed;
+      }
       requestedFrom = windowStart;
       windowsVisited += 1;
 
       const fetched = await fetchConfiguredVrmRows({
         start: windowStart,
         end: windowEnd,
-        interval
+        interval: normalizedInterval
       });
       if (!fetched.ok) return fetched;
 
@@ -1515,14 +1527,34 @@ export function createHistoryImportManager({
         store.writeSamples(fetched.rows);
         importedWindows += 1;
         importedRows += fetched.rows.length;
+        foundAnyData = true;
         trailingEmptyWindows = 0;
       } else {
-        trailingEmptyWindows += 1;
+        emptyWindows += 1;
+        if (foundAnyData) {
+          trailingEmptyWindows += 1;
+        }
       }
 
       cursorEnd = windowStart;
-      if (trailingEmptyWindows >= maxEmptyWindows) break;
-      await waitImpl(delayMs);
+      if (foundAnyData && trailingEmptyWindows >= maxEmptyWindows) break;
+      if (new Date(cursorEnd).getTime() <= new Date(oldestAllowed).getTime()) break;
+      if (foundAnyData) {
+        await waitImpl(delayMs);
+      }
+    }
+
+    if (!foundAnyData && importedRows === 0 && allowIntervalFallback && normalizedInterval === '15mins') {
+      return runVrmFullBackfill({
+        now,
+        chunkDays: normalizedChunkDays,
+        delayMs,
+        maxEmptyWindows,
+        maxLookbackDays: normalizedMaxLookbackDays,
+        interval: 'days',
+        auto,
+        allowIntervalFallback: false
+      });
     }
 
     const importConfig = telemetryConfig.historyImport || {};
@@ -1535,14 +1567,16 @@ export function createHistoryImportManager({
       sourceAccount: importConfig.vrmPortalId,
       meta: {
         provider: 'vrm',
-        interval,
+        interval: normalizedInterval,
         auto,
         mode: 'full',
-        chunkDays,
+        chunkDays: normalizedChunkDays,
+        maxLookbackDays: normalizedMaxLookbackDays,
         maxEmptyWindows,
         windowsVisited,
         importedWindows,
-        emptyWindows: trailingEmptyWindows
+        emptyWindows,
+        foundAnyData
       }
     });
     const priceBackfill = await maybeBackfillPricesForRange({
@@ -1561,7 +1595,7 @@ export function createHistoryImportManager({
       requestedTo,
       windowsVisited,
       importedWindows,
-      emptyWindows: trailingEmptyWindows,
+      emptyWindows,
       importedRows,
       priceBackfill
     };

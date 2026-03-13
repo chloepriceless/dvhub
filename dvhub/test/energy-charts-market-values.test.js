@@ -157,11 +157,25 @@ test('market value service returns locally persisted values without re-fetching 
     },
     marketValueStore: {
       listSolarMarketValuesForYear({ year }) {
-        assert.equal(year, 2026);
+        assert.equal(year, 2025);
         return {
           hasAny: true,
+          hasComplete: true,
           summary: {
-            monthlyCtKwhByMonth: { '2026-03': 5 },
+            monthlyCtKwhByMonth: {
+              '2025-01': 5,
+              '2025-02': 5,
+              '2025-03': 5,
+              '2025-04': 5,
+              '2025-05': 5,
+              '2025-06': 5,
+              '2025-07': 5,
+              '2025-08': 5,
+              '2025-09': 5,
+              '2025-10': 5,
+              '2025-11': 5,
+              '2025-12': 5
+            },
             annualCtKwhByYear: { 2025: 4.508 }
           }
         };
@@ -169,10 +183,10 @@ test('market value service returns locally persisted values without re-fetching 
     }
   });
 
-  const summary = await service.getSolarMarketValueSummary({ year: 2026 });
+  const summary = await service.getSolarMarketValueSummary({ year: 2025 });
 
   assert.equal(calls, 0);
-  assert.equal(summary.monthlyCtKwhByMonth['2026-03'], 5);
+  assert.equal(summary.monthlyCtKwhByMonth['2025-03'], 5);
   assert.equal(summary.annualCtKwhByYear[2025], 4.508);
 });
 
@@ -213,11 +227,9 @@ test('market value service records cooldown metadata when the Energy Charts fetc
     nowIso: () => '2026-03-11T11:00:00.000Z'
   });
 
-  await assert.rejects(
-    () => service.getSolarMarketValueSummary({ year: 2026 }),
-    /HTTP 429/
-  );
+  const summary = await service.getSolarMarketValueSummary({ year: 2026 });
 
+  assert.deepEqual(summary, { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} });
   assert.deepEqual(attempts, [
     {
       year: 2026,
@@ -253,6 +265,47 @@ test('market value service skips refetching a cooled-down year after an API fail
 
   assert.equal(calls, 0);
   assert.deepEqual(summary, { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} });
+});
+
+test('market value service refreshes an incomplete current year from the local store and persists new months', async () => {
+  const dbPath = createTempDbPath();
+  const store = createTelemetryStore({
+    dbPath,
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    store.upsertSolarMarketValue({
+      scope: 'monthly',
+      key: '2026-01',
+      ctKwh: 11.5,
+      source: 'energy_charts',
+      fetchedAt: '2026-01-15T00:00:00.000Z',
+      lastAttemptAt: '2026-01-15T00:00:00.000Z'
+    });
+    store.markSolarMarketValueAttempt({
+      year: 2026,
+      attemptedAt: '2026-01-15T00:00:00.000Z',
+      cooldownUntil: null,
+      status: 'ready',
+      error: null
+    });
+
+    const service = createEnergyChartsMarketValueService({
+      fetchImpl: successfulFetchFixture,
+      marketValueStore: store,
+      nowIso: () => '2026-03-11T10:00:00.000Z'
+    });
+
+    const summary = await service.getSolarMarketValueSummary({ year: 2026 });
+
+    assert.equal(summary.monthlyCtKwhByMonth['2026-01'], 11.5);
+    assert.equal(summary.monthlyCtKwhByMonth['2026-03'], 5);
+    assert.equal(store.getSolarMarketValue({ scope: 'monthly', key: '2026-03' }).ctKwh, 5);
+  } finally {
+    store.close();
+  }
 });
 
 test('a fresh market value service instance reuses persisted values from the telemetry store', async () => {
@@ -326,4 +379,34 @@ test('automatic market value backfill only fetches missing historical years in s
   });
 
   assert.deepEqual(requestedYears.sort(), [2023, 2024]);
+});
+
+test('market value service does not retry again on the same day after a failed fetch when the store records the attempt', async () => {
+  const dbPath = createTempDbPath();
+  const store = createTelemetryStore({
+    dbPath,
+    rawRetentionDays: 30,
+    rollupIntervals: [300, 900, 3600]
+  });
+
+  try {
+    let calls = 0;
+    const service = createEnergyChartsMarketValueService({
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error('offline');
+      },
+      marketValueStore: store,
+      nowIso: () => '2026-03-11T11:00:00.000Z'
+    });
+
+    const first = await service.getSolarMarketValueSummary({ year: 2026 });
+    const second = await service.getSolarMarketValueSummary({ year: 2026 });
+
+    assert.deepEqual(first, { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} });
+    assert.deepEqual(second, first);
+    assert.equal(calls, 2);
+  } finally {
+    store.close();
+  }
 });

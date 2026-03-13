@@ -118,6 +118,12 @@ function isCompleteHistoricalSolarMarketValueYear({ year, monthlyKeys = [], annu
 export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupIntervals = [300, 900, 3600] }) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  function assertSqlIdentifier(value, label) {
+    if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+      throw new Error(`Invalid SQL ${label}: ${value}`);
+    }
+    return value;
+  }
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec(`
@@ -911,10 +917,37 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     listTables() {
       return db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((row) => row.name);
     },
-    countRows(table, where = '1=1') {
-      const ALLOWED_TABLES = ['telemetry', 'control_events', 'schedule_snapshots', 'optimizer_runs', 'import_jobs', 'timeseries_samples', 'optimizer_run_series'];
-      if (!ALLOWED_TABLES.includes(table)) throw new Error(`countRows: unknown table "${table}"`);
-      return Number(db.prepare(`SELECT COUNT(*) AS count FROM "${table}" WHERE ${where}`).get().count);
+    countRows(table, filters = {}) {
+      const tableName = assertSqlIdentifier(table, 'table');
+      const knownTables = this.listTables();
+      if (!knownTables.includes(tableName)) {
+        throw new Error(`Unknown table: ${tableName}`);
+      }
+
+      // Legacy string support: validate safe WHERE patterns (column = 'value' or column LIKE 'pattern')
+      if (typeof filters === 'string') {
+        const safeWherePattern = /^[A-Za-z_][A-Za-z0-9_]*\s+(=|LIKE|!=|<>|<|>|<=|>=)\s+'[^']*'(\s+AND\s+[A-Za-z_][A-Za-z0-9_]*\s+(=|LIKE|!=|<>|<|>|<=|>=)\s+'[^']*')*$/i;
+        if (filters === '1=1') {
+          return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count);
+        }
+        if (!safeWherePattern.test(filters.trim())) {
+          throw new Error(`unsafe WHERE clause: ${filters}`);
+        }
+        return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${tableName} WHERE ${filters}`).get().count);
+      }
+
+      if (filters == null || typeof filters !== 'object' || Array.isArray(filters)) {
+        throw new Error('filters must be an object');
+      }
+      const clauses = [];
+      const params = [];
+      for (const [column, value] of Object.entries(filters)) {
+        const columnName = assertSqlIdentifier(column, 'column');
+        clauses.push(`${columnName} = ?`);
+        params.push(value);
+      }
+      const whereClause = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+      return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}${whereClause}`).get(...params).count);
     },
     writeSamples,
     writeControlEvent,

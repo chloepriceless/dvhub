@@ -110,6 +110,10 @@ function emptySummary() {
   };
 }
 
+function monthlyEntryCount(summary) {
+  return Object.keys(summary?.monthlyCtKwhByMonth || {}).length;
+}
+
 function isCooldownActive(cooldownUntil, nowValue) {
   const untilMs = Date.parse(cooldownUntil || '');
   const nowMs = Date.parse(nowValue || '');
@@ -117,9 +121,26 @@ function isCooldownActive(cooldownUntil, nowValue) {
   return untilMs > nowMs;
 }
 
+function utcDateKey(value) {
+  const time = Date.parse(value || '');
+  if (!Number.isFinite(time)) return '';
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+function wasAttemptedToday(lastAttemptAt, nowValue) {
+  const attemptedDay = utcDateKey(lastAttemptAt);
+  return attemptedDay !== '' && attemptedDay === utcDateKey(nowValue);
+}
+
 function yearFromIso(value) {
   const year = Number(String(value || '').slice(0, 4));
   return Number.isInteger(year) ? year : null;
+}
+
+function currentMonthFromIso(value) {
+  const time = Date.parse(value || '');
+  if (!Number.isFinite(time)) return null;
+  return new Date(time).getUTCMonth() + 1;
 }
 
 function normalizeBackfillYears(years = []) {
@@ -143,27 +164,57 @@ export function createEnergyChartsMarketValueService({
   fetchCooldownMs = DEFAULT_FETCH_COOLDOWN_MS
 } = {}) {
   const cache = new Map();
+  const pendingByYear = new Map();
 
-  async function getSolarMarketValueSummary({ year }) {
+  function needsRefresh({ year, persisted, nowValue }) {
+    if (!marketValueStore) return !cache.has(year);
+
+    if (!persisted?.hasAny) {
+      return !isCooldownActive(persisted?.cooldownUntil, nowValue);
+    }
+
+    const currentYear = yearFromIso(nowValue);
+    const currentMonth = currentMonthFromIso(nowValue);
+    const monthlyValues = monthlyEntryCount(persisted?.summary);
+    if (currentYear != null && currentMonth != null && year === currentYear) {
+      if (monthlyValues >= currentMonth) return false;
+      if (isCooldownActive(persisted?.cooldownUntil, nowValue)) return false;
+      return !wasAttemptedToday(persisted?.attempt?.lastAttemptAt, nowValue);
+    }
+
+    if (persisted?.hasComplete !== false) return false;
+    if (isCooldownActive(persisted?.cooldownUntil, nowValue)) return false;
+    return !wasAttemptedToday(persisted?.attempt?.lastAttemptAt, nowValue);
+  }
+
+  async function getSolarMarketValueSummary({ year, throwOnError = false }) {
     const numericYear = Number(year);
     if (!Number.isInteger(numericYear)) {
       return emptySummary();
     }
-    const persisted = marketValueStore?.listSolarMarketValuesForYear?.({ year: numericYear }) || null;
-    const currentYear = yearFromIso(nowIso());
-    const isCurrentYear = currentYear != null && numericYear >= currentYear;
-    if (persisted?.hasAny && (isCurrentYear || persisted?.hasComplete !== false)) {
-      return persisted.summary;
+    if (!marketValueStore) {
+      if (!cache.has(numericYear)) {
+        cache.set(numericYear, fetchEnergyChartsSolarMarketValues({
+          year: numericYear,
+          fetchImpl
+        }).catch((error) => {
+          cache.delete(numericYear);
+          throw error;
+        }));
+      }
+      return cache.get(numericYear);
     }
+
+    const persisted = marketValueStore.listSolarMarketValuesForYear?.({ year: numericYear }) || null;
     const attemptedAt = nowIso();
-    if (isCooldownActive(persisted?.cooldownUntil, attemptedAt)) {
+    if (!needsRefresh({ year: numericYear, persisted, nowValue: attemptedAt })) {
       return persisted?.summary || emptySummary();
     }
-    if (!cache.has(numericYear)) {
-      cache.set(numericYear, fetchEnergyChartsSolarMarketValues({
+    if (!pendingByYear.has(numericYear)) {
+      pendingByYear.set(numericYear, Promise.resolve(fetchEnergyChartsSolarMarketValues({
         year: numericYear,
         fetchImpl
-      }).then((summary) => {
+      })).then((summary) => {
         persistSummary(summary, marketValueStore);
         marketValueStore?.markSolarMarketValueAttempt?.({
           year: numericYear,
@@ -172,7 +223,7 @@ export function createEnergyChartsMarketValueService({
           error: null,
           cooldownUntil: null
         });
-        return summary;
+        return { ok: true, summary };
       }).catch((error) => {
         marketValueStore?.markSolarMarketValueAttempt?.({
           year: numericYear,
@@ -181,11 +232,18 @@ export function createEnergyChartsMarketValueService({
           error: error.message,
           cooldownUntil: new Date(Date.parse(attemptedAt) + fetchCooldownMs).toISOString()
         });
-        cache.delete(numericYear);
-        throw error;
+        return {
+          ok: false,
+          summary: persisted?.summary || emptySummary(),
+          error
+        };
+      }).finally(() => {
+        pendingByYear.delete(numericYear);
       }));
     }
-    return cache.get(numericYear);
+    const result = await pendingByYear.get(numericYear);
+    if (!result.ok && throwOnError) throw result.error;
+    return result.summary;
   }
 
   async function backfillMissingSolarMarketValues({
@@ -205,7 +263,7 @@ export function createEnergyChartsMarketValueService({
       if (isCooldownActive(persisted?.cooldownUntil, nowIso())) continue;
 
       try {
-        await getSolarMarketValueSummary({ year });
+        await getSolarMarketValueSummary({ year, throwOnError: true });
         fetchedYears.push(year);
       } catch {
         continue;

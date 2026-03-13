@@ -1803,6 +1803,7 @@ test('history runtime exposes pv full-load hours from configured plant capacity'
 test('history summary API validates views and delegates to the runtime', async () => {
   let called = 0;
   let backfillInput = null;
+  const solarCalls = [];
   const handlers = createHistoryApiHandlers({
     historyRuntime: {
       getSummary(input) {
@@ -1823,26 +1824,50 @@ test('history summary API validates views and delegates to the runtime', async (
       version: '0.3.0',
       revision: 'ea104c9',
       versionLabel: 'v0.3.0+ea104c9'
+    },
+    getSolarMarketValueSummary: async ({ year }) => {
+      solarCalls.push(year);
+      return {
+        monthlyCtKwhByMonth: { [`${year}-03`]: 4.5 },
+        annualCtKwhByYear: {}
+      };
     }
   });
 
   const invalid = await handlers.getSummary({ view: 'quarter', date: '2026-03-09' });
   const valid = await handlers.getSummary({ view: 'month', date: '2026-03-09' });
+  const week = await handlers.getSummary({ view: 'week', date: '2026-03-09' });
   const backfill = await handlers.postPriceBackfill({ view: 'week', date: '2026-03-09' });
 
   assert.equal(invalid.status, 400);
   assert.match(invalid.body.error, /view/i);
   assert.equal(valid.status, 200);
-  assert.deepEqual(valid.body.echo, { view: 'month', date: '2026-03-09', solarMarketValues: null });
+  assert.deepEqual(valid.body.echo, {
+    view: 'month',
+    date: '2026-03-09',
+    solarMarketValues: {
+      monthlyCtKwhByMonth: { '2026-03': 4.5 },
+      annualCtKwhByYear: {}
+    }
+  });
+  assert.deepEqual(week.body.echo, {
+    view: 'week',
+    date: '2026-03-09',
+    solarMarketValues: {
+      monthlyCtKwhByMonth: { '2026-03': 4.5 },
+      annualCtKwhByYear: {}
+    }
+  });
   assert.equal(valid.body.app.versionLabel, 'v0.3.0+ea104c9');
   assert.equal(backfill.status, 200);
   assert.equal(backfill.body.requestedDays, 1);
+  assert.deepEqual(solarCalls, [2026, 2026]);
   assert.deepEqual(backfillInput, {
     bzn: 'DE-LU',
     start: '2026-03-08T23:00:00.000Z',
     end: '2026-03-15T23:00:00.000Z'
   });
-  assert.equal(called, 1);
+  assert.equal(called, 2);
 });
 
 test('history price backfill API without a range delegates bounds selection to the import manager', async () => {

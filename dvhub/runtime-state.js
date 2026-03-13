@@ -48,7 +48,8 @@ const SCHEDULE_FIELDS = [
   'active',
   'lastWrite',
   'manualOverride',
-  'lastEvalAt'
+  'lastEvalAt',
+  'smallMarketAutomation'
 ];
 
 const TELEMETRY_FIELDS = [

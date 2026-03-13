@@ -653,6 +653,7 @@ const setupWizardHelpers = {
   createSetupWizardState,
   describeSetupStep,
   formatSetupDiscoveredSystemOption,
+  getSetupNavActionLabel,
   getPrimarySetupActionLabel,
   shouldPrimarySetupActionSave,
   getSetupFieldsForStep,
@@ -734,6 +735,10 @@ function shouldPrimarySetupActionSave(state = setupWizardState) {
 
 function getPrimarySetupActionLabel(state = setupWizardState) {
   return shouldPrimarySetupActionSave(state) ? 'Jetzt speichern' : 'Zur Prüfung';
+}
+
+function getSetupNavActionLabel(state = setupWizardState) {
+  return shouldPrimarySetupActionSave(state) ? 'Jetzt speichern' : 'Weiter';
 }
 
 function renderPrimarySetupAction() {
@@ -1192,7 +1197,7 @@ function renderSetupNav() {
   nextButton.className = 'btn btn-primary';
   nextButton.dataset.action = 'next';
   nextButton.hidden = isReviewStep;
-  nextButton.textContent = isLastStep ? 'Weiter zur Prüfung' : 'Weiter';
+  nextButton.textContent = getSetupNavActionLabel(setupWizardState);
 
   container.append(copy, backButton, nextButton);
 }
@@ -1382,6 +1387,19 @@ function handleWizardNav(action) {
   if (action === 'back') {
     setSetupWizardState(goToPreviousSetupStep(syncedState));
     renderSetupWizard();
+    return;
+  }
+
+  if (shouldPrimarySetupActionSave(syncedState)) {
+    if (syncedState.validation.isBlocking) {
+      moveToFirstInvalidStep(syncedState);
+      renderSetupWizard();
+      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
+      return;
+    }
+    saveSetup(clone(syncedState.draftConfig || {})).catch((error) => {
+      setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
+    });
     return;
   }
 

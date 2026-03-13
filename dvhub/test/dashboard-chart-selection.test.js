@@ -76,8 +76,9 @@ test('dashboard exposes and renders today min max with the same scaling as tomor
 
   assert.match(html, /id="todayMinMax"/);
   assert.match(app, /'todayMinMax'/);
-  assert.match(app, /Number\(s\.todayMin\) \/ 10/);
-  assert.match(app, /Number\(s\.todayMax\) \/ 10/);
+  assert.match(app, /fmtCentFromTenthCt\(Number\(s\.todayMin\)\)/);
+  assert.match(app, /fmtCentFromTenthCt\(Number\(s\.todayMax\)\)/);
+  assert.match(app, /Cent/);
 });
 
 test('dashboard helpers compute dynamic gross import prices from market price and surcharges', () => {
@@ -279,7 +280,8 @@ test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back
       enabled: true,
       grid: -40,
       charge: 80,
-      stopSocPct: 25
+      stopSocPct: 25,
+      ruleId: 'grid_1'
     }
   ]);
 });
@@ -291,6 +293,21 @@ test('dashboard schedule row template includes stop-soc controls', () => {
   assert.match(app, /sched-stop-soc-val/);
 });
 
+test('dashboard escapes dynamic schedule and plan row template values', () => {
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+
+  assert.match(app, /function escapeAttr\(value\)/);
+  assert.match(app, /value="\$\{escapeAttr\(start\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(end\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(gridVal\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(chargeVal\)\}"/);
+  assert.match(app, /value="\$\{escapeAttr\(stopSocVal\)\}"/);
+  assert.match(app, /title="\$\{escapeAttr\(isAutomation \? 'Automatisch verwaltet' : 'Aktiv'\)\}"/);
+  assert.match(app, /<td>\$\{escapeAttr\(slot\.time \|\| '\\u2014'\)\}<\/td>/);
+  assert.match(app, /<td>\$\{escapeAttr\(powerLabel\)\}<\/td>/);
+  assert.match(app, /<td>\$\{escapeAttr\(slot\.priceCtKwh != null \? \(Number\(slot\.priceCtKwh\)\)\.toFixed\(2\) : '\\u2014'\)\} ct\/kWh<\/td>/);
+});
+
 test('dashboard places the schedule panel directly after the price engine panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const priceIndex = html.indexOf('Preis-Engine');
@@ -300,4 +317,16 @@ test('dashboard places the schedule panel directly after the price engine panel'
   assert.ok(priceIndex >= 0);
   assert.ok(scheduleIndex > priceIndex);
   assert.ok(controlIndex > scheduleIndex);
+});
+
+test('dashboard source preserves automation metadata and yellow rule styling', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+
+  assert.match(html, /kleine Börsenautomatik/);
+  assert.match(css, /\.sched-row-automation/);
+  assert.match(css, /--schedule-automation-yellow/);
+  assert.match(app, /displayTone/);
+  assert.match(app, /small_market_automation/);
 });
