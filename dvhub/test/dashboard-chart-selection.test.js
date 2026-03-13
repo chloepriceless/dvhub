@@ -280,7 +280,8 @@ test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back
       enabled: true,
       grid: -40,
       charge: 80,
-      stopSocPct: 25
+      stopSocPct: 25,
+      ruleId: 'grid_1'
     }
   ]);
 });

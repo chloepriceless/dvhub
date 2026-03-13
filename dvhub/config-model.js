@@ -1819,6 +1819,10 @@ function sanitizeScheduleRules(value, warnings) {
     if (item.value != null) next.value = Number(item.value);
     if (item.stopSocPct != null && item.stopSocPct !== '') next.stopSocPct = Number(item.stopSocPct);
     if (item.enabled != null) next.enabled = coerceBoolean(item.enabled);
+    if (item.source != null) next.source = String(item.source);
+    if (item.autoManaged != null) next.autoManaged = coerceBoolean(item.autoManaged);
+    if (item.displayTone != null) next.displayTone = String(item.displayTone);
+    if (item.activeDate != null) next.activeDate = String(item.activeDate);
     if (next.value != null && !Number.isFinite(next.value)) {
       warnings.push(`schedule.rules.${next.id || rules.length}: value ignored because it is not numeric`);
       continue;
