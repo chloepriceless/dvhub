@@ -112,3 +112,37 @@ describe('INT-07: publish() replaced with emit() in optimizer', () => {
     assert.match(src, /ctx\.eventBus\.emit\(\{.*type:\s*'evcc\.state'/s);
   });
 });
+
+// ─── Task 3: INT-05 + INT-06 — Expose hal and planEngine ───
+
+describe('INT-05: hal exposed on gateway module object', () => {
+  const src = readSource('modules/gateway/index.js');
+
+  it('has hal: null in createGatewayModule return object', () => {
+    assert.match(src, /hal:\s*null/);
+  });
+
+  it('assigns this.hal = hal in init()', () => {
+    assert.match(src, /this\.hal\s*=\s*hal/);
+  });
+
+  it('cleans up this.hal = null in destroy()', () => {
+    assert.match(src, /this\.hal\s*=\s*null/);
+  });
+});
+
+describe('INT-06: planEngine exposed on optimizer module object', () => {
+  const src = readSource('modules/optimizer/index.js');
+
+  it('has planEngine: null in return object', () => {
+    assert.match(src, /planEngine:\s*null/);
+  });
+
+  it('assigns this.planEngine = planEngine in init()', () => {
+    assert.match(src, /this\.planEngine\s*=\s*planEngine/);
+  });
+
+  it('cleans up this.planEngine = null in destroy()', () => {
+    assert.match(src, /this\.planEngine\s*=\s*null/);
+  });
+});

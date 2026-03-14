@@ -2814,17 +2814,20 @@ export function createGatewayModule() {
     requires: [],
     plugin: null,
     modbusProxy: null,
+    hal: null,
 
     async init(ctx) {
       await initializeGatewayRuntime(ctx);
       this.plugin = gatewayPluginInstance;
       this.modbusProxy = modbusProxy;
+      this.hal = hal;
     },
 
     async destroy() {
       await destroyGatewayRuntime();
       this.plugin = null;
       this.modbusProxy = null;
+      this.hal = null;
     }
   };
 }

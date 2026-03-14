@@ -45,6 +45,7 @@ export function createOptimizerModule(config) {
     name: 'optimizer',
     requires: ['gateway'],
     plugin: null,
+    planEngine: null,
 
     async init(ctx) {
       const log = ctx.fastify?.log;
@@ -210,6 +211,9 @@ export function createOptimizerModule(config) {
         await fastify.register(optimizerPlugin, pluginOpts);
       };
 
+      // Expose planEngine on module object for exec module plan-intent bridge
+      this.planEngine = planEngine;
+
       log?.info({
         adapters: adapterRegistry.getAll().map(a => a.name),
       }, 'Optimizer module initialized');
@@ -226,6 +230,7 @@ export function createOptimizerModule(config) {
       if (planEngine) planEngine.destroy();
       adapterRegistry = null;
       planEngine = null;
+      this.planEngine = null;
       scorer = null;
       this.plugin = null;
     },
