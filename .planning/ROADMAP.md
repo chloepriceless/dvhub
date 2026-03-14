@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Foundation** - Module infrastructure, event bus, Device HAL, and bootstrap extraction from monolithic server.js
 - [x] **Phase 2: Data Architecture** - SQLite WAL optimization, multi-resolution storage, partitioned telemetry, and rollup engine (completed 2026-03-14)
-- [ ] **Phase 3: DV Module** - Direktvermarktung extraction with provider adapters, measurement export, and curtailment processing
+- [x] **Phase 3: DV Module** - Direktvermarktung extraction with provider adapters, measurement export, and curtailment processing (completed 2026-03-14)
 - [ ] **Phase 4: Optimizer Core** - Adapter registry, EOS/EMHASS adapters, plan engine, and plan scoring/selection
 - [ ] **Phase 5: External Integrations** - EVCC bridge, forecast broker, tariff models, and MISPEL preparation
 - [ ] **Phase 6: Arbitration + Execution** - Intent-based control pipeline with priority resolution, command logging, and audit trail
@@ -171,7 +171,7 @@ Phases execute in numeric order. Phases 3 and 4 share Phase 2 as dependency and 
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/4 | In Progress|  |
 | 2. Data Architecture | 4/4 | Complete   | 2026-03-14 |
-| 3. DV Module | 2/3 | In Progress|  |
+| 3. DV Module | 3/3 | Complete   | 2026-03-14 |
 | 4. Optimizer Core | 0/3 | Not started | - |
 | 5. External Integrations | 0/3 | Not started | - |
 | 6. Arbitration + Execution | 0/2 | Not started | - |
