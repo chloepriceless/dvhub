@@ -12,6 +12,7 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
 DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
+DEPLOY_MODE="${DEPLOY_MODE:-native}"
 
 function parse_branch_from_installer_url() {
   local url="${1:-}"
@@ -215,6 +216,10 @@ while [[ $# -gt 0 ]]; do
       DATA_DIR="$2"
       shift 2
       ;;
+    --mode)
+      DEPLOY_MODE="$2"
+      shift 2
+      ;;
     *)
       echo "Unbekannter Parameter: $1" >&2
       exit 1
@@ -228,6 +233,14 @@ fi
 if [[ -z "$REPO_BRANCH" ]]; then
   REPO_BRANCH="main"
 fi
+
+case "$DEPLOY_MODE" in
+  native|hybrid|full) ;;
+  *)
+    echo "FEHLER: Ungueltiger Modus '$DEPLOY_MODE'. Erlaubt: native, hybrid, full." >&2
+    exit 1
+    ;;
+esac
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
@@ -244,24 +257,24 @@ fi
 
 assert_supported_layout
 
-echo "[1/7] Pakete installieren"
+echo "[1/8] Pakete installieren"
 apt-get update
 apt-get install -y curl ca-certificates git sudo
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
-  echo "[2/7] Node.js 22 installieren"
+  echo "[2/8] Node.js 22 installieren"
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 else
-  echo "[2/7] Node.js vorhanden: $(node --version)"
+  echo "[2/8] Node.js vorhanden: $(node --version)"
 fi
 
-echo "[3/7] Service-User vorbereiten"
+echo "[3/8] Service-User vorbereiten"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-echo "[4/7] Repository bereitstellen"
+echo "[4/8] Repository bereitstellen"
 mkdir -p "$(dirname "$INSTALL_DIR")"
 migrate_legacy_config_files
 migrate_legacy_data_files
@@ -286,11 +299,30 @@ if [[ ! -f "$APP_DIR/package.json" ]]; then
   exit 1
 fi
 
-echo "[5/7] Node-Abhaengigkeiten installieren"
+echo "[5/8] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
-npm install --omit=dev
+if [[ ! -f "package-lock.json" ]]; then
+  echo "FEHLER: package-lock.json fehlt. Reproduzierbare Installation nicht moeglich." >&2
+  exit 1
+fi
+npm ci --omit=dev
 
-echo "[6/7] Config-Pfad und Rechte vorbereiten"
+if [[ "$DEPLOY_MODE" != "native" ]]; then
+  echo "[6/8] Docker-Voraussetzungen pruefen (Modus: $DEPLOY_MODE)"
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "FEHLER: Docker ist nicht installiert. Fuer Modus '$DEPLOY_MODE' wird Docker benoetigt." >&2
+    exit 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "FEHLER: Docker Compose v2 Plugin nicht gefunden. 'docker compose version' fehlgeschlagen." >&2
+    exit 1
+  fi
+  cp "$APP_DIR/deploy/docker-compose.yaml" "$CONFIG_DIR/docker-compose.yaml"
+else
+  echo "[6/8] Docker-Pruefung uebersprungen (Modus: native)"
+fi
+
+echo "[7/8] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
 mkdir -p "$DATA_DIR"
@@ -304,7 +336,7 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
 
-echo "[7/7] systemd Service einrichten"
+echo "[8/8] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
@@ -315,34 +347,26 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.serv
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 
-cat >/etc/systemd/system/${SERVICE_NAME}.service <<SERVICE
-[Unit]
-Description=DVhub DV Control
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_USER}
-WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/node --experimental-sqlite ${APP_DIR}/server.js
-Environment=NODE_ENV=production
-Environment=DV_APP_CONFIG=${CONFIG_PATH}
-Environment=DV_ENABLE_SERVICE_ACTIONS=1
-Environment=DV_SERVICE_NAME=${SERVICE_NAME}.service
-Environment=DV_SERVICE_USE_SUDO=1
-Environment=DV_DATA_DIR=${DATA_DIR}
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
+sed -e "s|__SERVICE_USER__|${SERVICE_USER}|g" \
+    -e "s|__APP_DIR__|${APP_DIR}|g" \
+    -e "s|__CONFIG_PATH__|${CONFIG_PATH}|g" \
+    -e "s|__CONFIG_DIR__|${CONFIG_DIR}|g" \
+    -e "s|__DATA_DIR__|${DATA_DIR}|g" \
+    "$APP_DIR/deploy/dvhub.service.template" > "/etc/systemd/system/${SERVICE_NAME}.service"
 
 systemctl daemon-reload
-systemctl enable --now "${SERVICE_NAME}.service"
-systemctl restart "${SERVICE_NAME}.service"
+systemctl enable "${SERVICE_NAME}.service"
+
+if [[ "$DEPLOY_MODE" == "full" ]]; then
+  echo "Modus 'full': DVhub laeuft im Container -- systemd Service wird nicht gestartet."
+else
+  systemctl restart "${SERVICE_NAME}.service"
+fi
+
+if [[ "$DEPLOY_MODE" == "hybrid" || "$DEPLOY_MODE" == "full" ]]; then
+  echo "Docker Compose starten (Modus: $DEPLOY_MODE)"
+  docker compose -f "$CONFIG_DIR/docker-compose.yaml" --profile "$DEPLOY_MODE" up -d
+fi
 
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${PRIMARY_IP}" ]]; then
@@ -351,14 +375,18 @@ fi
 
 echo
 echo "DVhub wurde installiert."
+echo "Deployment-Modus: ${DEPLOY_MODE}"
 echo "Service: systemctl status ${SERVICE_NAME}.service"
 echo "Config-Datei: ${CONFIG_PATH}"
 echo "Herstellerprofil: ${CONFIG_DIR}/hersteller/victron.json"
 echo "Datenverzeichnis: ${DATA_DIR}"
 echo "Interne Historie: ${DATA_DIR}/telemetry.sqlite"
 echo "Setup-Oberfläche: http://${PRIMARY_IP}:8080/"
+if [[ "$DEPLOY_MODE" != "native" ]]; then
+  echo "Docker Compose: docker compose -f $CONFIG_DIR/docker-compose.yaml ps"
+fi
 echo
 echo "DVhub nutzt eine externe Betriebs-Config und ein separates Herstellerprofil."
 echo "Technische Register und Victron-spezifische Kommunikationswerte liegen in ${CONFIG_DIR}/hersteller/victron.json."
-echo "Restart-Button und Health-Check sind über die Einstellungen aktiv."
+echo "Restart-Button und Health-Check sind ueber die Einstellungen aktiv."
 echo "Die interne Telemetrie-Datenbank wird automatisch aufgebaut und schreibt ab dem ersten Start alle relevanten Daten mit."
