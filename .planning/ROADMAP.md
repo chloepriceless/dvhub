@@ -20,6 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Arbitration + Execution** - Intent-based control pipeline with priority resolution, command logging, and audit trail (completed 2026-03-14)
 - [x] **Phase 7: Deployment** - Docker Compose orchestration, hybrid mode, compose-manager, and native install updates (completed 2026-03-14)
 - [x] **Phase 8: UI Modernization** - Preact+HTM migration, animated power flow, setup wizard, and mobile-responsive dashboard (completed 2026-03-14)
+- [x] **Phase 9: Integration Wiring** - Bootstrap wiring, telemetry stream fix, module interfaces, WebSocket broadcast (gap closure from v1.0 audit) (completed 2026-03-14)
 
 ## Phase Details
 
@@ -162,6 +163,24 @@ Plans:
 - [ ] 08-02-PLAN.md -- Dashboard views: power flow, price chart, energy timeline, KPI cards, forecast, panels
 - [ ] 08-03-PLAN.md -- Settings, setup wizard with module toggles, history page, tools page
 
+### Phase 9: Integration Wiring
+**Goal**: All modules are wired together in server.js bootstrap so the system functions as an integrated whole -- exec module registered, database adapter instantiated, telemetry streams connected between gateway and downstream modules, WebSocket broadcast wired to live data, module interfaces expose hal and planEngine for cross-module access
+**Depends on**: Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6
+**Gap Closure**: Closes 7 critical integration gaps from v1.0 audit (INT-01 through INT-07)
+**Requirements**: EXEC-01, EXEC-02, EXEC-03, EXEC-04, DV-02, DV-03, OPT-01, OPT-02, OPT-04, OPT-08, OPT-09, OPT-10, OPT-11, UI-01, UI-04, UI-05, GW-05, GW-06, ARCH-05, DATA-01, DATA-02, DATA-05
+**Success Criteria** (what must be TRUE):
+  1. server.js registers exec module alongside gateway, DV, and optimizer -- GET /api/exec/status returns valid JSON
+  2. server.js instantiates createDatabaseAdapter and passes it as ctx.db -- modules receive a working database adapter
+  3. Gateway creates an aggregate 'telemetry' stream that DV and optimizer can subscribe to -- DV registers update from live meter data, optimizer triggerOptimization reads current telemetry without crashing
+  4. WebSocket broadcast is captured from registerWebSocketRoutes() and wired to gateway telemetry updates -- UI signal store receives live data via WebSocket messages
+  5. Gateway module exposes hal on its return object -- exec module can access gateway.hal for hardware writes
+  6. Optimizer module exposes planEngine on its return object -- exec module can create plan-intent bridge
+  7. optimizer/index.js uses eventBus.emit() instead of non-existent eventBus.publish() -- EVCC state published to event bus without TypeError
+**Plans**: 1 plan
+
+Plans:
+- [ ] 09-01-PLAN.md -- Bootstrap wiring, telemetry stream fix, module interfaces, WebSocket broadcast
+
 ## Progress
 
 **Execution Order:**
@@ -177,3 +196,4 @@ Phases execute in numeric order. Phases 3 and 4 share Phase 2 as dependency and 
 | 6. Arbitration + Execution | 2/2 | Complete   | 2026-03-14 |
 | 7. Deployment | 2/2 | Complete   | 2026-03-14 |
 | 8. UI Modernization | 3/3 | Complete   | 2026-03-14 |
+| 9. Integration Wiring | 1/1 | Complete   | 2026-03-14 |
