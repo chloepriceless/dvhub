@@ -13,8 +13,9 @@ import { html } from 'htm/preact';
  * @param {number} [props.max] - Max for number type
  * @param {number} [props.step] - Step for number type
  * @param {string} [props.hint] - Help text below the field
+ * @param {string} [props.placeholder] - Placeholder text for input fields
  */
-export function SettingsField({ type, name, label, value, onChange, options, min, max, step, hint }) {
+export function SettingsField({ type, name, label, value, onChange, options, min, max, step, hint, placeholder }) {
   const handleChange = (val) => {
     if (onChange) onChange({ name, value: val });
   };
@@ -29,6 +30,7 @@ export function SettingsField({ type, name, label, value, onChange, options, min
         class="input-field" type="number" name=${name}
         value=${value ?? ''} min=${min} max=${max} step=${step}
         style=${fieldStyle}
+        placeholder=${placeholder}
         onInput=${(e) => handleChange(Number(e.target.value))}
       />`;
       break;
@@ -60,6 +62,7 @@ export function SettingsField({ type, name, label, value, onChange, options, min
         class="input-field" type="password" name=${name}
         value=${value ?? ''}
         style=${fieldStyle}
+        placeholder=${placeholder}
         onInput=${(e) => handleChange(e.target.value)}
       />`;
       break;
@@ -72,11 +75,22 @@ export function SettingsField({ type, name, label, value, onChange, options, min
       >${value ?? ''}</textarea>`;
       break;
 
+    case 'time':
+      input = html`<input
+        class="input-field" type="time" name=${name}
+        value=${value ?? ''}
+        style=${fieldStyle}
+        placeholder=${placeholder}
+        onInput=${(e) => handleChange(e.target.value)}
+      />`;
+      break;
+
     default: // text
       input = html`<input
         class="input-field" type="text" name=${name}
         value=${value ?? ''}
         style=${fieldStyle}
+        placeholder=${placeholder}
         onInput=${(e) => handleChange(e.target.value)}
       />`;
       break;
