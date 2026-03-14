@@ -25,23 +25,27 @@ export function loadConfig(configPath) {
   const effectiveConfig = loaded.effectiveConfig;
 
   // Merge in modules defaults
+  // If no modules section exists in config, enable both for backward compatibility
   if (!effectiveConfig.modules) {
-    effectiveConfig.modules = { ...DEFAULT_MODULES };
+    effectiveConfig.modules = {
+      dv: { enabled: true },
+      optimizer: { enabled: true }
+    };
   } else {
     effectiveConfig.modules = {
       dv: { enabled: false, ...effectiveConfig.modules.dv },
       optimizer: { enabled: false, ...effectiveConfig.modules.optimizer }
     };
-  }
 
-  // Validate: at least one of DV or Optimizer must be active
-  const dvEnabled = effectiveConfig.modules.dv.enabled === true;
-  const optEnabled = effectiveConfig.modules.optimizer.enabled === true;
+    // Validate: at least one of DV or Optimizer must be active
+    const dvEnabled = effectiveConfig.modules.dv.enabled === true;
+    const optEnabled = effectiveConfig.modules.optimizer.enabled === true;
 
-  if (!dvEnabled && !optEnabled) {
-    throw new Error(
-      'At least one of DV or Optimizer must be active alongside Gateway'
-    );
+    if (!dvEnabled && !optEnabled) {
+      throw new Error(
+        'At least one of DV or Optimizer must be active alongside Gateway'
+      );
+    }
   }
 
   return {

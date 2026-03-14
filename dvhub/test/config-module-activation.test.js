@@ -85,14 +85,13 @@ describe('loadConfig - module activation', () => {
     }
   });
 
-  it('throws when modules section is missing (defaults both to disabled)', () => {
+  it('enables both modules when modules section is missing (backward compat)', () => {
     const { configPath, tmpDir } = writeTempConfig({});
-    // No modules key at all
+    // No modules key at all — should default to both enabled for backward compatibility
     try {
-      assert.throws(
-        () => loadConfig(configPath),
-        /at least one of DV or Optimizer must be active/i
-      );
+      const result = loadConfig(configPath);
+      assert.equal(result.config.modules.dv.enabled, true);
+      assert.equal(result.config.modules.optimizer.enabled, true);
     } finally {
       cleanup(tmpDir);
     }
