@@ -91,26 +91,57 @@ function formatChartCentValue(value) {
   return fmtCentValue(Number(value) * 100);
 }
 
-function getChartHighlightSets(values, { highCount = 4, lowCount = 8 } = {}) {
+function getChartHighlightSets(values, { highCount = 4, lowCount = 8, timestamps = [] } = {}) {
   const ranked = (Array.isArray(values) ? values : [])
     .map((value, index) => ({ value: Number(value), index }))
     .filter((entry) => Number.isFinite(entry.value));
 
-  const high = new Set(
+  // Group entries by calendar day (00:00-24:00) when timestamps are available
+  const hasTimestamps = Array.isArray(timestamps) && timestamps.length === (Array.isArray(values) ? values : []).length;
+  const dayGroups = new Map();
+  if (hasTimestamps) {
+    for (const entry of ranked) {
+      const ts = Number(timestamps[entry.index]);
+      if (!Number.isFinite(ts)) continue;
+      const dateKey = new Date(ts).toLocaleDateString('en-CA'); // YYYY-MM-DD
+      if (!dayGroups.has(dateKey)) dayGroups.set(dateKey, []);
+      dayGroups.get(dateKey).push(entry);
+    }
+  }
+
+  const high = new Set();
+  const low = new Set();
+
+  if (dayGroups.size > 0) {
+    // Per-day highlights
+    for (const [, group] of dayGroups) {
+      group
+        .slice()
+        .sort((left, right) => right.value - left.value)
+        .slice(0, highCount)
+        .forEach((entry) => high.add(entry.index));
+      group
+        .slice()
+        .filter((entry) => entry.value < 0)
+        .sort((left, right) => left.value - right.value)
+        .slice(0, lowCount)
+        .forEach((entry) => low.add(entry.index));
+    }
+  } else {
+    // Fallback: global highlights (no timestamps)
     ranked
       .slice()
       .sort((left, right) => right.value - left.value)
       .slice(0, highCount)
-      .map((entry) => entry.index)
-  );
-  const low = new Set(
+      .forEach((entry) => high.add(entry.index));
     ranked
       .slice()
       .filter((entry) => entry.value < 0)
       .sort((left, right) => left.value - right.value)
       .slice(0, lowCount)
-      .map((entry) => entry.index)
-  );
+      .forEach((entry) => low.add(entry.index));
+  }
+
   return { high, low };
 }
 
@@ -535,7 +566,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     focusBandFloor: -0.01
   }).y;
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
-  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals);
+  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, {
+    timestamps: data.map((d) => d.ts)
+  });
 
   for (let i = 0; i <= 6; i++) {
     const vv = min + ((max - min) * i) / 6;

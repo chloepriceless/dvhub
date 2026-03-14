@@ -40,6 +40,7 @@ import {
   buildAutomationRuleChain,
   buildChainVariants,
   computeAvailableEnergyKwh,
+  computeNextPeriodBounds,
   expandChainSlots,
   filterSlotsByTimeWindow,
   filterFreeAutomationSlots,
@@ -273,12 +274,27 @@ function buildSmallMarketAutomationRules({
 } = {}) {
   if (!automationConfig?.enabled || !sunTimesCache) return [];
 
+  const timeZoneForFilter = cfg.schedule?.timezone || 'Europe/Berlin';
+  const periodBounds = computeNextPeriodBounds({
+    now,
+    searchWindowStart: automationConfig?.searchWindowStart,
+    searchWindowEnd: automationConfig?.searchWindowEnd,
+    timeZone: timeZoneForFilter
+  });
   const filteredPriceSlots = filterSlotsByTimeWindow({
     slots: priceSlots,
     searchWindowStart: automationConfig?.searchWindowStart,
     searchWindowEnd: automationConfig?.searchWindowEnd,
-    timeZone: cfg.schedule?.timezone || 'Europe/Berlin'
-  }).filter((slot) => Number(slot?.ts) >= now);
+    timeZone: timeZoneForFilter
+  }).filter((slot) => {
+    const ts = Number(slot?.ts);
+    if (ts < now) return false;
+    // Constrain to the next period only (not subsequent periods)
+    if (periodBounds) {
+      return ts >= periodBounds.startTs && ts < periodBounds.endTs;
+    }
+    return true;
+  });
   const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
   const dateStr = berlinDateString(new Date(now));
   const refDate = new Date(`${dateStr}T12:00:00Z`);
