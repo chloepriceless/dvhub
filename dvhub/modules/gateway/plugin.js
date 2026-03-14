@@ -39,7 +39,6 @@ async function registerGatewayPlugin(fastify, opts) {
   await fastify.register(fastifyStatic, {
     root: api.getPublicDir(),
     prefix: '/',
-    decorateReply: false,
     wildcard: false,
     index: false
   });
