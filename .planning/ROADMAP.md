@@ -123,11 +123,11 @@ Plans:
   2. No module writes to hardware directly -- all control flows through the execution layer via Device HAL, and any direct hardware write attempt is blocked or logged as a violation
   3. Every hardware command is logged with source, priority, target, value, and timestamp -- and a readback verification confirms the command was applied
   4. Deviation alerting fires when readback differs from commanded value by more than a configurable threshold
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [ ] 06-01-PLAN.md -- Arbitrator core with fixed-priority resolution and executor with command logging, readback verification, deviation alerting
+- [ ] 06-02-PLAN.md -- Exec module lifecycle, plan-intent bridge, API routes, and integration tests
 
 ### Phase 7: Deployment
 **Goal**: DVhub deploys reliably in three modes (native-only, hybrid, full-Docker) with the hybrid mode as recommended default, and external optimizers run as managed Docker containers with resource limits
