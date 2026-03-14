@@ -88,7 +88,7 @@ function roundCt(value) {
 
 function formatChartCentValue(value) {
   if (!Number.isFinite(Number(value))) return '-';
-  return fmtCentValue(Number(value) * 100);
+  return fmtCentValue(Number(value) * 100, 0);
 }
 
 function getChartHighlightSets(values, { highCount = 4, lowCount = 8, timestamps = [] } = {}) {
@@ -546,13 +546,16 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const importVals = data
     .map((d) => Number(comparisonByTs.get(Number(d.ts))?.importPriceCtKwh) / 100)
     .filter((value) => Number.isFinite(value));
-  const allVals = vals.concat(importVals);
-  let min = Math.min(...allVals);
-  let max = Math.max(...allVals);
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
   if (min === max) {
     min -= 1;
     max += 1;
   }
+  const importNearMarket = importVals.length > 0 && importVals.some((iv) => iv >= min && iv <= max);
+  const importMargin = (max - min) * 0.15;
+  const importClose = importVals.length > 0 && importVals.some((iv) => iv >= min - importMargin && iv <= max + importMargin);
+  const showImportLine = importNearMarket || importClose;
 
   const barW = (W - padL - padR) / data.length;
   const x = (i) => padL + i * barW;
@@ -696,11 +699,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       return `${x(index) + (barW / 2)},${y(importCtKwh / 100)}`;
     })
     .filter(Boolean);
-  if (importPoints.length >= 2) {
+  if (showImportLine && importPoints.length >= 2) {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
     line.setAttribute('fill', 'none');
     line.setAttribute('stroke', chartImport);
     line.setAttribute('stroke-width', '2.5');
+    line.setAttribute('stroke-dasharray', '8 4');
     line.setAttribute('stroke-linejoin', 'round');
     line.setAttribute('stroke-linecap', 'round');
     line.setAttribute('points', importPoints.join(' '));
