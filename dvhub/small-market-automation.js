@@ -209,6 +209,114 @@ export function filterSlotsByTimeWindow({
 }
 
 /**
+ * Compute the absolute timestamp bounds [startTs, endTs) of the next search period
+ * relative to `now`. For an overnight window like 14:00→09:00, this returns
+ * today 14:00 → tomorrow 09:00 if now < today 09:00 or now >= today 14:00,
+ * otherwise tomorrow 14:00 → day-after 09:00.
+ * For a same-day window like 09:00→14:00, it returns the next occurrence of that window.
+ */
+export function computeNextPeriodBounds({
+  now,
+  searchWindowStart,
+  searchWindowEnd,
+  timeZone = 'Europe/Berlin'
+} = {}) {
+  const startMin = parseHHMM(searchWindowStart);
+  const endMin = parseHHMM(searchWindowEnd);
+  if (startMin == null || endMin == null || !Number.isFinite(now)) return null;
+
+  // Get the local date components for `now`
+  const dtf = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  const parts = dtf.formatToParts(new Date(now));
+  const year = Number(parts.find((p) => p.type === 'year')?.value);
+  const month = Number(parts.find((p) => p.type === 'month')?.value);
+  const day = Number(parts.find((p) => p.type === 'day')?.value);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value);
+  if ([year, month, day, hour, minute].some((v) => !Number.isFinite(v))) return null;
+  const nowMin = hour * 60 + minute;
+
+  // Helper: create a timestamp for a given local date + minutes-of-day
+  function localToTs(y, m, d, minuteOfDay) {
+    const hh = String(Math.floor(minuteOfDay / 60)).padStart(2, '0');
+    const mm = String(minuteOfDay % 60).padStart(2, '0');
+    // Build a date string and compute offset for the timezone
+    const refDate = new Date(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T${hh}:${mm}:00Z`);
+    const localParts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23'
+    }).format(refDate);
+    const [dPart, tPart] = localParts.split(', ');
+    const [dd, mm2, yyyy] = dPart.split('/');
+    const localRef = new Date(`${yyyy}-${mm2}-${dd}T${tPart}Z`);
+    const offsetMs = localRef.getTime() - refDate.getTime();
+    return refDate.getTime() - offsetMs;
+  }
+
+  function addDays(y, m, d, count) {
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + count);
+    return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+  }
+
+  const isOvernight = startMin > endMin;
+
+  if (isOvernight) {
+    // Window spans midnight, e.g. 14:00 → 09:00
+    // Period A: today startMin → tomorrow endMin
+    // Period B: tomorrow startMin → day-after endMin
+    // We're in period A if now >= startMin today OR now < endMin today (which means period started yesterday)
+    if (nowMin >= startMin) {
+      // Period starts today at startMin, ends tomorrow at endMin
+      const next = addDays(year, month, day, 1);
+      return {
+        startTs: localToTs(year, month, day, startMin),
+        endTs: localToTs(next.y, next.m, next.d, endMin)
+      };
+    }
+    if (nowMin < endMin) {
+      // We're in the tail end of a period that started yesterday
+      const prev = addDays(year, month, day, -1);
+      return {
+        startTs: localToTs(prev.y, prev.m, prev.d, startMin),
+        endTs: localToTs(year, month, day, endMin)
+      };
+    }
+    // now is between endMin and startMin — next period starts today at startMin
+    const next = addDays(year, month, day, 1);
+    return {
+      startTs: localToTs(year, month, day, startMin),
+      endTs: localToTs(next.y, next.m, next.d, endMin)
+    };
+  }
+
+  // Same-day window, e.g. 09:00 → 14:00
+  if (nowMin < endMin) {
+    return {
+      startTs: localToTs(year, month, day, startMin),
+      endTs: localToTs(year, month, day, endMin)
+    };
+  }
+  // Next occurrence is tomorrow
+  const next = addDays(year, month, day, 1);
+  return {
+    startTs: localToTs(next.y, next.m, next.d, startMin),
+    endTs: localToTs(next.y, next.m, next.d, endMin)
+  };
+}
+
+/**
  * Split chronologically sorted slots into contiguous segments.
  * Two slots are contiguous when their timestamps differ by exactly slotDurationMs.
  */

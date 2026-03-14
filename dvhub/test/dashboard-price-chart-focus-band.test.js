@@ -94,11 +94,78 @@ test('dashboard source uses cent chart labels and highlight fills', () => {
   const app = fs.readFileSync(appPath, 'utf8');
 
   assert.match(app, /formatChartCentValue\(vv\)/);
-  assert.match(app, /getChartHighlightSets\(vals\)/);
+  assert.match(app, /getChartHighlightSets\(vals,/);
   assert.match(app, /enableFocusBand:\s*vals\.some\(\(value\)\s*=>\s*Number\.isFinite\(value\)\s*&&\s*value\s*>=\s*-0\.01\s*&&\s*value\s*<=\s*0\.01\)/);
   assert.match(app, /chartPositiveHighlight/);
   assert.match(app, /chartNegativeHighlight/);
   assert.match(app, /createPriceChartScale\(/);
+});
+
+test('getChartHighlightSets highlights per day when timestamps are provided', () => {
+  const helpers = loadDashboardHelpers();
+
+  // Two days of data: day 1 has 4 values, day 2 has 4 values
+  const day1Base = Date.parse('2026-03-14T00:00:00Z');
+  const day2Base = Date.parse('2026-03-15T00:00:00Z');
+  const hour = 3600000;
+
+  const values = [
+    10, 5, 3, 1,    // day 1: indices 0-3
+    20, 15, 8, 2    // day 2: indices 4-7
+  ];
+  const timestamps = [
+    day1Base, day1Base + hour, day1Base + 2 * hour, day1Base + 3 * hour,
+    day2Base, day2Base + hour, day2Base + 2 * hour, day2Base + 3 * hour
+  ];
+
+  const result = helpers.getChartHighlightSets(values, {
+    highCount: 2,
+    lowCount: 8,
+    timestamps
+  });
+
+  // Day 1 top 2: indices 0 (10) and 1 (5)
+  // Day 2 top 2: indices 4 (20) and 5 (15)
+  // Total: 4 highlights, not just global top 2 (which would be indices 4, 5)
+  const highIndices = [...result.high].sort((a, b) => a - b);
+  assert.deepEqual(highIndices, [0, 1, 4, 5], 'should highlight top 2 per day, not globally');
+});
+
+test('getChartHighlightSets highlights negative values per day', () => {
+  const helpers = loadDashboardHelpers();
+
+  const day1Base = Date.parse('2026-03-14T00:00:00Z');
+  const day2Base = Date.parse('2026-03-15T00:00:00Z');
+  const hour = 3600000;
+
+  const values = [
+    5, -1, -3, 2,    // day 1: negatives at indices 1, 2
+    8, -5, -2, 3     // day 2: negatives at indices 5, 6
+  ];
+  const timestamps = [
+    day1Base, day1Base + hour, day1Base + 2 * hour, day1Base + 3 * hour,
+    day2Base, day2Base + hour, day2Base + 2 * hour, day2Base + 3 * hour
+  ];
+
+  const result = helpers.getChartHighlightSets(values, {
+    highCount: 4,
+    lowCount: 2,
+    timestamps
+  });
+
+  const lowIndices = [...result.low].sort((a, b) => a - b);
+  // Day 1 bottom 2 negative: indices 1 (-1) and 2 (-3)
+  // Day 2 bottom 2 negative: indices 5 (-5) and 6 (-2)
+  assert.deepEqual(lowIndices, [1, 2, 5, 6], 'should highlight lowest negatives per day');
+});
+
+test('getChartHighlightSets falls back to global when no timestamps provided', () => {
+  const helpers = loadDashboardHelpers();
+
+  // Same test as the existing one — backward compatibility
+  const result = helpers.getChartHighlightSets([2, 7, -1, -3, 5, 1, -2, 8, -5, 4, -4, 6]);
+  assert.deepEqual([...result.high].sort((left, right) => left - right), [1, 4, 7, 11]);
+  assert.deepEqual([...result.low].sort((left, right) => left - right), [2, 3, 6, 8, 10]);
 });
 
 test('dashboard source formats tooltip market prices with two cent decimals', () => {
