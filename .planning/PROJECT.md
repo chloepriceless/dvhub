@@ -68,9 +68,9 @@ Das System muss zuverlaessig und in Echtzeit die Direktvermarktungs-Schnittstell
 - [ ] Plan-Scoring, Vergleich, automatische Winner-Auswahl zwischen Optimierern
 
 **Datenarchitektur:**
-- [ ] Austauschbare DB-Schicht (Database Adapter Pattern): SQLite Default fuer Pi, TimescaleDB/PostgreSQL fuer Server
-- [ ] SQLite-Backend: WAL-Optimierung, manuelles Partitioning, eigene Rollup-Engine
-- [ ] TimescaleDB-Backend: Continuous Aggregates, native Compression, Retention Policies
+- [ ] Austauschbare DB-Schicht (Database Adapter Pattern): TimescaleDB als Default, SQLite als Lightweight-Fallback
+- [ ] TimescaleDB-Backend (Default): Hypertables, Continuous Aggregates, native Compression, Retention Policies
+- [ ] SQLite-Backend (Fallback): WAL-Optimierung, manuelles Partitioning, eigene Rollup-Engine
 - [ ] Multi-Resolution-Datenhaltung: Raw ~1s (7d), 5min (90d), 15min (2y), Daily (forever)
 - [ ] Schema-Trennung per Table-Prefix: shared_, dv_, opt_, exec_, telemetry_
 - [ ] Monthly partitioned raw-telemetry tables (telemetry_raw_YYYY_MM bei SQLite, Hypertables bei TimescaleDB)
@@ -113,7 +113,7 @@ Das System muss zuverlaessig und in Echtzeit die Direktvermarktungs-Schnittstell
 
 <!-- Explicit boundaries — these come later or are deliberately excluded. -->
 
-- GPIO-Pins fuer Funkrundsteuerempfaenger — spaeter, Architektur vorbereiten
+- GPIO-Pins fuer Funkrundsteuerempfaenger — spaeter, ueber Modbus RTU I/O-Module (DIN-Hutschiene) oder x86-SBC GPIO oder ESP32+MQTT
 - CLS-Steuerboxen — spaeter
 - EEBUS-Kommunikation — spaeter
 - Blend-Modus (Optimizer-Mixing auf Slot-Ebene) — erst nach genug Evidenz
@@ -124,9 +124,9 @@ Das System muss zuverlaessig und in Echtzeit die Direktvermarktungs-Schnittstell
 
 **Bestehende Codebase:** Monolithischer Node.js Server (~2800 Zeilen server.js), ES Modules, kein Framework, node:sqlite fuer Telemetrie, Vanilla HTML/JS Frontend. Funktioniert produktiv mit Victron-Hardware und LUOX-Direktvermarkter.
 
-**Zielplattform:** Primaer x86 Server/VM/NAS, muss aber auch auf Raspberry Pi (ARM64, 4GB) laufen fuer GPIO-Zugriff und Edge-Deployments.
+**Zielplattform:** Primaer x86 (Server, VM, NAS, Mini-PC). Pi bleibt als Edge-Option, treibt aber nicht die Architektur-Entscheidungen. GPIO-Zugriff (Funkrundsteuerempfaenger, CLS) ueber externe Modbus-RTU-I/O-Module (DIN-Hutschiene + USB-RS485-Adapter), nicht ueber onboard GPIO. Alternativ: x86-SBCs mit GPIO (Radxa X4, LattePanda Mu) oder ESP32+MQTT fuer verteilte I/O.
 
-**Neue Dependencies (v2):** Fastify (HTTP + Ajv Validierung + Pino Logging), @fastify/websocket (ws), RxJS (interner Event-Bus mit BehaviorSubject). Optional: pg (PostgreSQL-Treiber bei TimescaleDB).
+**Neue Dependencies (v2):** Fastify (HTTP + Ajv Validierung + Pino Logging), @fastify/websocket (ws), RxJS (interner Event-Bus mit BehaviorSubject), pg (PostgreSQL-Treiber fuer TimescaleDB Default). Optional: node:sqlite als Fallback-Backend.
 
 **Vorhandene Architektur-Dokumente:** Vier detaillierte Design-Dokumente existieren unter `docs/plans/2026-03-10-*`:
 - PostgreSQL Schema Blueprint (4 Schemas: shared, dv, opt, exec) — dient als Referenz fuer TimescaleDB-Backend
@@ -134,7 +134,7 @@ Das System muss zuverlaessig und in Echtzeit die Direktvermarktungs-Schnittstell
 - Optimizer Orchestrator Design (6-Layer Architektur)
 - Data Architecture Masterlist (MVP + Phase 2 Tabellen)
 
-Diese Dokumente dienen als Referenz. DB ist austauschbar: SQLite (Pi-Default) oder TimescaleDB/PostgreSQL (Server-Empfehlung).
+Diese Dokumente dienen als Referenz. DB ist austauschbar: TimescaleDB/PostgreSQL (Default) oder SQLite (Lightweight-Fallback).
 
 **Codebase-Map:** Detaillierte Analyse unter `.planning/codebase/` (7 Dokumente, 1360 Zeilen).
 
@@ -148,7 +148,7 @@ Diese Dokumente dienen als Referenz. DB ist austauschbar: SQLite (Pi-Default) od
 
 ## Constraints
 
-- **Platform**: Muss auf Raspberry Pi (ARM, begrenzte Ressourcen) UND x86 laufen — beeinflusst DB-Wahl und Performance-Budget
+- **Platform**: Primaer x86 (Server, VM, NAS, Mini-PC). Pi als Edge-Option unterstuetzt aber nicht Architektur-treibend. GPIO extern ueber Modbus RTU I/O-Module
 - **Node.js**: Node.js >= 22.5 als Runtime (wegen node:sqlite), Wechsel nur wenn Research Phase bessere Alternative zeigt
 - **Echtzeit**: DV-Messwert-Lieferung und Abregelung muessen in Echtzeit funktionieren — keine Verzoegerung durch Optimizer-Logik
 - **Wartbarkeit**: Modulare Struktur, keine zu komplexe Codestruktur, einzelne Teile austauschbar
@@ -163,7 +163,7 @@ Diese Dokumente dienen als Referenz. DB ist austauschbar: SQLite (Pi-Default) od
 |----------|-----------|---------|
 | 3 Module: Gateway + DV + Optimierung | Universalitaet und unabhaengiger Betrieb, mindestens ein Modul neben Gateway aktiv | ✓ Confirmed — In-Process Modular Monolith (kein Microservice) |
 | Hersteller-Configs externalisiert | Keine hart-verdrahteten Register im Code, User kann eigene Configs anlegen | ✓ Confirmed — Device HAL mit Driver-Interface |
-| DB: Austauschbare DB-Schicht | SQLite Default (Pi), TimescaleDB/PostgreSQL fuer Server. Database Adapter Pattern | ✓ Decided — SQLite + TimescaleDB via Adapter |
+| DB: TimescaleDB als Default | TimescaleDB/PostgreSQL Default (x86), SQLite als Lightweight-Fallback. Database Adapter Pattern | ✓ Decided — TimescaleDB Default + SQLite Fallback |
 | UI: Preact + HTM (kein Build-Step) | 5KB total, React-API, tagged templates statt JSX, inkrementelle Migration. Beste Wahl nach Vergleich mit Vue, Svelte, Alpine, Lit, Solid | ✓ Decided — Preact 10.x + HTM 3.x |
 | Deployment: Hybrid als Default | DVhub nativ via systemd, EOS/EMHASS/EVCC als Docker Container mit CPU/Mem Limits | ✓ Decided — Hybrid Default, Full-Docker optional |
 | Modul-Trennung als erste Prioritaet | Architektur-Fundament muss stehen bevor Features drauf gebaut werden | ✓ Confirmed |
@@ -172,7 +172,9 @@ Diese Dokumente dienen als Referenz. DB ist austauschbar: SQLite (Pi-Default) od
 | HTTP-Framework: Fastify | Ersetzt 50 if/else-Routing-Branches, bringt Ajv (Validierung) + Pino (Logging) mit. Bester Wert pro Dependency | ✓ Decided — Fastify + @fastify/websocket |
 | WebSocket: ws (via @fastify/websocket) | Standard-WebSocket, universell, kein eigenes Protokoll. Socket.io Overkill fuer LAN+VPN Use Case | ✓ Decided — ws, kein Socket.io |
 | DV-Echtzeit-Pfad: synchron in-process | DV-Messwert darf NICHT async werden — Vertragliche Pflicht, Latenz-Budget 2x pollInterval | ✓ Architectural Rule |
-| Dependencies: Strategisch minimal | Fastify + RxJS + ws als Kern-Dependencies. pg nur bei TimescaleDB. Keine Express, Socket.io, Winston, PM2 | ✓ Decided |
+| Dependencies: Strategisch minimal | Fastify + RxJS + ws + pg als Kern-Dependencies. node:sqlite nur bei Fallback. Keine Express, Socket.io, Winston, PM2 | ✓ Decided |
+| Zielplattform: x86 primaer | x86 (Server/VM/NAS/Mini-PC) als primaere Plattform. Pi nur Edge-Option, treibt nicht die Architektur | ✓ Decided |
+| GPIO: Extern ueber Modbus RTU | GPIO-Zugriff (FRE, CLS) ueber DIN-Hutschienen Modbus-I/O-Module + USB-RS485. Kein onboard GPIO noetig | ✓ Decided — Alternativ: x86-SBC (Radxa X4), ESP32+MQTT |
 | User-Rollen | readonly / user / admin — Grundstruktur fuer Remote-Zugriff via VPN vorbereiten | ✓ Decided — Auth-Token bei WS-Handshake |
 | MQTT nur fuer Geraetekommunikation | MQTT (Mosquitto) bleibt fuer Hardware-Anbindung. Interner Bus ist RxJS, nicht MQTT | ✓ Decided |
 
@@ -208,7 +210,7 @@ Diese Dokumente dienen als Referenz. DB ist austauschbar: SQLite (Pi-Default) od
 | OPT-09 | Dashboard: live data, DV states, prices, planning, switches | Phase 5 | Pending |
 | OPT-10 | History data from all endpoints | Phase 5 | Pending |
 | OPT-11 | Plan scoring, comparison, winner selection | Phase 4 | Pending |
-| DATA-01 | Database Adapter Pattern (austauschbar: SQLite / TimescaleDB) | Phase 2 | Pending |
+| DATA-01 | Database Adapter Pattern (TimescaleDB Default, SQLite Fallback) | Phase 2 | Pending |
 | DATA-02 | Multi-resolution data retention | Phase 2 | Pending |
 | DATA-03 | Schema separation via table prefix | Phase 2 | Pending |
 | DATA-04 | Monthly partitioned raw telemetry (SQLite) / Hypertables (TimescaleDB) | Phase 2 | Pending |

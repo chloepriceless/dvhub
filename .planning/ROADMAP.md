@@ -43,17 +43,17 @@ Plans:
 - [ ] 01-03: TBD
 
 ### Phase 2: Data Architecture
-**Goal**: Telemetry storage supports multi-resolution retention with automatic rollups via a Database Adapter Pattern -- SQLite backend for Pi, TimescaleDB/PostgreSQL backend for servers, both behind the same interface
+**Goal**: Telemetry storage supports multi-resolution retention with automatic rollups via a Database Adapter Pattern -- TimescaleDB/PostgreSQL as default backend, SQLite as lightweight fallback, both behind the same interface
 **Depends on**: Phase 1
 **Requirements**: DATA-01, DATA-02, DATA-03, DATA-04, DATA-05, DATA-06, GW-04
 **Success Criteria** (what must be TRUE):
   1. Database Adapter interface abstracts storage operations -- modules call adapter methods, never raw SQL specific to one backend
-  2. SQLite backend: WAL mode, optimized PRAGMAs, monthly partitioned raw tables (telemetry_raw_YYYY_MM), manual rollup engine
-  3. TimescaleDB backend: Hypertables for telemetry, Continuous Aggregates for 5min/15min/daily rollups, native compression and retention policies
-  4. Rollup engine automatically aggregates raw samples into 5-min, 15-min, and daily resolution on schedule (manual for SQLite, Continuous Aggregates for TimescaleDB)
+  2. TimescaleDB backend (default): Hypertables for telemetry, Continuous Aggregates for 5min/15min/daily rollups, native compression and retention policies via pg driver
+  3. SQLite backend (fallback): WAL mode, optimized PRAGMAs, monthly partitioned raw tables (telemetry_raw_YYYY_MM), manual rollup engine
+  4. Rollup engine automatically aggregates raw samples into 5-min, 15-min, and daily resolution (Continuous Aggregates for TimescaleDB, manual for SQLite)
   5. Retention policy enforces cleanup: raw data older than 7 days is purged after rollup confirmation, 5-min data retained 90 days, 15-min data retained 2 years
-  6. All tables follow schema-prefix convention (shared_, dv_, opt_, exec_, telemetry_) and queries against 30-day history return in under 500ms on Pi hardware
-  7. Backend selection via config: `database.backend: "sqlite" | "timescaledb"`
+  6. All tables follow schema-prefix convention (shared_, dv_, opt_, exec_, telemetry_) and queries against 30-day history return in under 500ms
+  7. Backend selection via config: `database.backend: "timescaledb" | "sqlite"` (default: timescaledb)
 **Plans**: TBD
 
 Plans:
