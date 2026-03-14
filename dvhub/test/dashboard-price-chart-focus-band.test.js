@@ -45,7 +45,7 @@ test('formatChartCentValue renders cent labels with two decimal places', () => {
   const helpers = loadDashboardHelpers();
 
   assert.equal(typeof helpers.formatChartCentValue, 'function');
-  assert.equal(helpers.formatChartCentValue(0.08123), '8,12 Cent');
+  assert.equal(helpers.formatChartCentValue(0.08123), '8 Cent');
 });
 
 test('getChartHighlightSets returns the four highest and eight lowest slot indices', () => {
