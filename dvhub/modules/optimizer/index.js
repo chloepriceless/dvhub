@@ -14,6 +14,10 @@ import { createEmhassAdapter } from './adapters/emhass.js';
 import { createPlanEngine } from './plan-engine.js';
 import { createPlanScorer } from './plan-scorer.js';
 import optimizerPlugin from './plugin.js';
+import { createEvccBridge } from './services/evcc-bridge.js';
+import { createForecastBroker } from './services/forecast-broker.js';
+import { createTariffEngine } from './services/tariff-engine.js';
+import { createMispelTracker } from './services/mispel-tracker.js';
 
 /**
  * Create an Optimizer module instance.
@@ -25,6 +29,11 @@ export function createOptimizerModule(config) {
   let adapterRegistry = null;
   let planEngine = null;
   let scorer = null;
+  let evccBridge = null;
+  let forecastBroker = null;
+  let tariffEngine = null;
+  let mispelTracker = null;
+  let evccSubscription = null;
 
   return {
     name: 'optimizer',
@@ -77,7 +86,47 @@ export function createOptimizerModule(config) {
         }
       }
 
-      // 5. Create triggerOptimization function (fire-and-forget)
+      // 5b. Create forecast broker (always created)
+      forecastBroker = createForecastBroker({ log, maxStaleMs: optConfig.forecastStaleMs || 21600000 });
+
+      // 5c. Create tariff engine
+      tariffEngine = createTariffEngine({ config: config.userEnergyPricing || {}, log });
+
+      // 5d. Create MISPEL tracker (disabled by default)
+      mispelTracker = createMispelTracker({ config: optConfig.mispel || { enabled: false }, db: ctx.db || null, log });
+
+      // 5e. Create EVCC bridge (only if configured)
+      const evccConfig = optConfig.evcc || {};
+      if (evccConfig.baseUrl) {
+        evccBridge = createEvccBridge({
+          baseUrl: evccConfig.baseUrl,
+          pollIntervalMs: evccConfig.pollIntervalMs || 30000,
+          log,
+        });
+        evccBridge.start();
+
+        // OPT-10: Publish EVCC state to event bus for unified telemetry
+        evccSubscription = evccBridge.getState$().subscribe(state => {
+          if (state && ctx.eventBus) {
+            ctx.eventBus.publish('evcc.state', state);
+          }
+          // History persistence: write EVCC loadpoint telemetry to DB
+          if (state && ctx.db) {
+            const ts = state.updatedAt;
+            const samples = (state.loadpoints || []).flatMap((lp, i) => [
+              { ts, seriesKey: `evcc.lp${i}.chargePower`, valueNum: lp.chargePower, unit: 'W' },
+              { ts, seriesKey: `evcc.lp${i}.vehicleSoc`, valueNum: lp.vehicleSoc ?? 0, unit: '%' },
+            ]);
+            if (samples.length > 0) {
+              ctx.db.insertSamples(samples).catch(err => {
+                log?.warn({ err: err.message }, 'Failed to persist EVCC telemetry');
+              });
+            }
+          }
+        });
+      }
+
+      // 5f. Create triggerOptimization function (fire-and-forget)
       const triggerOptimization = () => {
         // Get current telemetry snapshot from event bus
         const telemetry = ctx.eventBus?.getValue('telemetry') || {};
@@ -98,7 +147,7 @@ export function createOptimizerModule(config) {
 
         // Fire-and-forget: call each adapter with AbortSignal.timeout(5000)
         for (const adapter of adapterRegistry.getAll()) {
-          callOptimizer(adapter, snapshot, planEngine, log)
+          callOptimizer(adapter, snapshot, planEngine, forecastBroker, log)
             .catch(err => {
               log?.warn({ adapter: adapter.name, err: err.message }, 'Optimizer call failed');
             });
@@ -106,7 +155,7 @@ export function createOptimizerModule(config) {
       };
 
       // 6. Create Fastify plugin wrapper
-      const pluginOpts = { planEngine, adapterRegistry, triggerOptimization };
+      const pluginOpts = { planEngine, adapterRegistry, triggerOptimization, evccBridge, forecastBroker, tariffEngine, mispelTracker };
       this.plugin = async function optimizerPluginWrapper(fastify) {
         await fastify.register(optimizerPlugin, pluginOpts);
       };
@@ -117,6 +166,11 @@ export function createOptimizerModule(config) {
     },
 
     async destroy() {
+      if (evccSubscription) { evccSubscription.unsubscribe(); evccSubscription = null; }
+      if (evccBridge) { evccBridge.stop(); evccBridge = null; }
+      if (forecastBroker) { forecastBroker.destroy(); forecastBroker = null; }
+      tariffEngine = null;
+      mispelTracker = null;
       if (planEngine) planEngine.destroy();
       adapterRegistry = null;
       planEngine = null;
@@ -134,11 +188,14 @@ export function createOptimizerModule(config) {
  * @param {object} planEngine - Plan engine to submit results to
  * @param {object} log - Logger
  */
-async function callOptimizer(adapter, snapshot, planEngine, log) {
+async function callOptimizer(adapter, snapshot, planEngine, forecastBroker, log) {
   try {
     const plan = await adapter.optimize(snapshot, { signal: AbortSignal.timeout(5000) });
     if (plan) {
       planEngine.submitPlan(plan);
+      if (forecastBroker) {
+        forecastBroker.ingestFromPlan(plan);
+      }
     }
   } catch (err) {
     log?.warn({ optimizer: adapter.name, err: err.message }, 'Optimizer call failed');
