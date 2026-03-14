@@ -21,6 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Deployment** - Docker Compose orchestration, hybrid mode, compose-manager, and native install updates (completed 2026-03-14)
 - [x] **Phase 8: UI Modernization** - Preact+HTM migration, animated power flow, setup wizard, and mobile-responsive dashboard (completed 2026-03-14)
 - [x] **Phase 9: Integration Wiring** - Bootstrap wiring, telemetry stream fix, module interfaces, WebSocket broadcast (gap closure from v1.0 audit) (completed 2026-03-14)
+- [x] **Phase 10: Null Safety & WS Field Fix** - Executor null guards for db/hal, WebSocket field name alignment (gap closure from v1.0 re-audit) (completed 2026-03-14)
 
 ## Phase Details
 
@@ -181,6 +182,22 @@ Plans:
 Plans:
 - [ ] 09-01-PLAN.md -- Bootstrap wiring, telemetry stream fix, module interfaces, WebSocket broadcast
 
+### Phase 10: Null Safety & WS Field Fix
+**Goal**: Executor handles null db/hal gracefully without crashing the control pipeline, and WebSocket broadcast field names match between server and UI so live telemetry reaches dashboard components
+**Depends on**: Phase 9
+**Gap Closure**: Closes 3 critical integration gaps from v1.0 re-audit (INT-08 through INT-10)
+**Requirements**: EXEC-01, EXEC-02, EXEC-03, UI-01, UI-04, UI-05, GW-06, DV-02, DV-03
+**Success Criteria** (what must be TRUE):
+  1. executor.js handles null db gracefully -- command logging is skipped (with warning) when ctx.db is null, HAL write still proceeds
+  2. executor.js handles null hal gracefully -- throws descriptive error instead of TypeError on null reference
+  3. WebSocket messages use consistent field names -- use-websocket.js reads the same field name the server broadcasts (data, not payload)
+  4. Live telemetry data reaches UI signal store via WebSocket -- power flow, price chart, and status panels update with real data
+  5. DV curtailment → arbitration → execution flow completes end-to-end without null crashes
+**Plans**: 1 plan
+
+Plans:
+- [ ] 10-01-PLAN.md -- Executor null guards and WebSocket field name fix
+
 ## Progress
 
 **Execution Order:**
@@ -197,3 +214,4 @@ Phases execute in numeric order. Phases 3 and 4 share Phase 2 as dependency and 
 | 7. Deployment | 2/2 | Complete   | 2026-03-14 |
 | 8. UI Modernization | 3/3 | Complete   | 2026-03-14 |
 | 9. Integration Wiring | 1/1 | Complete   | 2026-03-14 |
+| 10. Null Safety & WS Field Fix | 1/1 | Complete   | 2026-03-14 |
