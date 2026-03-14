@@ -3079,15 +3079,18 @@ export function createGatewayModule() {
     name: 'gateway',
     requires: [],
     plugin: null,
+    modbusProxy: null,
 
     async init(ctx) {
       await initializeGatewayRuntime(ctx);
       this.plugin = gatewayPluginInstance;
+      this.modbusProxy = modbusProxy;
     },
 
     async destroy() {
       await destroyGatewayRuntime();
       this.plugin = null;
+      this.modbusProxy = null;
     }
   };
 }

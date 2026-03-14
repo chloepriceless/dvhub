@@ -52,7 +52,8 @@ async function bootstrapServer() {
     eventBus,
     config,
     rawConfig,
-    configPath
+    configPath,
+    registry
   });
 
   for (const mod of registry.getAll()) {
