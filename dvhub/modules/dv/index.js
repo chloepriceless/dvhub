@@ -97,10 +97,19 @@ export function createDvModule(config) {
         });
       }
 
-      // 8. Start lease expiry timer
+      // 8. Inject DV state into gateway's /api/status response
+      if (gateway?.setDvStateProvider) {
+        gateway.setDvStateProvider(() => ({
+          dvRegs: { ...dvState.dvRegs },
+          ctrl: { ...dvState.ctrl },
+          controlValue: curtailment.controlValue()
+        }));
+      }
+
+      // 9. Start lease expiry timer
       curtailment.startLeaseTimer();
 
-      // 9. Create Fastify plugin as wrapper so server.js can register without opts
+      // 10. Create Fastify plugin as wrapper so server.js can register without opts
       const pluginOpts = { state: dvState, curtailment, provider };
       this.plugin = async function dvPluginWrapper(fastify) {
         await fastify.register(dvPlugin, pluginOpts);

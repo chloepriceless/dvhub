@@ -432,6 +432,11 @@ function saveConfigAndBuildResponse(deps, body, source) {
     }
   }
 
+  // Notify gateway to sync runtime state with updated config
+  if (typeof deps.onConfigSaved === 'function') {
+    deps.onConfigSaved();
+  }
+
   pushLog(deps, 'config_saved', {
     changedPaths: changedPaths.length,
     restartRequired,

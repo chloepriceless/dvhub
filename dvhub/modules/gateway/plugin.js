@@ -26,7 +26,8 @@ async function registerGatewayPlugin(fastify, opts) {
     appVersion,
     hal,
     eventBus,
-    scheduleRuntime
+    scheduleRuntime,
+    onConfigSaved
   } = opts;
 
   fastify.addHook('onSend', async (request, reply, payload) => {
@@ -55,7 +56,8 @@ async function registerGatewayPlugin(fastify, opts) {
     getState,
     configPath,
     logBuffer,
-    appVersion
+    appVersion,
+    onConfigSaved
   });
 
   registerControlRoutes(fastify, {

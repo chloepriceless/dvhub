@@ -615,11 +615,12 @@ function buildCurrentRuntimeSnapshot() {
 }
 
 function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCurrentRuntimeSnapshot() } = {}) {
+  const dvState = typeof dvStateProvider === 'function' ? dvStateProvider() : null;
   return {
     now: Number(now),
-    // DV control value and registers are now provided by the DV module (/api/dv/status)
-    dvControlValue: 1,
-    ctrl: { ...state.ctrl },
+    dvControlValue: dvState?.controlValue ?? 1,
+    dvRegs: dvState?.dvRegs ?? { 0: 0, 1: 0, 3: 0, 4: 0 },
+    ctrl: dvState?.ctrl ?? { ...state.ctrl },
     keepalive: state.keepalive,
     meter: runtimeSnapshot.meter,
     victron: runtimeSnapshot.victron,
@@ -1131,9 +1132,9 @@ async function pollMeter() {
       const posImport = cfg.gridPositiveMeans === 'grid_import';
       const sign = posImport ? 1 : -1;
       total = halGridPower * sign;
-      l1 = Number(halReading?.raw?.meter?.[0] ?? 0) * sign;
-      l2 = Number(halReading?.raw?.meter?.[1] ?? 0) * sign;
-      l3 = Number(halReading?.raw?.meter?.[2] ?? 0) * sign;
+      l1 = s16(Number(halReading?.raw?.meter?.[0] ?? 0)) * sign;
+      l2 = s16(Number(halReading?.raw?.meter?.[1] ?? 0)) * sign;
+      l3 = s16(Number(halReading?.raw?.meter?.[2] ?? 0)) * sign;
       state.meter = {
         ok: true,
         updatedAt: Number(halReading?.timestamp || Date.now()),
@@ -2147,6 +2148,7 @@ function buildGatewayRouteApi() {
     },
 
     getStatus() {
+      expireLeaseIfNeeded();
       return buildApiStatusResponse(Date.now());
     },
 
@@ -2586,6 +2588,7 @@ function startRuntimeLoops() {
   };
 
   loadEnergy();
+  trackTimer(setInterval(expireLeaseIfNeeded, 1000));
   trackTimer(setInterval(() => liveTelemetryBuffer?.flush(), 1000));
   trackTimer(setInterval(() => publishRuntimeSnapshot(), 1000));
 
@@ -2723,12 +2726,19 @@ async function initializeGatewayRuntime(ctx) {
     rawConfig: rawCfg,
     getConfig: () => cfg,
     getRawConfig: () => rawCfg,
-    getSnapshot: () => buildApiStatusResponse(Date.now()),
+    getSnapshot: () => routeApi.getRuntimeSnapshot(),
     getState: () => state,
     state,
     configPath: CONFIG_PATH,
     logBuffer: state.log,
     appVersion: APP_VERSION,
+    onConfigSaved: () => {
+      // Sync gateway runtime state with newly saved config
+      state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
+      state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
+      state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
+      state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
+    },
     hal,
     eventBus: ctx.eventBus,
     // controlValue has been moved to DV module (curtailment.js)
@@ -2806,6 +2816,8 @@ async function destroyGatewayRuntime() {
   refreshTelemetryStatus();
 }
 
+let dvStateProvider = null;
+
 export function createGatewayModule() {
   return {
     name: 'gateway',
@@ -2813,6 +2825,14 @@ export function createGatewayModule() {
     plugin: null,
     modbusProxy: null,
     hal: null,
+
+    /**
+     * Called by the DV module after its init to inject DV state into /api/status.
+     * @param {function} provider - Returns { dvRegs, ctrl, controlValue }
+     */
+    setDvStateProvider(provider) {
+      dvStateProvider = typeof provider === 'function' ? provider : null;
+    },
 
     async init(ctx) {
       await initializeGatewayRuntime(ctx);
@@ -2822,6 +2842,7 @@ export function createGatewayModule() {
     },
 
     async destroy() {
+      dvStateProvider = null;
       await destroyGatewayRuntime();
       this.plugin = null;
       this.modbusProxy = null;
