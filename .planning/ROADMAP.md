@@ -35,12 +35,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Manufacturer configs are loaded from external JSON files and the Victron driver reads/writes through the HAL interface without brand-specific code in business logic
   6. Existing HTTP API endpoints respond identically to v1 behavior (no regressions in /api/status, /api/config, etc.)
   7. Modbus TCP proxy enforces IP AllowList, buffer size caps, and interface binding
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [ ] 01-01-PLAN.md -- Core infrastructure: module registry, RxJS event bus, config wrapper
+- [ ] 01-02-PLAN.md -- Fastify auth plugin and WebSocket with role-filtered broadcast
+- [ ] 01-03-PLAN.md -- Device HAL with Victron driver and secured Modbus TCP proxy
+- [ ] 01-04-PLAN.md -- Bootstrap assembly: Gateway module, route migration, server.js rewrite
 
 ### Phase 2: Data Architecture
 **Goal**: Telemetry storage supports multi-resolution retention with automatic rollups via a Database Adapter Pattern -- TimescaleDB/PostgreSQL as default backend, SQLite as lightweight fallback, both behind the same interface
@@ -165,7 +166,7 @@ Phases execute in numeric order. Phases 3 and 4 share Phase 2 as dependency and 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Not started | - |
+| 1. Foundation | 0/4 | Planning complete | - |
 | 2. Data Architecture | 0/2 | Not started | - |
 | 3. DV Module | 0/2 | Not started | - |
 | 4. Optimizer Core | 0/3 | Not started | - |
