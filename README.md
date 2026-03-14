@@ -62,6 +62,18 @@ des Direktvermarkters wird in Software nachgebildet, während die Live-Daten dir
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash
 ```
 
+### Branch-Installation
+
+Um einen bestimmten Branch zu installieren, ohne das `main`-Installscript zu ändern:
+
+```bash
+BRANCH="codex/small-market-automation"
+URL="https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh"
+curl -fsSL "$URL" | INSTALLER_SOURCE_URL="https://github.com/chloepriceless/dvhub/blob/${BRANCH}/install.sh" bash
+```
+
+Das Installscript von `main` wird heruntergeladen, aber `INSTALLER_SOURCE_URL` zeigt auf den gewünschten Branch — so wird dessen Version installiert.
+
 Nach der Installation:
 
 | Seite | URL |
