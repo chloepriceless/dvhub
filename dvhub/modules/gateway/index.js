@@ -2723,7 +2723,7 @@ async function initializeGatewayRuntime(ctx) {
     rawConfig: rawCfg,
     getConfig: () => cfg,
     getRawConfig: () => rawCfg,
-    getSnapshot: () => routeApi.getRuntimeSnapshot(),
+    getSnapshot: () => buildApiStatusResponse(Date.now()),
     getState: () => state,
     state,
     configPath: CONFIG_PATH,
