@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-14T11:27:00Z"
+status: executing
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-14T11:33:08.698Z"
 last_activity: 2026-03-14 -- Completed 04-01 Optimizer Adapter Infrastructure
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
   percent: 86
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-14)
 ## Current Position
 
 Phase: 4 of 8 (Optimizer Core)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: In Progress
-Last activity: 2026-03-14 -- Completed 04-01 Optimizer Adapter Infrastructure
+Last activity: 2026-03-14 -- Completed 04-02 Plan Engine and Scorer
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [█████████░] 86%
 | Phase 03 P02 | 3min | 2 tasks | 7 files |
 | Phase 03 P03 | 7min | 2 tasks | 5 files |
 | Phase 04 P01 | 4min | 2 tasks | 9 files |
+| Phase 04 P02 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,9 @@ Recent decisions affecting current work:
 - [Phase 04]: EMHASS response schema permissive -- tighten after container testing per research
 - [Phase 04]: Adapter interface: name, testedVersions, buildInput, validateResponse, normalizeOutput, healthCheck, optimize
 - [Phase 04]: Canonical plan uses camelCase slot fields (gridImportWh, batteryChargeWh) for JS convention
+- [Phase 04]: SoC score maps last-slot targetSocPct to 0-100 range with minSocPct floor and 50% ceiling
+- [Phase 04]: chooseWinningPlan re-evaluates all feasible history entries on each submit (global optimum)
+- [Phase 04]: Plan engine uses BehaviorSubject for synchronous getValue() reads matching event-bus pattern
 
 ### Pending Todos
 
@@ -123,6 +127,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T11:27:00Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-03-14T11:33:08.692Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
