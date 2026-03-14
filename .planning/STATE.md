@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-03-14T14:55:52.854Z"
-last_activity: 2026-03-14 -- Completed 06-02 Pipeline Wiring and Integration
+status: in-progress
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-14T15:40:32.313Z"
+last_activity: 2026-03-14 -- Completed 07-01 Deployment Foundations
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 19
-  completed_plans: 19
-  percent: 100
+  total_plans: 21
+  completed_plans: 20
+  percent: 95
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Reliable real-time DV interface (measurement delivery, curtailment compliance) AND intelligent price optimization -- all from one box
-**Current focus:** Phase 6: Arbitration + Execution
+**Current focus:** Phase 7: Deployment
 
 ## Current Position
 
-Phase: 6 of 8 (Arbitration + Execution) -- COMPLETE
-Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 06 Complete, ready for Phase 07
-Last activity: 2026-03-14 -- Completed 06-02 Pipeline Wiring and Integration
+Phase: 7 of 8 (Deployment) -- IN PROGRESS
+Plan: 1 of 2 in current phase -- COMPLETE
+Status: 07-01 complete, ready for 07-02
+Last activity: 2026-03-14 -- Completed 07-01 Deployment Foundations
 
-Progress: [██████████] 100%
+Progress: [██████████] 95%
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Progress: [██████████] 100%
 | Phase 05 P03 | 3min | 2 tasks | 7 files |
 | Phase 06 P01 | 3min | 2 tasks | 4 files |
 | Phase 06 P02 | 3min | 2 tasks | 5 files |
+| Phase 07 P01 | 2min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,9 @@ Recent decisions affecting current work:
 - [Phase 06]: Clear action on control:intent uses arbitrator.clearSource for clean removal
 - [Phase 06]: Slot boundary timer uses unref() to prevent blocking process exit
 - [Phase 06]: API routes conditionally apply auth preHandler matching DV module pattern
+- [Phase 07]: Three deployment modes via Docker Compose profiles: native, hybrid, full
+- [Phase 07]: EOS requires seccomp:unconfined and high ulimits for OpenBLAS threading
+- [Phase 07]: Compose-manager uses optional DI parameter (execFn) for testability
 
 ### Pending Todos
 
@@ -153,6 +157,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T14:55:52.846Z
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-03-14T15:40:32.307Z
+Stopped at: Completed 07-01-PLAN.md
 Resume file: None
