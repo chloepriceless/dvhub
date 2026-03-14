@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-14T15:51:56.931Z"
-last_activity: 2026-03-14 -- Completed 08-01 SPA Foundation
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-03-14T16:49:28Z"
+last_activity: 2026-03-14 -- Completed 08-02 Dashboard Views
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 24
-  completed_plans: 22
-  percent: 92
+  completed_plans: 23
+  percent: 96
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-14)
 ## Current Position
 
 Phase: 8 of 8 (UI Modernization)
-Plan: 1 of 3 in current phase -- COMPLETE
-Status: Plan 08-01 complete, ready for Plan 08-02
-Last activity: 2026-03-14 -- Completed 08-01 SPA Foundation
+Plan: 2 of 3 in current phase -- COMPLETE
+Status: Plan 08-02 complete, ready for Plan 08-03
+Last activity: 2026-03-14 -- Completed 08-02 Dashboard Views
 
-Progress: [███████████░░░░░░░░░] 73%
+Progress: [████████████████░░░░] 80%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [███████████░░░░░░░░░] 73%
 | Phase 07 P01 | 2min | 2 tasks | 6 files |
 | Phase 07 P02 | 5min | 2 tasks | 7 files |
 | Phase 08 P01 | 8min | 2 tasks | 20 files |
+| Phase 08 P02 | 6min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -151,6 +152,9 @@ Recent decisions affecting current work:
 - [Phase 08]: Pure KPI computations extracted to compute.js for Node.js testability without Preact import map
 - [Phase 08]: Used standalone.js from preact-htm-signals-standalone (var-declaration ESM with export)
 - [Phase 08]: SPA responsive breakpoints added alongside existing device-specific breakpoints
+- [Phase 08]: Pure compute functions extracted to *-compute.js files for Node.js testability of SVG chart logic
+- [Phase 08]: Chart components receive signals as props for isolation and composability
+- [Phase 08]: Energy data signal as local placeholder, ready for telemetry history integration
 
 ### Pending Todos
 
@@ -165,6 +169,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T16:40:23Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-03-14T16:49:28Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
