@@ -35,7 +35,7 @@ Row 3: Price Chart(12)                                 [bestehend]
 - **Inline-Edit:** Klick auf Tabellenzeile macht Felder editierbar (Inputs statt Text). Speichern/Abbrechen-Buttons erscheinen. Loeschen-Button pro Zeile.
 - **Neue Regel:** '+' Button unter der Tabelle fuegt leere editierbare Zeile hinzu.
 - **Default-Inputs:** Zwei Eingabefelder OBERHALB der Regel-Tabelle im Schedule-Panel: "Standard Netz-Sollwert (W)" und "Standard Ladestrom (A)". Schreiben via POST /api/config/save.
-- **API:** Regeln via POST /api/schedule/rules (create/update/delete). Defaults via config-save.
+- **API:** Regeln via POST /api/schedule/rules (create/update/delete). Defaults via POST /api/schedule/config.
 
 ## Decision 4: Aktive Schedule-Werte Platzierung
 **Choice:** Im Schedule-Panel unter den Defaults
