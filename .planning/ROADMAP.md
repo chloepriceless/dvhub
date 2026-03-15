@@ -247,7 +247,11 @@ Plans:
   2. Hovering over a price bar shows a tooltip with slot time range, price in ct/kWh, and import price comparison
   3. Import price overlay line renders on the price chart so the user can visually compare EPEX prices against their import tariff, with a zero-baseline reference line
   4. Price comparison summary displays calculated margins for PV export, battery arbitrage, and mixed strategies versus grid import cost
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 13-01-PLAN.md -- Pure compute functions, tests, CSS variables, userEnergyPricing signal
+- [ ] 13-02-PLAN.md -- Interactive PriceChart: selection, tooltip, overlay, summary, wiring
 
 ### Phase 14: Kleine Boersenautomatik
 **Goal**: The stage-based market automation system is fully configurable from the dashboard, showing plan summaries and visualizing selected slots on the price chart
@@ -302,7 +306,7 @@ Phases execute in numeric order. Phases 3 and 4 share Phase 2 as dependency and 
 | 10. Null Safety & WS Field Fix | 1/1 | Complete   | 2026-03-14 |
 | 11. Backend Integration | 2/2 | Complete   | 2026-03-15 |
 | 12. Dashboard Data & Controls | 3/3 | Complete    | 2026-03-15 |
-| 13. Chart Interactivity | 0/0 | Not started | - |
+| 13. Chart Interactivity | 0/2 | Not started | - |
 | 14. Kleine Boersenautomatik | 0/0 | Not started | - |
 | 15. Settings Parity | 0/0 | Not started | - |
 | 16. History Parity | 0/0 | Not started | - |
