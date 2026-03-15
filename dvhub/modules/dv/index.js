@@ -102,6 +102,7 @@ export function createDvModule(config) {
         gateway.setDvStateProvider(() => ({
           dvRegs: { ...dvState.dvRegs },
           ctrl: { ...dvState.ctrl },
+          keepalive: { modbusLastQuery: dvState.keepalive.modbusLastQuery },
           controlValue: curtailment.controlValue()
         }));
       }

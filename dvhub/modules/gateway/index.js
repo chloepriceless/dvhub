@@ -150,8 +150,8 @@ const state = {
       defaultGridSetpointW: cfg.schedule.defaultGridSetpointW,
       defaultChargeCurrentA: cfg.schedule.defaultChargeCurrentA
     },
-    active: { gridSetpointW: null, chargeCurrentA: null },
-    lastWrite: { gridSetpointW: null, chargeCurrentA: null },
+    active: { gridSetpointW: null, chargeCurrentA: null, minSocPct: null },
+    lastWrite: { gridSetpointW: null, chargeCurrentA: null, minSocPct: null },
     manualOverride: {},
     lastEvalAt: 0,
     smallMarketAutomation: {
@@ -621,7 +621,10 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     dvControlValue: dvState?.controlValue ?? 1,
     dvRegs: dvState?.dvRegs ?? { 0: 0, 1: 0, 3: 0, 4: 0 },
     ctrl: dvState?.ctrl ?? { ...state.ctrl },
-    keepalive: state.keepalive,
+    keepalive: {
+      ...state.keepalive,
+      modbusLastQuery: dvState?.keepalive?.modbusLastQuery ?? state.keepalive?.modbusLastQuery ?? null
+    },
     meter: runtimeSnapshot.meter,
     victron: runtimeSnapshot.victron,
     scan: state.scan,
@@ -1654,9 +1657,15 @@ async function evaluateSchedule() {
   const priceNow = epexNowNext()?.current;
   const priceNegative = npp?.enabled && priceNow && Number(priceNow.ct_kwh) < 0;
 
-  for (const target of ['gridSetpointW', 'chargeCurrentA']) {
+  for (const target of ['gridSetpointW', 'chargeCurrentA', 'minSocPct']) {
     const eff = effectiveTargetValue(target);
     if (eff.value == null) continue;
+
+    // If no controlWrite config for this target, just track the active value
+    if (!cfg.controlWrite?.[target]?.enabled) {
+      state.schedule.active[target] = { value: eff.value, source: eff.source, at: Date.now() };
+      continue;
+    }
 
     // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
     if (target === 'gridSetpointW' && priceNegative) {
