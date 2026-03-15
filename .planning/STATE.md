@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Functional Parity
-status: in_progress
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-03-15T00:04:53Z"
-last_activity: 2026-03-15 -- Completed 11-01-PLAN.md (API status field parity)
+milestone: v1.0
+milestone_name: milestone
+status: completed
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-03-15T00:12:00Z"
+last_activity: 2026-03-15 -- Completed 11-02-PLAN.md (telemetry extension + config-save triggers)
 progress:
-  total_phases: 6
-  completed_phases: 0
-  total_plans: 2
-  completed_plans: 1
+  total_phases: 10
+  completed_phases: 5
+  total_plans: 14
+  completed_plans: 26
   percent: 50
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Reliable real-time DV interface (measurement delivery, curtailment compliance) AND intelligent price optimization -- all from one box
-**Current focus:** v1.1 Functional Parity -- Phase 11 (Backend Integration), Plan 01 complete
+**Current focus:** v1.1 Functional Parity -- Phase 11 (Backend Integration), COMPLETE
 
 ## Current Position
 
-Phase: 11 of 16 (Backend Integration)
-Plan: 1 of 2 in current phase -- Plan 01 COMPLETE
-Status: 11-01 complete. API status field parity achieved (keepalive + minSocPct).
-Last activity: 2026-03-15 -- Completed 11-01-PLAN.md (API status field parity)
+Phase: 11 of 16 (Backend Integration) -- COMPLETE
+Plan: 2 of 2 in current phase -- All plans COMPLETE
+Status: Phase 11 complete. API status parity + telemetry extension + config-save triggers.
+Last activity: 2026-03-15 -- Completed 11-02-PLAN.md (telemetry extension + config-save triggers)
 
 Progress: [██████████░░░░░░░░░░] 50%
 
@@ -76,6 +76,7 @@ Progress: [██████████░░░░░░░░░░] 50%
 | Phase 09 P01 | 7min | 4 tasks | 6 files |
 | Phase 10 P01 | 6min | 2 tasks | 3 files |
 | Phase 11 P01 | 3min | 1 tasks | 2 files |
+| Phase 11 P02 | 1min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -170,6 +171,9 @@ Recent decisions affecting current work:
 - [Phase 10]: WebSocket field name data.data matches gateway broadcast format
 - [Phase 11]: controlWrite guard pattern: track schedule.active value without Modbus write when target not configured
 - [Phase 11]: DV keepalive merge uses fallback chain (dvState > state.keepalive > null)
+- [Phase 11]: Config-save changedPaths propagation for selective SMA/EPEX triggers
+- [Phase 11]: SMA trigger uses startsWith match on schedule.smallMarketAutomation prefix
+- [Phase 11]: EPEX trigger uses exact match on epex.bzn and epex.enabled paths
 
 ### Pending Todos
 
@@ -184,6 +188,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T00:04:53Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-03-15T00:12:00Z
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None
