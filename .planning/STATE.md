@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Phases
 status: completed
-stopped_at: Phase 13 context gathered
-last_updated: "2026-03-15T09:31:38.578Z"
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-03-15T10:12:39.486Z"
 last_activity: 2026-03-15 -- Completed 12-03-PLAN.md (schedule panel interactive)
 progress:
   total_phases: 16
   completed_phases: 7
-  total_plans: 18
-  completed_plans: 31
+  total_plans: 20
+  completed_plans: 32
   percent: 100
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Reliable real-time DV interface (measurement delivery, curtailment compliance) AND intelligent price optimization -- all from one box
-**Current focus:** v1.1 Functional Parity -- Phase 12 (Dashboard Data & Controls), Plan 03 COMPLETE
+**Current focus:** v1.1 Functional Parity -- Phase 13 (Chart Interactivity), Plan 01 COMPLETE
 
 ## Current Position
 
-Phase: 12 of 16 (Dashboard Data & Controls) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Plan 12-03 complete. Interactive schedule panel with inline editing, defaults, active values.
+Phase: 13 of 16 (Chart Interactivity)
+Plan: 1 of 2 in current phase
+Status: Plan 13-01 complete. Pure compute functions for chart selection, overlay, and rule building.
 Last activity: 2026-03-15 -- Completed 12-03-PLAN.md (schedule panel interactive)
 
 Progress: [██████████] 100%
@@ -80,6 +80,7 @@ Progress: [██████████] 100%
 | Phase 12 P01 | 2min | 2 tasks | 6 files |
 | Phase 12 P02 | 2min | 2 tasks | 3 files |
 | Phase 12 P03 | 2min | 2 tasks | 3 files |
+| Phase 13 P01 | 2min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -183,6 +184,8 @@ Recent decisions affecting current work:
 - [Phase 12]: Slider uses oninput for preview, onchange for submit (standard range input UX)
 - [Phase 12]: Charge current input has no min/max constraints (inverter sizes vary)
 - [Phase 12]: Module-level signals for edit state (editingRowIdx, editBuffer) instead of component state
+- [Phase 13]: fmtHHMM uses toLocaleTimeString de-DE for consistent HH:MM format matching existing formatSlotTime
+- [Phase 13]: _ts field added to computeBarLayout bars for Map-based join with comparison data
 
 ### Pending Todos
 
@@ -197,6 +200,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T09:31:38.566Z
-Stopped at: Phase 13 context gathered
-Resume file: .planning/phases/13-chart-interactivity/13-CONTEXT.md
+Last session: 2026-03-15T10:12:39.478Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: None
