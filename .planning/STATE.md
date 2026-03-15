@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v1.1
+milestone_name: Functional Parity
 status: in_progress
-stopped_at: Gap closure phase 10 created from re-audit
-last_updated: "2026-03-14T19:35:00.000Z"
-last_activity: 2026-03-14 -- Created Phase 10 gap closure from re-audit (INT-08..10)
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-03-15T00:04:53Z"
+last_activity: 2026-03-15 -- Completed 11-01-PLAN.md (API status field parity)
 progress:
-  total_phases: 10
-  completed_phases: 9
-  total_plans: 26
-  completed_plans: 26
-  percent: 100
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Reliable real-time DV interface (measurement delivery, curtailment compliance) AND intelligent price optimization -- all from one box
-**Current focus:** Phase 10: Null Safety & WS Field Fix (gap closure)
+**Current focus:** v1.1 Functional Parity -- Phase 11 (Backend Integration), Plan 01 complete
 
 ## Current Position
 
-Phase: 10 of 10 (Null Safety & WS Field Fix)
-Plan: 1 of 1 in current phase -- COMPLETE
-Status: Phase 10 complete. All gap closure issues (INT-08..10) resolved.
-Last activity: 2026-03-14 -- Completed 10-01-PLAN.md (null safety + WS field fix)
+Phase: 11 of 16 (Backend Integration)
+Plan: 1 of 2 in current phase -- Plan 01 COMPLETE
+Status: 11-01 complete. API status field parity achieved (keepalive + minSocPct).
+Last activity: 2026-03-15 -- Completed 11-01-PLAN.md (API status field parity)
 
-Progress: [████████████████████] 100%
+Progress: [██████████░░░░░░░░░░] 50%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [████████████████████] 100%
 | Phase 08 P03 | 8min | 2 tasks | 13 files |
 | Phase 09 P01 | 7min | 4 tasks | 6 files |
 | Phase 10 P01 | 6min | 2 tasks | 3 files |
+| Phase 11 P01 | 3min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -167,6 +168,8 @@ Recent decisions affecting current work:
 - [Phase 10]: Null db uses if(!db) guard pattern at all 4 executor call sites with warn at entry only
 - [Phase 10]: Null hal throws plain Error (not TypeError) with target/value/source context
 - [Phase 10]: WebSocket field name data.data matches gateway broadcast format
+- [Phase 11]: controlWrite guard pattern: track schedule.active value without Modbus write when target not configured
+- [Phase 11]: DV keepalive merge uses fallback chain (dvState > state.keepalive > null)
 
 ### Pending Todos
 
@@ -181,6 +184,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T18:10:46Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-03-15T00:04:53Z
+Stopped at: Completed 11-01-PLAN.md
 Resume file: None
