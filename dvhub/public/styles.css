@@ -42,6 +42,7 @@
   --chart-positive-highlight: var(--dvhub-lime);
   --chart-negative-highlight: #ff7a59;
   --chart-now: var(--dvhub-orange);
+  --chart-import: #22c55e;
   --schedule-automation-yellow: #f2c94c;
   --shadow-soft: 0 18px 36px rgba(0, 0, 0, 0.28);
   --shadow-hard: 0 24px 54px rgba(0, 0, 0, 0.34);
@@ -1745,6 +1746,60 @@ svg {
   color: var(--text-soft);
   font-size: 0.86rem;
 }
+
+/* Chart tooltip */
+.chart-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  max-width: 280px;
+  white-space: nowrap;
+}
+
+.chart-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chart-tooltip-label {
+  color: var(--text-muted);
+}
+
+.chart-tooltip-value {
+  font-weight: 600;
+  text-align: right;
+}
+
+/* Chart margin summary */
+.chart-summary {
+  padding: 6px 0 4px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.chart-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.chart-summary-label {
+  color: var(--text-muted);
+}
+
+.best-source-pv { color: var(--dvhub-green); }
+.best-source-akku { color: var(--dvhub-blue); }
+.best-source-gemischt { color: var(--dvhub-orange); }
+.best-source-netz { color: var(--text-muted); }
 
 #tooltip {
   position: fixed;

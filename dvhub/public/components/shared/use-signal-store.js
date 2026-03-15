@@ -12,6 +12,7 @@ export const prices = signal([]);
 export const forecast = signal({ pv: [], load: [] });
 export const dvStatus = signal({});
 export const execStatus = signal({});
+export const userEnergyPricing = signal(null);
 
 // --- Computed signals using the pure functions ---
 
