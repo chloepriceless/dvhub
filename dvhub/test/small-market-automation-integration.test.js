@@ -296,3 +296,48 @@ test('computeNextPeriodBounds returns null for invalid inputs', () => {
   assert.equal(computeNextPeriodBounds({ now: Date.now(), searchWindowStart: null, searchWindowEnd: '09:00' }), null);
   assert.equal(computeNextPeriodBounds({ now: Date.now(), searchWindowStart: '14:00', searchWindowEnd: null }), null);
 });
+
+// --- SMA rule absolute timestamp validation (Bug 1 fix) ---
+
+test('SMA rule with slotTs should only match when now is within the slot window', () => {
+  // Simulate: rule was generated for tomorrow 03:00 (within overnight window 14:00→09:00).
+  // The schedule engine must NOT fire this rule today at 03:00 — only tomorrow at 03:00.
+  const SLOT_DURATION_MS = 15 * 60 * 1000;
+  const tomorrowSlotTs = Date.parse('2026-03-15T02:00:00Z'); // 03:00 Berlin
+  const rule = {
+    id: 'sma-test',
+    target: 'gridSetpointW',
+    start: '03:00',
+    end: '03:15',
+    value: -12000,
+    enabled: true,
+    slotTs: tomorrowSlotTs,
+    slotEndTs: tomorrowSlotTs + SLOT_DURATION_MS,
+    source: 'small_market_automation',
+    autoManaged: true
+  };
+
+  // Today at 03:05 — HH:MM matches, but absolute timestamp does not
+  const todayNow = Date.parse('2026-03-14T02:05:00Z'); // 03:05 Berlin on March 14
+  assert.ok(todayNow < rule.slotTs, 'today 03:05 should be before the slot timestamp');
+
+  // Tomorrow at 03:05 — both HH:MM and absolute timestamp match
+  const tomorrowNow = Date.parse('2026-03-15T02:05:00Z'); // 03:05 Berlin on March 15
+  assert.ok(tomorrowNow >= rule.slotTs && tomorrowNow < rule.slotEndTs,
+    'tomorrow 03:05 should be within the slot window');
+});
+
+test('SMA rule without slotTs should behave as before (backward compatible)', () => {
+  // Old rules without slotTs should still match by HH:MM only
+  const rule = {
+    id: 'sma-legacy',
+    target: 'gridSetpointW',
+    start: '18:00',
+    end: '18:15',
+    value: -12000,
+    enabled: true,
+    source: 'small_market_automation',
+    autoManaged: true
+  };
+  assert.equal(rule.slotTs, undefined, 'legacy rule should not have slotTs');
+});
