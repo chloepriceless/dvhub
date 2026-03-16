@@ -355,8 +355,12 @@ function buildSmallMarketAutomationRules({
     slotDurationH: SLOT_DURATION_HOURS
   });
 
-  // Fall back to legacy single-chain if no stages are configured
-  if (!chainVariants.length) {
+  // Fall back to legacy single-chain if no stages are configured.
+  // IMPORTANT: Do NOT use the fallback when energy budget is known — the budget
+  // already truncated all variants to empty, meaning the battery does not have
+  // enough energy for even a single slot at the configured power.  Bypassing the
+  // budget here would create many rules the battery cannot actually serve.
+  if (!chainVariants.length && !(availableEnergyKwh != null && availableEnergyKwh > 0)) {
     const fallback = buildDefaultAutomationChain(automationConfig);
     if (fallback.length) chainVariants.push(fallback);
   }
@@ -382,6 +386,8 @@ function buildSmallMarketAutomationRules({
       end: formatLocalHHMM(end, timeZone),
       value: Number(expandedBestChain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
       activeDate: berlinDateString(new Date(now)),
+      slotTs: slot.ts,
+      slotEndTs: slot.ts + SLOT_DURATION_MS,
       source: SMALL_MARKET_AUTOMATION_SOURCE,
       autoManaged: true,
       displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
@@ -1737,7 +1743,17 @@ function effectiveTargetValue(target) {
   const now = Date.now();
   const mod = localMinutesOfDay(new Date(now));
 
-  const hit = state.schedule.rules.find((r) => r.target === target && scheduleMatch(r, mod));
+  const hit = state.schedule.rules.find((r) => {
+    if (r.target !== target || !scheduleMatch(r, mod)) return false;
+    // SMA rules carry absolute slot timestamps — enforce them so a rule
+    // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
+    if (isSmallMarketAutomationRule(r) && r.slotTs != null) {
+      const slotTs = Number(r.slotTs);
+      const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
+      if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;
+    }
+    return true;
+  });
   if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
 
   const mo = state.schedule.manualOverride[target];

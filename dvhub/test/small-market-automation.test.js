@@ -387,6 +387,24 @@ test('buildChainVariants returns empty for no stages', () => {
   assert.deepEqual(buildChainVariants({ maxDischargeW: -18000 }), []);
 });
 
+test('buildChainVariants returns empty when energy budget is too small for even one slot', () => {
+  // 1 kWh available, stage needs 18kW * 0.25h = 4.5 kWh per slot → 0 slots fit
+  const stages = [
+    { dischargeW: -18000, dischargeSlots: 4, cooldownSlots: 0 }
+  ];
+  const variants = buildChainVariants({ maxDischargeW: -18000, stages, availableKwh: 1.0 });
+  assert.equal(variants.length, 0, 'should return no variants when energy is insufficient for a single slot');
+});
+
+test('buildChainVariants returns empty when energy budget is very small (1.2 kWh, 12kW discharge)', () => {
+  // 12kW * 0.25h = 3 kWh per slot → Math.floor(1.2/3) = 0 slots
+  const stages = [
+    { dischargeW: -12000, dischargeSlots: 4, cooldownSlots: 0 }
+  ];
+  const variants = buildChainVariants({ maxDischargeW: -12000, stages, availableKwh: 1.2 });
+  assert.equal(variants.length, 0, 'should return no variants when 1.2 kWh is too small for a 3 kWh slot');
+});
+
 test('pickBestAutomationPlan selects most profitable chain variant', () => {
   // 8 contiguous high-price slots
   const slots = Array.from({ length: 8 }, (_, i) => slotAt(i, 20 + i));

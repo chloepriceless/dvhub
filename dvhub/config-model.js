@@ -1597,6 +1597,8 @@ function sanitizeScheduleRules(value, warnings) {
     if (item.autoManaged != null) next.autoManaged = coerceBoolean(item.autoManaged);
     if (item.displayTone != null) next.displayTone = String(item.displayTone);
     if (item.activeDate != null) next.activeDate = String(item.activeDate);
+    if (item.slotTs != null) next.slotTs = Number(item.slotTs);
+    if (item.slotEndTs != null) next.slotEndTs = Number(item.slotEndTs);
     if (next.value != null && !Number.isFinite(next.value)) {
       warnings.push(`schedule.rules.${next.id || rules.length}: value ignored because it is not numeric`);
       continue;
