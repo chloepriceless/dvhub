@@ -509,7 +509,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
   return windows;
 }
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = []) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null) {
   const svg = document.getElementById('priceChart');
   const tooltip = document.getElementById('tooltip');
   if (!svg) return;
@@ -720,6 +720,67 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     zero.setAttribute('stroke', chartNegative);
     zero.setAttribute('stroke-width', '1.5');
     svg.appendChild(zero);
+  }
+
+  // --- Solar Forecast Overlay (right Y-axis, kW) ---
+  if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 1 && data.length > 0) {
+    const fcColor = '#f59e0b'; // amber/orange
+    const firstTs = Number(data[0].ts);
+    const lastTs = Number(data[data.length - 1].ts);
+    const slotMs = data.length > 1 ? (Number(data[1].ts) - firstTs) : 3600000;
+    const fcFiltered = forecast.solar
+      .map(p => ({ ts: new Date(p.ts).getTime(), kw: p.w / 1000 }))
+      .filter(p => p.ts >= firstTs && p.ts <= lastTs + slotMs);
+
+    if (fcFiltered.length >= 2) {
+      const fcMax = Math.max(...fcFiltered.map(p => p.kw), 1);
+      const fcY = (kw) => padT + (H - padT - padB) * (1 - kw / fcMax);
+      const fcX = (ts) => padL + ((ts - firstTs) / (lastTs + slotMs - firstTs)) * (W - padL - padR);
+
+      // Right Y-axis labels
+      const fcTicks = [0, Math.round(fcMax / 2), Math.round(fcMax)];
+      for (const tick of fcTicks) {
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', W - padR + 6);
+        lbl.setAttribute('y', fcY(tick) + 4);
+        lbl.setAttribute('font-size', '11');
+        lbl.setAttribute('fill', fcColor);
+        lbl.setAttribute('text-anchor', 'start');
+        lbl.textContent = `${tick} kW`;
+        svg.appendChild(lbl);
+      }
+
+      // Forecast area (filled)
+      const areaPoints = fcFiltered.map(p => `${fcX(p.ts)},${fcY(p.kw)}`);
+      areaPoints.push(`${fcX(fcFiltered[fcFiltered.length - 1].ts)},${H - padB}`);
+      areaPoints.push(`${fcX(fcFiltered[0].ts)},${H - padB}`);
+      const area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      area.setAttribute('points', areaPoints.join(' '));
+      area.setAttribute('fill', fcColor);
+      area.setAttribute('fill-opacity', '0.12');
+      svg.appendChild(area);
+
+      // Forecast line
+      const linePoints = fcFiltered.map(p => `${fcX(p.ts)},${fcY(p.kw)}`);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      line.setAttribute('fill', 'none');
+      line.setAttribute('stroke', fcColor);
+      line.setAttribute('stroke-width', '2');
+      line.setAttribute('stroke-linejoin', 'round');
+      line.setAttribute('stroke-linecap', 'round');
+      line.setAttribute('points', linePoints.join(' '));
+      svg.appendChild(line);
+
+      // Legend
+      const legend = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      legend.setAttribute('x', W - padR - 2);
+      legend.setAttribute('y', padT - 2);
+      legend.setAttribute('font-size', '10');
+      legend.setAttribute('fill', fcColor);
+      legend.setAttribute('text-anchor', 'end');
+      legend.textContent = '☀ PV Forecast';
+      svg.appendChild(legend);
+    }
   }
 
   svg.onmouseleave = () => {
@@ -959,7 +1020,12 @@ function renderDashboardStatus(status) {
   applyScheduleRowStates(status.now);
   updateChartComparisonSummary(status.userEnergyPricing);
 
-  drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []);
+  // Fetch VRM solar forecast for chart overlay
+  apiFetch('/api/forecast').then(r => r.json()).then(fc => {
+    drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || [], fc.ok ? fc : null);
+  }).catch(() => {
+    drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || [], null);
+  });
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
   renderAutomationStatus(status.schedule);
