@@ -418,6 +418,103 @@ async function triggerHistoryBackfill(mode = 'gap') {
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
+// --- DV Signal Log ---
+const DV_SIGNAL_TYPES = new Set([
+  'ctrl_off', 'ctrl_on', 'ctrl_lease_expired',
+  'dv_victron_write', 'dv_victron_write_error',
+  'modbus_fc6', 'modbus_fc16',
+  'negative_price_protection_on', 'negative_price_protection_off'
+]);
+
+const DV_SIGNAL_LABELS = {
+  ctrl_off: 'Abregelung',
+  ctrl_on: 'Freigabe',
+  ctrl_lease_expired: 'Lease abgelaufen',
+  dv_victron_write: 'Victron Write',
+  dv_victron_write_error: 'Victron Write Fehler',
+  modbus_fc6: 'Modbus FC6 Write',
+  modbus_fc16: 'Modbus FC16 Write',
+  negative_price_protection_on: 'Negativpreis-Schutz AN',
+  negative_price_protection_off: 'Negativpreis-Schutz AUS'
+};
+
+const DV_SIGNAL_FILTER_MAP = {
+  all: null,
+  ctrl: ['ctrl_off', 'ctrl_on', 'ctrl_lease_expired', 'negative_price_protection_on', 'negative_price_protection_off'],
+  modbus: ['modbus_fc6', 'modbus_fc16'],
+  victron: ['dv_victron_write', 'dv_victron_write_error']
+};
+
+let dvLogEntries = [];
+
+async function loadDvSignalLog() {
+  setText('dvLogMeta', 'Laden...');
+  try {
+    const log = await apiFetch('/api/log');
+    const entries = Array.isArray(log) ? log : [];
+    dvLogEntries = entries.filter((e) => DV_SIGNAL_TYPES.has(e.type));
+    renderDvSignalLog();
+    setText('dvLogMeta', `${dvLogEntries.length} DV-Signale gefunden (von ${entries.length} Log-Eintraegen)`);
+  } catch (error) {
+    setText('dvLogMeta', `Fehler: ${error.message}`);
+  }
+}
+
+function renderDvSignalLog() {
+  const tbody = document.getElementById('dvLogRows');
+  if (!tbody) return;
+  const filterKey = document.getElementById('dvLogFilter')?.value || 'all';
+  const allowed = DV_SIGNAL_FILTER_MAP[filterKey];
+  const filtered = allowed ? dvLogEntries.filter((e) => allowed.includes(e.type)) : dvLogEntries;
+
+  tbody.innerHTML = '';
+  for (const entry of filtered.slice(0, 200)) {
+    const tr = document.createElement('tr');
+    const isError = entry.type.includes('error') || entry.type === 'ctrl_off' || entry.type === 'neg_price_cutoff';
+    const isOk = entry.type === 'ctrl_on' || entry.type === 'neg_price_restore';
+    tr.style.color = isError ? '#ef4444' : (isOk ? '#22c55e' : '');
+
+    const tdTime = document.createElement('td');
+    tdTime.textContent = fmtTs(entry.ts);
+    tr.appendChild(tdTime);
+
+    const tdType = document.createElement('td');
+    tdType.textContent = DV_SIGNAL_LABELS[entry.type] || entry.type;
+    tr.appendChild(tdType);
+
+    const tdDetail = document.createElement('td');
+    const detail = entry.detail || entry.data || {};
+    const parts = [];
+    if (detail.reason) parts.push(`Grund: ${detail.reason}`);
+    if (detail.register) parts.push(`Register: ${detail.register}`);
+    if (detail.address !== undefined) parts.push(`Addr: ${detail.address}`);
+    if (detail.value !== undefined) parts.push(`Wert: ${detail.value}`);
+    if (detail.remote) parts.push(`Remote: ${detail.remote}`);
+    if (detail.feedIn !== undefined) parts.push(`Feed-In: ${detail.feedIn}`);
+    if (detail.forcedOff !== undefined) parts.push(`Abgeregelt: ${detail.forcedOff}`);
+    if (detail.price !== undefined) parts.push(`Preis: ${detail.price} ct/kWh`);
+    if (detail.limit !== undefined) parts.push(`Limit: ${detail.limit} W`);
+    if (detail.error) parts.push(`Fehler: ${detail.error}`);
+    if (detail.offUntil) parts.push(`Bis: ${fmtTs(detail.offUntil)}`);
+    if (detail.values) parts.push(`Values: [${detail.values}]`);
+    if (detail.qty !== undefined) parts.push(`Qty: ${detail.qty}`);
+    tdDetail.textContent = parts.length > 0 ? parts.join(' | ') : JSON.stringify(detail);
+    tr.appendChild(tdDetail);
+
+    tbody.appendChild(tr);
+  }
+  if (filtered.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 3;
+    td.textContent = 'Keine DV-Signale im aktuellen Log.';
+    td.style.textAlign = 'center';
+    td.style.color = '#888';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -435,6 +532,9 @@ function initToolsPage() {
   document.getElementById('restartServiceBtn')?.addEventListener('click', () => {
     restartService().catch((error) => setBanner('healthBanner', `Restart fehlgeschlagen: ${error.message}`, 'error'));
   });
+  document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
+  document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
+  document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());
   document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();
