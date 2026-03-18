@@ -1550,6 +1550,97 @@ async function fetchEpexDay() {
   publishRuntimeSnapshot();
 }
 
+// --- VRM Solar Forecast ---
+const VRM_FORECAST_API = 'https://vrmapi.victronenergy.com';
+
+async function fetchVrmForecast() {
+  const hi = cfg.telemetry?.historyImport;
+  if (!hi?.enabled || !hi?.vrmPortalId || !hi?.vrmToken) return;
+  if (!telemetryStore?.writeForecastPoints) return;
+
+  const portalId = hi.vrmPortalId;
+  const token = hi.vrmToken;
+  const now = new Date();
+  const fetchedAt = now.toISOString();
+
+  // Fetch today, tomorrow, and day after tomorrow
+  const days = [0, 1, 2];
+  let totalUpserted = 0;
+
+  for (const dayOffset of days) {
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() + dayOffset);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setHours(23, 59, 59, 999);
+    const forecastForDate = dayStart.toISOString().slice(0, 10);
+
+    try {
+      const params = new URLSearchParams({
+        type: 'forecast',
+        start: String(Math.floor(dayStart.getTime() / 1000)),
+        end: String(Math.floor(dayEnd.getTime() / 1000))
+      });
+      const url = `${VRM_FORECAST_API}/v2/installations/${encodeURIComponent(portalId)}/stats?${params}`;
+      const response = await fetch(url, {
+        headers: { accept: 'application/json', 'x-authorization': `Token ${token}` },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (!data.success || !data.records) continue;
+
+      const points = [];
+
+      // Solar yield forecast
+      if (Array.isArray(data.records.solar_yield_forecast)) {
+        for (const [tsMs, valueW] of data.records.solar_yield_forecast) {
+          if (valueW == null || !Number.isFinite(valueW)) continue;
+          points.push({
+            forecastType: 'solar_yield',
+            tsUtc: new Date(tsMs).toISOString(),
+            valueW: Math.round(valueW * 10) / 10,
+            fetchedAt,
+            forecastForDate,
+            source: 'vrm'
+          });
+        }
+      }
+
+      // Consumption forecast
+      if (Array.isArray(data.records.vrm_consumption_fc)) {
+        for (const [tsMs, valueW] of data.records.vrm_consumption_fc) {
+          if (valueW == null || !Number.isFinite(valueW)) continue;
+          points.push({
+            forecastType: 'consumption',
+            tsUtc: new Date(tsMs).toISOString(),
+            valueW: Math.round(valueW * 10) / 10,
+            fetchedAt,
+            forecastForDate,
+            source: 'vrm'
+          });
+        }
+      }
+
+      if (points.length > 0) {
+        const upserted = await telemetryStore.writeForecastPoints(points);
+        totalUpserted += upserted;
+      }
+    } catch (e) {
+      pushLog('vrm_forecast_error', { dayOffset, error: e.message });
+    }
+  }
+
+  if (totalUpserted > 0) {
+    pushLog('vrm_forecast_ok', { upserted: totalUpserted });
+  }
+
+  // Store in state for quick API access
+  state.forecast = state.forecast || {};
+  state.forecast.lastFetchAt = fetchedAt;
+  state.forecast.lastUpserted = totalUpserted;
+}
+
 function epexNowNext() {
   const rec = state.epex;
   if (!rec.ok || !Array.isArray(rec.data) || rec.data.length === 0) return null;
@@ -2516,6 +2607,36 @@ const web = http.createServer(async (req, res) => {
     }
   }
 
+  // --- VRM Forecast API ---
+  if (url.pathname === '/api/forecast' && req.method === 'GET') {
+    if (!telemetryStore?.listForecasts) return json(res, 503, { ok: false, error: 'telemetry store not available' });
+    const now = new Date();
+    const startParam = url.searchParams.get('start');
+    const endParam = url.searchParams.get('end');
+    const start = startParam || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const end = endParam || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3).toISOString();
+    const forecastType = url.searchParams.get('type') || null;
+    try {
+      const rows = await telemetryStore.listForecasts({ start, end, forecastType });
+      return json(res, 200, {
+        ok: true,
+        start,
+        end,
+        solar: rows.filter(r => r.type === 'solar_yield').map(r => ({ ts: r.ts, w: r.valueW })),
+        consumption: rows.filter(r => r.type === 'consumption').map(r => ({ ts: r.ts, w: r.valueW })),
+        lastFetchAt: state.forecast?.lastFetchAt || null,
+        total: rows.length
+      });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
+  if (url.pathname === '/api/forecast/refresh' && req.method === 'POST') {
+    fetchVrmForecast().catch(e => pushLog('vrm_forecast_manual_error', { error: e.message }));
+    return json(res, 202, { ok: true, message: 'Forecast refresh started' });
+  }
+
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
     return json(res, 200, buildApiStatusResponse(Date.now()));
@@ -2948,6 +3069,9 @@ if (IS_RUNTIME_PROCESS) {
   setInterval(persistEnergy, 60000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
+  // VRM Solar Forecast: fetch on startup + every 2 hours
+  setTimeout(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_init_error', { error: e.message })), 10000);
+  setInterval(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_error', { error: e.message })), 2 * 60 * 60 * 1000);
 }
 
 function gracefulShutdown(signal) {

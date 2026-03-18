@@ -698,6 +698,48 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         meta: r.meta_json ? JSON.parse(r.meta_json) : null
       }));
     },
+    async writeForecastPoints(points = []) {
+      if (!points.length) return 0;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        let upserted = 0;
+        for (const pt of points) {
+          await client.query(`
+            INSERT INTO vrm_forecasts (forecast_type, ts_utc, value_w, fetched_at, forecast_for_date, source, meta_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (forecast_type, ts_utc, forecast_for_date)
+            DO UPDATE SET value_w = EXCLUDED.value_w, fetched_at = EXCLUDED.fetched_at, source = EXCLUDED.source
+          `, [pt.forecastType, pt.tsUtc, pt.valueW, pt.fetchedAt || new Date().toISOString(), pt.forecastForDate, pt.source || 'vrm', pt.meta ? JSON.stringify(pt.meta) : null]);
+          upserted++;
+        }
+        await client.query('COMMIT');
+        return upserted;
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    },
+    async listForecasts({ start, end, forecastType = null } = {}) {
+      let query = 'SELECT forecast_type, ts_utc, value_w, fetched_at, forecast_for_date, source FROM vrm_forecasts WHERE ts_utc >= $1 AND ts_utc <= $2';
+      const params = [start, end];
+      if (forecastType) {
+        params.push(forecastType);
+        query += ` AND forecast_type = $${params.length}`;
+      }
+      query += ' ORDER BY ts_utc ASC';
+      const result = await pool.query(query, params);
+      return result.rows.map(r => ({
+        type: r.forecast_type,
+        ts: r.ts_utc,
+        valueW: r.value_w,
+        fetchedAt: r.fetched_at,
+        forecastForDate: r.forecast_for_date,
+        source: r.source
+      }));
+    },
     async close() {
       await pool.end();
     }
