@@ -951,6 +951,12 @@ function expireLeaseIfNeeded() {
     state.ctrl.lastSignal = 'lease_expired';
     state.ctrl.updatedAt = Date.now();
     pushLog('ctrl_lease_expired');
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'ctrl_lease_expired',
+      target: 'dv_control',
+      reason: 'lease_expired',
+      source: 'direktvermarkter'
+    }));
     applyDvVictronControl(true);
   }
 }
@@ -961,6 +967,13 @@ function setForcedOff(reason) {
   state.ctrl.lastSignal = reason;
   state.ctrl.updatedAt = Date.now();
   pushLog('ctrl_off', { reason, offUntil: new Date(state.ctrl.offUntil).toISOString() });
+  telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+    eventType: 'ctrl_off',
+    target: 'dv_control',
+    reason,
+    source: 'direktvermarkter',
+    meta: { offUntil: new Date(state.ctrl.offUntil).toISOString(), leaseMs: cfg.offLeaseMs }
+  }));
   applyDvVictronControl(false);
 }
 
@@ -970,6 +983,12 @@ function clearForcedOff(reason) {
   state.ctrl.lastSignal = reason;
   state.ctrl.updatedAt = Date.now();
   pushLog('ctrl_on', { reason });
+  telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+    eventType: 'ctrl_on',
+    target: 'dv_control',
+    reason,
+    source: 'direktvermarkter'
+  }));
   applyDvVictronControl(true);
 }
 
@@ -1899,7 +1918,17 @@ async function evaluateSchedule() {
     if (target === 'gridSetpointW' && priceNegative) {
       const limit = Number(npp.gridSetpointW ?? -40);
       const prev = state.ctrl.negativePriceActive;
-      if (!prev) pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
+      if (!prev) {
+        pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });
+        telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+          eventType: 'negative_price_protection_on',
+          target: 'dv_control',
+          valueNum: priceNow.ct_kwh,
+          reason: 'negative_price',
+          source: 'runtime',
+          meta: { price: priceNow.ct_kwh, limit }
+        }));
+      }
       state.ctrl.negativePriceActive = true;
       // Victron DC/AC Abregelung immer bei negativen Preisen
       if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
@@ -1929,6 +1958,14 @@ async function evaluateSchedule() {
   if (state.ctrl.negativePriceActive && !priceNegative) {
     state.ctrl.negativePriceActive = false;
     pushLog('negative_price_protection_off', { price: priceNow?.ct_kwh });
+    telemetrySafeWrite(() => telemetryStore.writeControlEvent({
+      eventType: 'negative_price_protection_off',
+      target: 'dv_control',
+      valueNum: priceNow?.ct_kwh,
+      reason: 'price_positive',
+      source: 'runtime',
+      meta: { price: priceNow?.ct_kwh }
+    }));
     if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
       applyDvVictronControl(true);
     }
@@ -2547,6 +2584,19 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/log' && req.method === 'GET') {
     const limit = resolveLogLimit(url.searchParams.get('limit'));
     return json(res, 200, { rows: state.log.slice(-limit) });
+  }
+
+  // Persistent DV signal log from database
+  if (url.pathname === '/api/log/dv-signals' && req.method === 'GET') {
+    if (!telemetryStore?.listControlEvents) return json(res, 503, { ok: false, error: 'telemetry store not available' });
+    const limit = Number(url.searchParams.get('limit')) || 200;
+    const eventType = url.searchParams.get('type') || null;
+    try {
+      const rows = await telemetryStore.listControlEvents({ limit, eventType });
+      return json(res, 200, { ok: true, rows, total: rows.length });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
   }
 
   if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
