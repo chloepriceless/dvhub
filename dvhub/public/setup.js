@@ -819,6 +819,25 @@ function renderField(field) {
       input.appendChild(option);
     }
     input.value = String(value);
+  } else if (field.type === 'dynamicSelect') {
+    input = document.createElement('select');
+    const placeholder = document.createElement('option');
+    placeholder.value = String(value || '');
+    placeholder.textContent = value ? String(value) : 'Laden...';
+    placeholder.selected = true;
+    input.appendChild(placeholder);
+    if (field.dynamicOptionsUrl) {
+      fetch(field.dynamicOptionsUrl).then(r => r.json()).then((data) => {
+        input.innerHTML = '';
+        for (const z of (data?.zones || [])) {
+          const opt = document.createElement('option');
+          opt.value = z.zone;
+          opt.textContent = z.zone + (z.days_covered > 0 ? ` (${z.days_covered} Tage)` : '');
+          input.appendChild(opt);
+        }
+        input.value = String(value || 'DE-LU');
+      }).catch(() => { placeholder.textContent = value || 'Fehler'; });
+    }
   } else {
     input = document.createElement('input');
     input.type = field.type === 'number' ? 'number' : 'text';

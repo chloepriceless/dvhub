@@ -1231,9 +1231,10 @@ function buildFieldDefinitions() {
       groupLabel: 'EPEX',
       groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.bzn',
-      label: 'BZN',
-      type: 'text',
-      help: 'Beispiel: DE-LU'
+      label: 'Preiszone',
+      type: 'dynamicSelect',
+      dynamicOptionsUrl: '/api/epex/zones',
+      help: 'EPEX Day-Ahead Bidding Zone. Wird von api.dvhub.de geladen.'
     },
     {
       section: 'epex',
@@ -1244,6 +1245,16 @@ function buildFieldDefinitions() {
       label: 'EPEX Zeitzone',
       type: 'text',
       help: 'Zum Beispiel Europe/Berlin.'
+    },
+    {
+      section: 'epex',
+      group: 'market',
+      groupLabel: 'EPEX',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
+      path: 'epex.priceApiUrl',
+      label: 'Price API URL',
+      type: 'text',
+      help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
     }
   ];
 
@@ -1384,7 +1395,8 @@ export function createDefaultConfig() {
     epex: {
       enabled: true,
       bzn: 'DE-LU',
-      timezone: 'Europe/Berlin'
+      timezone: 'Europe/Berlin',
+      priceApiUrl: 'https://api.dvhub.de'
     }
   };
 }
