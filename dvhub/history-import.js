@@ -1288,10 +1288,10 @@ export function createHistoryImportManager({
     return { ok: true, status };
   }
 
-  function listCompletedCoverageRanges({ start, end }) {
+  async function listCompletedCoverageRanges({ start, end }) {
     const importConfig = telemetryConfig.historyImport || {};
     const rows = typeof store.listImportJobRanges === 'function'
-      ? store.listImportJobRanges({
+      ? await store.listImportJobRanges({
         jobTypes: VRM_COVERAGE_JOB_TYPES,
         statuses: ['completed'],
         sourceAccount: importConfig.vrmPortalId || null,
@@ -1305,14 +1305,14 @@ export function createHistoryImportManager({
     })));
   }
 
-  function collectGapWindows({
+  async function collectGapWindows({
     now = null,
     lookbackDays = VRM_GAP_BACKFILL_LOOKBACK_DAYS,
     chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS
   } = {}) {
     const rangeEnd = now ? toIso(now) : new Date().toISOString();
     const rangeStart = shiftIsoByDays(rangeEnd, -Math.max(1, Number(lookbackDays || VRM_GAP_BACKFILL_LOOKBACK_DAYS)));
-    const coverage = listCompletedCoverageRanges({
+    const coverage = await listCompletedCoverageRanges({
       start: rangeStart,
       end: rangeEnd
     });
@@ -1330,7 +1330,7 @@ export function createHistoryImportManager({
     };
   }
 
-  function importSamples({ provider = 'vrm', rows = [], requestedFrom = null, requestedTo = null, sourceAccount = null }) {
+  async function importSamples({ provider = 'vrm', rows = [], requestedFrom = null, requestedTo = null, sourceAccount = null }) {
     const cleaned = rows
       .filter((row) => row && row.seriesKey && row.ts != null && row.value != null)
       .map((row) => ({
@@ -1353,8 +1353,8 @@ export function createHistoryImportManager({
       };
     }
 
-    store.writeSamples(cleaned);
-    const jobId = store.writeImportJob({
+    await store.writeSamples(cleaned);
+    const jobId = await store.writeImportJob({
       jobType: `${provider}_history_import`,
       status: 'completed',
       requestedFrom,
@@ -1449,9 +1449,9 @@ export function createHistoryImportManager({
       return { ok: false, error: 'no importable rows returned from VRM' };
     }
 
-    store.writeSamples(allRows);
+    await store.writeSamples(allRows);
     const importConfig = telemetryConfig.historyImport || {};
-    const jobId = store.writeImportJob({
+    const jobId = await store.writeImportJob({
       jobType: 'vrm_history_import',
       status: 'completed',
       requestedFrom: fetched.requestedFrom,
@@ -1524,7 +1524,7 @@ export function createHistoryImportManager({
       if (!fetched.ok) return fetched;
 
       if ((fetched.rows || []).length > 0) {
-        store.writeSamples(fetched.rows);
+        await store.writeSamples(fetched.rows);
         importedWindows += 1;
         importedRows += fetched.rows.length;
         foundAnyData = true;
@@ -1558,7 +1558,7 @@ export function createHistoryImportManager({
     }
 
     const importConfig = telemetryConfig.historyImport || {};
-    const jobId = store.writeImportJob({
+    const jobId = await store.writeImportJob({
       jobType: 'vrm_history_full_backfill',
       status: 'completed',
       requestedFrom,
@@ -1612,7 +1612,7 @@ export function createHistoryImportManager({
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
 
-    const plan = collectGapWindows({ now, lookbackDays, chunkDays });
+    const plan = await collectGapWindows({ now, lookbackDays, chunkDays });
     const { requestedFrom, requestedTo, gapWindows } = plan;
     if (!gapWindows.length) {
       return {
@@ -1645,7 +1645,7 @@ export function createHistoryImportManager({
       if (!fetched.ok) return fetched;
 
       if ((fetched.rows || []).length > 0) {
-        store.writeSamples(fetched.rows);
+        await store.writeSamples(fetched.rows);
         importedWindows += 1;
         importedRows += fetched.rows.length;
       } else {
@@ -1659,7 +1659,7 @@ export function createHistoryImportManager({
 
     const importConfig = telemetryConfig.historyImport || {};
     const status = emptyWindows > 0 ? 'completed_with_gaps' : 'completed';
-    const jobId = store.writeImportJob({
+    const jobId = await store.writeImportJob({
       jobType: 'vrm_history_gap_backfill',
       status,
       requestedFrom,
@@ -1720,7 +1720,7 @@ export function createHistoryImportManager({
     }
   }
 
-  function startAutomaticBackfill(options = {}) {
+  async function startAutomaticBackfill(options = {}) {
     const status = getStatus();
     if (!status.enabled || !status.ready || vrmBackfillPromise) {
       return {
@@ -1729,7 +1729,7 @@ export function createHistoryImportManager({
       };
     }
     const autoNow = startOfUtcDayIso(options.now || new Date());
-    const plan = collectGapWindows({
+    const plan = await collectGapWindows({
       ...options,
       now: autoNow
     });
@@ -1755,7 +1755,7 @@ export function createHistoryImportManager({
   }
 
   async function backfillMissingPriceHistory({ bzn = 'DE-LU', start = null, end = null, seriesKeys } = {}) {
-    const bounds = store.getTelemetryBounds();
+    const bounds = await store.getTelemetryBounds();
     const rangeStart = start ? toIso(start) : bounds.earliest;
     const rangeEnd = end
       ? toIso(end)
@@ -1774,7 +1774,7 @@ export function createHistoryImportManager({
       };
     }
 
-    const missingBuckets = store.listMissingPriceBuckets({
+    const missingBuckets = await store.listMissingPriceBuckets({
       start: rangeStart,
       end: rangeEnd,
       seriesKeys
@@ -1817,12 +1817,12 @@ export function createHistoryImportManager({
     }
 
     const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);
-    if (historyRows.length) store.writeSamples(historyRows);
+    if (historyRows.length) await store.writeSamples(historyRows);
 
     const skippedBuckets = Math.max(0, missingBuckets.length - matchedRows.length);
     const partial = openDays.length > 0 && historyRows.length > 0;
     const ok = openDays.length === 0 || partial;
-    const jobId = store.writeImportJob({
+    const jobId = await store.writeImportJob({
       jobType: 'price_backfill',
       status: ok ? (partial ? 'completed_with_gaps' : 'completed') : 'failed',
       requestedFrom: rangeStart,

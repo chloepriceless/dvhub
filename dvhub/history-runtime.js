@@ -1040,12 +1040,12 @@ export function createHistoryRuntime({
   getApplicableValueSummary = () => ({ applicableValueCtKwhByMonth: {} }),
   getCurrentDate = currentBerlinDate
 }) {
-  function listRawFallbackSlotsForRange({ start, end }) {
+  async function listRawFallbackSlotsForRange({ start, end }) {
     const today = getCurrentDate();
     const todayStart = localDateTimeToUtcIso(today, 0, 0);
 
     if (end <= todayStart) {
-      return store.listAggregatedEnergySlots({
+      return await store.listAggregatedEnergySlots({
         start,
         end,
         bucketSeconds: SLOT_BUCKET_SECONDS,
@@ -1054,7 +1054,7 @@ export function createHistoryRuntime({
     }
 
     if (start >= todayStart) {
-      return store.listAggregatedEnergySlots({
+      return await store.listAggregatedEnergySlots({
         start,
         end,
         bucketSeconds: SLOT_BUCKET_SECONDS,
@@ -1062,13 +1062,13 @@ export function createHistoryRuntime({
       });
     }
 
-    const historySlots = store.listAggregatedEnergySlots({
+    const historySlots = await store.listAggregatedEnergySlots({
       start,
       end: todayStart,
       bucketSeconds: SLOT_BUCKET_SECONDS,
       scopes: ['history']
     });
-    const liveSlots = store.listAggregatedEnergySlots({
+    const liveSlots = await store.listAggregatedEnergySlots({
       start: todayStart,
       end,
       bucketSeconds: SLOT_BUCKET_SECONDS,
@@ -1077,9 +1077,9 @@ export function createHistoryRuntime({
     return [...historySlots, ...liveSlots].sort((left, right) => left.ts.localeCompare(right.ts));
   }
 
-  function listEnergySlotsForRange({ start, end }) {
+  async function listEnergySlotsForRange({ start, end }) {
     if (typeof store.listMaterializedEnergySlots === 'function') {
-      const materialized = store.listMaterializedEnergySlots({
+      const materialized = await store.listMaterializedEnergySlots({
         start,
         end,
         sourceKinds: ['vrm_import', 'local_live']
@@ -1088,10 +1088,10 @@ export function createHistoryRuntime({
         return materialized;
       }
     }
-    return listRawFallbackSlotsForRange({ start, end });
+    return await listRawFallbackSlotsForRange({ start, end });
   }
 
-  function listYearEnergySlotsByMonth(date) {
+  async function listYearEnergySlotsByMonth(date) {
     const yearStart = startOfYear(date);
     const year = parseDateOnly(yearStart)?.year;
     if (!Number.isFinite(year)) return [];
@@ -1101,19 +1101,19 @@ export function createHistoryRuntime({
       const monthRange = normalizeViewRange('month', monthDate);
       const start = localDateTimeToUtcIso(monthRange.startDate, 0, 0);
       const end = localDateTimeToUtcIso(monthRange.endDateExclusive, 0, 0);
-      slots.push(...listEnergySlotsForRange({ start, end }));
+      slots.push(...await listEnergySlotsForRange({ start, end }));
     }
     return slots;
   }
 
-  function getSummary({ view = 'day', date, solarMarketValues = null }) {
+  async function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
     const energySlots = view === 'year' && typeof store.listMaterializedEnergySlots === 'function'
-      ? listYearEnergySlotsByMonth(date)
-      : listEnergySlotsForRange({ start, end });
-    const priceRows = store.listPriceSlots({
+      ? await listYearEnergySlotsByMonth(date)
+      : await listEnergySlotsForRange({ start, end });
+    const priceRows = await store.listPriceSlots({
       start,
       end
     });
@@ -1433,7 +1433,7 @@ export function createHistoryApiHandlers({
       return {
         status: 200,
         body: {
-          ...historyRuntime.getSummary({ view, date, solarMarketValues }),
+          ...await historyRuntime.getSummary({ view, date, solarMarketValues }),
           app: appVersion
         }
       };
