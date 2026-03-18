@@ -2424,6 +2424,61 @@ const web = http.createServer(async (req, res) => {
     });
   }
 
+  // --- Software Update ---
+  if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
+    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
+    try {
+      const repoRoot = path.resolve(__dirname, '..');
+      // Fetch latest from remote without changing working tree
+      await execFileAsync('git', ['fetch', '--quiet'], { cwd: repoRoot, timeout: 15000 });
+      const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+      const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+      const behind = (await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+      const ahead = (await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+      let changelog = '';
+      if (Number(behind) > 0) {
+        changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+      }
+      return json(res, 200, {
+        ok: true,
+        current: { version: APP_VERSION.versionLabel, revision: localRev.slice(0, 7) },
+        remote: { revision: remoteRev.slice(0, 7) },
+        behind: Number(behind),
+        ahead: Number(ahead),
+        updateAvailable: Number(behind) > 0,
+        changelog: changelog.split('\n').filter(Boolean)
+      });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
+    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
+    try {
+      const repoRoot = path.resolve(__dirname, '..');
+      // Pull latest changes
+      const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+      // Run npm install in case dependencies changed
+      const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+      pushLog('update_applied', {
+        pullOutput: pull.stdout.trim().split('\n').slice(0, 5).join('\n'),
+        npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
+      });
+      // Schedule restart so the response can be sent first
+      scheduleServiceRestart();
+      pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'update' });
+      return json(res, 200, {
+        ok: true,
+        pullOutput: pull.stdout.trim(),
+        message: 'Update applied, service restart scheduled'
+      });
+    } catch (e) {
+      pushLog('update_error', { error: e.message });
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
   if (url.pathname === '/api/status' && req.method === 'GET') {
     expireLeaseIfNeeded();
     return json(res, 200, buildApiStatusResponse(Date.now()));

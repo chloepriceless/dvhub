@@ -541,6 +541,66 @@ function renderDvSignalLog() {
   }
 }
 
+// --- Software Update ---
+async function checkForUpdate() {
+  setBanner('updateBanner', 'Prüfe auf Updates...', 'info');
+  document.getElementById('updateChangelog').style.display = 'none';
+  document.getElementById('updateActions').style.display = 'none';
+  try {
+    const res = await apiFetch('/api/admin/update/check');
+    const data = await res.json();
+    if (!data.ok) {
+      setBanner('updateBanner', `Fehler: ${data.error}`, 'error');
+      setText('updateMeta', '-');
+      return;
+    }
+    setText('updateMeta', `Aktuell: ${data.current.version} (${data.current.revision}) | Remote: ${data.remote.revision}`);
+    if (data.updateAvailable) {
+      setBanner('updateBanner', `Update verfügbar! ${data.behind} Commit${data.behind > 1 ? 's' : ''} hinter origin/main.`, 'warning');
+      const changelogDiv = document.getElementById('updateChangelog');
+      if (data.changelog && data.changelog.length) {
+        changelogDiv.innerHTML = '<p class="card-title">Änderungen:</p>' +
+          data.changelog.map(line => {
+            const el = document.createElement('div');
+            el.className = 'summary-card';
+            el.textContent = line;
+            return el.outerHTML;
+          }).join('');
+        changelogDiv.style.display = '';
+      }
+      document.getElementById('updateActions').style.display = '';
+    } else {
+      setBanner('updateBanner', 'DVhub ist aktuell — keine Updates verfügbar.', 'success');
+      if (data.ahead > 0) {
+        setText('updateMeta', `${setText('updateMeta').textContent} | ${data.ahead} lokale Commits voraus`);
+      }
+    }
+  } catch (error) {
+    setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
+  }
+}
+
+async function applyUpdate() {
+  const btn = document.getElementById('applyUpdateBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Update läuft...'; }
+  setBanner('updateBanner', 'Update wird installiert — bitte warten...', 'info');
+  try {
+    const res = await apiFetch('/api/admin/update/apply', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      setBanner('updateBanner', 'Update installiert! Service startet neu — Seite lädt in 10 Sekunden automatisch neu.', 'success');
+      document.getElementById('updateActions').style.display = 'none';
+      setTimeout(() => window.location.reload(), 10000);
+    } else {
+      setBanner('updateBanner', `Update fehlgeschlagen: ${data.error}`, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+    }
+  } catch (error) {
+    setBanner('updateBanner', `Update fehlgeschlagen: ${error.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+  }
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -558,6 +618,8 @@ function initToolsPage() {
   document.getElementById('restartServiceBtn')?.addEventListener('click', () => {
     restartService().catch((error) => setBanner('healthBanner', `Restart fehlgeschlagen: ${error.message}`, 'error'));
   });
+  document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
+  document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
   document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());
@@ -644,6 +706,8 @@ function initToolsPage() {
   if (bootstrapPlan.loadHealth) {
     loadHealth().catch((error) => setBanner('healthBanner', `Health-Status konnte nicht geladen werden: ${error.message}`, 'error'));
   }
+  // Auto-check for updates on page load
+  checkForUpdate().catch(() => {});
   if (bootstrapPlan.loadHistoryImportStatus) {
     loadHistoryImportStatus().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
