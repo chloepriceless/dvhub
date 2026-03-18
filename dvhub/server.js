@@ -459,9 +459,13 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     && currentSocPct != null
     && lastState?.lastSocPct != null
     && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
-  const needsRegeneration = !lastState?.lastRunDate
-    || lastState.lastRunDate !== runDate
-    || !previousAutomationRules.length
+  // Only treat "no automation rules" as needing regeneration if we haven't
+  // already planned today.  When the outcome is 'no_slots', an empty rule
+  // list is expected and does NOT mean we need to re-plan every 15 seconds.
+  const neverPlannedToday = !lastState?.lastRunDate || lastState.lastRunDate !== runDate;
+  const missingRules = !previousAutomationRules.length && lastState?.lastOutcome !== 'no_slots';
+  const needsRegeneration = neverPlannedToday
+    || missingRules
     || priceDataChanged
     || socChanged;
 
@@ -549,11 +553,18 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     plan: planSummary
   };
   persistConfig();
-  pushLog('sma_plan_applied', {
-    slots: planSummary.futureSlots,
-    energyKwh: availableEnergyKwh,
-    estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt) / 100
-  });
+
+  // Only log when the plan actually changed (different slots or slot count)
+  const prevSlots = lastState?.selectedSlotTimestamps || [];
+  const planChanged = selectedSlotTimestamps.length !== prevSlots.length
+    || selectedSlotTimestamps.some((ts, i) => ts !== prevSlots[i]);
+  if (planChanged) {
+    pushLog('sma_plan_applied', {
+      slots: planSummary.futureSlots,
+      energyKwh: availableEnergyKwh,
+      estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt) / 100
+    });
+  }
 }
 
 function applyLoadedConfig(nextLoadedConfig) {
