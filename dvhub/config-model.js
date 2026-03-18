@@ -75,12 +75,6 @@ const SECTIONS = [
     destination: 'advanced'
   },
   {
-    id: 'influx',
-    label: 'InfluxDB',
-    description: 'Optionale Speicherung der Messdaten in InfluxDB.',
-    destination: 'services'
-  },
-  {
     id: 'telemetry',
     label: 'Telemetrie & Historie',
     description: 'Interne Datenbank fuer Live-Historie, Rollups und Backfill.',
@@ -183,23 +177,6 @@ const SETUP_WIZARD_FIELD_META = {
     visibleWhenPath: { path: 'epex.enabled', equals: true },
     help: 'Handelszone für EPEX, zum Beispiel DE-LU.'
   },
-  'influx.enabled': {
-    stepId: 'services',
-    order: 40,
-    help: 'Aktiviere Influx nur, wenn du Messwerte langfristig extern speichern willst.'
-  },
-  'influx.url': {
-    stepId: 'services',
-    order: 50,
-    visibleWhenPath: { path: 'influx.enabled', equals: true },
-    help: 'Adresse deines Influx-Servers oder Containers.'
-  },
-  'influx.db': {
-    stepId: 'services',
-    order: 60,
-    visibleWhenPath: { path: 'influx.enabled', equals: true },
-    help: 'Name der Datenbank oder des Zielbereichs für den Influx-Export.'
-  }
 };
 
 const restartSensitivePrefixes = [
@@ -872,93 +849,6 @@ function buildFieldDefinitions() {
       help: 'Blendet leere Registerbereiche aus.'
     },
 
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.enabled',
-      label: 'Influx aktiv',
-      type: 'boolean',
-      help: 'Aktiviert den Export nach InfluxDB.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.apiVersion',
-      label: 'Influx API Version',
-      type: 'select',
-      options: [
-        { value: 'v3', label: 'v3' },
-        { value: 'v2', label: 'v2' }
-      ],
-      help: 'Legt den Write-Endpunkt fest.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.url',
-      label: 'Influx URL',
-      type: 'text',
-      help: 'Zum Beispiel http://127.0.0.1:8086'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.db',
-      label: 'Database / DB',
-      type: 'text',
-      help: 'DB-Name für Influx v3 oder Fallback für v2.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.org',
-      label: 'Organisation',
-      type: 'text',
-      empty: 'blank',
-      help: 'Nur für Influx v2 relevant.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.bucket',
-      label: 'Bucket',
-      type: 'text',
-      empty: 'blank',
-      help: 'Nur für Influx v2 relevant.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.token',
-      label: 'Influx Token',
-      type: 'text',
-      empty: 'blank',
-      help: 'Optionaler Auth-Token.'
-    },
-    {
-      section: 'influx',
-      group: 'connection',
-      groupLabel: 'Influx',
-      groupDescription: 'Optionale Speicherung in InfluxDB.',
-      path: 'influx.measurement',
-      label: 'Measurement',
-      type: 'text',
-      help: 'Measurement-Name für alle Messreihen.'
-    },
 
     {
       section: 'pricing',
@@ -1430,16 +1320,6 @@ export function createDefaultConfig() {
       quantity: 10,
       timeoutMs: 700,
       onlyNonZero: true
-    },
-    influx: {
-      enabled: false,
-      apiVersion: 'v3',
-      url: 'http://127.0.0.1:8086',
-      db: '',
-      org: '',
-      bucket: '',
-      token: '',
-      measurement: 'dv'
     },
     telemetry: {
       enabled: true,

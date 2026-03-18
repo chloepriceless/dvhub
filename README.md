@@ -51,7 +51,7 @@ DVhub auf `main` ist heute:
 - **Einstellungsoberfläche** statt roher `config.json`-Bearbeitung
 - **Victron-Anbindung per Modbus TCP oder MQTT**
 - **Telemetrie mit lokaler SQLite-Historie**, gezieltem Preis-Backfill und optionalem VRM-Nachimport
-- **Integrationsplattform** für EOS, EMHASS, Home Assistant, Loxone und InfluxDB
+- **Integrationsplattform** für EOS, EMHASS, Home Assistant und Loxone
 - **Installierbare Service-Anwendung** mit `install.sh`, systemd und Health-/Restart-Funktionen
 
 ## Inhaltsverzeichnis
@@ -158,7 +158,7 @@ Der First-Run-Setup-Assistent führt Schritt für Schritt durch:
 - HTTP-Port und API-Token
 - Victron-Verbindung per Modbus oder MQTT
 - Meter- und DV-Basiswerte
-- EPEX- und Influx-Grunddaten
+- EPEX-Grunddaten
 - Review-Schritt mit Validierung vor dem Speichern
 - Anzeige vererbter Meter- und DV-Register-Verbindungen im Review
 
@@ -194,8 +194,6 @@ DVhub stellt Daten bereit oder nimmt Optimierungsergebnisse entgegen für:
 - **Loxone**
 - **EOS (Akkudoktor)**
 - **EMHASS**
-- **InfluxDB v2/v3**
-
 Zusätzlich kann DVhub historische Daten per **VRM** nachladen, wenn neue Installationen ältere Werte auffüllen sollen oder Lücken entstanden sind.
 Für Marktpreise kann DVhub zusätzlich fehlende historische Börsenpreise gezielt über Energy Charts in die interne SQLite-Datenbank zurückschreiben.
 
@@ -409,7 +407,6 @@ Die Einstellungsseite pflegt diese Werte zentral im Bereich Marktprämie.
 | `victron` | Anlagenadresse (`host`) |
 | `schedule` | Zeitplan-Regeln, Defaults und Kleine Börsenautomatik (`smallMarketAutomation`) |
 | `epex` | Preiszone und Zeitzone |
-| `influx` | InfluxDB-Anbindung |
 | `telemetry` | Lokale SQLite-Historie, Rollups, Preis-Backfill und VRM-History-Import |
 | `userEnergyPricing` | Eigene Preislogik für Netz, PV und Akku plus Marktwert-/PV-Anlagen-Metadaten |
 | `scan` | Modbus Scan-Parameter |
@@ -424,7 +421,6 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 
 - Änderungen an Victron-Registern, Port, Unit-ID oder Timeout erfolgen bewusst nur in `/etc/dvhub/hersteller/victron.json`
 - Die normale `config.json` bleibt damit klein und sicher und enthält nur Betriebs- und Anlagenwerte
-- **InfluxDB v3** ist Default, v2 bleibt kompatibel
 - `dvControl.enabled` ist standardmäßig deaktiviert und muss aktiv gesetzt werden
 - `userEnergyPricing` erlaubt festen Endkundenpreis oder dynamische Preisbestandteile auf Basis von EPEX
 - im MQTT-Modus wird `victron.mqtt.portalId` benötigt; ohne eigenen Broker nutzt DVhub den GX-Host
@@ -463,7 +459,7 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 
 - Timing-Safe Token-Vergleich (`crypto.timingSafeEqual`) statt String-Vergleich
 - Content-Security-Policy Header zum Schutz vor XSS
-- API-Responses redaktieren sensible Felder (`apiToken`, `influx.token`, `vrmToken`)
+- API-Responses redaktieren sensible Felder (`apiToken`, `vrmToken`)
 - Config-Datei wird mit `0600`-Berechtigung geschrieben
 - SQL-Injection-Schutz in `countRows()` per Table-Allowlist
 - Eingabevalidierung für Schedule-Regeln (`validateScheduleRule`)

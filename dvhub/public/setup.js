@@ -275,11 +275,6 @@ function validateSetupWizardState(state) {
   if (resolveWizardValue(state, 'epex.enabled', false)) {
     requireText('services', 'epex.bzn', 'Bitte die BZN für den EPEX-Dienst angeben.');
   }
-  if (resolveWizardValue(state, 'influx.enabled', false)) {
-    requireText('services', 'influx.url', 'Bitte die Influx-URL angeben.');
-    requireText('services', 'influx.db', 'Bitte die Influx-Datenbank angeben.');
-  }
-
   return {
     ...state,
     definition: clone(state?.definition || setupDefinition || {}),
@@ -412,7 +407,7 @@ function describeSetupStep(state, stepId = state?.activeStepId) {
         highlight: {
           eyebrow: 'Optional zum Start',
           title: 'Zeitzone zuerst, Dienste nur bei Bedarf',
-          body: 'Schedule, EPEX und Influx bleiben kompakt. Zusatzfelder erscheinen erst, wenn du den jeweiligen Dienst einschaltest.'
+          body: 'Schedule und EPEX bleiben kompakt. Zusatzfelder erscheinen erst, wenn du den jeweiligen Dienst einschaltest.'
         },
         note: 'So bleibt der letzte Schritt klein, auch wenn du nur die Grundkonfiguration speichern willst.'
       };
@@ -533,7 +528,6 @@ function buildSetupReviewSnapshot(state) {
   const host = resolveWizardValue(state, 'victron.host', '');
   const scheduleTimezone = resolveWizardValue(state, 'schedule.timezone', '');
   const epexEnabled = Boolean(resolveWizardValue(state, 'epex.enabled', false));
-  const influxEnabled = Boolean(resolveWizardValue(state, 'influx.enabled', false));
   const inheritedConnectionSections = buildInheritedSetupInfoSections(state);
   const inheritedConnectionNotes = inheritedConnectionSections.flatMap((section) => section.notes);
 
@@ -584,10 +578,7 @@ function buildSetupReviewSnapshot(state) {
       entries: [
         { label: 'Zeitzone', value: formatReviewValue(scheduleTimezone) },
         { label: 'EPEX', value: epexEnabled ? 'Aktiv' : 'Deaktiviert' },
-        { label: 'EPEX BZN', value: epexEnabled ? formatReviewValue(resolveWizardValue(state, 'epex.bzn', '')) : 'Nicht aktiv' },
-        { label: 'InfluxDB', value: influxEnabled ? 'Aktiv' : 'Deaktiviert' },
-        { label: 'Influx URL', value: influxEnabled ? formatReviewValue(resolveWizardValue(state, 'influx.url', '')) : 'Nicht aktiv' },
-        { label: 'Influx DB', value: influxEnabled ? formatReviewValue(resolveWizardValue(state, 'influx.db', '')) : 'Nicht aktiv' }
+        { label: 'EPEX BZN', value: epexEnabled ? formatReviewValue(resolveWizardValue(state, 'epex.bzn', '')) : 'Nicht aktiv' }
       ],
       notes: serviceNotes
     }

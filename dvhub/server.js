@@ -1310,59 +1310,6 @@ function updateEnergyIntegrals(nowMs, totalW) {
   state.energy.revenueEur += (exportW / 1000) * dtH * (epexCtKwh / 100);
 }
 
-let influxBuffer = [];
-const INFLUX_FLUSH_MS = 10000;
-
-async function flushInflux() {
-  if (!cfg.influx.enabled || !influxBuffer.length) return;
-  const lines = influxBuffer.splice(0);
-  try {
-    const base = cfg.influx.url.replace(/\/+$/, '');
-    const body = lines.join('\n');
-    const headers = { 'content-type': 'text/plain; charset=utf-8' };
-    let url;
-
-    if (cfg.influx.apiVersion === 'v2') {
-      // InfluxDB v2: /api/v2/write?org=...&bucket=...&precision=s
-      const qp = new URLSearchParams({ org: cfg.influx.org || '', bucket: cfg.influx.bucket || cfg.influx.db || '', precision: 's' });
-      url = `${base}/api/v2/write?${qp.toString()}`;
-      if (cfg.influx.token) headers.Authorization = `Token ${cfg.influx.token}`;
-    } else {
-      // InfluxDB v3 (Default): /api/v3/write_lp?db=...&precision=second
-      const qp = new URLSearchParams({ db: cfg.influx.db || cfg.influx.bucket || '', precision: 'second' });
-      url = `${base}/api/v3/write_lp?${qp.toString()}`;
-      if (cfg.influx.token) headers.Authorization = `Bearer ${cfg.influx.token}`;
-    }
-
-    const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  } catch (e) {
-    pushLog('influx_error', { error: e.message });
-  }
-}
-
-function bufferInflux(lines) {
-  if (!cfg.influx.enabled || !lines.length) return;
-  influxBuffer.push(...lines);
-}
-
-function buildInfluxLines(nowSec) {
-  const m = cfg.influx.measurement;
-  const lines = [];
-  const meter = state.meter;
-  const vic = state.victron;
-  lines.push(`${m},source=meter grid_l1_w=${Number(meter.grid_l1_w || 0)},grid_l2_w=${Number(meter.grid_l2_w || 0)},grid_l3_w=${Number(meter.grid_l3_w || 0)},grid_total_w=${Number(meter.grid_total_w || 0)} ${nowSec}`);
-  lines.push(`${m},source=ctrl dv_control=${Number(controlValue())},forced_off=${state.ctrl.forcedOff ? 1 : 0} ${nowSec}`);
-  const f = [];
-  for (const [k, v] of Object.entries(vic)) {
-    if (k === 'errors' || k === 'updatedAt') continue;
-    if (v == null || Number.isNaN(Number(v))) continue;
-    f.push(`${k}=${Number(v)}`);
-  }
-  if (f.length) lines.push(`${m},source=victron ${f.join(',')} ${nowSec}`);
-  lines.push(`${m},source=energy import_wh=${state.energy.importWh.toFixed(3)},export_wh=${state.energy.exportWh.toFixed(3)},cost_eur=${state.energy.costEur.toFixed(6)},revenue_eur=${state.energy.revenueEur.toFixed(6)} ${nowSec}`);
-  return lines;
-}
 
 async function pollMeter() {
   try {
@@ -1474,7 +1421,6 @@ async function pollMeter() {
   });
   liveTelemetryBuffer?.flush();
 
-  bufferInflux(buildInfluxLines(Math.floor(Date.now() / 1000)));
   publishRuntimeSnapshot();
 }
 
@@ -2102,7 +2048,7 @@ function downloadJson(res, filename, payload) {
   res.end(JSON.stringify(payload, null, 2));
 }
 
-const REDACTED_PATHS = ['apiToken', 'influx.token', 'telemetry.historyImport.vrmToken'];
+const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken'];
 
 function redactConfig(config) {
   const copy = JSON.parse(JSON.stringify(config));
@@ -2784,9 +2730,6 @@ if (IS_RUNTIME_PROCESS) {
     const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
     if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
   }, 5 * 60 * 1000);
-  setInterval(() => {
-    flushInflux().catch((e) => pushLog('influx_flush_error', { error: e.message }));
-  }, INFLUX_FLUSH_MS);
   setInterval(persistEnergy, 60000);
   setInterval(() => {
     telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
@@ -2819,8 +2762,6 @@ console.log('Config loaded:', {
   meterPollMs: cfg.meterPollMs,
   meterAddress: `${cfg.meter.host}:${cfg.meter.port} uid=${cfg.meter.unitId} reg=${cfg.meter.address}`,
   apiTokenSet: !!cfg.apiToken,
-  influxEnabled: cfg.influx.enabled,
-  influxApiVersion: cfg.influx.apiVersion || 'v3',
   epexEnabled: cfg.epex.enabled,
   scheduleRules: cfg.schedule.rules.length,
   telemetryEnabled: cfg.telemetry?.enabled,
