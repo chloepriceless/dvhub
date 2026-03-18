@@ -83,10 +83,10 @@ export async function fetchEnergyChartsSolarMarketValues({ year, fetchImpl = glo
   };
 }
 
-function persistSummary(summary, marketValueStore) {
+async function persistSummary(summary, marketValueStore) {
   if (!marketValueStore?.upsertSolarMarketValue) return;
   for (const [key, ctKwh] of Object.entries(summary?.monthlyCtKwhByMonth || {})) {
-    marketValueStore.upsertSolarMarketValue({
+    await marketValueStore.upsertSolarMarketValue({
       scope: 'monthly',
       key,
       ctKwh,
@@ -94,7 +94,7 @@ function persistSummary(summary, marketValueStore) {
     });
   }
   for (const [key, ctKwh] of Object.entries(summary?.annualCtKwhByYear || {})) {
-    marketValueStore.upsertSolarMarketValue({
+    await marketValueStore.upsertSolarMarketValue({
       scope: 'annual',
       key: String(key),
       ctKwh,
@@ -205,7 +205,7 @@ export function createEnergyChartsMarketValueService({
       return cache.get(numericYear);
     }
 
-    const persisted = marketValueStore.listSolarMarketValuesForYear?.({ year: numericYear }) || null;
+    const persisted = await marketValueStore.listSolarMarketValuesForYear?.({ year: numericYear }) || null;
     const attemptedAt = nowIso();
     if (!needsRefresh({ year: numericYear, persisted, nowValue: attemptedAt })) {
       return persisted?.summary || emptySummary();
@@ -214,9 +214,9 @@ export function createEnergyChartsMarketValueService({
       pendingByYear.set(numericYear, Promise.resolve(fetchEnergyChartsSolarMarketValues({
         year: numericYear,
         fetchImpl
-      })).then((summary) => {
-        persistSummary(summary, marketValueStore);
-        marketValueStore?.markSolarMarketValueAttempt?.({
+      })).then(async (summary) => {
+        await persistSummary(summary, marketValueStore);
+        await marketValueStore?.markSolarMarketValueAttempt?.({
           year: numericYear,
           attemptedAt,
           status: 'ready',
@@ -224,8 +224,8 @@ export function createEnergyChartsMarketValueService({
           cooldownUntil: null
         });
         return { ok: true, summary };
-      }).catch((error) => {
-        marketValueStore?.markSolarMarketValueAttempt?.({
+      }).catch(async (error) => {
+        await marketValueStore?.markSolarMarketValueAttempt?.({
           year: numericYear,
           attemptedAt,
           status: 'error',
