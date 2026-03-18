@@ -1419,28 +1419,56 @@ async function pollMeter() {
   publishRuntimeSnapshot();
 }
 
+async function fetchEpexFromDvhubApi(day, day2, bzn) {
+  const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+  const url = `${baseUrl}/api/prices?start=${day}&end=${addDays(day2, 1)}&zone=${encodeURIComponent(bzn)}`;
+  const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error(`DVhub Price API HTTP ${r.status}`);
+  const p = await r.json();
+  if (!Array.isArray(p?.data) || p.data.length === 0) return null;
+  return p.data.map((entry) => {
+    const ts = new Date(entry.ts).getTime();
+    const eur = Number(entry.price);
+    const ds = berlinDateString(new Date(ts));
+    return { ts, day: ds, eur_mwh: eur, ct_kwh: Number((eur / 10).toFixed(3)) };
+  }).filter((row) => row.day === day || row.day === day2);
+}
+
+async function fetchEpexFromEnergyCharts(day, day2, bzn) {
+  const url = `https://api.energy-charts.info/price?bzn=${encodeURIComponent(bzn)}&start=${day}&end=${day2}`;
+  const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error(`Energy Charts HTTP ${r.status}`);
+  const p = await r.json();
+  const unix = Array.isArray(p?.unix_seconds) ? p.unix_seconds : [];
+  const prices = Array.isArray(p?.price) ? p.price : [];
+  const n = Math.min(unix.length, prices.length);
+  const data = [];
+  for (let i = 0; i < n; i++) {
+    const sec = Number(unix[i]);
+    const eur = Number(prices[i]);
+    if (!Number.isFinite(sec) || !Number.isFinite(eur)) continue;
+    const ts = sec * 1000;
+    const ds = berlinDateString(new Date(ts));
+    if (ds !== day && ds !== day2) continue;
+    data.push({ ts, day: ds, eur_mwh: eur, ct_kwh: Number((eur / 10).toFixed(3)) });
+  }
+  return data;
+}
+
 async function fetchEpexDay() {
   if (!cfg.epex.enabled) return;
   const day = berlinDateString();
   const day2 = addDays(day, 1);
-  const url = `https://api.energy-charts.info/price?bzn=${encodeURIComponent(cfg.epex.bzn)}&start=${day}&end=${day2}`;
+  const bzn = cfg.epex.bzn || 'DE-LU';
   try {
-    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const p = await r.json();
-    const unix = Array.isArray(p?.unix_seconds) ? p.unix_seconds : [];
-    const prices = Array.isArray(p?.price) ? p.price : [];
-    const n = Math.min(unix.length, prices.length);
-    const data = [];
-
-    for (let i = 0; i < n; i++) {
-      const sec = Number(unix[i]);
-      const eur = Number(prices[i]);
-      if (!Number.isFinite(sec) || !Number.isFinite(eur)) continue;
-      const ts = sec * 1000;
-      const ds = berlinDateString(new Date(ts));
-      if (ds !== day && ds !== day2) continue;
-      data.push({ ts, day: ds, eur_mwh: eur, ct_kwh: Number((eur / 10).toFixed(3)) });
+    let data = null;
+    try {
+      data = await fetchEpexFromDvhubApi(day, day2, bzn);
+    } catch (apiErr) {
+      pushLog('epex_dvhub_api_fallback', { error: apiErr.message });
+    }
+    if (!data || data.length === 0) {
+      data = await fetchEpexFromEnergyCharts(day, day2, bzn);
     }
 
     data.sort((a, b) => a.ts - b.ts);
@@ -2493,6 +2521,50 @@ const web = http.createServer(async (req, res) => {
   if (url.pathname === '/api/epex/refresh' && req.method === 'POST') {
     await fetchEpexDay();
     return json(res, 200, { ok: state.epex.ok, error: state.epex.error });
+  }
+
+  if (url.pathname === '/api/epex/zones' && req.method === 'GET') {
+    try {
+      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+      const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      return json(res, 200, data);
+    } catch (e) {
+      return json(res, 502, { error: e.message });
+    }
+  }
+
+  if (url.pathname === '/api/epex/gaps' && req.method === 'GET') {
+    try {
+      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+      const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
+      const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      return json(res, 200, data);
+    } catch (e) {
+      return json(res, 502, { error: e.message });
+    }
+  }
+
+  if (url.pathname === '/api/epex/backfill' && req.method === 'POST') {
+    try {
+      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+      const body = await parseBody(req);
+      const zone = body?.zone || cfg.epex.bzn || 'DE-LU';
+      const r = await fetch(`${baseUrl}/api/backfill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zone, start: body?.start || '2020-01-01' }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      return json(res, 200, data);
+    } catch (e) {
+      return json(res, 502, { error: e.message });
+    }
   }
 
   if (url.pathname === '/api/meter/scan' && req.method === 'POST') {
