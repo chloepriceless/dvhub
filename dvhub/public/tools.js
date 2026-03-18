@@ -456,19 +456,32 @@ let dvLogEntries = [];
 
 async function loadDvSignalLog() {
   setText('dvLogMeta', 'Laden...');
+  const source = document.getElementById('dvLogSource')?.value || 'ram';
   try {
-    const res = await apiFetch('/api/log?limit=1000');
-    const data = await res.json();
-    const rawEntries = Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : []);
-    // Normalize: server uses 'event' key, UI expects 'type'
-    const entries = rawEntries.map((e) => ({
-      ...e,
-      type: e.type || e.event,
-      detail: e.detail || e
-    }));
-    dvLogEntries = entries.filter((e) => DV_SIGNAL_TYPES.has(e.type));
+    let rawEntries;
+    if (source === 'db') {
+      const res = await apiFetch('/api/log/dv-signals?limit=500');
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'DB-Abfrage fehlgeschlagen');
+      rawEntries = (data.rows || []).map((e) => ({
+        ...e,
+        type: e.event,
+        detail: { ...(e.meta || {}), reason: e.reason, source: e.source, target: e.target, value: e.value }
+      }));
+    } else {
+      const res = await apiFetch('/api/log?limit=1000');
+      const data = await res.json();
+      rawEntries = Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : []);
+      rawEntries = rawEntries.map((e) => ({
+        ...e,
+        type: e.type || e.event,
+        detail: e.detail || e
+      }));
+    }
+    dvLogEntries = source === 'db' ? rawEntries : rawEntries.filter((e) => DV_SIGNAL_TYPES.has(e.type));
     renderDvSignalLog();
-    setText('dvLogMeta', `${dvLogEntries.length} DV-Signale gefunden (von ${entries.length} Log-Einträgen)`);
+    const label = source === 'db' ? 'Datenbank (persistent)' : 'RAM (aktuelle Sitzung)';
+    setText('dvLogMeta', `${dvLogEntries.length} DV-Signale aus ${label}`);
   } catch (error) {
     setText('dvLogMeta', `Fehler: ${error.message}`);
   }
@@ -623,6 +636,7 @@ function initToolsPage() {
   document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());
+  document.getElementById('dvLogSource')?.addEventListener('change', () => loadDvSignalLog());
   document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

@@ -219,6 +219,12 @@
           <div class="controls">
             <button id="loadDvLog" class="btn btn-primary" type="button">Log laden</button>
             <button id="refreshDvLog" type="button">Aktualisieren</button>
+            <label>Quelle:
+              <select id="dvLogSource">
+                <option value="ram">Aktuell (RAM)</option>
+                <option value="db">Datenbank (persistent)</option>
+              </select>
+            </label>
             <label>Filter:
               <select id="dvLogFilter">
                 <option value="all">Alle DV-Signale</option>

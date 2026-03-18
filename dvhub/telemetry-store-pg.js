@@ -677,6 +677,27 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         eventRows: Number(eventCount || 0)
       };
     },
+    async listControlEvents({ limit = 200, eventType = null } = {}) {
+      let query = 'SELECT event_type, target, value_num, value_text, reason, source, ts_utc, meta_json FROM control_events';
+      const params = [];
+      if (eventType) {
+        params.push(eventType);
+        query += ` WHERE event_type = $${params.length}`;
+      }
+      params.push(Math.min(Math.max(1, Number(limit) || 200), 2000));
+      query += ` ORDER BY ts_utc DESC LIMIT $${params.length}`;
+      const result = await pool.query(query, params);
+      return result.rows.map(r => ({
+        event: r.event_type,
+        target: r.target,
+        value: r.value_num,
+        valueText: r.value_text,
+        reason: r.reason,
+        source: r.source,
+        ts: r.ts_utc,
+        meta: r.meta_json ? JSON.parse(r.meta_json) : null
+      }));
+    },
     async close() {
       await pool.end();
     }
