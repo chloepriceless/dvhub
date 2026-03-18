@@ -163,14 +163,17 @@ Der First-Run-Setup-Assistent fuehrt Schritt fuer Schritt durch:
 - Review-Schritt mit Validierung vor dem Speichern
 - Anzeige vererbter Meter- und DV-Register-Verbindungen im Review
 
-### Tools
+### Tools / Wartung
 
-Die Tool-Seite enthaelt:
+Die Wartungsseite enthaelt:
 
+- **DV-Schaltsignal-Log** mit Filterfunktion (Schaltbefehle, Modbus/Setpoint-Writes, Victron-Writes, Boersenautomatik)
 - Modbus Register Scan
 - Schedule JSON Bearbeitung
 - Health-/Service-Status
+- Config Import/Export
 - VRM History-Import fuer Telemetrie-Nachfuellung
+- API-Dokumentation (Swagger UI)
 
 ### Historie
 
@@ -503,9 +506,13 @@ Unter `userEnergyPricing` stehen fuer die History-Marktpraemie zwei zusaetzliche
 
 - Zentraler Preisfeed unter api.dvhub.de fuer alle 44 EPEX Day-Ahead Bidding Zones
 - Historische Daten ab 2020, stuendlich vor 01.10.2024, 15-Minuten danach
+- ENTSO-E Transparency Platform als Primaerquelle, Energy Charts als Fallback
 - fetchEpexDay() nutzt primaer api.dvhub.de mit automatischem Fallback auf Energy Charts
 - Neue Proxy-Endpunkte: `/api/epex/zones`, `/api/epex/gaps`, `/api/epex/backfill`
 - CORS-Support fuer DVhub-Instanzen
+- Swagger UI API-Dokumentation unter api.dvhub.de/docs
+- EPEX Spot Day-Ahead Live-Chart unter api.dvhub.de/spot und dvhub.de/spot
+- Backfill-API nur aus dem LAN erreichbar (POST /api/backfill)
 
 **Preiszonen-Selektor:**
 
@@ -521,6 +528,20 @@ Unter `userEnergyPricing` stehen fuer die History-Marktpraemie zwei zusaetzliche
 - Neuer `db-client.js` fuer zentrale Datenbankverbindung
 - Migrationsscript `scripts/migrate-sqlite-to-pg.sh` mit SQLite-Backup
 - Config-Sektion `telemetry.database` fuer PostgreSQL-Verbindungsdaten
+
+**Kleine Boersenautomatik - Plan-Lock:**
+
+- Bugfix: Laufende Entladung wird nicht mehr durch Re-Planning abgebrochen
+- Plan-Lock-Mechanismus verhindert Neuberechnung waehrend aktiver Slot-Ausfuehrung
+- SoC-basierte Regeneration nur noch ausserhalb der Entlade-/Cooldown-Phasen
+- Cooldown-Lock bis 30 Minuten nach letztem Slot-Ende bei vorhandenen Zukunfts-Slots
+
+**DV-Schaltsignal-Log:**
+
+- Neue Wartungsseiten-Ansicht fuer alle DV-Steuersignale
+- Filterfunktionen: Schaltbefehle, Modbus/Setpoint-Writes, Victron-Writes, Boersenautomatik
+- Erweiterte Signal-Typen: control_write, sma_plan_applied, schedule_auto_disabled, schedule_stop_soc_reached
+- Farbcodierung: Rot fuer Fehler/Abregelung, Gruen fuer Freigabe/Plan, Blau fuer Writes
 
 **Weitere Aenderungen:**
 

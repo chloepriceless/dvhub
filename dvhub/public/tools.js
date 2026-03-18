@@ -423,7 +423,9 @@ const DV_SIGNAL_TYPES = new Set([
   'ctrl_off', 'ctrl_on', 'ctrl_lease_expired',
   'dv_victron_write', 'dv_victron_write_error',
   'modbus_fc6', 'modbus_fc16',
-  'negative_price_protection_on', 'negative_price_protection_off'
+  'negative_price_protection_on', 'negative_price_protection_off',
+  'control_write', 'sma_plan_applied',
+  'schedule_auto_disabled', 'schedule_stop_soc_reached'
 ]);
 
 const DV_SIGNAL_LABELS = {
@@ -435,14 +437,19 @@ const DV_SIGNAL_LABELS = {
   modbus_fc6: 'Modbus FC6 Write',
   modbus_fc16: 'Modbus FC16 Write',
   negative_price_protection_on: 'Negativpreis-Schutz AN',
-  negative_price_protection_off: 'Negativpreis-Schutz AUS'
+  negative_price_protection_off: 'Negativpreis-Schutz AUS',
+  control_write: 'Setpoint Write',
+  sma_plan_applied: 'Börsenautomatik Plan',
+  schedule_auto_disabled: 'Regel deaktiviert',
+  schedule_stop_soc_reached: 'Stop-SoC erreicht'
 };
 
 const DV_SIGNAL_FILTER_MAP = {
   all: null,
   ctrl: ['ctrl_off', 'ctrl_on', 'ctrl_lease_expired', 'negative_price_protection_on', 'negative_price_protection_off'],
-  modbus: ['modbus_fc6', 'modbus_fc16'],
-  victron: ['dv_victron_write', 'dv_victron_write_error']
+  modbus: ['modbus_fc6', 'modbus_fc16', 'control_write'],
+  victron: ['dv_victron_write', 'dv_victron_write_error'],
+  sma: ['sma_plan_applied', 'schedule_auto_disabled', 'schedule_stop_soc_reached']
 };
 
 let dvLogEntries = [];
@@ -450,11 +457,18 @@ let dvLogEntries = [];
 async function loadDvSignalLog() {
   setText('dvLogMeta', 'Laden...');
   try {
-    const log = await apiFetch('/api/log');
-    const entries = Array.isArray(log) ? log : [];
+    const res = await apiFetch('/api/log?limit=1000');
+    const data = await res.json();
+    const rawEntries = Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : []);
+    // Normalize: server uses 'event' key, UI expects 'type'
+    const entries = rawEntries.map((e) => ({
+      ...e,
+      type: e.type || e.event,
+      detail: e.detail || e
+    }));
     dvLogEntries = entries.filter((e) => DV_SIGNAL_TYPES.has(e.type));
     renderDvSignalLog();
-    setText('dvLogMeta', `${dvLogEntries.length} DV-Signale gefunden (von ${entries.length} Log-Eintraegen)`);
+    setText('dvLogMeta', `${dvLogEntries.length} DV-Signale gefunden (von ${entries.length} Log-Einträgen)`);
   } catch (error) {
     setText('dvLogMeta', `Fehler: ${error.message}`);
   }
@@ -470,9 +484,10 @@ function renderDvSignalLog() {
   tbody.innerHTML = '';
   for (const entry of filtered.slice(0, 200)) {
     const tr = document.createElement('tr');
-    const isError = entry.type.includes('error') || entry.type === 'ctrl_off' || entry.type === 'neg_price_cutoff';
-    const isOk = entry.type === 'ctrl_on' || entry.type === 'neg_price_restore';
-    tr.style.color = isError ? '#ef4444' : (isOk ? '#22c55e' : '');
+    const isError = entry.type.includes('error') || entry.type === 'ctrl_off' || entry.type === 'neg_price_cutoff' || entry.type === 'schedule_auto_disabled' || entry.type === 'schedule_stop_soc_reached';
+    const isOk = entry.type === 'ctrl_on' || entry.type === 'neg_price_restore' || entry.type === 'sma_plan_applied';
+    const isInfo = entry.type === 'control_write';
+    tr.style.color = isError ? '#ef4444' : (isOk ? '#22c55e' : (isInfo ? '#3b82f6' : ''));
 
     const tdTime = document.createElement('td');
     tdTime.textContent = fmtTs(entry.ts);
@@ -498,6 +513,17 @@ function renderDvSignalLog() {
     if (detail.offUntil) parts.push(`Bis: ${fmtTs(detail.offUntil)}`);
     if (detail.values) parts.push(`Values: [${detail.values}]`);
     if (detail.qty !== undefined) parts.push(`Qty: ${detail.qty}`);
+    if (detail.target) parts.push(`Ziel: ${detail.target}`);
+    if (detail.source) parts.push(`Quelle: ${detail.source}`);
+    if (detail.raw !== undefined) parts.push(`Raw: ${detail.raw}`);
+    if (detail.scaled !== undefined) parts.push(`Skaliert: ${detail.scaled}`);
+    if (detail.writeType) parts.push(`Typ: ${detail.writeType}`);
+    if (detail.fc !== undefined) parts.push(`FC: ${detail.fc}`);
+    if (detail.slots !== undefined) parts.push(`Slots: ${detail.slots}`);
+    if (detail.energyKwh !== undefined) parts.push(`Energie: ${detail.energyKwh} kWh`);
+    if (detail.estimatedRevenueEur !== undefined) parts.push(`Erlös: ${detail.estimatedRevenueEur} €`);
+    if (detail.soc !== undefined) parts.push(`SoC: ${detail.soc}%`);
+    if (detail.id) parts.push(`Regel: ${detail.id}`);
     tdDetail.textContent = parts.length > 0 ? parts.join(' | ') : JSON.stringify(detail);
     tr.appendChild(tdDetail);
 

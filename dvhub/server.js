@@ -429,8 +429,33 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const lastState = state.schedule.smallMarketAutomation;
   const priceSlotCount = Array.isArray(state.epex?.data) ? state.epex.data.length : 0;
   const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
+
+  // --- Plan lock: never re-plan while a slot is actively executing ---
+  // Once a plan is committed, it must run to completion. Re-planning during
+  // discharge causes the optimizer to see reduced SoC, compute fewer slots,
+  // and abort the running feed-in mid-slot.
+  const planIsExecuting = previousAutomationRules.some((rule) => {
+    const slotTs = Number(rule?.slotTs);
+    const slotEndTs = Number(rule?.slotEndTs);
+    if (!Number.isFinite(slotTs) || !Number.isFinite(slotEndTs)) return false;
+    return now >= slotTs && now < slotEndTs;
+  });
+
+  // Also lock the plan if we're between scheduled slots (gap < 30 min)
+  // to prevent re-planning during cooldown phases between discharge bursts.
+  const planHasFutureSlots = previousAutomationRules.some((rule) => {
+    const slotTs = Number(rule?.slotTs);
+    return Number.isFinite(slotTs) && slotTs > now;
+  });
+  const planIsLocked = planIsExecuting || (planHasFutureSlots && previousAutomationRules.some((rule) => {
+    const slotEndTs = Number(rule?.slotEndTs);
+    return Number.isFinite(slotEndTs) && now >= slotEndTs && (now - slotEndTs) < 30 * 60 * 1000;
+  }));
+
   // Regenerate when SOC changed significantly (>5%) — energy budget may have shifted
-  const socChanged = automationConfig?.batteryCapacityKwh > 0
+  // BUT only when the plan is NOT currently executing or locked.
+  const socChanged = !planIsLocked
+    && automationConfig?.batteryCapacityKwh > 0
     && currentSocPct != null
     && lastState?.lastSocPct != null
     && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
@@ -439,6 +464,13 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     || !previousAutomationRules.length
     || priceDataChanged
     || socChanged;
+
+  // Even if regeneration is needed, skip it while a plan is actively running
+  if (planIsLocked && needsRegeneration && !priceDataChanged) {
+    // Plan is locked — defer regeneration until current execution completes
+    return;
+  }
+
   if (!needsRegeneration) return;
 
   const sunTimesCache = getSunTimesCacheForPlanning({ now });
