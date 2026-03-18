@@ -13,12 +13,12 @@ import {
   loadConfigFile,
   saveConfigFile
 } from './config-model.js';
-import { createTelemetryStore } from './telemetry-store.js';
+import { createTelemetryStorePg } from './telemetry-store-pg.js';
+import { createPool } from './db-client.js';
 import {
   buildLiveTelemetrySamples,
   buildOptimizerRunPayload,
-  buildPriceTelemetrySamples,
-  resolveTelemetryDbPath
+  buildPriceTelemetrySamples
 } from './telemetry-runtime.js';
 import {
   createSerialTaskRunner,
@@ -572,18 +572,13 @@ function persistConfig() {
 function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
-    const dbPath = resolveTelemetryDbPath({
-      configPath: CONFIG_PATH,
-      telemetryConfig: cfg.telemetry,
-      dataDir: DATA_DIR
-    });
-    const store = createTelemetryStore({
-      dbPath,
-      rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45),
-      rollupIntervals: Array.isArray(cfg.telemetry.rollupIntervals) ? cfg.telemetry.rollupIntervals : [300, 900, 3600]
+    const dbConfig = cfg.telemetry.database || {};
+    const pool = createPool(dbConfig);
+    const store = createTelemetryStorePg(pool, {
+      rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });
     state.telemetry.enabled = true;
-    state.telemetry.dbPath = dbPath;
+    state.telemetry.dbPath = `postgresql://${dbConfig.host || 'localhost'}:${dbConfig.port || 5432}/${dbConfig.name || 'dvhub'}`;
     state.telemetry.ok = true;
     state.telemetry.lastError = null;
     return store;
@@ -768,10 +763,10 @@ function startDedicatedRuntimeWorker() {
   return worker;
 }
 
-function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
+async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
   if (!telemetryStore) return null;
   try {
-    const result = action();
+    const result = await action();
     refreshTelemetryStatus();
     if (updateRollup) state.telemetry.lastRollupAt = Date.now();
     if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
@@ -2048,7 +2043,7 @@ function downloadJson(res, filename, payload) {
   res.end(JSON.stringify(payload, null, 2));
 }
 
-const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken'];
+const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
 
 function redactConfig(config) {
   const copy = JSON.parse(JSON.stringify(config));
@@ -2731,12 +2726,7 @@ if (IS_RUNTIME_PROCESS) {
     if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
   }, 5 * 60 * 1000);
   setInterval(persistEnergy, 60000);
-  setInterval(() => {
-    telemetrySafeWrite(() => telemetryStore.buildRollups({ now: new Date() }), { updateRollup: true });
-  }, 5 * 60 * 1000);
-  setInterval(() => {
-    telemetrySafeWrite(() => telemetryStore.cleanupRawSamples({ now: new Date() }), { updateCleanup: true });
-  }, 6 * 60 * 60 * 1000);
+  // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 }
 

@@ -30,6 +30,7 @@
     "mqtt": "^5.10.0"
   },
   "dependencies": {
-    "multicast-dns": "^7.2.5"
+    "multicast-dns": "^7.2.5",
+    "pg": "^8.13.0"
   }
 }
