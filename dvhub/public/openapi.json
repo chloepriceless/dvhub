@@ -1,0 +1,310 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DVhub API",
+    "description": "Lokale API der DVhub DV-Schnittstelle. Steuert Victron-Anlagen, liefert Live-Daten, Day-Ahead-Preise und historische Telemetrie.\n\n**Authentifizierung:** Optional per Bearer-Token (`apiToken` in config.json). Ohne Token sind alle Endpoints offen.\n\n**Preise:** EPEX Day-Ahead in EUR/MWh (Umrechnung: ÷10 = ct/kWh)",
+    "version": "0.3.6"
+  },
+  "servers": [
+    { "url": "/", "description": "Lokale DVhub-Instanz" }
+  ],
+  "paths": {
+    "/dv/control-value": {
+      "get": {
+        "summary": "DV-Schaltstatus",
+        "description": "Gibt den aktuellen DV-Kontrollwert zurück. 0 = Abregelung (Einspeisung blockiert), 1 = Freigabe (Einspeisung erlaubt).",
+        "tags": ["DV-Steuerung"],
+        "responses": { "200": { "description": "Textwert: 0 oder 1" } }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "summary": "Vollständiger Systemstatus",
+        "description": "Liefert alle Live-Daten: Grid, PV, Batterie, SOC, DV-Status, EPEX-Preise, Schedule, Kosten. Wird vom Dashboard genutzt.",
+        "tags": ["System"],
+        "responses": { "200": { "description": "JSON mit allen Systemdaten" } }
+      }
+    },
+    "/api/costs": {
+      "get": {
+        "summary": "Tages-Kostenübersicht",
+        "description": "Bezugskosten, Einspeiseerlöse und Netto für den aktuellen Tag.",
+        "tags": ["System"],
+        "responses": { "200": { "description": "Kostenaufstellung" } }
+      }
+    },
+    "/api/log": {
+      "get": {
+        "summary": "Event-Log",
+        "description": "Letzte 300 System-Events (DV-Signale, Schaltbefehle, EPEX-Updates, Fehler).",
+        "tags": ["System"],
+        "responses": { "200": { "description": "Array von Log-Einträgen mit type, ts, detail" } }
+      }
+    },
+    "/api/config": {
+      "get": {
+        "summary": "Konfiguration lesen",
+        "description": "Aktuelle Betriebskonfiguration. Sensible Felder (apiToken, vrmToken) werden redaktiert.",
+        "tags": ["Konfiguration"],
+        "responses": { "200": { "description": "Config-Objekt" } }
+      },
+      "post": {
+        "summary": "Konfiguration aktualisieren",
+        "description": "Überschreibt die config.json mit den übergebenen Werten. Löst bei bestimmten Feldern einen Neustart aus.",
+        "tags": ["Konfiguration"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Aktualisierte Config" } }
+      }
+    },
+    "/api/config/export": {
+      "get": {
+        "summary": "Config exportieren",
+        "description": "Lädt die Config als JSON-Datei herunter.",
+        "tags": ["Konfiguration"],
+        "responses": { "200": { "description": "JSON-Download" } }
+      }
+    },
+    "/api/config/import": {
+      "post": {
+        "summary": "Config importieren",
+        "description": "Importiert eine hochgeladene config.json.",
+        "tags": ["Konfiguration"],
+        "responses": { "200": { "description": "Import-Ergebnis" } }
+      }
+    },
+    "/api/epex/refresh": {
+      "post": {
+        "summary": "EPEX-Preise aktualisieren",
+        "description": "Holt aktuelle Day-Ahead-Preise von api.dvhub.de (primär) oder Energy Charts (Fallback). Preise in EUR/MWh.",
+        "tags": ["EPEX / Preise"],
+        "responses": { "200": { "description": "{ ok, error }" } }
+      }
+    },
+    "/api/epex/zones": {
+      "get": {
+        "summary": "Verfügbare Preiszonen",
+        "description": "Proxy zu api.dvhub.de/api/zones. Listet alle 44 EPEX Day-Ahead Bidding Zones mit Abdeckungsstatistiken.",
+        "tags": ["EPEX / Preise"],
+        "responses": { "200": { "description": "Zonen-Liste mit Coverage" } }
+      }
+    },
+    "/api/epex/gaps": {
+      "get": {
+        "summary": "Fehlende Preisdaten",
+        "description": "Proxy zu api.dvhub.de/api/prices/gaps. Zeigt Tage mit unvollständigen Preisdaten.",
+        "tags": ["EPEX / Preise"],
+        "parameters": [
+          { "name": "zone", "in": "query", "schema": { "type": "string", "default": "DE-LU" } }
+        ],
+        "responses": { "200": { "description": "Lückenliste" } }
+      }
+    },
+    "/api/epex/backfill": {
+      "post": {
+        "summary": "Preis-Backfill anstoßen",
+        "description": "Proxy zu api.dvhub.de. Startet Backfill fehlender Preisdaten für eine Zone.",
+        "tags": ["EPEX / Preise"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "zone": { "type": "string" }, "start": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Backfill gestartet" } }
+      }
+    },
+    "/api/history/summary": {
+      "get": {
+        "summary": "Historische Zusammenfassung",
+        "description": "Aggregierte Telemetrie für Tag, Woche, Monat oder Jahr.",
+        "tags": ["Historie"],
+        "parameters": [
+          { "name": "view", "in": "query", "required": true, "schema": { "type": "string", "enum": ["day", "week", "month", "year"] } },
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" }, "example": "2026-03-18" }
+        ],
+        "responses": { "200": { "description": "Summary mit Bezug, Einspeisung, Kosten, Erlöse" } }
+      }
+    },
+    "/api/history/import": {
+      "post": {
+        "summary": "Telemetrie importieren",
+        "description": "Startet einen Import historischer Telemetrie-Daten.",
+        "tags": ["Historie"],
+        "responses": { "200": { "description": "Import-Status" } }
+      }
+    },
+    "/api/history/import/status": {
+      "get": {
+        "summary": "Import-Status",
+        "description": "Status des konfigurierten History-Imports (VRM).",
+        "tags": ["Historie"],
+        "responses": { "200": { "description": "Import-Status-Objekt" } }
+      }
+    },
+    "/api/history/backfill/vrm": {
+      "post": {
+        "summary": "VRM-Backfill",
+        "description": "Startet VRM Full- oder Gap-Backfill für historische Telemetrie.",
+        "tags": ["Historie"],
+        "responses": { "200": { "description": "Backfill-Ergebnis" } }
+      }
+    },
+    "/api/history/backfill/prices": {
+      "post": {
+        "summary": "Preis-Backfill (lokal)",
+        "description": "Füllt fehlende historische Börsenpreise in der lokalen Telemetrie nach.",
+        "tags": ["Historie"],
+        "responses": { "200": { "description": "Backfill-Ergebnis" } }
+      }
+    },
+    "/api/schedule": {
+      "get": {
+        "summary": "Schedule lesen",
+        "description": "Aktuelle Zeitplan-Regeln, Defaults und Kleine Börsenautomatik.",
+        "tags": ["Schedule / Steuerung"],
+        "responses": { "200": { "description": "Schedule-Config und Regeln" } }
+      }
+    },
+    "/api/schedule/rules": {
+      "post": {
+        "summary": "Schedule-Regeln setzen",
+        "description": "Aktualisiert die manuellen Zeitplan-Regeln.",
+        "tags": ["Schedule / Steuerung"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Aktualisierte Regeln" } }
+      }
+    },
+    "/api/schedule/config": {
+      "post": {
+        "summary": "Schedule-Defaults setzen",
+        "description": "Setzt Default Grid Setpoint und Charge Current.",
+        "tags": ["Schedule / Steuerung"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "defaultGridSetpointW": { "type": "number" }, "defaultChargeCurrentA": { "type": "number" } } } } } },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/schedule/automation/config": {
+      "get": {
+        "summary": "Börsenautomatik-Config",
+        "description": "Konfiguration der Kleinen Börsenautomatik (SMA).",
+        "tags": ["Schedule / Steuerung"],
+        "responses": { "200": { "description": "SMA-Config" } }
+      },
+      "post": {
+        "summary": "Börsenautomatik anpassen",
+        "description": "Aktualisiert SMA-Parameter (Suchfenster, Min-SOC, Max-Entladeleistung etc.).",
+        "tags": ["Schedule / Steuerung"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Aktualisierte Config" } }
+      }
+    },
+    "/api/control/write": {
+      "post": {
+        "summary": "Manueller Steuerbefehl",
+        "description": "Schreibt Grid Setpoint, Charge Current oder Min SOC direkt auf die Anlage.",
+        "tags": ["Schedule / Steuerung"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "gridSetpointW": { "type": "number" }, "chargeCurrentA": { "type": "number" }, "minSocPct": { "type": "number" } } } } } },
+        "responses": { "200": { "description": "Write-Ergebnis" } }
+      }
+    },
+    "/api/meter/scan": {
+      "get": {
+        "summary": "Scan-Ergebnisse",
+        "description": "Letzte Modbus-Register-Scan-Ergebnisse.",
+        "tags": ["Diagnose"],
+        "responses": { "200": { "description": "Scan-Daten" } }
+      },
+      "post": {
+        "summary": "Register-Scan starten",
+        "description": "Startet einen Modbus-Register-Scan für Diagnose und Mapping.",
+        "tags": ["Diagnose"],
+        "responses": { "200": { "description": "Scan gestartet" } }
+      }
+    },
+    "/api/discovery/systems": {
+      "get": {
+        "summary": "Systemerkennung",
+        "description": "Sucht nach Victron-Geräten im Netzwerk.",
+        "tags": ["Diagnose"],
+        "responses": { "200": { "description": "Gefundene Systeme" } }
+      }
+    },
+    "/api/admin/health": {
+      "get": {
+        "summary": "Health-Check",
+        "description": "Systemd-Service-Status, Uptime und Ressourcen.",
+        "tags": ["Admin"],
+        "responses": { "200": { "description": "Health-Status" } }
+      }
+    },
+    "/api/admin/service/restart": {
+      "post": {
+        "summary": "Service neustarten",
+        "description": "Startet den DVhub systemd-Service neu. Erfordert sudo-Berechtigung.",
+        "tags": ["Admin"],
+        "responses": { "200": { "description": "Restart ausgelöst" } }
+      }
+    },
+    "/api/integration/home-assistant": {
+      "get": {
+        "summary": "Home Assistant Export",
+        "description": "Alle Messwerte als JSON für Home Assistant REST-Sensor.",
+        "tags": ["Integrationen"],
+        "responses": { "200": { "description": "HA-kompatibles JSON" } }
+      }
+    },
+    "/api/integration/loxone": {
+      "get": {
+        "summary": "Loxone Export",
+        "description": "Messwerte als Textformat für Loxone Virtual HTTP Input.",
+        "tags": ["Integrationen"],
+        "responses": { "200": { "description": "Loxone-Textformat" } }
+      }
+    },
+    "/api/integration/eos": {
+      "get": {
+        "summary": "EOS Akkudoktor Daten",
+        "description": "Messwerte + EPEX-Preise für EOS-Optimierung. Preise in EUR/MWh.",
+        "tags": ["Integrationen"],
+        "responses": { "200": { "description": "EOS-kompatibles JSON" } }
+      }
+    },
+    "/api/integration/eos/apply": {
+      "post": {
+        "summary": "EOS-Ergebnis anwenden",
+        "description": "Wendet EOS-Optimierungsergebnisse als Schedule-Regeln an.",
+        "tags": ["Integrationen"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Angewandt" } }
+      }
+    },
+    "/api/integration/emhass": {
+      "get": {
+        "summary": "EMHASS Daten",
+        "description": "Messwerte + Preisarrays für EMHASS-Optimierung.",
+        "tags": ["Integrationen"],
+        "responses": { "200": { "description": "EMHASS-kompatibles JSON" } }
+      }
+    },
+    "/api/integration/emhass/apply": {
+      "post": {
+        "summary": "EMHASS-Ergebnis anwenden",
+        "description": "Wendet EMHASS-Optimierungsergebnisse als Schedule-Regeln an.",
+        "tags": ["Integrationen"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Angewandt" } }
+      }
+    },
+    "/api/keepalive/modbus": {
+      "get": {
+        "summary": "Letzte Modbus-Abfrage",
+        "description": "Zeitstempel der letzten Modbus-Kommunikation mit dem Direktvermarkter.",
+        "tags": ["Keepalive"],
+        "responses": { "200": { "description": "{ ok, lastQuery, now }" } }
+      }
+    },
+    "/api/keepalive/pulse": {
+      "get": {
+        "summary": "Uptime-Pulse",
+        "description": "60-Sekunden-Heartbeat für Monitoring.",
+        "tags": ["Keepalive"],
+        "responses": { "200": { "description": "{ ok, uptime, now }" } }
+      }
+    }
+  }
+}
