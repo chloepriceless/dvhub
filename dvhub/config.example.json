@@ -92,9 +92,14 @@
   },
   "telemetry": {
     "enabled": true,
-    "dbPath": "",
+    "database": {
+      "host": "localhost",
+      "port": 5432,
+      "name": "dvhub",
+      "user": "dvhub",
+      "password": ""
+    },
     "rawRetentionDays": 45,
-    "rollupIntervals": [300, 900, 3600],
     "historyImport": {
       "enabled": false,
       "provider": "vrm",

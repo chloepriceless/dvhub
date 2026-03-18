@@ -185,8 +185,9 @@ const restartSensitivePrefixes = [
   'modbusListenPort',
   'meterPollMs',
   'telemetry.enabled',
-  'telemetry.dbPath',
-  'telemetry.rawRetentionDays',
+  'telemetry.database.host',
+  'telemetry.database.port',
+  'telemetry.database.name',
   'telemetry.historyImport.enabled',
   'telemetry.historyImport.provider',
   'schedule.evaluateMs',
@@ -436,24 +437,66 @@ function buildFieldDefinitions() {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
-      path: 'telemetry.dbPath',
-      label: 'DB Pfad',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.database.host',
+      label: 'DB Host',
       type: 'text',
-      empty: 'blank',
-      help: 'Optionaler Override. Leer bedeutet: Standardpfad im DVhub-Datenverzeichnis.'
+      help: 'PostgreSQL Hostname oder IP-Adresse.'
     },
     {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.database.port',
+      label: 'DB Port',
+      type: 'number',
+      min: 1,
+      max: 65535,
+      help: 'PostgreSQL Port (Standard: 5432).'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.database.name',
+      label: 'Datenbankname',
+      type: 'text',
+      help: 'Name der PostgreSQL-Datenbank (Standard: dvhub).'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.database.user',
+      label: 'DB Benutzer',
+      type: 'text',
+      help: 'PostgreSQL Benutzername.'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      path: 'telemetry.database.password',
+      label: 'DB Passwort',
+      type: 'text',
+      empty: 'blank',
+      help: 'PostgreSQL Passwort.'
+    },
+    {
+      section: 'telemetry',
+      group: 'database',
+      groupLabel: 'Interne Datenbank',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
       path: 'telemetry.rawRetentionDays',
       label: 'Raw Retention (Tage)',
       type: 'number',
       min: 1,
       max: 3650,
-      help: 'Wie lange Rohdaten mit hoher Aufloesung aufbewahrt werden.'
+      help: 'Wie lange Rohdaten mit hoher Aufloesung aufbewahrt werden. TimescaleDB Retention Policy.'
     },
     {
       section: 'telemetry',
@@ -1323,9 +1366,14 @@ export function createDefaultConfig() {
     },
     telemetry: {
       enabled: true,
-      dbPath: '',
+      database: {
+        host: 'localhost',
+        port: 5432,
+        name: 'dvhub',
+        user: 'dvhub',
+        password: ''
+      },
       rawRetentionDays: 45,
-      rollupIntervals: [300, 900, 3600],
       historyImport: {
         enabled: false,
         provider: 'vrm',
