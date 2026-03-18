@@ -53,7 +53,6 @@ function createSampleState(overrides = {}) {
       victron: { transport: defaults.victron.transport },
       schedule: {},
       epex: {},
-      influx: {},
       meter: {},
       dvControl: {}
     },
@@ -93,10 +92,6 @@ function createValidSetupState(overrides = {}) {
         bzn: 'DE-LU',
         timezone: 'Europe/Berlin'
       },
-      influx: {
-        ...defaults.influx,
-        enabled: false
-      }
     },
     effectiveConfig: {
       ...defaults,
@@ -141,10 +136,6 @@ function createValidSetupState(overrides = {}) {
         bzn: 'DE-LU',
         timezone: 'Europe/Berlin'
       },
-      influx: {
-        ...defaults.influx,
-        enabled: false
-      }
     },
     ...overrides
   }));
@@ -440,8 +431,6 @@ test('review step extends the wizard flow and summarizes key setup outcomes', ()
   const servicesSection = review.find((section) => section.id === 'services');
   assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');
   assert.equal(getReviewEntryValue(servicesSection, 'EPEX'), 'Aktiv');
-  assert.equal(getReviewEntryValue(servicesSection, 'InfluxDB'), 'Deaktiviert');
-
   const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
   assert.match(reviewStep.highlight.title, /Prüfen|Review/i);
   assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
@@ -527,7 +516,7 @@ test('save outcome highlights warnings and restart-sensitive manufacturer change
     meta: {
       warnings: [
         'manufacturer wurde normalisiert',
-        'influx.db wurde auf den Standardwert gesetzt'
+        'telemetry.dbPath wurde auf den Standardwert gesetzt'
       ]
     },
     restartRequired: true,
@@ -539,7 +528,7 @@ test('save outcome highlights warnings and restart-sensitive manufacturer change
   assert.match(outcome.summary, /erst nach einem Dienst-Neustart/i);
   assert.deepEqual(Array.from(outcome.warnings), [
     'manufacturer wurde normalisiert',
-    'influx.db wurde auf den Standardwert gesetzt'
+    'telemetry.dbPath wurde auf den Standardwert gesetzt'
   ]);
   assert.match(outcome.restartItems.join(' '), /Herstellerprofil/i);
   assert.match(outcome.restartItems.join(' '), /DV Modbus Proxy/i);

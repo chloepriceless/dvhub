@@ -90,14 +90,6 @@
     "timeoutMs": 700,
     "onlyNonZero": true
   },
-  "influx": {
-    "enabled": false,
-    "apiVersion": "v3",
-    "url": "http://127.0.0.1:8086",
-    "db": "dvhub",
-    "token": "",
-    "measurement": "dv"
-  },
   "telemetry": {
     "enabled": true,
     "dbPath": "",

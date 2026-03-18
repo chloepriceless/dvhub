@@ -20,7 +20,6 @@ async function loadServerModule() {
   config.victron = { ...config.victron, host: '' };
   config.telemetry = { ...config.telemetry, enabled: false };
   config.epex = { ...config.epex, enabled: false };
-  config.influx = { ...config.influx, enabled: false };
   fs.writeFileSync(configPath, JSON.stringify(config), 'utf8');
 
   const previousRole = process.env.DVHUB_PROCESS_ROLE;
