@@ -167,6 +167,39 @@
         </section>
 
         <section class="panel reveal span-6">
+          <div class="panel-head">
+            <div>
+              <p class="card-title">DV-Signale</p>
+              <h2 class="section-title">DV-Schaltsignal-Log</h2>
+            </div>
+          </div>
+          <p class="tools-note compact-note">Alle Schalt- und Steuersignale des Direktvermarkters. Zeigt Abregelungen, Freigaben, Lease-Events und Modbus-Writes.</p>
+          <div class="controls">
+            <button id="loadDvLog" class="btn btn-primary" type="button">Log laden</button>
+            <button id="refreshDvLog" type="button">Aktualisieren</button>
+            <label>Filter:
+              <select id="dvLogFilter">
+                <option value="all">Alle DV-Signale</option>
+                <option value="ctrl">Nur Schaltbefehle</option>
+                <option value="modbus">Nur Modbus-Writes</option>
+                <option value="victron">Nur Victron-Writes</option>
+              </select>
+            </label>
+          </div>
+          <div class="meta" id="dvLogMeta">Noch nicht geladen.</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Zeitpunkt</th>
+                <th>Signal</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="dvLogRows"></tbody>
+          </table>
+        </section>
+
+        <section class="panel reveal span-6">
           <h2 class="tools-card-title">Modbus-Scan</h2>
           <p class="tools-note">Direktscan von Registerbereichen für schnelle Diagnose und Mapping.</p>
 
