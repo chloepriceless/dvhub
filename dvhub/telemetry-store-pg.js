@@ -286,16 +286,26 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
 
   async function listMissingPriceBuckets({ start = null, end = null, seriesKeys = ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'] } = {}) {
     const keys = Array.isArray(seriesKeys) && seriesKeys.length ? seriesKeys : ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'];
-    const params = [...keys];
-    let idx = keys.length;
-    let telemetryWhere = '';
-    let priceWhere = '';
-    if (start) { idx++; telemetryWhere += ` AND ts_utc >= $${idx}`; priceWhere += ` AND ts_utc >= $${idx}`; params.push(isoTimestamp(start)); }
-    if (end) { idx++; telemetryWhere += ` AND ts_utc < $${idx}`; priceWhere += ` AND ts_utc < $${idx}`; params.push(isoTimestamp(end)); }
 
+    // Telemetry query: series keys + optional start/end
+    const telemetryParams = [...keys];
+    let telemetryIdx = keys.length;
+    let telemetryWhere = '';
+    if (start) { telemetryIdx++; telemetryWhere += ` AND ts_utc >= $${telemetryIdx}`; telemetryParams.push(isoTimestamp(start)); }
+    if (end) { telemetryIdx++; telemetryWhere += ` AND ts_utc < $${telemetryIdx}`; telemetryParams.push(isoTimestamp(end)); }
     const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-    const telemetryRows = (await pool.query(`SELECT ts_utc FROM timeseries_samples WHERE series_key IN (${placeholders})${telemetryWhere}`, params)).rows;
-    const priceRows = (await pool.query(`SELECT ts_utc FROM timeseries_samples WHERE series_key = 'price_ct_kwh'${priceWhere}`, params.slice(keys.length))).rows;
+    const telemetryRows = (await pool.query(`SELECT ts_utc FROM timeseries_samples WHERE series_key IN (${placeholders})${telemetryWhere}`, telemetryParams)).rows;
+
+    // Price query: separate params with own indices
+    const priceParams = [];
+    let priceIdx = 0;
+    let priceWhere = '';
+    if (start) { priceIdx++; priceWhere += ` AND ts_utc >= $${priceIdx}`; priceParams.push(isoTimestamp(start)); }
+    if (end) { priceIdx++; priceWhere += ` AND ts_utc < $${priceIdx}`; priceParams.push(isoTimestamp(end)); }
+    const priceQuery = priceParams.length
+      ? `SELECT ts_utc FROM timeseries_samples WHERE series_key = 'price_ct_kwh'${priceWhere}`
+      : `SELECT ts_utc FROM timeseries_samples WHERE series_key = 'price_ct_kwh'`;
+    const priceRows = (await pool.query(priceQuery, priceParams)).rows;
 
     const telemetryBuckets = new Set(telemetryRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
     const pricedBuckets = new Set(priceRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
