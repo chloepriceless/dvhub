@@ -511,7 +511,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 
 let priceChartInstance = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = []) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -649,6 +649,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       borderColor: fcColor,
       backgroundColor: fcColor + '18',
       borderWidth: 2,
+      borderDash: [6, 3],
       pointRadius: 0,
       pointHoverRadius: 3,
       fill: true,
@@ -656,6 +657,106 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       yAxisID: 'kw',
       order: 0
     });
+  }
+
+  // --- Consumption forecast (Lastvorhersage) ---
+  if (forecast && Array.isArray(forecast.consumption) && forecast.consumption.length > 1) {
+    const consFcRaw = forecast.consumption
+      .map(p => ({ ts: new Date(p.ts).getTime(), kw: p.w / 1000 }))
+      .sort((a, b) => a.ts - b.ts);
+    const consFc = data.map(d => {
+      const ts = Number(d.ts);
+      if (consFcRaw.length < 2) return null;
+      for (let j = 0; j < consFcRaw.length - 1; j++) {
+        if (ts >= consFcRaw[j].ts && ts <= consFcRaw[j + 1].ts) {
+          const ratio = (ts - consFcRaw[j].ts) / (consFcRaw[j + 1].ts - consFcRaw[j].ts);
+          return consFcRaw[j].kw + ratio * (consFcRaw[j + 1].kw - consFcRaw[j].kw);
+        }
+      }
+      return null;
+    });
+    if (consFc.some(v => v != null)) {
+      datasets.push({
+        label: '⚡ Lastvorhersage',
+        type: 'line',
+        data: consFc,
+        borderColor: 'rgba(191,199,210,0.7)',
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: false,
+        spanGaps: true,
+        yAxisID: 'kw',
+        order: 0
+      });
+    }
+  }
+
+  // --- Actual PV production + Grid power from history slots ---
+  if (Array.isArray(historySlots) && historySlots.length > 0) {
+    const slotMap = new Map(historySlots.map(s => [new Date(s.ts).getTime(), s]));
+    const pvActual = data.map(d => {
+      const slot = slotMap.get(Number(d.ts));
+      return slot ? (slot.pvKwh * 4) : null; // kWh per 15min → kW average
+    });
+    const gridActual = data.map(d => {
+      const slot = slotMap.get(Number(d.ts));
+      if (!slot) return null;
+      const imp = Number(slot.importKwh || 0);
+      const exp = Number(slot.exportKwh || 0);
+      return (imp - exp) * 4; // kW (positive = import, negative = export)
+    });
+    const loadActual = data.map(d => {
+      const slot = slotMap.get(Number(d.ts));
+      return slot ? (slot.loadKwh * 4) : null;
+    });
+
+    if (pvActual.some(v => v != null && v > 0)) {
+      datasets.push({
+        label: '☀ PV Ist',
+        type: 'line',
+        data: pvActual,
+        borderColor: '#f5c451',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: false,
+        spanGaps: true,
+        yAxisID: 'kw',
+        order: 0
+      });
+    }
+    if (loadActual.some(v => v != null && v > 0)) {
+      datasets.push({
+        label: '🏠 Verbrauch',
+        type: 'line',
+        data: loadActual,
+        borderColor: 'rgba(191,199,210,0.9)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: false,
+        spanGaps: true,
+        yAxisID: 'kw',
+        order: 0
+      });
+    }
+    if (gridActual.some(v => v != null)) {
+      datasets.push({
+        label: '🔌 Netz',
+        type: 'line',
+        data: gridActual,
+        borderColor: '#ff6b6b90',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: false,
+        spanGaps: true,
+        yAxisID: 'kw',
+        order: 0
+      });
+    }
   }
 
   // --- "Jetzt" annotation line ---
@@ -782,7 +883,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           grid: { display: false },
           beginAtZero: true,
           min: 0,
-          suggestedMax: Math.max(...solarFc.filter(v => v != null)) * 1.15 || 10
+          suggestedMax: Math.max(...datasets.filter(d => d.yAxisID === 'kw').flatMap(d => d.data).filter(v => v != null && Number.isFinite(v)), 1) * 1.15
         }
       }
     }
@@ -1055,11 +1156,16 @@ function renderDashboardStatus(status) {
   applyScheduleRowStates(status.now);
   updateChartComparisonSummary(status.userEnergyPricing);
 
-  // Fetch VRM solar forecast for chart overlay
-  apiFetch('/api/forecast').then(r => r.json()).then(fc => {
-    drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || [], fc.ok ? fc : null);
+  // Fetch forecast + history slots for chart overlay
+  const today = new Date(status.now).toISOString().slice(0, 10);
+  const chartArgs = () => [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
+  Promise.all([
+    apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
+    apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
+  ]).then(([fc, hist]) => {
+    drawPriceChart(...chartArgs(), fc?.ok ? fc : null, hist?.slots || []);
   }).catch(() => {
-    drawPriceChart(status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || [], null);
+    drawPriceChart(...chartArgs(), null, []);
   });
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
