@@ -737,18 +737,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       const fcY = (kw) => padT + (H - padT - padB) * (1 - kw / fcMax);
       const fcX = (ts) => padL + ((ts - firstTs) / (lastTs + slotMs - firstTs)) * (W - padL - padR);
 
-      // Right Y-axis labels
-      const fcTicks = [0, Math.round(fcMax / 2), Math.round(fcMax)];
-      for (const tick of fcTicks) {
-        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        lbl.setAttribute('x', W - padR + 6);
-        lbl.setAttribute('y', fcY(tick) + 4);
-        lbl.setAttribute('font-size', '11');
-        lbl.setAttribute('fill', fcColor);
-        lbl.setAttribute('text-anchor', 'start');
-        lbl.textContent = `${tick} kW`;
-        svg.appendChild(lbl);
-      }
+      // Forecast group — pointer-events:none so clicks pass through to price bars
+      const fcGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      fcGroup.setAttribute('style', 'pointer-events: none;');
 
       // Forecast area (filled)
       const areaPoints = fcFiltered.map(p => `${fcX(p.ts)},${fcY(p.kw)}`);
@@ -757,7 +748,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       const area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       area.setAttribute('points', areaPoints.join(' '));
       area.setAttribute('fill', fcColor);
-      area.setAttribute('fill-opacity', '0.12');
+      area.setAttribute('fill-opacity', '0.08');
       svg.appendChild(area);
 
       // Forecast line
@@ -765,11 +756,27 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
       line.setAttribute('fill', 'none');
       line.setAttribute('stroke', fcColor);
-      line.setAttribute('stroke-width', '2');
+      line.setAttribute('stroke-width', '1.5');
       line.setAttribute('stroke-linejoin', 'round');
       line.setAttribute('stroke-linecap', 'round');
+      line.setAttribute('stroke-dasharray', '6 3');
       line.setAttribute('points', linePoints.join(' '));
-      svg.appendChild(line);
+      fcGroup.appendChild(area);
+      fcGroup.appendChild(line);
+
+      // Right Y-axis labels
+      const fcTicks = [0, Math.round(fcMax / 2), Math.round(fcMax)];
+      for (const tick of fcTicks) {
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', W - padR + 6);
+        lbl.setAttribute('y', fcY(tick) + 4);
+        lbl.setAttribute('font-size', '10');
+        lbl.setAttribute('fill', fcColor);
+        lbl.setAttribute('fill-opacity', '0.7');
+        lbl.setAttribute('text-anchor', 'start');
+        lbl.textContent = `${tick}kW`;
+        fcGroup.appendChild(lbl);
+      }
 
       // Legend
       const legend = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -777,9 +784,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       legend.setAttribute('y', padT - 2);
       legend.setAttribute('font-size', '10');
       legend.setAttribute('fill', fcColor);
+      legend.setAttribute('fill-opacity', '0.8');
       legend.setAttribute('text-anchor', 'end');
       legend.textContent = '☀ PV Forecast';
-      svg.appendChild(legend);
+      fcGroup.appendChild(legend);
+
+      svg.appendChild(fcGroup);
     }
   }
 
