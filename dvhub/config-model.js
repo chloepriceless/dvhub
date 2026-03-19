@@ -422,9 +422,33 @@ function buildFieldDefinitions() {
       ],
       help: 'Legt fest, wie eingehende Meterwerte interpretiert werden.'
     },
+    {
+      section: 'system',
+      group: 'monitoring',
+      groupLabel: 'Remote-Überwachung',
+      groupDescription: 'Externer Heartbeat für Uptime-Monitoring (z.B. Uptime Kuma, Healthchecks.io).',
+      path: 'monitoring.pushUrl',
+      label: 'Push-URL für Heartbeat',
+      type: 'text',
+      placeholder: 'https://uptime.example.com/api/push/TOKEN?status=up&msg=OK&ping=',
+      help: 'DVhub sendet alle 4 Minuten einen Heartbeat an diese URL. Leer lassen um den Heartbeat zu deaktivieren. Kompatibel mit Uptime Kuma (Push-Monitor), Healthchecks.io und ähnlichen Diensten.'
+    },
+    {
+      section: 'system',
+      group: 'monitoring',
+      groupLabel: 'Remote-Überwachung',
+      groupDescription: 'Externer Heartbeat für Uptime-Monitoring (z.B. Uptime Kuma, Healthchecks.io).',
+      path: 'monitoring.pushIntervalSec',
+      label: 'Heartbeat-Intervall (Sekunden)',
+      type: 'number',
+      min: 30,
+      max: 600,
+      help: 'Wie oft der Heartbeat gesendet wird (Standard: 240 Sekunden = 4 Minuten).'
+    },
 
     {
       section: 'telemetry',
+
       group: 'database',
       groupLabel: 'Interne Datenbank',
       groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
@@ -1274,6 +1298,10 @@ export function createDefaultConfig() {
     meterPollMs: 5000,
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',
+    monitoring: {
+      pushUrl: '',
+      pushIntervalSec: 240
+    },
     victron: {
       transport: 'modbus',
       host: '192.168.20.19',

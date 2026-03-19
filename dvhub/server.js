@@ -3105,20 +3105,21 @@ if (IS_RUNTIME_PROCESS) {
   setTimeout(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_init_error', { error: e.message })), 10000);
   setInterval(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_error', { error: e.message })), 2 * 60 * 60 * 1000);
 
-  // Uptime Kuma push heartbeat (every 4 minutes)
-  const UPTIME_KUMA_PUSH_URL = 'https://uptime.bottom.zone/api/push/D5oFSRRl9w';
-  setInterval(async () => {
-    try {
-      const msg = encodeURIComponent('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%');
-      await fetch(UPTIME_KUMA_PUSH_URL + '?status=up&msg=' + msg + '&ping=', { signal: AbortSignal.timeout(10000) });
-    } catch (e) { /* silent - kuma is optional */ }
-  }, 4 * 60 * 1000);
-  // Initial push after 30s
-  setTimeout(async () => {
-    try {
-      await fetch(UPTIME_KUMA_PUSH_URL + '?status=up&msg=DVhub+started&ping=', { signal: AbortSignal.timeout(10000) });
-    } catch (e) { /* silent */ }
-  }, 30000);
+  // Remote monitoring heartbeat (configurable push URL)
+  const monitoringPushUrl = cfg.monitoring?.pushUrl || '';
+  const monitoringIntervalMs = (Number(cfg.monitoring?.pushIntervalSec) || 240) * 1000;
+  if (monitoringPushUrl) {
+    const sendHeartbeat = async (msg) => {
+      try {
+        const sep = monitoringPushUrl.includes('?') ? '&' : '?';
+        const fullUrl = monitoringPushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=';
+        await fetch(fullUrl, { signal: AbortSignal.timeout(10000) });
+      } catch (e) { /* silent - monitoring is optional */ }
+    };
+    setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%'), monitoringIntervalMs);
+    setTimeout(() => sendHeartbeat('DVhub started'), 30000);
+    console.log('  Monitoring heartbeat -> ' + monitoringPushUrl.substring(0, 60) + '...');
+  }
 }
 
 function gracefulShutdown(signal) {
