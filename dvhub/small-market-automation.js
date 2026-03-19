@@ -114,35 +114,6 @@ export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = 
     }
   }
 
-  // 2) Auto-generated power-level variants: spread the same energy over more slots at lower power.
-  //    e.g. if max is 18 kW with 12 kWh available, try 15 kW, 12 kW, 10 kW, 8 kW, 6 kW
-  //    each covering more slots at the lower power, maximising revenue on expensive slots.
-  const absMaxW = Math.abs(toFiniteNumber(maxDischargeW, 0));
-  if (absMaxW > 0) {
-    const powerSteps = [0.85, 0.7, 0.55, 0.4, 0.3].map(f => Math.round(absMaxW * f / 500) * 500).filter(w => w >= 1000);
-    const seenPowers = new Set(variants.flatMap(v => v.map(e => Math.abs(e.powerW))));
-
-    for (const stepW of powerSteps) {
-      if (seenPowers.has(stepW)) continue;
-      seenPowers.add(stepW);
-
-      // Flat chain: all slots at this power, no cooldown
-      if (availableKwh != null && availableKwh > 0) {
-        const energyPerSlot = (stepW / 1000) * slotDurationH;
-        const maxSlots = Math.ceil(availableKwh / energyPerSlot);
-        const chain = [{ powerW: -stepW, slots: maxSlots }];
-        const truncated = truncateChainToEnergy(chain, availableKwh, slotDurationH);
-        if (truncated.length) variants.push(truncated);
-      } else {
-        // Without energy budget, use same total slot count as first stage
-        const refSlots = stages.reduce((sum, s) => sum + toFiniteNumber(s?.dischargeSlots, 0) + toFiniteNumber(s?.cooldownSlots, 0), 0);
-        if (refSlots > 0) {
-          variants.push([{ powerW: -stepW, slots: refSlots }]);
-        }
-      }
-    }
-  }
-
   return variants;
 }
 
@@ -420,6 +391,124 @@ export function pickBestAutomationPlan({ slots = [], targetSlotCount = 0, chainO
   }
 
   return bestPlan;
+}
+
+/**
+ * Multi-block greedy optimizer: places configured stages at the most profitable
+ * time windows, allowing gaps between blocks and reuse of the same stage type.
+ *
+ * Each stage is a fixed block (discharge slots + cooldown slots).  The optimizer:
+ *   1. Builds all valid placements (stage × start position in contiguous segments)
+ *   2. Greedily picks the highest-revenue placement
+ *   3. Marks those slots as occupied
+ *   4. Repeats until energy budget is exhausted or no profitable placement remains
+ *
+ * Returns the same shape as pickBestAutomationPlan for drop-in compatibility.
+ */
+export function pickMultiBlockPlan({
+  slots = [],
+  stages = [],
+  maxDischargeW,
+  availableKwh = null,
+  slotDurationMs = 15 * 60 * 1000,
+  slotDurationH = SLOT_DURATION_HOURS
+}) {
+  const ordered = (Array.isArray(slots) ? [...slots] : [])
+    .filter((s) => s && toFiniteNumber(s?.ts, null) != null)
+    .sort((a, b) => toFiniteNumber(a.ts, 0) - toFiniteNumber(b.ts, 0));
+
+  if (!ordered.length || !Array.isArray(stages) || !stages.length) {
+    return { selectedSlotTimestamps: [], totalRevenueCt: 0, chain: [], peakDischargeW: 0, blocks: [] };
+  }
+
+  // Build expanded blocks for each stage
+  const stageBlocks = stages.map((stage) => {
+    const chain = buildAutomationRuleChain({ maxDischargeW, stages: [stage] });
+    const expanded = expandChainSlots(chain);
+    const energyKwh = expanded.reduce((sum, e) =>
+      sum + (Math.abs(toFiniteNumber(e.powerW, 0)) / 1000) * slotDurationH, 0);
+    return { chain, expanded, energyKwh, stage };
+  }).filter(b => b.expanded.length > 0);
+
+  if (!stageBlocks.length) {
+    return { selectedSlotTimestamps: [], totalRevenueCt: 0, chain: [], peakDischargeW: 0, blocks: [] };
+  }
+
+  const occupiedSet = new Set(); // slot timestamps already claimed
+  let remainingKwh = availableKwh != null ? availableKwh : Infinity;
+  const placedBlocks = [];
+
+  // Greedy loop: keep placing the most profitable block until budget runs out
+  for (let round = 0; round < 20; round++) { // safety cap: max 20 blocks
+    if (remainingKwh <= 0) break;
+
+    // Rebuild segments from unoccupied slots
+    const freeSlots = ordered.filter(s => !occupiedSet.has(toFiniteNumber(s.ts, 0)));
+    const segments = splitIntoContiguousSegments(freeSlots, slotDurationMs);
+
+    let bestPlacement = null;
+
+    for (const block of stageBlocks) {
+      if (block.energyKwh > remainingKwh) continue; // not enough energy for this block
+
+      for (const segment of segments) {
+        for (let i = 0; i + block.expanded.length <= segment.length; i++) {
+          const window = segment.slice(i, i + block.expanded.length);
+          const revenueCt = window.reduce((sum, slot, idx) =>
+            sum + estimateSlotRevenueCt(slot, block.expanded[idx]?.powerW), 0);
+
+          if (revenueCt <= 0) continue; // only place if profitable
+
+          if (!bestPlacement || revenueCt > bestPlacement.revenueCt) {
+            bestPlacement = {
+              block,
+              window,
+              revenueCt,
+              timestamps: window.map(s => toFiniteNumber(s.ts, 0))
+            };
+          }
+        }
+      }
+    }
+
+    if (!bestPlacement) break; // no more profitable placements
+
+    // Claim the slots
+    for (const ts of bestPlacement.timestamps) occupiedSet.add(ts);
+    remainingKwh -= bestPlacement.block.energyKwh;
+    placedBlocks.push(bestPlacement);
+  }
+
+  // Build combined result
+  const allTimestamps = [];
+  const combinedChain = [];
+  let totalRevenueCt = 0;
+  let peakDischargeW = 0;
+
+  // Sort placed blocks chronologically
+  placedBlocks.sort((a, b) => a.timestamps[0] - b.timestamps[0]);
+
+  for (const pb of placedBlocks) {
+    allTimestamps.push(...pb.timestamps);
+    combinedChain.push(...cloneChain(pb.block.chain));
+    totalRevenueCt += pb.revenueCt;
+    const blockPeak = pb.block.expanded.reduce((p, e) =>
+      Math.max(p, Math.abs(toFiniteNumber(e.powerW, 0))), 0);
+    if (blockPeak > peakDischargeW) peakDischargeW = blockPeak;
+  }
+
+  return {
+    selectedSlotTimestamps: allTimestamps,
+    totalRevenueCt,
+    chain: combinedChain,
+    peakDischargeW,
+    blocks: placedBlocks.map(pb => ({
+      stage: pb.block.stage,
+      startTs: pb.timestamps[0],
+      revenueCt: pb.revenueCt,
+      slots: pb.timestamps.length
+    }))
+  };
 }
 
 function cloneChain(chain = []) {
