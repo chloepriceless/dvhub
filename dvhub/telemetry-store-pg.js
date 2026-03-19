@@ -728,7 +728,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         reason: r.reason,
         source: r.source,
         ts: r.ts_utc,
-        meta: r.meta_json ? JSON.parse(r.meta_json) : null
+        meta: r.meta_json ? (typeof r.meta_json === "string" ? JSON.parse(r.meta_json) : r.meta_json) : null
       }));
     },
     async writeForecastPoints(points = []) {

@@ -438,7 +438,9 @@ export function pickMultiBlockPlan({
   let remainingKwh = availableKwh != null ? availableKwh : Infinity;
   const placedBlocks = [];
 
-  // Greedy loop: keep placing the most profitable block until budget runs out
+  // Greedy loop: keep placing the most profitable block until budget runs out.
+  // After the first block, prefer placements that are ADJACENT to already-placed
+  // blocks to avoid gaps where the default setpoint takes over.
   for (let round = 0; round < 20; round++) { // safety cap: max 20 blocks
     if (remainingKwh <= 0) break;
 
@@ -447,6 +449,7 @@ export function pickMultiBlockPlan({
     const segments = splitIntoContiguousSegments(freeSlots, slotDurationMs);
 
     let bestPlacement = null;
+    let bestScore = -Infinity;
 
     for (const block of stageBlocks) {
       if (block.energyKwh > remainingKwh) continue; // not enough energy for this block
@@ -459,7 +462,26 @@ export function pickMultiBlockPlan({
 
           if (revenueCt <= 0) continue; // only place if profitable
 
-          if (!bestPlacement || revenueCt > bestPlacement.revenueCt) {
+          // Adjacency bonus: if this placement starts right after an existing
+          // block ends (or ends right before one starts), give it a score boost.
+          // This keeps blocks contiguous and avoids gaps where default takes over.
+          let adjacencyBonus = 0;
+          if (placedBlocks.length > 0) {
+            const windowStart = toFiniteNumber(window[0]?.ts, 0);
+            const windowEnd = toFiniteNumber(window[window.length - 1]?.ts, 0) + slotDurationMs;
+            for (const pb of placedBlocks) {
+              const pbStart = pb.timestamps[0];
+              const pbEnd = pb.timestamps[pb.timestamps.length - 1] + slotDurationMs;
+              if (windowStart === pbEnd || windowEnd === pbStart) {
+                adjacencyBonus = revenueCt * 0.15; // 15% bonus for adjacent placement
+                break;
+              }
+            }
+          }
+
+          const score = revenueCt + adjacencyBonus;
+          if (score > bestScore) {
+            bestScore = score;
             bestPlacement = {
               block,
               window,
