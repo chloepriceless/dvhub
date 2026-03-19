@@ -21,7 +21,12 @@ let explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpe
 const activeSeriesIds = new Set(SERIES_DEFS.filter(s => !s.hidden).map(s => s.id));
 
 // --- Helpers ---
-function fmtDate(d) { return d.toISOString().slice(0, 10); }
+function fmtDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
 function getDateRange() {
@@ -143,13 +148,34 @@ function buildChartData(slots, fcData, epexData, agg) {
     return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   });
 
-  // Build maps for forecast + EPEX overlay
-  const fcSolarMap = new Map();
-  const fcConsMap = new Map();
-  if (fcData?.solar) fcData.solar.forEach(p => fcSolarMap.set(new Date(p.ts).getTime(), p.w / 1000));
-  if (fcData?.consumption) fcData.consumption.forEach(p => fcConsMap.set(new Date(p.ts).getTime(), p.w / 1000));
+  // Build sorted arrays for forecast + EPEX for interpolation
+  const fcSolarArr = (fcData?.solar || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
+  const fcConsArr = (fcData?.consumption || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
   const epexMap = new Map();
   if (epexData) epexData.forEach(p => epexMap.set(Number(p.ts), Number(p.ct_kwh)));
+
+  // Interpolate value from sorted array of {ts, v}
+  function interpol(arr, ts) {
+    if (!arr.length) return null;
+    if (ts <= arr[0].ts) return arr[0].v;
+    if (ts >= arr[arr.length - 1].ts) return arr[arr.length - 1].v;
+    for (let j = 0; j < arr.length - 1; j++) {
+      if (ts >= arr[j].ts && ts <= arr[j + 1].ts) {
+        const r = (ts - arr[j].ts) / (arr[j + 1].ts - arr[j].ts);
+        return arr[j].v + r * (arr[j + 1].v - arr[j].v);
+      }
+    }
+    return null;
+  }
+
+  // Find nearest EPEX price within 15 min tolerance
+  function findEpex(ts) {
+    const direct = epexMap.get(ts);
+    if (direct != null) return direct;
+    // Round to nearest 15min and try
+    const rounded = Math.round(ts / 900000) * 900000;
+    return epexMap.get(rounded) ?? null;
+  }
 
   // Build dataset values
   const seriesData = {};
@@ -161,10 +187,10 @@ function buildChartData(slots, fcData, epexData, agg) {
         const exp = Number(s.exportKwh || 0);
         return (imp - exp) * kwFactor;
       }
-      if (def.key === '_pvFc') return fcSolarMap.get(ts) ?? null;
-      if (def.key === '_consFc') return fcConsMap.get(ts) ?? null;
-      if (def.key === '_marketCt') return epexMap.get(ts) ?? null;
-      if (def.key === '_importCt') return null; // TODO: from comparisons
+      if (def.key === '_pvFc') return interpol(fcSolarArr, ts);
+      if (def.key === '_consFc') return interpol(fcConsArr, ts);
+      if (def.key === '_marketCt') return findEpex(ts);
+      if (def.key === '_importCt') return null;
       if (def.key === 'soc') return s.soc ?? null;
       const val = Number(s[def.key]);
       return Number.isFinite(val) ? (def.toKw ? val * kwFactor : val) : null;
