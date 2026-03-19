@@ -566,6 +566,17 @@ function mapCanonicalRowsFromVrm({ bucket, type, code, rawValue, resolutionSecon
     ...(metaOverride || {})
   };
 
+  if (type === 'venus' && code === 'bs') {
+    addMappedCanonicalSample(bucket, {
+      seriesKey: 'battery_soc_pct',
+      field: 'batterySocPct',
+      value: rawValue,
+      unit: '%',
+      meta: mappedMeta
+    });
+    return;
+  }
+
   if (type === 'venus' && code === 'Pdc') {
     addAccumulatedCanonicalSample(bucket, {
       seriesKey: 'pv_total_w',
@@ -1156,7 +1167,7 @@ function parseVrmSeries(type, records, resolutionSeconds) {
         seriesKey: `vrm_${type}_${code}`,
         ts,
         value,
-        unit: type === 'venus' ? (code === 'tsT' ? 'C' : 'W') : 'kWh',
+        unit: type === 'venus' ? (code === 'tsT' ? 'C' : code === 'bs' ? '%' : 'W') : 'kWh',
         resolutionSeconds,
         meta: item.length > 2 ? { extra: item.slice(2) } : null
       });
@@ -1189,6 +1200,16 @@ function parseVrmSeries(type, records, resolutionSeconds) {
           unit: 'C',
           resolutionSeconds,
           meta: item.length > 3 ? { min: item[2], max: item[3] } : null
+        });
+      }
+
+      if (type === 'venus' && code === 'bs') {
+        pushSeriesRow(rows, {
+          seriesKey: 'battery_soc_pct',
+          ts,
+          value,
+          unit: '%',
+          resolutionSeconds
         });
       }
     }
