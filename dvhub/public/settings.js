@@ -946,6 +946,7 @@ function renderSectionWorkspace(sectionId) {
 
     sectionShell.appendChild(groupList);
     if (section.id === 'pricing') {
+      sectionShell.appendChild(renderEpexPriceSourceInfo());
       sectionShell.appendChild(renderPvPlantsEditor());
       sectionShell.appendChild(renderPricingPeriodsEditor());
     }
@@ -1122,6 +1123,56 @@ function renderPvPlantsEditor() {
     });
   });
 
+  return section;
+}
+
+function renderEpexPriceSourceInfo() {
+  const section = document.createElement('section');
+  section.className = 'settings-pricing-source';
+  section.innerHTML = `
+    <div class="settings-subsection-head">
+      <p class="card-title">Preisquelle</p>
+      <h3>EPEX Day-Ahead Börsenpreise</h3>
+      <p class="tools-note">Die Day-Ahead Börsenstrompreise werden automatisch von <strong>api.dvhub.de</strong> geladen.
+        Die Preise stammen von der EPEX SPOT und werden für die konfigurierte Bidding Zone bereitgestellt.</p>
+    </div>
+    <div id="epexBacklogInfo" class="status-banner info" style="margin-top:8px">
+      Lade Preis-Backlog...
+    </div>
+  `;
+  // Async load backlog info
+  setTimeout(() => {
+    const { apiFetch } = window.DVhubCommon || {};
+    if (!apiFetch) return;
+    Promise.all([
+      apiFetch('/api/status').then(r => r.json()).catch(() => null),
+      apiFetch('/api/config').then(r => r.json()).catch(() => null)
+    ]).then(([status, config]) => {
+      const el = document.getElementById('epexBacklogInfo');
+      if (!el) return;
+      const epex = status?.epex || {};
+      const data = epex.data || [];
+      const bzn = config?.epex?.bzn || status?.config?.epex?.bzn || 'DE-LU';
+      const updatedAt = epex.updatedAt ? new Date(epex.updatedAt).toLocaleString('de-DE') : '-';
+      const datapoints = data.length;
+      const hoursAvailable = Math.round(datapoints * 0.25); // 15min slots → hours
+      // Telemetry bounds for overall price history
+      const bounds = status?.telemetry || {};
+      const earliest = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString('de-DE') : null;
+      const latest = bounds.latest ? new Date(bounds.latest).toLocaleDateString('de-DE') : null;
+      const backlogRange = earliest && latest ? `${earliest} bis ${latest}` : `${hoursAvailable}h heute`;
+      el.innerHTML = `
+        <strong>Bidding Zone:</strong> ${bzn} &nbsp;|&nbsp;
+        <strong>Letztes Update:</strong> ${updatedAt} &nbsp;|&nbsp;
+        <strong>Heute:</strong> ${datapoints} Slots (${hoursAvailable}h)
+        ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${backlogRange}` : ''}
+        <br><small style="opacity:0.7">Quelle: api.dvhub.de → EPEX SPOT Day-Ahead Auktion</small>
+      `;
+    }).catch(() => {
+      const el = document.getElementById('epexBacklogInfo');
+      if (el) el.textContent = 'Preis-Backlog konnte nicht geladen werden.';
+    });
+  }, 500);
   return section;
 }
 
