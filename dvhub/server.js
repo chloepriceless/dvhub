@@ -315,7 +315,7 @@ function buildSmallMarketAutomationRules({
   const offsetM = String(Math.floor((absOffset % 3600000) / 60000)).padStart(2, '0');
   const tzSuffix = `${offsetSign}${offsetH}:${offsetM}`;
   const occupiedWindows = (Array.isArray(occupiedRules) ? occupiedRules : [])
-    .filter((rule) => !isSmallMarketAutomationRule(rule))
+    .filter((rule) => !isSmallMarketAutomationRule(rule) && rule.enabled !== false)
     .map((rule) => ({
       startTs: Date.parse(`${dateStr}T${rule.start || '00:00'}:00${tzSuffix}`),
       endTs: Date.parse(`${dateStr}T${rule.end || '00:00'}:00${tzSuffix}`),
