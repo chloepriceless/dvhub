@@ -509,12 +509,13 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
   return windows;
 }
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null) {
-  const svg = document.getElementById('priceChart');
-  const tooltip = document.getElementById('tooltip');
-  if (!svg) return;
+let priceChartInstance = null;
 
-  svg.innerHTML = '';
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null) {
+  const container = document.getElementById('priceChartContainer');
+  const tooltip = document.getElementById('tooltip');
+  if (!container || typeof uPlot === 'undefined') return;
+
   chartSelectionState.data = Array.isArray(data) ? data : [];
   chartSelectionState.barElements = [];
   chartSelectionState.hoveredIndex = null;
@@ -522,283 +523,243 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   chartSelectionState.anchorIndex = null;
   chartSelectionState.didDrag = false;
   updateChartSelectionCallout();
-  if (!Array.isArray(data) || data.length === 0) return;
+  if (!Array.isArray(data) || data.length === 0) { container.innerHTML = ''; return; }
 
-  const W = 1000;
-  const H = 300;
-  const padL = 56;
-  const padR = 20;
-  const padT = 16;
-  const padB = 40;
-  const chartGrid = cssVar('--chart-grid', '#e5e7eb');
-  const chartAxis = cssVar('--chart-axis', '#9ca3af');
-  const chartLabel = cssVar('--chart-label', '#6b7280');
+  // Destroy previous chart
+  if (priceChartInstance) { priceChartInstance.destroy(); priceChartInstance = null; }
+  container.innerHTML = '';
+
   const chartPositive = cssVar('--chart-positive', '#1d4ed8');
   const chartNegative = cssVar('--chart-negative', '#ef4444');
+  const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
   const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
-  const chartNow = cssVar('--chart-now', '#facc15');
   const chartImport = cssVar('--chart-import', '#22c55e');
-  const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
+  const fcColor = '#f59e0b';
 
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
-  const vals = data.map((d) => Number(d.ct_kwh) / 100);
-  const importVals = data
-    .map((d) => Number(comparisonByTs.get(Number(d.ts))?.importPriceCtKwh) / 100)
-    .filter((value) => Number.isFinite(value));
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
-  const importNearMarket = importVals.length > 0 && importVals.some((iv) => iv >= min && iv <= max);
-  const importMargin = (max - min) * 0.15;
-  const importClose = importVals.length > 0 && importVals.some((iv) => iv >= min - importMargin && iv <= max + importMargin);
-  const showImportLine = importNearMarket || importClose;
-
-  const barW = (W - padL - padR) / data.length;
-  const x = (i) => padL + i * barW;
-  const y = createPriceChartScale({
-    min,
-    max,
-    top: padT,
-    bottom: H - padB,
-    enableFocusBand: vals.some((value) => Number.isFinite(value) && value >= -0.01 && value <= 0.01),
-    focusBandCeiling: 0.01,
-    focusBandFloor: -0.01
-  }).y;
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
-  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, {
-    timestamps: data.map((d) => d.ts)
+  const vals = data.map((d) => Number(d.ct_kwh) / 100);
+  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
+
+  // uPlot data: [timestamps, prices, importPrices, solarForecast]
+  const timestamps = data.map(d => Math.floor(Number(d.ts) / 1000));
+  const prices = data.map(d => Number(d.ct_kwh));
+  const importPrices = data.map(d => {
+    const c = comparisonByTs.get(Number(d.ts));
+    const v = Number(c?.importPriceCtKwh);
+    return Number.isFinite(v) ? v : null;
   });
 
-  for (let i = 0; i <= 6; i++) {
-    const vv = min + ((max - min) * i) / 6;
-    const yy = y(vv);
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', padL);
-    line.setAttribute('x2', W - padR);
-    line.setAttribute('y1', yy);
-    line.setAttribute('y2', yy);
-    line.setAttribute('stroke', chartGrid);
-    svg.appendChild(line);
-
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', 4);
-    label.setAttribute('y', yy + 4);
-    label.setAttribute('font-size', '11');
-    label.setAttribute('fill', chartLabel);
-    label.textContent = formatChartCentValue(vv);
-    svg.appendChild(label);
-  }
-
-  const tickCount = Math.min(10, data.length);
-  for (let i = 0; i < tickCount; i++) {
-    const idx = Math.round((i * (data.length - 1)) / Math.max(1, tickCount - 1));
-    const xx = x(idx) + barW / 2;
-    const tm = fmtDmHm(data[idx].ts);
-
-    const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    tick.setAttribute('x1', xx);
-    tick.setAttribute('x2', xx);
-    tick.setAttribute('y1', H - padB);
-    tick.setAttribute('y2', H - padB + 4);
-    tick.setAttribute('stroke', chartAxis);
-    svg.appendChild(tick);
-
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', xx - 16);
-    label.setAttribute('y', H - 10);
-    label.setAttribute('font-size', '10');
-    label.setAttribute('fill', chartLabel);
-    label.textContent = tm;
-    svg.appendChild(label);
-  }
-
-  const idxNow = data.findIndex((d, i) => d.ts <= nowTs && (i === data.length - 1 || data[i + 1].ts > nowTs));
-  if (idxNow >= 0) {
-    const xv = x(idxNow) + barW / 2;
-    const vline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    vline.setAttribute('x1', xv);
-    vline.setAttribute('x2', xv);
-    vline.setAttribute('y1', padT);
-    vline.setAttribute('y2', H - padB);
-    vline.setAttribute('stroke', chartNow);
-    vline.setAttribute('stroke-dasharray', '4 3');
-    svg.appendChild(vline);
-  }
-
-  const zeroY = y(0);
-  const baseY = zeroY >= padT && zeroY <= H - padB ? zeroY : H - padB;
-  data.forEach((row, index) => {
-    const comparison = comparisonByTs.get(Number(row.ts)) || null;
-    const val = Number(row.ct_kwh) / 100;
-    const bx = x(index);
-    const by = y(val);
-    const bh = Math.abs(by - baseY);
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', bx + 1);
-    rect.setAttribute('y', Math.min(by, baseY));
-    rect.setAttribute('width', Math.max(barW - 2, 1));
-    rect.setAttribute('height', bh || 1);
-    const isAutomation = automationSlots.has(Number(row.ts));
-    rect.setAttribute(
-      'fill',
-      isAutomation
-        ? chartAutomation
-        : lowHighlights.has(index)
-          ? chartNegativeHighlight
-          : highHighlights.has(index)
-            ? chartPositiveHighlight
-            : (val < 0 ? chartNegative : chartPositive)
-    );
-    rect.classList.add('price-bar');
-    rect.classList.add(val < 0 ? 'is-negative' : 'is-positive');
-    if (isAutomation) rect.classList.add('is-automation');
-    if (highHighlights.has(index)) rect.classList.add('is-highlight-positive');
-    if (lowHighlights.has(index)) rect.classList.add('is-highlight-negative');
-    rect.addEventListener('mousedown', (event) => {
-      event.preventDefault();
-      chartSelectionState.pointerDown = true;
-      chartSelectionState.anchorIndex = index;
-      chartSelectionState.didDrag = false;
-      chartSelectionState.hoveredIndex = index;
-      setChartSelection(data, [index]);
-      showChartTooltip(tooltip, row, event, comparison);
-    });
-    rect.addEventListener('mouseenter', (event) => {
-      chartSelectionState.hoveredIndex = index;
-      if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
-        chartSelectionState.didDrag = chartSelectionState.didDrag || index !== chartSelectionState.anchorIndex;
-        setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, index));
-      } else {
-        updateChartBarStates();
+  // Build forecast series aligned to price timestamps
+  let solarFc = timestamps.map(() => null);
+  if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 0) {
+    const fcMap = new Map(forecast.solar.map(p => [Math.floor(new Date(p.ts).getTime() / 1000), p.w / 1000]));
+    solarFc = timestamps.map(ts => {
+      // Find closest forecast point within 1800s
+      for (const [fts, kw] of fcMap) {
+        if (Math.abs(fts - ts) < 1800) return kw;
       }
-      showChartTooltip(tooltip, row, event, comparison);
+      return null;
     });
-    rect.addEventListener('mousemove', (event) => {
-      chartSelectionState.hoveredIndex = index;
-      if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
-        chartSelectionState.didDrag = chartSelectionState.didDrag || index !== chartSelectionState.anchorIndex;
-        setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, index));
-      } else {
-        updateChartBarStates();
-      }
-      showChartTooltip(tooltip, row, event, comparison);
-    });
-    svg.appendChild(rect);
-    chartSelectionState.barElements.push(rect);
-  });
-
-  const importPoints = data
-    .map((row, index) => {
-      const comparison = comparisonByTs.get(Number(row.ts));
-      const importCtKwh = Number(comparison?.importPriceCtKwh);
-      if (!Number.isFinite(importCtKwh)) return null;
-      return `${x(index) + (barW / 2)},${y(importCtKwh / 100)}`;
-    })
-    .filter(Boolean);
-  if (showImportLine && importPoints.length >= 2) {
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    line.setAttribute('fill', 'none');
-    line.setAttribute('stroke', chartImport);
-    line.setAttribute('stroke-width', '2.5');
-    line.setAttribute('stroke-dasharray', '8 4');
-    line.setAttribute('stroke-linejoin', 'round');
-    line.setAttribute('stroke-linecap', 'round');
-    line.setAttribute('points', importPoints.join(' '));
-    svg.appendChild(line);
   }
 
-  if (zeroY >= padT && zeroY <= H - padB) {
-    const zero = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    zero.setAttribute('x1', padL);
-    zero.setAttribute('x2', W - padR);
-    zero.setAttribute('y1', zeroY);
-    zero.setAttribute('y2', zeroY);
-    zero.setAttribute('stroke', chartNegative);
-    zero.setAttribute('stroke-width', '1.5');
-    svg.appendChild(zero);
+  const uData = [timestamps, prices, importPrices, solarFc];
+
+  // Bar drawing plugin
+  function barsPlugin() {
+    return {
+      hooks: {
+        draw: [
+          (u) => {
+            const ctx = u.ctx;
+            const { left, top, width, height } = u.bbox;
+            const xScale = u.scales.x;
+            const yScale = u.scales.y;
+            const d = u.data;
+            const n = d[0].length;
+            if (n < 2) return;
+
+            const slotSec = d[0][1] - d[0][0];
+            const barPx = Math.max(1, u.valToPos(d[0][0] + slotSec, 'x') - u.valToPos(d[0][0], 'x') - 2);
+            const zeroY = u.valToPos(0, 'y');
+
+            for (let i = 0; i < n; i++) {
+              const val = d[1][i];
+              if (val == null) continue;
+              const xPx = u.valToPos(d[0][i], 'x');
+              const yPx = u.valToPos(val, 'y');
+              const ts = d[0][i] * 1000;
+
+              const isAutomation = automationSlots.has(ts);
+              const isHighPos = highHighlights.has(i);
+              const isHighNeg = lowHighlights.has(i);
+
+              ctx.fillStyle = isAutomation ? chartAutomation
+                : isHighNeg ? chartNegativeHighlight
+                : isHighPos ? chartPositiveHighlight
+                : (val < 0 ? chartNegative : chartPositive);
+
+              const barTop = Math.min(yPx, zeroY);
+              const barH = Math.abs(yPx - zeroY) || 1;
+              ctx.fillRect(xPx, barTop, barPx, barH);
+            }
+          }
+        ]
+      }
+    };
   }
 
-  // --- Solar Forecast Overlay (right Y-axis, kW) ---
-  if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 1 && data.length > 0) {
-    const fcColor = '#f59e0b'; // amber/orange
-    const firstTs = Number(data[0].ts);
-    const lastTs = Number(data[data.length - 1].ts);
-    const slotMs = data.length > 1 ? (Number(data[1].ts) - firstTs) : 3600000;
-    const fcFiltered = forecast.solar
-      .map(p => ({ ts: new Date(p.ts).getTime(), kw: p.w / 1000 }))
-      .filter(p => p.ts >= firstTs && p.ts <= lastTs + slotMs);
-
-    if (fcFiltered.length >= 2) {
-      const fcMax = Math.max(...fcFiltered.map(p => p.kw), 1);
-      const fcY = (kw) => padT + (H - padT - padB) * (1 - kw / fcMax);
-      const fcX = (ts) => padL + ((ts - firstTs) / (lastTs + slotMs - firstTs)) * (W - padL - padR);
-
-      // Forecast group — pointer-events:none so clicks pass through to price bars
-      const fcGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      fcGroup.setAttribute('style', 'pointer-events: none;');
-
-      // Forecast area (filled)
-      const areaPoints = fcFiltered.map(p => `${fcX(p.ts)},${fcY(p.kw)}`);
-      areaPoints.push(`${fcX(fcFiltered[fcFiltered.length - 1].ts)},${H - padB}`);
-      areaPoints.push(`${fcX(fcFiltered[0].ts)},${H - padB}`);
-      const area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      area.setAttribute('points', areaPoints.join(' '));
-      area.setAttribute('fill', fcColor);
-      area.setAttribute('fill-opacity', '0.08');
-      svg.appendChild(area);
-
-      // Forecast line
-      const linePoints = fcFiltered.map(p => `${fcX(p.ts)},${fcY(p.kw)}`);
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      line.setAttribute('fill', 'none');
-      line.setAttribute('stroke', fcColor);
-      line.setAttribute('stroke-width', '1.5');
-      line.setAttribute('stroke-linejoin', 'round');
-      line.setAttribute('stroke-linecap', 'round');
-      line.setAttribute('stroke-dasharray', '6 3');
-      line.setAttribute('points', linePoints.join(' '));
-      fcGroup.appendChild(area);
-      fcGroup.appendChild(line);
-
-      // Right Y-axis labels
-      const fcTicks = [0, Math.round(fcMax / 2), Math.round(fcMax)];
-      for (const tick of fcTicks) {
-        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        lbl.setAttribute('x', W - padR + 6);
-        lbl.setAttribute('y', fcY(tick) + 4);
-        lbl.setAttribute('font-size', '10');
-        lbl.setAttribute('fill', fcColor);
-        lbl.setAttribute('fill-opacity', '0.7');
-        lbl.setAttribute('text-anchor', 'start');
-        lbl.textContent = `${tick}kW`;
-        fcGroup.appendChild(lbl);
+  // Now-line plugin
+  function nowLinePlugin() {
+    return {
+      hooks: {
+        draw: [
+          (u) => {
+            const nowSec = Math.floor(nowTs / 1000);
+            const xPx = u.valToPos(nowSec, 'x');
+            const { top, height } = u.bbox;
+            if (xPx < u.bbox.left || xPx > u.bbox.left + u.bbox.width) return;
+            const ctx = u.ctx;
+            ctx.save();
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 3]);
+            ctx.beginPath();
+            ctx.moveTo(xPx, top);
+            ctx.lineTo(xPx, top + height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#facc15';
+            ctx.font = 'bold 11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Jetzt', xPx, top - 4);
+            ctx.restore();
+          }
+        ]
       }
+    };
+  }
 
-      // Legend
-      const legend = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      legend.setAttribute('x', W - padR - 2);
-      legend.setAttribute('y', padT - 2);
-      legend.setAttribute('font-size', '10');
-      legend.setAttribute('fill', fcColor);
-      legend.setAttribute('fill-opacity', '0.8');
-      legend.setAttribute('text-anchor', 'end');
-      legend.textContent = '☀ PV Forecast';
-      fcGroup.appendChild(legend);
+  const hasForecast = solarFc.some(v => v != null && v > 0);
+  const hasImport = importPrices.some(v => v != null);
 
-      svg.appendChild(fcGroup);
+  const series = [
+    {}, // x-axis (timestamps)
+    {
+      label: 'Börsenpreis',
+      scale: 'y',
+      value: (u, v) => v != null ? v.toFixed(1) + ' ct/kWh' : '-',
+      paths: () => null, // bars drawn via plugin
+      points: { show: false }
+    },
+    {
+      label: 'Bezugspreis',
+      scale: 'y',
+      show: hasImport,
+      stroke: chartImport,
+      width: 2,
+      dash: [8, 4],
+      points: { show: false },
+      value: (u, v) => v != null ? v.toFixed(1) + ' ct/kWh' : '-'
+    },
+    {
+      label: '☀ PV Forecast',
+      scale: 'kw',
+      show: hasForecast,
+      stroke: fcColor,
+      width: 1.5,
+      fill: fcColor + '18',
+      points: { show: false },
+      value: (u, v) => v != null ? v.toFixed(1) + ' kW' : '-'
     }
+  ];
+
+  const axes = [
+    { // x-axis
+      values: (u, vals) => vals.map(v => {
+        const d = new Date(v * 1000);
+        return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+      }),
+      grid: { stroke: '#e5e7eb40', width: 1 },
+      ticks: { stroke: '#9ca3af', width: 1 }
+    },
+    { // left y-axis (ct/kWh)
+      scale: 'y',
+      label: 'ct/kWh',
+      labelSize: 14,
+      values: (u, vals) => vals.map(v => v.toFixed(0)),
+      grid: { stroke: '#e5e7eb40', width: 1 },
+      ticks: { stroke: '#9ca3af', width: 1 }
+    }
+  ];
+
+  if (hasForecast) {
+    axes.push({
+      scale: 'kw',
+      side: 1, // right
+      label: 'kW',
+      labelSize: 14,
+      stroke: fcColor,
+      values: (u, vals) => vals.map(v => v.toFixed(0)),
+      grid: { show: false },
+      ticks: { stroke: fcColor + '60', width: 1 }
+    });
   }
 
-  svg.onmouseleave = () => {
-    chartSelectionState.hoveredIndex = null;
-    updateChartBarStates();
-    hideChartTooltip();
+  const scales = {
+    x: { time: true },
+    y: {},
+    kw: { auto: true, range: (u, min, max) => [0, Math.max(max * 1.1, 1)] }
   };
-  updateChartBarStates();
+
+  const opts = {
+    width: container.clientWidth || 800,
+    height: 300,
+    cursor: {
+      drag: { x: false, y: false },
+      focus: { prox: 30 }
+    },
+    legend: { show: true },
+    plugins: [barsPlugin(), nowLinePlugin()],
+    series,
+    axes,
+    scales,
+    hooks: {
+      setCursor: [
+        (u) => {
+          const idx = u.cursor.idx;
+          if (idx == null || idx < 0 || idx >= data.length) {
+            hideChartTooltip();
+            return;
+          }
+          const row = data[idx];
+          const comparison = comparisonByTs.get(Number(row.ts)) || null;
+          const fcKw = solarFc[idx];
+          const ttParts = [
+            `${new Date(row.ts).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`,
+            `Börse: ${Number(row.ct_kwh).toFixed(2)} ct/kWh`
+          ];
+          if (comparison?.importPriceCtKwh != null) ttParts.push(`Bezug: ${Number(comparison.importPriceCtKwh).toFixed(2)} ct/kWh`);
+          if (fcKw != null) ttParts.push(`PV Forecast: ${fcKw.toFixed(1)} kW`);
+          if (tooltip) {
+            tooltip.style.display = 'block';
+            tooltip.textContent = ttParts.join(' | ');
+          }
+        }
+      ]
+    }
+  };
+
+  priceChartInstance = new uPlot(opts, uData, container);
+
+  // Resize handler
+  const resizeObserver = new ResizeObserver(() => {
+    if (priceChartInstance && container.clientWidth > 0) {
+      priceChartInstance.setSize({ width: container.clientWidth, height: 300 });
+    }
+  });
+  resizeObserver.observe(container);
 }
 
 function resolveDvControlIndicators(status) {
