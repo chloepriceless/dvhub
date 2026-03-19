@@ -3104,6 +3104,21 @@ if (IS_RUNTIME_PROCESS) {
   // VRM Solar Forecast: fetch on startup + every 2 hours
   setTimeout(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_init_error', { error: e.message })), 10000);
   setInterval(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_error', { error: e.message })), 2 * 60 * 60 * 1000);
+
+  // Uptime Kuma push heartbeat (every 4 minutes)
+  const UPTIME_KUMA_PUSH_URL = 'https://uptime.bottom.zone/api/push/D5oFSRRl9w';
+  setInterval(async () => {
+    try {
+      const msg = encodeURIComponent('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%');
+      await fetch(UPTIME_KUMA_PUSH_URL + '?status=up&msg=' + msg + '&ping=', { signal: AbortSignal.timeout(10000) });
+    } catch (e) { /* silent - kuma is optional */ }
+  }, 4 * 60 * 1000);
+  // Initial push after 30s
+  setTimeout(async () => {
+    try {
+      await fetch(UPTIME_KUMA_PUSH_URL + '?status=up&msg=DVhub+started&ping=', { signal: AbortSignal.timeout(10000) });
+    } catch (e) { /* silent */ }
+  }, 30000);
 }
 
 function gracefulShutdown(signal) {
