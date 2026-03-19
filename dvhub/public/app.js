@@ -736,12 +736,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               label: {
                 display: true,
                 content: 'Jetzt',
-                position: { x: 'center', y: 'start' },
+                position: 'end',
                 backgroundColor: '#1a1a2eee',
                 color: '#facc15',
                 font: { weight: 'bold', size: 11 },
-                padding: { top: 2, bottom: 2, left: 4, right: 4 },
-                yAdjust: -14
+                padding: { top: 2, bottom: 2, left: 4, right: 4 }
               }
             }
           }
@@ -772,8 +771,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           title: { display: true, text: 'ct/kWh', color: '#9ca3af', font: { size: 11 } },
           ticks: { color: '#9ca3af', font: { size: 10 } },
           grid: { color: '#e5e7eb20', lineWidth: 1 },
-          beginAtZero: false,
-          suggestedMin: -1
+          beginAtZero: true,
+          min: 0
         },
         kw: {
           position: 'right',
@@ -782,6 +781,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           ticks: { color: fcColor + '90', font: { size: 10 } },
           grid: { display: false },
           beginAtZero: true,
+          min: 0,
           suggestedMax: Math.max(...solarFc.filter(v => v != null)) * 1.15 || 10
         }
       }
