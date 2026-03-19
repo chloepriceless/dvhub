@@ -97,6 +97,8 @@ export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = 
   if (!Array.isArray(stages) || !stages.length) return [];
 
   const variants = [];
+
+  // 1) Original stage-prefix variants (existing behaviour)
   for (let count = 1; count <= stages.length; count++) {
     const chain = buildAutomationRuleChain({
       maxDischargeW,
@@ -109,6 +111,35 @@ export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = 
       if (truncated.length) variants.push(truncated);
     } else {
       variants.push(chain);
+    }
+  }
+
+  // 2) Auto-generated power-level variants: spread the same energy over more slots at lower power.
+  //    e.g. if max is 18 kW with 12 kWh available, try 15 kW, 12 kW, 10 kW, 8 kW, 6 kW
+  //    each covering more slots at the lower power, maximising revenue on expensive slots.
+  const absMaxW = Math.abs(toFiniteNumber(maxDischargeW, 0));
+  if (absMaxW > 0) {
+    const powerSteps = [0.85, 0.7, 0.55, 0.4, 0.3].map(f => Math.round(absMaxW * f / 500) * 500).filter(w => w >= 1000);
+    const seenPowers = new Set(variants.flatMap(v => v.map(e => Math.abs(e.powerW))));
+
+    for (const stepW of powerSteps) {
+      if (seenPowers.has(stepW)) continue;
+      seenPowers.add(stepW);
+
+      // Flat chain: all slots at this power, no cooldown
+      if (availableKwh != null && availableKwh > 0) {
+        const energyPerSlot = (stepW / 1000) * slotDurationH;
+        const maxSlots = Math.ceil(availableKwh / energyPerSlot);
+        const chain = [{ powerW: -stepW, slots: maxSlots }];
+        const truncated = truncateChainToEnergy(chain, availableKwh, slotDurationH);
+        if (truncated.length) variants.push(truncated);
+      } else {
+        // Without energy budget, use same total slot count as first stage
+        const refSlots = stages.reduce((sum, s) => sum + toFiniteNumber(s?.dischargeSlots, 0) + toFiniteNumber(s?.cooldownSlots, 0), 0);
+        if (refSlots > 0) {
+          variants.push([{ powerW: -stepW, slots: refSlots }]);
+        }
+      }
     }
   }
 
