@@ -598,11 +598,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       : (val < 0 ? chartNegative : chartPositive);
     // Apply alpha for past bars
     if (isPast) {
-      // Convert hex to rgba with 0.45 alpha
+      // Convert hex to rgba with 0.30 alpha for past bars
       const r = parseInt(color.slice(1,3), 16);
       const g = parseInt(color.slice(3,5), 16);
       const b = parseInt(color.slice(5,7), 16);
-      color = `rgba(${r},${g},${b},0.45)`;
+      color = `rgba(${r},${g},${b},0.30)`;
     }
     return color;
   });
@@ -621,8 +621,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       backgroundColor: barColors,
       borderColor: barColors,
       borderWidth: 0,
-      barPercentage: 0.92,
-      categoryPercentage: 0.92,
+      barPercentage: 0.78,
+      categoryPercentage: 0.88,
       yAxisID: 'y',
       order: 2
     }
@@ -949,11 +949,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   // --- Click selection for schedule creation ---
   canvas.addEventListener('mousedown', (e) => {
+    if (e.shiftKey) return; // Shift+drag = pan (let zoom plugin handle it)
     const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
     e.preventDefault();
+    e.stopPropagation();
     chartSelectionState.pointerDown = true;
     chartSelectionState.anchorIndex = idx;
     chartSelectionState.didDrag = false;
@@ -961,12 +963,14 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     setChartSelection(data, [idx]);
   });
   canvas.addEventListener('mousemove', (e) => {
+    if (e.shiftKey) return; // Shift+drag = pan
     const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
     chartSelectionState.hoveredIndex = idx;
     if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
+      e.preventDefault();
       chartSelectionState.didDrag = chartSelectionState.didDrag || idx !== chartSelectionState.anchorIndex;
       setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, idx));
     }
