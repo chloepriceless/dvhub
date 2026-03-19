@@ -370,12 +370,13 @@ function getSelectedChartIndices(data = chartSelectionState.data) {
 }
 
 function updateChartBarStates() {
-  const selectedIndices = new Set(getSelectedChartIndices());
-  chartSelectionState.barElements.forEach((bar, index) => {
-    if (!bar?.classList) return;
-    bar.classList.toggle('is-hovered', index === chartSelectionState.hoveredIndex);
-    bar.classList.toggle('is-selected', selectedIndices.has(index));
-  });
+  // Trigger redraw so the selectionHighlight plugin paints the overlay
+  if (priceChartInstance) {
+    cancelAnimationFrame(updateChartBarStates._raf);
+    updateChartBarStates._raf = requestAnimationFrame(() => {
+      if (priceChartInstance) priceChartInstance.draw();
+    });
+  }
 }
 
 function updateChartSelectionCallout() {
@@ -583,6 +584,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   }
 
   // --- Per-bar colors & alpha ---
+  chartSelectionState.baseBarColors = null; // will be set after barColors built
   const barColors = data.map((d, i) => {
     const val = Number(d.ct_kwh);
     const ts = Number(d.ts);
@@ -604,6 +606,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     }
     return color;
   });
+
+  chartSelectionState.baseBarColors = [...barColors];
 
   const hasForecast = solarFc.some(v => v != null && v > 0);
   const hasImport = importPrices.some(v => v != null);
@@ -849,7 +853,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         zoom: {
           pan: {
             enabled: true,
-            mode: 'x'
+            mode: 'x',
+            modifierKey: 'shift'
           },
           zoom: {
             wheel: { enabled: true, modifierKey: null },
@@ -906,6 +911,39 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   // Set canvas container height
   container.style.height = '380px';
+
+  // Selection overlay plugin - draws highlight over selected bars
+  const selectionHighlightPlugin = {
+    id: 'selectionHighlight',
+    afterDatasetsDraw(chart) {
+      const selected = new Set(getSelectedChartIndices());
+      if (!selected.size) return;
+      const ds = chart.data.datasets.findIndex(d => d.label === "Börsenpreis");
+      if (ds < 0) return;
+      const meta = chart.getDatasetMeta(ds);
+      const ctx = chart.ctx;
+      // Dim all non-selected bars
+      meta.data.forEach((bar, i) => {
+        if (!selected.has(i)) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(10, 20, 40, 0.6)';
+          ctx.fillRect(bar.x - bar.width / 2, chart.chartArea.top, bar.width, chart.chartArea.bottom - chart.chartArea.top);
+          ctx.restore();
+        }
+      });
+      // Highlight selected bars with bright border
+      meta.data.forEach((bar, i) => {
+        if (selected.has(i)) {
+          ctx.save();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(bar.x - bar.width / 2, bar.y, bar.width, bar.base - bar.y);
+          ctx.restore();
+        }
+      });
+    }
+  };
+  config.plugins = [selectionHighlightPlugin, ...(config.plugins || [])];
 
   priceChartInstance = new Chart(canvas, config);
 
