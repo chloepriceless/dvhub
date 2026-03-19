@@ -845,6 +845,21 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               }
             }
           }
+        },
+        zoom: {
+          pan: {
+            enabled: true,
+            mode: 'x'
+          },
+          zoom: {
+            wheel: { enabled: true, modifierKey: null },
+            pinch: { enabled: true },
+            drag: { enabled: false },
+            mode: 'x'
+          },
+          limits: {
+            x: { minRange: 4 }
+          }
         }
       },
       scales: {
@@ -924,6 +939,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   canvas.addEventListener('mouseleave', () => {
     chartSelectionState.pointerDown = false;
     chartSelectionState.hoveredIndex = null;
+  });
+  // Double-click to reset zoom
+  canvas.addEventListener('dblclick', () => {
+    if (priceChartInstance) priceChartInstance.resetZoom();
   });
 }
 
