@@ -551,15 +551,23 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     return Number.isFinite(v) ? v : null;
   });
 
-  // Build forecast series aligned to price timestamps
+  // Build forecast series with linear interpolation from hourly to 15-min
   let solarFc = timestamps.map(() => null);
-  if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 0) {
-    const fcMap = new Map(forecast.solar.map(p => [Math.floor(new Date(p.ts).getTime() / 1000), p.w / 1000]));
+  if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 1) {
+    const fcPoints = forecast.solar
+      .map(p => ({ ts: Math.floor(new Date(p.ts).getTime() / 1000), kw: p.w / 1000 }))
+      .sort((a, b) => a.ts - b.ts);
     solarFc = timestamps.map(ts => {
-      // Find closest forecast point within 1800s
-      for (const [fts, kw] of fcMap) {
-        if (Math.abs(fts - ts) < 1800) return kw;
+      // Find surrounding forecast points for interpolation
+      if (ts < fcPoints[0].ts || ts > fcPoints[fcPoints.length - 1].ts) return null;
+      for (let j = 0; j < fcPoints.length - 1; j++) {
+        if (ts >= fcPoints[j].ts && ts <= fcPoints[j + 1].ts) {
+          const ratio = (ts - fcPoints[j].ts) / (fcPoints[j + 1].ts - fcPoints[j].ts);
+          return fcPoints[j].kw + ratio * (fcPoints[j + 1].kw - fcPoints[j].kw);
+        }
       }
+      // Exact match on last point
+      if (ts === fcPoints[fcPoints.length - 1].ts) return fcPoints[fcPoints.length - 1].kw;
       return null;
     });
   }
@@ -595,14 +603,18 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               const isHighPos = highHighlights.has(i);
               const isHighNeg = lowHighlights.has(i);
 
-              ctx.fillStyle = isAutomation ? chartAutomation
+              const isPast = ts < nowTs;
+              const baseColor = isAutomation ? chartAutomation
                 : isHighNeg ? chartNegativeHighlight
                 : isHighPos ? chartPositiveHighlight
                 : (val < 0 ? chartNegative : chartPositive);
+              ctx.fillStyle = baseColor;
+              ctx.globalAlpha = isPast ? 0.45 : 1.0;
 
               const barTop = Math.min(yPx, zeroY);
               const barH = Math.abs(yPx - zeroY) || 1;
               ctx.fillRect(xPx, barTop, barPx, barH);
+              ctx.globalAlpha = 1.0;
             }
           }
         ]
@@ -622,18 +634,30 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             if (xPx < u.bbox.left || xPx > u.bbox.left + u.bbox.width) return;
             const ctx = u.ctx;
             ctx.save();
-            ctx.strokeStyle = '#facc15';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([6, 3]);
+            // Glow effect
+            ctx.strokeStyle = '#facc1540';
+            ctx.lineWidth = 6;
             ctx.beginPath();
             ctx.moveTo(xPx, top);
             ctx.lineTo(xPx, top + height);
             ctx.stroke();
+            // Main line
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 2.5;
             ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(xPx, top);
+            ctx.lineTo(xPx, top + height);
+            ctx.stroke();
+            // Label with background
             ctx.fillStyle = '#facc15';
-            ctx.font = 'bold 11px Inter, sans-serif';
+            ctx.font = 'bold 12px Inter, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('Jetzt', xPx, top - 4);
+            const labelW = ctx.measureText('Jetzt').width + 8;
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(xPx - labelW / 2, top - 18, labelW, 16);
+            ctx.fillStyle = '#facc15';
+            ctx.fillText('Jetzt', xPx, top - 5);
             ctx.restore();
           }
         ]
@@ -657,9 +681,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       label: 'Bezugspreis',
       scale: 'y',
       show: hasImport,
-      stroke: chartImport,
-      width: 2,
-      dash: [8, 4],
+      stroke: chartImport + '90',
+      width: 1.5,
+      dash: [6, 4],
       points: { show: false },
       value: (u, v) => v != null ? v.toFixed(1) + ' ct/kWh' : '-'
     },
@@ -752,6 +776,38 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   };
 
   priceChartInstance = new uPlot(opts, uData, container);
+
+  // Click selection for schedule creation
+  const canvas = container.querySelector('canvas');
+  if (canvas) {
+    canvas.addEventListener('mousedown', (e) => {
+      const idx = priceChartInstance.cursor.idx;
+      if (idx == null || idx < 0 || idx >= data.length) return;
+      e.preventDefault();
+      chartSelectionState.pointerDown = true;
+      chartSelectionState.anchorIndex = idx;
+      chartSelectionState.didDrag = false;
+      chartSelectionState.hoveredIndex = idx;
+      setChartSelection(data, [idx]);
+    });
+    canvas.addEventListener('mousemove', () => {
+      const idx = priceChartInstance.cursor.idx;
+      if (idx == null || idx < 0 || idx >= data.length) return;
+      chartSelectionState.hoveredIndex = idx;
+      if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
+        chartSelectionState.didDrag = chartSelectionState.didDrag || idx !== chartSelectionState.anchorIndex;
+        setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, idx));
+      }
+    });
+    canvas.addEventListener('mouseup', () => {
+      chartSelectionState.pointerDown = false;
+    });
+    canvas.addEventListener('mouseleave', () => {
+      chartSelectionState.pointerDown = false;
+      chartSelectionState.hoveredIndex = null;
+      hideChartTooltip();
+    });
+  }
 
   // Resize handler
   const resizeObserver = new ResizeObserver(() => {
