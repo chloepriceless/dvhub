@@ -2607,6 +2607,22 @@ const web = http.createServer(async (req, res) => {
     }
   }
 
+  // --- Telemetry Series Query API ---
+  if (url.pathname === '/api/telemetry/series' && req.method === 'GET') {
+    if (!telemetryStore?.querySeries) return json(res, 503, { ok: false, error: 'telemetry store not available' });
+    const keys = (url.searchParams.get('keys') || 'battery_soc_pct').split(',').map(k => k.trim()).filter(Boolean);
+    const now = new Date();
+    const start = url.searchParams.get('start') || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const end = url.searchParams.get('end') || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+    const maxRes = Number(url.searchParams.get('maxResolution')) || 900;
+    try {
+      const rows = await telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
+      return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
   // --- VRM Forecast API ---
   if (url.pathname === '/api/forecast' && req.method === 'GET') {
     if (!telemetryStore?.listForecasts) return json(res, 503, { ok: false, error: 'telemetry store not available' });
