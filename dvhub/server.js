@@ -45,6 +45,7 @@ import {
   filterSlotsByTimeWindow,
   filterFreeAutomationSlots,
   pickBestAutomationPlan,
+  pickMultiBlockPlan,
   SLOT_DURATION_HOURS
 } from './small-market-automation.js';
 import {
@@ -365,11 +366,26 @@ function buildSmallMarketAutomationRules({
     if (fallback.length) chainVariants.push(fallback);
   }
 
-  const plan = pickBestAutomationPlan({
+  // Run BOTH optimizers and pick the one with higher revenue
+  const singleBlockPlan = pickBestAutomationPlan({
     slots: freeSlots,
     chainOptions: chainVariants,
     slotDurationMs: SLOT_DURATION_MS
   });
+
+  const multiBlockPlan = pickMultiBlockPlan({
+    slots: freeSlots,
+    stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
+    maxDischargeW: automationConfig?.maxDischargeW,
+    availableKwh: availableEnergyKwh,
+    slotDurationMs: SLOT_DURATION_MS,
+    slotDurationH: SLOT_DURATION_HOURS
+  });
+
+  // Pick the plan with higher total revenue
+  const plan = (multiBlockPlan.totalRevenueCt > singleBlockPlan.totalRevenueCt)
+    ? multiBlockPlan
+    : singleBlockPlan;
 
   const expandedBestChain = expandChainSlots(plan.chain);
 
