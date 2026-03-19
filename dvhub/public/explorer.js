@@ -8,7 +8,7 @@ const SERIES_DEFS = [
   { id: 'batteryKw',  label: 'Batterie',         color: '#67a5ff', unit: 'kW',    axis: 'kw',  key: 'batteryKwh',  toKw: true },
   { id: 'exportKw',   label: 'Einspeisung',      color: '#39E06F', unit: 'kW',    axis: 'kw',  key: 'exportKwh',   toKw: true },
   { id: 'importKw',   label: 'Netzbezug',        color: '#ff6b6b', unit: 'kW',    axis: 'kw',  key: 'importKwh',   toKw: true, hidden: true },
-  { id: 'soc',        label: 'Batterie SOC',      color: '#67a5ff', unit: '%',     axis: 'pct', key: 'soc',         toKw: false, hidden: true },
+  { id: 'autarkie',   label: 'Autarkie',           color: '#A8F000', unit: '%',     axis: 'pct', key: '_autarkie',    toKw: false },
   { id: 'pvFc',       label: 'PV Forecast',       color: '#f59e0b', unit: 'kW',    axis: 'kw',  key: '_pvFc',       toKw: false, dash: [6, 3] },
   { id: 'consFc',     label: 'Lastvorhersage',    color: '#bfc7d2', unit: 'kW',    axis: 'kw',  key: '_consFc',     toKw: false, dash: [4, 3], hidden: true },
   { id: 'marketCt',   label: 'Boersenpreis',      color: '#0077ff', unit: 'ct/kWh', axis: 'ct', key: '_marketCt',   toKw: false },
@@ -189,9 +189,20 @@ function buildChartData(slots, fcData, epexData, agg) {
       }
       if (def.key === '_pvFc') return interpol(fcSolarArr, ts);
       if (def.key === '_consFc') return interpol(fcConsArr, ts);
-      if (def.key === '_marketCt') return findEpex(ts);
-      if (def.key === '_importCt') return null;
-      if (def.key === 'soc') return s.soc ?? null;
+      if (def.key === '_marketCt') {
+        // Prefer slot data, fallback to EPEX overlay
+        const slotPrice = Number(s.marketPriceCtKwh);
+        return Number.isFinite(slotPrice) ? slotPrice : findEpex(ts);
+      }
+      if (def.key === '_importCt') {
+        const v = Number(s.userImportPriceCtKwh);
+        return Number.isFinite(v) ? v : null;
+      }
+      if (def.key === '_autarkie') {
+        const load = Number(s.loadKwh || 0);
+        const selfCons = Number(s.selfConsumptionKwh || 0);
+        return load > 0.001 ? Math.min(100, (selfCons / load) * 100) : null;
+      }
       const val = Number(s[def.key]);
       return Number.isFinite(val) ? (def.toKw ? val * kwFactor : val) : null;
     });
