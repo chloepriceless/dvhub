@@ -512,9 +512,10 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 let priceChartInstance = null;
 
 function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null) {
+  const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
-  if (!container || typeof uPlot === 'undefined') return;
+  if (!canvas || typeof Chart === 'undefined') return;
 
   chartSelectionState.data = Array.isArray(data) ? data : [];
   chartSelectionState.barElements = [];
@@ -523,13 +524,14 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   chartSelectionState.anchorIndex = null;
   chartSelectionState.didDrag = false;
   updateChartSelectionCallout();
-  if (!Array.isArray(data) || data.length === 0) { container.innerHTML = ''; return; }
+  if (!Array.isArray(data) || data.length === 0) { canvas.style.display = 'none'; return; }
+  canvas.style.display = '';
 
   // Destroy previous chart
   if (priceChartInstance) { priceChartInstance.destroy(); priceChartInstance = null; }
-  container.innerHTML = '';
 
-  const chartPositive = cssVar('--chart-positive', '#1d4ed8');
+  // --- Colors ---
+  const chartPositive = cssVar('--chart-positive', '#0077ff');
   const chartNegative = cssVar('--chart-negative', '#ef4444');
   const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
   const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
@@ -537,13 +539,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const chartImport = cssVar('--chart-import', '#22c55e');
   const fcColor = '#f59e0b';
 
+  // --- Data prep ---
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
   const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
 
-  // uPlot data: [timestamps, prices, importPrices, solarForecast]
-  const timestamps = data.map(d => Math.floor(Number(d.ts) / 1000));
+  const labels = data.map(d => new Date(d.ts));
   const prices = data.map(d => Number(d.ct_kwh));
   const importPrices = data.map(d => {
     const c = comparisonByTs.get(Number(d.ts));
@@ -551,21 +553,19 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     return Number.isFinite(v) ? v : null;
   });
 
-  // Build forecast series with linear interpolation from hourly to 15-min
-  let solarFc = timestamps.map(() => null);
+  // Build forecast series (interpolation from hourly to 15-min)
+  let solarFc = data.map(() => null);
   if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 1) {
-    // Filter out zero-padding at edges (nighttime zeros that aren't real data)
     const rawPoints = forecast.solar
-      .map(p => ({ ts: Math.floor(new Date(p.ts).getTime() / 1000), kw: p.w / 1000 }))
+      .map(p => ({ ts: new Date(p.ts).getTime(), kw: p.w / 1000 }))
       .sort((a, b) => a.ts - b.ts);
-    // Trim leading/trailing zeros — keep only the range where kw > 0
     let firstNonZero = rawPoints.findIndex(p => p.kw > 0);
     let lastNonZero = rawPoints.length - 1;
     while (lastNonZero > 0 && rawPoints[lastNonZero].kw <= 0) lastNonZero--;
     const fcPoints = firstNonZero >= 0 ? rawPoints.slice(firstNonZero, lastNonZero + 1) : [];
-    solarFc = timestamps.map(ts => {
+    solarFc = data.map(d => {
+      const ts = Number(d.ts);
       if (fcPoints.length < 2) return null;
-      // Find surrounding forecast points for interpolation
       if (ts < fcPoints[0].ts || ts > fcPoints[fcPoints.length - 1].ts) return null;
       for (let j = 0; j < fcPoints.length - 1; j++) {
         if (ts >= fcPoints[j].ts && ts <= fcPoints[j + 1].ts) {
@@ -574,7 +574,6 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           return val > 0 ? val : null;
         }
       }
-      // Exact match on last point
       if (ts === fcPoints[fcPoints.length - 1].ts) {
         const v = fcPoints[fcPoints.length - 1].kw;
         return v > 0 ? v : null;
@@ -583,259 +582,248 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     });
   }
 
-  const uData = [timestamps, prices, importPrices, solarFc];
-
-  // Bar drawing plugin
-  function barsPlugin() {
-    return {
-      hooks: {
-        draw: [
-          (u) => {
-            const ctx = u.ctx;
-            const { left, top, width, height } = u.bbox;
-            const xScale = u.scales.x;
-            const yScale = u.scales.y;
-            const d = u.data;
-            const n = d[0].length;
-            if (n < 2) return;
-
-            const slotSec = d[0][1] - d[0][0];
-            const rawBarPx = u.valToPos(d[0][0] + slotSec, 'x') - u.valToPos(d[0][0], 'x');
-            const barGap = Math.max(2, Math.round(rawBarPx * 0.12));
-            const barPx = Math.max(1, rawBarPx - barGap);
-            const zeroY = u.valToPos(0, 'y');
-
-            for (let i = 0; i < n; i++) {
-              const val = d[1][i];
-              if (val == null) continue;
-              const xPx = u.valToPos(d[0][i], 'x');
-              const yPx = u.valToPos(val, 'y');
-              const ts = d[0][i] * 1000;
-
-              const isAutomation = automationSlots.has(ts);
-              const isHighPos = highHighlights.has(i);
-              const isHighNeg = lowHighlights.has(i);
-
-              const isPast = ts < nowTs;
-              const baseColor = isAutomation ? chartAutomation
-                : isHighNeg ? chartNegativeHighlight
-                : isHighPos ? chartPositiveHighlight
-                : (val < 0 ? chartNegative : chartPositive);
-              ctx.fillStyle = baseColor;
-              ctx.globalAlpha = isPast ? 0.30 : 1.0;
-
-              const barTop = Math.min(yPx, zeroY);
-              const barH = Math.abs(yPx - zeroY) || 1;
-              ctx.fillRect(xPx, barTop, barPx, barH);
-              ctx.globalAlpha = 1.0;
-            }
-          }
-        ]
-      }
-    };
-  }
-
-  // Now-line plugin
-  function nowLinePlugin() {
-    return {
-      hooks: {
-        draw: [
-          (u) => {
-            const nowSec = Math.floor(nowTs / 1000);
-            const xPx = u.valToPos(nowSec, 'x');
-            const { top, height } = u.bbox;
-            if (xPx < u.bbox.left || xPx > u.bbox.left + u.bbox.width) return;
-            const ctx = u.ctx;
-            ctx.save();
-            // Glow effect
-            ctx.strokeStyle = '#facc1540';
-            ctx.lineWidth = 6;
-            ctx.beginPath();
-            ctx.moveTo(xPx, top);
-            ctx.lineTo(xPx, top + height);
-            ctx.stroke();
-            // Main line
-            ctx.strokeStyle = '#facc15';
-            ctx.lineWidth = 2.5;
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.moveTo(xPx, top);
-            ctx.lineTo(xPx, top + height);
-            ctx.stroke();
-            // Label with background
-            ctx.fillStyle = '#facc15';
-            ctx.font = 'bold 12px Inter, sans-serif';
-            ctx.textAlign = 'center';
-            const labelW = ctx.measureText('Jetzt').width + 8;
-            ctx.fillStyle = '#1a1a2e';
-            ctx.fillRect(xPx - labelW / 2, top - 18, labelW, 16);
-            ctx.fillStyle = '#facc15';
-            ctx.fillText('Jetzt', xPx, top - 5);
-            ctx.restore();
-          }
-        ]
-      }
-    };
-  }
+  // --- Per-bar colors & alpha ---
+  const barColors = data.map((d, i) => {
+    const val = Number(d.ct_kwh);
+    const ts = Number(d.ts);
+    const isPast = ts < nowTs;
+    const isAutomation = automationSlots.has(ts);
+    const isHighPos = highHighlights.has(i);
+    const isHighNeg = lowHighlights.has(i);
+    let color = isAutomation ? chartAutomation
+      : isHighNeg ? chartNegativeHighlight
+      : isHighPos ? chartPositiveHighlight
+      : (val < 0 ? chartNegative : chartPositive);
+    // Apply alpha for past bars
+    if (isPast) {
+      // Convert hex to rgba with 0.45 alpha
+      const r = parseInt(color.slice(1,3), 16);
+      const g = parseInt(color.slice(3,5), 16);
+      const b = parseInt(color.slice(5,7), 16);
+      color = `rgba(${r},${g},${b},0.45)`;
+    }
+    return color;
+  });
 
   const hasForecast = solarFc.some(v => v != null && v > 0);
   const hasImport = importPrices.some(v => v != null);
 
-  const series = [
-    {}, // x-axis (timestamps)
+  // --- Datasets ---
+  const datasets = [
     {
       label: 'Börsenpreis',
-      scale: 'y',
-      value: (u, v) => v != null ? v.toFixed(1) + ' ct/kWh' : '-',
-      paths: () => null, // bars drawn via plugin
-      points: { show: false }
-    },
-    {
-      label: 'Bezugspreis',
-      scale: 'y',
-      show: hasImport,
-      stroke: chartImport + '90',
-      width: 1.5,
-      dash: [6, 4],
-      points: { show: false },
-      value: (u, v) => v != null ? v.toFixed(1) + ' ct/kWh' : '-'
-    },
-    {
-      label: '☀ PV Forecast',
-      scale: 'kw',
-      show: hasForecast,
-      stroke: fcColor,
-      width: 1.5,
-      fill: fcColor + '18',
-      spanGaps: false,
-      points: { show: false },
-      value: (u, v) => v != null ? v.toFixed(1) + ' kW' : '-'
+      type: 'bar',
+      data: prices,
+      backgroundColor: barColors,
+      borderColor: barColors,
+      borderWidth: 0,
+      barPercentage: 0.92,
+      categoryPercentage: 0.92,
+      yAxisID: 'y',
+      order: 2
     }
   ];
 
-  const axes = [
-    { // x-axis
-      values: (u, vals) => vals.map(v => {
-        const d = new Date(v * 1000);
-        return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
-      }),
-      grid: { stroke: '#e5e7eb40', width: 1 },
-      ticks: { stroke: '#9ca3af', width: 1 }
-    },
-    { // left y-axis (ct/kWh)
-      scale: 'y',
-      label: 'ct/kWh',
-      labelSize: 14,
-      values: (u, vals) => vals.map(v => v.toFixed(0)),
-      grid: { stroke: '#e5e7eb40', width: 1 },
-      ticks: { stroke: '#9ca3af', width: 1 }
-    }
-  ];
+  if (hasImport) {
+    datasets.push({
+      label: 'Bezugspreis',
+      type: 'line',
+      data: importPrices,
+      borderColor: chartImport + '90',
+      borderWidth: 1.5,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      fill: false,
+      spanGaps: true,
+      yAxisID: 'y',
+      order: 1
+    });
+  }
 
   if (hasForecast) {
-    axes.push({
-      scale: 'kw',
-      side: 1, // right
-      label: 'kW',
-      labelSize: 14,
-      stroke: fcColor,
-      values: (u, vals) => vals.map(v => v.toFixed(0)),
-      grid: { show: false },
-      ticks: { stroke: fcColor + '60', width: 1 }
+    datasets.push({
+      label: '☀ PV Forecast',
+      type: 'line',
+      data: solarFc,
+      borderColor: fcColor,
+      backgroundColor: fcColor + '18',
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      fill: true,
+      spanGaps: false,
+      yAxisID: 'kw',
+      order: 0
     });
   }
 
-  const scales = {
-    x: { time: true },
-    y: {},
-    kw: { auto: true, range: (u, min, max) => [0, Math.max(max * 1.1, 1)] }
-  };
+  // --- "Jetzt" annotation line ---
+  const nowDate = new Date(nowTs);
+  // Find closest data index for the now line
+  let nowIdx = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (Number(data[i].ts) <= nowTs) nowIdx = i;
+  }
 
-  const opts = {
-    width: container.clientWidth || 800,
-    height: 300,
-    cursor: {
-      drag: { x: false, y: false },
-      focus: { prox: 30 }
-    },
-    legend: { show: true },
-    plugins: [barsPlugin(), nowLinePlugin()],
-    series,
-    axes,
-    scales,
-    hooks: {
-      setCursor: [
-        (u) => {
-          const idx = u.cursor.idx;
-          if (idx == null || idx < 0 || idx >= data.length) {
-            hideChartTooltip();
-            return;
+  // --- Chart.js config ---
+  const config = {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      layout: { padding: { top: 24, right: 8, bottom: 0, left: 0 } },
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: {
+            color: '#9ca3af',
+            font: { size: 11 },
+            usePointStyle: true,
+            padding: 16
           }
-          const row = data[idx];
-          const comparison = comparisonByTs.get(Number(row.ts)) || null;
-          const fcKw = solarFc[idx];
-          const ttParts = [
-            `${new Date(row.ts).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`,
-            `Börse: ${Number(row.ct_kwh).toFixed(2)} ct/kWh`
-          ];
-          if (comparison?.importPriceCtKwh != null) ttParts.push(`Bezug: ${Number(comparison.importPriceCtKwh).toFixed(2)} ct/kWh`);
-          if (fcKw != null) ttParts.push(`PV Forecast: ${fcKw.toFixed(1)} kW`);
-          if (tooltip) {
-            tooltip.textContent = ttParts.join(' | ');
-            tooltip.style.display = 'block';
-            // Position tooltip near cursor using uPlot cursor coords
-            const rect = u.root.getBoundingClientRect();
-            const cx = rect.left + u.cursor.left;
-            const cy = rect.top + u.cursor.top;
-            tooltip.style.left = (cx + 12) + 'px';
-            tooltip.style.top = (cy - 36) + 'px';
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#1a1a2eee',
+          titleColor: '#e5e7eb',
+          bodyColor: '#e5e7eb',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            title: (items) => {
+              if (!items.length) return '';
+              const d = items[0].label;
+              return new Date(d).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            },
+            label: (item) => {
+              if (item.dataset.label === 'Börsenpreis') return `Börse: ${Number(item.raw).toFixed(2)} ct/kWh`;
+              if (item.dataset.label === 'Bezugspreis') return item.raw != null ? `Bezug: ${Number(item.raw).toFixed(2)} ct/kWh` : null;
+              if (item.dataset.label.includes('Forecast')) return item.raw != null ? `PV Forecast: ${Number(item.raw).toFixed(1)} kW` : null;
+              return null;
+            },
+            afterBody: (items) => {
+              if (!items.length) return '';
+              const idx = items[0].dataIndex;
+              const row = data[idx];
+              const comp = comparisonByTs.get(Number(row.ts));
+              if (!comp) return '';
+              const parts = [];
+              if (comp.pvMarginCtKwh != null) parts.push(`PV Marge: ${fmtSignedCt(comp.pvMarginCtKwh)}`);
+              if (comp.batteryMarginCtKwh != null) parts.push(`Akku: ${fmtSignedCt(comp.batteryMarginCtKwh)}`);
+              return parts.join('\n');
+            }
+          }
+        },
+        annotation: {
+          annotations: {
+            nowLine: {
+              type: 'line',
+              xMin: nowIdx,
+              xMax: nowIdx,
+              borderColor: '#facc15',
+              borderWidth: 2.5,
+              borderDash: [],
+              label: {
+                display: true,
+                content: 'Jetzt',
+                position: { x: 'center', y: 'start' },
+                backgroundColor: '#1a1a2eee',
+                color: '#facc15',
+                font: { weight: 'bold', size: 11 },
+                padding: { top: 2, bottom: 2, left: 4, right: 4 },
+                yAdjust: -14
+              }
+            }
           }
         }
-      ]
+      },
+      scales: {
+        x: {
+          type: 'category',
+          ticks: {
+            color: '#9ca3af',
+            font: { size: 10 },
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 24,
+            callback: function(value, index) {
+              const d = data[index];
+              if (!d) return '';
+              const date = new Date(d.ts);
+              const m = date.getMinutes();
+              if (m === 0) return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+              return '';
+            }
+          },
+          grid: { color: '#e5e7eb20', lineWidth: 1 }
+        },
+        y: {
+          position: 'left',
+          title: { display: true, text: 'ct/kWh', color: '#9ca3af', font: { size: 11 } },
+          ticks: { color: '#9ca3af', font: { size: 10 } },
+          grid: { color: '#e5e7eb20', lineWidth: 1 },
+          beginAtZero: false,
+          suggestedMin: -1
+        },
+        kw: {
+          position: 'right',
+          display: hasForecast,
+          title: { display: true, text: 'kW', color: fcColor, font: { size: 11 } },
+          ticks: { color: fcColor + '90', font: { size: 10 } },
+          grid: { display: false },
+          beginAtZero: true,
+          suggestedMax: Math.max(...solarFc.filter(v => v != null)) * 1.15 || 10
+        }
+      }
     }
   };
 
-  priceChartInstance = new uPlot(opts, uData, container);
+  // Set canvas container height
+  container.style.height = '380px';
 
-  // Click selection for schedule creation
-  const canvas = container.querySelector('canvas');
-  if (canvas) {
-    canvas.addEventListener('mousedown', (e) => {
-      const idx = priceChartInstance.cursor.idx;
-      if (idx == null || idx < 0 || idx >= data.length) return;
-      e.preventDefault();
-      chartSelectionState.pointerDown = true;
-      chartSelectionState.anchorIndex = idx;
-      chartSelectionState.didDrag = false;
-      chartSelectionState.hoveredIndex = idx;
-      setChartSelection(data, [idx]);
-    });
-    canvas.addEventListener('mousemove', () => {
-      const idx = priceChartInstance.cursor.idx;
-      if (idx == null || idx < 0 || idx >= data.length) return;
-      chartSelectionState.hoveredIndex = idx;
-      if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
-        chartSelectionState.didDrag = chartSelectionState.didDrag || idx !== chartSelectionState.anchorIndex;
-        setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, idx));
-      }
-    });
-    canvas.addEventListener('mouseup', () => {
-      chartSelectionState.pointerDown = false;
-    });
-    canvas.addEventListener('mouseleave', () => {
-      chartSelectionState.pointerDown = false;
-      chartSelectionState.hoveredIndex = null;
-      hideChartTooltip();
-    });
-  }
+  priceChartInstance = new Chart(canvas, config);
 
-  // Resize handler
-  const resizeObserver = new ResizeObserver(() => {
-    if (priceChartInstance && container.clientWidth > 0) {
-      priceChartInstance.setSize({ width: container.clientWidth, height: 300 });
+  // --- Click selection for schedule creation ---
+  canvas.addEventListener('mousedown', (e) => {
+    const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+    if (!elements.length) return;
+    const idx = elements[0].index;
+    if (idx < 0 || idx >= data.length) return;
+    e.preventDefault();
+    chartSelectionState.pointerDown = true;
+    chartSelectionState.anchorIndex = idx;
+    chartSelectionState.didDrag = false;
+    chartSelectionState.hoveredIndex = idx;
+    setChartSelection(data, [idx]);
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+    if (!elements.length) return;
+    const idx = elements[0].index;
+    if (idx < 0 || idx >= data.length) return;
+    chartSelectionState.hoveredIndex = idx;
+    if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
+      chartSelectionState.didDrag = chartSelectionState.didDrag || idx !== chartSelectionState.anchorIndex;
+      setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, idx));
     }
   });
-  resizeObserver.observe(container);
+  canvas.addEventListener('mouseup', () => {
+    chartSelectionState.pointerDown = false;
+  });
+  canvas.addEventListener('mouseleave', () => {
+    chartSelectionState.pointerDown = false;
+    chartSelectionState.hoveredIndex = null;
+  });
 }
 
 function resolveDvControlIndicators(status) {
