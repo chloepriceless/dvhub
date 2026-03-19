@@ -585,7 +585,8 @@ async function checkForUpdate() {
     } else {
       setBanner('updateBanner', 'DVhub ist aktuell — keine Updates verfügbar.', 'success');
       if (data.ahead > 0) {
-        setText('updateMeta', `${setText('updateMeta').textContent} | ${data.ahead} lokale Commits voraus`);
+        const metaEl = document.getElementById('updateMeta');
+        setText('updateMeta', `${metaEl?.textContent || ''} | ${data.ahead} lokale Commits voraus`);
       }
     }
   } catch (error) {
