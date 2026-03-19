@@ -554,20 +554,31 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // Build forecast series with linear interpolation from hourly to 15-min
   let solarFc = timestamps.map(() => null);
   if (forecast && Array.isArray(forecast.solar) && forecast.solar.length > 1) {
-    const fcPoints = forecast.solar
+    // Filter out zero-padding at edges (nighttime zeros that aren't real data)
+    const rawPoints = forecast.solar
       .map(p => ({ ts: Math.floor(new Date(p.ts).getTime() / 1000), kw: p.w / 1000 }))
       .sort((a, b) => a.ts - b.ts);
+    // Trim leading/trailing zeros — keep only the range where kw > 0
+    let firstNonZero = rawPoints.findIndex(p => p.kw > 0);
+    let lastNonZero = rawPoints.length - 1;
+    while (lastNonZero > 0 && rawPoints[lastNonZero].kw <= 0) lastNonZero--;
+    const fcPoints = firstNonZero >= 0 ? rawPoints.slice(firstNonZero, lastNonZero + 1) : [];
     solarFc = timestamps.map(ts => {
+      if (fcPoints.length < 2) return null;
       // Find surrounding forecast points for interpolation
       if (ts < fcPoints[0].ts || ts > fcPoints[fcPoints.length - 1].ts) return null;
       for (let j = 0; j < fcPoints.length - 1; j++) {
         if (ts >= fcPoints[j].ts && ts <= fcPoints[j + 1].ts) {
           const ratio = (ts - fcPoints[j].ts) / (fcPoints[j + 1].ts - fcPoints[j].ts);
-          return fcPoints[j].kw + ratio * (fcPoints[j + 1].kw - fcPoints[j].kw);
+          const val = fcPoints[j].kw + ratio * (fcPoints[j + 1].kw - fcPoints[j].kw);
+          return val > 0 ? val : null;
         }
       }
       // Exact match on last point
-      if (ts === fcPoints[fcPoints.length - 1].ts) return fcPoints[fcPoints.length - 1].kw;
+      if (ts === fcPoints[fcPoints.length - 1].ts) {
+        const v = fcPoints[fcPoints.length - 1].kw;
+        return v > 0 ? v : null;
+      }
       return null;
     });
   }
@@ -589,7 +600,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             if (n < 2) return;
 
             const slotSec = d[0][1] - d[0][0];
-            const barPx = Math.max(1, u.valToPos(d[0][0] + slotSec, 'x') - u.valToPos(d[0][0], 'x') - 2);
+            const rawBarPx = u.valToPos(d[0][0] + slotSec, 'x') - u.valToPos(d[0][0], 'x');
+            const barGap = Math.max(2, Math.round(rawBarPx * 0.12));
+            const barPx = Math.max(1, rawBarPx - barGap);
             const zeroY = u.valToPos(0, 'y');
 
             for (let i = 0; i < n; i++) {
@@ -609,7 +622,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 : isHighPos ? chartPositiveHighlight
                 : (val < 0 ? chartNegative : chartPositive);
               ctx.fillStyle = baseColor;
-              ctx.globalAlpha = isPast ? 0.45 : 1.0;
+              ctx.globalAlpha = isPast ? 0.30 : 1.0;
 
               const barTop = Math.min(yPx, zeroY);
               const barH = Math.abs(yPx - zeroY) || 1;
@@ -694,6 +707,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       stroke: fcColor,
       width: 1.5,
       fill: fcColor + '18',
+      spanGaps: false,
       points: { show: false },
       value: (u, v) => v != null ? v.toFixed(1) + ' kW' : '-'
     }
@@ -767,8 +781,14 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           if (comparison?.importPriceCtKwh != null) ttParts.push(`Bezug: ${Number(comparison.importPriceCtKwh).toFixed(2)} ct/kWh`);
           if (fcKw != null) ttParts.push(`PV Forecast: ${fcKw.toFixed(1)} kW`);
           if (tooltip) {
-            tooltip.style.display = 'block';
             tooltip.textContent = ttParts.join(' | ');
+            tooltip.style.display = 'block';
+            // Position tooltip near cursor using uPlot cursor coords
+            const rect = u.root.getBoundingClientRect();
+            const cx = rect.left + u.cursor.left;
+            const cy = rect.top + u.cursor.top;
+            tooltip.style.left = (cx + 12) + 'px';
+            tooltip.style.top = (cy - 36) + 'px';
           }
         }
       ]
