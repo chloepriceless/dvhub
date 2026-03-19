@@ -548,8 +548,41 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     };
   }
 
+  // Query arbitrary telemetry series (e.g. battery_soc_pct)
+  async function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    if (!keys.length) return [];
+    const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+    const result = await pool.query(`
+      SELECT series_key, ts_utc, resolution_seconds, value_num, unit
+      FROM timeseries_samples
+      WHERE series_key IN (${placeholders})
+        AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
+        AND resolution_seconds <= $${keys.length + 3}
+      ORDER BY ts_utc ASC, resolution_seconds ASC
+    `, [...keys, isoTimestamp(start), isoTimestamp(end), maxResolution]);
+    // Deduplicate: prefer smallest resolution per (key, 15min bucket)
+    const seen = new Map();
+    const rows = [];
+    for (const row of result.rows) {
+      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, 900)}`;
+      if (!seen.has(bucket)) {
+        seen.set(bucket, true);
+        rows.push({
+          key: row.series_key,
+          ts: row.ts_utc,
+          value: Number(row.value_num),
+          unit: row.unit,
+          resolution: row.resolution_seconds
+        });
+      }
+    }
+    return rows;
+  }
+
   return {
     dbPath: 'postgresql',
+    querySeries,
     async listTables() {
       const result = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);
       return result.rows.map((row) => row.name);

@@ -8,6 +8,7 @@ const SERIES_DEFS = [
   { id: 'batteryKw',  label: 'Batterie',         color: '#67a5ff', unit: 'kW',    axis: 'kw',  key: 'batteryKwh',  toKw: true },
   { id: 'exportKw',   label: 'Einspeisung',      color: '#39E06F', unit: 'kW',    axis: 'kw',  key: 'exportKwh',   toKw: true },
   { id: 'importKw',   label: 'Netzbezug',        color: '#ff6b6b', unit: 'kW',    axis: 'kw',  key: 'importKwh',   toKw: true, hidden: true },
+  { id: 'soc',        label: 'Batterie SOC',        color: '#67a5ff', unit: '%',     axis: 'pct', key: '_soc',         toKw: false, dash: [4, 2] },
   { id: 'autarkie',   label: 'Autarkie',           color: '#A8F000', unit: '%',     axis: 'pct', key: '_autarkie',    toKw: false },
   { id: 'pvFc',       label: 'PV Forecast',       color: '#f59e0b', unit: 'kW',    axis: 'kw',  key: '_pvFc',       toKw: false, dash: [6, 3] },
   { id: 'consFc',     label: 'Lastvorhersage',    color: '#bfc7d2', unit: 'kW',    axis: 'kw',  key: '_consFc',     toKw: false, dash: [4, 3], hidden: true },
@@ -83,21 +84,25 @@ async function fetchExplorerData() {
     dayResults.sort((a, b) => a.date.localeCompare(b.date));
     for (const dr of dayResults) allSlots.push(...dr.slots);
 
-    // Fetch forecast + EPEX prices
-    const [fcData, statusData] = await Promise.all([
+    // Fetch forecast + EPEX prices + SOC telemetry
+    const startIso = new Date(startDate).toISOString();
+    const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
+    const [fcData, statusData, socData] = await Promise.all([
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
-      apiFetch('/api/status').then(r => r.json()).catch(() => null)
+      apiFetch('/api/status').then(r => r.json()).catch(() => null),
+      apiFetch(`/api/telemetry/series?keys=battery_soc_pct&start=${startIso}&end=${endIso}`).then(r => r.json()).catch(() => null)
     ]);
 
     explorerData.rawSlots = allSlots;
     explorerData.rawFc = fcData;
     explorerData.rawEpex = statusData?.epex?.data || [];
+    explorerData.rawSoc = socData?.data || [];
 
     // Aggregate if needed
     const slots = aggregateSlots(allSlots, agg);
 
     // Build chart data
-    buildChartData(slots, fcData, statusData?.epex?.data || [], agg);
+    buildChartData(slots, fcData, statusData?.epex?.data || [], agg, explorerData.rawSoc);
     renderChart();
     setStatus(`${allSlots.length} Slots geladen (${startDate} bis ${endDate}).`);
   } catch (e) {
@@ -137,7 +142,7 @@ function aggregateSlots(slots, agg) {
   return result;
 }
 
-function buildChartData(slots, fcData, epexData, agg) {
+function buildChartData(slots, fcData, epexData, agg, socSamples = []) {
   const slotMinutes = agg === '15min' ? 15 : agg === '1h' ? 60 : 1440;
   const kwFactor = 60 / slotMinutes; // kWh → kW conversion
 
@@ -148,9 +153,10 @@ function buildChartData(slots, fcData, epexData, agg) {
     return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   });
 
-  // Build sorted arrays for forecast + EPEX for interpolation
+  // Build sorted arrays for forecast + EPEX + SOC for interpolation
   const fcSolarArr = (fcData?.solar || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
   const fcConsArr = (fcData?.consumption || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
+  const socArr = (socSamples || []).map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.value) })).filter(p => Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
   const epexMap = new Map();
   if (epexData) epexData.forEach(p => epexMap.set(Number(p.ts), Number(p.ct_kwh)));
 
@@ -187,6 +193,7 @@ function buildChartData(slots, fcData, epexData, agg) {
         const exp = Number(s.exportKwh || 0);
         return (imp - exp) * kwFactor;
       }
+      if (def.key === '_soc') return interpol(socArr, ts);
       if (def.key === '_pvFc') return interpol(fcSolarArr, ts);
       if (def.key === '_consFc') return interpol(fcConsArr, ts);
       if (def.key === '_marketCt') {

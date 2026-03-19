@@ -912,8 +912,41 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     };
   }
 
+  // Query arbitrary telemetry series (e.g. battery_soc_pct) with rollup preference
+  function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    if (!keys.length) return [];
+    const placeholders = keys.map(() => '?').join(', ');
+    const rows = db.prepare(`
+      SELECT series_key, ts_utc, resolution_seconds, value_num, unit
+      FROM timeseries_samples
+      WHERE series_key IN (${placeholders})
+        AND ts_utc >= ? AND ts_utc < ?
+        AND resolution_seconds <= ?
+      ORDER BY ts_utc ASC, resolution_seconds DESC
+    `).all(...keys, isoTimestamp(start), isoTimestamp(end), maxResolution);
+    // Deduplicate: prefer higher resolution for each (series_key, ts bucket)
+    const seen = new Map();
+    const result = [];
+    for (const row of rows) {
+      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, Math.min(row.resolution_seconds, 900))}`;
+      if (!seen.has(bucket)) {
+        seen.set(bucket, true);
+        result.push({
+          key: row.series_key,
+          ts: row.ts_utc,
+          value: row.value_num,
+          unit: row.unit,
+          resolution: row.resolution_seconds
+        });
+      }
+    }
+    return result;
+  }
+
   return {
     dbPath,
+    querySeries,
     listTables() {
       return db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((row) => row.name);
     },
