@@ -1,6 +1,8 @@
 const common = window.DVhubCommon || {};
 const { apiFetch } = common;
 
+const historyChartInstances = {};
+
 const historyState = {
   loading: false,
   backfillBusy: false,
@@ -700,6 +702,23 @@ function bindBarChartPointer(mount, mountId, items, rerender) {
   });
 }
 
+// CSS class → color mapping for Chart.js series
+const seriesColorMap = {
+  'history-series-cost': '#00A8FF',
+  'history-series-import': '#00A8FF',
+  'history-series-market': '#00A8FF',
+  'history-series-user': '#00A8FF',
+  'history-series-revenue': '#39E06F',
+  'history-series-export': '#39E06F',
+  'history-series-net': '#A8F000',
+  'history-series-load': 'rgba(191,199,210,0.92)',
+  'history-series-load-gray': 'rgba(191,199,210,0.92)',
+  'history-series-pv': '#f5c451',
+  'history-series-pv-ac': '#ff9f43',
+  'history-series-import-red': '#ff6b6b',
+  'history-series-battery': '#67a5ff'
+};
+
 function renderLineChart(mountId, items, series, formatter, unitLabel, options = {}) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -707,74 +726,77 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
     mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
     return;
   }
+  if (typeof Chart === 'undefined') return; // fallback: skip if Chart.js not loaded
 
-  const width = Number(options.width || 420);
-  const height = Number(options.height || 180);
-  const marginLeft = 44;
-  const marginRight = 12;
-  const marginTop = 12;
-  const marginBottom = 28;
-  const innerWidth = width - marginLeft - marginRight;
-  const innerHeight = height - marginTop - marginBottom;
-  const values = series.flatMap((entry) => items.map((item) => Number(item?.[entry.key])))
-    .filter((value) => Number.isFinite(value));
-  const min = Number.isFinite(options.min) ? Number(options.min) : Math.min(0, ...(values.length ? values : [0]));
-  const max = Math.max(...(values.length ? values : [1]), 1);
-  const ticks = axisTickMeta(min, max, Number(options.tickCount || 4), formatter);
-  const xTicks = xAxisTickMeta(items, Number(options.maxLabels || 6));
-  const interactive = options.interactive !== false;
-  const selectedIndex = selectedChartIndex(mountId, items);
-  const selectedItem = items[selectedIndex] || items[0];
-  const cursorX = items.length === 1
-    ? marginLeft + (innerWidth / 2)
-    : marginLeft + ((selectedIndex / Math.max(items.length - 1, 1)) * innerWidth);
+  // Destroy previous chart
+  if (historyChartInstances[mountId]) { historyChartInstances[mountId].destroy(); delete historyChartInstances[mountId]; }
 
-  mount.innerHTML = `
-    <div class="history-line-chart">
-      <div class="history-chart-legend">
-        ${series.map((entry) => `<span><i class="history-legend-swatch ${entry.className}"></i>${escapeHtml(entry.label)}</span>`).join('')}
-      </div>
-      <div class="history-axis-caption">${escapeHtml(unitLabel)}</div>
-      <div class="history-chart-interaction">
-        <svg viewBox="0 0 ${width} ${height}" class="history-line-svg${options.detail ? ' history-line-svg-detail' : ''}" aria-hidden="true">
-          <g class="history-axis-y">
-        ${ticks.map((tick) => {
-          const y = marginTop + (tick.ratio * innerHeight);
-          return `
-            <path class="history-grid-line" d="M${marginLeft},${y.toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${y.toFixed(2)}" />
-            <text class="history-axis-label" x="0" y="${(y + 4).toFixed(2)}">${escapeHtml(tick.label)}</text>
-          `;
-        }).join('')}
-          </g>
-          <g class="history-axis-x">
-            <path class="history-axis-baseline" d="M${marginLeft},${(marginTop + innerHeight).toFixed(2)} L${(marginLeft + innerWidth).toFixed(2)},${(marginTop + innerHeight).toFixed(2)}" />
-            ${xTicks.map((tick) => {
-              const x = items.length === 1 ? marginLeft + (innerWidth / 2) : marginLeft + ((tick.index / Math.max(items.length - 1, 1)) * innerWidth);
-              return `<text class="history-axis-label history-x-axis-label" x="${x.toFixed(2)}" y="${(height - 6).toFixed(2)}">${escapeHtml(tick.label)}</text>`;
-            }).join('')}
-          </g>
-        ${series.map((entry) => {
-          const points = items.map((item) => Number(item?.[entry.key]));
-          return `<path class="history-series-line ${entry.className}" d="${linePathWithOffset(points, innerWidth, innerHeight, min, max, marginLeft, marginTop)}" />`;
-        }).join('')}
-        ${interactive ? `<path class="history-cursor-line" d="M${cursorX.toFixed(2)},${marginTop} L${cursorX.toFixed(2)},${(marginTop + innerHeight).toFixed(2)}" />` : ''}
-        </svg>
-        ${interactive ? `<div class="history-chart-hover-surface" data-history-mount="${escapeHtml(mountId)}" aria-hidden="true"></div>` : ''}
-      </div>
-      ${interactive ? `
-        <div class="history-chart-inspector">
-          <strong>${escapeHtml(selectedItem?.label || '-')}</strong>
-          ${series.map((entry) => `<span>${escapeHtml(entry.label)} ${entry.formatter ? entry.formatter(selectedItem?.[entry.key]) : formatter(selectedItem?.[entry.key])}</span>`).join('')}
-          ${typeof options.inspectorExtras === 'function' ? options.inspectorExtras(selectedItem) : ''}
-          ${typeof options.badgeRenderer === 'function' ? options.badgeRenderer(selectedItem) : ''}
-        </div>
-      ` : ''}
-    </div>
-  `;
+  const chartHeight = Number(options.height || 220);
+  const labels = items.map(item => compactAxisLabel(item?.label || '-'));
+  const datasets = series.map(entry => ({
+    label: entry.label,
+    data: items.map(item => Number(item?.[entry.key]) || 0),
+    borderColor: seriesColorMap[entry.className] || '#9ca3af',
+    backgroundColor: (seriesColorMap[entry.className] || '#9ca3af') + '18',
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    fill: false,
+    tension: 0.3
+  }));
 
-  if (interactive) {
-    bindLineChartPointer(mount, mountId, items, () => renderLineChart(mountId, items, series, formatter, unitLabel, options));
-  }
+  mount.innerHTML = `<div style="position:relative;height:${chartHeight}px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  const canvas = document.getElementById(mountId + 'Canvas');
+  if (!canvas) return;
+
+  historyChartInstances[mountId] = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { color: '#9ca3af', font: { size: 10 }, usePointStyle: true, padding: 10 }
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#1a1a2eee',
+          titleColor: '#e5e7eb',
+          bodyColor: '#e5e7eb',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 8,
+          displayColors: true,
+          callbacks: {
+            label: (ctx) => {
+              const entry = series[ctx.datasetIndex];
+              const val = ctx.raw;
+              const fmt = entry?.formatter || formatter;
+              return `${ctx.dataset.label}: ${fmt(val)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+          grid: { color: '#e5e7eb20' }
+        },
+        y: {
+          title: { display: true, text: unitLabel, color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => formatter(v) },
+          grid: { color: '#e5e7eb20' },
+          beginAtZero: options.min === 0,
+          min: Number.isFinite(options.min) ? options.min : undefined
+        }
+      }
+    }
+  });
 }
 
 function renderDetailedDayChart(mountId, items) {
@@ -1041,7 +1063,7 @@ function renderCharts(summary) {
       { key: 'marketPriceCtKwh', label: 'Marktpreis', className: 'history-series-market' },
       { key: 'userImportPriceCtKwh', label: 'Bezugspreis', className: 'history-series-user' }
     ], fmtCt, 'ct/kWh');
-    renderPriceList('historyPriceList', dayPriceLines);
+    setHtml('historyPriceList', '');
     setHtml('historyAggregatePriceHint', '');
     setHtml('historySolarSummary', '');
     return;
