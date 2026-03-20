@@ -447,6 +447,65 @@ function buildFieldDefinitions() {
     },
 
     {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'DC-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Nur f\u00fcr DC-gekoppelte PV (MPPT auf DC-Seite). Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte DC-PV-Leistung einspeist.',
+      path: 'dcExportMode.enabled',
+      label: 'DC-Export-Modus aktivieren',
+      type: 'boolean',
+      help: 'Wenn aktiv, wird der Grid Setpoint dynamisch auf -(DC-PV-Leistung) gesetzt, sodass der Multi/Quattro die komplette DC-PV-Produktion ins Netz einspeist. Netto-Batteriestrom bleibt bei ca. 0A. Nur sinnvoll wenn ein MPPT RS oder SmartSolar DC-gekoppelt am Batteriebus h\u00e4ngt.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'DC-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Nur f\u00fcr DC-gekoppelte PV (MPPT auf DC-Seite). Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte DC-PV-Leistung einspeist.',
+      path: 'dcExportMode.bufferW',
+      label: 'Puffer (W)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      help: 'Kleiner Sicherheitspuffer in Watt (Standard: 100W). Verhindert kurzzeitiges Pendeln zwischen Laden/Entladen bei schwankender PV-Leistung.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'DC-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Nur f\u00fcr DC-gekoppelte PV (MPPT auf DC-Seite). Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte DC-PV-Leistung einspeist.',
+      path: 'dcExportMode.priceThresholdCtKwh',
+      label: 'Preisschwelle (ct/kWh)',
+      type: 'number',
+      min: -20,
+      max: 50,
+      help: 'Wenn der aktuelle B\u00f6rsenpreis \u00fcber diesem Wert liegt, wird DC-PV eingespeist statt geladen. Unter dem Schwellwert wird normal geladen (g\u00fcnstige Stunden nutzen). Leer lassen f\u00fcr rein manuellen/zeitgesteuerten Betrieb.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'DC-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Nur f\u00fcr DC-gekoppelte PV (MPPT auf DC-Seite). Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte DC-PV-Leistung einspeist.',
+      path: 'dcExportMode.targetSocPct',
+      label: 'Ziel-SOC f\u00fcr Abend (%)',
+      type: 'number',
+      min: 20,
+      max: 100,
+      help: 'Der Akku muss diesen SOC bis zur Deadline erreicht haben. Wird der Wert nicht erreicht, wird DC-Export 2 Stunden vor der Deadline automatisch deaktiviert um den Akku noch laden zu lassen. Standard: 90%.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'DC-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Nur f\u00fcr DC-gekoppelte PV (MPPT auf DC-Seite). Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte DC-PV-Leistung einspeist.',
+      path: 'dcExportMode.chargeDeadlineHour',
+      label: 'Lade-Deadline (Uhrzeit)',
+      type: 'number',
+      min: 10,
+      max: 22,
+      help: 'Bis zu dieser Uhrzeit muss der Akku den Ziel-SOC erreicht haben (f\u00fcr Abend-Einspeisung). 2 Stunden vorher wird DC-Export ggf. deaktiviert. Standard: 17 Uhr.'
+    },
+
+    {
       section: 'telemetry',
 
       group: 'database',
@@ -1301,6 +1360,13 @@ export function createDefaultConfig() {
     monitoring: {
       pushUrl: '',
       pushIntervalSec: 240
+    },
+    dcExportMode: {
+      enabled: false,
+      bufferW: 100,
+      priceThresholdCtKwh: null,
+      targetSocPct: 90,
+      chargeDeadlineHour: 17
     },
     victron: {
       transport: 'modbus',
