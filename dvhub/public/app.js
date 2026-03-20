@@ -796,37 +796,36 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           }
         },
         tooltip: {
-          enabled: true,
-          backgroundColor: '#1a1a2eee',
-          titleColor: '#e5e7eb',
-          bodyColor: '#e5e7eb',
-          borderColor: '#334155',
-          borderWidth: 1,
-          padding: 10,
-          displayColors: false,
-          callbacks: {
-            title: (items) => {
-              if (!items.length) return '';
-              const d = items[0].label;
-              return new Date(d).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-            },
-            label: (item) => {
-              if (item.dataset.label === 'Börsenpreis') return `Börse: ${Number(item.raw).toFixed(2)} ct/kWh`;
-              if (item.dataset.label === 'Bezugspreis') return item.raw != null ? `Bezug: ${Number(item.raw).toFixed(2)} ct/kWh` : null;
-              if (item.dataset.label.includes('Forecast')) return item.raw != null ? `PV Forecast: ${Number(item.raw).toFixed(1)} kW` : null;
-              return null;
-            },
-            afterBody: (items) => {
-              if (!items.length) return '';
-              const idx = items[0].dataIndex;
-              const row = data[idx];
-              const comp = comparisonByTs.get(Number(row.ts));
-              if (!comp) return '';
-              const parts = [];
+          enabled: false,
+          external: (context) => {
+            const tt = document.getElementById('tooltip');
+            if (!tt) return;
+            const { tooltip: tip } = context;
+            if (tip.opacity === 0) { tt.style.display = 'none'; return; }
+            const idx = tip.dataPoints?.[0]?.dataIndex;
+            if (idx == null) { tt.style.display = 'none'; return; }
+            const row = data[idx];
+            if (!row) { tt.style.display = 'none'; return; }
+            const parts = [fmtDmHm(row.ts)];
+            parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
+            const comp = comparisonByTs.get(Number(row.ts));
+            if (comp) {
+              if (comp.importPriceCtKwh != null) parts.push(`Bezug: ${fmtCt(comp.importPriceCtKwh, 2)}`);
               if (comp.pvMarginCtKwh != null) parts.push(`PV Marge: ${fmtSignedCt(comp.pvMarginCtKwh)}`);
               if (comp.batteryMarginCtKwh != null) parts.push(`Akku: ${fmtSignedCt(comp.batteryMarginCtKwh)}`);
-              return parts.join('\n');
             }
+            for (const dp of (tip.dataPoints || [])) {
+              if (dp.dataset?.label?.includes('Forecast') && dp.raw != null) {
+                parts.push(`PV Fc: ${Number(dp.raw).toFixed(1)} kW`);
+              }
+            }
+            tt.innerHTML = parts.join(' <span style="opacity:0.4">|</span> ');
+            tt.style.display = 'block';
+            const rect = context.chart.canvas.getBoundingClientRect();
+            const x = rect.left + tip.caretX + 14;
+            const y = rect.top + tip.caretY - 10;
+            tt.style.left = Math.min(x, window.innerWidth - tt.offsetWidth - 8) + 'px';
+            tt.style.top = Math.max(4, y) + 'px';
           }
         },
         annotation: {
@@ -948,6 +947,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   priceChartInstance = new Chart(canvas, config);
 
   // --- Click selection for schedule creation ---
+  canvas.addEventListener('mouseleave', () => {
+    const tt = document.getElementById('tooltip');
+    if (tt) tt.style.display = 'none';
+  });
   canvas.addEventListener('mousedown', (e) => {
     if (e.shiftKey) return; // Shift+drag = pan (let zoom plugin handle it)
     const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
