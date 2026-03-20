@@ -1363,6 +1363,18 @@ function collectScheduleRulesFromRowState(rows) {
       rules.push(chargeRule);
     }
 
+    // DC Export Mode rule
+    if (row?.dcExportEnabled) {
+      rules.push({
+        id: `dcexport_${idx}`,
+        enabled: rowEnabled,
+        target: 'dcExportMode',
+        start,
+        end,
+        value: 1
+      });
+    }
+
     idx++;
   }
 
@@ -1383,6 +1395,7 @@ function groupScheduleRulesForDashboard(rules) {
         grid: null,
         charge: null,
         stopSocPct: null,
+        dcExport: false,
         enabled: rule.enabled !== false
       });
     }
@@ -1393,6 +1406,7 @@ function groupScheduleRulesForDashboard(rules) {
       slot.stopSocPct = Number.isFinite(stopSocPct) ? stopSocPct : null;
     }
     if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
+    if (rule.target === 'dcExportMode') slot.dcExport = true;
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
     if (!slot.source && rule.source) slot.source = rule.source;
@@ -1437,6 +1451,7 @@ function addScheduleRow(opts = {}) {
     start = '06:45', end = '07:15',
     gridVal = -40, chargeVal = '', stopSocVal = '',
     gridEnabled = true, chargeEnabled = false, stopSocEnabled = false,
+    dcExportEnabled = false,
     rowEnabled = true,
     ruleId = '',
     source = '',
@@ -1466,6 +1481,7 @@ function addScheduleRow(opts = {}) {
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="1" ${disabled} /></label></td>
+    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="DC-PV einspeisen statt laden" /></td>
     <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
   if (!isAutomation) {
@@ -1513,6 +1529,7 @@ function collectScheduleRows() {
       chargeVal: tr.querySelector('.sched-charge-val')?.value,
       stopSocEnabled: tr.querySelector('.sched-stop-soc-en')?.checked,
       stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value,
+      dcExportEnabled: tr.querySelector('.sched-dc-export')?.checked ?? false,
       source: tr.dataset.ruleSource || '',
       displayTone: tr.dataset.displayTone || '',
       autoManaged: tr.dataset.autoManaged === 'true',
@@ -1543,6 +1560,7 @@ async function loadScheduleDash() {
         gridEnabled: slot.grid != null,
         chargeEnabled: slot.charge != null,
         stopSocEnabled: slot.stopSocPct != null,
+        dcExportEnabled: slot.dcExport === true,
         rowEnabled: slot.enabled,
         ruleId: slot.ruleId,
         source: slot.source,
@@ -1597,7 +1615,9 @@ async function saveScheduleDash() {
 
   const gridCount = rules.filter((r) => r.target === 'gridSetpointW').length;
   const chargeCount = rules.filter((r) => r.target === 'chargeCurrentA').length;
-  setControlMsg(`Gespeichert: ${gridCount} Grid + ${chargeCount} Charge Regeln`);
+  const dcExportCount = rules.filter((r) => r.target === 'dcExportMode').length;
+  const dcPart = dcExportCount ? ` + ${dcExportCount} DC-Export` : '';
+  setControlMsg(`Gespeichert: ${gridCount} Grid + ${chargeCount} Charge${dcPart} Regeln`);
   await loadScheduleDash();
 }
 
