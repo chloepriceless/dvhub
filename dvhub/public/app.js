@@ -470,26 +470,7 @@ function updateChartComparisonSummary(pricing) {
   ].filter(Boolean).join(' | ');
 }
 
-function showChartTooltip(tooltip, row, event, comparison) {
-  if (!tooltip || !row || !event) return;
-  tooltip.style.display = 'block';
-  const parts = [`${fmtDmHm(row.ts)} | Börse ${fmtCt(row.ct_kwh, 2)}`];
-  if (comparison) {
-    parts.push(`Bezug ${fmtCt(comparison.importPriceCtKwh, 2)}`);
-    parts.push(`PV ${fmtSignedCt(comparison.pvMarginCtKwh, 2)}`);
-    parts.push(`Akku ${fmtSignedCt(comparison.batteryMarginCtKwh, 2)}`);
-    parts.push(`Gemischt ${fmtSignedCt(comparison.mixedMarginCtKwh, 2)}`);
-  }
-  tooltip.textContent = parts.join(' | ');
-  tooltip.style.left = `${event.clientX + 12}px`;
-  tooltip.style.top = `${event.clientY + 12}px`;
-}
-
-function hideChartTooltip() {
-  if (typeof document === 'undefined') return;
-  const tooltip = document.getElementById('tooltip');
-  if (tooltip) tooltip.style.display = 'none';
-}
+// (tooltip functions removed - using external Chart.js tooltip)
 
 function appendScheduleRowsFromChartSelection(data, indices) {
   const windows = buildScheduleWindowsFromSelection(data, indices);
@@ -1631,7 +1612,7 @@ function handleGlobalChartMouseUp() {
 
   if (shouldCreateSingleSlot) {
     createScheduleRowsFromChartSelection(selectedIndices);
-    hideChartTooltip();
+    const _tt = document.getElementById('tooltip'); if (_tt) _tt.style.display = 'none';
     return;
   }
 
