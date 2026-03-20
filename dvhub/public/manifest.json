@@ -1,0 +1,22 @@
+{
+  "name": "DVhub Leitstand",
+  "short_name": "DVhub",
+  "description": "Energiemanagement und Steuerung",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0f1a",
+  "theme_color": "#0077ff",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/logo-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/logo-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
