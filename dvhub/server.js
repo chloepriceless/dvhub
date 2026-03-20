@@ -48,6 +48,7 @@ import {
   pickMultiBlockPlan,
   SLOT_DURATION_HOURS
 } from './small-market-automation.js';
+import { pickMilpPlan } from './milp-optimizer.js';
 import {
   buildSunTimesCacheKey,
   isSunTimesCacheStale,
@@ -250,6 +251,7 @@ function buildDefaultAutomationChain(automationConfig = {}) {
     }];
   return buildAutomationRuleChain({
     maxDischargeW: automationConfig?.maxDischargeW,
+    engine: automationConfig?.engine || 'greedy',
     stages
   });
 }
@@ -266,7 +268,7 @@ function formatLocalHHMM(date, timeZone) {
   return `${hours}:${minutes}`;
 }
 
-function buildSmallMarketAutomationRules({
+async function buildSmallMarketAutomationRules({
   now = Date.now(),
   automationConfig = cfg.schedule?.smallMarketAutomation,
   priceSlots = state.epex?.data,
@@ -366,26 +368,52 @@ function buildSmallMarketAutomationRules({
     if (fallback.length) chainVariants.push(fallback);
   }
 
-  // Run BOTH optimizers and pick the one with higher revenue
-  const singleBlockPlan = pickBestAutomationPlan({
-    slots: freeSlots,
-    chainOptions: chainVariants,
-    slotDurationMs: SLOT_DURATION_MS
-  });
+  // --- Engine selection: greedy (legacy) vs MILP (optimal) ---
+  const engine = automationConfig?.engine || 'greedy';
+  let plan;
 
-  const multiBlockPlan = pickMultiBlockPlan({
-    slots: freeSlots,
-    stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
-    maxDischargeW: automationConfig?.maxDischargeW,
-    availableKwh: availableEnergyKwh,
-    slotDurationMs: SLOT_DURATION_MS,
-    slotDurationH: SLOT_DURATION_HOURS
-  });
+  if (engine === 'milp') {
+    // MILP: mathematisch optimale Block-Platzierung via HiGHS
+    try {
+      plan = await pickMilpPlan({
+        slots: freeSlots,
+        stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
+        maxDischargeW: automationConfig?.maxDischargeW,
+        availableKwh: availableEnergyKwh,
+        slotDurationMs: SLOT_DURATION_MS,
+        slotDurationH: SLOT_DURATION_HOURS
+      });
+      if (plan.totalRevenueCt <= 0 || !plan.selectedSlotTimestamps.length) {
+        plan = null; // Fallback to greedy
+      }
+    } catch (e) {
+      pushLog('milp_error', { error: e.message });
+      plan = null;
+    }
+  }
 
-  // Pick the plan with higher total revenue
-  const plan = (multiBlockPlan.totalRevenueCt > singleBlockPlan.totalRevenueCt)
-    ? multiBlockPlan
-    : singleBlockPlan;
+  if (!plan) {
+    // Greedy: Legacy-Algorithmus (auch als Fallback wenn MILP fehlschlaegt)
+    const singleBlockPlan = pickBestAutomationPlan({
+      slots: freeSlots,
+      chainOptions: chainVariants,
+      slotDurationMs: SLOT_DURATION_MS
+    });
+
+    const multiBlockPlan = pickMultiBlockPlan({
+      slots: freeSlots,
+      stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
+      maxDischargeW: automationConfig?.maxDischargeW,
+      availableKwh: availableEnergyKwh,
+      slotDurationMs: SLOT_DURATION_MS,
+      slotDurationH: SLOT_DURATION_HOURS
+    });
+
+    plan = (multiBlockPlan.totalRevenueCt > singleBlockPlan.totalRevenueCt)
+      ? multiBlockPlan
+      : singleBlockPlan;
+    plan.engine = 'greedy';
+  }
 
   const expandedBestChain = expandChainSlots(plan.chain);
 
@@ -411,7 +439,7 @@ function buildSmallMarketAutomationRules({
   }).filter(Boolean);
 }
 
-function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
+async function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const automationConfig = cfg.schedule?.smallMarketAutomation;
   const runDate = berlinDateString(new Date(now));
   const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
@@ -522,7 +550,7 @@ function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
     return;
   }
 
-  const generatedRules = buildSmallMarketAutomationRules(planInput);
+  const generatedRules = await buildSmallMarketAutomationRules(planInput);
 
   // Build transparent plan summary for the UI
   const selectedSlotTimestamps = generatedRules
@@ -2000,7 +2028,7 @@ async function applyControlTarget(target, value, source) {
 async function evaluateSchedule() {
   const now = Date.now();
   const nowMin = localMinutesOfDay(new Date(now));
-  regenerateSmallMarketAutomationRules({ now });
+  await regenerateSmallMarketAutomationRules({ now });
   state.schedule.lastEvalAt = now;
 
   const stopSocDisable = autoDisableStopSocScheduleRules({
@@ -3030,7 +3058,7 @@ const web = http.createServer(async (req, res) => {
       ...filteredBody
     };
     saveAndApplyConfig(current);
-    regenerateSmallMarketAutomationRules();
+    regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
 
     return json(res, 200, { ok: true, config: cfg.schedule.smallMarketAutomation });
   }

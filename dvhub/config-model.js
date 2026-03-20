@@ -714,6 +714,20 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smallMarketAutomation',
+      groupLabel: 'Kleine B\u00f6rsenautomatik',
+      groupDescription: 'Automatische Entladeplanung basierend auf B\u00f6rsenpreisen.',
+      path: 'schedule.smallMarketAutomation.engine',
+      label: 'Optimierungs-Engine',
+      type: 'select',
+      options: [
+        { value: 'greedy', label: 'Greedy (Legacy) \u2014 schnell, lokales Optimum' },
+        { value: 'milp', label: 'MILP (HiGHS) \u2014 mathematisch optimal, global' }
+      ],
+      help: 'Greedy platziert Bl\u00f6cke einzeln am jeweils besten Slot (schnell, aber findet nicht immer das globale Optimum). MILP nutzt den HiGHS-Solver und findet mathematisch bewiesen die beste Kombination aller Bl\u00f6cke.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.enabled',
@@ -1416,6 +1430,7 @@ export function createDefaultConfig() {
       defaultChargeCurrentA: null,
       rules: [],
       smallMarketAutomation: {
+      engine: 'greedy',
         enabled: false,
         searchWindowStart: '14:00',
         searchWindowEnd: '09:00',
