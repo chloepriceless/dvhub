@@ -591,6 +591,8 @@ function applyLoadedConfig(nextLoadedConfig) {
   state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
+  // Hot-reload monitoring heartbeat if function exists
+  if (typeof startMonitoringHeartbeat === 'function') startMonitoringHeartbeat();
 }
 
 function saveAndApplyConfig(nextRawConfig) {
@@ -3105,21 +3107,24 @@ if (IS_RUNTIME_PROCESS) {
   setTimeout(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_init_error', { error: e.message })), 10000);
   setInterval(() => fetchVrmForecast().catch(e => pushLog('vrm_forecast_error', { error: e.message })), 2 * 60 * 60 * 1000);
 
-  // Remote monitoring heartbeat (configurable push URL)
-  const monitoringPushUrl = cfg.monitoring?.pushUrl || '';
-  const monitoringIntervalMs = (Number(cfg.monitoring?.pushIntervalSec) || 240) * 1000;
-  if (monitoringPushUrl) {
+  // Remote monitoring heartbeat (hot-reloadable)
+  let monitoringTimerId = null;
+  function startMonitoringHeartbeat() {
+    if (monitoringTimerId) { clearInterval(monitoringTimerId); monitoringTimerId = null; }
+    const pushUrl = cfg.monitoring?.pushUrl || '';
+    const intervalMs = (Number(cfg.monitoring?.pushIntervalSec) || 240) * 1000;
+    if (!pushUrl) return;
     const sendHeartbeat = async (msg) => {
       try {
-        const sep = monitoringPushUrl.includes('?') ? '&' : '?';
-        const fullUrl = monitoringPushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=';
-        await fetch(fullUrl, { signal: AbortSignal.timeout(10000) });
-      } catch (e) { /* silent - monitoring is optional */ }
+        const sep = pushUrl.includes('?') ? '&' : '?';
+        await fetch(pushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=', { signal: AbortSignal.timeout(10000) });
+      } catch (e) { /* silent */ }
     };
-    setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%'), monitoringIntervalMs);
-    setTimeout(() => sendHeartbeat('DVhub started'), 30000);
-    console.log('  Monitoring heartbeat -> ' + monitoringPushUrl.substring(0, 60) + '...');
+    monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%'), intervalMs);
+    setTimeout(() => sendHeartbeat('DVhub started'), 5000);
+    console.log('  Monitoring heartbeat -> ' + pushUrl.substring(0, 60) + '...');
   }
+  startMonitoringHeartbeat();
 }
 
 function gracefulShutdown(signal) {

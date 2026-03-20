@@ -1862,6 +1862,27 @@ function initDashboard() {
   document.getElementById('minSocSlider')?.addEventListener('input', (event) => {
     syncMinSocEditorPreview(event?.target?.value);
   });
+
+  // --- Dedicated "Defaults speichern" button ---
+  document.getElementById('saveDefaultsBtn')?.addEventListener('click', async () => {
+    const configBody = {};
+    const defGridVal = Number(document.getElementById('defaultGridSetpointInput')?.value);
+    if (Number.isFinite(defGridVal)) configBody.defaultGridSetpointW = defGridVal;
+    const defChargeVal = Number(document.getElementById('defaultChargeCurrentInput')?.value);
+    if (Number.isFinite(defChargeVal)) configBody.defaultChargeCurrentA = defChargeVal;
+    if (!Object.keys(configBody).length) { setControlMsg('Keine Werte zum Speichern.'); return; }
+    try {
+      const r = await apiFetch('/api/schedule/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(configBody)
+      });
+      const out = await r.json();
+      if (!r.ok || !out.ok) { setControlMsg(`Fehler: ${out.error || r.status}`, true); return; }
+      setControlMsg(`Defaults gespeichert: Grid ${defGridVal}W, Charge ${defChargeVal}A`);
+      await loadScheduleDash();
+    } catch (e) { setControlMsg(`Fehler: ${e.message}`, true); }
+  });
   document.getElementById('minSocSubmitBtn')?.addEventListener('click', handleMinSocSubmit);
   document.getElementById('createSelectionScheduleBtn')?.addEventListener('click', () => {
     createScheduleRowsFromChartSelection();
