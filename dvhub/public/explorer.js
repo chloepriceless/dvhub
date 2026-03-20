@@ -129,15 +129,21 @@ function aggregateSlots(slots, agg) {
 
   const result = [];
   for (const [key, group] of buckets) {
-    const agg = { ts: key };
+    const bucket = { ts: key };
     const numKeys = ['pvKwh', 'loadKwh', 'importKwh', 'exportKwh', 'batteryKwh', 'batteryChargeKwh', 'batteryDischargeKwh', 'selfConsumptionKwh'];
     for (const k of numKeys) {
-      agg[k] = group.reduce((sum, s) => sum + (Number(s[k]) || 0), 0);
+      bucket[k] = group.reduce((sum, s) => sum + (Number(s[k]) || 0), 0);
     }
     // SOC: take last value
     const lastWithSoc = [...group].reverse().find(s => s.soc != null);
-    if (lastWithSoc) agg.soc = lastWithSoc.soc;
-    result.push(agg);
+    if (lastWithSoc) bucket.soc = lastWithSoc.soc;
+    // Market price: average
+    const prices = group.map(s => Number(s.marketPriceCtKwh)).filter(v => Number.isFinite(v));
+    if (prices.length) bucket.marketPriceCtKwh = prices.reduce((a, b) => a + b, 0) / prices.length;
+    // User import price: average
+    const uPrices = group.map(s => Number(s.userImportPriceCtKwh)).filter(v => Number.isFinite(v));
+    if (uPrices.length) bucket.userImportPriceCtKwh = uPrices.reduce((a, b) => a + b, 0) / uPrices.length;
+    result.push(bucket);
   }
   return result;
 }
@@ -365,7 +371,7 @@ function exportCsv() {
   const rows = explorerData.labels.map((label, i) => {
     return [label, ...activeDefs.map(d => {
       const v = explorerData.seriesData[d.id][i];
-      return v != null ? Number(v).toFixed(3) : '';
+      return v != null ? Number(v).toFixed(3).replace('.', ',') : '';
     })].join(';');
   });
   const csv = [header.join(';'), ...rows].join('\n');
