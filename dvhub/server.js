@@ -108,7 +108,7 @@ const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE ===
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
-  ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now() },
+  ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false },
   keepalive: {
     modbusLastQuery: null,
     appPulse: { periodSec: cfg.keepalivePulseSec }
@@ -687,6 +687,7 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
   return {
     now: Number(now),
     dvControlValue: controlValue(),
+    dcExportMode: { enabled: cfg.dcExportMode?.enabled === true, priceThresholdCtKwh: cfg.dcExportMode?.priceThresholdCtKwh ?? null, pvDcW: Number(state.victron.pvPowerW || 0) },
     dvRegs: state.dvRegs,
     ctrl: { ...state.ctrl, dvControl: state.ctrl.dvControl || null },
     keepalive: state.keepalive,
@@ -2019,6 +2020,73 @@ async function evaluateSchedule() {
   const priceNow = epexNowNext()?.current;
   const priceNegative = npp?.enabled && priceNow && Number(priceNow.ct_kwh) < 0;
 
+  // --- DC Export Mode: dynamischer Grid Setpoint = -(DC-PV - Puffer) ---
+  // Nur fuer DC-gekoppelte PV (MPPT auf DC-Seite). Setzt den Grid Setpoint
+  // so, dass der Multi die gesamte DC-PV-Produktion einspeist.
+  // Netto-Batteriestrom bleibt bei ca. 0A.
+  //
+  // Aktivierung: entweder global (enabled=true) oder preisgesteuert:
+  //   - priceThresholdCtKwh: Wenn Boersenpreis >= Schwellwert -> DC exportieren
+  //   - Unter dem Schwellwert -> normal laden lassen (guenstige Stunden nutzen)
+  //   - Oder per Schedule-Regel: target='dcExportMode', value=1
+  let dcExportActive = cfg.dcExportMode?.enabled === true;
+  // Preisgesteuerter Modus: Ueberschreibt enabled-Toggle
+  const dcPriceThreshold = Number(cfg.dcExportMode?.priceThresholdCtKwh);
+  if (Number.isFinite(dcPriceThreshold) && priceNow) {
+    const currentPrice = Number(priceNow.ct_kwh);
+    dcExportActive = currentPrice >= dcPriceThreshold;
+  }
+  // Schedule-Regel Ueberschreibung: target='dcExportMode' mit value=1 aktiviert
+  const dcScheduleRule = state.schedule.rules.find(r => r.target === 'dcExportMode' && r.enabled !== false && scheduleMatch(r, nowMin));
+  if (dcScheduleRule) {
+    dcExportActive = Number(dcScheduleRule.value) === 1;
+  }
+  // SOC-Sicherung: Wenn Akku unter Ziel-SOC UND weniger als X Stunden bis Abend-Peak,
+  // DC-Export deaktivieren damit der Akku noch laden kann.
+  const dcTargetSoc = Number(cfg.dcExportMode?.targetSocPct ?? 90);
+  const dcDeadlineHour = Number(cfg.dcExportMode?.chargeDeadlineHour ?? 17);
+  const currentSoc = Number(state.victron.soc ?? 0);
+  const currentHour = new Date(now).getHours();
+  if (dcExportActive && currentSoc < dcTargetSoc && currentHour >= (dcDeadlineHour - 2)) {
+    // Weniger als 2 Stunden bis Deadline und SOC noch nicht erreicht -> laden lassen
+    dcExportActive = false;
+    if (!state.ctrl._dcSocGuardLogged) {
+      pushLog('dc_export_soc_guard', { currentSoc, dcTargetSoc, dcDeadlineHour, currentHour });
+      state.ctrl._dcSocGuardLogged = true;
+    }
+  } else {
+    state.ctrl._dcSocGuardLogged = false;
+  }
+  if (dcExportActive) {
+    const pvDcW = Math.max(0, Number(state.victron.pvPowerW || 0));
+    const bufferW = Number(cfg.dcExportMode?.bufferW ?? 100);
+    if (pvDcW > 50) {
+      // Negativer Setpoint = Einspeisung. Export = DC-PV minus Puffer.
+      const exportW = Math.round(-(pvDcW - bufferW));
+      const prev = state.schedule.active.gridSetpointW;
+      const prevVal = prev?.value;
+      // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
+      const timeSinceLastWrite = now - (state.ctrl._dcExportLastWriteAt || 0);
+      if (prevVal == null || Math.abs(exportW - prevVal) > 50 || timeSinceLastWrite > 60000) {
+        await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
+        state.ctrl._dcExportLastWriteAt = now;
+        if (!state.ctrl._dcExportLogged) {
+          pushLog('dc_export_mode_active', { pvDcW, exportW, bufferW });
+          state.ctrl._dcExportLogged = true;
+        }
+      }
+    } else {
+      // Kein DC-PV: Zurueck zum Default Setpoint
+      if (state.ctrl._dcExportLogged) {
+        pushLog('dc_export_mode_idle', { pvDcW });
+        state.ctrl._dcExportLogged = false;
+      }
+    }
+  } else if (state.ctrl._dcExportLogged) {
+    pushLog('dc_export_mode_off', {});
+    state.ctrl._dcExportLogged = false;
+  }
+
   for (const target of ['gridSetpointW', 'chargeCurrentA']) {
     const eff = effectiveTargetValue(target);
     if (eff.value == null) continue;
@@ -2049,6 +2117,10 @@ async function evaluateSchedule() {
       }
     }
 
+    // Skip gridSetpointW if DC export mode is actively controlling it
+    if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvPowerW || 0)) > 50) {
+      continue;
+    }
     await applyControlTarget(target, eff.value, eff.source);
   }
 
