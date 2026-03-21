@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.3.6 |
+| **Status** | `main` -- Version 0.3.9 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -499,6 +499,29 @@ Unter `userEnergyPricing` stehen fuer die History-Marktpraemie zwei zusaetzliche
 ---
 
 ## Changelog
+
+### 0.3.9 (2026-03-21)
+
+**Schedule-gesteuerte DC-Einspeisung:**
+
+- feedExcessDcPv (Register 2707/2708) ist jetzt ueber Schedule-Regeln steuerbar
+- Default: EIN (Ueberschuss wird eingespeist), abschaltbar per Schedule-Regel oder manuell
+- Negativer Preisschutz und DV forcedOff ueberschreiben weiterhin (hoechste Prioritaet)
+- Nach DV-Freigabe oder Lease-Ablauf wird der Schedule-Zustand respektiert statt blind einzuschalten
+- Neuer Default-Config-Wert: defaultFeedExcessDcPv (aenderbar ueber Dashboard)
+- Dashboard zeigt DC-Einspeisungs-Status mit Quelle (Schedule/Default/DV/Negativpreis)
+
+**dcExportMode nur noch per Schedule:**
+
+- dcExportMode (dynamischer Grid Setpoint = -(PV - Buffer)) erfordert jetzt eine aktive Schedule-Regel
+- Statische Aktivierung ueber Config (enabled/priceThresholdCtKwh) entfernt
+- Verhindert unbeabsichtigte Batterie-Entladeblockade durch dauerhaften DC-Export
+- SOC-Guard bleibt aktiv (Batterie laden vor Abend-Peak)
+
+**applyDvVictronControl Fix:**
+
+- Register 2707 wird jetzt auch beim Einschalten (feedIn=true) aktiv geschrieben
+- Vorher wurde nur beim Abschalten geschrieben, Einschalten war ein No-Op
 
 ### 0.3.6 (2026-03-18)
 
