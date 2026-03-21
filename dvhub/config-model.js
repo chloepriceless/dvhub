@@ -719,7 +719,7 @@ function buildFieldDefinitions() {
       path: 'schedule.defaultFeedExcessDcPv',
       label: 'Default DC-Einspeisung (0/1)',
       type: 'number',
-      help: '0 = DC-Einspeisung gesperrt (Standard), 1 = DC-Einspeisung erlaubt. Über Zeitplan-Regeln mit target "feedExcessDcPv" steuerbar.'
+      help: '1 = DC-Einspeisung erlaubt (Standard), 0 = DC-Einspeisung gesperrt. Über Zeitplan-Regeln mit target "feedExcessDcPv" steuerbar.'
     },
     {
       section: 'schedule',
@@ -1438,7 +1438,7 @@ export function createDefaultConfig() {
       evaluateMs: 15000,
       defaultGridSetpointW: null,
       defaultChargeCurrentA: null,
-      defaultFeedExcessDcPv: 0,
+      defaultFeedExcessDcPv: 1,
       rules: [],
       smallMarketAutomation: {
       engine: 'greedy',

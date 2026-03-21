@@ -148,7 +148,7 @@ const state = {
     config: {
       defaultGridSetpointW: cfg.schedule.defaultGridSetpointW,
       defaultChargeCurrentA: cfg.schedule.defaultChargeCurrentA,
-      defaultFeedExcessDcPv: cfg.schedule.defaultFeedExcessDcPv ?? 0
+      defaultFeedExcessDcPv: cfg.schedule.defaultFeedExcessDcPv ?? 1
     },
     active: { gridSetpointW: null, chargeCurrentA: null, feedExcessDcPv: null },
     lastWrite: { gridSetpointW: null, chargeCurrentA: null, feedExcessDcPv: null },
@@ -620,7 +620,7 @@ function applyLoadedConfig(nextLoadedConfig) {
   state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
-  state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 0;
+  state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 1;
   // Hot-reload monitoring heartbeat if function exists
   if (typeof startMonitoringHeartbeat === 'function') startMonitoringHeartbeat();
 }
@@ -1048,11 +1048,9 @@ async function applyDvVictronControl(feedIn) {
   if (!dc?.enabled) return;
   const results = {};
 
-  // Feed excess DC-coupled PV into grid: schedule-controlled.
-  // DV control only blocks (feedIn=false → 0). Enabling (1) is handled
-  // by the schedule engine via feedExcessDcPv schedule rules.
-  if (dc.feedExcessDcPv?.enabled && !feedIn) {
-    const val = 0;
+  // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
+  if (dc.feedExcessDcPv?.enabled) {
+    const val = feedIn ? 1 : 0;
     try {
       if (transport.type === 'mqtt') {
         await transport.mqttWrite('feedExcessDcPv', val);
@@ -1939,7 +1937,7 @@ function effectiveTargetValue(target) {
 
   if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
   if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
-  if (target === 'feedExcessDcPv') return { value: Number(state.schedule.config.defaultFeedExcessDcPv ?? 0), source: 'default', rule: null };
+  if (target === 'feedExcessDcPv') return { value: Number(state.schedule.config.defaultFeedExcessDcPv ?? 1), source: 'default', rule: null };
   return { value: null, source: 'none', rule: null };
 }
 
@@ -2060,22 +2058,11 @@ async function evaluateSchedule() {
   // so, dass der Multi die gesamte DC-PV-Produktion einspeist.
   // Netto-Batteriestrom bleibt bei ca. 0A.
   //
-  // Aktivierung: entweder global (enabled=true) oder preisgesteuert:
-  //   - priceThresholdCtKwh: Wenn Boersenpreis >= Schwellwert -> DC exportieren
-  //   - Unter dem Schwellwert -> normal laden lassen (guenstige Stunden nutzen)
-  //   - Oder per Schedule-Regel: target='dcExportMode', value=1
-  let dcExportActive = cfg.dcExportMode?.enabled === true;
-  // Preisgesteuerter Modus: Ueberschreibt enabled-Toggle
-  const dcPriceThreshold = Number(cfg.dcExportMode?.priceThresholdCtKwh);
-  if (Number.isFinite(dcPriceThreshold) && priceNow) {
-    const currentPrice = Number(priceNow.ct_kwh);
-    dcExportActive = currentPrice >= dcPriceThreshold;
-  }
-  // Schedule-Regel Ueberschreibung: target='dcExportMode' mit value=1 aktiviert
+  // dcExportMode: NUR aktiv wenn eine Schedule-Regel target='dcExportMode', value=1 matcht.
+  // Config-Flags (enabled, priceThresholdCtKwh) werden nur als Parameter genutzt,
+  // nicht zur Aktivierung. Ohne aktive Schedule-Regel bleibt dcExportMode AUS.
   const dcScheduleRule = state.schedule.rules.find(r => r.target === 'dcExportMode' && r.enabled !== false && scheduleMatch(r, nowMin));
-  if (dcScheduleRule) {
-    dcExportActive = Number(dcScheduleRule.value) === 1;
-  }
+  let dcExportActive = dcScheduleRule != null && Number(dcScheduleRule.value) === 1;
   // SOC-Sicherung: Wenn Akku unter Ziel-SOC UND weniger als X Stunden bis Abend-Peak,
   // DC-Export deaktivieren damit der Akku noch laden kann.
   const dcTargetSoc = Number(cfg.dcExportMode?.targetSocPct ?? 90);
