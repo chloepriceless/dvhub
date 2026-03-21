@@ -567,9 +567,29 @@ async function checkForUpdate() {
       setText('updateMeta', '-');
       return;
     }
-    setText('updateMeta', `Aktuell: ${data.current.version} (${data.current.revision}) | Remote: ${data.remote.revision}`);
+    // Sync channel dropdown with server state
+    const channelSelect = document.getElementById('updateChannel');
+    if (channelSelect && data.channel) channelSelect.value = data.channel;
+
+    if (data.channel === 'stable') {
+      const currentLabel = data.current.tag || data.current.revision;
+      const latestLabel = data.latest.tag || 'unbekannt';
+      setText('updateMeta', `Channel: Stable | Aktuell: ${currentLabel} | Neueste Version: ${latestLabel}`);
+      if (data.updateAvailable) {
+        setBanner('updateBanner', `Neue Version verfügbar: ${data.latest.tag}`, 'warning');
+      } else {
+        setBanner('updateBanner', `DVhub ist aktuell — ${currentLabel}`, 'success');
+      }
+    } else {
+      setText('updateMeta', `Channel: Dev | Aktuell: ${data.current.revision} | Remote: ${data.latest.revision}${data.behind ? ` | ${data.behind} Commits hinter main` : ''}${data.ahead ? ` | ${data.ahead} voraus` : ''}`);
+      if (data.updateAvailable) {
+        setBanner('updateBanner', `Update verfügbar! ${data.behind} Commit${data.behind > 1 ? 's' : ''} hinter origin/main.`, 'warning');
+      } else {
+        setBanner('updateBanner', 'DVhub ist aktuell — keine Updates verfügbar.', 'success');
+      }
+    }
+
     if (data.updateAvailable) {
-      setBanner('updateBanner', `Update verfügbar! ${data.behind} Commit${data.behind > 1 ? 's' : ''} hinter origin/main.`, 'warning');
       const changelogDiv = document.getElementById('updateChangelog');
       if (data.changelog && data.changelog.length) {
         changelogDiv.innerHTML = '<p class="card-title">Änderungen:</p>' +
@@ -582,12 +602,6 @@ async function checkForUpdate() {
         changelogDiv.style.display = '';
       }
       document.getElementById('updateActions').style.display = '';
-    } else {
-      setBanner('updateBanner', 'DVhub ist aktuell — keine Updates verfügbar.', 'success');
-      if (data.ahead > 0) {
-        const metaEl = document.getElementById('updateMeta');
-        setText('updateMeta', `${metaEl?.textContent || ''} | ${data.ahead} lokale Commits voraus`);
-      }
     }
   } catch (error) {
     setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
@@ -615,6 +629,34 @@ async function applyUpdate() {
   }
 }
 
+async function switchUpdateChannel(newChannel) {
+  const label = newChannel === 'stable' ? 'Stable (Releases)' : 'Bleeding Edge (Dev Commits)';
+  if (!confirm(`Wechsel zu ${label}?\n\nDVhub wird auf den ${newChannel === 'stable' ? 'neuesten Release-Tag' : 'aktuellen main-Branch'} umgestellt und neu gestartet.`)) {
+    // Revert dropdown to previous value
+    checkForUpdate().catch(() => {});
+    return;
+  }
+  setBanner('updateBanner', `Wechsel zu ${label} — bitte warten...`, 'info');
+  try {
+    const res = await apiFetch('/api/admin/update/channel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: newChannel })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
+      setTimeout(() => window.location.reload(), 10000);
+    } else {
+      setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${data.error}`, 'error');
+      checkForUpdate().catch(() => {});
+    }
+  } catch (error) {
+    setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${error.message}`, 'error');
+    checkForUpdate().catch(() => {});
+  }
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -634,6 +676,7 @@ function initToolsPage() {
   });
   document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
   document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
+  document.getElementById('updateChannel')?.addEventListener('change', (e) => switchUpdateChannel(e.target.value));
   document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());

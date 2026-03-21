@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/chloepriceless/dvhub.git}"
 REPO_BRANCH="${REPO_BRANCH:-}"
+UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 INSTALLER_SOURCE_URL="${INSTALLER_SOURCE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
@@ -215,12 +216,24 @@ while [[ $# -gt 0 ]]; do
       DATA_DIR="$2"
       shift 2
       ;;
+    --channel)
+      UPDATE_CHANNEL="$2"
+      shift 2
+      ;;
     *)
       echo "Unbekannter Parameter: $1" >&2
       exit 1
       ;;
   esac
 done
+
+if [[ -n "$UPDATE_CHANNEL" && "$UPDATE_CHANNEL" != "stable" && "$UPDATE_CHANNEL" != "dev" ]]; then
+  echo "Ungueltiger Channel: $UPDATE_CHANNEL (erlaubt: stable, dev)" >&2
+  exit 1
+fi
+if [[ -z "$UPDATE_CHANNEL" ]]; then
+  UPDATE_CHANNEL="stable"
+fi
 
 if [[ -z "$REPO_BRANCH" ]]; then
   REPO_BRANCH="$(resolve_default_repo_branch || true)"
@@ -231,7 +244,7 @@ fi
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "$0" "$@"
+    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "$0" "$@"
   fi
   echo "Dieses Skript muss als root ausgeführt werden." >&2
   exit 1
@@ -270,13 +283,28 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     git config --global --add safe.directory "$INSTALL_DIR"
   fi
   git -C "$INSTALL_DIR" fetch --tags origin
-  git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
 elif [[ -d "$INSTALL_DIR" && -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
   echo "Zielverzeichnis $INSTALL_DIR ist nicht leer und kein Git-Repository." >&2
   exit 1
 else
   rm -rf "$INSTALL_DIR"
   git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  git -C "$INSTALL_DIR" fetch --tags origin
+fi
+
+# Channel-aware checkout
+if [[ "$UPDATE_CHANNEL" == "stable" ]]; then
+  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --sort=-v:refname | head -1)"
+  if [[ -n "$LATEST_TAG" ]]; then
+    echo "   Channel: stable — checkout $LATEST_TAG"
+    git -C "$INSTALL_DIR" checkout "$LATEST_TAG"
+  else
+    echo "   Keine Release-Tags gefunden, verwende $REPO_BRANCH"
+    git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+  fi
+else
+  echo "   Channel: dev — checkout origin/$REPO_BRANCH"
+  git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
 fi
 
 remove_legacy_app_dir
@@ -296,6 +324,20 @@ mkdir -p "$CONFIG_DIR/hersteller"
 mkdir -p "$DATA_DIR"
 if [[ ! -f "$CONFIG_PATH" ]]; then
   cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
+fi
+# Set updateChannel in config if not already present
+if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
+  node -e "
+    const fs = require('fs');
+    const p = '$CONFIG_PATH';
+    try {
+      const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (!c.updateChannel) {
+        c.updateChannel = '$UPDATE_CHANNEL';
+        fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+      }
+    } catch {}
+  "
 fi
 if [[ ! -f "$CONFIG_DIR/hersteller/victron.json" ]]; then
   cp "$APP_DIR/hersteller/victron.json" "$CONFIG_DIR/hersteller/victron.json"

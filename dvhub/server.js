@@ -2685,25 +2685,52 @@ const web = http.createServer(async (req, res) => {
     if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
     try {
       const repoRoot = path.resolve(__dirname, '..');
-      // Fetch latest from remote without changing working tree
-      await execFileAsync('git', ['fetch', '--quiet'], { cwd: repoRoot, timeout: 15000 });
+      const channel = rawCfg.updateChannel || 'stable';
+      await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
       const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-      const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-      const behind = (await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-      const ahead = (await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-      let changelog = '';
-      if (Number(behind) > 0) {
-        changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+
+      if (channel === 'stable') {
+        // Tag-based update check
+        let currentTag = null;
+        try {
+          currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+        } catch { /* not on a tag */ }
+        let latestTag = null;
+        try {
+          latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0] || null;
+        } catch { /* no tags */ }
+        let changelog = '';
+        if (currentTag && latestTag && currentTag !== latestTag) {
+          try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+        } else if (!currentTag && latestTag) {
+          try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+        }
+        const updateAvailable = latestTag != null && latestTag !== currentTag;
+        return json(res, 200, {
+          ok: true, channel,
+          current: { version: APP_VERSION.versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
+          latest: { tag: latestTag, revision: null },
+          updateAvailable,
+          changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+        });
+      } else {
+        // Dev: commit-based update check (original logic)
+        const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+        const behind = Number((await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+        const ahead = Number((await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+        let changelog = '';
+        if (behind > 0) {
+          changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+        }
+        return json(res, 200, {
+          ok: true, channel,
+          current: { version: APP_VERSION.versionLabel, tag: null, revision: localRev.slice(0, 7) },
+          latest: { tag: null, revision: remoteRev.slice(0, 7) },
+          behind, ahead,
+          updateAvailable: behind > 0,
+          changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+        });
       }
-      return json(res, 200, {
-        ok: true,
-        current: { version: APP_VERSION.versionLabel, revision: localRev.slice(0, 7) },
-        remote: { revision: remoteRev.slice(0, 7) },
-        behind: Number(behind),
-        ahead: Number(ahead),
-        updateAvailable: Number(behind) > 0,
-        changelog: changelog.split('\n').filter(Boolean)
-      });
     } catch (e) {
       return json(res, 500, { ok: false, error: e.message });
     }
@@ -2713,24 +2740,79 @@ const web = http.createServer(async (req, res) => {
     if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
     try {
       const repoRoot = path.resolve(__dirname, '..');
-      // Pull latest changes
-      const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
-      // Run npm install in case dependencies changed
+      const channel = rawCfg.updateChannel || 'stable';
+      let gitOutput = '';
+
+      if (channel === 'stable') {
+        await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+        if (!latestTag) throw new Error('No release tags found');
+        const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+        gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
+      } else {
+        await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+        const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+        gitOutput = pull.stdout.trim();
+      }
+
       const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
       pushLog('update_applied', {
-        pullOutput: pull.stdout.trim().split('\n').slice(0, 5).join('\n'),
+        channel,
+        gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
         npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
       });
-      // Schedule restart so the response can be sent first
       scheduleServiceRestart();
       pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'update' });
       return json(res, 200, {
-        ok: true,
-        pullOutput: pull.stdout.trim(),
+        ok: true, channel,
+        gitOutput,
         message: 'Update applied, service restart scheduled'
       });
     } catch (e) {
       pushLog('update_error', { error: e.message });
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
+    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
+    try {
+      const body = await readBody(req);
+      const { channel } = JSON.parse(body);
+      if (channel !== 'stable' && channel !== 'dev') {
+        return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
+      }
+      const repoRoot = path.resolve(__dirname, '..');
+      let gitOutput = '';
+
+      // Save channel to config
+      const next = JSON.parse(JSON.stringify(rawCfg || {}));
+      next.updateChannel = channel;
+      saveAndApplyConfig(next);
+
+      // Switch to the target ref
+      await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+      if (channel === 'stable') {
+        const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+        if (!latestTag) throw new Error('No release tags found');
+        await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+        gitOutput = `Switched to stable: ${latestTag}`;
+      } else {
+        await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+        gitOutput = 'Switched to dev: origin/main';
+      }
+
+      const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+      pushLog('update_channel_changed', { channel, gitOutput });
+      scheduleServiceRestart();
+      pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
+      return json(res, 200, {
+        ok: true, channel, gitOutput,
+        message: `Channel switched to ${channel}, service restart scheduled`
+      });
+    } catch (e) {
+      pushLog('update_channel_error', { error: e.message });
       return json(res, 500, { ok: false, error: e.message });
     }
   }
