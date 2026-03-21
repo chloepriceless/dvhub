@@ -1,6 +1,6 @@
 let nextRequestId = 1;
 
-const CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'minSocPct']);
+const CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'minSocPct', 'feedExcessDcPv']);
 const HISTORY_BACKFILL_MODES = new Set(['gap', 'full']);
 
 function isObject(value) {
@@ -41,7 +41,7 @@ export function validateRuntimeCommand(command) {
 
   if (type === 'control_write') {
     if (!CONTROL_TARGETS.has(String(payload.target || ''))) {
-      return { ok: false, error: 'control_write target must be gridSetpointW, chargeCurrentA, or minSocPct' };
+      return { ok: false, error: 'control_write target must be gridSetpointW, chargeCurrentA, minSocPct, or feedExcessDcPv' };
     }
     if (!Number.isFinite(Number(payload.value))) {
       return { ok: false, error: 'control_write value must be finite' };

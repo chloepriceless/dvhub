@@ -247,6 +247,7 @@
           <div class="metric-row"><span>Aktiver Grid Setpoint</span><strong id="activeGridSetpoint">-</strong></div>
           <div class="metric-row"><span>Aktiver Charge Current</span><strong id="activeChargeCurrent">-</strong></div>
           <div class="metric-row"><span>Aktiver Minimum-SOC</span><strong id="activeMinSoc">-</strong></div>
+          <div class="metric-row"><span>DC-Einspeisung</span><strong id="activeDcFeed">-</strong></div>
           <div class="metric-row"><span>Letzter Write</span><strong id="lastControlWrite">-</strong></div>
 
           <p class="card-title" style="margin-top: 16px;">Direkt schreiben</p>
@@ -265,6 +266,9 @@
             </label>
             <label>Default Charge Current (A)
               <input id="defaultChargeCurrentInput" type="number" value="100" />
+            </label>
+            <label>Default DC-Einspeisung (0/1)
+              <input id="defaultFeedExcessDcPvInput" type="number" min="0" max="1" step="1" value="0" />
             </label>
             <button id="saveDefaultsBtn" class="btn-small btn-accent">Defaults speichern</button>
           </div>

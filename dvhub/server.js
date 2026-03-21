@@ -147,10 +147,11 @@ const state = {
     rules: Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [],
     config: {
       defaultGridSetpointW: cfg.schedule.defaultGridSetpointW,
-      defaultChargeCurrentA: cfg.schedule.defaultChargeCurrentA
+      defaultChargeCurrentA: cfg.schedule.defaultChargeCurrentA,
+      defaultFeedExcessDcPv: cfg.schedule.defaultFeedExcessDcPv ?? 0
     },
-    active: { gridSetpointW: null, chargeCurrentA: null },
-    lastWrite: { gridSetpointW: null, chargeCurrentA: null },
+    active: { gridSetpointW: null, chargeCurrentA: null, feedExcessDcPv: null },
+    lastWrite: { gridSetpointW: null, chargeCurrentA: null, feedExcessDcPv: null },
     manualOverride: {},
     lastEvalAt: 0,
     smallMarketAutomation: {
@@ -619,6 +620,7 @@ function applyLoadedConfig(nextLoadedConfig) {
   state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
+  state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 0;
   // Hot-reload monitoring heartbeat if function exists
   if (typeof startMonitoringHeartbeat === 'function') startMonitoringHeartbeat();
 }
@@ -645,12 +647,14 @@ function persistConfig() {
     current.schedule.rules = sanitizePersistedScheduleRules(state.schedule.rules);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
+    current.schedule.defaultFeedExcessDcPv = state.schedule.config.defaultFeedExcessDcPv;
     saveAndApplyConfig(current);
     telemetrySafeWrite(() => telemetryStore.writeScheduleSnapshot({
       ts: new Date(),
       rules: current.schedule.rules,
       defaultGridSetpointW: state.schedule.config.defaultGridSetpointW,
       defaultChargeCurrentA: state.schedule.config.defaultChargeCurrentA,
+      defaultFeedExcessDcPv: state.schedule.config.defaultFeedExcessDcPv,
       source: 'config_persist'
     }));
   } catch (e) {
@@ -1004,7 +1008,7 @@ function expireLeaseIfNeeded() {
       reason: 'lease_expired',
       source: 'direktvermarkter'
     }));
-    applyDvVictronControl(true);
+    // feedExcessDcPv: nächster evaluateSchedule()-Lauf setzt den Schedule-Zustand
   }
 }
 
@@ -1036,7 +1040,7 @@ function clearForcedOff(reason) {
     reason,
     source: 'direktvermarkter'
   }));
-  applyDvVictronControl(true);
+  // feedExcessDcPv: nächster evaluateSchedule()-Lauf setzt den Schedule-Zustand
 }
 
 async function applyDvVictronControl(feedIn) {
@@ -1044,9 +1048,11 @@ async function applyDvVictronControl(feedIn) {
   if (!dc?.enabled) return;
   const results = {};
 
-  // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
-  if (dc.feedExcessDcPv?.enabled) {
-    const val = feedIn ? 1 : 0;
+  // Feed excess DC-coupled PV into grid: schedule-controlled.
+  // DV control only blocks (feedIn=false → 0). Enabling (1) is handled
+  // by the schedule engine via feedExcessDcPv schedule rules.
+  if (dc.feedExcessDcPv?.enabled && !feedIn) {
+    const val = 0;
     try {
       if (transport.type === 'mqtt') {
         await transport.mqttWrite('feedExcessDcPv', val);
@@ -1933,11 +1939,12 @@ function effectiveTargetValue(target) {
 
   if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
   if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
+  if (target === 'feedExcessDcPv') return { value: Number(state.schedule.config.defaultFeedExcessDcPv ?? 0), source: 'default', rule: null };
   return { value: null, source: 'none', rule: null };
 }
 
 async function applyControlTarget(target, value, source) {
-  const conf = cfg.controlWrite[target];
+  const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
   if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
   if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
 
@@ -2152,6 +2159,24 @@ async function evaluateSchedule() {
     await applyControlTarget(target, eff.value, eff.source);
   }
 
+  // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
+  if (cfg.dvControl?.enabled) {
+    let dcFeedIn = false;
+    let dcSource = 'default_off';
+    // DV forcedOff und negative Preise blockieren DC-Einspeisung immer
+    if (state.ctrl.forcedOff) {
+      dcSource = 'dv_forced_off';
+    } else if (priceNegative) {
+      dcSource = 'negative_price_protection';
+    } else {
+      const eff = effectiveTargetValue('feedExcessDcPv');
+      dcFeedIn = eff.value != null && Number(eff.value) === 1;
+      dcSource = eff.source;
+    }
+    await applyDvVictronControl(dcFeedIn);
+    state.schedule.active.feedExcessDcPv = { value: dcFeedIn ? 1 : 0, source: dcSource, at: Date.now() };
+  }
+
   // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
   const autoDisable = autoDisableExpiredScheduleRules(state.schedule.rules, nowMin);
   if (autoDisable.changed) {
@@ -2175,9 +2200,7 @@ async function evaluateSchedule() {
       source: 'runtime',
       meta: { price: priceNow?.ct_kwh }
     }));
-    if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
-      applyDvVictronControl(true);
-    }
+    // feedExcessDcPv: wird oben im feedExcessDcPv-Block schedule-basiert gesetzt
   }
 
   publishRuntimeSnapshot();
@@ -2995,11 +3018,16 @@ const web = http.createServer(async (req, res) => {
     if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
     const validRules = body.rules.filter(validateScheduleRule);
     if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
-    // Preserve automation-managed rules — manual save only replaces manual rules
+    // Preserve automation-managed and feedExcessDcPv rules — dashboard save only replaces grid/charge rules
     const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
     const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
-    state.schedule.rules = [...incomingManualRules, ...existingAutomationRules];
-    pushLog('schedule_rules_updated', { manual: incomingManualRules.length, automation: existingAutomationRules.length });
+    const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isSmallMarketAutomationRule(r));
+    const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
+    const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
+    // If no feedExcessDcPv rules are sent, preserve existing ones (dashboard doesn't manage them)
+    const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
+    state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
+    pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
     persistConfig();
     return json(res, 200, { ok: true, count: state.schedule.rules.length });
   }
@@ -3015,6 +3043,11 @@ const web = http.createServer(async (req, res) => {
       const v = Number(body.defaultChargeCurrentA);
       if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultChargeCurrentA invalid' });
       state.schedule.config.defaultChargeCurrentA = v;
+    }
+    if (body.defaultFeedExcessDcPv !== undefined) {
+      const v = Number(body.defaultFeedExcessDcPv);
+      if (v !== 0 && v !== 1) return json(res, 400, { ok: false, error: 'defaultFeedExcessDcPv must be 0 or 1' });
+      state.schedule.config.defaultFeedExcessDcPv = v;
     }
     pushLog('schedule_config_updated', { config: state.schedule.config });
     persistConfig();
