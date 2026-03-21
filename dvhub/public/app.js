@@ -1193,6 +1193,8 @@ function renderDashboardStatus(status) {
   setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
   setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
   setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
+  const adc = sch.active?.feedExcessDcPv;
+  setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
   const lwParts = [];
   if (lwG?.at) lwParts.push(`Grid: ${lwG.value} @ ${fmtTs(lwG.at)}`);
   if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
@@ -1581,6 +1583,11 @@ async function loadScheduleDash() {
     const inp = document.getElementById('defaultChargeCurrentInput');
     if (inp) inp.value = defCharge;
   }
+  const defDcFeed = data?.config?.defaultFeedExcessDcPv;
+  if (defDcFeed != null) {
+    const inp = document.getElementById('defaultFeedExcessDcPvInput');
+    if (inp) inp.value = defDcFeed;
+  }
 
   setControlMsg(`Schedule geladen (${fmtTs(Date.now())})`);
   applyScheduleRowStates();
@@ -1602,6 +1609,8 @@ async function saveScheduleDash() {
   if (Number.isFinite(defGridVal)) configBody.defaultGridSetpointW = defGridVal;
   const defChargeVal = Number(document.getElementById('defaultChargeCurrentInput')?.value);
   if (Number.isFinite(defChargeVal)) configBody.defaultChargeCurrentA = defChargeVal;
+  const defDcFeedVal = Number(document.getElementById('defaultFeedExcessDcPvInput')?.value);
+  if (defDcFeedVal === 0 || defDcFeedVal === 1) configBody.defaultFeedExcessDcPv = defDcFeedVal;
 
   if (Object.keys(configBody).length) {
     const r2 = await apiFetch('/api/schedule/config', {
