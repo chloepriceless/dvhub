@@ -819,19 +819,17 @@ function openLocationPicker(locationBasePath) {
   let selectedLon = currentLon;
 
   // Load Leaflet CSS + JS dynamically (no API key needed)
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-  document.head.appendChild(link);
-
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-  script.onload = () => {
-    const map = L.map('location-picker-map').setView([currentLat, currentLon], 13);
+  function initLeafletMap() {
+    const mapContainer = document.getElementById('location-picker-map');
+    if (!mapContainer) return;
+    const map = L.map(mapContainer).setView([currentLat, currentLon], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
       maxZoom: 19
     }).addTo(map);
+    // Fix: Leaflet needs a size recalculation after the container becomes visible
+    setTimeout(() => map.invalidateSize(), 200);
+
     const marker = L.marker([currentLat, currentLon], { draggable: true }).addTo(map);
 
     function updateCoords(lat, lon) {
@@ -850,8 +848,23 @@ function openLocationPicker(locationBasePath) {
       marker.setLatLng(e.latlng);
       updateCoords(e.latlng.lat, e.latlng.lng);
     });
-  };
-  document.head.appendChild(script);
+  }
+
+  // Leaflet already loaded from a previous open?
+  if (typeof L !== 'undefined') {
+    initLeafletMap();
+  } else {
+    if (!document.querySelector('link[href*="leaflet"]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => initLeafletMap();
+    document.head.appendChild(script);
+  }
 
   // Close
   overlay.querySelector('.location-picker-close').addEventListener('click', () => {
