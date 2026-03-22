@@ -2887,40 +2887,47 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
-    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
     try {
       const body = await readBody(req);
       const { channel } = JSON.parse(body);
       if (channel !== 'stable' && channel !== 'dev') {
         return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
       }
-      const repoRoot = path.resolve(__dirname, '..');
-      let gitOutput = '';
 
-      // Save channel to config
+      // Always save channel preference to config (works even without service actions)
       const next = JSON.parse(JSON.stringify(rawCfg || {}));
       next.updateChannel = channel;
       saveAndApplyConfig(next);
 
-      // Switch to the target ref
-      await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-      if (channel === 'stable') {
-        const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-        if (!latestTag) throw new Error('No release tags found');
-        await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-        gitOutput = `Switched to stable: ${latestTag}`;
-      } else {
-        await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-        gitOutput = 'Switched to dev: origin/main';
+      // If service actions are enabled, also switch git ref and restart
+      if (SERVICE_ACTIONS_ENABLED) {
+        const repoRoot = path.resolve(__dirname, '..');
+        let gitOutput = '';
+        await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        if (channel === 'stable') {
+          const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+          if (!latestTag) throw new Error('No release tags found');
+          await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+          gitOutput = `Switched to stable: ${latestTag}`;
+        } else {
+          await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+          gitOutput = 'Switched to dev: origin/main';
+        }
+        await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+        pushLog('update_channel_changed', { channel, gitOutput });
+        scheduleServiceRestart();
+        pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
+        return json(res, 200, {
+          ok: true, channel, gitOutput,
+          message: `Channel switched to ${channel}, service restart scheduled`
+        });
       }
 
-      const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
-      pushLog('update_channel_changed', { channel, gitOutput });
-      scheduleServiceRestart();
-      pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
+      // Without service actions: channel saved, next update check will use it
+      pushLog('update_channel_changed', { channel, note: 'config-only, service actions disabled' });
       return json(res, 200, {
-        ok: true, channel, gitOutput,
-        message: `Channel switched to ${channel}, service restart scheduled`
+        ok: true, channel,
+        message: `Channel preference saved to ${channel}. Git switch will happen on next update.`
       });
     } catch (e) {
       pushLog('update_channel_error', { error: e.message });

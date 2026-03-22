@@ -630,10 +630,13 @@ async function applyUpdate() {
 }
 
 async function switchUpdateChannel(newChannel) {
+  const channelSelect = document.getElementById('updateChannel');
+  const previousChannel = newChannel === 'stable' ? 'dev' : 'stable';
+  const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; };
+
   const label = newChannel === 'stable' ? 'Stable (Releases)' : 'Bleeding Edge (Dev Commits)';
   if (!confirm(`Wechsel zu ${label}?\n\nDVhub wird auf den ${newChannel === 'stable' ? 'neuesten Release-Tag' : 'aktuellen main-Branch'} umgestellt und neu gestartet.`)) {
-    // Revert dropdown to previous value
-    checkForUpdate().catch(() => {});
+    revertDropdown();
     return;
   }
   setBanner('updateBanner', `Wechsel zu ${label} — bitte warten...`, 'info');
@@ -649,11 +652,11 @@ async function switchUpdateChannel(newChannel) {
       setTimeout(() => window.location.reload(), 10000);
     } else {
       setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${data.error}`, 'error');
-      checkForUpdate().catch(() => {});
+      revertDropdown();
     }
   } catch (error) {
     setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${error.message}`, 'error');
-    checkForUpdate().catch(() => {});
+    revertDropdown();
   }
 }
 
