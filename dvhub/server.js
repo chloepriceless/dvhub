@@ -684,17 +684,23 @@ function createTelemetryStoreIfEnabled() {
   }
 }
 
-function refreshTelemetryStatus() {
+async function refreshTelemetryStatus() {
   if (!telemetryStore) {
     state.telemetry.enabled = !!cfg.telemetry?.enabled;
     state.telemetry.ok = false;
     return;
   }
-  const status = telemetryStore.getStatus();
-  state.telemetry.enabled = !!cfg.telemetry?.enabled;
-  state.telemetry.dbPath = status.dbPath;
-  state.telemetry.ok = true;
-  state.telemetry.lastWriteAt = status.lastWriteAt;
+  try {
+    const status = await telemetryStore.getStatus();
+    state.telemetry.enabled = !!cfg.telemetry?.enabled;
+    state.telemetry.dbPath = status.dbPath;
+    state.telemetry.ok = true;
+    state.telemetry.lastWriteAt = status.lastWriteAt;
+  } catch (error) {
+    state.telemetry.enabled = !!cfg.telemetry?.enabled;
+    state.telemetry.ok = false;
+    state.telemetry.lastError = error.message;
+  }
 }
 
 function buildCurrentRuntimeSnapshot() {
@@ -861,7 +867,7 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
   if (!telemetryStore) return null;
   try {
     const result = await action();
-    refreshTelemetryStatus();
+    await refreshTelemetryStatus();
     if (updateRollup) state.telemetry.lastRollupAt = Date.now();
     if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
     return result;
@@ -3213,7 +3219,7 @@ historyApi = createHistoryApiHandlers({
   appVersion: APP_VERSION,
   getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
 });
-refreshTelemetryStatus();
+refreshTelemetryStatus().catch(e => pushLog('telemetry_status_error', { error: e.message }));
 if (IS_RUNTIME_PROCESS) {
   applicableValueService.refresh().catch((error) => {
     pushLog('applicable_value_refresh_error', { error: error.message });

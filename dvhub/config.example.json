@@ -91,7 +91,7 @@
     "onlyNonZero": true
   },
   "telemetry": {
-    "enabled": true,
+    "enabled": false,
     "database": {
       "host": "localhost",
       "port": 5432,
