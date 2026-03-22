@@ -93,7 +93,7 @@
   "telemetry": {
     "enabled": true,
     "database": {
-      "host": "localhost",
+      "host": "/var/run/postgresql",
       "port": 5432,
       "name": "dvhub",
       "user": "dvhub",
