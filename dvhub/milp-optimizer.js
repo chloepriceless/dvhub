@@ -44,6 +44,7 @@ export async function pickMilpPlan({
   stages = [],
   maxDischargeW,
   availableKwh = null,
+  perSlotBudgets = null,
   slotDurationMs = 15 * 60 * 1000,
   slotDurationH = SLOT_DURATION_HOURS
 }) {
@@ -124,17 +125,58 @@ export async function pickMilpPlan({
     }
   }
 
-  // Energy budget constraint
-  if (availableKwh != null && Number.isFinite(availableKwh) && availableKwh > 0) {
+  // Energy budget constraints — cumulative and time-aware.
+  // When perSlotBudgets is available, the budget grows over the night:
+  // evening slots have less energy (high SOC floor), morning slots near
+  // sunrise have more (low SOC floor). For each time T_k, the total energy
+  // of all selected placements at times <= T_k must not exceed budget(T_k).
+  const budgetMap = new Map();
+  if (Array.isArray(perSlotBudgets) && perSlotBudgets.length) {
+    for (const entry of perSlotBudgets) {
+      budgetMap.set(entry.ts, entry.budgetKwh);
+    }
+  }
+
+  if (budgetMap.size > 0) {
+    // Cumulative time-bucket constraints
+    const sortedTimes = [...budgetMap.keys()].sort((a, b) => a - b);
+    for (let k = 0; k < sortedTimes.length; k++) {
+      const cutoffTs = sortedTimes[k];
+      const budgetAtTime = budgetMap.get(cutoffTs);
+      if (budgetAtTime == null || !Number.isFinite(budgetAtTime) || budgetAtTime <= 0) continue;
+      // Find all placements whose latest slot timestamp <= cutoffTs
+      const eligiblePlacements = placements.filter(p =>
+        p.timestamps.every(ts => ts <= cutoffTs)
+      );
+      if (!eligiblePlacements.length) continue;
+      // Skip if this constraint is identical to the previous one (same placements, same budget)
+      if (k > 0) {
+        const prevBudget = budgetMap.get(sortedTimes[k - 1]);
+        const prevEligible = placements.filter(p =>
+          p.timestamps.every(ts => ts <= sortedTimes[k - 1])
+        );
+        if (prevEligible.length === eligiblePlacements.length &&
+            Math.round((prevBudget || 0) * 10000) === Math.round(budgetAtTime * 10000)) continue;
+      }
+      const energyTerms = eligiblePlacements.map(p =>
+        `${Math.round(p.energyKwh * 10000)} ${p.id}`
+      ).join(' + ');
+      lp += ` energy_t${k}: ${energyTerms} <= ${Math.round(budgetAtTime * 10000)}\n`;
+    }
+  } else if (availableKwh != null && Number.isFinite(availableKwh) && availableKwh > 0) {
+    // Fallback: single global energy constraint (no sun times available)
     const energyTerms = placements.map(p =>
       `${Math.round(p.energyKwh * 10000)} ${p.id}`
     ).join(' + ');
     lp += ` energy: ${energyTerms} <= ${Math.round(availableKwh * 10000)}\n`;
   }
 
-  // Max repetitions per stage: use energy-based cap when available, otherwise 20
-  const maxRepCap = (availableKwh != null && Number.isFinite(availableKwh) && availableKwh > 0)
-    ? Math.max(1, Math.ceil(availableKwh / Math.max(...stageBlocks.map(b => b.energyKwh || 1))))
+  // Max repetitions per stage
+  const maxBudget = budgetMap.size > 0
+    ? Math.max(...budgetMap.values())
+    : (availableKwh != null && Number.isFinite(availableKwh) && availableKwh > 0 ? availableKwh : null);
+  const maxRepCap = maxBudget != null
+    ? Math.max(1, Math.ceil(maxBudget / Math.max(...stageBlocks.map(b => b.energyKwh || 1))))
     : 20;
   for (const block of stageBlocks) {
     const stagePlacements = placements.filter(p => p.block.stageIdx === block.stageIdx);
