@@ -356,12 +356,14 @@ if command -v psql >/dev/null 2>&1; then
     su - postgres -c "createdb -O dvhub dvhub" 2>/dev/null || true
   fi
   # Peer-Auth: dvhub system user kann sich ohne Passwort verbinden
-  if ! grep -q "dvhub" /etc/postgresql/*/main/pg_hba.conf 2>/dev/null; then
-    PG_HBA="$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)"
-    if [[ -n "$PG_HBA" ]]; then
+  PG_HBA="$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)"
+  if [[ -n "$PG_HBA" ]]; then
+    # Remove old md5/scram entries for dvhub, ensure peer auth
+    sed -i '/dvhub.*dvhub.*\(md5\|scram-sha-256\)/d' "$PG_HBA" 2>/dev/null || true
+    if ! grep -q "local.*dvhub.*dvhub.*peer" "$PG_HBA" 2>/dev/null; then
       sed -i '1i local   dvhub   dvhub   peer' "$PG_HBA"
-      systemctl reload postgresql 2>/dev/null || true
     fi
+    systemctl reload postgresql 2>/dev/null || true
   fi
 fi
 

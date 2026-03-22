@@ -253,6 +253,19 @@ export async function ensurePgSchema(pool) {
     );
     CREATE INDEX IF NOT EXISTS idx_solar_market_values_scope_key ON solar_market_values(scope, key);
 
+    CREATE TABLE IF NOT EXISTS vrm_forecasts (
+      id BIGSERIAL PRIMARY KEY,
+      forecast_type TEXT NOT NULL,
+      ts_utc TIMESTAMPTZ NOT NULL,
+      value_w DOUBLE PRECISION,
+      fetched_at TIMESTAMPTZ NOT NULL,
+      forecast_for_date TEXT,
+      source TEXT,
+      meta_json TEXT,
+      UNIQUE(forecast_type, ts_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vrm_forecasts_ts ON vrm_forecasts(ts_utc);
+
     CREATE TABLE IF NOT EXISTS solar_market_value_year_attempts (
       year INTEGER PRIMARY KEY,
       last_attempt_at TIMESTAMPTZ NOT NULL,
@@ -261,6 +274,14 @@ export async function ensurePgSchema(pool) {
       error TEXT
     );
   `);
+  // Ensure connected user owns all tables (fixes tables created by a different user, e.g. postgres)
+  const { rows } = await pool.query(`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tableowner <> current_user
+  `);
+  for (const row of rows) {
+    await pool.query(`ALTER TABLE public.${row.tablename} OWNER TO current_user`);
+  }
 }
 
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
