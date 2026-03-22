@@ -13,7 +13,7 @@ import {
   loadConfigFile,
   saveConfigFile
 } from './config-model.js';
-import { createTelemetryStorePg } from './telemetry-store-pg.js';
+import { createTelemetryStorePg, ensurePgSchema } from './telemetry-store-pg.js';
 import { createPool } from './db-client.js';
 import {
   buildLiveTelemetrySamples,
@@ -667,8 +667,9 @@ async function createTelemetryStoreIfEnabled() {
   try {
     const dbConfig = cfg.telemetry.database || {};
     const pool = createPool(dbConfig);
-    // Connectivity check — fail fast if DB is unreachable
+    // Connectivity check + schema init — fail fast if DB is unreachable
     await pool.query('SELECT 1');
+    await ensurePgSchema(pool);
     const store = createTelemetryStorePg(pool, {
       rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });
@@ -792,20 +793,21 @@ function historicalMarketValueBackfillYears({ bounds, now = new Date() } = {}) {
   return Array.from({ length: endYear - earliestYear + 1 }, (_, index) => earliestYear + index);
 }
 
-function startAutomaticMarketValueBackfill() {
+async function startAutomaticMarketValueBackfill() {
   if (!IS_RUNTIME_PROCESS || !telemetryStore || !energyChartsMarketValueService?.backfillMissingSolarMarketValues) {
     return;
   }
-  const years = historicalMarketValueBackfillYears({
-    bounds: telemetryStore.getTelemetryBounds()
-  });
-  if (!years.length) return;
-  energyChartsMarketValueService.backfillMissingSolarMarketValues({
-    years,
-    maxYearsPerRun: MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN
-  }).catch((error) => {
+  try {
+    const bounds = await telemetryStore.getTelemetryBounds();
+    const years = historicalMarketValueBackfillYears({ bounds });
+    if (!years.length) return;
+    await energyChartsMarketValueService.backfillMissingSolarMarketValues({
+      years,
+      maxYearsPerRun: MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN
+    });
+  } catch (error) {
     pushLog('market_value_backfill_error', { error: error.message });
-  });
+  }
 }
 
 function publishRuntimeSnapshot() {

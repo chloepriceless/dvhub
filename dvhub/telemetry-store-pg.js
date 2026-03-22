@@ -136,6 +136,133 @@ const KNOWN_TABLES = new Set([
   'import_jobs', 'data_gaps', 'solar_market_values', 'solar_market_value_year_attempts'
 ]);
 
+export async function ensurePgSchema(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS timeseries_samples (
+      id BIGSERIAL PRIMARY KEY,
+      series_key TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      source TEXT NOT NULL,
+      quality TEXT NOT NULL,
+      ts_utc TIMESTAMPTZ NOT NULL,
+      resolution_seconds INTEGER NOT NULL,
+      value_num DOUBLE PRECISION,
+      value_text TEXT,
+      unit TEXT,
+      meta_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(series_key, scope, source, quality, ts_utc, resolution_seconds)
+    );
+    CREATE INDEX IF NOT EXISTS idx_timeseries_series_ts ON timeseries_samples(series_key, ts_utc);
+    CREATE INDEX IF NOT EXISTS idx_timeseries_scope_ts ON timeseries_samples(scope, ts_utc);
+
+    CREATE TABLE IF NOT EXISTS control_events (
+      id BIGSERIAL PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      target TEXT,
+      value_num DOUBLE PRECISION,
+      value_text TEXT,
+      reason TEXT,
+      source TEXT NOT NULL,
+      ts_utc TIMESTAMPTZ NOT NULL,
+      meta_json TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS schedule_snapshots (
+      id BIGSERIAL PRIMARY KEY,
+      ts_utc TIMESTAMPTZ NOT NULL,
+      rules_json TEXT NOT NULL,
+      default_grid_setpoint_w DOUBLE PRECISION,
+      default_charge_current_a DOUBLE PRECISION,
+      source TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS optimizer_runs (
+      id BIGSERIAL PRIMARY KEY,
+      optimizer TEXT NOT NULL,
+      run_started_at TIMESTAMPTZ NOT NULL,
+      run_finished_at TIMESTAMPTZ,
+      status TEXT NOT NULL,
+      input_json TEXT,
+      result_json TEXT,
+      source TEXT NOT NULL,
+      external_run_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS optimizer_run_series (
+      id BIGSERIAL PRIMARY KEY,
+      optimizer_run_id BIGINT NOT NULL REFERENCES optimizer_runs(id) ON DELETE CASCADE,
+      series_key TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      ts_utc TIMESTAMPTZ NOT NULL,
+      resolution_seconds INTEGER NOT NULL,
+      value_num DOUBLE PRECISION,
+      unit TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id BIGSERIAL PRIMARY KEY,
+      job_type TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL,
+      finished_at TIMESTAMPTZ,
+      status TEXT NOT NULL,
+      requested_from TEXT,
+      requested_to TEXT,
+      imported_rows INTEGER NOT NULL DEFAULT 0,
+      source_account TEXT,
+      meta_json TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS data_gaps (
+      id BIGSERIAL PRIMARY KEY,
+      series_key TEXT NOT NULL,
+      gap_start TIMESTAMPTZ NOT NULL,
+      gap_end TIMESTAMPTZ NOT NULL,
+      detected_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      fill_source TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS energy_slots_15m (
+      id BIGSERIAL PRIMARY KEY,
+      slot_start_utc TIMESTAMPTZ NOT NULL,
+      series_key TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      quality TEXT NOT NULL,
+      value_num DOUBLE PRECISION,
+      unit TEXT,
+      meta_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(slot_start_utc, series_key, source_kind)
+    );
+    CREATE INDEX IF NOT EXISTS idx_energy_slots_15m_slot_start ON energy_slots_15m(slot_start_utc);
+
+    CREATE TABLE IF NOT EXISTS solar_market_values (
+      id BIGSERIAL PRIMARY KEY,
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      ct_kwh DOUBLE PRECISION NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at TIMESTAMPTZ NOT NULL,
+      last_attempt_at TIMESTAMPTZ,
+      cooldown_until TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'ready',
+      error TEXT,
+      UNIQUE(scope, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_solar_market_values_scope_key ON solar_market_values(scope, key);
+
+    CREATE TABLE IF NOT EXISTS solar_market_value_year_attempts (
+      year INTEGER PRIMARY KEY,
+      last_attempt_at TIMESTAMPTZ NOT NULL,
+      cooldown_until TIMESTAMPTZ,
+      status TEXT NOT NULL,
+      error TEXT
+    );
+  `);
+}
+
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
 
   async function writeSamples(rows) {
