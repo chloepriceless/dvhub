@@ -662,11 +662,13 @@ function persistConfig() {
   }
 }
 
-function createTelemetryStoreIfEnabled() {
+async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
     const dbConfig = cfg.telemetry.database || {};
     const pool = createPool(dbConfig);
+    // Connectivity check — fail fast if DB is unreachable
+    await pool.query('SELECT 1');
     const store = createTelemetryStorePg(pool, {
       rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });
@@ -3192,40 +3194,42 @@ const web = http.createServer(async (req, res) => {
   }
 });
 
-telemetryStore = createTelemetryStoreIfEnabled();
-energyChartsMarketValueService = createEnergyChartsMarketValueService({
-  marketValueStore: telemetryStore
-});
-liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
-  flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
-  buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
-  writeSamples: (rows) => telemetrySafeWrite(() => telemetryStore.writeSamples(rows))
-}) : null;
-historyImportManager = telemetryStore ? createHistoryImportManager({
-  store: telemetryStore,
-  telemetryConfig: cfg.telemetry || {}
-}) : null;
-if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
-historyRuntime = telemetryStore ? createHistoryRuntime({
-  store: telemetryStore,
-  getPricingConfig: () => cfg.userEnergyPricing || {},
-  getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants })
-}) : null;
-historyApi = createHistoryApiHandlers({
-  historyRuntime,
-  historyImportManager,
-  telemetryEnabled: !!telemetryStore,
-  defaultBzn: cfg.epex?.bzn || 'DE-LU',
-  appVersion: APP_VERSION,
-  getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
-});
-refreshTelemetryStatus().catch(e => pushLog('telemetry_status_error', { error: e.message }));
-if (IS_RUNTIME_PROCESS) {
-  applicableValueService.refresh().catch((error) => {
-    pushLog('applicable_value_refresh_error', { error: error.message });
+(async () => {
+  telemetryStore = await createTelemetryStoreIfEnabled();
+  energyChartsMarketValueService = createEnergyChartsMarketValueService({
+    marketValueStore: telemetryStore
   });
-  startAutomaticMarketValueBackfill();
-}
+  liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
+    flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
+    buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
+    writeSamples: (rows) => telemetrySafeWrite(() => telemetryStore.writeSamples(rows))
+  }) : null;
+  historyImportManager = telemetryStore ? createHistoryImportManager({
+    store: telemetryStore,
+    telemetryConfig: cfg.telemetry || {}
+  }) : null;
+  if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
+  historyRuntime = telemetryStore ? createHistoryRuntime({
+    store: telemetryStore,
+    getPricingConfig: () => cfg.userEnergyPricing || {},
+    getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants })
+  }) : null;
+  historyApi = createHistoryApiHandlers({
+    historyRuntime,
+    historyImportManager,
+    telemetryEnabled: !!telemetryStore,
+    defaultBzn: cfg.epex?.bzn || 'DE-LU',
+    appVersion: APP_VERSION,
+    getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
+  });
+  await refreshTelemetryStatus();
+  if (IS_RUNTIME_PROCESS) {
+    applicableValueService.refresh().catch((error) => {
+      pushLog('applicable_value_refresh_error', { error: error.message });
+    });
+    startAutomaticMarketValueBackfill();
+  }
+})().catch(e => pushLog('telemetry_init_error', { error: e.message }));
 
 if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
   runtimeWorker = startDedicatedRuntimeWorker();
