@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.3.9 |
+| **Status** | `main` -- Version 0.3.10 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -69,13 +69,22 @@ des Direktvermarkters wird in Software nachgebildet, waehrend die Live-Daten dir
 
 ### Installer
 
+**Stable (empfohlen):**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash
 ```
 
+**Dev (Bleeding Edge — aktuelle Commits von main):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash -s -- --channel dev
+```
+
 Der Installer:
 
-- installiert Node.js
+- installiert Node.js und PostgreSQL
+- legt PostgreSQL-User und Datenbank `dvhub` an (Peer-Auth via Unix-Socket)
 - klont das Repo nach `/opt/dvhub`
 - nutzt die App unter `/opt/dvhub/dvhub`
 - migriert alte Installationen aus `/opt/dvhub/dv-control-webapp`
@@ -83,6 +92,9 @@ Der Installer:
 - nutzt eine externe Config-Datei unter `/etc/dvhub/config.json`
 - aktiviert Health-Checks und optionalen Restart aus der GUI
 - startet `dvhub.service` nach dem Update automatisch neu
+- **Stable-Channel** (Standard): checkt den neuesten Release-Tag aus
+- **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
+- Update-Channel ist ueber die Tools-Seite umschaltbar
 
 Wenn die Config-Datei noch fehlt oder ungueltig ist, oeffnet DVhub beim ersten Aufruf automatisch den Setup-Assistenten.
 
@@ -499,6 +511,27 @@ Unter `userEnergyPricing` stehen fuer die History-Marktpraemie zwei zusaetzliche
 ---
 
 ## Changelog
+
+### 0.3.10 (2026-03-22)
+
+**Update-Channel-System:**
+
+- Neuer Update-Channel: Stable (Release-Tags) oder Dev (Bleeding Edge main HEAD)
+- Channel waehlbar ueber Tools-Seite oder Installer (`--channel dev`)
+- Stable folgt Git-Tags, Dev folgt origin/main — sauber umschaltbar
+- Installer schreibt `updateChannel` in die Config
+
+**PostgreSQL Auto-Schema:**
+
+- Datenbank-Tabellen werden beim ersten Start automatisch erstellt (CREATE TABLE IF NOT EXISTS)
+- Neue Installationen funktionieren ohne manuelle Schema-Migration
+- Installer installiert PostgreSQL, legt User/DB an und konfiguriert Peer-Auth via Unix-Socket
+
+**Bugfixes:**
+
+- Fix: startAutomaticMarketValueBackfill ruft getTelemetryBounds jetzt korrekt mit await auf
+- Fix: Unhandled Rejection bei leerer Datenbank behoben
+- Fix: Telemetrie-Init mit async Connectivity-Check und graceful Error-Handling
 
 ### 0.3.9 (2026-03-21)
 
