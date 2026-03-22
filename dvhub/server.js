@@ -40,6 +40,7 @@ import {
   buildAutomationRuleChain,
   buildChainVariants,
   computeAvailableEnergyKwh,
+  computeDynamicAutomationMinSocPct,
   computeEnergyBasedSlotAllocation,
   computeNextPeriodBounds,
   expandChainSlots,
@@ -53,6 +54,7 @@ import { pickMilpPlan } from './milp-optimizer.js';
 import {
   buildSunTimesCacheKey,
   isSunTimesCacheStale,
+  readSunTimesForDate,
   readSunTimesCacheStore
 } from './sun-times-cache.js';
 import {
@@ -357,11 +359,39 @@ async function buildSmallMarketAutomationRules({
   const currentSocPct = state.victron?.soc;
   let availableEnergyKwh = null;
 
+  // Dynamic SOC floor: use sunrise/sunset to allow deeper discharge near sunrise.
+  // For the overall energy budget, use the lowest SOC floor across all candidate
+  // slot times (= at sunrise) so morning slots can access the extra energy.
+  let effectiveMinSocPct = automationConfig?.minSocPct;
+  if (sunTimesCache?.cache) {
+    // Find the latest slot timestamp to determine the most generous SOC floor
+    const latestSlotTs = freeSlots.length
+      ? Math.max(...freeSlots.map(s => Number(s?.ts) || 0))
+      : now;
+    const latestSlotDate = berlinDateString(new Date(latestSlotTs));
+    const sunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: latestSlotDate });
+    if (sunTimes?.sunriseTs && sunTimes?.sunsetTs) {
+      const sunriseMs = new Date(sunTimes.sunriseTs).getTime();
+      const prevDate = berlinDateString(new Date(latestSlotTs - 86400000));
+      const prevSunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: prevDate });
+      const sunsetMs = prevSunTimes?.sunsetTs
+        ? new Date(prevSunTimes.sunsetTs).getTime()
+        : sunriseMs - 12 * 3600000; // fallback: 12h before sunrise
+      effectiveMinSocPct = computeDynamicAutomationMinSocPct({
+        automationMinSocPct: automationConfig?.minSocPct,
+        globalMinSocPct: state.victron?.minSocPct ?? 10,
+        sunsetTs: sunsetMs,
+        sunriseTs: sunriseMs,
+        nowTs: latestSlotTs
+      });
+    }
+  }
+
   if (batteryCapacityKwh > 0 && currentSocPct != null) {
     availableEnergyKwh = computeAvailableEnergyKwh({
       batteryCapacityKwh,
       currentSocPct,
-      minSocPct: automationConfig?.minSocPct,
+      minSocPct: effectiveMinSocPct,
       inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
     });
   }

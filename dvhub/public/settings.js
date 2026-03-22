@@ -774,7 +774,105 @@ function renderField(field) {
     }
   }
 
+  // Location picker button after longitude field
+  if (field.path && field.path.endsWith('.location.longitude')) {
+    const mapBtn = document.createElement('button');
+    mapBtn.type = 'button';
+    mapBtn.className = 'btn btn-secondary';
+    mapBtn.textContent = 'Auf Karte w\u00e4hlen';
+    mapBtn.style.marginTop = '4px';
+    mapBtn.addEventListener('click', () => openLocationPicker(field.path.replace('.longitude', '')));
+    wrapper.appendChild(mapBtn);
+  }
+
   return wrapper;
+}
+
+/* ---------- OpenStreetMap location picker modal ---------- */
+function openLocationPicker(locationBasePath) {
+  const latPath = locationBasePath + '.latitude';
+  const lonPath = locationBasePath + '.longitude';
+  const latInput = document.querySelector(`[data-path="${latPath}"]`);
+  const lonInput = document.querySelector(`[data-path="${lonPath}"]`);
+  const currentLat = parseFloat(latInput?.value) || 51.0;
+  const currentLon = parseFloat(lonInput?.value) || 10.0;
+
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'location-picker-overlay';
+  overlay.innerHTML = `
+    <div class="location-picker-modal">
+      <div class="location-picker-header">
+        <strong>Standort auf Karte w\u00e4hlen</strong>
+        <button type="button" class="btn btn-ghost location-picker-close">\u2715</button>
+      </div>
+      <div id="location-picker-map" style="width:100%;height:400px;"></div>
+      <div class="location-picker-footer">
+        <span id="location-picker-coords">${currentLat.toFixed(6)}, ${currentLon.toFixed(6)}</span>
+        <button type="button" class="btn btn-primary" id="location-picker-apply">\u00dcbernehmen</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  let selectedLat = currentLat;
+  let selectedLon = currentLon;
+
+  // Load Leaflet CSS + JS dynamically (no API key needed)
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+  document.head.appendChild(link);
+
+  const script = document.createElement('script');
+  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+  script.onload = () => {
+    const map = L.map('location-picker-map').setView([currentLat, currentLon], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+    const marker = L.marker([currentLat, currentLon], { draggable: true }).addTo(map);
+
+    function updateCoords(lat, lon) {
+      selectedLat = lat;
+      selectedLon = lon;
+      document.getElementById('location-picker-coords').textContent =
+        `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    }
+
+    marker.on('dragend', () => {
+      const pos = marker.getLatLng();
+      updateCoords(pos.lat, pos.lng);
+    });
+
+    map.on('click', (e) => {
+      marker.setLatLng(e.latlng);
+      updateCoords(e.latlng.lat, e.latlng.lng);
+    });
+  };
+  document.head.appendChild(script);
+
+  // Close
+  overlay.querySelector('.location-picker-close').addEventListener('click', () => {
+    overlay.remove();
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  // Apply
+  document.getElementById('location-picker-apply').addEventListener('click', () => {
+    if (latInput) {
+      latInput.value = selectedLat.toFixed(6);
+      latInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    if (lonInput) {
+      lonInput.value = selectedLon.toFixed(6);
+      lonInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    overlay.remove();
+  });
 }
 
 function groupFields(fields) {
