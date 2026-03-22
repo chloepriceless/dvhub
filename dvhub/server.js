@@ -359,41 +359,65 @@ async function buildSmallMarketAutomationRules({
   const currentSocPct = state.victron?.soc;
   let availableEnergyKwh = null;
 
-  // Dynamic SOC floor: use sunrise/sunset to allow deeper discharge near sunrise.
-  // For the overall energy budget, use the lowest SOC floor across all candidate
-  // slot times (= at sunrise) so morning slots can access the extra energy.
-  let effectiveMinSocPct = automationConfig?.minSocPct;
-  if (sunTimesCache?.cache) {
-    // Find the latest slot timestamp to determine the most generous SOC floor
-    const latestSlotTs = freeSlots.length
-      ? Math.max(...freeSlots.map(s => Number(s?.ts) || 0))
-      : now;
+  // Dynamic SOC floor: sunrise/sunset-aware energy budgeting.
+  // Each slot gets a time-dependent energy budget — morning slots near sunrise
+  // can access more battery energy because the SOC floor is lower then.
+  // perSlotBudgets: array of { ts, budgetKwh } sorted chronologically.
+  let perSlotBudgets = null;
+  let sunsetMsForPlanning = null;
+  let sunriseMsForPlanning = null;
+
+  if (sunTimesCache?.cache && freeSlots.length) {
+    // Find sunrise for the latest slot date and sunset from the previous day
+    const latestSlotTs = Math.max(...freeSlots.map(s => Number(s?.ts) || 0));
     const latestSlotDate = berlinDateString(new Date(latestSlotTs));
     const sunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: latestSlotDate });
     if (sunTimes?.sunriseTs && sunTimes?.sunsetTs) {
-      const sunriseMs = new Date(sunTimes.sunriseTs).getTime();
+      sunriseMsForPlanning = new Date(sunTimes.sunriseTs).getTime();
       const prevDate = berlinDateString(new Date(latestSlotTs - 86400000));
       const prevSunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: prevDate });
-      const sunsetMs = prevSunTimes?.sunsetTs
+      sunsetMsForPlanning = prevSunTimes?.sunsetTs
         ? new Date(prevSunTimes.sunsetTs).getTime()
-        : sunriseMs - 12 * 3600000; // fallback: 12h before sunrise
-      effectiveMinSocPct = computeDynamicAutomationMinSocPct({
-        automationMinSocPct: automationConfig?.minSocPct,
-        globalMinSocPct: state.victron?.minSocPct ?? 10,
-        sunsetTs: sunsetMs,
-        sunriseTs: sunriseMs,
-        nowTs: latestSlotTs
-      });
+        : sunriseMsForPlanning - 12 * 3600000;
+
+      if (batteryCapacityKwh > 0 && currentSocPct != null) {
+        perSlotBudgets = freeSlots
+          .map(s => Number(s?.ts) || 0)
+          .sort((a, b) => a - b)
+          .map(ts => {
+            const dynamicMin = computeDynamicAutomationMinSocPct({
+              automationMinSocPct: automationConfig?.minSocPct,
+              globalMinSocPct: state.victron?.minSocPct ?? 10,
+              sunsetTs: sunsetMsForPlanning,
+              sunriseTs: sunriseMsForPlanning,
+              nowTs: ts
+            });
+            return {
+              ts,
+              budgetKwh: computeAvailableEnergyKwh({
+                batteryCapacityKwh,
+                currentSocPct,
+                minSocPct: dynamicMin,
+                inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+              })
+            };
+          });
+      }
     }
   }
 
+  // Overall energy budget: use the most generous (latest/sunrise) budget
   if (batteryCapacityKwh > 0 && currentSocPct != null) {
-    availableEnergyKwh = computeAvailableEnergyKwh({
-      batteryCapacityKwh,
-      currentSocPct,
-      minSocPct: effectiveMinSocPct,
-      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
-    });
+    if (perSlotBudgets?.length) {
+      availableEnergyKwh = perSlotBudgets[perSlotBudgets.length - 1].budgetKwh;
+    } else {
+      availableEnergyKwh = computeAvailableEnergyKwh({
+        batteryCapacityKwh,
+        currentSocPct,
+        minSocPct: automationConfig?.minSocPct,
+        inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+      });
+    }
   }
 
   // Hard energy gate: if battery capacity is known and no energy available, skip planning
@@ -438,6 +462,7 @@ async function buildSmallMarketAutomationRules({
         stages: milpStages,
         maxDischargeW: automationConfig?.maxDischargeW,
         availableKwh: availableEnergyKwh,
+        perSlotBudgets: perSlotBudgets || null,
         slotDurationMs: SLOT_DURATION_MS,
         slotDurationH: SLOT_DURATION_HOURS
       });
