@@ -396,10 +396,16 @@ async function buildSmallMarketAutomationRules({
 
   if (engine === 'milp') {
     // MILP: mathematisch optimale Block-Platzierung via HiGHS
+    // When no custom stages are configured, use single-slot stages so the MILP
+    // can place each slot independently at the most profitable time (non-contiguous).
+    const hasCustomStages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length > 0;
+    const milpStages = hasCustomStages
+      ? automationConfig.stages
+      : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: 1, cooldownSlots: 0 }];
     try {
       plan = await pickMilpPlan({
         slots: freeSlots,
-        stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
+        stages: milpStages,
         maxDischargeW: automationConfig?.maxDischargeW,
         availableKwh: availableEnergyKwh,
         slotDurationMs: SLOT_DURATION_MS,
