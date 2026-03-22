@@ -132,11 +132,14 @@ export async function pickMilpPlan({
     lp += ` energy: ${energyTerms} <= ${Math.round(availableKwh * 10000)}\n`;
   }
 
-  // Max repetitions per stage: reasonable cap (e.g., 10)
+  // Max repetitions per stage: use energy-based cap when available, otherwise 20
+  const maxRepCap = (availableKwh != null && Number.isFinite(availableKwh) && availableKwh > 0)
+    ? Math.max(1, Math.ceil(availableKwh / Math.max(...stageBlocks.map(b => b.energyKwh || 1))))
+    : 20;
   for (const block of stageBlocks) {
     const stagePlacements = placements.filter(p => p.block.stageIdx === block.stageIdx);
     if (stagePlacements.length > 1) {
-      lp += ` maxrep_s${block.stageIdx}: ${stagePlacements.map(p => p.id).join(' + ')} <= 10\n`;
+      lp += ` maxrep_s${block.stageIdx}: ${stagePlacements.map(p => p.id).join(' + ')} <= ${maxRepCap}\n`;
     }
   }
 
