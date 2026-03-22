@@ -771,11 +771,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.targetSlotCount',
-      label: 'Maximale Ziel-Slots',
+      label: 'Maximale Ziel-Slots (optional)',
       type: 'number',
-      min: 1,
+      min: 0,
       max: 24,
-      help: 'Wie viele freie Slots (je 15 Min.) maximal belegt werden dürfen.'
+      help: 'Optionaler Maximalwert. Wird automatisch aus Batteriekapazität, Leistung und SOC berechnet wenn leer oder 0.'
     },
     {
       section: 'schedule',
@@ -1445,7 +1445,7 @@ export function createDefaultConfig() {
         enabled: false,
         searchWindowStart: '14:00',
         searchWindowEnd: '09:00',
-        targetSlotCount: 4,
+        targetSlotCount: null,
         maxDischargeW: -12000,
         batteryCapacityKwh: null,
         inverterEfficiencyPct: 85,
@@ -1498,7 +1498,7 @@ export function createDefaultConfig() {
     telemetry: {
       enabled: true,
       database: {
-        host: 'localhost',
+        host: '/var/run/postgresql',
         port: 5432,
         name: 'dvhub',
         user: 'dvhub',
