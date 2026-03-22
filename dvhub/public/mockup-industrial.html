@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DVhub — Industrial Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+  background: #1A1A1A;
+  color: #E0E0E0;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 400;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  min-height: 100vh;
+}
+
+/* NAV */
+.nav {
+  background: #111111;
+  border-bottom: 2px solid #333333;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 24px;
+  font-size: 0.85rem;
+}
+.nav-brand {
+  color: #00FF88;
+  font-weight: 700;
+  text-decoration: none;
+}
+.nav a {
+  text-decoration: none;
+  font-family: 'JetBrains Mono', monospace;
+}
+.nav-link {
+  color: #999999;
+}
+.nav-link:hover {
+  color: #E0E0E0;
+}
+.nav-link.active {
+  color: #00FF88;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+/* GRID */
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 8px;
+  padding: 12px;
+}
+
+/* PANEL */
+.panel {
+  background: #222222;
+  border: 2px solid #3A3A3A;
+  border-radius: 4px;
+  padding: 10px;
+  border-left: 4px solid #00FF88;
+}
+.panel--amber { border-left-color: #FFB800; }
+.panel--red { border-left-color: #FF3333; }
+
+/* KICKER */
+.kicker {
+  color: #FFB800;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* VALUE */
+.value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #00FF88;
+  line-height: 1.1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.value-unit {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #666666;
+}
+.value-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #00FF88;
+  margin-left: 4px;
+}
+
+/* LED */
+.led {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.led--green { background: #00FF88; }
+.led--red { background: #FF3333; }
+.led--amber { background: #FFB800; }
+.led--off {
+  background: transparent;
+  border: 1.5px solid #666666;
+}
+
+/* METRICS */
+.metrics {
+  margin-top: 8px;
+  font-size: 0.8rem;
+}
+.metric-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.metric-label {
+  color: #999999;
+  min-width: 48px;
+}
+.metric-value {
+  color: #E0E0E0;
+}
+.metric-value--green { color: #00FF88; }
+.metric-value--amber { color: #FFB800; }
+.metric-value--red { color: #FF3333; }
+
+/* BATTERY BAR */
+.battery-bar {
+  display: flex;
+  gap: 2px;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+.battery-seg {
+  width: 100%;
+  height: 10px;
+  border-radius: 1px;
+  background: #3A3A3A;
+}
+.battery-seg--filled {
+  background: #00FF88;
+}
+
+/* COST ROWS */
+.cost-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.85rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.cost-label { color: #999999; min-width: 32px; }
+.cost-value { color: #E0E0E0; min-width: 56px; text-align: right; }
+.cost-row--bold .cost-value { color: #FFFFFF; font-weight: 700; }
+
+/* CHART */
+.chart-container {
+  height: 120px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding-top: 4px;
+  position: relative;
+}
+.chart-bar-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+}
+.chart-bar {
+  width: 100%;
+  background: #00FF88;
+  border-radius: 1px;
+  min-height: 1px;
+}
+.chart-bar--neg {
+  background: #FF3333;
+}
+.chart-hour {
+  font-size: 0.55rem;
+  color: #666666;
+  margin-top: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1;
+}
+.chart-zero-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid #3A3A3A;
+}
+
+/* TABLE */
+.schedule-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.schedule-table th {
+  color: #666666;
+  font-weight: 500;
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid #3A3A3A;
+}
+.schedule-table td {
+  padding: 4px 6px;
+  color: #E0E0E0;
+}
+.schedule-table .num {
+  text-align: right;
+}
+.schedule-table .dim {
+  color: #666666;
+}
+.schedule-table .src-sma { color: #00FF88; }
+.schedule-table .src-man { color: #FFB800; }
+
+/* AUTOMATION */
+.auto-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+.auto-status-text { color: #00FF88; font-weight: 500; }
+.auto-status-mode { color: #999999; }
+
+/* CONTROL ROWS */
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.85rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.ctrl-label { color: #999999; min-width: 40px; }
+.ctrl-value { color: #E0E0E0; }
+.ctrl-note { color: #666666; font-size: 0.75rem; margin-top: 8px; }
+
+/* LOG */
+.log-terminal {
+  background: #111111;
+  border: 1px solid #333333;
+  border-radius: 2px;
+  padding: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: #00FF88;
+  line-height: 1.6;
+}
+.log-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* SPAN HELPERS */
+.span-3  { grid-column: span 3; }
+.span-4  { grid-column: span 4; }
+.span-6  { grid-column: span 6; }
+.span-8  { grid-column: span 8; }
+.span-12 { grid-column: span 12; }
+
+/* RESPONSIVE */
+@media (max-width: 1024px) {
+  .dashboard { grid-template-columns: repeat(2, 1fr); }
+  .span-3, .span-4, .span-6, .span-8, .span-12 { grid-column: span 1; }
+  .span-12, .span-8 { grid-column: span 2; }
+}
+@media (max-width: 768px) {
+  .dashboard { grid-template-columns: 1fr; gap: 6px; padding: 8px; }
+  .span-3, .span-4, .span-6, .span-8, .span-12 { grid-column: span 1; }
+  .value { font-size: 1.6rem; }
+  .nav { gap: 16px; font-size: 0.78rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <a href="#" class="nav-brand">[DVhub]</a>
+  <a href="#" class="nav-link active">Dashboard</a>
+  <a href="#" class="nav-link">Explorer</a>
+  <a href="#" class="nav-link">Einstellungen</a>
+</nav>
+
+<!-- DASHBOARD -->
+<div class="dashboard">
+
+  <!-- ROW 1: METRIC CARDS -->
+
+  <!-- DV-STATUS -->
+  <div class="panel span-3">
+    <div class="kicker">DV-STATUS</div>
+    <div class="value">
+      <span>1</span>
+      <span class="led led--green" style="align-self:center;"></span>
+    </div>
+    <div class="metrics">
+      <div class="metric-row">
+        <span class="metric-label">DC-PV</span>
+        <span class="led led--green"></span>
+        <span class="metric-value">AKT</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">LEASE</span>
+        <span style="color:#666666;">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">POLL</span>
+        <span class="metric-value">14:32</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MARKT -->
+  <div class="panel panel--amber span-3">
+    <div class="kicker">MARKT</div>
+    <div class="value">
+      <span>8.2</span>
+      <span class="value-unit">ct/kWh</span>
+    </div>
+    <div class="metrics">
+      <div class="metric-row">
+        <span class="metric-label">NEXT</span>
+        <span class="metric-value">6.1 ct</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">NEG</span>
+        <span class="metric-value--red">2</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">RANGE</span>
+        <span class="metric-value">2.1–11.4</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- NETZ -->
+  <div class="panel span-3">
+    <div class="kicker">NETZ</div>
+    <div class="value">
+      <span>-1200</span>
+      <span class="value-unit">W</span>
+      <span class="value-label">&#9650; EXPORT</span>
+    </div>
+    <div class="metrics">
+      <div class="metric-row">
+        <span class="metric-label">L1</span>
+        <span class="metric-value">-380W</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">L2</span>
+        <span class="metric-value">-410W</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">L3</span>
+        <span class="metric-value">-410W</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ANLAGE -->
+  <div class="panel span-3">
+    <div class="kicker">ANLAGE</div>
+    <div class="value">
+      <span>72</span>
+      <span class="value-unit">%</span>
+    </div>
+    <div class="battery-bar">
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg battery-seg--filled"></div>
+      <div class="battery-seg"></div>
+      <div class="battery-seg"></div>
+      <div class="battery-seg"></div>
+    </div>
+    <div class="metrics">
+      <div class="metric-row">
+        <span class="metric-label">BAT</span>
+        <span class="metric-value">-2400W</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">PV</span>
+        <span class="metric-value--green">4850W</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">SET</span>
+        <span class="metric-value">-5000W</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">SOC</span>
+        <span class="metric-value">10%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 2: KOSTEN + PREISE -->
+
+  <!-- KOSTEN -->
+  <div class="panel panel--amber span-4">
+    <div class="kicker">KOSTEN</div>
+    <div class="cost-row">
+      <span class="cost-label">IMP</span>
+      <span class="cost-value">1.24&#8364;</span>
+      <span class="led led--red"></span>
+    </div>
+    <div class="cost-row">
+      <span class="cost-label">EXP</span>
+      <span class="cost-value">0.87&#8364;</span>
+      <span class="led led--green"></span>
+    </div>
+    <div class="cost-row cost-row--bold" style="margin-top:8px; padding-top:8px; border-top:1px solid #3A3A3A;">
+      <span class="cost-label">NET</span>
+      <span class="cost-value">0.37&#8364;</span>
+    </div>
+  </div>
+
+  <!-- PREISE -->
+  <div class="panel panel--amber span-8">
+    <div class="kicker">DAY-AHEAD ct/kWh</div>
+    <div class="chart-container" style="position:relative;">
+      <!-- Zero line positioned: max=11.4, min=-1.2, range=12.6, zero at (11.4/12.6)*100 = 90.48% from top -->
+      <div class="chart-zero-line" style="bottom: calc(1.2 / 12.6 * 100%);"></div>
+      <!-- 24 bars. Heights as % of 12.6 range. Bars grow from zero line. -->
+      <!-- h0: 5.2 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(5.2 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">0</div>
+      </div>
+      <!-- h1: 4.8 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(4.8 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">1</div>
+      </div>
+      <!-- h2: 3.9 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(3.9 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">2</div>
+      </div>
+      <!-- h3: 3.1 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(3.1 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">3</div>
+      </div>
+      <!-- h4: 2.8 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(2.8 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">4</div>
+      </div>
+      <!-- h5: 3.5 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(3.5 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">5</div>
+      </div>
+      <!-- h6: 6.2 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(6.2 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">6</div>
+      </div>
+      <!-- h7: 8.1 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(8.1 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">7</div>
+      </div>
+      <!-- h8: 9.4 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(9.4 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">8</div>
+      </div>
+      <!-- h9: 8.7 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(8.7 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">9</div>
+      </div>
+      <!-- h10: 7.2 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(7.2 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">10</div>
+      </div>
+      <!-- h11: 6.8 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(6.8 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">11</div>
+      </div>
+      <!-- h12: 5.9 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(5.9 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">12</div>
+      </div>
+      <!-- h13: 4.2 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(4.2 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">13</div>
+      </div>
+      <!-- h14: -1.2 (negative) -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%); display:flex; align-items:flex-end; width:100%;">
+          <div class="chart-bar chart-bar--neg" style="height:100%; width:100%;"></div>
+        </div>
+        <div class="chart-hour">14</div>
+      </div>
+      <!-- h15: -0.8 (negative) -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div style="height: calc(0.8 / 12.6 * 100%); display:flex; align-items:flex-end; width:100%;">
+          <div class="chart-bar chart-bar--neg" style="height:100%; width:100%;"></div>
+        </div>
+        <div class="chart-hour">15</div>
+      </div>
+      <!-- h16: 2.1 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(2.1 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">16</div>
+      </div>
+      <!-- h17: 5.8 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(5.8 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">17</div>
+      </div>
+      <!-- h18: 9.2 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(9.2 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">18</div>
+      </div>
+      <!-- h19: 11.4 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(11.4 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">19</div>
+      </div>
+      <!-- h20: 10.8 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(10.8 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">20</div>
+      </div>
+      <!-- h21: 9.1 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(9.1 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">21</div>
+      </div>
+      <!-- h22: 7.3 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(7.3 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">22</div>
+      </div>
+      <!-- h23: 6.0 -->
+      <div class="chart-bar-wrap">
+        <div style="flex:1;"></div>
+        <div class="chart-bar" style="height: calc(6.0 / 12.6 * 100%);"></div>
+        <div style="height: calc(1.2 / 12.6 * 100%);"></div>
+        <div class="chart-hour">23</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 3: ZEITPLAN -->
+  <div class="panel span-12">
+    <div class="kicker">ZEITPLAN</div>
+    <table class="schedule-table">
+      <thead>
+        <tr>
+          <th>ST</th>
+          <th>VON</th>
+          <th>BIS</th>
+          <th class="num">GRID</th>
+          <th class="num">CHARGE</th>
+          <th class="num">STOP</th>
+          <th>DC</th>
+          <th>SRC</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="led led--green"></span></td>
+          <td>02:00</td>
+          <td>05:00</td>
+          <td class="num">-12000</td>
+          <td class="num">—</td>
+          <td class="num">20%</td>
+          <td>—</td>
+          <td class="src-sma">SMA</td>
+        </tr>
+        <tr>
+          <td><span class="led led--green"></span></td>
+          <td>14:00</td>
+          <td>16:00</td>
+          <td class="num">-40</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td><span class="led led--green"></span></td>
+          <td class="src-man">MAN</td>
+        </tr>
+        <tr>
+          <td><span class="led led--green"></span></td>
+          <td>16:00</td>
+          <td>18:00</td>
+          <td class="num">-8000</td>
+          <td class="num">—</td>
+          <td class="num">30%</td>
+          <td>—</td>
+          <td class="src-sma">SMA</td>
+        </tr>
+        <tr class="dim">
+          <td><span class="led led--off"></span></td>
+          <td>20:00</td>
+          <td>22:00</td>
+          <td class="num">-40</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td><span class="led led--off"></span></td>
+          <td class="src-man">MAN</td>
+        </tr>
+        <tr>
+          <td><span class="led led--green"></span></td>
+          <td>23:00</td>
+          <td>01:00</td>
+          <td class="num">-6000</td>
+          <td class="num">—</td>
+          <td class="num">25%</td>
+          <td>—</td>
+          <td class="src-sma">SMA</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ROW 4: AUTOMATIK + STEUERUNG -->
+
+  <!-- AUTOMATIK -->
+  <div class="panel span-6">
+    <div class="kicker">B&Ouml;RSENAUTOMATIK</div>
+    <div class="auto-status">
+      <span class="led led--green"></span>
+      <span class="auto-status-text">AKTIV</span>
+      <span class="auto-status-mode">MILP</span>
+    </div>
+    <div class="metrics">
+      <div class="metric-row">
+        <span class="metric-label">SLOT</span>
+        <span class="metric-value">16:00–18:00</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">USED</span>
+        <span class="metric-value">3/5</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">REV</span>
+        <span class="metric-value--green">2.45&#8364;</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">BUDG</span>
+        <span class="metric-value">16.3kWh</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">STAGE</span>
+        <span class="metric-value">12000W&times;1</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEUERUNG -->
+  <div class="panel panel--amber span-6">
+    <div class="kicker">STEUERUNG</div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">GRID</span>
+      <span class="ctrl-value">-5000W</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">CHRG</span>
+      <span class="ctrl-value">100A</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">SOC</span>
+      <span class="ctrl-value">10%</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">DC</span>
+      <span class="led led--green"></span>
+      <span class="ctrl-value" style="color:#00FF88;">EIN</span>
+    </div>
+    <div class="ctrl-note">TTL 5MIN</div>
+  </div>
+
+  <!-- ROW 5: LOG -->
+  <div class="panel span-12">
+    <div class="kicker">LOG</div>
+    <div class="log-terminal">
+      <div class="log-line">$ 14:32:15 control_write gridSetpointW=-5000W src=sma-1711032000</div>
+      <div class="log-line">$ 14:30:00 sma_plan engine=milp slots=3 rev=2.45EUR</div>
+      <div class="log-line">$ 14:15:22 dv_write feedDcPv=1 blockAcPv=0</div>
+      <div class="log-line">$ 14:00:01 epex_update slots=24 neg=2</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

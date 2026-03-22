@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DVhub — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0A0A0A; color: #FAFAFA; min-height: 100vh; }
+
+  /* NAV */
+  .topbar { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 20px; border-bottom: 1px solid #1F1F1F; background: #0A0A0A; position: sticky; top: 0; z-index: 100; }
+  .topbar-brand { font-weight: 600; font-size: 1.1rem; color: #FAFAFA; }
+  .topbar-nav { display: flex; gap: 4px; }
+  .topbar-nav a { text-decoration: none; font-size: 0.8rem; font-weight: 500; padding: 5px 12px; border-radius: 6px; transition: color 0.15s, background 0.15s; }
+  .topbar-nav a.active { color: #3B82F6; background: rgba(59,130,246,0.1); }
+  .topbar-nav a:not(.active) { color: #A1A1AA; background: transparent; }
+  .topbar-nav a:not(.active):hover { color: #FAFAFA; }
+
+  /* GRID */
+  .dashboard { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; padding: 20px; max-width: 1400px; margin: 0 auto; }
+
+  /* CARD */
+  .card { background: #141414; border: 1px solid #262626; border-radius: 8px; padding: 16px; }
+
+  /* KICKER */
+  .kicker { font-size: 0.68rem; font-weight: 500; color: #71717A; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+
+  /* BIG VALUE */
+  .big-value { font-size: 1.8rem; font-weight: 600; color: #FAFAFA; line-height: 1.2; }
+  .big-suffix { font-size: 0.85rem; font-weight: 400; color: #71717A; margin-left: 4px; }
+  .big-label { font-size: 0.75rem; font-weight: 500; margin-top: 2px; }
+
+  /* STATUS DOT */
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .dot-green { background: #22C55E; }
+  .dot-red { background: #EF4444; }
+
+  /* METRIC ROWS */
+  .metric-rows { margin-top: 12px; }
+  .metric-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #1F1F1F; font-size: 0.78rem; }
+  .metric-row:last-child { border-bottom: none; }
+  .metric-label { color: #A1A1AA; }
+  .metric-value { color: #FAFAFA; font-weight: 500; }
+
+  /* PROGRESS BAR */
+  .progress-track { width: 100%; height: 3px; background: #262626; border-radius: 2px; margin-top: 8px; }
+  .progress-fill { height: 100%; background: #3B82F6; border-radius: 2px; }
+
+  /* COST ROWS */
+  .cost-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1F1F1F; font-size: 0.82rem; }
+  .cost-row:last-child { border-bottom: none; }
+  .cost-label { color: #A1A1AA; }
+  .cost-value { font-weight: 500; }
+  .cost-red { color: #EF4444; }
+  .cost-green { color: #22C55E; }
+
+  /* BAR CHART */
+  .bar-chart { display: flex; align-items: flex-end; gap: 3px; height: 140px; margin-top: 8px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar { width: 100%; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .bar-blue { background: #3B82F6; }
+  .bar-red { background: #EF4444; }
+  .bar-label { font-size: 0.6rem; color: #52525B; margin-top: 4px; text-align: center; }
+
+  /* TABLE */
+  .schedule-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .schedule-table thead th { color: #71717A; font-size: 0.68rem; text-transform: uppercase; font-weight: 500; letter-spacing: 0.05em; text-align: left; padding: 6px 8px; }
+  .schedule-table tbody td { padding: 8px; border-bottom: 1px solid #1F1F1F; color: #FAFAFA; }
+  .schedule-table tbody tr:last-child td { border-bottom: none; }
+  .row-inactive { opacity: 0.4; }
+  .circle-active { color: #22C55E; }
+  .circle-inactive { color: #52525B; }
+  .tag-sma { display: inline-block; background: #262626; color: #A1A1AA; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; }
+  .tag-manual { color: #A1A1AA; font-size: 0.78rem; }
+
+  /* AUTOMATION */
+  .status-line { font-size: 0.82rem; color: #FAFAFA; margin-bottom: 10px; }
+
+  /* CONTROLS */
+  .ctrl-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #1F1F1F; font-size: 0.8rem; }
+  .ctrl-row:last-child { border-bottom: none; }
+  .ctrl-label { color: #A1A1AA; }
+  .ctrl-value { color: #FAFAFA; font-weight: 500; }
+  .ctrl-note { font-size: 0.72rem; color: #52525B; margin-top: 10px; }
+
+  /* LOG */
+  .log-block { background: #0F0F0F; padding: 12px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: #71717A; line-height: 1.8; }
+
+  /* SPAN HELPERS */
+  .span-3 { grid-column: span 3; }
+  .span-4 { grid-column: span 4; }
+  .span-6 { grid-column: span 6; }
+  .span-8 { grid-column: span 8; }
+  .span-12 { grid-column: span 12; }
+
+  /* RESPONSIVE */
+  @media (max-width: 1024px) {
+    .dashboard { grid-template-columns: repeat(2, 1fr); }
+    .span-3, .span-4, .span-6, .span-8, .span-12 { grid-column: span 1; }
+    .span-12, .span-8 { grid-column: span 2; }
+  }
+  @media (max-width: 768px) {
+    .dashboard { grid-template-columns: 1fr; }
+    .span-3, .span-4, .span-6, .span-8, .span-12 { grid-column: span 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<nav class="topbar">
+  <span class="topbar-brand">DVhub</span>
+  <div class="topbar-nav">
+    <a href="#" class="active">Dashboard</a>
+    <a href="#">Explorer</a>
+    <a href="#">Einstellungen</a>
+  </div>
+</nav>
+
+<!-- DASHBOARD -->
+<main class="dashboard">
+
+  <!-- ROW 1: METRIC CARDS -->
+
+  <!-- DV-Status -->
+  <section class="card span-3">
+    <div class="kicker">DV-Steuerung</div>
+    <div class="big-value">1 <span class="big-suffix"><span class="dot dot-green"></span>Freigabe</span></div>
+    <div class="metric-rows">
+      <div class="metric-row"><span class="metric-label">DC-PV</span><span class="metric-value">Aktiv</span></div>
+      <div class="metric-row"><span class="metric-label">Lease</span><span class="metric-value">&mdash;</span></div>
+      <div class="metric-row"><span class="metric-label">Kontakt</span><span class="metric-value">14:32</span></div>
+    </div>
+  </section>
+
+  <!-- Markt -->
+  <section class="card span-3">
+    <div class="kicker">Marktdaten</div>
+    <div class="big-value">8.2<span class="big-suffix">ct/kWh</span></div>
+    <div class="metric-rows">
+      <div class="metric-row"><span class="metric-label">N&auml;chster</span><span class="metric-value">6.1 ct</span></div>
+      <div class="metric-row"><span class="metric-label">Negativ</span><span class="metric-value">2</span></div>
+      <div class="metric-row"><span class="metric-label">Bereich</span><span class="metric-value">2.1&mdash;11.4</span></div>
+    </div>
+  </section>
+
+  <!-- Netz -->
+  <section class="card span-3">
+    <div class="kicker">Netzfluss</div>
+    <div class="big-value">&minus;1200 W</div>
+    <div class="big-label" style="color:#22C55E;">Export</div>
+    <div class="metric-rows">
+      <div class="metric-row"><span class="metric-label">L1</span><span class="metric-value">&minus;380 W</span></div>
+      <div class="metric-row"><span class="metric-label">L2</span><span class="metric-value">&minus;410 W</span></div>
+      <div class="metric-row"><span class="metric-label">L3</span><span class="metric-value">&minus;410 W</span></div>
+    </div>
+  </section>
+
+  <!-- Anlage -->
+  <section class="card span-3">
+    <div class="kicker">Anlage</div>
+    <div class="big-value">72 %</div>
+    <div class="progress-track"><div class="progress-fill" style="width:72%;"></div></div>
+    <div class="metric-rows">
+      <div class="metric-row"><span class="metric-label">Batterie</span><span class="metric-value">&minus;2400 W</span></div>
+      <div class="metric-row"><span class="metric-label">PV</span><span class="metric-value">4850 W</span></div>
+      <div class="metric-row"><span class="metric-label">Setpoint</span><span class="metric-value">&minus;5000 W</span></div>
+      <div class="metric-row"><span class="metric-label">Min-SOC</span><span class="metric-value">10 %</span></div>
+    </div>
+  </section>
+
+  <!-- ROW 2: COSTS + PRICE CHART -->
+
+  <!-- Kosten -->
+  <section class="card span-4">
+    <div class="kicker">Kosten heute</div>
+    <div class="cost-row"><span class="cost-label">Import</span><span class="cost-value cost-red">1.24 &euro;</span></div>
+    <div class="cost-row"><span class="cost-label">Export</span><span class="cost-value cost-green">0.87 &euro;</span></div>
+    <div class="cost-row"><span class="cost-label">Netto</span><span class="cost-value" style="font-weight:600;">0.37 &euro;</span></div>
+  </section>
+
+  <!-- Price Chart -->
+  <section class="card span-8">
+    <div class="kicker">Day-Ahead Preise</div>
+    <div class="bar-chart">
+      <div class="bar-col"><div class="bar bar-blue" style="height:45.6%;"></div><span class="bar-label">0</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:42.1%;"></div><span class="bar-label">1</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:34.2%;"></div><span class="bar-label">2</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:27.2%;"></div><span class="bar-label">3</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:24.6%;"></div><span class="bar-label">4</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:30.7%;"></div><span class="bar-label">5</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:54.4%;"></div><span class="bar-label">6</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:71.1%;"></div><span class="bar-label">7</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:82.5%;"></div><span class="bar-label">8</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:76.3%;"></div><span class="bar-label">9</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:63.2%;"></div><span class="bar-label">10</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:59.6%;"></div><span class="bar-label">11</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:51.8%;"></div><span class="bar-label">12</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:36.8%;"></div><span class="bar-label">13</span></div>
+      <div class="bar-col"><div class="bar bar-red" style="height:10.5%;"></div><span class="bar-label">14</span></div>
+      <div class="bar-col"><div class="bar bar-red" style="height:7.0%;"></div><span class="bar-label">15</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:18.4%;"></div><span class="bar-label">16</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:50.9%;"></div><span class="bar-label">17</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:80.7%;"></div><span class="bar-label">18</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:100%;"></div><span class="bar-label">19</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:94.7%;"></div><span class="bar-label">20</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:79.8%;"></div><span class="bar-label">21</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:64.0%;"></div><span class="bar-label">22</span></div>
+      <div class="bar-col"><div class="bar bar-blue" style="height:52.6%;"></div><span class="bar-label">23</span></div>
+    </div>
+  </section>
+
+  <!-- ROW 3: SCHEDULE TABLE -->
+  <section class="card span-12">
+    <div class="kicker">Zeitplan</div>
+    <table class="schedule-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Start</th>
+          <th>Ende</th>
+          <th>Setpoint</th>
+          <th>SOC</th>
+          <th>Min-SOC</th>
+          <th>DC</th>
+          <th>Quelle</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td>02:00</td>
+          <td>05:00</td>
+          <td>&minus;12000</td>
+          <td>&mdash;</td>
+          <td>20%</td>
+          <td>&mdash;</td>
+          <td><span class="tag-sma">SMA</span></td>
+        </tr>
+        <tr>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td>14:00</td>
+          <td>16:00</td>
+          <td>&minus;40</td>
+          <td>&mdash;</td>
+          <td>&mdash;</td>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td><span class="tag-manual">Manuell</span></td>
+        </tr>
+        <tr>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td>16:00</td>
+          <td>18:00</td>
+          <td>&minus;8000</td>
+          <td>&mdash;</td>
+          <td>30%</td>
+          <td>&mdash;</td>
+          <td><span class="tag-sma">SMA</span></td>
+        </tr>
+        <tr class="row-inactive">
+          <td><span class="circle-inactive">&#9675;</span></td>
+          <td>20:00</td>
+          <td>22:00</td>
+          <td>&minus;40</td>
+          <td>&mdash;</td>
+          <td>&mdash;</td>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td><span class="tag-manual">Manuell</span></td>
+        </tr>
+        <tr>
+          <td><span class="circle-active">&#9679;</span></td>
+          <td>23:00</td>
+          <td>01:00</td>
+          <td>&minus;6000</td>
+          <td>&mdash;</td>
+          <td>25%</td>
+          <td>&mdash;</td>
+          <td><span class="tag-sma">SMA</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ROW 4: AUTOMATION + CONTROLS -->
+
+  <!-- Boersenautomatik -->
+  <section class="card span-6">
+    <div class="kicker">B&ouml;rsenautomatik</div>
+    <div class="status-line"><span class="dot dot-green"></span>Aktiv &middot; MILP</div>
+    <div class="metric-rows">
+      <div class="metric-row"><span class="metric-label">Slot</span><span class="metric-value">16:00&ndash;18:00</span></div>
+      <div class="metric-row"><span class="metric-label">Belegt</span><span class="metric-value">3/5</span></div>
+      <div class="metric-row"><span class="metric-label">Revenue</span><span class="metric-value">2.45 &euro;</span></div>
+      <div class="metric-row"><span class="metric-label">Budget</span><span class="metric-value">16.3 kWh</span></div>
+    </div>
+    <div style="font-size:0.75rem; color:#71717A; margin-top:10px;">12000 W &times; 1 Slot</div>
+  </section>
+
+  <!-- Steuerung -->
+  <section class="card span-6">
+    <div class="kicker">Steuerung</div>
+    <div class="ctrl-row"><span class="ctrl-label">Grid Setpoint</span><span class="ctrl-value">&minus;5000 W</span></div>
+    <div class="ctrl-row"><span class="ctrl-label">Ladestrom</span><span class="ctrl-value">100 A</span></div>
+    <div class="ctrl-row"><span class="ctrl-label">Min-SOC</span><span class="ctrl-value">10 %</span></div>
+    <div class="ctrl-row"><span class="ctrl-label">DC-Einspeisung</span><span class="ctrl-value" style="color:#22C55E;">EIN</span></div>
+    <div class="ctrl-note">Override: 5 Min TTL</div>
+  </section>
+
+  <!-- ROW 5: LOG -->
+  <section class="card span-12">
+    <div class="kicker">Log</div>
+    <div class="log-block">14:32:15&nbsp;&nbsp;control_write&nbsp;&nbsp;gridSetpointW = &minus;5000 W<br>14:30:00&nbsp;&nbsp;sma_plan&nbsp;&nbsp;engine=milp slots=3 revenue=2.45&euro;<br>14:15:22&nbsp;&nbsp;dv_write&nbsp;&nbsp;feedExcessDcPv=1<br>14:00:01&nbsp;&nbsp;epex_update&nbsp;&nbsp;24 slots, 2 negative</div>
+  </section>
+
+</main>
+
+</body>
+</html>
