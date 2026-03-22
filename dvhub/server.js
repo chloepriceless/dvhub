@@ -40,6 +40,7 @@ import {
   buildAutomationRuleChain,
   buildChainVariants,
   computeAvailableEnergyKwh,
+  computeEnergyBasedSlotAllocation,
   computeNextPeriodBounds,
   expandChainSlots,
   filterSlotsByTimeWindow,
@@ -242,12 +243,32 @@ function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
   return nextEntry;
 }
 
-function buildDefaultAutomationChain(automationConfig = {}) {
+/**
+ * Compute discharge slot count from available energy when no custom stages are configured.
+ * Falls back to targetSlotCount (manual cap) or a sensible default.
+ */
+function computeDefaultDischargeSlots(automationConfig, availableEnergyKwh) {
+  const maxDischargeW = automationConfig?.maxDischargeW;
+  // Energy-based: compute how many slots the battery can serve at the configured power
+  if (availableEnergyKwh != null && availableEnergyKwh > 0 && maxDischargeW) {
+    const { totalSlots } = computeEnergyBasedSlotAllocation({
+      availableKwh: availableEnergyKwh,
+      maxDischargeW
+    });
+    // If a manual targetSlotCount is set, use it as an upper cap
+    const cap = automationConfig?.targetSlotCount;
+    return (cap != null && cap > 0) ? Math.min(totalSlots, cap) : totalSlots;
+  }
+  // Fallback: use manual targetSlotCount (legacy behaviour)
+  return automationConfig?.targetSlotCount || 4;
+}
+
+function buildDefaultAutomationChain(automationConfig = {}, availableEnergyKwh = null) {
   const stages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length
     ? automationConfig.stages
     : [{
       dischargeW: automationConfig?.maxDischargeW,
-      dischargeSlots: automationConfig?.targetSlotCount,
+      dischargeSlots: computeDefaultDischargeSlots(automationConfig, availableEnergyKwh),
       cooldownSlots: 0
     }];
   return buildAutomationRuleChain({
@@ -354,7 +375,7 @@ async function buildSmallMarketAutomationRules({
     maxDischargeW: automationConfig?.maxDischargeW,
     stages: Array.isArray(automationConfig?.stages) && automationConfig.stages.length
       ? automationConfig.stages
-      : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: automationConfig?.targetSlotCount, cooldownSlots: 0 }],
+      : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: computeDefaultDischargeSlots(automationConfig, availableEnergyKwh), cooldownSlots: 0 }],
     availableKwh: availableEnergyKwh,
     slotDurationH: SLOT_DURATION_HOURS
   });
@@ -365,7 +386,7 @@ async function buildSmallMarketAutomationRules({
   // enough energy for even a single slot at the configured power.  Bypassing the
   // budget here would create many rules the battery cannot actually serve.
   if (!chainVariants.length && !(availableEnergyKwh != null && availableEnergyKwh > 0)) {
-    const fallback = buildDefaultAutomationChain(automationConfig);
+    const fallback = buildDefaultAutomationChain(automationConfig, availableEnergyKwh);
     if (fallback.length) chainVariants.push(fallback);
   }
 
@@ -2393,6 +2414,25 @@ function redactConfig(config) {
   return copy;
 }
 
+function restoreRedactedValues(incoming, current) {
+  const copy = JSON.parse(JSON.stringify(incoming));
+  for (const dotPath of REDACTED_PATHS) {
+    const parts = dotPath.split('.');
+    let target = copy;
+    let source = current;
+    for (let i = 0; i < parts.length - 1; i++) {
+      target = target?.[parts[i]];
+      source = source?.[parts[i]];
+      if (!target || !source) break;
+    }
+    const key = parts[parts.length - 1];
+    if (target && source && target[key] === '***' && key in source) {
+      target[key] = source[key];
+    }
+  }
+  return copy;
+}
+
 function configMetaPayload() {
   return {
     path: CONFIG_PATH,
@@ -2640,7 +2680,7 @@ const web = http.createServer(async (req, res) => {
     if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
       return json(res, 400, { ok: false, error: 'config object required' });
     }
-    const result = saveAndApplyConfig(body.config);
+    const result = saveAndApplyConfig(restoreRedactedValues(body.config, rawCfg));
     pushLog('config_saved', {
       changedPaths: result.changedPaths.length,
       restartRequired: result.restartRequired,

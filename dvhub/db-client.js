@@ -2,7 +2,7 @@ import pg from 'pg';
 
 export function createPool(config = {}) {
   const pool = new pg.Pool({
-    host: config.host || 'localhost',
+    host: config.host || '/var/run/postgresql',
     port: Number(config.port || 5432),
     database: config.name || config.database || 'dvhub',
     user: config.user || 'dvhub',
