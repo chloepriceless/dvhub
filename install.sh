@@ -259,7 +259,7 @@ assert_supported_layout
 
 echo "[1/7] Pakete installieren"
 apt-get update
-apt-get install -y curl ca-certificates git sudo
+apt-get install -y curl ca-certificates git sudo postgresql
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
@@ -345,6 +345,25 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
+
+# PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
+if command -v psql >/dev/null 2>&1; then
+  systemctl enable --now postgresql 2>/dev/null || true
+  if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='dvhub'\"" 2>/dev/null | grep -q 1; then
+    su - postgres -c "createuser dvhub" 2>/dev/null || true
+  fi
+  if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='dvhub'\"" 2>/dev/null | grep -q 1; then
+    su - postgres -c "createdb -O dvhub dvhub" 2>/dev/null || true
+  fi
+  # Peer-Auth: dvhub system user kann sich ohne Passwort verbinden
+  if ! grep -q "dvhub" /etc/postgresql/*/main/pg_hba.conf 2>/dev/null; then
+    PG_HBA="$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)"
+    if [[ -n "$PG_HBA" ]]; then
+      sed -i '1i local   dvhub   dvhub   peer' "$PG_HBA"
+      systemctl reload postgresql 2>/dev/null || true
+    fi
+  fi
+fi
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
