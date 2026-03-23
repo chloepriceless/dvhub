@@ -32,42 +32,26 @@
       <div class="topbar-right"></div>
     </header>
 
-    <main class="page-content" style="max-width:800px;margin:0 auto;">
-      <!-- Centered setup card -->
-      <div class="sub-card" style="margin-top:24px;">
-        <div style="text-align:center;margin-bottom:20px;">
-          <p class="card-kicker" style="color:var(--chart-positive);">Ersteinrichtung</p>
-          <h1 class="section-title" style="font-size:1.6rem;">DVhub einrichten</h1>
-          <p class="meta" style="margin-top:6px;">Verbinde deine Anlage und starte DVhub in wenigen Schritten.</p>
+    <main class="page-content">
+      <div class="setup-container" style="padding:16px 16px 80px;">
+        <div style="text-align:center;margin-bottom:16px;">
+          <h1 style="font-family:var(--font-title);font-size:20px;font-weight:600;">DVhub einrichten</h1>
+          <p style="font-size:12px;color:rgba(232,234,240,0.5);">Pflichtfelder ausfuellen, speichern, fertig.</p>
         </div>
 
-        <div id="setupBanner" class="status-banner" style="margin-bottom:12px;">Setup wird geladen...</div>
-        <div id="setupMeta" class="meta" style="margin-bottom:16px;">-</div>
-        <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
+        <div id="setupBanner" class="config-banner warn">Setup wird geladen...</div>
 
-        <div id="setup-shell" class="setup-shell">
-          <!-- Step indicators (rendered by setup.js into #setup-steps) -->
-          <div id="setup-steps" class="settings-sidebar-nav" style="justify-content:center;"></div>
+        <div id="setupGrid" class="config-grid"></div>
 
-          <!-- Progress (rendered by setup.js) -->
-          <div id="setup-progress" class="setup-progress"></div>
-
-          <!-- Main workspace -->
-          <div id="setup-callout" class="setup-callout"></div>
-          <div id="setup-errors" class="status-banner" hidden></div>
-          <div id="setup-workspace" class="settings-workspace-panel"></div>
-
-          <!-- Nav buttons (Weiter / Zurueck) -->
-          <div id="setup-nav" class="panel-head" style="justify-content:space-between;margin-top:20px;"></div>
+        <div id="setupImportRow" style="text-align:center;margin-top:16px;">
+          <p style="font-size:11px;color:rgba(232,234,240,0.25);">Oder <a id="setupImportLink" href="#" style="color:#4CE36C;text-decoration:none;">vorhandene Config importieren</a></p>
+          <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
         </div>
+      </div>
 
-        <div style="text-align:center;margin-top:20px;padding-top:16px;border-top:1px solid var(--flow-border);">
-          <div style="display:flex;gap:8px;justify-content:center;">
-            <button id="setupSaveBtn" class="btn btn-primary" type="button">Konfiguration pr&uuml;fen &amp; speichern</button>
-            <button id="setupImportBtn" class="btn btn-ghost" type="button">Vorhandene Config importieren</button>
-          </div>
-          <p class="meta" style="margin-top:8px;">Oder <a href="/settings.html" style="color:var(--chart-positive);">direkt zu den Einstellungen</a></p>
-        </div>
+      <div class="config-save-bar" style="justify-content:center;gap:12px;">
+        <span class="config-save-bar-text" id="setupSaveBarText">-</span>
+        <button id="setupSaveBtn" class="btn btn-primary" style="padding:10px 28px;font-size:13px;font-weight:600;">Konfiguration speichern</button>
       </div>
     </main>
   </div>
