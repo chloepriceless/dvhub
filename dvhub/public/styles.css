@@ -171,7 +171,7 @@ button {
 /* --- Main body — 3-column grid --- */
 .main-body {
   display: grid;
-  grid-template-columns: 200px 1fr 200px;
+  grid-template-columns: 260px 1fr 280px;
   min-height: 0;
   overflow: hidden;
 }
@@ -180,8 +180,8 @@ button {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px;
+  gap: 6px;
+  padding: 8px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--flow-border) transparent;
@@ -240,10 +240,10 @@ button {
 /* --- Flow center --- */
 .flow-center {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   position: relative;
-  padding: 10px;
+  padding: 6px;
 }
 
 /* --- Bottom panel --- */
@@ -416,9 +416,10 @@ button {
 
 /* --- Flow diagram --- */
 .flow-diagram {
-  width: 420px;
-  max-width: 420px;
-  height: 280px;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 300px;
   position: relative;
   margin: 0 auto;
 }
@@ -429,67 +430,66 @@ button {
   background: var(--flow-surface);
   border: 2px solid var(--flow-border);
   border-radius: 14px;
-  padding: 10px 14px;
-  min-width: 90px;
+  padding: 14px 20px;
+  min-width: 110px;
   z-index: 2;
   backdrop-filter: blur(4px);
 }
 
 .flow-node-icon {
-  font-size: 1.3rem;
-  margin-bottom: 2px;
+  font-size: 1.5rem;
+  margin-bottom: 4px;
 }
 
 .flow-node-value {
-  font-size: 1.1rem;
+  font-size: 1.4rem;
   font-weight: 700;
   font-family: var(--font-brand);
   line-height: 1;
 }
 
 .flow-node-label {
-  font-size: 0.55rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
   color: var(--flow-text-muted);
   letter-spacing: 0.04em;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 
 .flow-node-sub {
-  font-size: 0.55rem;
+  font-size: 0.65rem;
   color: var(--flow-text-muted);
-  margin-top: 2px;
+  margin-top: 3px;
 }
 
-/* Node positions */
+/* Node positions — spread across full diagram area */
 .flow-node-pv {
-  top: 0;
+  top: 2%;
   left: 50%;
   transform: translateX(-50%);
   border-color: var(--node-pv);
 }
 
 .flow-node-bat {
-  top: 50%;
-  left: 0;
+  top: 45%;
+  left: 2%;
   transform: translateY(-50%);
   border-color: var(--node-bat);
 }
 
 .flow-node-house {
-  top: 50%;
-  right: 0;
+  top: 45%;
+  right: 2%;
   transform: translateY(-50%);
   border-color: var(--node-house);
 }
 
 .flow-node-grid {
-  bottom: -10px;
+  bottom: 2%;
   left: 50%;
   transform: translateX(-50%);
   border-color: var(--ok);
-  min-width: 120px;
-  padding: 12px 16px;
+  min-width: 130px;
 }
 
 /* Center ring */
@@ -498,8 +498,8 @@ button {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 110px;
-  height: 110px;
+  width: 130px;
+  height: 130px;
   border-radius: 50%;
   border: 3px solid rgba(99, 130, 246, 0.3);
   display: flex;
