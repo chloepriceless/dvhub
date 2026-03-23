@@ -109,7 +109,7 @@ function buildHistoryFullBackfillActionState({ status, busy, acknowledged }) {
   if (!acknowledged) {
     return {
       disabled: true,
-      reason: 'Bitte die Warnung fuer den Voll-Backfill erst explizit bestaetigen.'
+      reason: 'Bitte die Warnung für den Voll-Backfill erst explizit bestätigen.'
     };
   }
   return { disabled: false, reason: '' };
@@ -162,7 +162,7 @@ function renderHistoryImportState() {
       ? 'VRM-Backfill ist derzeit deaktiviert.'
       : !currentHistoryImportStatus.ready
         ? 'VRM-Zugang ist noch nicht vollständig konfiguriert.'
-        : `VRM verbunden fuer Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Lueckenabgleich und manueller Voll-Backfill sind bereit.`;
+        : `VRM verbunden für Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Lückenabgleich und manueller Voll-Backfill sind bereit.`;
   const bannerKind = currentHistoryImportStatus?.backfillRunning ? 'warn' : (currentHistoryImportStatus?.ready ? 'success' : 'warn');
   setBanner('historyBanner', bannerText, bannerKind);
 
@@ -174,7 +174,7 @@ function renderHistoryImportState() {
   const backfillButton = document.getElementById('historyBackfillBtn');
   if (backfillButton) {
     backfillButton.disabled = backfillState.disabled;
-    backfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job laeuft...' : 'VRM-Luecken schliessen';
+    backfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job läuft...' : 'VRM-Lücken schließen';
   }
   const fullBackfillButton = document.getElementById('historyFullBackfillBtn');
   if (fullBackfillButton) {
@@ -207,7 +207,7 @@ function renderHistoryImportState() {
     actionState.reason
       || backfillState.reason
       || fullBackfillState.reason
-      || 'Der normale Backfill prueft nur den letzten Zeitraum auf echte Luecken. Voll-Backfill zieht die komplette Historie erneut.'
+      || 'Der normale Backfill prüft nur den letzten Zeitraum auf echte Lücken. Voll-Backfill zieht die komplette Historie erneut.'
   );
 
   if (currentHistoryImportResult) {

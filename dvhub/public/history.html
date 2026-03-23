@@ -67,46 +67,49 @@
         <div id="historyStatusInfo" class="history-status-info" hidden></div>
       </section>
 
-      <!-- KPI + Detail Cards — 5 columns -->
+      <!-- KPI Cards — 5 columns -->
       <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px;">
-        <!-- Netto KPI -->
-        <div class="rail-card">
-          <p class="card-kicker">Netto</p>
-          <div id="historyKpiNet" class="card-value">-</div>
-          <div class="metric-row"><span>Bezugs-Kosten</span><strong id="historyKpiCost">-</strong></div>
-          <div class="metric-row"><span>Erl&ouml;s Einspeisung</span><strong id="historyKpiRevenue">-</strong></div>
+
+        <!-- 1: Energiekosten -->
+        <div class="config-group" data-accent="orange">
+          <div class="config-group-kicker" style="color:var(--flow-orange);">Energiekosten</div>
+          <div id="historyKpiTotalCost" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-orange);">-</div>
+          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiAvoidedPvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiAvoidedBatteryCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
         </div>
 
-        <!-- Ersparnis KPI -->
-        <div class="rail-card">
-          <p class="card-kicker">Ersparnis</p>
-          <div id="historyKpiGrossReturn" class="card-value">-</div>
-          <div class="metric-row"><span>Vermiedene Bezugskosten</span><strong id="historyKpiAvoided">-</strong></div>
-          <div class="metric-row"><span>Gespartes Geld</span><strong id="historyKpiSavedMoney">-</strong></div>
+        <!-- 2: Energieeinnahmen -->
+        <div class="config-group" data-accent="green">
+          <div class="config-group-kicker" style="color:var(--flow-green);">Energieeinnahmen</div>
+          <div id="historyKpiTotalRevenue" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-green);">-</div>
+          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiRevenue" class="config-row-value" style="color:var(--flow-green);">-</strong></div>
         </div>
 
-        <!-- Energie-Bilanz KPI -->
-        <div class="rail-card">
-          <p class="card-kicker">Energie-Bilanz</p>
-          <div id="historyKpiPv" class="card-value" style="color:var(--node-pv);">-</div>
-          <div class="metric-row"><span>Bezug</span><strong id="historyKpiImport">-</strong></div>
-          <div class="metric-row"><span>Einspeisung</span><strong id="historyKpiExport">-</strong></div>
+        <!-- 3: Netto Cashflow -->
+        <div class="config-group" data-accent="blue">
+          <div class="config-group-kicker" style="color:var(--flow-blue);">Netto Cashflow</div>
+          <div id="historyKpiNet" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-blue);">-</div>
+          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiCashIn" class="config-row-value" style="color:var(--flow-green);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCashOut" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
         </div>
 
-        <!-- Detailed financials (was in separate row below) -->
-        <div class="rail-card">
-          <p class="card-kicker">Gespart / Brutto</p>
-          <div class="metric-row"><span>PV brutto</span><strong id="historyKpiAvoidedPvGross">-</strong></div>
-          <div class="metric-row"><span>Akku brutto</span><strong id="historyKpiAvoidedBatteryGross">-</strong></div>
-          <div class="metric-row"><span>PV Kosten</span><strong id="historyKpiAvoidedPvCost">-</strong></div>
-          <div class="metric-row"><span>Akku Kosten</span><strong id="historyKpiAvoidedBatteryCost">-</strong></div>
+        <!-- 4: Vermiedene Kosten -->
+        <div class="config-group" data-accent="cyan">
+          <div class="config-group-kicker" style="color:var(--flow-cyan);">Vermiedene Kosten</div>
+          <div id="historyKpiAvoided" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-cyan);">-</div>
+          <div class="config-row"><span class="config-row-label">Eigenverbrauch PV</span><strong id="historyKpiAvoidedPvGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Eigenverbrauch Akku</span><strong id="historyKpiAvoidedBatteryGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
         </div>
 
-        <!-- Energiemengen detail -->
-        <div class="rail-card">
-          <p class="card-kicker">Energiemengen</p>
-          <div class="metric-row"><span>Verbrauch</span><strong id="historyKpiLoad">-</strong></div>
-          <div class="metric-row"><span>VBH</span><strong id="historyKpiVbh">-</strong></div>
+        <!-- 5: Gesamtbilanz -->
+        <div class="config-group" id="historyKpiBilanzCard" data-accent="green">
+          <div class="config-group-kicker" style="color:var(--flow-green);">Gesamtbilanz</div>
+          <div id="historyKpiGrossReturn" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-green);">-</div>
+          <div class="config-row"><span class="config-row-label">Vermiedene Kosten</span><strong id="historyKpiBilanzAvoided" class="config-row-value">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Netto Cashflow</span><strong id="historyKpiBilanzNet" class="config-row-value">-</strong></div>
+          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiBilanzPvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiBilanzBatCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
         </div>
       </div>
 
