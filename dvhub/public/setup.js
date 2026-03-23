@@ -615,7 +615,9 @@ function createConfigInput(field, value) {
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
     input.value = value === null || value === undefined ? '' : String(value);
-    input.style.width = field.type === 'number' ? '70px' : '140px';
+    const valStr = String(input.value);
+    const charW = field.type === 'number' ? 10 : 8;
+    input.style.width = `${Math.max(field.type === 'number' ? 80 : 120, valStr.length * charW + 30)}px`;
   }
   input.id = getFieldInputId(field.path);
   input.dataset.path = field.path;
