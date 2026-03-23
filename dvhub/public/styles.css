@@ -168,12 +168,24 @@ button {
   gap: 8px;
 }
 
-/* --- Main body — 3-column grid --- */
+/* --- Main body — grid with named areas --- */
 .main-body {
   display: grid;
-  grid-template-columns: 340px 1fr 280px;
+  grid-template-columns: 260px 1fr 280px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "left-rail  flow-center  right-rail"
+    "chart-area chart-area   right-rail";
   min-height: 0;
   overflow: hidden;
+}
+
+.rail-left { grid-area: left-rail; }
+.flow-center { grid-area: flow-center; }
+.rail-right { grid-area: right-rail; }
+.chart-span {
+  grid-area: chart-area;
+  padding: 6px 8px;
 }
 
 /* --- Rails (left/right sidebars) --- */
@@ -209,10 +221,12 @@ button {
   backdrop-filter: blur(4px);
 }
 
-/* Chart card in rail — grows to fill remaining space */
-.rail-chart-card {
-  flex: 1;
-  min-height: 200px;
+/* Chart spanning left+center columns */
+.chart-span-card {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
 }
 
 .rail-card[data-accent="pv"] {
@@ -490,10 +504,24 @@ button {
 
 .flow-node-grid {
   bottom: -8px;
-  left: 50%;
+  left: 35%;
   transform: translateX(-50%);
   border-color: var(--ok);
   min-width: 130px;
+}
+
+/* Netzphasen detail — positioned to the right of Grid node */
+.flow-grid-detail {
+  position: absolute;
+  bottom: -4px;
+  left: 58%;
+  z-index: 2;
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 8px 12px;
+  min-width: 120px;
+  backdrop-filter: blur(4px);
 }
 
 /* Center ring */
