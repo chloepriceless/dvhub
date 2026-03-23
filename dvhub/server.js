@@ -2873,6 +2873,9 @@ const web = http.createServer(async (req, res) => {
       const channel = rawCfg.updateChannel || 'stable';
       let gitOutput = '';
 
+      // Discard any local modifications before switching (e.g. from manual scp deploys)
+      await execFileAsync('git', ['checkout', '--', '.'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+
       if (channel === 'stable') {
         await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
         const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
@@ -2922,6 +2925,7 @@ const web = http.createServer(async (req, res) => {
       if (SERVICE_ACTIONS_ENABLED) {
         const repoRoot = path.resolve(__dirname, '..');
         let gitOutput = '';
+        await execFileAsync('git', ['checkout', '--', '.'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
         await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
         if (channel === 'stable') {
           const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
