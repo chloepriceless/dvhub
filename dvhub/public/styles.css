@@ -172,7 +172,7 @@ button {
 .main-body {
   display: grid;
   grid-template-columns: 260px 1fr 280px;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 1fr auto;
   grid-template-areas:
     "left-rail  flow-center  right-rail"
     "chart-area chart-area   right-rail";
@@ -260,7 +260,7 @@ button {
 /* --- Flow center --- */
 .flow-center {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: center;
   position: relative;
   padding: 6px;
@@ -511,7 +511,7 @@ button {
 /* Netzphasen detail — positioned to the right of Grid node */
 .flow-grid-detail {
   position: absolute;
-  bottom: -4px;
+  bottom: -20px;
   left: 58%;
   z-index: 2;
   background: var(--flow-surface);
