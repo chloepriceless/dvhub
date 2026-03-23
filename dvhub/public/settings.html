@@ -340,14 +340,23 @@
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
   <script>
-  // Tab switching — wait for settings.js to render nav
+  // Tab switching with retry until settings.js has rendered nav buttons
+  function clickNavButton(target, retries) {
+    const btn = document.querySelector('#settingsNavTree [data-settings-target="' + target + '"]');
+    if (btn) {
+      btn.click();
+      return;
+    }
+    if (retries > 0) setTimeout(function() { clickNavButton(target, retries - 1); }, 200);
+  }
+
   function switchSettingsTab(target) {
-    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
-    const activeTab = document.querySelector('.settings-tab[data-settings-target="' + target + '"]');
+    document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('is-active'); });
+    var activeTab = document.querySelector('.settings-tab[data-settings-target="' + target + '"]');
     if (activeTab) activeTab.classList.add('is-active');
 
-    const systemContent = document.getElementById('systemTabContent');
-    const settingsContent = document.getElementById('settingsWorkspace');
+    var systemContent = document.getElementById('systemTabContent');
+    var settingsContent = document.getElementById('settingsWorkspace');
 
     if (target === 'system') {
       if (systemContent) systemContent.style.display = '';
@@ -355,15 +364,8 @@
     } else {
       if (systemContent) systemContent.style.display = 'none';
       if (settingsContent) settingsContent.style.display = '';
-      // Find the settings.js nav button for this destination
-      // settings.js renders buttons with dataset.settingsTarget
-      const navBtns = document.querySelectorAll('#settingsNavTree button, #settingsNavTree [data-settings-target]');
-      for (const btn of navBtns) {
-        if (btn.dataset.settingsTarget === target) {
-          btn.click();
-          break;
-        }
-      }
+      // Click the nav button in settingsNavTree — retry up to 15 times (3 seconds)
+      clickNavButton(target, 15);
     }
   }
 

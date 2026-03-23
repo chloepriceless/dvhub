@@ -4201,10 +4201,333 @@ button {
   color: var(--flow-text-muted);
 }
 .setup-shell .setup-callout:empty { display: none; }
-/* Setup navigation buttons (Weiter/Zurueck) */
-.setup-shell .panel-head {
+
+/* ============================================================
+   SETUP WIZARD — Complete new design for setup.js dynamic content
+   ============================================================ */
+
+/* Step navigation (wizard-steps list) */
+.setup-shell .wizard-steps {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  justify-content: center;
+}
+.setup-shell .setup-step-item { flex: 0; }
+.setup-shell .setup-step-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--flow-text-muted);
+}
+.setup-shell .setup-step-button:hover { border-color: rgba(99,102,241,0.4); }
+.setup-shell .setup-step-button.is-active,
+.setup-shell .setup-step-button[aria-current="step"] {
+  border-color: var(--chart-positive);
+  color: var(--flow-text);
+  background: rgba(99,102,241,0.08);
+}
+.setup-shell .setup-step-button.is-done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.setup-shell .setup-step-index {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--flow-border);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--flow-text);
+  flex-shrink: 0;
+}
+.setup-shell .setup-step-button.is-active .setup-step-index {
+  background: var(--chart-positive);
+  color: #fff;
+}
+.setup-shell .setup-step-button.is-done .setup-step-index {
+  background: var(--ok);
+  color: #fff;
+}
+.setup-shell .setup-step-copy { display: flex; flex-direction: column; gap: 1px; text-align: left; }
+.setup-shell .setup-step-title { font-size: 0.8rem; font-weight: 600; }
+.setup-shell .setup-step-meta { font-size: 0.65rem; color: var(--flow-text-dim); }
+
+/* Progress bar */
+.setup-shell .setup-progress {
+  margin-bottom: 16px;
+}
+.setup-shell .setup-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.setup-shell .setup-progress-label,
+.setup-shell .eyebrow {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--flow-text-muted);
+  font-weight: 600;
+}
+.setup-shell .setup-progress-count {
+  font-size: 0.72rem;
+  color: var(--flow-text-muted);
+  font-weight: 500;
+}
+.setup-shell .setup-progress-bar {
+  height: 4px;
+  background: var(--flow-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.setup-shell .setup-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--chart-positive), var(--ok));
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Step header */
+.setup-shell .setup-step-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.setup-shell .setup-step-intro {
+  font-size: 0.78rem;
+  color: var(--flow-text-muted);
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+/* Setup fields */
+.setup-shell .settings-fields,
+.setup-shell .setup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.setup-shell .settings-field,
+.setup-shell .setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--flow-border);
+}
+.setup-shell .settings-field:last-child,
+.setup-shell .setup-field:last-child { border-bottom: none; }
+.setup-shell .settings-field-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--flow-text);
+}
+.setup-shell .field-help {
+  font-size: 0.72rem;
+  color: var(--flow-text-dim);
+  line-height: 1.3;
+}
+.setup-shell input[type="text"],
+.setup-shell input[type="number"],
+.setup-shell input[type="url"],
+.setup-shell input[type="password"],
+.setup-shell select {
+  background: rgba(8,12,24,0.5);
+  border: 1px solid var(--flow-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--flow-text);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  width: 100%;
+  max-width: 400px;
+}
+.setup-shell input[type="checkbox"] {
+  accent-color: var(--chart-positive);
+}
+
+/* Callout */
+.setup-shell .setup-callout {
+  background: rgba(99,102,241,0.06);
+  border: 1px solid rgba(99,102,241,0.15);
+  border-radius: var(--flow-radius);
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.setup-shell .setup-callout:empty { display: none; }
+.setup-shell .setup-callout-eyebrow {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--chart-positive);
+  margin-bottom: 4px;
+}
+.setup-shell .setup-callout-title {
+  font-family: var(--font-brand);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--flow-text);
+  margin-bottom: 4px;
+}
+.setup-shell .setup-callout-body {
+  font-size: 0.78rem;
+  color: var(--flow-text-muted);
+  line-height: 1.4;
+}
+.setup-shell .setup-callout-note {
+  font-size: 0.68rem;
+  color: var(--flow-text-dim);
+  margin-top: 6px;
+}
+
+/* Review step */
+.setup-shell .setup-review { display: flex; flex-direction: column; gap: 10px; }
+.setup-shell .setup-review-reminder {
+  font-size: 0.78rem;
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(240,136,62,0.08);
+  border: 1px solid rgba(240,136,62,0.2);
+  color: var(--warn);
+}
+.setup-shell .setup-review-card {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+}
+.setup-shell .setup-review-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.setup-shell .setup-review-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--flow-text);
+}
+.setup-shell .setup-review-list {
+  list-style: none;
+  padding: 0;
+  font-size: 0.78rem;
+}
+.setup-shell .setup-review-list li {
+  padding: 3px 0;
+  color: var(--flow-text-muted);
+  border-bottom: 1px solid var(--flow-border);
+}
+.setup-shell .setup-review-list li:last-child { border-bottom: none; }
+.setup-shell .setup-review-notes {
+  font-size: 0.68rem;
+  color: var(--flow-text-dim);
+  margin-top: 6px;
+}
+
+/* Save outcome */
+.setup-shell .setup-save-outcome { margin-top: 12px; }
+.setup-shell .setup-save-card {
+  background: rgba(63,185,80,0.06);
+  border: 1px solid rgba(63,185,80,0.2);
+  border-radius: var(--flow-radius);
+  padding: 14px;
+}
+.setup-shell .setup-save-title {
+  font-family: var(--font-brand);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ok);
+  margin-bottom: 6px;
+}
+.setup-shell .setup-save-summary {
+  font-size: 0.78rem;
+  color: var(--flow-text-muted);
+  margin-bottom: 8px;
+}
+.setup-shell .setup-save-subtitle {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--flow-text);
+  margin: 8px 0 4px;
+}
+.setup-shell .setup-save-list {
+  list-style: none;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--flow-text-muted);
+}
+.setup-shell .setup-save-list li { padding: 2px 0; }
+.setup-shell .setup-save-list-warnings li { color: var(--warn); }
+
+/* Navigation buttons (Weiter/Zurueck) */
+.setup-shell .setup-nav-copy {
+  font-size: 0.72rem;
+  color: var(--flow-text-dim);
+}
+.setup-shell #setup-nav {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
-  margin-top: 16px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--flow-border);
+}
+
+/* Inherited notes */
+.setup-shell .setup-inherited-notes {
+  font-size: 0.72rem;
+  color: var(--flow-text-dim);
+  padding: 6px 0;
+}
+
+/* Error display */
+.setup-shell .setup-error-intro {
+  font-size: 0.8rem;
+  color: var(--danger);
+  margin-bottom: 6px;
+}
+.setup-shell .setup-error-list {
+  list-style: none;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+.setup-shell .setup-error-list li {
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,123,114,0.15);
+}
+
+/* ============================================================
+   HISTORY CHART — Override legacy 3-col grid
+   ============================================================ */
+.page-content .history-chart-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.page-content .history-chart-grid article {
+  width: 100%;
+}
+.page-content .history-chart-shell {
+  min-height: 280px;
+  background: rgba(8,12,24,0.3);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
 }
