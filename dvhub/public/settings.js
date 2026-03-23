@@ -921,6 +921,15 @@ function createSummaryCard(title, text) {
 
 // getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
 
+// Fields hidden from UI (managed automatically, user should not edit)
+const HIDDEN_FIELD_PATHS = [
+  'telemetry.database.host',
+  'telemetry.database.port',
+  'telemetry.database.name',
+  'telemetry.database.user',
+  'telemetry.database.password'
+];
+
 function renderDestinationGrid(destinationId) {
   const gridId = destinationId + 'Grid';
   const mount = document.getElementById(gridId);
@@ -934,17 +943,21 @@ function renderDestinationGrid(destinationId) {
     const allFields = [];
     for (const grp of section.groups || []) {
       for (const field of grp.fields || []) {
-        if (field.type !== 'array' && isFieldVisible(field)) allFields.push(field);
+        if (field.type !== 'array' && isFieldVisible(field) && !HIDDEN_FIELD_PATHS.includes(field.path)) allFields.push(field);
       }
     }
     if (!allFields.length) continue;
 
     const group = createConfigGroup(section.label, getGroupAccent(section));
+    // 2-column row container for compact layout
+    const rowContainer = document.createElement('div');
+    rowContainer.className = 'config-row-grid';
+    group.appendChild(rowContainer);
 
     for (const field of allFields) {
       const model = buildFieldRenderModel(field);
       const input = createConfigInput(field, model.value);
-      group.appendChild(createConfigRow(field.label, input));
+      rowContainer.appendChild(createConfigRow(field.label, input));
       if (model.discovery.visible) {
         const discoveryRow = document.createElement('div');
         discoveryRow.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
@@ -967,14 +980,14 @@ function renderDestinationGrid(destinationId) {
             discoveryRow.appendChild(pickBtn);
           }
         }
-        group.appendChild(discoveryRow);
+        rowContainer.appendChild(discoveryRow);
       }
     }
 
     mount.appendChild(group);
 
     if (section.id === 'pricing') {
-      mount.appendChild(renderEpexPriceSourceInfo());
+      // EPEX price source info removed — redundant with EPEX config group
       mount.appendChild(renderPvPlantsEditor());
       mount.appendChild(renderPricingPeriodsEditor());
     }
