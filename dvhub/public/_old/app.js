@@ -51,103 +51,29 @@ function setControlMsg(text, isErr = false) {
   el.classList.add(isErr ? 'off' : 'ok');
 }
 
-function updateFlowDiagram(status) {
-  const gridTotal = Number(status?.meter?.grid_total_w || 0);
-  const batPower = Number(status?.victron?.batteryPowerW || 0);
-  const pvPower = Number(status?.victron?.pvPowerW || 0);
-  const loadW = Number(status?.victron?.selfConsumptionW || 0);
-  const soc = Number(status?.victron?.soc || 0);
-
-  // Grid flow direction & node
-  const gridLine = document.getElementById('flowLineGrid');
-  const gridNode = document.getElementById('flowNodeGridValue');
-  const gridLabel = document.getElementById('flowNodeGridLabel');
-  if (gridLine) {
-    const isExport = gridTotal < 0;
-    gridLine.setAttribute('stroke', isExport ? cssVar('--node-grid-export', '#3fb950') : cssVar('--node-grid-import', '#ff7b72'));
-    gridLine.setAttribute('opacity', String(Math.min(Math.abs(gridTotal) / 5000, 1) * 0.6 + 0.2));
-  }
-  if (gridNode) {
-    gridNode.textContent = `${Math.abs(gridTotal)} W`;
-    gridNode.style.color = gridTotal < 0 ? 'var(--node-grid-export)' : 'var(--node-grid-import)';
-  }
-  if (gridLabel) gridLabel.textContent = gridTotal < 0 ? 'Export' : 'Import';
-
-  // Battery flow
-  const batLine = document.getElementById('flowLineBat');
-  const batNode = document.getElementById('flowNodeBatValue');
-  const batPowerNode = document.getElementById('flowNodeBatPower');
-  if (batLine) {
-    batLine.setAttribute('stroke', batPower < 0 ? cssVar('--node-bat', '#3fb950') : cssVar('--node-house', '#58a6ff'));
-    batLine.setAttribute('opacity', String(Math.min(Math.abs(batPower) / 3000, 1) * 0.6 + 0.2));
-  }
-  if (batNode) batNode.textContent = `${soc} %`;
-  if (batPowerNode) batPowerNode.textContent = `${batPower} W`;
-
-  // PV flow
-  const pvLine = document.getElementById('flowLinePV');
-  const pvNode = document.getElementById('flowNodePvValue');
-  if (pvLine) pvLine.setAttribute('opacity', String(Math.min(pvPower / 5000, 1) * 0.6 + 0.2));
-  if (pvNode) pvNode.textContent = `${pvPower} W`;
-
-  // House flow
-  const houseLine = document.getElementById('flowLineHouse');
-  const houseNode = document.getElementById('flowNodeHouseValue');
-  if (houseLine) houseLine.setAttribute('opacity', String(Math.min(loadW / 5000, 1) * 0.6 + 0.2));
-  if (houseNode) houseNode.textContent = loadW > 0 ? `${loadW} W` : 'Haus';
-
-  // Center ring
-  const centerNet = document.getElementById('flowCenterNet');
-  const centerDir = document.getElementById('flowCenterDir');
-  const c = status?.costs || {};
-  if (centerNet) centerNet.textContent = c.netEur != null ? `${c.netEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : '-';
-  if (centerDir) {
-    centerDir.textContent = gridTotal < 0 ? 'Export' : 'Import';
-    centerDir.style.color = gridTotal < 0 ? 'var(--ok)' : 'var(--danger)';
-  }
-
-  // SOC progress bar
-  const socBar = document.getElementById('socBar');
-  if (socBar) socBar.style.width = `${Math.max(0, Math.min(100, soc))}%`;
+function clsByDir(dir) {
+  if (!dir || dir.mode === 'neutral') return '';
+  return dir.mode === 'feed_in' ? 'ok' : 'off';
 }
 
-function initFlowDiagram() {
-  const svg = document.getElementById('flowDiagram');
-  if (!svg) return;
-
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  const lines = [
-    { id: 'flowLinePV', d: 'M 250,40 C 250,75 250,110 250,150', color: cssVar('--node-pv', '#e3b341') },
-    { id: 'flowLineBat', d: 'M 70,200 C 120,200 160,200 195,200', color: cssVar('--node-bat', '#3fb950') },
-    { id: 'flowLineHouse', d: 'M 305,200 C 340,200 380,200 430,200', color: cssVar('--node-house', '#58a6ff') },
-    { id: 'flowLineGrid', d: 'M 250,250 C 250,290 250,330 250,380', color: cssVar('--ok', '#3fb950') }
-  ];
-
-  for (const { id, d, color } of lines) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('id', id);
-    path.setAttribute('d', d);
-    path.setAttribute('stroke', color);
-    path.setAttribute('stroke-width', '2');
-    path.setAttribute('fill', 'none');
-    path.setAttribute('opacity', '0.3');
-    svg.appendChild(path);
-
-    if (prefersReducedMotion) continue;
-
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('r', '4');
-    circle.setAttribute('fill', color);
-    circle.setAttribute('opacity', '0.6');
-    const animate = document.createElementNS('http://www.w3.org/2000/svg', 'animateMotion');
-    animate.setAttribute('dur', '3s');
-    animate.setAttribute('repeatCount', 'indefinite');
-    const mpath = document.createElementNS('http://www.w3.org/2000/svg', 'mpath');
-    mpath.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', `#${id}`);
-    animate.appendChild(mpath);
-    circle.appendChild(animate);
-    svg.appendChild(circle);
+function setFlow(dir) {
+  const arrow = document.getElementById('flowArrow');
+  const label = document.getElementById('flowLabel');
+  if (!arrow || !label) return;
+  if (!dir || dir.mode === 'neutral') {
+    arrow.textContent = '-';
+    arrow.className = 'arrow';
+    label.textContent = '';
+    return;
+  }
+  if (dir.mode === 'feed_in') {
+    arrow.textContent = '<';
+    arrow.className = 'arrow ok';
+    label.textContent = '';
+  } else {
+    arrow.textContent = '>';
+    arrow.className = 'arrow off';
+    label.textContent = '';
   }
 }
 
@@ -1231,8 +1157,8 @@ function renderDashboardStatus(status) {
   setText('l1', `${status.meter?.grid_l1_w ?? '-'} W`);
   setText('l2', `${status.meter?.grid_l2_w ?? '-'} W`);
   setText('l3', `${status.meter?.grid_l3_w ?? '-'} W`);
-  setText('total', `${status.meter?.grid_total_w ?? '-'} W`, status.meter?.grid_total_w < 0 ? 'ok' : (status.meter?.grid_total_w > 0 ? 'off' : ''));
-  updateFlowDiagram(status);
+  setText('total', `${status.meter?.grid_total_w ?? '-'} W`, clsByDir(status.meter?.totalDir));
+  setFlow(status.meter?.totalDir);
 
   const vic = status.victron || {};
   setText('soc', vic.soc == null ? '-' : `${vic.soc} %`);
@@ -1935,7 +1861,6 @@ function renderAutomationStatus(scheduleData) {
 }
 
 function initDashboard() {
-  initFlowDiagram();
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);

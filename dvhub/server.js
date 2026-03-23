@@ -2418,8 +2418,27 @@ function epexPriceArray() {
   }));
 }
 
+function isLocalNetworkRequest(req) {
+  const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+  const addr = raw.replace(/^::ffff:/, '');
+  // Localhost
+  if (addr === '127.0.0.1' || addr === '::1') return true;
+  // Private/LAN ranges (RFC 1918)
+  const parts = addr.split('.').map(Number);
+  if (parts.length === 4) {
+    if (parts[0] === 10) return true;                                    // 10.0.0.0/8
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
+    if (parts[0] === 192 && parts[1] === 168) return true;               // 192.168.0.0/16
+  }
+  // IPv6 link-local
+  if (addr.startsWith('fe80:')) return true;
+  return false;
+}
+
 function checkAuth(req, res) {
   if (!cfg.apiToken) return true;
+  // LAN / localhost requests bypass token check
+  if (isLocalNetworkRequest(req)) return true;
   const expected = Buffer.from(cfg.apiToken);
   const auth = req.headers.authorization || '';
   if (auth.startsWith('Bearer ')) {

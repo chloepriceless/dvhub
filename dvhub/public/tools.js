@@ -1,3 +1,5 @@
+(function() {
+'use strict';
 const common = window.DVhubCommon || {};
 const { apiFetch, buildApiUrl } = common;
 
@@ -29,7 +31,7 @@ function setBanner(id, text, kind = 'info') {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function parseDateTimeLocal(value) {
@@ -107,7 +109,7 @@ function buildHistoryFullBackfillActionState({ status, busy, acknowledged }) {
   if (!acknowledged) {
     return {
       disabled: true,
-      reason: 'Bitte die Warnung fuer den Voll-Backfill erst explizit bestaetigen.'
+      reason: 'Bitte die Warnung für den Voll-Backfill erst explizit bestätigen.'
     };
   }
   return { disabled: false, reason: '' };
@@ -160,7 +162,7 @@ function renderHistoryImportState() {
       ? 'VRM-Backfill ist derzeit deaktiviert.'
       : !currentHistoryImportStatus.ready
         ? 'VRM-Zugang ist noch nicht vollständig konfiguriert.'
-        : `VRM verbunden fuer Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Lueckenabgleich und manueller Voll-Backfill sind bereit.`;
+        : `VRM verbunden für Portal ${currentHistoryImportStatus.vrmPortalId || '-'}. Lückenabgleich und manueller Voll-Backfill sind bereit.`;
   const bannerKind = currentHistoryImportStatus?.backfillRunning ? 'warn' : (currentHistoryImportStatus?.ready ? 'success' : 'warn');
   setBanner('historyBanner', bannerText, bannerKind);
 
@@ -172,7 +174,7 @@ function renderHistoryImportState() {
   const backfillButton = document.getElementById('historyBackfillBtn');
   if (backfillButton) {
     backfillButton.disabled = backfillState.disabled;
-    backfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job laeuft...' : 'VRM-Luecken schliessen';
+    backfillButton.textContent = historyImportBusy || currentHistoryImportStatus?.backfillRunning ? 'VRM-Job läuft...' : 'VRM-Lücken schließen';
   }
   const fullBackfillButton = document.getElementById('historyFullBackfillBtn');
   if (fullBackfillButton) {
@@ -205,7 +207,7 @@ function renderHistoryImportState() {
     actionState.reason
       || backfillState.reason
       || fullBackfillState.reason
-      || 'Der normale Backfill prueft nur den letzten Zeitraum auf echte Luecken. Voll-Backfill zieht die komplette Historie erneut.'
+      || 'Der normale Backfill prüft nur den letzten Zeitraum auf echte Lücken. Voll-Backfill zieht die komplette Historie erneut.'
   );
 
   if (currentHistoryImportResult) {
@@ -248,13 +250,16 @@ function renderHealth(payload) {
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
   for (const check of checks) {
     const card = document.createElement('div');
-    card.className = 'summary-card';
-    const strong = document.createElement('strong');
-    strong.textContent = `${check.ok ? 'OK' : 'Check'}: ${check.label}`;
-    const text = document.createElement('span');
-    text.textContent = check.detail || '-';
-    card.appendChild(strong);
-    card.appendChild(text);
+    card.className = 'config-row';
+    const label = document.createElement('span');
+    label.className = 'config-row-label';
+    label.textContent = `${check.ok ? '✓' : '✗'} ${check.label}`;
+    label.style.color = check.ok ? 'var(--flow-green)' : 'var(--flow-red, rgba(255,108,99,0.85))';
+    const val = document.createElement('strong');
+    val.className = 'config-row-value';
+    val.textContent = check.detail || '-';
+    card.appendChild(label);
+    card.appendChild(val);
     mount.appendChild(card);
   }
 
@@ -592,10 +597,10 @@ async function checkForUpdate() {
     if (data.updateAvailable) {
       const changelogDiv = document.getElementById('updateChangelog');
       if (data.changelog && data.changelog.length) {
-        changelogDiv.innerHTML = '<p class="card-title">Änderungen:</p>' +
+        changelogDiv.innerHTML = '<p style="padding:4px 0;font-size:12px;color:rgba(232,234,240,0.5);margin:0;">Änderungen:</p>' +
           data.changelog.map(line => {
             const el = document.createElement('div');
-            el.className = 'summary-card';
+            el.className = 'config-row';
             el.textContent = line;
             return el.outerHTML;
           }).join('');
@@ -799,3 +804,4 @@ if (typeof globalThis !== 'undefined') {
     formatHistoryImportResult
   };
 }
+})();

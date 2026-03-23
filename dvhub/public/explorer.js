@@ -258,7 +258,7 @@ function renderChart() {
   if (explorerChart) { explorerChart.destroy(); explorerChart = null; }
 
   const datasets = buildDatasets();
-  if (!datasets.length) { setStatus('Keine Daten fuer die ausgewaehlten Serien.'); return; }
+  if (!datasets.length) { setStatus('Keine Daten für die ausgewählten Serien.'); return; }
 
   // Determine which axes are needed
   const usedAxes = new Set(datasets.map(d => d.yAxisID));
