@@ -31,7 +31,7 @@ function setBanner(id, text, kind = 'info') {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function parseDateTimeLocal(value) {
@@ -250,13 +250,16 @@ function renderHealth(payload) {
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
   for (const check of checks) {
     const card = document.createElement('div');
-    card.className = 'summary-card';
-    const strong = document.createElement('strong');
-    strong.textContent = `${check.ok ? 'OK' : 'Check'}: ${check.label}`;
-    const text = document.createElement('span');
-    text.textContent = check.detail || '-';
-    card.appendChild(strong);
-    card.appendChild(text);
+    card.className = 'config-row';
+    const label = document.createElement('span');
+    label.className = 'config-row-label';
+    label.textContent = `${check.ok ? '✓' : '✗'} ${check.label}`;
+    label.style.color = check.ok ? 'var(--flow-green)' : 'var(--flow-red, rgba(255,108,99,0.85))';
+    const val = document.createElement('strong');
+    val.className = 'config-row-value';
+    val.textContent = check.detail || '-';
+    card.appendChild(label);
+    card.appendChild(val);
     mount.appendChild(card);
   }
 
@@ -594,10 +597,10 @@ async function checkForUpdate() {
     if (data.updateAvailable) {
       const changelogDiv = document.getElementById('updateChangelog');
       if (data.changelog && data.changelog.length) {
-        changelogDiv.innerHTML = '<p class="card-title">Änderungen:</p>' +
+        changelogDiv.innerHTML = '<p style="padding:4px 0;font-size:12px;color:rgba(232,234,240,0.5);margin:0;">Änderungen:</p>' +
           data.changelog.map(line => {
             const el = document.createElement('div');
-            el.className = 'summary-card';
+            el.className = 'config-row';
             el.textContent = line;
             return el.outerHTML;
           }).join('');
