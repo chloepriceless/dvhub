@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DVhub Einrichtung</title>
+  <title>DVhub Einstellungen</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -26,8 +26,7 @@
         <a href="/">Leitstand</a>
         <a href="/history.html">Historie</a>
         <a href="/explorer.html">Explorer</a>
-        <a class="is-active" href="/settings.html">Einrichtung</a>
-        <a href="/tools.html">Wartung</a>
+        <a class="is-active" href="/settings.html">Einstellungen</a>
         <a href="/setup.html">Setup</a>
       </nav>
       <div class="topbar-right"></div>
@@ -36,52 +35,331 @@
     <main class="page-content">
       <!-- Page header -->
       <div class="page-header-card">
-        <div class="page-header-card-copy">
-          <p class="page-kicker">Einrichtung</p>
-          <h1>DVhub Einrichtung</h1>
-          <p class="page-subtitle">Verbindung, Steuerung und Datendienste in einer dichten Konfigurationsansicht.</p>
-          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <div id="settingsBanner" class="status-banner">Konfiguration wird geladen...</div>
-            <div id="configMeta" class="meta">-</div>
-          </div>
-        </div>
-        <div class="page-header-card-actions">
-          <button id="reloadConfigBtn" class="btn btn-ghost" type="button">Neu laden</button>
-          <button id="saveConfigBtn" class="btn btn-primary" type="button">Speichern</button>
-          <a class="btn btn-ghost" href="/setup.html">Assistent</a>
-        </div>
-      </div>
-
-      <!-- Health status card -->
-      <div class="sub-card" style="margin-bottom:10px;">
         <div class="panel-head">
           <div>
-            <p class="card-kicker">Status</p>
-            <p class="section-title" style="margin-top:2px;">System kurz geprüft</p>
+            <p class="card-kicker">Einstellungen</p>
+            <h1 class="section-title" style="font-size:1.4rem;">DVhub Einstellungen</h1>
+            <div id="settingsBanner" class="status-banner" style="margin-top:6px;">Konfiguration wird geladen...</div>
+            <div id="configMeta" class="meta">-</div>
           </div>
-          <a class="btn btn-ghost btn-small" href="/tools.html">Wartung öffnen</a>
+          <div class="controls">
+            <button id="reloadConfigBtn" class="btn btn-ghost btn-small">Neu laden</button>
+            <button id="saveConfigBtn" class="btn btn-primary btn-small">Speichern</button>
+          </div>
         </div>
-        <div id="healthBanner" class="status-banner" style="margin-top:8px;">Health-Status wird geladen...</div>
-        <div id="healthChecks" class="settings-summary settings-summary-compact" style="margin-top:6px;"></div>
-        <div id="serviceMeta" class="meta" style="margin-top:4px;">-</div>
       </div>
 
-      <!-- Settings workspace with sidebar nav -->
-      <div class="settings-layout">
-        <div class="settings-layout-nav">
-          <p class="card-title">Einrichtung</p>
-          <div id="settingsNavTree" class="app-nav-subtree-list"></div>
-        </div>
-        <div class="settings-layout-workspace">
-          <div id="settingsWorkspace" class="settings-workspace-panel">
-            <section id="settingsSections" class="settings-sections"></section>
-          </div>
-        </div>
+      <!-- Horizontal Tab Bar -->
+      <div class="settings-tabs">
+        <button class="settings-tab is-active" data-settings-target="quickstart">Schnellstart</button>
+        <button class="settings-tab" data-settings-target="connection">Anlage</button>
+        <button class="settings-tab" data-settings-target="control">Steuerung</button>
+        <button class="settings-tab" data-settings-target="services">Preise &amp; Daten</button>
+        <button class="settings-tab" data-settings-target="advanced">Erweitert</button>
+        <button class="settings-tab" data-settings-target="system">System</button>
       </div>
+
+      <!-- Settings content area -->
+      <div class="settings-content">
+        <div id="settingsNavTree" style="display:none;"></div>
+        <div id="settingsWorkspace" class="settings-workspace-panel">
+          <section id="settingsSections" class="settings-sections"></section>
+        </div>
+
+        <!-- System tab content (from tools.html) — hidden by default -->
+        <div id="systemTabContent" class="system-tab-content" style="display:none;">
+          <div class="page-grid">
+
+            <!-- Systemstatus -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Systemstatus</p>
+                  <h2 class="section-title">Systemstatus</h2>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <button id="refreshHealthBtn" class="btn btn-ghost btn-small" type="button">Status neu laden</button>
+                  <button id="restartServiceBtn" class="btn btn-danger btn-small" type="button">Dienst neu starten</button>
+                </div>
+              </div>
+              <div id="healthBanner" class="status-banner" style="margin-top:8px;">Health-Status wird geladen...</div>
+              <div id="healthChecks" class="settings-summary" style="margin-top:6px;"></div>
+              <div id="serviceMeta" class="meta" style="margin-top:4px;">-</div>
+            </div>
+
+            <!-- Software Update -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Software</p>
+                  <h2 class="section-title">Update</h2>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <select id="updateChannel" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:4px 8px;border-radius:6px;font-size:0.75rem;">
+                    <option value="stable">Stable (Releases)</option>
+                    <option value="dev">Bleeding Edge (Dev)</option>
+                  </select>
+                  <button id="checkUpdateBtn" class="btn btn-ghost btn-small" type="button">Auf Updates pr&uuml;fen</button>
+                </div>
+              </div>
+              <div id="updateBanner" class="status-banner" style="margin-top:8px;">Version wird gepr&uuml;ft...</div>
+              <div id="updateChangelog" class="settings-summary" style="display:none;margin-top:6px;"></div>
+              <div id="updateActions" class="settings-inline-actions" style="display:none;margin-top:8px;">
+                <button id="applyUpdateBtn" class="btn btn-primary btn-small" type="button">Update installieren &amp; neu starten</button>
+              </div>
+              <div id="updateMeta" class="meta" style="margin-top:4px;">-</div>
+            </div>
+
+            <!-- Config Import / Export -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Config</p>
+                  <h2 class="section-title">Import &amp; Export</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Konfiguration sichern, pr&uuml;fen oder aus einer vorbereiteten Datei wieder einspielen.</p>
+              <div class="controls" style="margin-top:10px;">
+                <button id="exportConfigBtn" class="btn btn-ghost btn-small" type="button">Config exportieren</button>
+                <button id="importConfigBtn" class="btn btn-primary btn-small" type="button">Config importieren</button>
+              </div>
+              <input id="importConfigFile" type="file" accept="application/json,.json" hidden />
+              <div id="importBanner" class="status-banner" style="margin-top:8px;">Noch kein Import oder Export ausgef&uuml;hrt.</div>
+              <div id="importMeta" class="meta" style="margin-top:4px;">Export l&auml;dt die aktuelle wirksame Config. Import nutzt dieselbe Server-Validierung wie die Einrichtung.</div>
+            </div>
+
+            <!-- Historie -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Historie</p>
+                  <h2 class="section-title">Historie</h2>
+                </div>
+                <button id="refreshHistoryBtn" class="btn btn-ghost btn-small" type="button">Status pr&uuml;fen</button>
+              </div>
+              <p class="meta" style="margin-top:6px;">Historische Nachimporte bleiben absichtlich in der Wartung, damit die Einrichtung ruhig und platzsparend bleibt.</p>
+              <div id="historyBannerTools" class="status-banner" style="margin-top:8px;">VRM-Status wird geladen...</div>
+              <div class="settings-fields compact" style="margin-top:10px;">
+                <label class="settings-field" for="historyImportStart">
+                  <span class="settings-field-title">Von</span>
+                  <input id="historyImportStart" type="datetime-local" />
+                  <small class="field-help">Startzeit des VRM-Historienimports.</small>
+                </label>
+                <label class="settings-field" for="historyImportEnd">
+                  <span class="settings-field-title">Bis</span>
+                  <input id="historyImportEnd" type="datetime-local" />
+                  <small class="field-help">Endzeit des VRM-Historienimports.</small>
+                </label>
+                <label class="settings-field">
+                  <span class="settings-field-title">Intervall</span>
+                  <input type="text" value="15 Minuten" readonly />
+                  <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
+                </label>
+              </div>
+              <div class="settings-inline-actions" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+                <button id="historyImportBtn" class="btn btn-primary btn-small" type="button">VRM-Historie importieren</button>
+                <button id="historyBackfillBtnTools" class="btn btn-ghost btn-small" type="button">VRM-Luecken schliessen</button>
+                <small id="historyReason" class="meta">Der normale Backfill prueft nur den letzten Zeitraum auf offene VRM-Luecken.</small>
+              </div>
+              <div class="settings-summary" style="margin-top:8px;">
+                <div class="summary-card">
+                  <strong>Voll-Backfill</strong>
+                  <span>Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich laenger.</span>
+                </div>
+              </div>
+              <label class="settings-field" for="historyFullBackfillAck" style="margin-top:8px;">
+                <span class="settings-field-title">Warnung bestaetigen</span>
+                <div class="toggle-row">
+                  <input id="historyFullBackfillAck" type="checkbox" />
+                  <small class="field-help">Ich bestaetige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur fuer Reparaturfaelle gedacht ist.</small>
+                </div>
+              </label>
+              <div class="history-full-backfill-advanced">
+                <label class="settings-field" for="historyFullBackfillExtendedLookback">
+                  <span class="settings-field-title">Laengeren Rueckblick aktivieren</span>
+                  <div class="toggle-row">
+                    <input id="historyFullBackfillExtendedLookback" type="checkbox" />
+                    <small class="field-help">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurueck suchen, wenn vor den eigentlichen VRM-Daten laengere leere Zeitraeume liegen.</small>
+                  </div>
+                </label>
+                <label id="historyFullBackfillLookbackField" class="settings-field history-full-backfill-lookback" for="historyFullBackfillLookbackDays" hidden>
+                  <span class="settings-field-title">Max. Rueckblick (Tage)</span>
+                  <input id="historyFullBackfillLookbackDays" type="number" min="1" max="365" step="1" inputmode="numeric" value="365" />
+                  <small class="field-help">Nur fuer Reparaturfaelle. Mit dieser Obergrenze stoppt der Voll-Backfill spaetestens nach dem eingestellten Rueckblick.</small>
+                </label>
+              </div>
+              <div style="margin-top:8px;">
+                <button id="historyFullBackfillBtn" class="btn btn-danger btn-small" type="button">Voll-Backfill starten</button>
+              </div>
+              <div id="historyResult" class="status-banner" style="margin-top:8px;">Noch kein Import gestartet.</div>
+            </div>
+
+            <!-- API Dokumentation -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">API</p>
+                  <h2 class="section-title">API Dokumentation</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Interaktive API-Dokumentation mit Swagger UI. Alle Endpoints testen und Daten inspizieren.</p>
+              <div class="settings-summary" style="margin-top:10px;">
+                <div class="summary-card">
+                  <strong>Swagger UI</strong>
+                  <span>Alle DVhub-Endpoints interaktiv testen (Try-it-out).</span>
+                </div>
+                <div class="summary-card">
+                  <strong>Price API</strong>
+                  <span>EPEX Day-Ahead Preise f&uuml;r 44 Zonen (<a href="https://api.dvhub.de/docs" target="_blank" style="color:var(--node-house);">api.dvhub.de/docs</a>).</span>
+                </div>
+              </div>
+              <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+                <a href="/api-docs.html" class="btn btn-primary btn-small" target="_blank">DVhub API Docs &ouml;ffnen</a>
+                <a href="https://api.dvhub.de/docs" class="btn btn-ghost btn-small" target="_blank">Price API Docs</a>
+              </div>
+            </div>
+
+            <!-- Diagnose -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Diagnose</p>
+                  <h2 class="section-title">Diagnose</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Registerscan und Zeitplan-JSON bleiben erhalten, sind aber klar als Diagnosewerkzeuge markiert.</p>
+              <div class="settings-summary" style="margin-top:10px;">
+                <div class="summary-card">
+                  <strong>Scan</strong>
+                  <span>Registerbereiche live lesen, wenn Mapping oder Adressen gepr&uuml;ft werden m&uuml;ssen.</span>
+                </div>
+                <div class="summary-card">
+                  <strong>Zeitplan</strong>
+                  <span>Regeln als JSON laden und speichern, wenn gezielte Serviceeingriffe n&ouml;tig sind.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- DV-Schaltsignal-Log -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">DV-Signale</p>
+                  <h2 class="section-title">DV-Schaltsignal-Log</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Alle Schalt- und Steuersignale des Direktvermarkters. Zeigt Abregelungen, Freigaben, Lease-Events und Modbus-Writes.</p>
+              <div class="controls" style="margin-top:10px;">
+                <button id="loadDvLog" class="btn btn-primary btn-small" type="button">Log laden</button>
+                <button id="refreshDvLog" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
+                <label style="font-size:0.72rem;color:var(--flow-text-muted);">Quelle:
+                  <select id="dvLogSource" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:3px 6px;border-radius:6px;font-size:0.72rem;">
+                    <option value="ram">Aktuell (RAM)</option>
+                    <option value="db">Datenbank (persistent)</option>
+                  </select>
+                </label>
+                <label style="font-size:0.72rem;color:var(--flow-text-muted);">Filter:
+                  <select id="dvLogFilter" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:3px 6px;border-radius:6px;font-size:0.72rem;">
+                    <option value="all">Alle DV-Signale</option>
+                    <option value="ctrl">Nur Schaltbefehle</option>
+                    <option value="modbus">Nur Modbus/Setpoint-Writes</option>
+                    <option value="victron">Nur Victron-Writes</option>
+                    <option value="sma">Nur B&ouml;rsenautomatik</option>
+                  </select>
+                </label>
+              </div>
+              <div class="meta" id="dvLogMeta" style="margin-top:6px;">Noch nicht geladen.</div>
+              <table class="data-table" style="margin-top:8px;width:100%;font-size:0.72rem;">
+                <thead>
+                  <tr>
+                    <th>Zeitpunkt</th>
+                    <th>Signal</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="dvLogRows"></tbody>
+              </table>
+            </div>
+
+            <!-- Modbus-Scan -->
+            <div class="sub-card">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Modbus</p>
+                  <h2 class="section-title">Modbus-Scan</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Direktscan von Registerbereichen f&uuml;r schnelle Diagnose und Mapping.</p>
+              <div class="controls" style="margin-top:10px;">
+                <label style="font-size:0.72rem;">Unit <input id="scanUnit" type="number" value="0" style="width:60px;" /></label>
+                <label style="font-size:0.72rem;">Start <input id="scanStart" type="number" value="2500" style="width:70px;" /></label>
+                <label style="font-size:0.72rem;">Ende <input id="scanEnd" type="number" value="2700" style="width:70px;" /></label>
+                <label style="font-size:0.72rem;">Schritt <input id="scanStep" type="number" value="10" style="width:60px;" /></label>
+                <label style="font-size:0.72rem;">Anzahl <input id="scanQty" type="number" value="10" style="width:60px;" /></label>
+                <button id="startScan" class="btn btn-primary btn-small" type="button">Scan starten</button>
+              </div>
+              <div class="meta" id="scanMeta" style="margin-top:6px;">-</div>
+              <table class="data-table" style="margin-top:8px;width:100%;font-size:0.72rem;">
+                <thead>
+                  <tr>
+                    <th>Adresse</th>
+                    <th>Register (u16)</th>
+                    <th>Register (s16)</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="scanRows"></tbody>
+              </table>
+            </div>
+
+            <!-- Schedule / Control -->
+            <div class="sub-card page-grid-full">
+              <div class="panel-head">
+                <div>
+                  <p class="card-kicker">Zeitplan</p>
+                  <h2 class="section-title">Schedule / Control</h2>
+                </div>
+              </div>
+              <p class="meta" style="margin-top:6px;">Regeln laden, pr&uuml;fen und als JSON gezielt anpassen.</p>
+              <div class="controls" style="margin-top:10px;">
+                <button id="loadSchedule" class="btn btn-ghost btn-small" type="button">Zeitplan laden</button>
+                <button id="saveSchedule" class="btn btn-primary btn-small" type="button">Zeitplan speichern</button>
+              </div>
+              <div class="meta" style="margin-top:6px;">JSON-Format: <code>{ "rules": [ ... ] }</code></div>
+              <textarea id="scheduleJson" style="width:100%;min-height:160px;margin-top:8px;background:rgba(8,12,24,0.5);border:1px solid var(--flow-border);color:var(--flow-text);border-radius:6px;padding:10px;font-family:var(--font-mono);font-size:0.72rem;resize:vertical;"></textarea>
+              <div class="meta" id="scheduleMeta" style="margin-top:6px;">-</div>
+            </div>
+
+          </div><!-- /.page-grid -->
+        </div><!-- /#systemTabContent -->
+      </div><!-- /.settings-content -->
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/settings.js"></script>
+  <script src="/tools.js"></script>
+  <script>
+  // Tab switching logic
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
+      tab.classList.add('is-active');
+      const target = tab.dataset.settingsTarget;
+      const systemContent = document.getElementById('systemTabContent');
+      const settingsContent = document.getElementById('settingsWorkspace');
+      if (target === 'system') {
+        systemContent.style.display = '';
+        settingsContent.style.display = 'none';
+      } else {
+        systemContent.style.display = 'none';
+        settingsContent.style.display = '';
+        // Trigger settings.js navigation
+        const navBtn = document.querySelector('#settingsNavTree [data-section="' + target + '"]');
+        if (navBtn) navBtn.click();
+      }
+    });
+  });
+  </script>
 </body>
 </html>
