@@ -77,7 +77,7 @@ const SECTIONS = [
   {
     id: 'telemetry',
     label: 'Telemetrie & Historie',
-    description: 'Interne Datenbank fuer Live-Historie, Rollups und Backfill.',
+    description: 'Interne Datenbank für Live-Historie, Rollups und Backfill.',
     destination: 'services'
   },
   {
@@ -510,30 +510,33 @@ function buildFieldDefinitions() {
 
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'Automatische lokale Historie fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'Automatische lokale Historie für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.enabled',
       label: 'Interne Historie aktiv',
       type: 'boolean',
+      hidden: true,
       help: 'Schreibt Livewerte, Preise, Steuerereignisse und Optimierergebnisse lokal in eine eingebaute Datenbank.'
     },
     {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.database.host',
       label: 'DB Host',
       type: 'text',
+      hidden: true,
       help: 'PostgreSQL Hostname oder IP-Adresse.'
     },
     {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.database.port',
       label: 'DB Port',
       type: 'number',
+      hidden: true,
       min: 1,
       max: 65535,
       help: 'PostgreSQL Port (Standard: 5432).'
@@ -542,30 +545,33 @@ function buildFieldDefinitions() {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.database.name',
       label: 'Datenbankname',
       type: 'text',
+      hidden: true,
       help: 'Name der PostgreSQL-Datenbank (Standard: dvhub).'
     },
     {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.database.user',
       label: 'DB Benutzer',
       type: 'text',
+      hidden: true,
       help: 'PostgreSQL Benutzername.'
     },
     {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.database.password',
       label: 'DB Passwort',
       type: 'text',
+      hidden: true,
       empty: 'blank',
       help: 'PostgreSQL Passwort.'
     },
@@ -573,58 +579,58 @@ function buildFieldDefinitions() {
       section: 'telemetry',
       group: 'database',
       groupLabel: 'Interne Datenbank',
-      groupDescription: 'PostgreSQL + TimescaleDB Verbindung fuer Telemetrie, Preise und Optimierer.',
+      groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.rawRetentionDays',
       label: 'Raw Retention (Tage)',
       type: 'number',
       min: 1,
       max: 3650,
-      help: 'Wie lange Rohdaten mit hoher Aufloesung aufbewahrt werden. TimescaleDB Retention Policy.'
+      help: 'Wie lange Rohdaten mit hoher Auflösung aufbewahrt werden. TimescaleDB Retention Policy.'
     },
     {
       section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
-      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
       path: 'telemetry.historyImport.enabled',
       label: 'History Import aktiv',
       type: 'boolean',
-      help: 'Aktiviert den optionalen VRM-Import fuer bestehende Historie und Gap-Fill.'
+      help: 'Aktiviert den optionalen VRM-Import für bestehende Historie und Gap-Fill.'
     },
     {
       section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
-      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
       path: 'telemetry.historyImport.provider',
       label: 'Import Quelle',
       type: 'select',
       options: [
         { value: 'vrm', label: 'VRM' }
       ],
-      help: 'Historischer Nachimport wird bewusst nur ueber VRM unterstuetzt.'
+      help: 'Historischer Nachimport wird bewusst nur über VRM unterstützt.'
     },
     {
       section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
-      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
       path: 'telemetry.historyImport.vrmPortalId',
       label: 'VRM Portal ID',
       type: 'text',
       empty: 'blank',
-      help: 'Optional. Wird fuer spaeteren VRM-Historienimport genutzt.'
+      help: 'Optional. Wird für späteren VRM-Historienimport genutzt.'
     },
     {
       section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
-      groupDescription: 'Optionale Nachfuellung aus VRM fuer Historie und Datenluecken.',
+      groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
       path: 'telemetry.historyImport.vrmToken',
       label: 'VRM Token',
       type: 'text',
       empty: 'blank',
-      help: 'Optionaler API-Token fuer spaeteren VRM-Backfill.'
+      help: 'Optionaler API-Token für späteren VRM-Backfill.'
     },
 
     {
@@ -1359,8 +1365,12 @@ function buildFieldDefinitions() {
       groupLabel: 'EPEX',
       groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.priceApiUrl',
-      label: 'Price API URL',
-      type: 'text',
+      label: 'Preis-API',
+      type: 'select',
+      options: [
+        { value: 'https://api.dvhub.de', label: 'DVhub API (api.dvhub.de)' },
+        { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
+      ],
       help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
     }
   ];
