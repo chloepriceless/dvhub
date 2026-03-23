@@ -140,12 +140,30 @@ function renderKpis(summary) {
   setText('historyKpiCashIn', fmtEur(revenue));
   setText('historyKpiCashOut', fmtEur(-Math.abs(cost)));
 
-  // Karte 4: Vermiedene Kosten
+  // Karte 4: Vermiedene Kosten (Bezugspreis-Modus)
+  const oppCost = kpis?.opportunityCostEur || 0;
+  const oppCostPv = kpis?.opportunityCostPvEur || 0;
+  const oppCostBat = kpis?.opportunityCostBatteryEur || 0;
+  const avoidedPv = kpis?.avoidedImportPvGrossEur || 0;
+  const avoidedBat = kpis?.avoidedImportBatteryGrossEur || 0;
+  // Store for toggle
+  window._historyKpiCache = { avoided, avoidedPv, avoidedBat, oppCost, oppCostPv, oppCostBat, net, gross, pvCost, batCost };
   setText('historyKpiAvoided', fmtEur(avoided));
-  setText('historyKpiAvoidedPvGross', fmtEur(kpis?.avoidedImportPvGrossEur));
-  setText('historyKpiAvoidedBatteryGross', fmtEur(kpis?.avoidedImportBatteryGrossEur));
+  setText('historyKpiAvoidedPvGross', fmtEur(avoidedPv));
+  setText('historyKpiAvoidedBatteryGross', fmtEur(avoidedBat));
+  // Marktwert-Modus Werte
+  setText('historyKpiAvoidedPvMarket', fmtEur(round2(avoidedPv - oppCostPv)));
+  setText('historyKpiAvoidedBatMarket', fmtEur(round2(avoidedBat - oppCostBat)));
+  setText('historyKpiOppCost', fmtEur(-Math.abs(oppCost)));
 
-  // Karte 5: Gesamtbilanz
+  // Karte 5: Energiebilanz
+  setText('historyKpiPv', fmtKwh(kpis?.pvKwh));
+  setText('historyKpiSelfCons', fmtKwh(kpis?.selfConsumptionKwh));
+  setText('historyKpiImport', fmtKwh(kpis?.importKwh));
+  setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
+  setText('historyKpiVbh', hasFiniteNumber(kpis?.pvFullLoadHours) ? fmtHours(kpis?.pvFullLoadHours) : '-');
+
+  // Karte 6: Gesamtbilanz
   setText('historyKpiGrossReturn', fmtEur(gross));
   setText('historyKpiBilanzAvoided', fmtEur(avoided));
   setText('historyKpiBilanzNet', fmtEur(net));
@@ -1390,6 +1408,32 @@ function initHistoryPage() {
   if (date && !date.value) date.value = currentDateValue();
   renderBackfillButtonState();
   bindHistoryControls();
+  // Marktwert toggle on Vermiedene Kosten card
+  const marketToggle = byId('historyMarketToggle');
+  if (marketToggle) {
+    let marketMode = false;
+    marketToggle.addEventListener('click', function() {
+      marketMode = !marketMode;
+      const defPanel = byId('historyAvoidedDefault');
+      const mktPanel = byId('historyAvoidedMarket');
+      const label = byId('historyAvoidedLabel');
+      if (defPanel) defPanel.hidden = marketMode;
+      if (mktPanel) mktPanel.hidden = !marketMode;
+      if (label) label.textContent = marketMode ? 'Vermiedene Kosten (Marktwert)' : 'Vermiedene Kosten';
+      marketToggle.textContent = marketMode ? 'Bezugspreis' : 'Marktwert';
+      marketToggle.style.opacity = marketMode ? '1' : '0.6';
+      // Update headline value
+      const c = window._historyKpiCache;
+      if (c) {
+        const avoidedVal = marketMode ? round2(c.avoided - c.oppCost) : c.avoided;
+        setText('historyKpiAvoided', fmtEur(avoidedVal));
+        // Update Gesamtbilanz with adjusted avoided
+        const adjustedGross = round2(cashNetEur({ exportRevenueEur: c.net + importCostEur({ gridCostEur: 0 }) }) + avoidedVal);
+        // Simpler: gross = net + avoided - pvCost - batCost (approximation from grossReturnEur formula)
+        setText('historyKpiBilanzAvoided', fmtEur(avoidedVal));
+      }
+    });
+  }
   loadHistorySummary().catch((error) => setBanner(`Historie konnte nicht initialisiert werden: ${error.message}`, 'error'));
 }
 
