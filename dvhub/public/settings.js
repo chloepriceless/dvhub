@@ -570,7 +570,7 @@ function setBanner(message, kind = 'info') {
   const el = document.getElementById('settingsBanner');
   if (!el) return;
   el.textContent = message;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function buildMetaText(meta) {
@@ -900,16 +900,15 @@ function buildDestinationWorkspace(definitionLike, destinationId) {
 
 function createSummaryCard(title, text) {
   const card = document.createElement('div');
-  card.className = 'summary-card';
-
-  const strong = document.createElement('strong');
-  strong.textContent = title;
-  card.appendChild(strong);
-
-  const body = document.createElement('span');
-  body.textContent = text;
-  card.appendChild(body);
-
+  card.className = 'config-row';
+  const label = document.createElement('span');
+  label.className = 'config-row-label';
+  label.textContent = title;
+  card.appendChild(label);
+  const val = document.createElement('strong');
+  val.className = 'config-row-value';
+  val.textContent = text;
+  card.appendChild(val);
   return card;
 }
 
@@ -1001,46 +1000,8 @@ function buildHistoryImportSummary(status) {
 
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
-  panel.style.cssText = 'margin-top:16px;padding-top:12px;border-top:1px solid var(--flow-border);';
-
-  const head = document.createElement('div');
-  head.style.cssText = 'margin-bottom:8px;';
-  head.innerHTML = `
-    <p class="card-kicker">Historie</p>
-    <h3 class="section-title" style="font-size:1rem;">VRM Backfill</h3>
-    <p class="meta">Historische Nachimporte werden bewusst nur über VRM unterstützt. GX/Cerbo bleibt Live-Quelle.</p>
-  `;
-  panel.appendChild(head);
-
-  const statusBanner = document.createElement('div');
-  statusBanner.className = `status-banner ${currentHistoryImportStatus?.ready ? 'success' : 'warn'}`;
-  statusBanner.textContent = buildHistoryImportSummary(currentHistoryImportStatus);
-  panel.appendChild(statusBanner);
-
-  const summary = document.createElement('div');
-  summary.className = 'settings-summary';
-  summary.appendChild(createSummaryCard('Quelle', 'VRM Portal'));
-  summary.appendChild(createSummaryCard('Portal ID', currentHistoryImportStatus?.vrmPortalId || '-'));
-  summary.appendChild(createSummaryCard('Status', currentHistoryImportStatus?.ready ? 'Import bereit' : 'Konfiguration unvollständig'));
-  panel.appendChild(summary);
-
-  const grid = document.createElement('div');
-  grid.className = 'settings-fields compact';
-  grid.innerHTML = `
-    <label class="settings-field" for="historyImportStart">
-      <span class="settings-field-title">Von</span>
-      <input id="historyImportStart" type="datetime-local" value="${historyImportFormState.start || ''}" />
-    </label>
-    <label class="settings-field" for="historyImportEnd">
-      <span class="settings-field-title">Bis</span>
-      <input id="historyImportEnd" type="datetime-local" value="${historyImportFormState.end || ''}" />
-    </label>
-    <label class="settings-field">
-      <span class="settings-field-title">Intervall</span>
-      <input type="text" value="15 Minuten" readonly />
-    </label>
-  `;
-  panel.appendChild(grid);
+  panel.className = 'config-group';
+  panel.dataset.accent = 'yellow';
 
   const actionState = buildHistoryImportActionState({
     destinationId,
@@ -1054,35 +1015,50 @@ function renderHistoryImportPanel(destinationId) {
     busy: historyImportBusy
   });
 
-  const actions = document.createElement('div');
-  actions.className = 'settings-inline-actions';
-  const importButton = document.createElement('button');
-  importButton.id = 'historyImportBtn';
-  importButton.type = 'button';
-  importButton.className = 'btn btn-primary';
-  importButton.disabled = actionState.disabled;
-  importButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren';
-  actions.appendChild(importButton);
-
-  const backfillButton = document.createElement('button');
-  backfillButton.id = 'historyBackfillBtn';
-  backfillButton.type = 'button';
-  backfillButton.className = 'btn btn-secondary';
-  backfillButton.disabled = backfillState.disabled;
-  backfillButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten';
-  actions.appendChild(backfillButton);
-
-  const note = document.createElement('small');
-  note.className = 'tools-note';
-  note.textContent = actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill bis zur ersten leeren Historie.';
-  actions.appendChild(note);
-  panel.appendChild(actions);
-
-  const result = document.createElement('div');
-  result.id = 'historyImportResult';
-  result.className = `status-banner ${currentHistoryImportResult?.ok ? 'success' : currentHistoryImportResult?.error ? 'error' : 'info'}`;
-  result.textContent = formatHistoryImportResult(currentHistoryImportResult);
-  panel.appendChild(result);
+  panel.innerHTML = `
+    <div class="config-group-kicker" style="color:var(--flow-yellow);">VRM Backfill</div>
+    <div class="config-banner ${currentHistoryImportStatus?.ready ? 'ok' : 'warn'}" style="margin:4px 14px;">
+      ${buildHistoryImportSummary(currentHistoryImportStatus)}
+    </div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Quelle</span>
+        <strong class="config-row-value">VRM Portal</strong>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Portal ID</span>
+        <strong class="config-row-value">${currentHistoryImportStatus?.vrmPortalId || '-'}</strong>
+      </div>
+    </div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Von</span>
+        <input id="historyImportStart" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.start || ''}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Bis</span>
+        <input id="historyImportEnd" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.end || ''}" />
+      </div>
+    </div>
+    <div class="config-row">
+      <span class="config-row-label">Intervall</span>
+      <strong class="config-row-value">15 Minuten</strong>
+    </div>
+    <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button id="historyImportBtn" type="button" class="btn btn-primary btn-small" ${actionState.disabled ? 'disabled' : ''}>
+        ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren'}
+      </button>
+      <button id="historyBackfillBtn" type="button" class="btn btn-ghost btn-small" ${backfillState.disabled ? 'disabled' : ''}>
+        ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten'}
+      </button>
+    </div>
+    <p style="padding:2px 14px 4px;font-size:11px;color:rgba(232,234,240,0.35);margin:0;">
+      ${actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill.'}
+    </p>
+    <div id="historyImportResult" class="config-banner ${currentHistoryImportResult?.ok ? 'ok' : currentHistoryImportResult?.error ? 'error' : 'info'}" style="margin:4px 14px 8px;">
+      ${formatHistoryImportResult(currentHistoryImportResult)}
+    </div>
+  `;
 
   bindHistoryImportControls(panel);
   return panel;
@@ -1118,8 +1094,8 @@ function renderPvPlantsEditor() {
   section.className = 'config-group';
   section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
-    ? `<div class="status-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
-    : '<div class="status-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
+    ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '<div class="config-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
   section.innerHTML = buildMarketPremiumEditorMarkup({
     marketValueMode: marketValueModeDraft,
     plants: pvPlantsDraft,
@@ -1157,14 +1133,12 @@ function renderPvPlantsEditor() {
 
 function renderEpexPriceSourceInfo() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-source';
+  section.className = 'config-group';
+  section.dataset.accent = 'green';
   section.innerHTML = `
-    <div style="margin-bottom:8px;">
-      <p class="card-kicker">Preisquelle</p>
-      <h3 class="section-title" style="font-size:1rem;">EPEX Day-Ahead Börsenpreise</h3>
-      <p class="meta">Die Day-Ahead Börsenstrompreise werden automatisch von <strong>api.dvhub.de</strong> geladen (EPEX SPOT).</p>
-    </div>
-    <div id="epexBacklogInfo" class="status-banner info" style="margin-top:8px">
+    <div class="config-group-kicker" style="color:var(--flow-green);">Preisquelle</div>
+    <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Day-Ahead Börsenstrompreise von <strong>api.dvhub.de</strong> (EPEX SPOT).</p>
+    <div id="epexBacklogInfo" class="config-banner info" style="margin:6px 14px;">
       Lade Preis-Backlog...
     </div>
   `;
@@ -1439,7 +1413,7 @@ function setHealthBanner(message, kind = 'info') {
   const el = document.getElementById('healthBanner');
   if (!el) return;
   el.textContent = message;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function renderHealth(payload) {
@@ -1754,14 +1728,14 @@ function initSettingsPage() {
     const banner = document.getElementById('connectionBanner');
     if (!banner) return;
     const ok = status?.victron?.connected;
-    banner.className = `status-banner ${ok ? 'success' : 'warn'}`;
+    banner.className = `config-banner ${ok ? 'success' : 'warn'}`;
     banner.textContent = ok
       ? `Verbunden mit ${status.victron?.host || 'Victron'}`
       : 'Keine Verbindung zum Victron-System.';
   }).catch(() => {
     const banner = document.getElementById('connectionBanner');
     if (banner) {
-      banner.className = 'status-banner error';
+      banner.className = 'config-banner error';
       banner.textContent = 'Status konnte nicht geladen werden.';
     }
   });
