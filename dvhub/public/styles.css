@@ -46,6 +46,9 @@
   --font-body: 'Inter', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
+  /* Additional chart tokens (used by app.js cssVar() calls) */
+  --chart-import: #22c55e;
+
   /* Shadows */
   --shadow-soft: 0 4px 12px rgba(0,0,0,0.15);
 }
@@ -686,6 +689,21 @@ button {
 .icon-btn:hover {
   border-color: rgba(80, 100, 160, 0.4);
   color: var(--flow-text);
+}
+
+.btn-danger {
+  background: rgba(255, 123, 114, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(255, 123, 114, 0.3);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 123, 114, 0.25);
+}
+
+/* Schedule row automation marker (toggled by JS) */
+.sched-row-automation {
+  background: rgba(242, 201, 76, 0.06);
 }
 
 /* --- Forms --- */
