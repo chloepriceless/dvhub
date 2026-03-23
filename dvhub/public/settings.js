@@ -620,6 +620,8 @@ function getVisibilityValue(path) {
 }
 
 function isFieldVisible(field) {
+  if (field.hidden) return false;
+
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
     if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
@@ -1340,7 +1342,7 @@ function updateSaveBar() {
   const text = document.getElementById('saveBarText');
   if (text) {
     const count = countChangedFields();
-    text.textContent = changed ? `${count} Feld${count === 1 ? '' : 'er'} geaendert` : '';
+    text.textContent = changed ? `${count} Feld${count === 1 ? '' : 'er'} geändert` : '';
   }
 }
 
