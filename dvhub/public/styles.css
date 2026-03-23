@@ -701,13 +701,14 @@ button {
 }
 
 .btn-ghost {
-  background: transparent;
-  color: var(--flow-text-muted);
-  border: 1px solid var(--flow-border);
+  background: rgba(255,255,255,0.04);
+  color: rgba(232,234,240,0.7);
+  border: 1px solid rgba(123,151,178,0.25);
 }
 
 .btn-ghost:hover {
-  border-color: rgba(80, 100, 160, 0.5);
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(123,151,178,0.45);
   color: var(--flow-text);
 }
 
