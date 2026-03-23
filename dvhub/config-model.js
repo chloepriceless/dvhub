@@ -400,7 +400,7 @@ function buildFieldDefinitions() {
       min: 500,
       max: 60000,
       step: 100,
-      help: 'Abstand zwischen den Live-Abfragen an das GX.'
+      help: 'Abstand zwischen den Live-Abfragen an das GX. 1000ms = 1s.'
     },
     {
       section: 'system',
