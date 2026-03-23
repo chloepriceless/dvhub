@@ -479,7 +479,6 @@ function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [
             <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
             <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
           </select>
-          <small class="field-help">Jahresmarktwert nutzt das bisherige Verhalten. Monatsmarktwert erzwingt Monatswerte fuer Monats- und Jahresansichten.</small>
         </label>
       </div>
     </div>
@@ -946,6 +945,30 @@ function renderDestinationGrid(destinationId) {
       const model = buildFieldRenderModel(field);
       const input = createConfigInput(field, model.value);
       group.appendChild(createConfigRow(field.label, input));
+      if (model.discovery.visible) {
+        const discoveryRow = document.createElement('div');
+        discoveryRow.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
+        const discBtn = document.createElement('button');
+        discBtn.type = 'button';
+        discBtn.className = 'btn btn-ghost btn-small';
+        discBtn.dataset.discoveryRun = field.path;
+        discBtn.disabled = model.discovery.loading || !model.discovery.manufacturer;
+        discBtn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
+        discoveryRow.appendChild(discBtn);
+        if (model.discovery.systems.length) {
+          for (const system of model.discovery.systems) {
+            const pickBtn = document.createElement('button');
+            pickBtn.type = 'button';
+            pickBtn.className = 'btn btn-ghost btn-small';
+            pickBtn.dataset.discoveryFieldPath = field.path;
+            pickBtn.dataset.discoverySelectSystem = system.id;
+            pickBtn.textContent = formatDiscoveredSystemOption(system);
+            if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
+            discoveryRow.appendChild(pickBtn);
+          }
+        }
+        group.appendChild(discoveryRow);
+      }
     }
 
     mount.appendChild(group);
@@ -1000,17 +1023,14 @@ function renderHistoryImportPanel(destinationId) {
     <label class="settings-field" for="historyImportStart">
       <span class="settings-field-title">Von</span>
       <input id="historyImportStart" type="datetime-local" value="${historyImportFormState.start || ''}" />
-      <small class="field-help">Startzeit des VRM-Historienimports.</small>
     </label>
     <label class="settings-field" for="historyImportEnd">
       <span class="settings-field-title">Bis</span>
       <input id="historyImportEnd" type="datetime-local" value="${historyImportFormState.end || ''}" />
-      <small class="field-help">Endzeit des VRM-Historienimports.</small>
     </label>
     <label class="settings-field">
       <span class="settings-field-title">Intervall</span>
       <input type="text" value="15 Minuten" readonly />
-      <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
     </label>
   `;
   panel.appendChild(grid);
@@ -1306,6 +1326,7 @@ function renderSettingsShell() {
     if (!DEST_TO_GRID[dest.id]) continue;
     renderDestinationGrid(dest.id);
   }
+  updateSaveBar();
 }
 
 function syncRenderedFieldsToDraft() {
