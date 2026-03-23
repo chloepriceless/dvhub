@@ -1,3 +1,5 @@
+(function() {
+'use strict';
 const common = window.DVhubCommon || {};
 const { apiFetch, buildApiUrl } = common;
 
@@ -799,3 +801,4 @@ if (typeof globalThis !== 'undefined') {
     formatHistoryImportResult
   };
 }
+})();

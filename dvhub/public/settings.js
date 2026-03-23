@@ -1753,6 +1753,29 @@ function initSettingsPage() {
     }
   });
 
+  // Tab switching (must be in external JS — CSP blocks inline scripts)
+  const tabContainer = document.querySelector('.settings-tabs');
+  if (tabContainer) {
+    tabContainer.addEventListener('click', (e) => {
+      const tab = e.target.closest('.settings-tab');
+      if (!tab) return;
+      const target = tab.dataset.tab;
+      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
+      tab.classList.add('is-active');
+      document.querySelectorAll('.settings-tab-panel').forEach(p => { p.hidden = true; });
+      const panel = document.getElementById('tab-' + target);
+      if (panel) panel.hidden = false;
+      history.replaceState(null, '', '#' + target);
+      syncRenderedFieldsToDraft();
+    });
+    // Restore tab from URL hash
+    const hash = location.hash.replace('#', '');
+    if (hash) {
+      const tab = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
+      if (tab) tab.click();
+    }
+  }
+
   loadConfig().catch((error) => {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
   });

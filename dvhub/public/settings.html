@@ -342,26 +342,6 @@
   <script src="/common.js"></script>
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
-  <script>
-  // Tab switching
-  document.querySelectorAll('.settings-tab').forEach(function(tab) {
-    tab.addEventListener('click', function() {
-      var target = tab.dataset.tab;
-      document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('is-active'); });
-      tab.classList.add('is-active');
-      document.querySelectorAll('.settings-tab-panel').forEach(function(p) { p.hidden = true; });
-      var panel = document.getElementById('tab-' + target);
-      if (panel) panel.hidden = false;
-      history.replaceState(null, '', '#' + target);
-      if (window.DVhubSettings) window.DVhubSettings.onTabSwitch(target);
-    });
-  });
-  // Restore tab from URL hash
-  var hash = location.hash.replace('#', '');
-  if (hash) {
-    var tab = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
-    if (tab) tab.click();
-  }
-  </script>
+  <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>
