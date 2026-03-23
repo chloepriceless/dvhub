@@ -416,10 +416,9 @@ button {
 
 /* --- Flow diagram --- */
 .flow-diagram {
-  width: 400px;
-  max-width: 400px;
-  max-height: 240px;
-  height: 240px;
+  width: 420px;
+  max-width: 420px;
+  height: 280px;
   position: relative;
   margin: 0 auto;
 }
@@ -485,10 +484,12 @@ button {
 }
 
 .flow-node-grid {
-  bottom: 0;
+  bottom: -10px;
   left: 50%;
   transform: translateX(-50%);
   border-color: var(--ok);
+  min-width: 120px;
+  padding: 12px 16px;
 }
 
 /* Center ring */
