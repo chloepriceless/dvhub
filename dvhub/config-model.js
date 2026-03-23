@@ -146,6 +146,11 @@ const SETUP_WIZARD_FIELD_META = {
     order: 20,
     help: 'IP-Adresse oder Hostname der Anlage. Technische Register- und Kommunikationswerte kommen aus dem Herstellerprofil.'
   },
+  pvCoupling: {
+    stepId: 'transport',
+    order: 30,
+    help: 'W\u00e4hle wie deine PV-Anlage am Victron-System angeschlossen ist.'
+  },
   modbusListenHost: {
     stepId: 'dv',
     order: 10,
@@ -192,7 +197,8 @@ const restartSensitivePrefixes = [
   'telemetry.historyImport.provider',
   'schedule.evaluateMs',
   'manufacturer',
-  'victron.host'
+  'victron.host',
+  'pvCoupling'
 ];
 
 function addSetupWizardMetadata(fields) {
@@ -659,6 +665,21 @@ function buildFieldDefinitions() {
         actionLabel: 'Find System IP'
       },
       help: 'IP-Adresse oder Hostname der Anlage. Register und weitere Kommunikationswerte kommen aus der Herstellerdatei.'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und die Anlagenadresse.',
+      path: 'pvCoupling',
+      label: 'PV-Anbindung',
+      type: 'select',
+      options: [
+        { value: 'ac_dc', label: 'AC + DC gekoppelt' },
+        { value: 'dc', label: 'Nur DC (MPPT)' },
+        { value: 'ac', label: 'Nur AC (Fronius, SMA, etc.)' }
+      ],
+      help: 'Art der PV-Anbindung. Bei reiner DC-Kopplung werden AC-PV-Register nicht abgefragt, bei reiner AC-Kopplung wird das DC-PV-Register \u00fcbersprungen.'
     },
 
     {
@@ -1388,9 +1409,10 @@ export function createDefaultConfig() {
     modbusListenHost: '0.0.0.0',
     modbusListenPort: 1502,
     offLeaseMs: 8 * 60 * 1000,
-    meterPollMs: 5000,
+    meterPollMs: 2000,
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',
+    pvCoupling: 'ac_dc',
     monitoring: {
       pushUrl: '',
       pushIntervalSec: 240
@@ -1446,39 +1468,39 @@ export function createDefaultConfig() {
     schedule: {
       timezone: 'Europe/Berlin',
       evaluateMs: 15000,
-      defaultGridSetpointW: null,
+      defaultGridSetpointW: -40,
       defaultChargeCurrentA: null,
       defaultFeedExcessDcPv: 1,
       rules: [],
       smallMarketAutomation: {
-      engine: 'greedy',
+      engine: 'milp',
         enabled: false,
         searchWindowStart: '14:00',
         searchWindowEnd: '09:00',
         targetSlotCount: null,
         maxDischargeW: -12000,
-        batteryCapacityKwh: null,
+        batteryCapacityKwh: 30,
         inverterEfficiencyPct: 85,
         minSocPct: 30,
         aggressivePremiumPct: 20,
         location: {
-          label: '',
-          latitude: null,
-          longitude: null
+          label: 'Deutschland',
+          latitude: 51.1657,
+          longitude: 10.4515
         },
         stages: []
       }
     },
     userEnergyPricing: {
       mode: 'fixed',
-      fixedGrossImportCtKwh: null,
+      fixedGrossImportCtKwh: 30,
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
       dynamicComponents: {
         energyMarkupCtKwh: 0,
-        gridChargesCtKwh: 0,
-        leviesAndFeesCtKwh: 0,
+        gridChargesCtKwh: 8.5,
+        leviesAndFeesCtKwh: 3,
         vatPct: 19
       },
       usesParagraph14aModule3: false,
@@ -1488,8 +1510,8 @@ export function createDefaultConfig() {
         window3: { enabled: false, label: '', start: '', end: '', priceCtKwh: null }
       },
       costs: {
-        pvCtKwh: null,
-        batteryBaseCtKwh: null,
+        pvCtKwh: 5,
+        batteryBaseCtKwh: 4,
         batteryLossMarkupPct: 20
       }
     },
@@ -1547,6 +1569,17 @@ function applyVictronDefaults(config) {
   for (const [key, item] of Object.entries(next.dvControl || {})) {
     if (key !== 'enabled' && key !== 'negativePriceProtection') apply(item);
   }
+  // Disable PV points based on pvCoupling selection
+  const coupling = next.pvCoupling || 'ac_dc';
+  if (coupling === 'dc' && next.points) {
+    if (next.points.acPvL1W) next.points.acPvL1W.enabled = false;
+    if (next.points.acPvL2W) next.points.acPvL2W.enabled = false;
+    if (next.points.acPvL3W) next.points.acPvL3W.enabled = false;
+  }
+  if (coupling === 'ac' && next.points) {
+    if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;
+  }
+
   return next;
 }
 

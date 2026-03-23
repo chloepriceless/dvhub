@@ -979,6 +979,21 @@ function renderDestinationGrid(destinationId) {
       }
     }
 
+    // Add map picker button if location fields are present in this group
+    const locationField = allFields.find(f => f.path && f.path.endsWith('.location.latitude'));
+    if (locationField) {
+      const basePath = locationField.path.replace('.latitude', '');
+      const mapRow = document.createElement('div');
+      mapRow.style.cssText = 'padding:4px 14px 12px;';
+      const mapBtn = document.createElement('button');
+      mapBtn.type = 'button';
+      mapBtn.className = 'btn btn-ghost btn-small';
+      mapBtn.textContent = '\u{1F5FA}\uFE0F Auf Karte w\u00e4hlen';
+      mapBtn.addEventListener('click', () => openLocationPicker(basePath));
+      mapRow.appendChild(mapBtn);
+      rowContainer.appendChild(mapRow);
+    }
+
     mount.appendChild(group);
 
     if (section.id === 'pricing') {
