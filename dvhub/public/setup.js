@@ -671,8 +671,13 @@ function renderSetupForm() {
   if (!grid) return;
   grid.innerHTML = '';
 
+  // Setup only shows the transport step (Victron plant connection)
+  // All other settings are in /settings.html
+  const SETUP_ONLY_STEPS = ['transport'];
+
   const steps = getSetupStepDefinitions();
   for (const step of steps) {
+    if (!SETUP_ONLY_STEPS.includes(step.id)) continue;
     const fields = getVisibleSetupFieldsForStep(setupWizardState, step.id);
     if (!fields.length) continue;
 
@@ -685,27 +690,32 @@ function renderSetupForm() {
       const required = field.setup?.required || false;
       group.appendChild(createConfigRow(field.label, input, { required }));
 
-      // Discovery button
+      // Discovery button — prominent styling
       if (model.discovery.visible) {
         const actions = document.createElement('div');
-        actions.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
+        actions.style.cssText = 'padding:8px 14px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;';
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'btn btn-ghost btn-small';
+        btn.className = 'btn btn-primary';
+        btn.style.cssText = 'padding:8px 18px;font-size:13px;font-weight:600;border-radius:8px;';
         btn.dataset.discoveryRun = field.path;
         btn.disabled = model.discovery.loading || !model.discovery.manufacturer;
-        btn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
+        btn.textContent = model.discovery.loading ? 'Suche laeuft...' : (model.discovery.actionLabel || 'System suchen');
         actions.appendChild(btn);
 
         if (model.discovery.systems.length) {
           for (const system of model.discovery.systems) {
             const pickBtn = document.createElement('button');
             pickBtn.type = 'button';
-            pickBtn.className = 'btn btn-ghost btn-small';
+            pickBtn.className = 'btn btn-ghost';
+            pickBtn.style.cssText = 'padding:6px 14px;font-size:12px;border:1px solid rgba(76,227,108,0.3);border-radius:6px;';
             pickBtn.dataset.discoveryFieldPath = field.path;
             pickBtn.dataset.discoverySelectSystem = system.id;
             pickBtn.textContent = formatSetupDiscoveredSystemOption(system);
-            if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
+            if (system.id === model.discovery.selectedSystemId) {
+              pickBtn.style.borderColor = '#4CE36C';
+              pickBtn.style.color = '#4CE36C';
+            }
             actions.appendChild(pickBtn);
           }
         }
@@ -715,6 +725,12 @@ function renderSetupForm() {
 
     grid.appendChild(group);
   }
+
+  // Hint: link to full settings
+  const hint = document.createElement('p');
+  hint.style.cssText = 'text-align:center;font-size:12px;color:rgba(232,234,240,0.35);margin-top:20px;';
+  hint.innerHTML = 'Weitere Einstellungen unter <a href="/settings.html" style="color:var(--flow-green,#4CE36C);text-decoration:none;">Einstellungen</a>';
+  grid.appendChild(hint);
 
   updateSetupSaveBar();
 }
