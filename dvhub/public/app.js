@@ -58,20 +58,23 @@ function updateFlowDiagram(status) {
   const loadW = Number(status?.victron?.selfConsumptionW || 0);
   const soc = Number(status?.victron?.soc || 0);
 
-  // Grid flow direction & node
+  // Grid flow direction & node — use victron gridExportW/gridImportW for reliable direction
   const gridLine = document.getElementById('flowLineGrid');
   const gridNode = document.getElementById('flowNodeGridValue');
   const gridLabel = document.getElementById('flowNodeGridLabel');
+  const gridExportW = Number(status?.victron?.gridExportW || 0);
+  const gridImportW = Number(status?.victron?.gridImportW || 0);
+  const isExport = gridExportW > gridImportW;
+  const gridAbsW = isExport ? gridExportW : gridImportW;
   if (gridLine) {
-    const isExport = gridTotal < 0;
     gridLine.setAttribute('stroke', isExport ? cssVar('--node-grid-export', '#3fb950') : cssVar('--node-grid-import', '#ff7b72'));
-    gridLine.setAttribute('opacity', String(Math.min(Math.abs(gridTotal) / 5000, 1) * 0.6 + 0.2));
+    gridLine.setAttribute('opacity', String(Math.min(gridAbsW / 5000, 1) * 0.6 + 0.2));
   }
   if (gridNode) {
-    gridNode.textContent = `${Math.abs(gridTotal)} W`;
-    gridNode.style.color = gridTotal < 0 ? 'var(--node-grid-export)' : 'var(--node-grid-import)';
+    gridNode.textContent = `${gridAbsW} W`;
+    gridNode.style.color = isExport ? 'var(--node-grid-export)' : 'var(--node-grid-import)';
   }
-  if (gridLabel) gridLabel.textContent = gridTotal < 0 ? 'Export' : 'Import';
+  if (gridLabel) gridLabel.textContent = isExport ? 'Export' : 'Import';
 
   // Battery flow
   const batLine = document.getElementById('flowLineBat');
@@ -102,8 +105,8 @@ function updateFlowDiagram(status) {
   const c = status?.costs || {};
   if (centerNet) centerNet.textContent = c.netEur != null ? `${c.netEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : '-';
   if (centerDir) {
-    centerDir.textContent = gridTotal < 0 ? 'Export' : 'Import';
-    centerDir.style.color = gridTotal < 0 ? 'var(--ok)' : 'var(--danger)';
+    centerDir.textContent = isExport ? 'Export' : 'Import';
+    centerDir.style.color = isExport ? 'var(--ok)' : 'var(--danger)';
   }
 
   // SOC progress bar
