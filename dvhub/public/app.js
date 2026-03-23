@@ -55,6 +55,7 @@ function updateFlowDiagram(status) {
   const gridTotal = Number(status?.meter?.grid_total_w || 0);
   const batPower = Number(status?.victron?.batteryPowerW || 0);
   const pvPower = Number(status?.victron?.pvPowerW || 0);
+  const loadW = Number(status?.victron?.selfConsumptionW || 0);
   const soc = Number(status?.victron?.soc || 0);
 
   // Grid flow direction & node
@@ -91,7 +92,9 @@ function updateFlowDiagram(status) {
 
   // House flow
   const houseLine = document.getElementById('flowLineHouse');
-  if (houseLine) houseLine.setAttribute('opacity', '0.5');
+  const houseNode = document.getElementById('flowNodeHouseValue');
+  if (houseLine) houseLine.setAttribute('opacity', String(Math.min(loadW / 5000, 1) * 0.6 + 0.2));
+  if (houseNode) houseNode.textContent = loadW > 0 ? `${loadW} W` : 'Haus';
 
   // Center ring
   const centerNet = document.getElementById('flowCenterNet');
