@@ -67,8 +67,8 @@
         <div id="historyStatusInfo" class="history-status-info" hidden></div>
       </section>
 
-      <!-- KPI Cards — 5 columns -->
-      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px;">
+      <!-- KPI Cards — 6 columns -->
+      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;">
 
         <!-- 1: Energiekosten -->
         <div class="config-group" data-accent="orange">
@@ -94,15 +94,37 @@
           <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCashOut" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
         </div>
 
-        <!-- 4: Vermiedene Kosten -->
+        <!-- 4: Vermiedene Kosten (with Marktwert toggle) -->
         <div class="config-group" data-accent="cyan">
-          <div class="config-group-kicker" style="color:var(--flow-cyan);">Vermiedene Kosten</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px 0;">
+            <span class="config-group-kicker" style="padding:0;color:var(--flow-cyan);" id="historyAvoidedLabel">Vermiedene Kosten</span>
+            <button id="historyMarketToggle" type="button" class="btn btn-ghost btn-small" style="font-size:9px;padding:2px 6px;opacity:0.6;">Marktwert</button>
+          </div>
           <div id="historyKpiAvoided" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-cyan);">-</div>
-          <div class="config-row"><span class="config-row-label">Eigenverbrauch PV</span><strong id="historyKpiAvoidedPvGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
-          <div class="config-row"><span class="config-row-label">Eigenverbrauch Akku</span><strong id="historyKpiAvoidedBatteryGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+          <!-- Default: Bezugspreis-Modus -->
+          <div id="historyAvoidedDefault">
+            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatteryGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+          </div>
+          <!-- Marktwert-Modus (hidden by default) -->
+          <div id="historyAvoidedMarket" hidden>
+            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvMarket" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatMarket" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Opportunit&auml;t</span><strong id="historyKpiOppCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          </div>
         </div>
 
-        <!-- 5: Gesamtbilanz -->
+        <!-- 5: Energiebilanz -->
+        <div class="config-group" data-accent="purple">
+          <div class="config-group-kicker" style="color:var(--flow-purple);">Energiebilanz</div>
+          <div id="historyKpiPv" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-purple);">-</div>
+          <div class="config-row"><span class="config-row-label">Eigenverbrauch</span><strong id="historyKpiSelfCons" class="config-row-value">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Bezug</span><strong id="historyKpiImport" class="config-row-value">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiExport" class="config-row-value">-</strong></div>
+          <div class="config-row"><span class="config-row-label">VBH</span><strong id="historyKpiVbh" class="config-row-value">-</strong></div>
+        </div>
+
+        <!-- 6: Gesamtbilanz -->
         <div class="config-group" id="historyKpiBilanzCard" data-accent="green">
           <div class="config-group-kicker" style="color:var(--flow-green);">Gesamtbilanz</div>
           <div id="historyKpiGrossReturn" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-green);">-</div>

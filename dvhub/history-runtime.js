@@ -30,6 +30,8 @@ const AGGREGATE_SUM_FIELDS = [
   'avoidedImportPvGrossEur',
   'avoidedImportBatteryGrossEur',
   'opportunityCostEur',
+  'opportunityCostPvEur',
+  'opportunityCostBatteryEur',
   'selfConsumptionCostEur',
   'exportRevenueEur',
   'solarCompensationEur',
@@ -242,6 +244,8 @@ function buildRowAccumulator(key, label) {
     avoidedImportPvGrossEur: 0,
     avoidedImportBatteryGrossEur: 0,
     opportunityCostEur: 0,
+    opportunityCostPvEur: 0,
+    opportunityCostBatteryEur: 0,
     selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
     solarCompensationEur: 0,
@@ -388,6 +392,8 @@ function buildDayCharts(slots) {
       avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
       avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
       opportunityCostEur: slot.opportunityCostEur,
+      opportunityCostPvEur: slot.opportunityCostPvEur,
+      opportunityCostBatteryEur: slot.opportunityCostBatteryEur,
       selfConsumptionCostEur: slot.selfConsumptionCostEur,
       exportRevenueEur: slot.exportRevenueEur,
       netEur: slot.netEur,
@@ -410,6 +416,8 @@ function buildPeriodCharts(rows) {
       avoidedImportPvGrossEur: row.avoidedImportPvGrossEur,
       avoidedImportBatteryGrossEur: row.avoidedImportBatteryGrossEur,
       opportunityCostEur: row.opportunityCostEur,
+      opportunityCostPvEur: row.opportunityCostPvEur,
+      opportunityCostBatteryEur: row.opportunityCostBatteryEur,
       selfConsumptionCostEur: row.selfConsumptionCostEur,
       netEur: row.netEur,
       grossReturnEur: row.grossReturnEur,
@@ -448,6 +456,8 @@ function buildPeriodCharts(rows) {
       avoidedImportPvGrossEur: row.avoidedImportPvGrossEur,
       avoidedImportBatteryGrossEur: row.avoidedImportBatteryGrossEur,
       opportunityCostEur: row.opportunityCostEur,
+      opportunityCostPvEur: row.opportunityCostPvEur,
+      opportunityCostBatteryEur: row.opportunityCostBatteryEur,
       selfConsumptionCostEur: row.selfConsumptionCostEur,
       netEur: row.netEur,
       grossReturnEur: row.grossReturnEur,
@@ -999,6 +1009,8 @@ function buildSummarySeries(view, slots) {
       avoidedImportPvGrossEur: slot.avoidedImportPvGrossEur,
       avoidedImportBatteryGrossEur: slot.avoidedImportBatteryGrossEur,
       opportunityCostEur: slot.opportunityCostEur,
+      opportunityCostPvEur: slot.opportunityCostPvEur,
+      opportunityCostBatteryEur: slot.opportunityCostBatteryEur,
       selfConsumptionCostEur: slot.selfConsumptionCostEur,
       importCostEur: slot.importCostEur,
       exportRevenueEur: slot.exportRevenueEur,
@@ -1175,6 +1187,8 @@ export function createHistoryRuntime({
         const avoidedImportGrossEur = round2((avoidedImportPvGrossEur || 0) + (avoidedImportBatteryGrossEur || 0));
         const importCostEur = gridCostEur;
         const opportunityCostEur = costForShareEur(localSelfConsumptionKwh, marketPriceCtKwh);
+        const opportunityCostPvEur = costForShareEur(shares.pvShareKwh, marketPriceCtKwh);
+        const opportunityCostBatteryEur = costForShareEur(shares.batteryShareKwh, marketPriceCtKwh);
         const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
         const exportRevenueEur = missingMarketPrice ? null : round2((slot.exportKwh * Number(marketPriceCtKwh || 0)) / 100);
         const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
@@ -1209,6 +1223,8 @@ export function createHistoryRuntime({
           avoidedImportPvGrossEur,
           avoidedImportBatteryGrossEur,
           opportunityCostEur,
+          opportunityCostPvEur,
+          opportunityCostBatteryEur,
           selfConsumptionCostEur,
           importCostEur,
           exportRevenueEur,
@@ -1255,6 +1271,8 @@ export function createHistoryRuntime({
       avoidedImportPvGrossEur: totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0),
       avoidedImportBatteryGrossEur: totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0),
       opportunityCostEur: totals.opportunityCostEur + (slot.opportunityCostEur || 0),
+      opportunityCostPvEur: totals.opportunityCostPvEur + (slot.opportunityCostPvEur || 0),
+      opportunityCostBatteryEur: totals.opportunityCostBatteryEur + (slot.opportunityCostBatteryEur || 0),
       selfConsumptionCostEur: totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0),
       exportRevenueEur: totals.exportRevenueEur + (slot.exportRevenueEur || 0),
       solarCompensationEur: 0,
@@ -1296,6 +1314,8 @@ export function createHistoryRuntime({
       avoidedImportPvGrossEur: 0,
       avoidedImportBatteryGrossEur: 0,
       opportunityCostEur: 0,
+      opportunityCostPvEur: 0,
+      opportunityCostBatteryEur: 0,
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
       solarCompensationEur: 0,
