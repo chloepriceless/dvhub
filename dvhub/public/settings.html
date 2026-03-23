@@ -34,40 +34,34 @@
 
     <main class="page-content">
       <!-- Page header -->
-      <div class="page-header-card">
-        <div class="panel-head">
-          <div>
-            <p class="card-kicker">Einstellungen</p>
-            <h1 class="section-title" style="font-size:1.4rem;">DVhub Einstellungen</h1>
-            <div id="settingsBanner" class="status-banner" style="margin-top:6px;">Konfiguration wird geladen...</div>
-            <div id="configMeta" class="meta">-</div>
-          </div>
-          <div class="controls">
-            <button id="reloadConfigBtn" class="btn btn-ghost btn-small">Neu laden</button>
-            <button id="saveConfigBtn" class="btn btn-primary btn-small">Speichern</button>
-          </div>
-        </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;padding:16px 16px 0;">
+        <h1 style="font-family:var(--font-title);font-size:18px;font-weight:600;">Einstellungen</h1>
+        <small id="configMeta" style="font-size:11px;color:rgba(232,234,240,0.25);font-family:var(--font-mono);">-</small>
       </div>
 
-      <!-- Horizontal Tab Bar -->
+      <!-- Tabs -->
       <div class="settings-tabs">
-        <button class="settings-tab is-active" data-settings-target="quickstart">Schnellstart</button>
-        <button class="settings-tab" data-settings-target="connection">Anlage</button>
-        <button class="settings-tab" data-settings-target="control">Steuerung</button>
-        <button class="settings-tab" data-settings-target="services">Preise &amp; Daten</button>
-        <button class="settings-tab" data-settings-target="advanced">Erweitert</button>
-        <button class="settings-tab" data-settings-target="system">System</button>
+        <button class="settings-tab is-active" data-tab="connection">Anlage</button>
+        <button class="settings-tab" data-tab="control">Steuerung</button>
+        <button class="settings-tab" data-tab="services">Preise</button>
+        <button class="settings-tab" data-tab="system">System</button>
       </div>
 
-      <!-- Settings content area -->
-      <div class="settings-content">
-        <div id="settingsNavTree" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);"></div>
-        <div id="settingsWorkspace" class="settings-workspace-panel">
-          <section id="settingsSections" class="settings-sections"></section>
-        </div>
+      <!-- Tab panels -->
+      <div style="padding:12px 16px 80px;">
+        <div id="settingsBanner" class="config-banner warn">Konfiguration wird geladen...</div>
 
-        <!-- System tab content (from tools.html) — hidden by default -->
-        <div id="systemTabContent" class="system-tab-content" style="display:none;">
+        <div id="tab-connection" class="settings-tab-panel">
+          <div id="connectionBanner" class="config-banner" style="display:none;"></div>
+          <div id="connectionGrid" class="config-grid"></div>
+        </div>
+        <div id="tab-control" class="settings-tab-panel" hidden>
+          <div id="controlGrid" class="config-grid"></div>
+        </div>
+        <div id="tab-services" class="settings-tab-panel" hidden>
+          <div id="servicesGrid" class="config-grid"></div>
+        </div>
+        <div id="tab-system" class="settings-tab-panel" hidden>
           <div class="page-grid">
 
             <!-- Systemstatus -->
@@ -331,8 +325,17 @@
             </div>
 
           </div><!-- /.page-grid -->
-        </div><!-- /#systemTabContent -->
-      </div><!-- /.settings-content -->
+        </div><!-- /#tab-system -->
+      </div>
+
+      <!-- Sticky save bar -->
+      <div class="config-save-bar">
+        <span class="config-save-bar-text" id="saveBarText">-</span>
+        <div class="config-save-bar-actions">
+          <button id="discardBtn" class="btn btn-ghost">Verwerfen</button>
+          <button id="saveConfigBtn" class="btn btn-primary">Speichern</button>
+        </div>
+      </div>
     </main>
   </div>
 
@@ -340,65 +343,25 @@
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
   <script>
-  // Tab switching — dispatch click event on settingsNavTree buttons
-  function triggerSettingsNav(targetId, retries) {
-    var navTree = document.getElementById('settingsNavTree');
-    if (!navTree) return;
-    var btn = navTree.querySelector('[data-settings-target="' + targetId + '"]');
-    if (btn) {
-      // Use dispatchEvent to trigger the delegated click handler in settings.js
-      var evt = new MouseEvent('click', { bubbles: true, cancelable: true });
-      btn.dispatchEvent(evt);
-      return true;
-    }
-    if (retries > 0) {
-      setTimeout(function() { triggerSettingsNav(targetId, retries - 1); }, 300);
-    }
-    return false;
-  }
-
-  function switchSettingsTab(target) {
-    // Update tab visuals
-    document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('is-active'); });
-    var activeTab = document.querySelector('.settings-tab[data-settings-target="' + target + '"]');
-    if (activeTab) activeTab.classList.add('is-active');
-
-    var systemContent = document.getElementById('systemTabContent');
-    var settingsContent = document.getElementById('settingsWorkspace');
-
-    if (target === 'system') {
-      if (systemContent) systemContent.style.display = '';
-      if (settingsContent) settingsContent.style.display = 'none';
-    } else {
-      if (systemContent) systemContent.style.display = 'none';
-      if (settingsContent) settingsContent.style.display = '';
-      // Trigger settings.js navigation via dispatched click event — retry up to 20 times
-      triggerSettingsNav(target, 20);
-    }
-  }
-
+  // Tab switching
   document.querySelectorAll('.settings-tab').forEach(function(tab) {
-    tab.addEventListener('click', function() { switchSettingsTab(tab.dataset.settingsTarget); });
-  });
-
-  // Sync tabs when settings.js nav buttons are clicked directly (via MutationObserver)
-  var observer = new MutationObserver(function() {
-    const navBtns = document.querySelectorAll('#settingsNavTree [data-settings-target]');
-    navBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const target = btn.dataset.settingsTarget;
-        document.querySelectorAll('.settings-tab').forEach(t => {
-          t.classList.toggle('is-active', t.dataset.settingsTarget === target);
-        });
-        const systemContent = document.getElementById('systemTabContent');
-        if (systemContent) systemContent.style.display = 'none';
-        const settingsContent = document.getElementById('settingsWorkspace');
-        if (settingsContent) settingsContent.style.display = '';
-      });
+    tab.addEventListener('click', function() {
+      var target = tab.dataset.tab;
+      document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('is-active'); });
+      tab.classList.add('is-active');
+      document.querySelectorAll('.settings-tab-panel').forEach(function(p) { p.hidden = true; });
+      var panel = document.getElementById('tab-' + target);
+      if (panel) panel.hidden = false;
+      history.replaceState(null, '', '#' + target);
+      if (window.DVhubSettings) window.DVhubSettings.onTabSwitch(target);
     });
   });
-  const navTree = document.getElementById('settingsNavTree');
-  if (navTree) observer.observe(navTree, { childList: true, subtree: true });
+  // Restore tab from URL hash
+  var hash = location.hash.replace('#', '');
+  if (hash) {
+    var tab = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
+    if (tab) tab.click();
+  }
   </script>
 </body>
 </html>
