@@ -4114,3 +4114,97 @@ button {
 @media (max-width: 768px) {
   .system-tab-content .page-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   HISTORY — full-width chart grid override
+   ============================================================ */
+/* History chart grid — override legacy 3-col to stack full-width */
+.page-content .history-chart-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.page-content .history-chart-grid article {
+  width: 100%;
+}
+.page-content .history-chart-shell {
+  min-height: 280px;
+  background: rgba(8,12,24,0.3);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+}
+
+/* ============================================================
+   SETUP WIZARD — override old classes for setup.js dynamic content
+   ============================================================ */
+.setup-shell .settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--flow-border);
+}
+.setup-shell .settings-field:last-child { border-bottom: none; }
+.setup-shell .settings-field-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--flow-text);
+}
+.setup-shell .field-help {
+  font-size: 0.72rem;
+  color: var(--flow-text-dim);
+}
+.setup-shell input[type="text"],
+.setup-shell input[type="number"],
+.setup-shell input[type="url"],
+.setup-shell input[type="password"],
+.setup-shell select {
+  background: rgba(8,12,24,0.5) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+  color: var(--flow-text) !important;
+  font-family: var(--font-body) !important;
+  font-size: 0.85rem !important;
+  width: 100%;
+  max-width: 400px;
+}
+.setup-shell .settings-sidebar-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.setup-shell .settings-sidebar-nav button,
+.setup-shell .settings-sidebar-nav .app-nav-subitem {
+  background: var(--flow-surface) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 6px !important;
+  padding: 8px 14px !important;
+  margin: 0 !important;
+  color: var(--flow-text-muted) !important;
+  cursor: pointer;
+  font-size: 0.78rem !important;
+}
+.setup-shell .settings-sidebar-nav .app-nav-subitem.is-active {
+  border-color: var(--chart-positive) !important;
+  color: var(--flow-text) !important;
+}
+.setup-shell .setup-callout {
+  background: rgba(99,102,241,0.06);
+  border: 1px solid rgba(99,102,241,0.15);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+  margin-bottom: 12px;
+  font-size: 0.8rem;
+  color: var(--flow-text-muted);
+}
+.setup-shell .setup-callout:empty { display: none; }
+/* Setup navigation buttons (Weiter/Zurueck) */
+.setup-shell .panel-head {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}

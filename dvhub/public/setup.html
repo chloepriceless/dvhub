@@ -32,41 +32,41 @@
       <div class="topbar-right"></div>
     </header>
 
-    <main class="page-content">
-      <!-- Page header -->
-      <div class="page-header-card">
-        <div class="panel-head">
-          <div>
-            <p class="card-kicker">Setup</p>
-            <h1 class="section-title" style="font-size:1.4rem;">DVhub Inbetriebnahme</h1>
-            <div id="setupBanner" class="status-banner" style="margin-top:6px;">Setup wird geladen...</div>
-            <div id="setupMeta" class="meta">-</div>
-          </div>
-          <div class="controls" style="display:flex;gap:8px;">
-            <button id="setupSaveBtn" class="btn btn-primary btn-small" type="button">Zur Pr&uuml;fung</button>
-            <button id="setupImportBtn" class="btn btn-ghost btn-small" type="button">Config importieren</button>
-          </div>
+    <main class="page-content" style="max-width:800px;margin:0 auto;">
+      <!-- Centered setup card -->
+      <div class="sub-card" style="margin-top:24px;">
+        <div style="text-align:center;margin-bottom:20px;">
+          <p class="card-kicker" style="color:var(--chart-positive);">Ersteinrichtung</p>
+          <h1 class="section-title" style="font-size:1.6rem;">DVhub einrichten</h1>
+          <p class="meta" style="margin-top:6px;">Verbinde deine Anlage und starte DVhub in wenigen Schritten.</p>
         </div>
-      </div>
-      <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
 
-      <!-- Setup wizard -->
-      <div class="sub-card">
-        <div id="setup-shell" class="setup-shell" style="display:flex;flex-direction:column;gap:16px;">
+        <div id="setupBanner" class="status-banner" style="margin-bottom:12px;">Setup wird geladen...</div>
+        <div id="setupMeta" class="meta" style="margin-bottom:16px;">-</div>
+        <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
 
-          <!-- Progress dots -->
-          <div id="setup-progress" class="setup-progress" style="display:flex;justify-content:center;gap:12px;padding:12px 0;"></div>
+        <div id="setup-shell" class="setup-shell">
+          <!-- Step indicators (rendered by setup.js into #setup-steps) -->
+          <div id="setup-steps" class="settings-sidebar-nav" style="justify-content:center;"></div>
 
-          <!-- Step navigation (rendered by setup.js) -->
-          <div id="setup-steps" style="display:none;"></div>
+          <!-- Progress (rendered by setup.js) -->
+          <div id="setup-progress" class="setup-progress"></div>
 
-          <!-- Workspace -->
-          <section class="setup-stage" style="min-height:300px;">
-            <div id="setup-callout" class="setup-callout"></div>
-            <div id="setup-errors" class="status-banner" hidden></div>
-            <div id="setup-workspace" class="settings-workspace-panel"></div>
-            <div id="setup-nav" class="panel-head" style="margin-top:16px;"></div>
-          </section>
+          <!-- Main workspace -->
+          <div id="setup-callout" class="setup-callout"></div>
+          <div id="setup-errors" class="status-banner" hidden></div>
+          <div id="setup-workspace" class="settings-workspace-panel"></div>
+
+          <!-- Nav buttons (Weiter / Zurueck) -->
+          <div id="setup-nav" class="panel-head" style="justify-content:space-between;margin-top:20px;"></div>
+        </div>
+
+        <div style="text-align:center;margin-top:20px;padding-top:16px;border-top:1px solid var(--flow-border);">
+          <div style="display:flex;gap:8px;justify-content:center;">
+            <button id="setupSaveBtn" class="btn btn-primary" type="button">Konfiguration pr&uuml;fen &amp; speichern</button>
+            <button id="setupImportBtn" class="btn btn-ghost" type="button">Vorhandene Config importieren</button>
+          </div>
+          <p class="meta" style="margin-top:8px;">Oder <a href="/settings.html" style="color:var(--chart-positive);">direkt zu den Einstellungen</a></p>
         </div>
       </div>
     </main>

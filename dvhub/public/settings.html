@@ -340,26 +340,55 @@
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
   <script>
-  // Tab switching logic
-  document.querySelectorAll('.settings-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
-      tab.classList.add('is-active');
-      const target = tab.dataset.settingsTarget;
-      const systemContent = document.getElementById('systemTabContent');
-      const settingsContent = document.getElementById('settingsWorkspace');
-      if (target === 'system') {
-        systemContent.style.display = '';
-        settingsContent.style.display = 'none';
-      } else {
-        systemContent.style.display = 'none';
-        settingsContent.style.display = '';
-        // Trigger settings.js navigation
-        const navBtn = document.querySelector('#settingsNavTree [data-section="' + target + '"]');
-        if (navBtn) navBtn.click();
+  // Tab switching — wait for settings.js to render nav
+  function switchSettingsTab(target) {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
+    const activeTab = document.querySelector('.settings-tab[data-settings-target="' + target + '"]');
+    if (activeTab) activeTab.classList.add('is-active');
+
+    const systemContent = document.getElementById('systemTabContent');
+    const settingsContent = document.getElementById('settingsWorkspace');
+
+    if (target === 'system') {
+      if (systemContent) systemContent.style.display = '';
+      if (settingsContent) settingsContent.style.display = 'none';
+    } else {
+      if (systemContent) systemContent.style.display = 'none';
+      if (settingsContent) settingsContent.style.display = '';
+      // Find the settings.js nav button for this destination
+      // settings.js renders buttons with dataset.settingsTarget
+      const navBtns = document.querySelectorAll('#settingsNavTree button, #settingsNavTree [data-settings-target]');
+      for (const btn of navBtns) {
+        if (btn.dataset.settingsTarget === target) {
+          btn.click();
+          break;
+        }
       }
+    }
+  }
+
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchSettingsTab(tab.dataset.settingsTarget));
+  });
+
+  // Also sync tabs when settings.js nav buttons are clicked directly
+  const observer = new MutationObserver(() => {
+    const navBtns = document.querySelectorAll('#settingsNavTree [data-settings-target]');
+    navBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.settingsTarget;
+        document.querySelectorAll('.settings-tab').forEach(t => {
+          t.classList.toggle('is-active', t.dataset.settingsTarget === target);
+        });
+        const systemContent = document.getElementById('systemTabContent');
+        if (systemContent) systemContent.style.display = 'none';
+        const settingsContent = document.getElementById('settingsWorkspace');
+        if (settingsContent) settingsContent.style.display = '';
+      });
     });
   });
+  const navTree = document.getElementById('settingsNavTree');
+  if (navTree) observer.observe(navTree, { childList: true, subtree: true });
   </script>
 </body>
 </html>
