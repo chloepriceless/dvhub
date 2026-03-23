@@ -22,6 +22,109 @@ let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 
+const GROUP_ACCENTS = {
+  connection: 'green', transport: 'green', victron: 'green',
+  modbus: 'yellow', dvProxy: 'yellow', dv: 'yellow', control: 'yellow',
+  schedule: 'green', automation: 'yellow', dvControl: 'blue',
+  location: 'blue', standort: 'blue',
+  telemetry: 'cyan', vrm: 'cyan',
+  webserver: 'purple', http: 'purple', api: 'purple',
+  mqtt: 'orange',
+  epex: 'green', pricing: 'yellow', pvPlants: 'blue'
+};
+
+function getGroupAccent(section) {
+  return GROUP_ACCENTS[section.id] || GROUP_ACCENTS[section.destination] || 'green';
+}
+
+function createConfigGroup(label, accent) {
+  const group = document.createElement('div');
+  group.className = 'config-group';
+  if (accent) group.dataset.accent = accent;
+  const kicker = document.createElement('div');
+  kicker.className = 'config-group-kicker';
+  kicker.style.color = `var(--flow-${accent || 'green'})`;
+  kicker.textContent = label;
+  group.appendChild(kicker);
+  return group;
+}
+
+function createConfigRow(label, inputEl, opts) {
+  const row = document.createElement('div');
+  row.className = 'config-row';
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'config-row-label';
+  labelSpan.textContent = label;
+  if (opts?.required) {
+    const req = document.createElement('span');
+    req.className = 'config-required';
+    req.textContent = '*';
+    labelSpan.appendChild(req);
+  }
+  row.appendChild(labelSpan);
+  if (typeof inputEl === 'string') {
+    const val = document.createElement('strong');
+    val.className = 'config-row-value';
+    val.textContent = inputEl;
+    row.appendChild(val);
+  } else {
+    row.appendChild(inputEl);
+  }
+  return row;
+}
+
+function createConfigInput(field, value) {
+  let input;
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'config-checkbox';
+    input.checked = Boolean(value);
+  } else if (field.type === 'select') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    for (const opt of field.options || []) {
+      const option = document.createElement('option');
+      option.value = String(opt.value);
+      option.textContent = opt.label;
+      input.appendChild(option);
+    }
+    input.value = String(value);
+  } else if (field.type === 'dynamicSelect') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    const placeholder = document.createElement('option');
+    placeholder.value = String(value || '');
+    placeholder.textContent = value ? String(value) : 'Laden...';
+    input.appendChild(placeholder);
+    if (field.dynamicOptionsUrl) {
+      apiFetch(field.dynamicOptionsUrl).then(data => {
+        input.innerHTML = '';
+        for (const z of (data?.zones || [])) {
+          const opt = document.createElement('option');
+          opt.value = z.zone;
+          opt.textContent = z.zone;
+          input.appendChild(opt);
+        }
+        input.value = String(value || 'DE-LU');
+      }).catch(() => { placeholder.textContent = value || 'Fehler'; });
+    }
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
+    input.className = 'config-input';
+    if (field.min !== undefined) input.min = field.min;
+    if (field.max !== undefined) input.max = field.max;
+    if (field.step !== undefined) input.step = field.step;
+    input.value = value === null || value === undefined ? '' : String(value);
+    input.style.width = field.type === 'number' ? '70px' : '140px';
+  }
+  input.id = fieldId(field.path);
+  input.dataset.path = field.path;
+  input.dataset.type = field.type;
+  return input;
+}
+
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -115,21 +218,10 @@ function setActiveSettingsSection(state, requestedId) {
   };
 }
 
-function buildDisclosureSummaryMarkup(group) {
-  return `
-    <span class="settings-group-accent" aria-hidden="true"></span>
-    <span class="settings-group-copy">
-      <span class="settings-group-title">${group.label}</span>
-      ${group.description ? `<small class="settings-group-description">${group.description}</small>` : ''}
-      <small class="settings-group-hint">Weitere Einstellungen ausklappen</small>
-    </span>
-    <span class="settings-group-chevron" aria-hidden="true">⌄</span>
-  `;
-}
+// buildDisclosureSummaryMarkup removed — replaced by config-group cards
 
 const settingsShellHelpers = {
   applyDiscoveredSystemToDraft,
-  buildDisclosureSummaryMarkup,
   buildDestinationWorkspace,
   buildFieldRenderModel,
   buildSettingsDestinations,
@@ -373,11 +465,10 @@ function validatePvPlants(plants = []) {
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
-    <div class="settings-subsection-head">
-      <p class="card-title">Marktprämie</p>
-      <h3>PV-Anlagen</h3>
-      <p class="settings-section-meta">${plants.length} konfigurierte Anlagen</p>
-      <p class="tools-note">Pflege hier global den Marktwert-Modus sowie pro Anlage nur die installierte Leistung und das Inbetriebnahmedatum. Die offiziellen Referenzwerte werden später daraus abgeleitet.</p>
+    <div style="margin-bottom:8px;">
+      <p class="card-kicker">Marktprämie</p>
+      <h3 class="section-title" style="font-size:1rem;">PV-Anlagen</h3>
+      <p class="meta">${plants.length} konfigurierte Anlagen · Leistung und Inbetriebnahmedatum pflegen.</p>
     </div>
     ${validationHtml}
     <div class="pricing-period-card">
@@ -661,132 +752,7 @@ function formatDiscoveredSystemOption(system = {}) {
   return parts.join(' • ');
 }
 
-function renderField(field) {
-  const wrapper = document.createElement('label');
-  wrapper.className = 'settings-field';
-  wrapper.setAttribute('for', fieldId(field.path));
-
-  const title = document.createElement('span');
-  title.className = 'settings-field-title';
-  title.textContent = field.label;
-  wrapper.appendChild(title);
-
-  const model = buildFieldRenderModel(field);
-  const { value, inherited } = model;
-  let input;
-  if (field.type === 'boolean') {
-    wrapper.classList.add('checkbox-field');
-    input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = Boolean(value);
-  } else if (field.type === 'select') {
-    input = document.createElement('select');
-    for (const optionDef of field.options || []) {
-      const option = document.createElement('option');
-      option.value = String(optionDef.value);
-      option.textContent = optionDef.label;
-      input.appendChild(option);
-    }
-    input.value = String(value);
-  } else if (field.type === 'dynamicSelect') {
-    input = document.createElement('select');
-    const placeholder = document.createElement('option');
-    placeholder.value = String(value || '');
-    placeholder.textContent = value ? String(value) : 'Laden...';
-    placeholder.selected = true;
-    input.appendChild(placeholder);
-    if (field.dynamicOptionsUrl) {
-      apiFetch(field.dynamicOptionsUrl).then((data) => {
-        input.innerHTML = '';
-        const zones = data?.zones || [];
-        for (const z of zones) {
-          const opt = document.createElement('option');
-          opt.value = z.zone;
-          const coverage = z.days_covered > 0 ? ` (${z.days_covered} Tage)` : ' (keine Daten)';
-          opt.textContent = `${z.zone}${coverage}`;
-          input.appendChild(opt);
-        }
-        input.value = String(value || 'DE-LU');
-      }).catch(() => {
-        placeholder.textContent = value ? String(value) : 'Fehler beim Laden';
-      });
-    }
-  } else {
-    input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
-    if (field.min !== undefined) input.min = field.min;
-    if (field.max !== undefined) input.max = field.max;
-    if (field.step !== undefined) input.step = field.step;
-    input.value = value === null || value === undefined ? '' : String(value);
-    if (inherited !== undefined && inherited !== null && field.empty === 'delete') {
-      input.placeholder = `Vererbt: ${inherited}`;
-    }
-  }
-
-  input.id = fieldId(field.path);
-  input.dataset.path = field.path;
-  input.dataset.type = field.type;
-  wrapper.appendChild(input);
-
-  const help = document.createElement('small');
-  help.className = 'field-help';
-  const helpParts = [];
-  if (field.help) helpParts.push(field.help);
-  if (field.empty === 'delete' && inherited !== undefined && inherited !== null) helpParts.push(`Aktuell vererbt: ${inherited}`);
-  if (field.empty === 'null') helpParts.push('Leer lassen setzt diesen Wert auf "kein Default".');
-  help.textContent = helpParts.join(' ');
-  wrapper.appendChild(help);
-
-  if (model.discovery.visible) {
-    const actions = document.createElement('div');
-    actions.className = 'settings-inline-actions settings-discovery-actions';
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'btn btn-secondary';
-    button.dataset.discoveryRun = field.path;
-    button.disabled = model.discovery.loading || !model.discovery.manufacturer;
-    button.textContent = model.discovery.loading ? 'Suche läuft...' : model.discovery.actionLabel;
-    actions.appendChild(button);
-
-    const note = document.createElement('small');
-    note.className = 'tools-note';
-    note.textContent = model.discovery.message;
-    actions.appendChild(note);
-    wrapper.appendChild(actions);
-
-    if (model.discovery.systems.length) {
-      const picker = document.createElement('div');
-      picker.className = 'settings-inline-actions settings-discovery-picker';
-      for (const system of model.discovery.systems) {
-        const applyButton = document.createElement('button');
-        applyButton.type = 'button';
-        applyButton.className = 'btn btn-ghost';
-        applyButton.dataset.discoveryFieldPath = field.path;
-        applyButton.dataset.discoverySelectSystem = system.id;
-        applyButton.textContent = formatDiscoveredSystemOption(system);
-        if (system.id === model.discovery.selectedSystemId) {
-          applyButton.classList.add('is-active');
-        }
-        picker.appendChild(applyButton);
-      }
-      wrapper.appendChild(picker);
-    }
-  }
-
-  // Location picker button after longitude field
-  if (field.path && field.path.endsWith('.location.longitude')) {
-    const mapBtn = document.createElement('button');
-    mapBtn.type = 'button';
-    mapBtn.className = 'btn btn-secondary';
-    mapBtn.textContent = 'Auf Karte w\u00e4hlen';
-    mapBtn.style.marginTop = '4px';
-    mapBtn.addEventListener('click', () => openLocationPicker(field.path.replace('.longitude', '')));
-    wrapper.appendChild(mapBtn);
-  }
-
-  return wrapper;
-}
+// renderField removed — replaced by createConfigInput + createConfigRow
 
 /* ---------- OpenStreetMap location picker modal ---------- */
 function openLocationPicker(locationBasePath) {
@@ -954,121 +920,46 @@ function createSummaryCard(title, text) {
   return card;
 }
 
-function getActiveSettingsDestination() {
-  return settingsShellState.destinations.find((destination) => destination.id === settingsShellState.activeSectionId)
-    || settingsShellState.destinations[0]
-    || null;
-}
+// getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
 
-function buildSectionMeta(destination) {
-  if (!destination) return '';
-  const fieldText = `${destination.fieldCount} Felder`;
-  if (destination.sectionCount > 1) return `${fieldText} in ${destination.sectionCount} Bereichen`;
-  return `${fieldText} in ${destination.groupCount} Gruppen`;
-}
-
-function renderSidebarNavigation() {
-  const navTree = document.getElementById('settingsNavTree');
-  if (!navTree) return;
-
-  navTree.innerHTML = '';
-  for (const destination of settingsShellState.destinations) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'app-nav-subitem';
-    button.dataset.settingsTarget = destination.id;
-    const isActive = destination.id === settingsShellState.activeSectionId;
-    if (isActive) button.classList.add('is-active');
-    button.setAttribute('aria-current', isActive ? 'page' : 'false');
-    button.innerHTML = `
-      <span class="app-nav-subitem-label">${destination.label}</span>
-      <small class="app-nav-subitem-copy">${destination.description || buildSectionMeta(destination)}</small>
-    `;
-    navTree.appendChild(button);
-  }
-}
-
-function renderSectionWorkspace(sectionId) {
-  const mount = document.getElementById('settingsSections');
+function renderDestinationGrid(destinationId) {
+  const gridId = destinationId + 'Grid';
+  const mount = document.getElementById(gridId);
   if (!mount) return;
   mount.innerHTML = '';
 
-  const destination = buildDestinationWorkspace(definition, sectionId);
-  const destinationMeta = getDestinationMeta(definition, sectionId);
+  const destination = buildDestinationWorkspace(definition, destinationId);
   if (!destination || !destination.sections.length) return;
 
-  const panel = document.createElement('section');
-  panel.className = 'panel reveal settings-panel';
-
-  const header = document.createElement('div');
-  header.className = 'panel-head settings-panel-head';
-  header.innerHTML = `
-    <div>
-      <p class="card-title">Aktiver Bereich</p>
-      <h2 class="section-title">${destination.label}</h2>
-    </div>
-    <div class="settings-panel-meta">
-      <strong>${buildSectionMeta(destination)}</strong>
-      <span>${destination.sections.map((section) => section.label).join(' • ')}</span>
-    </div>
-  `;
-  panel.appendChild(header);
-
-  const intro = document.createElement('p');
-  intro.className = 'tools-note';
-  intro.textContent = destinationMeta?.intro || destination.intro || destination.description || '';
-  panel.appendChild(intro);
-
   for (const section of destination.sections) {
-    const sectionShell = document.createElement('section');
-    sectionShell.className = 'settings-subsection';
+    const allFields = [];
+    for (const grp of section.groups || []) {
+      for (const field of grp.fields || []) {
+        if (field.type !== 'array' && isFieldVisible(field)) allFields.push(field);
+      }
+    }
+    if (!allFields.length) continue;
 
-    const sectionHead = document.createElement('div');
-    sectionHead.className = 'settings-subsection-head';
-    sectionHead.innerHTML = `
-      <p class="card-title">Bereich</p>
-      <h3>${section.label}</h3>
-      <p class="settings-section-meta">${section.fieldCount} Felder in ${section.groupCount} Gruppen</p>
-      <p class="tools-note">${section.description || ''}</p>
-    `;
-    sectionShell.appendChild(sectionHead);
+    const group = createConfigGroup(section.label, getGroupAccent(section));
 
-    const groupList = document.createElement('div');
-    groupList.className = 'settings-group-list';
-
-    for (const group of section.groups) {
-      const visibleFields = group.fields.filter((field) => field.type !== 'array' && isFieldVisible(field));
-      if (!visibleFields.length) continue;
-
-      const details = document.createElement('details');
-      details.className = 'settings-group';
-      details.open = group.openByDefault;
-
-      const summary = document.createElement('summary');
-      summary.innerHTML = buildDisclosureSummaryMarkup(group);
-      details.appendChild(summary);
-
-      const grid = document.createElement('div');
-      grid.className = 'settings-fields';
-      for (const field of visibleFields) grid.appendChild(renderField(field));
-      details.appendChild(grid);
-      groupList.appendChild(details);
+    for (const field of allFields) {
+      const model = buildFieldRenderModel(field);
+      const input = createConfigInput(field, model.value);
+      group.appendChild(createConfigRow(field.label, input));
     }
 
-    sectionShell.appendChild(groupList);
+    mount.appendChild(group);
+
     if (section.id === 'pricing') {
-      sectionShell.appendChild(renderEpexPriceSourceInfo());
-      sectionShell.appendChild(renderPvPlantsEditor());
-      sectionShell.appendChild(renderPricingPeriodsEditor());
+      mount.appendChild(renderEpexPriceSourceInfo());
+      mount.appendChild(renderPvPlantsEditor());
+      mount.appendChild(renderPricingPeriodsEditor());
     }
-    panel.appendChild(sectionShell);
   }
 
-  if (shouldRenderHistoryImportPanel(sectionId)) {
-    panel.appendChild(renderHistoryImportPanel(sectionId));
+  if (shouldRenderHistoryImportPanel(destinationId)) {
+    mount.appendChild(renderHistoryImportPanel(destinationId));
   }
-
-  mount.appendChild(panel);
 }
 
 function buildHistoryImportSummary(status) {
@@ -1080,15 +971,14 @@ function buildHistoryImportSummary(status) {
 
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
-  panel.className = 'settings-subsection settings-history-subsection';
+  panel.style.cssText = 'margin-top:16px;padding-top:12px;border-top:1px solid var(--flow-border);';
 
   const head = document.createElement('div');
-  head.className = 'settings-subsection-head';
+  head.style.cssText = 'margin-bottom:8px;';
   head.innerHTML = `
-    <p class="card-title">Historie</p>
-    <h3>VRM Backfill</h3>
-    <p class="settings-section-meta">Historische Nachimporte werden bewusst nur über VRM unterstützt.</p>
-    <p class="tools-note">GX/Cerbo bleibt Live-Quelle. Für Historie und Lückenfüllung nutzt DVhub den VRM-Zugang aus den Telemetrie-Einstellungen.</p>
+    <p class="card-kicker">Historie</p>
+    <h3 class="section-title" style="font-size:1rem;">VRM Backfill</h3>
+    <p class="meta">Historische Nachimporte werden bewusst nur über VRM unterstützt. GX/Cerbo bleibt Live-Quelle.</p>
   `;
   panel.appendChild(head);
 
@@ -1098,7 +988,7 @@ function renderHistoryImportPanel(destinationId) {
   panel.appendChild(statusBanner);
 
   const summary = document.createElement('div');
-  summary.className = 'settings-workspace-summary';
+  summary.className = 'settings-summary';
   summary.appendChild(createSummaryCard('Quelle', 'VRM Portal'));
   summary.appendChild(createSummaryCard('Portal ID', currentHistoryImportStatus?.vrmPortalId || '-'));
   summary.appendChild(createSummaryCard('Status', currentHistoryImportStatus?.ready ? 'Import bereit' : 'Konfiguration unvollständig'));
@@ -1215,14 +1105,14 @@ function renderPvPlantsEditor() {
   section.querySelector('#addPvPlantBtn')?.addEventListener('click', () => {
     pvPlantsDraft = addPvPlant(pvPlantsDraft);
     pvPlantsValidation = [];
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 
   section.querySelectorAll('[data-remove-pv-plant]').forEach((button) => {
     button.addEventListener('click', () => {
       pvPlantsDraft = removePvPlant(pvPlantsDraft, button.dataset.removePvPlant);
       pvPlantsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1230,7 +1120,7 @@ function renderPvPlantsEditor() {
     input.addEventListener('change', () => {
       updatePvPlantField(input.dataset.pvPlantId, input.dataset.pvPlantPath, input.value);
       pvPlantsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1241,11 +1131,10 @@ function renderEpexPriceSourceInfo() {
   const section = document.createElement('section');
   section.className = 'settings-pricing-source';
   section.innerHTML = `
-    <div class="settings-subsection-head">
-      <p class="card-title">Preisquelle</p>
-      <h3>EPEX Day-Ahead Börsenpreise</h3>
-      <p class="tools-note">Die Day-Ahead Börsenstrompreise werden automatisch von <strong>api.dvhub.de</strong> geladen.
-        Die Preise stammen von der EPEX SPOT und werden für die konfigurierte Bidding Zone bereitgestellt.</p>
+    <div style="margin-bottom:8px;">
+      <p class="card-kicker">Preisquelle</p>
+      <h3 class="section-title" style="font-size:1rem;">EPEX Day-Ahead Börsenpreise</h3>
+      <p class="meta">Die Day-Ahead Börsenstrompreise werden automatisch von <strong>api.dvhub.de</strong> geladen (EPEX SPOT).</p>
     </div>
     <div id="epexBacklogInfo" class="status-banner info" style="margin-top:8px">
       Lade Preis-Backlog...
@@ -1295,11 +1184,10 @@ function renderPricingPeriodsEditor() {
     : '<div class="status-banner info">Tarifzeiträume werden tagesgenau auf die Historienberechnung angewendet.</div>';
 
   section.innerHTML = `
-    <div class="settings-subsection-head">
-      <p class="card-title">Bezugspreise nach Zeitraum</p>
-      <h3>Tarifzeiträume</h3>
-      <p class="settings-section-meta">${pricingPeriodsDraft.length} definierte Zeiträume</p>
-      <p class="tools-note">Definiere hier fixe oder dynamische Tarife pro Zeitraum. Überlappungen werden vor dem Speichern blockiert.</p>
+    <div style="margin-bottom:8px;">
+      <p class="card-kicker">Bezugspreise nach Zeitraum</p>
+      <h3 class="section-title" style="font-size:1rem;">Tarifzeiträume</h3>
+      <p class="meta">${pricingPeriodsDraft.length} definierte Zeiträume · Fixe oder dynamische Tarife pro Zeitraum.</p>
     </div>
     ${validation}
     <div class="settings-inline-actions">
@@ -1363,14 +1251,14 @@ function renderPricingPeriodsEditor() {
   section.querySelector('#addPricingPeriodBtn')?.addEventListener('click', () => {
     pricingPeriodsDraft = addPricingPeriod(pricingPeriodsDraft);
     pricingPeriodsValidation = [];
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 
   section.querySelectorAll('[data-remove-period]').forEach((button) => {
     button.addEventListener('click', () => {
       pricingPeriodsDraft = removePricingPeriod(pricingPeriodsDraft, button.dataset.removePeriod);
       pricingPeriodsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1378,7 +1266,7 @@ function renderPricingPeriodsEditor() {
     input.addEventListener('change', () => {
       updatePricingPeriodField(input.dataset.periodId, input.dataset.periodPath, input.value);
       pricingPeriodsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1388,7 +1276,7 @@ function renderPricingPeriodsEditor() {
 function bindHistoryImportControls(panel) {
   const handleChange = () => {
     syncHistoryImportForm(panel);
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   };
 
   panel.querySelector('#historyImportStart')?.addEventListener('change', handleChange);
@@ -1397,28 +1285,27 @@ function bindHistoryImportControls(panel) {
     triggerHistoryImport().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
   panel.querySelector('#historyBackfillBtn')?.addEventListener('click', () => {
     triggerHistoryBackfill().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 }
 
-function renderActiveSettingsDestination() {
-  const activeDestination = getActiveSettingsDestination();
-  if (!activeDestination) return;
-  renderSectionWorkspace(activeDestination.id);
-}
+// renderActiveSettingsDestination removed — each grid is rendered independently via renderDestinationGrid
 
 function renderSettingsShell() {
   settingsShellState = createSettingsShellState(definition, settingsShellState.activeSectionId);
-  renderSidebarNavigation();
-  renderActiveSettingsDestination();
+  const DEST_TO_GRID = { connection: 'connection', control: 'control', services: 'services' };
+  for (const dest of settingsShellState.destinations) {
+    if (!DEST_TO_GRID[dest.id]) continue;
+    renderDestinationGrid(dest.id);
+  }
 }
 
 function syncRenderedFieldsToDraft() {
@@ -1436,9 +1323,29 @@ function syncRenderedFieldsToDraft() {
 
 function activateSettingsDestination(sectionId) {
   syncRenderedFieldsToDraft();
-  settingsShellState = setActiveSettingsSection(settingsShellState, sectionId);
-  renderSidebarNavigation();
-  renderActiveSettingsDestination();
+}
+
+function updateSaveBar() {
+  if (!definition) return;
+  const changed = JSON.stringify(currentDraftConfig) !== JSON.stringify(currentRawConfig);
+  document.body.classList.toggle('has-changes', changed);
+  const text = document.getElementById('saveBarText');
+  if (text) {
+    const count = countChangedFields();
+    text.textContent = changed ? `${count} Feld${count === 1 ? '' : 'er'} geaendert` : '';
+  }
+}
+
+function countChangedFields() {
+  let count = 0;
+  for (const field of definition?.fields || []) {
+    const input = document.getElementById(fieldId(field.path));
+    if (!input) continue;
+    const draft = parseFieldInput(field);
+    const saved = getPath(currentRawConfig, field.path);
+    if (JSON.stringify(draft) !== JSON.stringify(saved)) count++;
+  }
+  return count;
 }
 
 function parseFieldInput(field) {
@@ -1598,13 +1505,13 @@ async function saveConfig(config, source = 'settings') {
     : '';
   setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   return true;
 }
 
 async function triggerHistoryImport() {
   historyImportBusy = true;
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   const payload = buildHistoryImportRequest(historyImportFormState);
   const res = await apiFetch('/api/history/import', {
     method: 'POST',
@@ -1615,13 +1522,13 @@ async function triggerHistoryImport() {
   currentHistoryImportResult = body;
   historyImportBusy = false;
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
 async function triggerHistoryBackfill() {
   historyImportBusy = true;
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   const payload = buildHistoryBackfillRequest();
   const res = await apiFetch('/api/history/backfill/vrm', {
     method: 'POST',
@@ -1632,7 +1539,7 @@ async function triggerHistoryBackfill() {
   currentHistoryImportResult = body;
   historyImportBusy = false;
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
@@ -1645,7 +1552,7 @@ async function triggerFieldDiscovery(fieldPath) {
       manufacturer: '',
       error: 'manufacturer required'
     }));
-    renderActiveSettingsDestination();
+    renderSettingsShell();
     return;
   }
 
@@ -1653,7 +1560,7 @@ async function triggerFieldDiscovery(fieldPath) {
     manufacturer,
     loading: true
   }));
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 
   try {
     const res = await apiFetch(`/api/discovery/systems?manufacturer=${encodeURIComponent(manufacturer)}`);
@@ -1672,7 +1579,7 @@ async function triggerFieldDiscovery(fieldPath) {
     }));
   }
 
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 }
 
 function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
@@ -1687,7 +1594,7 @@ function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
     ...discoveryState,
     selectedSystemId
   }));
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 }
 
 async function saveCurrentForm() {
@@ -1697,7 +1604,7 @@ async function saveCurrentForm() {
   pricingPeriodsValidation = pricingValidation.messages;
   pvPlantsValidation = pvValidation.messages;
   if (!pricingValidation.valid || !pvValidation.valid) {
-    renderActiveSettingsDestination();
+    renderSettingsShell();
     setBanner(`Speichern blockiert: ${pricingValidation.messages[0] || pvValidation.messages[0]}`, 'error');
     return;
   }
@@ -1732,35 +1639,50 @@ async function restartService() {
 }
 
 function initSettingsPage() {
-  document.getElementById('settingsSections')?.addEventListener('change', (event) => {
-    const input = event.target;
-    if (!input?.dataset?.path) return;
-    syncRenderedFieldsToDraft();
-    if (input.dataset.path === 'manufacturer') settingsDiscoveryStates = {};
-    if (fieldAffectsVisibility(input.dataset.path)) renderActiveSettingsDestination();
-  });
+  // Delegated change listeners on the three grid containers
+  for (const gridId of ['connectionGrid', 'controlGrid', 'servicesGrid']) {
+    document.getElementById(gridId)?.addEventListener('change', (event) => {
+      const input = event.target;
+      if (!input?.dataset?.path) return;
+      syncRenderedFieldsToDraft();
+      updateSaveBar();
+      if (input.dataset.path === 'manufacturer') settingsDiscoveryStates = {};
+      if (fieldAffectsVisibility(input.dataset.path)) renderSettingsShell();
+    });
 
-  document.getElementById('settingsSections')?.addEventListener('click', (event) => {
-    const runButton = event.target.closest('[data-discovery-run]');
-    if (runButton) {
-      triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
-        setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
-      });
-      return;
-    }
+    document.getElementById(gridId)?.addEventListener('click', (event) => {
+      const runButton = event.target.closest('[data-discovery-run]');
+      if (runButton) {
+        triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
+          setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
+        });
+        return;
+      }
 
-    const selectionButton = event.target.closest('[data-discovery-select-system]');
-    if (!selectionButton) return;
-    applyFieldDiscoverySelection(
-      selectionButton.dataset.discoveryFieldPath,
-      selectionButton.dataset.discoverySelectSystem
-    );
-  });
+      const selectionButton = event.target.closest('[data-discovery-select-system]');
+      if (!selectionButton) return;
+      applyFieldDiscoverySelection(
+        selectionButton.dataset.discoveryFieldPath,
+        selectionButton.dataset.discoverySelectSystem
+      );
+    });
+  }
 
-  document.getElementById('settingsNavTree')?.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-settings-target]');
-    if (!target) return;
-    activateSettingsDestination(target.dataset.settingsTarget);
+  // Discard button resets draft to saved config and re-renders
+  document.getElementById('discardBtn')?.addEventListener('click', () => {
+    currentDraftConfig = clone(currentRawConfig);
+    pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
+    marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
+    pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
+      ...createEmptyPvPlant(index),
+      kwp: plant?.kwp ?? '',
+      commissionedAt: plant?.commissionedAt || ''
+    }));
+    pricingPeriodsValidation = [];
+    pvPlantsValidation = [];
+    renderSettingsShell();
+    updateSaveBar();
+    setBanner('Aenderungen verworfen.', 'info');
   });
 
   document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {
@@ -1790,20 +1712,42 @@ function initSettingsPage() {
   });
 
   window.addEventListener('dvhub:unauthorized', () => {
-    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN öffnen oder das Token neu speichern.', 'error');
+    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN oeffnen oder das Token neu speichern.', 'error');
+  });
+
+  // Connection status banner
+  apiFetch('/api/status').then(res => res.json()).then(status => {
+    const banner = document.getElementById('connectionBanner');
+    if (!banner) return;
+    const ok = status?.victron?.connected;
+    banner.className = `status-banner ${ok ? 'success' : 'warn'}`;
+    banner.textContent = ok
+      ? `Verbunden mit ${status.victron?.host || 'Victron'}`
+      : 'Keine Verbindung zum Victron-System.';
+  }).catch(() => {
+    const banner = document.getElementById('connectionBanner');
+    if (banner) {
+      banner.className = 'status-banner error';
+      banner.textContent = 'Status konnte nicht geladen werden.';
+    }
   });
 
   loadConfig().catch((error) => {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
   });
   loadHistoryImportStatus().then(() => {
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   }).catch((error) => {
     currentHistoryImportResult = { ok: false, error: error.message };
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 }
 
 if (typeof document !== 'undefined') {
   initSettingsPage();
 }
+
+window.DVhubSettings = {
+  activate: activateSettingsDestination,
+  onTabSwitch: function(tabId) { syncRenderedFieldsToDraft(); }
+};
