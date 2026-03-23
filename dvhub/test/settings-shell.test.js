@@ -25,7 +25,6 @@ function loadShellHelpers() {
 
 const {
   applyDiscoveredSystemToDraft,
-  buildDisclosureSummaryMarkup,
   buildDestinationWorkspace,
   buildFieldRenderModel,
   buildSettingsDestinations,
@@ -104,18 +103,7 @@ test('buildDestinationWorkspace keeps only the active destination sections and m
   assert.equal(workspace.sections[1].groups[0].openByDefault, false);
 });
 
-test('buildDisclosureSummaryMarkup adds explicit affordance copy for collapsed settings groups', () => {
-  const markup = buildDisclosureSummaryMarkup({
-    label: 'Netz & Grenzen',
-    description: 'Schwellen und Schutzwerte'
-  });
-
-  assert.match(markup, /settings-group-accent/);
-  assert.match(markup, /settings-group-copy/);
-  assert.match(markup, /Schwellen und Schutzwerte/);
-  assert.match(markup, /Weitere Einstellungen ausklappen/);
-  assert.match(markup, /settings-group-chevron/);
-});
+// buildDisclosureSummaryMarkup test removed — function removed in config-grid redesign
 
 test('real config definition keeps navigation compact and maps every section with fields', () => {
   const definition = getConfigDefinition();

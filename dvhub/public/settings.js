@@ -22,6 +22,111 @@ let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 
+const GROUP_ACCENTS = {
+  connection: 'green', transport: 'green', victron: 'green',
+  modbus: 'yellow', dvProxy: 'yellow', dv: 'yellow', control: 'yellow',
+  schedule: 'green', automation: 'yellow', dvControl: 'blue',
+  location: 'blue', standort: 'blue',
+  telemetry: 'cyan', vrm: 'cyan',
+  webserver: 'purple', http: 'purple', api: 'purple',
+  mqtt: 'orange',
+  epex: 'green', pricing: 'yellow', pvPlants: 'blue'
+};
+
+function getGroupAccent(section) {
+  return GROUP_ACCENTS[section.id] || GROUP_ACCENTS[section.destination] || 'green';
+}
+
+function createConfigGroup(label, accent) {
+  const group = document.createElement('div');
+  group.className = 'config-group';
+  if (accent) group.dataset.accent = accent;
+  const kicker = document.createElement('div');
+  kicker.className = 'config-group-kicker';
+  kicker.style.color = `var(--flow-${accent || 'green'})`;
+  kicker.textContent = label;
+  group.appendChild(kicker);
+  return group;
+}
+
+function createConfigRow(label, inputEl, opts) {
+  const row = document.createElement('div');
+  row.className = 'config-row';
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'config-row-label';
+  labelSpan.textContent = label;
+  if (opts?.required) {
+    const req = document.createElement('span');
+    req.className = 'config-required';
+    req.textContent = '*';
+    labelSpan.appendChild(req);
+  }
+  row.appendChild(labelSpan);
+  if (typeof inputEl === 'string') {
+    const val = document.createElement('strong');
+    val.className = 'config-row-value';
+    val.textContent = inputEl;
+    row.appendChild(val);
+  } else {
+    row.appendChild(inputEl);
+  }
+  return row;
+}
+
+function createConfigInput(field, value) {
+  let input;
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'config-checkbox';
+    input.checked = Boolean(value);
+  } else if (field.type === 'select') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    for (const opt of field.options || []) {
+      const option = document.createElement('option');
+      option.value = String(opt.value);
+      option.textContent = opt.label;
+      input.appendChild(option);
+    }
+    input.value = String(value);
+  } else if (field.type === 'dynamicSelect') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    const placeholder = document.createElement('option');
+    placeholder.value = String(value || '');
+    placeholder.textContent = value ? String(value) : 'Laden...';
+    input.appendChild(placeholder);
+    if (field.dynamicOptionsUrl) {
+      apiFetch(field.dynamicOptionsUrl).then(data => {
+        input.innerHTML = '';
+        for (const z of (data?.zones || [])) {
+          const opt = document.createElement('option');
+          opt.value = z.zone;
+          opt.textContent = z.zone;
+          input.appendChild(opt);
+        }
+        input.value = String(value || 'DE-LU');
+      }).catch(() => { placeholder.textContent = value || 'Fehler'; });
+    }
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
+    input.className = 'config-input';
+    if (field.min !== undefined) input.min = field.min;
+    if (field.max !== undefined) input.max = field.max;
+    if (field.step !== undefined) input.step = field.step;
+    input.value = value === null || value === undefined ? '' : String(value);
+    const valStr = String(input.value);
+    const charW = field.type === 'number' ? 10 : 8;
+    input.style.width = `${Math.max(field.type === 'number' ? 80 : 120, valStr.length * charW + 30)}px`;
+  }
+  input.id = fieldId(field.path);
+  input.dataset.path = field.path;
+  input.dataset.type = field.type;
+  return input;
+}
+
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -115,21 +220,10 @@ function setActiveSettingsSection(state, requestedId) {
   };
 }
 
-function buildDisclosureSummaryMarkup(group) {
-  return `
-    <span class="settings-group-accent" aria-hidden="true"></span>
-    <span class="settings-group-copy">
-      <span class="settings-group-title">${group.label}</span>
-      ${group.description ? `<small class="settings-group-description">${group.description}</small>` : ''}
-      <small class="settings-group-hint">Weitere Einstellungen ausklappen</small>
-    </span>
-    <span class="settings-group-chevron" aria-hidden="true">⌄</span>
-  `;
-}
+// buildDisclosureSummaryMarkup removed — replaced by config-group cards
 
 const settingsShellHelpers = {
   applyDiscoveredSystemToDraft,
-  buildDisclosureSummaryMarkup,
   buildDestinationWorkspace,
   buildFieldRenderModel,
   buildSettingsDestinations,
@@ -373,47 +467,37 @@ function validatePvPlants(plants = []) {
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
-    <div class="settings-subsection-head">
-      <p class="card-title">Marktprämie</p>
-      <h3>PV-Anlagen</h3>
-      <p class="settings-section-meta">${plants.length} konfigurierte Anlagen</p>
-      <p class="tools-note">Pflege hier global den Marktwert-Modus sowie pro Anlage nur die installierte Leistung und das Inbetriebnahmedatum. Die offiziellen Referenzwerte werden später daraus abgeleitet.</p>
-    </div>
+    <div class="config-group-kicker" style="color:var(--flow-purple);padding-top:10px;">Marktprämie</div>
     ${validationHtml}
-    <div class="pricing-period-card">
-      <div class="pricing-period-grid">
-        <label class="settings-field">
-          <span class="settings-field-title">Marktwert-Modus</span>
-          <select id="marketValueModeSelect">
-            <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
-            <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
-          </select>
-          <small class="field-help">Jahresmarktwert nutzt das bisherige Verhalten. Monatsmarktwert erzwingt Monatswerte fuer Monats- und Jahresansichten.</small>
-        </label>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Marktwert-Modus</span>
+        <select id="marketValueModeSelect" class="config-select">
+          <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
+          <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Anlagen</span>
+        <strong class="config-row-value">${plants.length} konfiguriert</strong>
       </div>
     </div>
-    <div class="settings-inline-actions">
-      <button id="addPvPlantBtn" class="btn btn-ghost" type="button">PV-Anlage hinzufügen</button>
+    <div style="padding:8px 14px;">
+      <button id="addPvPlantBtn" class="btn btn-ghost btn-small" type="button">+ PV-Anlage</button>
     </div>
-    <div class="pricing-period-list">
-      ${plants.map((plant) => `
-        <article class="pricing-period-card" data-pv-plant-id="${plant.id}">
-          <div class="pricing-period-grid">
-            <label class="settings-field">
-              <span class="settings-field-title">Leistung (kWp)</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Inbetriebnahme</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" />
-            </label>
-          </div>
-          <div class="settings-inline-actions">
-            <button class="btn btn-danger" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button>
-          </div>
-        </article>
-      `).join('')}
-    </div>
+    ${plants.map((plant) => `
+      <div class="config-row-grid" data-pv-plant-id="${plant.id}" style="border-top:1px solid rgba(255,255,255,0.06);">
+        <div class="config-row">
+          <span class="config-row-label">Leistung (kWp)</span>
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" style="width:80px;" />
+        </div>
+        <div class="config-row">
+          <span class="config-row-label">Inbetriebnahme</span>
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" style="width:140px;" />
+        </div>
+      </div>
+      <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button></div>
+    `).join('')}
   `;
 }
 
@@ -486,7 +570,7 @@ function setBanner(message, kind = 'info') {
   const el = document.getElementById('settingsBanner');
   if (!el) return;
   el.textContent = message;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function buildMetaText(meta) {
@@ -536,6 +620,8 @@ function getVisibilityValue(path) {
 }
 
 function isFieldVisible(field) {
+  if (field.hidden) return false;
+
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
     if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
@@ -661,132 +747,7 @@ function formatDiscoveredSystemOption(system = {}) {
   return parts.join(' • ');
 }
 
-function renderField(field) {
-  const wrapper = document.createElement('label');
-  wrapper.className = 'settings-field';
-  wrapper.setAttribute('for', fieldId(field.path));
-
-  const title = document.createElement('span');
-  title.className = 'settings-field-title';
-  title.textContent = field.label;
-  wrapper.appendChild(title);
-
-  const model = buildFieldRenderModel(field);
-  const { value, inherited } = model;
-  let input;
-  if (field.type === 'boolean') {
-    wrapper.classList.add('checkbox-field');
-    input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = Boolean(value);
-  } else if (field.type === 'select') {
-    input = document.createElement('select');
-    for (const optionDef of field.options || []) {
-      const option = document.createElement('option');
-      option.value = String(optionDef.value);
-      option.textContent = optionDef.label;
-      input.appendChild(option);
-    }
-    input.value = String(value);
-  } else if (field.type === 'dynamicSelect') {
-    input = document.createElement('select');
-    const placeholder = document.createElement('option');
-    placeholder.value = String(value || '');
-    placeholder.textContent = value ? String(value) : 'Laden...';
-    placeholder.selected = true;
-    input.appendChild(placeholder);
-    if (field.dynamicOptionsUrl) {
-      apiFetch(field.dynamicOptionsUrl).then((data) => {
-        input.innerHTML = '';
-        const zones = data?.zones || [];
-        for (const z of zones) {
-          const opt = document.createElement('option');
-          opt.value = z.zone;
-          const coverage = z.days_covered > 0 ? ` (${z.days_covered} Tage)` : ' (keine Daten)';
-          opt.textContent = `${z.zone}${coverage}`;
-          input.appendChild(opt);
-        }
-        input.value = String(value || 'DE-LU');
-      }).catch(() => {
-        placeholder.textContent = value ? String(value) : 'Fehler beim Laden';
-      });
-    }
-  } else {
-    input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
-    if (field.min !== undefined) input.min = field.min;
-    if (field.max !== undefined) input.max = field.max;
-    if (field.step !== undefined) input.step = field.step;
-    input.value = value === null || value === undefined ? '' : String(value);
-    if (inherited !== undefined && inherited !== null && field.empty === 'delete') {
-      input.placeholder = `Vererbt: ${inherited}`;
-    }
-  }
-
-  input.id = fieldId(field.path);
-  input.dataset.path = field.path;
-  input.dataset.type = field.type;
-  wrapper.appendChild(input);
-
-  const help = document.createElement('small');
-  help.className = 'field-help';
-  const helpParts = [];
-  if (field.help) helpParts.push(field.help);
-  if (field.empty === 'delete' && inherited !== undefined && inherited !== null) helpParts.push(`Aktuell vererbt: ${inherited}`);
-  if (field.empty === 'null') helpParts.push('Leer lassen setzt diesen Wert auf "kein Default".');
-  help.textContent = helpParts.join(' ');
-  wrapper.appendChild(help);
-
-  if (model.discovery.visible) {
-    const actions = document.createElement('div');
-    actions.className = 'settings-inline-actions settings-discovery-actions';
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'btn btn-secondary';
-    button.dataset.discoveryRun = field.path;
-    button.disabled = model.discovery.loading || !model.discovery.manufacturer;
-    button.textContent = model.discovery.loading ? 'Suche läuft...' : model.discovery.actionLabel;
-    actions.appendChild(button);
-
-    const note = document.createElement('small');
-    note.className = 'tools-note';
-    note.textContent = model.discovery.message;
-    actions.appendChild(note);
-    wrapper.appendChild(actions);
-
-    if (model.discovery.systems.length) {
-      const picker = document.createElement('div');
-      picker.className = 'settings-inline-actions settings-discovery-picker';
-      for (const system of model.discovery.systems) {
-        const applyButton = document.createElement('button');
-        applyButton.type = 'button';
-        applyButton.className = 'btn btn-ghost';
-        applyButton.dataset.discoveryFieldPath = field.path;
-        applyButton.dataset.discoverySelectSystem = system.id;
-        applyButton.textContent = formatDiscoveredSystemOption(system);
-        if (system.id === model.discovery.selectedSystemId) {
-          applyButton.classList.add('is-active');
-        }
-        picker.appendChild(applyButton);
-      }
-      wrapper.appendChild(picker);
-    }
-  }
-
-  // Location picker button after longitude field
-  if (field.path && field.path.endsWith('.location.longitude')) {
-    const mapBtn = document.createElement('button');
-    mapBtn.type = 'button';
-    mapBtn.className = 'btn btn-secondary';
-    mapBtn.textContent = 'Auf Karte w\u00e4hlen';
-    mapBtn.style.marginTop = '4px';
-    mapBtn.addEventListener('click', () => openLocationPicker(field.path.replace('.longitude', '')));
-    wrapper.appendChild(mapBtn);
-  }
-
-  return wrapper;
-}
+// renderField removed — replaced by createConfigInput + createConfigRow
 
 /* ---------- OpenStreetMap location picker modal ---------- */
 function openLocationPicker(locationBasePath) {
@@ -941,134 +902,95 @@ function buildDestinationWorkspace(definitionLike, destinationId) {
 
 function createSummaryCard(title, text) {
   const card = document.createElement('div');
-  card.className = 'summary-card';
-
-  const strong = document.createElement('strong');
-  strong.textContent = title;
-  card.appendChild(strong);
-
-  const body = document.createElement('span');
-  body.textContent = text;
-  card.appendChild(body);
-
+  card.className = 'config-row';
+  const label = document.createElement('span');
+  label.className = 'config-row-label';
+  label.textContent = title;
+  card.appendChild(label);
+  const val = document.createElement('strong');
+  val.className = 'config-row-value';
+  val.textContent = text;
+  card.appendChild(val);
   return card;
 }
 
-function getActiveSettingsDestination() {
-  return settingsShellState.destinations.find((destination) => destination.id === settingsShellState.activeSectionId)
-    || settingsShellState.destinations[0]
-    || null;
-}
+// getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
 
-function buildSectionMeta(destination) {
-  if (!destination) return '';
-  const fieldText = `${destination.fieldCount} Felder`;
-  if (destination.sectionCount > 1) return `${fieldText} in ${destination.sectionCount} Bereichen`;
-  return `${fieldText} in ${destination.groupCount} Gruppen`;
-}
+// Fields hidden from UI (managed automatically, user should not edit)
+const HIDDEN_FIELD_PATHS = [
+  'telemetry.database.host',
+  'telemetry.database.port',
+  'telemetry.database.name',
+  'telemetry.database.user',
+  'telemetry.database.password'
+];
 
-function renderSidebarNavigation() {
-  const navTree = document.getElementById('settingsNavTree');
-  if (!navTree) return;
-
-  navTree.innerHTML = '';
-  for (const destination of settingsShellState.destinations) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'app-nav-subitem';
-    button.dataset.settingsTarget = destination.id;
-    const isActive = destination.id === settingsShellState.activeSectionId;
-    if (isActive) button.classList.add('is-active');
-    button.setAttribute('aria-current', isActive ? 'page' : 'false');
-    button.innerHTML = `
-      <span class="app-nav-subitem-label">${destination.label}</span>
-      <small class="app-nav-subitem-copy">${destination.description || buildSectionMeta(destination)}</small>
-    `;
-    navTree.appendChild(button);
-  }
-}
-
-function renderSectionWorkspace(sectionId) {
-  const mount = document.getElementById('settingsSections');
+function renderDestinationGrid(destinationId) {
+  const gridId = destinationId + 'Grid';
+  const mount = document.getElementById(gridId);
   if (!mount) return;
   mount.innerHTML = '';
 
-  const destination = buildDestinationWorkspace(definition, sectionId);
-  const destinationMeta = getDestinationMeta(definition, sectionId);
+  const destination = buildDestinationWorkspace(definition, destinationId);
   if (!destination || !destination.sections.length) return;
 
-  const panel = document.createElement('section');
-  panel.className = 'panel reveal settings-panel';
-
-  const header = document.createElement('div');
-  header.className = 'panel-head settings-panel-head';
-  header.innerHTML = `
-    <div>
-      <p class="card-title">Aktiver Bereich</p>
-      <h2 class="section-title">${destination.label}</h2>
-    </div>
-    <div class="settings-panel-meta">
-      <strong>${buildSectionMeta(destination)}</strong>
-      <span>${destination.sections.map((section) => section.label).join(' • ')}</span>
-    </div>
-  `;
-  panel.appendChild(header);
-
-  const intro = document.createElement('p');
-  intro.className = 'tools-note';
-  intro.textContent = destinationMeta?.intro || destination.intro || destination.description || '';
-  panel.appendChild(intro);
-
   for (const section of destination.sections) {
-    const sectionShell = document.createElement('section');
-    sectionShell.className = 'settings-subsection';
+    const allFields = [];
+    for (const grp of section.groups || []) {
+      for (const field of grp.fields || []) {
+        if (field.type !== 'array' && isFieldVisible(field) && !HIDDEN_FIELD_PATHS.includes(field.path)) allFields.push(field);
+      }
+    }
+    if (!allFields.length) continue;
 
-    const sectionHead = document.createElement('div');
-    sectionHead.className = 'settings-subsection-head';
-    sectionHead.innerHTML = `
-      <p class="card-title">Bereich</p>
-      <h3>${section.label}</h3>
-      <p class="settings-section-meta">${section.fieldCount} Felder in ${section.groupCount} Gruppen</p>
-      <p class="tools-note">${section.description || ''}</p>
-    `;
-    sectionShell.appendChild(sectionHead);
+    const group = createConfigGroup(section.label, getGroupAccent(section));
+    // 2-column row container for compact layout
+    const rowContainer = document.createElement('div');
+    rowContainer.className = 'config-row-grid';
+    group.appendChild(rowContainer);
 
-    const groupList = document.createElement('div');
-    groupList.className = 'settings-group-list';
-
-    for (const group of section.groups) {
-      const visibleFields = group.fields.filter((field) => field.type !== 'array' && isFieldVisible(field));
-      if (!visibleFields.length) continue;
-
-      const details = document.createElement('details');
-      details.className = 'settings-group';
-      details.open = group.openByDefault;
-
-      const summary = document.createElement('summary');
-      summary.innerHTML = buildDisclosureSummaryMarkup(group);
-      details.appendChild(summary);
-
-      const grid = document.createElement('div');
-      grid.className = 'settings-fields';
-      for (const field of visibleFields) grid.appendChild(renderField(field));
-      details.appendChild(grid);
-      groupList.appendChild(details);
+    for (const field of allFields) {
+      const model = buildFieldRenderModel(field);
+      const input = createConfigInput(field, model.value);
+      rowContainer.appendChild(createConfigRow(field.label, input));
+      if (model.discovery.visible) {
+        const discoveryRow = document.createElement('div');
+        discoveryRow.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
+        const discBtn = document.createElement('button');
+        discBtn.type = 'button';
+        discBtn.className = 'btn btn-ghost btn-small';
+        discBtn.dataset.discoveryRun = field.path;
+        discBtn.disabled = model.discovery.loading || !model.discovery.manufacturer;
+        discBtn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
+        discoveryRow.appendChild(discBtn);
+        if (model.discovery.systems.length) {
+          for (const system of model.discovery.systems) {
+            const pickBtn = document.createElement('button');
+            pickBtn.type = 'button';
+            pickBtn.className = 'btn btn-ghost btn-small';
+            pickBtn.dataset.discoveryFieldPath = field.path;
+            pickBtn.dataset.discoverySelectSystem = system.id;
+            pickBtn.textContent = formatDiscoveredSystemOption(system);
+            if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
+            discoveryRow.appendChild(pickBtn);
+          }
+        }
+        rowContainer.appendChild(discoveryRow);
+      }
     }
 
-    sectionShell.appendChild(groupList);
+    mount.appendChild(group);
+
     if (section.id === 'pricing') {
-      sectionShell.appendChild(renderEpexPriceSourceInfo());
-      sectionShell.appendChild(renderPvPlantsEditor());
-      sectionShell.appendChild(renderPricingPeriodsEditor());
+      // EPEX price source info removed — redundant with EPEX config group
+      mount.appendChild(renderPvPlantsEditor());
+      mount.appendChild(renderPricingPeriodsEditor());
     }
-    panel.appendChild(sectionShell);
   }
 
-  if (shouldRenderHistoryImportPanel(sectionId)) {
-    panel.appendChild(renderHistoryImportPanel(sectionId));
+  if (shouldRenderHistoryImportPanel(destinationId)) {
+    mount.appendChild(renderHistoryImportPanel(destinationId));
   }
-
-  mount.appendChild(panel);
 }
 
 function buildHistoryImportSummary(status) {
@@ -1080,50 +1002,8 @@ function buildHistoryImportSummary(status) {
 
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
-  panel.className = 'settings-subsection settings-history-subsection';
-
-  const head = document.createElement('div');
-  head.className = 'settings-subsection-head';
-  head.innerHTML = `
-    <p class="card-title">Historie</p>
-    <h3>VRM Backfill</h3>
-    <p class="settings-section-meta">Historische Nachimporte werden bewusst nur über VRM unterstützt.</p>
-    <p class="tools-note">GX/Cerbo bleibt Live-Quelle. Für Historie und Lückenfüllung nutzt DVhub den VRM-Zugang aus den Telemetrie-Einstellungen.</p>
-  `;
-  panel.appendChild(head);
-
-  const statusBanner = document.createElement('div');
-  statusBanner.className = `status-banner ${currentHistoryImportStatus?.ready ? 'success' : 'warn'}`;
-  statusBanner.textContent = buildHistoryImportSummary(currentHistoryImportStatus);
-  panel.appendChild(statusBanner);
-
-  const summary = document.createElement('div');
-  summary.className = 'settings-workspace-summary';
-  summary.appendChild(createSummaryCard('Quelle', 'VRM Portal'));
-  summary.appendChild(createSummaryCard('Portal ID', currentHistoryImportStatus?.vrmPortalId || '-'));
-  summary.appendChild(createSummaryCard('Status', currentHistoryImportStatus?.ready ? 'Import bereit' : 'Konfiguration unvollständig'));
-  panel.appendChild(summary);
-
-  const grid = document.createElement('div');
-  grid.className = 'settings-fields compact';
-  grid.innerHTML = `
-    <label class="settings-field" for="historyImportStart">
-      <span class="settings-field-title">Von</span>
-      <input id="historyImportStart" type="datetime-local" value="${historyImportFormState.start || ''}" />
-      <small class="field-help">Startzeit des VRM-Historienimports.</small>
-    </label>
-    <label class="settings-field" for="historyImportEnd">
-      <span class="settings-field-title">Bis</span>
-      <input id="historyImportEnd" type="datetime-local" value="${historyImportFormState.end || ''}" />
-      <small class="field-help">Endzeit des VRM-Historienimports.</small>
-    </label>
-    <label class="settings-field">
-      <span class="settings-field-title">Intervall</span>
-      <input type="text" value="15 Minuten" readonly />
-      <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
-    </label>
-  `;
-  panel.appendChild(grid);
+  panel.className = 'config-group';
+  panel.dataset.accent = 'yellow';
 
   const actionState = buildHistoryImportActionState({
     destinationId,
@@ -1137,35 +1017,50 @@ function renderHistoryImportPanel(destinationId) {
     busy: historyImportBusy
   });
 
-  const actions = document.createElement('div');
-  actions.className = 'settings-inline-actions';
-  const importButton = document.createElement('button');
-  importButton.id = 'historyImportBtn';
-  importButton.type = 'button';
-  importButton.className = 'btn btn-primary';
-  importButton.disabled = actionState.disabled;
-  importButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren';
-  actions.appendChild(importButton);
-
-  const backfillButton = document.createElement('button');
-  backfillButton.id = 'historyBackfillBtn';
-  backfillButton.type = 'button';
-  backfillButton.className = 'btn btn-secondary';
-  backfillButton.disabled = backfillState.disabled;
-  backfillButton.textContent = historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten';
-  actions.appendChild(backfillButton);
-
-  const note = document.createElement('small');
-  note.className = 'tools-note';
-  note.textContent = actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill bis zur ersten leeren Historie.';
-  actions.appendChild(note);
-  panel.appendChild(actions);
-
-  const result = document.createElement('div');
-  result.id = 'historyImportResult';
-  result.className = `status-banner ${currentHistoryImportResult?.ok ? 'success' : currentHistoryImportResult?.error ? 'error' : 'info'}`;
-  result.textContent = formatHistoryImportResult(currentHistoryImportResult);
-  panel.appendChild(result);
+  panel.innerHTML = `
+    <div class="config-group-kicker" style="color:var(--flow-yellow);">VRM Backfill</div>
+    <div class="config-banner ${currentHistoryImportStatus?.ready ? 'ok' : 'warn'}" style="margin:4px 14px;">
+      ${buildHistoryImportSummary(currentHistoryImportStatus)}
+    </div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Quelle</span>
+        <strong class="config-row-value">VRM Portal</strong>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Portal ID</span>
+        <strong class="config-row-value">${currentHistoryImportStatus?.vrmPortalId || '-'}</strong>
+      </div>
+    </div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Von</span>
+        <input id="historyImportStart" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.start || ''}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Bis</span>
+        <input id="historyImportEnd" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.end || ''}" />
+      </div>
+    </div>
+    <div class="config-row">
+      <span class="config-row-label">Intervall</span>
+      <strong class="config-row-value">15 Minuten</strong>
+    </div>
+    <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button id="historyImportBtn" type="button" class="btn btn-primary btn-small" ${actionState.disabled ? 'disabled' : ''}>
+        ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren'}
+      </button>
+      <button id="historyBackfillBtn" type="button" class="btn btn-ghost btn-small" ${backfillState.disabled ? 'disabled' : ''}>
+        ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten'}
+      </button>
+    </div>
+    <p style="padding:2px 14px 4px;font-size:11px;color:rgba(232,234,240,0.35);margin:0;">
+      ${actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill.'}
+    </p>
+    <div id="historyImportResult" class="config-banner ${currentHistoryImportResult?.ok ? 'ok' : currentHistoryImportResult?.error ? 'error' : 'info'}" style="margin:4px 14px 8px;">
+      ${formatHistoryImportResult(currentHistoryImportResult)}
+    </div>
+  `;
 
   bindHistoryImportControls(panel);
   return panel;
@@ -1198,10 +1093,11 @@ function updatePvPlantField(plantId, path, value) {
 
 function renderPvPlantsEditor() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-periods';
+  section.className = 'config-group';
+  section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
-    ? `<div class="status-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
-    : '<div class="status-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
+    ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '<div class="config-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
   section.innerHTML = buildMarketPremiumEditorMarkup({
     marketValueMode: marketValueModeDraft,
     plants: pvPlantsDraft,
@@ -1215,14 +1111,14 @@ function renderPvPlantsEditor() {
   section.querySelector('#addPvPlantBtn')?.addEventListener('click', () => {
     pvPlantsDraft = addPvPlant(pvPlantsDraft);
     pvPlantsValidation = [];
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 
   section.querySelectorAll('[data-remove-pv-plant]').forEach((button) => {
     button.addEventListener('click', () => {
       pvPlantsDraft = removePvPlant(pvPlantsDraft, button.dataset.removePvPlant);
       pvPlantsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1230,7 +1126,7 @@ function renderPvPlantsEditor() {
     input.addEventListener('change', () => {
       updatePvPlantField(input.dataset.pvPlantId, input.dataset.pvPlantPath, input.value);
       pvPlantsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1239,15 +1135,12 @@ function renderPvPlantsEditor() {
 
 function renderEpexPriceSourceInfo() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-source';
+  section.className = 'config-group';
+  section.dataset.accent = 'green';
   section.innerHTML = `
-    <div class="settings-subsection-head">
-      <p class="card-title">Preisquelle</p>
-      <h3>EPEX Day-Ahead Börsenpreise</h3>
-      <p class="tools-note">Die Day-Ahead Börsenstrompreise werden automatisch von <strong>api.dvhub.de</strong> geladen.
-        Die Preise stammen von der EPEX SPOT und werden für die konfigurierte Bidding Zone bereitgestellt.</p>
-    </div>
-    <div id="epexBacklogInfo" class="status-banner info" style="margin-top:8px">
+    <div class="config-group-kicker" style="color:var(--flow-green);">Preisquelle</div>
+    <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Day-Ahead Börsenstrompreise von <strong>api.dvhub.de</strong> (EPEX SPOT).</p>
+    <div id="epexBacklogInfo" class="config-banner info" style="margin:6px 14px;">
       Lade Preis-Backlog...
     </div>
   `;
@@ -1289,88 +1182,92 @@ function renderEpexPriceSourceInfo() {
 
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-periods';
+  section.className = 'config-group';
+  section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
-    ? `<div class="status-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
-    : '<div class="status-banner info">Tarifzeiträume werden tagesgenau auf die Historienberechnung angewendet.</div>';
+    ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '';
 
   section.innerHTML = `
-    <div class="settings-subsection-head">
-      <p class="card-title">Bezugspreise nach Zeitraum</p>
-      <h3>Tarifzeiträume</h3>
-      <p class="settings-section-meta">${pricingPeriodsDraft.length} definierte Zeiträume</p>
-      <p class="tools-note">Definiere hier fixe oder dynamische Tarife pro Zeitraum. Überlappungen werden vor dem Speichern blockiert.</p>
+    <div class="config-group-kicker" style="color:var(--flow-yellow);">Bezugspreise nach Zeitraum</div>
+    <div class="config-row">
+      <span class="config-row-label">Tarifzeiträume</span>
+      <strong class="config-row-value">${pricingPeriodsDraft.length} definiert</strong>
     </div>
     ${validation}
-    <div class="settings-inline-actions">
-      <button id="addPricingPeriodBtn" class="btn btn-ghost" type="button">Zeitraum hinzufügen</button>
+    <div style="padding:8px 14px;">
+      <button id="addPricingPeriodBtn" class="btn btn-ghost btn-small" type="button">+ Zeitraum</button>
     </div>
-    <div class="pricing-period-list">
-      ${pricingPeriodsDraft.map((period) => `
-        <article class="pricing-period-card" data-period-id="${period.id}">
-          <div class="pricing-period-grid">
-            <label class="settings-field">
-              <span class="settings-field-title">Bezeichnung</span>
-              <input data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Start</span>
-              <input data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Ende</span>
-              <input data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Modus</span>
-              <select data-period-id="${period.id}" data-period-path="mode">
-                <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
-                <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
-              </select>
-            </label>
-            ${period.mode === 'fixed' ? `
-              <label class="settings-field">
-                <span class="settings-field-title">Bruttopreis (ct/kWh)</span>
-                <input data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" />
-              </label>
-            ` : `
-              <label class="settings-field">
-                <span class="settings-field-title">Energie-Aufschlag</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">Netzentgelte</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">Umlagen &amp; Abgaben</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">MwSt (%)</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" />
-              </label>
-            `}
+    ${pricingPeriodsDraft.map((period) => `
+      <div style="border-top:1px solid rgba(255,255,255,0.06);padding:4px 0;">
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Bezeichnung</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" style="width:120px;" />
           </div>
-          <div class="settings-inline-actions">
-            <button class="btn btn-danger" type="button" data-remove-period="${period.id}">Entfernen</button>
+          <div class="config-row">
+            <span class="config-row-label">Modus</span>
+            <select class="config-select" data-period-id="${period.id}" data-period-path="mode">
+              <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
+              <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+            </select>
           </div>
-        </article>
-      `).join('')}
-    </div>
+        </div>
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Start</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" style="width:140px;" />
+          </div>
+          <div class="config-row">
+            <span class="config-row-label">Ende</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" style="width:140px;" />
+          </div>
+        </div>
+        ${period.mode === 'fixed' ? `
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+        ` : `
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Energie-Aufschlag</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" style="width:80px;" />
+            </div>
+            <div class="config-row">
+              <span class="config-row-label">Netzentgelte</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Umlagen &amp; Abgaben</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" style="width:80px;" />
+            </div>
+            <div class="config-row">
+              <span class="config-row-label">MwSt (%)</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+        `}
+        <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-period="${period.id}">Entfernen</button></div>
+      </div>
+    `).join('')}
   `;
 
   section.querySelector('#addPricingPeriodBtn')?.addEventListener('click', () => {
     pricingPeriodsDraft = addPricingPeriod(pricingPeriodsDraft);
     pricingPeriodsValidation = [];
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 
   section.querySelectorAll('[data-remove-period]').forEach((button) => {
     button.addEventListener('click', () => {
       pricingPeriodsDraft = removePricingPeriod(pricingPeriodsDraft, button.dataset.removePeriod);
       pricingPeriodsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1378,7 +1275,7 @@ function renderPricingPeriodsEditor() {
     input.addEventListener('change', () => {
       updatePricingPeriodField(input.dataset.periodId, input.dataset.periodPath, input.value);
       pricingPeriodsValidation = [];
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 
@@ -1388,7 +1285,7 @@ function renderPricingPeriodsEditor() {
 function bindHistoryImportControls(panel) {
   const handleChange = () => {
     syncHistoryImportForm(panel);
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   };
 
   panel.querySelector('#historyImportStart')?.addEventListener('change', handleChange);
@@ -1397,28 +1294,28 @@ function bindHistoryImportControls(panel) {
     triggerHistoryImport().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
   panel.querySelector('#historyBackfillBtn')?.addEventListener('click', () => {
     triggerHistoryBackfill().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
       historyImportBusy = false;
-      renderActiveSettingsDestination();
+      renderSettingsShell();
     });
   });
 }
 
-function renderActiveSettingsDestination() {
-  const activeDestination = getActiveSettingsDestination();
-  if (!activeDestination) return;
-  renderSectionWorkspace(activeDestination.id);
-}
+// renderActiveSettingsDestination removed — each grid is rendered independently via renderDestinationGrid
 
 function renderSettingsShell() {
   settingsShellState = createSettingsShellState(definition, settingsShellState.activeSectionId);
-  renderSidebarNavigation();
-  renderActiveSettingsDestination();
+  const DEST_TO_GRID = { connection: 'connection', control: 'control', services: 'services' };
+  for (const dest of settingsShellState.destinations) {
+    if (!DEST_TO_GRID[dest.id]) continue;
+    renderDestinationGrid(dest.id);
+  }
+  updateSaveBar();
 }
 
 function syncRenderedFieldsToDraft() {
@@ -1436,9 +1333,29 @@ function syncRenderedFieldsToDraft() {
 
 function activateSettingsDestination(sectionId) {
   syncRenderedFieldsToDraft();
-  settingsShellState = setActiveSettingsSection(settingsShellState, sectionId);
-  renderSidebarNavigation();
-  renderActiveSettingsDestination();
+}
+
+function updateSaveBar() {
+  if (!definition) return;
+  const changed = JSON.stringify(currentDraftConfig) !== JSON.stringify(currentRawConfig);
+  document.body.classList.toggle('has-changes', changed);
+  const text = document.getElementById('saveBarText');
+  if (text) {
+    const count = countChangedFields();
+    text.textContent = changed ? `${count} Feld${count === 1 ? '' : 'er'} geändert` : '';
+  }
+}
+
+function countChangedFields() {
+  let count = 0;
+  for (const field of definition?.fields || []) {
+    const input = document.getElementById(fieldId(field.path));
+    if (!input) continue;
+    const draft = parseFieldInput(field);
+    const saved = getPath(currentRawConfig, field.path);
+    if (JSON.stringify(draft) !== JSON.stringify(saved)) count++;
+  }
+  return count;
 }
 
 function parseFieldInput(field) {
@@ -1498,7 +1415,7 @@ function setHealthBanner(message, kind = 'info') {
   const el = document.getElementById('healthBanner');
   if (!el) return;
   el.textContent = message;
-  el.className = `status-banner ${kind}`;
+  el.className = `config-banner ${kind}`;
 }
 
 function renderHealth(payload) {
@@ -1598,13 +1515,13 @@ async function saveConfig(config, source = 'settings') {
     : '';
   setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   return true;
 }
 
 async function triggerHistoryImport() {
   historyImportBusy = true;
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   const payload = buildHistoryImportRequest(historyImportFormState);
   const res = await apiFetch('/api/history/import', {
     method: 'POST',
@@ -1615,13 +1532,13 @@ async function triggerHistoryImport() {
   currentHistoryImportResult = body;
   historyImportBusy = false;
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
 async function triggerHistoryBackfill() {
   historyImportBusy = true;
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   const payload = buildHistoryBackfillRequest();
   const res = await apiFetch('/api/history/backfill/vrm', {
     method: 'POST',
@@ -1632,7 +1549,7 @@ async function triggerHistoryBackfill() {
   currentHistoryImportResult = body;
   historyImportBusy = false;
   await loadHistoryImportStatus();
-  renderActiveSettingsDestination();
+  renderSettingsShell();
   if (!res.ok || !body.ok) throw new Error(body.error || String(res.status));
 }
 
@@ -1645,7 +1562,7 @@ async function triggerFieldDiscovery(fieldPath) {
       manufacturer: '',
       error: 'manufacturer required'
     }));
-    renderActiveSettingsDestination();
+    renderSettingsShell();
     return;
   }
 
@@ -1653,7 +1570,7 @@ async function triggerFieldDiscovery(fieldPath) {
     manufacturer,
     loading: true
   }));
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 
   try {
     const res = await apiFetch(`/api/discovery/systems?manufacturer=${encodeURIComponent(manufacturer)}`);
@@ -1672,7 +1589,7 @@ async function triggerFieldDiscovery(fieldPath) {
     }));
   }
 
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 }
 
 function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
@@ -1687,7 +1604,7 @@ function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
     ...discoveryState,
     selectedSystemId
   }));
-  renderActiveSettingsDestination();
+  renderSettingsShell();
 }
 
 async function saveCurrentForm() {
@@ -1697,7 +1614,7 @@ async function saveCurrentForm() {
   pricingPeriodsValidation = pricingValidation.messages;
   pvPlantsValidation = pvValidation.messages;
   if (!pricingValidation.valid || !pvValidation.valid) {
-    renderActiveSettingsDestination();
+    renderSettingsShell();
     setBanner(`Speichern blockiert: ${pricingValidation.messages[0] || pvValidation.messages[0]}`, 'error');
     return;
   }
@@ -1732,35 +1649,50 @@ async function restartService() {
 }
 
 function initSettingsPage() {
-  document.getElementById('settingsSections')?.addEventListener('change', (event) => {
-    const input = event.target;
-    if (!input?.dataset?.path) return;
-    syncRenderedFieldsToDraft();
-    if (input.dataset.path === 'manufacturer') settingsDiscoveryStates = {};
-    if (fieldAffectsVisibility(input.dataset.path)) renderActiveSettingsDestination();
-  });
+  // Delegated change listeners on the three grid containers
+  for (const gridId of ['connectionGrid', 'controlGrid', 'servicesGrid']) {
+    document.getElementById(gridId)?.addEventListener('change', (event) => {
+      const input = event.target;
+      if (!input?.dataset?.path) return;
+      syncRenderedFieldsToDraft();
+      updateSaveBar();
+      if (input.dataset.path === 'manufacturer') settingsDiscoveryStates = {};
+      if (fieldAffectsVisibility(input.dataset.path)) renderSettingsShell();
+    });
 
-  document.getElementById('settingsSections')?.addEventListener('click', (event) => {
-    const runButton = event.target.closest('[data-discovery-run]');
-    if (runButton) {
-      triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
-        setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
-      });
-      return;
-    }
+    document.getElementById(gridId)?.addEventListener('click', (event) => {
+      const runButton = event.target.closest('[data-discovery-run]');
+      if (runButton) {
+        triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
+          setBanner(`Discovery fehlgeschlagen: ${error.message}`, 'error');
+        });
+        return;
+      }
 
-    const selectionButton = event.target.closest('[data-discovery-select-system]');
-    if (!selectionButton) return;
-    applyFieldDiscoverySelection(
-      selectionButton.dataset.discoveryFieldPath,
-      selectionButton.dataset.discoverySelectSystem
-    );
-  });
+      const selectionButton = event.target.closest('[data-discovery-select-system]');
+      if (!selectionButton) return;
+      applyFieldDiscoverySelection(
+        selectionButton.dataset.discoveryFieldPath,
+        selectionButton.dataset.discoverySelectSystem
+      );
+    });
+  }
 
-  document.getElementById('settingsNavTree')?.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-settings-target]');
-    if (!target) return;
-    activateSettingsDestination(target.dataset.settingsTarget);
+  // Discard button resets draft to saved config and re-renders
+  document.getElementById('discardBtn')?.addEventListener('click', () => {
+    currentDraftConfig = clone(currentRawConfig);
+    pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
+    marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
+    pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
+      ...createEmptyPvPlant(index),
+      kwp: plant?.kwp ?? '',
+      commissionedAt: plant?.commissionedAt || ''
+    }));
+    pricingPeriodsValidation = [];
+    pvPlantsValidation = [];
+    renderSettingsShell();
+    updateSaveBar();
+    setBanner('Aenderungen verworfen.', 'info');
   });
 
   document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {
@@ -1790,20 +1722,65 @@ function initSettingsPage() {
   });
 
   window.addEventListener('dvhub:unauthorized', () => {
-    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN öffnen oder das Token neu speichern.', 'error');
+    setBanner('API-Zugriff abgelehnt. Falls ein API-Token gesetzt ist, die Seite mit ?token=DEIN_TOKEN oeffnen oder das Token neu speichern.', 'error');
   });
+
+  // Connection status banner
+  apiFetch('/api/status').then(res => res.json()).then(status => {
+    const banner = document.getElementById('connectionBanner');
+    if (!banner) return;
+    const ok = status?.victron?.connected;
+    banner.className = `config-banner ${ok ? 'success' : 'warn'}`;
+    banner.textContent = ok
+      ? `Verbunden mit ${status.victron?.host || 'Victron'}`
+      : 'Keine Verbindung zum Victron-System.';
+  }).catch(() => {
+    const banner = document.getElementById('connectionBanner');
+    if (banner) {
+      banner.className = 'config-banner error';
+      banner.textContent = 'Status konnte nicht geladen werden.';
+    }
+  });
+
+  // Tab switching (must be in external JS — CSP blocks inline scripts)
+  const tabContainer = document.querySelector('.settings-tabs');
+  if (tabContainer) {
+    tabContainer.addEventListener('click', (e) => {
+      const tab = e.target.closest('.settings-tab');
+      if (!tab) return;
+      const target = tab.dataset.tab;
+      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
+      tab.classList.add('is-active');
+      document.querySelectorAll('.settings-tab-panel').forEach(p => { p.hidden = true; });
+      const panel = document.getElementById('tab-' + target);
+      if (panel) panel.hidden = false;
+      history.replaceState(null, '', '#' + target);
+      syncRenderedFieldsToDraft();
+    });
+    // Restore tab from URL hash
+    const hash = location.hash.replace('#', '');
+    if (hash) {
+      const tab = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
+      if (tab) tab.click();
+    }
+  }
 
   loadConfig().catch((error) => {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
   });
   loadHistoryImportStatus().then(() => {
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   }).catch((error) => {
     currentHistoryImportResult = { ok: false, error: error.message };
-    renderActiveSettingsDestination();
+    renderSettingsShell();
   });
 }
 
 if (typeof document !== 'undefined') {
   initSettingsPage();
 }
+
+window.DVhubSettings = {
+  activate: activateSettingsDestination,
+  onTabSwitch: function(tabId) { syncRenderedFieldsToDraft(); }
+};

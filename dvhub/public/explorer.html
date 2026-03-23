@@ -6,62 +6,44 @@
   <title>DVhub Explorer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
-  <style>
-    .explorer-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 16px; }
-    .explorer-control { display: flex; flex-direction: column; gap: 4px; }
-    .explorer-control label { font-size: 11px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; }
-    .explorer-control input, .explorer-control select { background: var(--surface-2, #1e293b); border: 1px solid #334155; color: #e5e7eb; padding: 6px 10px; border-radius: 6px; font-size: 13px; }
-    .explorer-series-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-    .explorer-series-chip { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; border: 1px solid #334155; background: var(--surface-2, #1e293b); color: #9ca3af; transition: all 0.15s; user-select: none; }
-    .explorer-series-chip.is-active { border-color: currentColor; color: #e5e7eb; }
-    .explorer-series-chip .chip-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .explorer-chart-wrap { position: relative; width: 100%; height: 480px; }
-    .explorer-status { font-size: 12px; color: #9ca3af; margin-top: 8px; }
-    .explorer-actions { display: flex; gap: 8px; margin-top: 12px; }
-  </style>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
   <link rel="manifest" href="/manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#0077ff">
+  <meta name="theme-color" content="#0B0F1A">
 </head>
-<body class="page-explorer">
-  <div class="app-shell shell-layout">
-    <aside class="app-nav panel reveal" aria-label="Hauptnavigation">
-      <div class="app-nav-brand">
-        <img src="/assets/dvhub.jpg" alt="DVhub Logo" class="app-brand-logo" />
-        <div>
-          <p class="app-nav-eyebrow">Direktvermarktung</p>
-          <strong class="app-nav-title">DVhub</strong>
-        </div>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <img src="/assets/dvhub.jpg" alt="DVhub Logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;">
+        <span>DVhub</span>
       </div>
-      <nav class="app-nav-links">
-        <a class="app-nav-link" href="/">Leitstand</a>
-        <a class="app-nav-link" href="/history.html">Historie</a>
-        <a class="app-nav-link is-active" href="/explorer.html">Explorer</a>
-        <a class="app-nav-link" href="/settings.html">Einrichtung</a>
-        <a class="app-nav-link" href="/tools.html">Wartung</a>
-        <a class="app-nav-link" href="/setup.html">Einrichtung starten</a>
+      <nav class="topbar-nav" aria-label="Hauptnavigation">
+        <a href="/">Leitstand</a>
+        <a href="/history.html">Historie</a>
+        <a class="is-active" href="/explorer.html">Explorer</a>
+        <a href="/settings.html">Einstellungen</a>
+        <a href="/setup.html">Setup</a>
       </nav>
-      <div class="app-nav-meta">
-        <p class="card-title">Explorer</p>
-        <p class="text-meta">Zeitreihen frei kombinieren und analysieren.</p>
-      </div>
-    </aside>
+      <div class="topbar-right"></div>
+    </header>
 
-    <div class="app-content">
-      <header class="page-header panel reveal">
-        <div>
-          <p class="card-title">Explorer</p>
-          <h1 class="section-title">Daten-Explorer</h1>
-          <p class="text-meta">Alle Messwerte frei kombinierbar mit Zoom, Pan und CSV-Export.</p>
+    <main class="page-content">
+      <!-- Page header -->
+      <div class="page-header-card">
+        <div class="page-header-card-copy">
+          <p class="page-kicker">Explorer</p>
+          <h1>Daten-Explorer</h1>
+          <p class="page-subtitle">Alle Messwerte frei kombinierbar mit Zoom, Pan und CSV-Export.</p>
         </div>
-      </header>
+      </div>
 
-      <section class="panel reveal" style="margin-top:16px">
+      <!-- Explorer card -->
+      <div class="sub-card">
         <div class="explorer-controls">
           <div class="explorer-control">
             <label>Zeitbereich</label>
@@ -107,8 +89,8 @@
           <button class="btn btn-ghost" id="explorerCsvBtn">CSV Export</button>
           <span class="explorer-status" id="explorerStatus">Bereit.</span>
         </div>
-      </section>
-    </div>
+      </div>
+    </main>
   </div>
 
   <script src="/chart.min.js"></script>
