@@ -67,8 +67,8 @@
         <div id="historyStatusInfo" class="history-status-info" hidden></div>
       </section>
 
-      <!-- KPI Cards row -->
-      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
+      <!-- KPI + Detail Cards — 5 columns -->
+      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px;">
         <!-- Netto KPI -->
         <div class="rail-card">
           <p class="card-kicker">Netto</p>
@@ -91,6 +91,22 @@
           <div id="historyKpiPv" class="card-value" style="color:var(--node-pv);">-</div>
           <div class="metric-row"><span>Bezug</span><strong id="historyKpiImport">-</strong></div>
           <div class="metric-row"><span>Einspeisung</span><strong id="historyKpiExport">-</strong></div>
+        </div>
+
+        <!-- Detailed financials (was in separate row below) -->
+        <div class="rail-card">
+          <p class="card-kicker">Gespart / Brutto</p>
+          <div class="metric-row"><span>PV brutto</span><strong id="historyKpiAvoidedPvGross">-</strong></div>
+          <div class="metric-row"><span>Akku brutto</span><strong id="historyKpiAvoidedBatteryGross">-</strong></div>
+          <div class="metric-row"><span>PV Kosten</span><strong id="historyKpiAvoidedPvCost">-</strong></div>
+          <div class="metric-row"><span>Akku Kosten</span><strong id="historyKpiAvoidedBatteryCost">-</strong></div>
+        </div>
+
+        <!-- Energiemengen detail -->
+        <div class="rail-card">
+          <p class="card-kicker">Energiemengen</p>
+          <div class="metric-row"><span>Verbrauch</span><strong id="historyKpiLoad">-</strong></div>
+          <div class="metric-row"><span>VBH</span><strong id="historyKpiVbh">-</strong></div>
         </div>
       </div>
 
@@ -134,34 +150,8 @@
         </article>
       </section>
 
-      <!-- Detail cards in 2-col grid -->
+      <!-- Detail cards -->
       <div class="page-grid" style="margin-bottom:10px;">
-        <!-- Detailed financials -->
-        <div class="sub-card">
-          <div class="panel-head">
-            <div>
-              <p class="card-kicker">Gespart / Brutto</p>
-              <h2 class="section-title">Vermiedene Kosten</h2>
-            </div>
-          </div>
-          <div class="metric-row"><span>PV brutto</span><strong id="historyKpiAvoidedPvGross">-</strong></div>
-          <div class="metric-row"><span>Akku brutto</span><strong id="historyKpiAvoidedBatteryGross">-</strong></div>
-          <div class="metric-row"><span>PV Kosten</span><strong id="historyKpiAvoidedPvCost">-</strong></div>
-          <div class="metric-row"><span>Akku Kosten</span><strong id="historyKpiAvoidedBatteryCost">-</strong></div>
-        </div>
-
-        <!-- Energiemengen detail -->
-        <div class="sub-card">
-          <div class="panel-head">
-            <div>
-              <p class="card-kicker">Energiemengen</p>
-              <h2 class="section-title">Bezug, Verbrauch, Erzeugung</h2>
-            </div>
-          </div>
-          <div class="metric-row"><span>Verbrauch</span><strong id="historyKpiLoad">-</strong></div>
-          <div class="metric-row"><span>VBH</span><strong id="historyKpiVbh">-</strong></div>
-        </div>
-
         <!-- Marktpraemie -->
         <article id="historyPremiumFields" class="sub-card" hidden>
           <div class="panel-head">

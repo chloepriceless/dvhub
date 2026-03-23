@@ -3025,6 +3025,7 @@ button {
 /* iPad landscape */
 @media (max-width: 1180px) {
   .span-3 { grid-column: span 4; }
+  .history-kpi-row { grid-template-columns: repeat(3, 1fr) !important; }
 }
 
 /* iPad portrait */
