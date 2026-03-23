@@ -3465,25 +3465,6 @@ button {
 
 
 /* ============================================================
-   HISTORY CHART — Override legacy 3-col grid
-   ============================================================ */
-.page-content .history-chart-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.page-content .history-chart-grid article {
-  width: 100%;
-}
-.page-content .history-chart-shell {
-  min-height: 280px;
-  background: rgba(8,12,24,0.3);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 12px;
-}
-
-/* ============================================================
    CONFIG COMPONENTS — Shared by Settings + Setup
    ============================================================ */
 
@@ -3514,11 +3495,11 @@ button {
 /* Group kicker label */
 .config-group-kicker {
   font-family: var(--font-title, 'Space Grotesk', sans-serif);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 10px 14px 2px;
+  padding: 12px 16px 4px;
 }
 
 /* Key-value row */
@@ -3526,24 +3507,24 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 9px 14px;
+  padding: 11px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 12px;
+  font-size: 14px;
 }
 .config-row:last-child { border-bottom: none; }
-.config-row-label { color: rgba(232,234,240,0.5); white-space: nowrap; }
+.config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; }
 .config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
-.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 11px; }
+.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; }
 
 /* Config inputs */
 .config-input {
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 6px;
-  padding: 5px 10px;
+  padding: 7px 12px;
   color: var(--flow-text, #e8eaf0);
   font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: 11px;
+  font-size: 13px;
   text-align: right;
   min-width: 0;
 }
@@ -3553,11 +3534,11 @@ button {
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 6px;
-  padding: 5px 10px;
+  padding: 7px 12px;
   color: var(--flow-text, #e8eaf0);
-  font-size: 11px;
+  font-size: 13px;
 }
-.config-checkbox { accent-color: var(--flow-green, #4CE36C); width: 16px; height: 16px; }
+.config-checkbox { accent-color: var(--flow-green, #4CE36C); width: 18px; height: 18px; }
 
 /* Sticky save bar */
 .config-save-bar {
@@ -3577,14 +3558,14 @@ button {
   transition: transform 0.2s ease-out;
 }
 body.has-changes .config-save-bar { transform: translateY(0); }
-.config-save-bar-text { font-size: 11px; color: rgba(232,234,240,0.5); }
+.config-save-bar-text { font-size: 13px; color: rgba(232,234,240,0.5); }
 .config-save-bar-actions { display: flex; gap: 8px; }
 
 /* Setup centered container */
 .setup-container { max-width: 860px; margin: 0 auto; }
 
 /* Config status banner */
-.config-banner { padding: 8px 14px; border-radius: 8px; font-size: 11px; margin-bottom: 12px; }
+.config-banner { padding: 10px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 .config-banner.ok { background: rgba(76,227,108,0.08); border: 1px solid rgba(76,227,108,0.2); color: #4CE36C; }
 .config-banner.warn { background: rgba(255,211,46,0.08); border: 1px solid rgba(255,211,46,0.2); color: #FFD32E; }
 .config-banner.error { background: rgba(255,108,99,0.08); border: 1px solid rgba(255,108,99,0.2); color: rgba(255,108,99,0.85); }
