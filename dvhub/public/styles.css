@@ -3743,3 +3743,201 @@ button {
   .shell-layout .metric-row-action { transition: none; }
   .min-soc-pending { animation: none; }
 }
+
+/* ============================================================
+   SUB-PAGE LAYOUT (topbar style — used by settings, explorer,
+   history, tools, setup)
+   ============================================================ */
+
+.page-content {
+  padding: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-header-card {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.page-header-card-copy h1 {
+  font-family: var(--font-brand);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--flow-text);
+}
+
+.page-header-card-copy .page-kicker {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--flow-text-muted);
+  margin-bottom: 4px;
+}
+
+.page-header-card-copy .page-subtitle {
+  font-size: 0.72rem;
+  color: var(--flow-text-muted);
+  margin-top: 4px;
+}
+
+.page-header-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.page-grid-full {
+  grid-column: 1 / -1;
+}
+
+/* Sub-page panel card */
+.sub-card {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 16px;
+}
+
+/* Settings sidebar inside page-grid */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.settings-layout-nav {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+  position: sticky;
+  top: calc(48px + 16px);
+}
+
+.settings-layout-nav .card-title {
+  margin-bottom: 8px;
+}
+
+.settings-layout-workspace {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 16px;
+}
+
+/* History summary grid */
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+/* Explorer inline styles updated to match theme */
+.explorer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.explorer-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.explorer-control label {
+  font-size: 11px;
+  color: var(--flow-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.explorer-control input,
+.explorer-control select {
+  background: rgba(16, 22, 40, 0.8);
+  border: 1px solid var(--flow-border);
+  color: var(--flow-text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-body);
+}
+
+.explorer-series-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.explorer-series-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--flow-border);
+  background: var(--flow-surface);
+  color: var(--flow-text-muted);
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.explorer-series-chip.is-active {
+  border-color: currentColor;
+  color: var(--flow-text);
+}
+
+.explorer-series-chip .chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.explorer-chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 480px;
+}
+
+.explorer-status {
+  font-size: 12px;
+  color: var(--flow-text-muted);
+  margin-top: 8px;
+}
+
+.explorer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+@media (max-width: 768px) {
+  .page-grid { grid-template-columns: 1fr; }
+  .page-grid-full { grid-column: 1; }
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-layout-nav { position: static; }
+}
