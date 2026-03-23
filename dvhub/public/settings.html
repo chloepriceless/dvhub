@@ -61,7 +61,7 @@
 
       <!-- Settings content area -->
       <div class="settings-content">
-        <div id="settingsNavTree" style="display:none;"></div>
+        <div id="settingsNavTree" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);"></div>
         <div id="settingsWorkspace" class="settings-workspace-panel">
           <section id="settingsSections" class="settings-sections"></section>
         </div>
@@ -340,17 +340,25 @@
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
   <script>
-  // Tab switching with retry until settings.js has rendered nav buttons
-  function clickNavButton(target, retries) {
-    const btn = document.querySelector('#settingsNavTree [data-settings-target="' + target + '"]');
+  // Tab switching — dispatch click event on settingsNavTree buttons
+  function triggerSettingsNav(targetId, retries) {
+    var navTree = document.getElementById('settingsNavTree');
+    if (!navTree) return;
+    var btn = navTree.querySelector('[data-settings-target="' + targetId + '"]');
     if (btn) {
-      btn.click();
-      return;
+      // Use dispatchEvent to trigger the delegated click handler in settings.js
+      var evt = new MouseEvent('click', { bubbles: true, cancelable: true });
+      btn.dispatchEvent(evt);
+      return true;
     }
-    if (retries > 0) setTimeout(function() { clickNavButton(target, retries - 1); }, 200);
+    if (retries > 0) {
+      setTimeout(function() { triggerSettingsNav(targetId, retries - 1); }, 300);
+    }
+    return false;
   }
 
   function switchSettingsTab(target) {
+    // Update tab visuals
     document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('is-active'); });
     var activeTab = document.querySelector('.settings-tab[data-settings-target="' + target + '"]');
     if (activeTab) activeTab.classList.add('is-active');
@@ -364,17 +372,17 @@
     } else {
       if (systemContent) systemContent.style.display = 'none';
       if (settingsContent) settingsContent.style.display = '';
-      // Click the nav button in settingsNavTree — retry up to 15 times (3 seconds)
-      clickNavButton(target, 15);
+      // Trigger settings.js navigation via dispatched click event — retry up to 20 times
+      triggerSettingsNav(target, 20);
     }
   }
 
-  document.querySelectorAll('.settings-tab').forEach(tab => {
-    tab.addEventListener('click', () => switchSettingsTab(tab.dataset.settingsTarget));
+  document.querySelectorAll('.settings-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() { switchSettingsTab(tab.dataset.settingsTarget); });
   });
 
-  // Also sync tabs when settings.js nav buttons are clicked directly
-  const observer = new MutationObserver(() => {
+  // Sync tabs when settings.js nav buttons are clicked directly (via MutationObserver)
+  var observer = new MutationObserver(function() {
     const navBtns = document.querySelectorAll('#settingsNavTree [data-settings-target]');
     navBtns.forEach(btn => {
       btn.addEventListener('click', () => {

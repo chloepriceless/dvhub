@@ -4261,8 +4261,8 @@ button {
   color: #fff;
 }
 .setup-shell .setup-step-copy { display: flex; flex-direction: column; gap: 1px; text-align: left; }
-.setup-shell .setup-step-title { font-size: 0.8rem; font-weight: 600; }
-.setup-shell .setup-step-meta { font-size: 0.65rem; color: var(--flow-text-dim); }
+.setup-shell .setup-step-title { font-size: 0.78rem; font-weight: 600; }
+.setup-shell .setup-step-meta { display: none; /* hide verbose step descriptions */ }
 
 /* Progress bar */
 .setup-shell .setup-progress {
@@ -4390,9 +4390,11 @@ button {
   line-height: 1.4;
 }
 .setup-shell .setup-callout-note {
-  font-size: 0.68rem;
-  color: var(--flow-text-dim);
-  margin-top: 6px;
+  display: none; /* hide verbose callout notes */
+}
+/* Compact callout title */
+.setup-shell .setup-callout-title {
+  font-size: 0.95rem;
 }
 
 /* Review step */
