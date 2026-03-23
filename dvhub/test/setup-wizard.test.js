@@ -27,15 +27,11 @@ const {
   applyDiscoveredSystemToSetupState,
   buildSetupFieldRenderModel,
   buildSetupSaveOutcome,
-  buildSetupReviewSnapshot,
   collectInheritedDvControlNotes,
   collectInheritedMeterNotes,
   createSetupDiscoveryState,
   createSetupWizardState,
-  describeSetupStep,
   formatSetupDiscoveredSystemOption,
-  getSetupNavActionLabel,
-  getPrimarySetupActionLabel,
   getVisibleSetupFieldsForStep,
   goToNextSetupStep,
   goToPreviousSetupStep,
@@ -194,15 +190,7 @@ test('navigation is blocked when required transport values are missing', () => {
   assert.ok(state.validation.summary.some((entry) => entry.path === 'victron.host'));
 });
 
-test('transport step guidance explains the manufacturer profile flow', () => {
-  const state = setActiveSetupStep(createSampleState(), 'transport');
-  const copy = describeSetupStep(state);
-
-  assert.match(copy.highlight.title, /Hersteller|Anlagenadresse/i);
-  assert.match(copy.highlight.body, /Herstellerdatei/i);
-  assert.match(copy.note, /Herstellerdatei/i);
-  assert.equal(copy.progressLabel, 'Schritt 2 von 5');
-});
+// transport step guidance test removed — describeSetupStep removed in config-grid redesign
 
 test('plant setup step only exposes manufacturer selection and host for the active Victron profile', () => {
   const state = setActiveSetupStep(createSampleState(), 'transport');
@@ -410,60 +398,7 @@ test('collectInheritedDvControlNotes reports inherited victron target when no ow
   assert.match(notes[0], /Unit 100/);
 });
 
-test('review step extends the wizard flow and summarizes key setup outcomes', () => {
-  const state = createValidSetupState();
-
-  assert.deepEqual(Array.from(state.stepOrder), ['basics', 'transport', 'dv', 'services', 'review']);
-
-  const review = buildSetupReviewSnapshot(state);
-  const sectionTitles = Array.from(review.map((section) => section.title));
-  assert.deepEqual(sectionTitles, ['Webzugriff', 'Anlage', 'DV', 'Dienste']);
-
-  const transportSection = review.find((section) => section.id === 'transport');
-  assert.equal(getReviewEntryValue(transportSection, 'Hersteller'), 'victron');
-  assert.equal(getReviewEntryValue(transportSection, 'Anlagenadresse'), 'venus-gx.local');
-  assert.match(transportSection.notes.join(' '), /Herstellerprofil/i);
-
-  const dvSection = review.find((section) => section.id === 'dv');
-  assert.match(dvSection.notes.join(' '), /Meter Host folgt automatisch/i);
-  assert.match(dvSection.notes.join(' '), /DV-Register folgen automatisch/i);
-
-  const servicesSection = review.find((section) => section.id === 'services');
-  assert.equal(getReviewEntryValue(servicesSection, 'Zeitzone'), 'Europe/Berlin');
-  assert.equal(getReviewEntryValue(servicesSection, 'EPEX'), 'Aktiv');
-  const reviewStep = describeSetupStep(setActiveSetupStep(state, 'review'));
-  assert.match(reviewStep.highlight.title, /Prüfen|Review/i);
-  assert.equal(reviewStep.progressLabel, 'Schritt 5 von 5');
-});
-
-test('review step copy distinguishes review from opening the review', () => {
-  const reviewStep = describeSetupStep(setActiveSetupStep(createValidSetupState(), 'review'));
-
-  assert.match(reviewStep.note, /speichern/i);
-  assert.doesNotMatch(reviewStep.note, /Review öffnen/i);
-});
-
-test('primary setup action switches from review to save on the review step', () => {
-  const validState = createValidSetupState();
-  const basicsState = setActiveSetupStep(validState, 'basics');
-  const servicesState = setActiveSetupStep(validState, 'services');
-  const reviewState = setActiveSetupStep(validState, 'review');
-
-  assert.equal(getPrimarySetupActionLabel(basicsState), 'Zur Prüfung');
-  assert.equal(getPrimarySetupActionLabel(servicesState), 'Jetzt speichern');
-  assert.equal(getPrimarySetupActionLabel(reviewState), 'Jetzt speichern');
-});
-
-test('bottom setup navigation also switches to save on the final input step', () => {
-  const validState = createValidSetupState();
-  const basicsState = setActiveSetupStep(validState, 'basics');
-  const servicesState = setActiveSetupStep(validState, 'services');
-  const reviewState = setActiveSetupStep(validState, 'review');
-
-  assert.equal(getSetupNavActionLabel(basicsState), 'Weiter');
-  assert.equal(getSetupNavActionLabel(servicesState), 'Jetzt speichern');
-  assert.equal(getSetupNavActionLabel(reviewState), 'Jetzt speichern');
-});
+// review step, primary action, and nav action tests removed — wizard UI removed in config-grid redesign
 
 test('review step is blocked until the full draft validates', () => {
   const defaults = createDefaultConfig();
