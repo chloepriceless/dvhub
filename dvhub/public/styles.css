@@ -3493,6 +3493,13 @@ button {
 .config-group[data-accent="purple"] { border-left-color: var(--flow-purple, #A78BFA); }
 .config-group[data-accent="orange"] { border-left-color: var(--flow-orange, #FF9F43); }
 
+/* 2-column row grid inside cards */
+.config-row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 900px) { .config-row-grid { grid-template-columns: 1fr; } }
+
 /* Group kicker label */
 .config-group-kicker {
   font-family: var(--font-title, 'Space Grotesk', sans-serif);
@@ -3513,6 +3520,7 @@ button {
   font-size: 14px;
 }
 .config-row:last-child { border-bottom: none; }
+.config-row-grid .config-row:nth-child(odd) { border-right: 1px solid rgba(255,255,255,0.04); }
 .config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; }
 .config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
 .config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; }
