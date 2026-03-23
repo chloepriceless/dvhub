@@ -3750,9 +3750,141 @@ button {
    ============================================================ */
 
 .page-content {
-  padding: 16px;
-  max-width: 1400px;
+  padding: 16px 24px;
+  max-width: 100%;
   margin: 0 auto;
+}
+
+/* Settings dynamic content — override old classes from settings.js */
+.settings-sections .panel,
+.settings-sections .settings-panel {
+  background: var(--flow-surface) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: var(--flow-radius) !important;
+  padding: 16px !important;
+  margin-bottom: 10px;
+  color: var(--flow-text) !important;
+  box-shadow: none !important;
+}
+.settings-sections .panel-head,
+.settings-sections .settings-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.settings-sections .settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--flow-border);
+}
+.settings-sections .settings-field:last-child { border-bottom: none; }
+.settings-sections .settings-field-title {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--flow-text);
+}
+.settings-sections .field-help {
+  font-size: 0.68rem;
+  color: var(--flow-text-dim);
+  line-height: 1.3;
+}
+.settings-sections input[type="text"],
+.settings-sections input[type="number"],
+.settings-sections input[type="url"],
+.settings-sections input[type="password"],
+.settings-sections input[type="datetime-local"],
+.settings-sections input[type="time"],
+.settings-sections select,
+.settings-sections textarea {
+  background: rgba(8,12,24,0.5) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  color: var(--flow-text) !important;
+  font-family: var(--font-body) !important;
+  font-size: 0.8rem !important;
+}
+.settings-sections input[type="checkbox"] {
+  accent-color: var(--chart-positive);
+}
+.settings-sections .summary-card {
+  background: rgba(8,12,24,0.3);
+  border: 1px solid var(--flow-border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 6px;
+}
+.settings-sections .summary-card strong {
+  color: var(--flow-text);
+  font-size: 0.8rem;
+  display: block;
+  margin-bottom: 4px;
+}
+.settings-sections .summary-card span {
+  color: var(--flow-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+/* Settings nav items (from settingsNavTree) */
+.settings-sections .app-nav-subitem,
+#settingsNavTree .app-nav-subitem {
+  background: var(--flow-surface) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 6px !important;
+  padding: 8px 10px !important;
+  margin: 0 !important;
+  color: var(--flow-text-muted) !important;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+#settingsNavTree .app-nav-subitem.is-active,
+#settingsNavTree .app-nav-subitem[aria-current="page"] {
+  border-color: var(--chart-positive) !important;
+  background: rgba(99,102,241,0.08) !important;
+  color: var(--flow-text) !important;
+}
+.app-nav-subitem-label {
+  font-size: 0.8rem !important;
+  font-weight: 600 !important;
+  color: var(--flow-text) !important;
+  font-family: var(--font-body) !important;
+  text-transform: none !important;
+}
+.app-nav-subitem-copy {
+  font-size: 0.68rem !important;
+  color: var(--flow-text-muted) !important;
+}
+/* Settings panel intro/meta */
+.settings-panel-meta {
+  font-size: 0.72rem;
+  color: var(--flow-text-muted);
+  margin-bottom: 8px;
+}
+
+/* Setup wizard — clean modern style */
+.setup-progress {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.setup-progress .step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--flow-border);
+  transition: all 0.2s;
+}
+.setup-progress .step-dot.is-active {
+  background: var(--chart-positive);
+  box-shadow: 0 0 6px var(--chart-positive);
+}
+.setup-progress .step-dot.is-done {
+  background: var(--ok);
 }
 
 .page-header-card {
