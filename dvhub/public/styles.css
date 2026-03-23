@@ -3524,6 +3524,36 @@ button {
 .config-row-grid .config-row:nth-child(odd) { border-right: 1px solid rgba(255,255,255,0.04); }
 .config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; }
 .config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
+.config-help-icon {
+  display: inline-block;
+  margin-left: 5px;
+  font-size: 11px;
+  color: rgba(168,196,232,0.45);
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+}
+.config-help-icon:hover { color: rgba(168,196,232,0.85); }
+.config-help-icon:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  background: var(--dvhub-panel, #0C2545);
+  border: 1px solid var(--dvhub-border, #1F4C7A);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--dvhub-text, #E8EAF0);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  width: max-content;
+  max-width: 280px;
+  z-index: 1000;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  pointer-events: none;
+}
 .config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; }
 
 /* Config inputs */

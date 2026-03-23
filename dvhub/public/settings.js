@@ -61,6 +61,13 @@ function createConfigRow(label, inputEl, opts) {
     req.textContent = '*';
     labelSpan.appendChild(req);
   }
+  if (opts?.help) {
+    const tip = document.createElement('span');
+    tip.className = 'config-help-icon';
+    tip.textContent = '\u24D8';
+    tip.dataset.tooltip = opts.help;
+    labelSpan.appendChild(tip);
+  }
   row.appendChild(labelSpan);
   if (typeof inputEl === 'string') {
     const val = document.createElement('strong');
@@ -952,7 +959,7 @@ function renderDestinationGrid(destinationId) {
     for (const field of allFields) {
       const model = buildFieldRenderModel(field);
       const input = createConfigInput(field, model.value);
-      rowContainer.appendChild(createConfigRow(field.label, input));
+      rowContainer.appendChild(createConfigRow(field.label, input, { help: field.help }));
       if (model.discovery.visible) {
         const discoveryRow = document.createElement('div');
         discoveryRow.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
