@@ -171,7 +171,7 @@ button {
 /* --- Main body — 3-column grid --- */
 .main-body {
   display: grid;
-  grid-template-columns: 300px 1fr 320px;
+  grid-template-columns: 340px 1fr 280px;
   min-height: 0;
   overflow: hidden;
 }
@@ -209,6 +209,12 @@ button {
   backdrop-filter: blur(4px);
 }
 
+/* Chart card in rail — grows to fill remaining space */
+.rail-chart-card {
+  flex: 1;
+  min-height: 200px;
+}
+
 .rail-card[data-accent="pv"] {
   border-color: rgba(227, 179, 65, 0.3);
 }
@@ -237,21 +243,13 @@ button {
   border-color: rgba(88, 166, 255, 0.3);
 }
 
-/* --- Flow center — column: flow diagram on top, chart below --- */
+/* --- Flow center --- */
 .flow-center {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   position: relative;
   padding: 6px;
-  gap: 8px;
-  overflow-y: auto;
-}
-
-.flow-chart-card {
-  background: var(--flow-surface);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 12px;
 }
 
 /* --- Bottom panel — Zeitplan, Automation, Log --- */
