@@ -467,45 +467,37 @@ function validatePvPlants(plants = []) {
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
-    <div style="margin-bottom:8px;">
-      <p class="card-kicker">Marktprämie</p>
-      <h3 class="section-title" style="font-size:1rem;">PV-Anlagen</h3>
-      <p class="meta">${plants.length} konfigurierte Anlagen · Leistung und Inbetriebnahmedatum pflegen.</p>
-    </div>
+    <div class="config-group-kicker" style="color:var(--flow-purple);padding-top:10px;">Marktprämie</div>
     ${validationHtml}
-    <div class="pricing-period-card">
-      <div class="pricing-period-grid">
-        <label class="settings-field">
-          <span class="settings-field-title">Marktwert-Modus</span>
-          <select id="marketValueModeSelect">
-            <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
-            <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
-          </select>
-        </label>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Marktwert-Modus</span>
+        <select id="marketValueModeSelect" class="config-select">
+          <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
+          <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Anlagen</span>
+        <strong class="config-row-value">${plants.length} konfiguriert</strong>
       </div>
     </div>
-    <div class="settings-inline-actions">
-      <button id="addPvPlantBtn" class="btn btn-ghost" type="button">PV-Anlage hinzufügen</button>
+    <div style="padding:8px 14px;">
+      <button id="addPvPlantBtn" class="btn btn-ghost btn-small" type="button">+ PV-Anlage</button>
     </div>
-    <div class="pricing-period-list">
-      ${plants.map((plant) => `
-        <article class="pricing-period-card" data-pv-plant-id="${plant.id}">
-          <div class="pricing-period-grid">
-            <label class="settings-field">
-              <span class="settings-field-title">Leistung (kWp)</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Inbetriebnahme</span>
-              <input data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" />
-            </label>
-          </div>
-          <div class="settings-inline-actions">
-            <button class="btn btn-danger" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button>
-          </div>
-        </article>
-      `).join('')}
-    </div>
+    ${plants.map((plant) => `
+      <div class="config-row-grid" data-pv-plant-id="${plant.id}" style="border-top:1px solid rgba(255,255,255,0.06);">
+        <div class="config-row">
+          <span class="config-row-label">Leistung (kWp)</span>
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" style="width:80px;" />
+        </div>
+        <div class="config-row">
+          <span class="config-row-label">Inbetriebnahme</span>
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" style="width:140px;" />
+        </div>
+      </div>
+      <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button></div>
+    `).join('')}
   `;
 }
 
@@ -1123,7 +1115,8 @@ function updatePvPlantField(plantId, path, value) {
 
 function renderPvPlantsEditor() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-periods';
+  section.className = 'config-group';
+  section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
     ? `<div class="status-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
     : '<div class="status-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
@@ -1213,74 +1206,79 @@ function renderEpexPriceSourceInfo() {
 
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
-  section.className = 'settings-pricing-periods';
+  section.className = 'config-group';
+  section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
-    ? `<div class="status-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
-    : '<div class="status-banner info">Tarifzeiträume werden tagesgenau auf die Historienberechnung angewendet.</div>';
+    ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    : '';
 
   section.innerHTML = `
-    <div style="margin-bottom:8px;">
-      <p class="card-kicker">Bezugspreise nach Zeitraum</p>
-      <h3 class="section-title" style="font-size:1rem;">Tarifzeiträume</h3>
-      <p class="meta">${pricingPeriodsDraft.length} definierte Zeiträume · Fixe oder dynamische Tarife pro Zeitraum.</p>
+    <div class="config-group-kicker" style="color:var(--flow-yellow);">Bezugspreise nach Zeitraum</div>
+    <div class="config-row">
+      <span class="config-row-label">Tarifzeiträume</span>
+      <strong class="config-row-value">${pricingPeriodsDraft.length} definiert</strong>
     </div>
     ${validation}
-    <div class="settings-inline-actions">
-      <button id="addPricingPeriodBtn" class="btn btn-ghost" type="button">Zeitraum hinzufügen</button>
+    <div style="padding:8px 14px;">
+      <button id="addPricingPeriodBtn" class="btn btn-ghost btn-small" type="button">+ Zeitraum</button>
     </div>
-    <div class="pricing-period-list">
-      ${pricingPeriodsDraft.map((period) => `
-        <article class="pricing-period-card" data-period-id="${period.id}">
-          <div class="pricing-period-grid">
-            <label class="settings-field">
-              <span class="settings-field-title">Bezeichnung</span>
-              <input data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Start</span>
-              <input data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Ende</span>
-              <input data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" />
-            </label>
-            <label class="settings-field">
-              <span class="settings-field-title">Modus</span>
-              <select data-period-id="${period.id}" data-period-path="mode">
-                <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
-                <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
-              </select>
-            </label>
-            ${period.mode === 'fixed' ? `
-              <label class="settings-field">
-                <span class="settings-field-title">Bruttopreis (ct/kWh)</span>
-                <input data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" />
-              </label>
-            ` : `
-              <label class="settings-field">
-                <span class="settings-field-title">Energie-Aufschlag</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">Netzentgelte</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">Umlagen &amp; Abgaben</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" />
-              </label>
-              <label class="settings-field">
-                <span class="settings-field-title">MwSt (%)</span>
-                <input data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" />
-              </label>
-            `}
+    ${pricingPeriodsDraft.map((period) => `
+      <div style="border-top:1px solid rgba(255,255,255,0.06);padding:4px 0;">
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Bezeichnung</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" style="width:120px;" />
           </div>
-          <div class="settings-inline-actions">
-            <button class="btn btn-danger" type="button" data-remove-period="${period.id}">Entfernen</button>
+          <div class="config-row">
+            <span class="config-row-label">Modus</span>
+            <select class="config-select" data-period-id="${period.id}" data-period-path="mode">
+              <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
+              <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+            </select>
           </div>
-        </article>
-      `).join('')}
-    </div>
+        </div>
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Start</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" style="width:140px;" />
+          </div>
+          <div class="config-row">
+            <span class="config-row-label">Ende</span>
+            <input class="config-input" data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" style="width:140px;" />
+          </div>
+        </div>
+        ${period.mode === 'fixed' ? `
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+        ` : `
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Energie-Aufschlag</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" style="width:80px;" />
+            </div>
+            <div class="config-row">
+              <span class="config-row-label">Netzentgelte</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+          <div class="config-row-grid">
+            <div class="config-row">
+              <span class="config-row-label">Umlagen &amp; Abgaben</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" style="width:80px;" />
+            </div>
+            <div class="config-row">
+              <span class="config-row-label">MwSt (%)</span>
+              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" style="width:80px;" />
+            </div>
+          </div>
+        `}
+        <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-period="${period.id}">Entfernen</button></div>
+      </div>
+    `).join('')}
   `;
 
   section.querySelector('#addPricingPeriodBtn')?.addEventListener('click', () => {
