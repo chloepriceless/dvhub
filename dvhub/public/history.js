@@ -1422,15 +1422,25 @@ function initHistoryPage() {
       if (label) label.textContent = marketMode ? 'Vermiedene Kosten (Marktwert)' : 'Vermiedene Kosten';
       marketToggle.textContent = marketMode ? 'Bezugspreis' : 'Marktwert';
       marketToggle.style.opacity = marketMode ? '1' : '0.6';
-      // Update headline value
+      // Update Vermiedene Kosten + Gesamtbilanz
       const c = window._historyKpiCache;
       if (c) {
         const avoidedVal = marketMode ? round2(c.avoided - c.oppCost) : c.avoided;
+        const savedMoney = round2(avoidedVal - c.pvCost - c.batCost);
+        const adjustedGross = round2(c.net + savedMoney);
         setText('historyKpiAvoided', fmtEur(avoidedVal));
-        // Update Gesamtbilanz with adjusted avoided
-        const adjustedGross = round2(cashNetEur({ exportRevenueEur: c.net + importCostEur({ gridCostEur: 0 }) }) + avoidedVal);
-        // Simpler: gross = net + avoided - pvCost - batCost (approximation from grossReturnEur formula)
         setText('historyKpiBilanzAvoided', fmtEur(avoidedVal));
+        setText('historyKpiGrossReturn', fmtEur(adjustedGross));
+        // Update Gesamtbilanz accent color
+        const bilanzCard = byId('historyKpiBilanzCard');
+        if (bilanzCard) {
+          const pos = adjustedGross >= 0;
+          bilanzCard.dataset.accent = pos ? 'green' : 'orange';
+          const bv = byId('historyKpiGrossReturn');
+          if (bv) bv.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
+          const bk = bilanzCard.querySelector('.config-group-kicker');
+          if (bk) bk.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
+        }
       }
     });
   }
