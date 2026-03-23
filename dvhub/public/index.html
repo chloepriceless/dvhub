@@ -134,6 +134,30 @@
             <div class="cr-sub" id="flowCenterDir">-</div>
           </div>
         </div>
+
+        <!-- Price Chart — direkt unter dem Flow-Diagram -->
+        <div class="flow-chart-card">
+          <div class="panel-head">
+            <p class="card-title">Day-Ahead-Preise (ct/kWh)</p>
+            <button id="refreshEpex" class="btn btn-primary btn-small" type="button">EPEX aktualisieren</button>
+          </div>
+          <div id="priceChartContainer" style="width:100%;position:relative;">
+            <canvas id="priceChartCanvas"></canvas>
+          </div>
+          <div id="tooltip" style="display:none;">-</div>
+          <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
+            <div class="chart-selection-copy">
+              <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
+              <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
+            </div>
+            <button id="createSelectionScheduleBtn" class="btn btn-ghost btn-small" type="button">Steuerung anlegen</button>
+          </div>
+          <div class="chart-comparison-summary">
+            <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
+            <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
+          </div>
+          <div class="meta" id="chartMeta">-</div>
+        </div>
       </div>
 
       <!-- Right Rail -->
@@ -209,33 +233,6 @@
 
     <!-- 3. Bottom Panel (chart, schedule, automation+log) -->
     <div class="bottom-panel">
-
-      <!-- Price Chart Card -->
-      <div class="bottom-card">
-        <div class="panel-head">
-          <div>
-            <p class="card-title">Day-Ahead-Preise</p>
-            <h2 class="section-title">Day-Ahead-Preise (ct/kWh)</h2>
-          </div>
-          <button id="refreshEpex" class="btn btn-primary btn-small" type="button">EPEX aktualisieren</button>
-        </div>
-        <div id="priceChartContainer" style="width:100%;position:relative;">
-          <canvas id="priceChartCanvas"></canvas>
-        </div>
-        <div id="tooltip" style="display:none;">-</div>
-        <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
-          <div class="chart-selection-copy">
-            <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
-            <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
-          </div>
-          <button id="createSelectionScheduleBtn" class="btn btn-ghost btn-small" type="button">Steuerung anlegen</button>
-        </div>
-        <div class="chart-comparison-summary">
-          <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
-          <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
-        </div>
-        <div class="meta" id="chartMeta">-</div>
-      </div>
 
       <!-- Zeitplan Card -->
       <div class="bottom-card">
