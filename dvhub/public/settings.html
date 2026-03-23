@@ -129,37 +129,37 @@
                 <span class="config-row-label">Intervall</span>
                 <strong class="config-row-value">15 Minuten</strong>
               </div>
-              <p style="padding:0 14px 4px;font-size:11px;color:rgba(232,234,240,0.3);margin:0;">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</p>
+              <p style="padding:0 14px 4px;font-size:11px;color:rgba(232,234,240,0.3);margin:0;">VRM-Stats werden für den Abgleich immer in 15-Minuten-Auflösung importiert.</p>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <button id="historyImportBtn" class="btn btn-primary btn-small" type="button">VRM-Historie importieren</button>
-                <button id="historyBackfillBtnTools" class="btn btn-ghost btn-small" type="button">VRM-Luecken schliessen</button>
+                <button id="historyBackfillBtnTools" class="btn btn-ghost btn-small" type="button">VRM-Lücken schließen</button>
                 <button id="refreshHistoryBtn" class="btn btn-ghost btn-small" type="button">Status pr&uuml;fen</button>
               </div>
-              <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="historyReason">Der normale Backfill prueft nur den letzten Zeitraum auf offene VRM-Luecken.</p>
+              <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="historyReason">Der normale Backfill prüft nur den letzten Zeitraum auf offene VRM-Lücken.</p>
               <div class="config-banner warn" style="margin:8px 14px 0;">
-                <strong>Voll-Backfill:</strong> Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich laenger.
+                <strong>Voll-Backfill:</strong> Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich länger.
               </div>
               <div class="config-row" style="align-items:flex-start;padding-top:10px;">
-                <span class="config-row-label">Warnung bestaetigen</span>
+                <span class="config-row-label">Warnung bestätigen</span>
                 <div style="display:flex;flex-direction:column;gap:4px;">
                   <input id="historyFullBackfillAck" type="checkbox" />
-                  <small style="font-size:11px;color:rgba(232,234,240,0.35);">Ich bestaetige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur fuer Reparaturfaelle gedacht ist.</small>
+                  <small style="font-size:11px;color:rgba(232,234,240,0.35);">Ich bestätige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur für Reparaturfälle gedacht ist.</small>
                 </div>
               </div>
               <div class="history-full-backfill-advanced">
                 <div class="config-row" style="align-items:flex-start;">
-                  <span class="config-row-label">Laengeren Rueckblick aktivieren</span>
+                  <span class="config-row-label">Längeren Rückblick aktivieren</span>
                   <div style="display:flex;flex-direction:column;gap:4px;">
                     <input id="historyFullBackfillExtendedLookback" type="checkbox" />
-                    <small style="font-size:11px;color:rgba(232,234,240,0.35);">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurueck suchen, wenn vor den eigentlichen VRM-Daten laengere leere Zeitraeume liegen.</small>
+                    <small style="font-size:11px;color:rgba(232,234,240,0.35);">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurück suchen, wenn vor den eigentlichen VRM-Daten längere leere Zeiträume liegen.</small>
                   </div>
                 </div>
                 <div id="historyFullBackfillLookbackField" class="history-full-backfill-lookback" hidden>
                   <div class="config-row">
-                    <span class="config-row-label">Max. Rueckblick (Tage)</span>
+                    <span class="config-row-label">Max. Rückblick (Tage)</span>
                     <input id="historyFullBackfillLookbackDays" type="number" min="1" max="365" step="1" inputmode="numeric" value="365" class="config-input" style="width:80px;" />
                   </div>
-                  <p style="padding:0 14px 4px;font-size:11px;color:rgba(232,234,240,0.3);margin:0;">Nur fuer Reparaturfaelle. Mit dieser Obergrenze stoppt der Voll-Backfill spaetestens nach dem eingestellten Rueckblick.</p>
+                  <p style="padding:0 14px 4px;font-size:11px;color:rgba(232,234,240,0.3);margin:0;">Nur für Reparaturfälle. Mit dieser Obergrenze stoppt der Voll-Backfill spätestens nach dem eingestellten Rückblick.</p>
                 </div>
               </div>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;">

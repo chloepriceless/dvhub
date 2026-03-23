@@ -133,39 +133,39 @@
             <label class="settings-field">
               <span class="settings-field-title">Intervall</span>
               <input type="text" value="15 Minuten" readonly />
-              <small class="field-help">VRM-Stats werden fuer den Abgleich immer in 15-Minuten-Aufloesung importiert.</small>
+              <small class="field-help">VRM-Stats werden für den Abgleich immer in 15-Minuten-Auflösung importiert.</small>
             </label>
           </div>
           <div class="settings-inline-actions" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
             <button id="historyImportBtn" class="btn btn-primary btn-small" type="button">VRM-Historie importieren</button>
-            <button id="historyBackfillBtn" class="btn btn-ghost btn-small" type="button">VRM-Luecken schliessen</button>
-            <small id="historyReason" class="meta">Der normale Backfill prueft nur den letzten Zeitraum auf offene VRM-Luecken.</small>
+            <button id="historyBackfillBtn" class="btn btn-ghost btn-small" type="button">VRM-Lücken schließen</button>
+            <small id="historyReason" class="meta">Der normale Backfill prüft nur den letzten Zeitraum auf offene VRM-Lücken.</small>
           </div>
           <div class="settings-summary" style="margin-top:8px;">
             <div class="summary-card">
               <strong>Voll-Backfill</strong>
-              <span>Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich laenger.</span>
+              <span>Nur manuell nutzen. Holt die komplette VRM-Historie erneut, erzeugt hohe CPU- und API-Last und dauert deutlich länger.</span>
             </div>
           </div>
           <label class="settings-field" for="historyFullBackfillAck" style="margin-top:8px;">
-            <span class="settings-field-title">Warnung bestaetigen</span>
+            <span class="settings-field-title">Warnung bestätigen</span>
             <div class="toggle-row">
               <input id="historyFullBackfillAck" type="checkbox" />
-              <small class="field-help">Ich bestaetige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur fuer Reparaturfaelle gedacht ist.</small>
+              <small class="field-help">Ich bestätige, dass der Voll-Backfill vorhandene Historie erneut abfragt und nur für Reparaturfälle gedacht ist.</small>
             </div>
           </label>
           <div class="history-full-backfill-advanced">
             <label class="settings-field" for="historyFullBackfillExtendedLookback">
-              <span class="settings-field-title">Laengeren Rueckblick aktivieren</span>
+              <span class="settings-field-title">Längeren Rückblick aktivieren</span>
               <div class="toggle-row">
                 <input id="historyFullBackfillExtendedLookback" type="checkbox" />
-                <small class="field-help">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurueck suchen, wenn vor den eigentlichen VRM-Daten laengere leere Zeitraeume liegen.</small>
+                <small class="field-help">Standard sind 14 Tage. Bei Bedarf kann DVhub bis zu 365 Tage zurück suchen, wenn vor den eigentlichen VRM-Daten längere leere Zeiträume liegen.</small>
               </div>
             </label>
             <label id="historyFullBackfillLookbackField" class="settings-field history-full-backfill-lookback" for="historyFullBackfillLookbackDays" hidden>
-              <span class="settings-field-title">Max. Rueckblick (Tage)</span>
+              <span class="settings-field-title">Max. Rückblick (Tage)</span>
               <input id="historyFullBackfillLookbackDays" type="number" min="1" max="365" step="1" inputmode="numeric" value="365" />
-              <small class="field-help">Nur fuer Reparaturfaelle. Mit dieser Obergrenze stoppt der Voll-Backfill spaetestens nach dem eingestellten Rueckblick.</small>
+              <small class="field-help">Nur für Reparaturfälle. Mit dieser Obergrenze stoppt der Voll-Backfill spätestens nach dem eingestellten Rückblick.</small>
             </label>
           </div>
           <div style="margin-top:8px;">

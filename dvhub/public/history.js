@@ -115,26 +115,57 @@ function renderBackfillButtonState() {
 }
 
 function renderKpis(summary) {
-  setText('historyKpiCost', fmtEur(importCostEur(summary?.kpis)));
-  setText('historyKpiRevenue', fmtEur(summary?.kpis?.exportRevenueEur));
-  setText('historyKpiAvoided', fmtEur(summary?.kpis?.avoidedImportGrossEur));
-  setText('historyKpiAvoidedPvGross', fmtEur(summary?.kpis?.avoidedImportPvGrossEur));
-  setText('historyKpiAvoidedBatteryGross', fmtEur(summary?.kpis?.avoidedImportBatteryGrossEur));
-  setText('historyKpiAvoidedPvCost', fmtEur(summary?.kpis?.pvCostEur));
-  setText('historyKpiAvoidedBatteryCost', fmtEur(summary?.kpis?.batteryCostEur));
-  setText('historyKpiNet', fmtEur(cashNetEur(summary?.kpis)));
-  setText('historyKpiSavedMoney', fmtEur(savedMoneyEur(summary?.kpis)));
-  setText('historyKpiGrossReturn', fmtEur(grossReturnEur(summary?.kpis)));
-  setText('historyKpiImport', fmtKwh(summary?.kpis?.importKwh));
-  setText('historyKpiLoad', fmtKwh(summary?.kpis?.loadKwh));
-  setText('historyKpiPv', fmtKwh(summary?.kpis?.pvKwh));
-  setText(
-    'historyKpiVbh',
-    hasFiniteNumber(summary?.kpis?.pvFullLoadHours)
-      ? fmtHours(summary?.kpis?.pvFullLoadHours)
-      : 'noch nicht verfügbar'
-  );
-  setText('historyKpiExport', fmtKwh(summary?.kpis?.exportKwh));
+  const kpis = summary?.kpis;
+  const cost = importCostEur(kpis);
+  const pvCost = kpis?.pvCostEur || 0;
+  const batCost = kpis?.batteryCostEur || 0;
+  const totalCost = round2(cost + pvCost + batCost);
+  const revenue = kpis?.exportRevenueEur || 0;
+  const net = cashNetEur(kpis);
+  const avoided = kpis?.avoidedImportGrossEur || 0;
+  const gross = grossReturnEur(kpis);
+
+  // Karte 1: Energiekosten
+  setText('historyKpiTotalCost', fmtEur(-Math.abs(totalCost)));
+  setText('historyKpiCost', fmtEur(-Math.abs(cost)));
+  setText('historyKpiAvoidedPvCost', fmtEur(-Math.abs(pvCost)));
+  setText('historyKpiAvoidedBatteryCost', fmtEur(-Math.abs(batCost)));
+
+  // Karte 2: Energieeinnahmen
+  setText('historyKpiTotalRevenue', fmtEur(revenue));
+  setText('historyKpiRevenue', fmtEur(revenue));
+
+  // Karte 3: Netto Cashflow
+  setText('historyKpiNet', fmtEur(net));
+  setText('historyKpiCashIn', fmtEur(revenue));
+  setText('historyKpiCashOut', fmtEur(-Math.abs(cost)));
+
+  // Karte 4: Vermiedene Kosten
+  setText('historyKpiAvoided', fmtEur(avoided));
+  setText('historyKpiAvoidedPvGross', fmtEur(kpis?.avoidedImportPvGrossEur));
+  setText('historyKpiAvoidedBatteryGross', fmtEur(kpis?.avoidedImportBatteryGrossEur));
+
+  // Karte 5: Gesamtbilanz
+  setText('historyKpiGrossReturn', fmtEur(gross));
+  setText('historyKpiBilanzAvoided', fmtEur(avoided));
+  setText('historyKpiBilanzNet', fmtEur(net));
+  setText('historyKpiBilanzPvCost', fmtEur(-Math.abs(pvCost)));
+  setText('historyKpiBilanzBatCost', fmtEur(-Math.abs(batCost)));
+
+  // Gesamtbilanz Karte: grün bei positiv, orange bei negativ
+  const bilanzCard = document.getElementById('historyKpiBilanzCard');
+  if (bilanzCard) {
+    const isPositive = gross >= 0;
+    bilanzCard.dataset.accent = isPositive ? 'green' : 'orange';
+    const bilanzValue = document.getElementById('historyKpiGrossReturn');
+    if (bilanzValue) bilanzValue.style.color = isPositive ? 'var(--flow-green)' : 'var(--flow-orange)';
+    const bilanzKicker = bilanzCard.querySelector('.config-group-kicker');
+    if (bilanzKicker) bilanzKicker.style.color = isPositive ? 'var(--flow-green)' : 'var(--flow-orange)';
+  }
+
+  // Netto Cashflow Karte: Farbe nach Vorzeichen
+  const netValue = document.getElementById('historyKpiNet');
+  if (netValue) netValue.style.color = net >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
 
   const view = String(summary?.view || '');
   const premiumVisible = view === 'week' || view === 'month' || view === 'year';
@@ -496,7 +527,7 @@ function renderAggregateSummaryTable(summary) {
 }
 
 function renderAggregateTrend(items) {
-  if (!Array.isArray(items) || !items.length) return '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+  if (!Array.isArray(items) || !items.length) return '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
   const width = 520;
   const height = 180;
   const marginLeft = 46;
@@ -547,7 +578,7 @@ function renderAggregateBreakdownTable(summary) {
   const view = String(summary?.view || '');
   const rows = buildAggregateDisplayRows(summary);
   if (!rows.length) {
-    return '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    return '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
   }
   const includeSummary = view === 'month' || view === 'year';
   const summaryRow = buildAggregateSummaryRow(summary);
@@ -578,7 +609,7 @@ function renderAggregateOverview(mountId, summary) {
   if (!mount) return;
   const rows = buildAggregateDisplayRows(summary);
   if (!rows.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
     return;
   }
   mount.innerHTML = `
@@ -723,7 +754,7 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
   const mount = byId(mountId);
   if (!mount) return;
   if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
     return;
   }
   if (typeof Chart === 'undefined') return; // fallback: skip if Chart.js not loaded
@@ -842,7 +873,7 @@ function renderRevenueCostBars(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
   if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
     return;
   }
 
@@ -879,7 +910,7 @@ function renderCombinedPeriodBars(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
   if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten fuer diese Ansicht.</div>';
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
     return;
   }
 
@@ -996,7 +1027,7 @@ function renderSolarSummary(mountId, summary) {
   if (!mount) return;
   const solar = summary?.meta?.solarMarketValue;
   if (!solar) {
-    mount.innerHTML = '<div class="history-chart-empty">Kein Marktwert Solar fuer diesen Zeitraum verfuegbar.</div>';
+    mount.innerHTML = '<div class="history-chart-empty">Kein Marktwert Solar für diesen Zeitraum verfügbar.</div>';
     return;
   }
   mount.innerHTML = `
