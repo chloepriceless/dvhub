@@ -207,8 +207,9 @@
 
       </aside>
 
-      <!-- Chart spanning left rail + flow center -->
+      <!-- Chart + Zeitplan + Automatik spanning left+center -->
       <div class="chart-span">
+        <!-- Chart -->
         <div class="chart-span-card">
           <div class="panel-head">
             <p class="card-title">Day-Ahead-Preise (ct/kWh)</p>
@@ -231,85 +232,83 @@
           </div>
           <div class="meta" id="chartMeta">-</div>
         </div>
+
+        <!-- Zeitplan + Automatik side by side under chart -->
+        <div class="chart-sub-row">
+          <div class="chart-span-card">
+            <p class="card-title">Zeitplan</p>
+            <h2 class="section-title">Börsenfenster und Regeln</h2>
+            <div class="schedule-flags">
+              <label><input type="checkbox" id="schedColGrid" checked> Grid-Spalte</label>
+              <label><input type="checkbox" id="schedColCharge"> Charge-Spalte</label>
+            </div>
+            <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
+              <p class="card-title">Aktueller Automationsplan</p>
+              <div class="automation-plan-meta">
+                <span id="planComputedAt">—</span>
+                <span id="planEnergyBudget">—</span>
+                <span id="planEstimatedRevenue">—</span>
+              </div>
+              <table class="sched-table automation-plan-table">
+                <thead><tr><th>Uhrzeit</th><th>Leistung (W)</th><th>Preis (ct/kWh)</th></tr></thead>
+                <tbody id="planSlotRows"></tbody>
+              </table>
+            </div>
+            <div class="meta">Gelb markierte Zeilen gehören zur kleinen Börsenautomatik.</div>
+            <table class="sched-table">
+              <thead>
+                <tr>
+                  <th>Aktiv</th><th>Beginn</th><th>Ende</th><th>Grid (W)</th><th>Charge (A)</th>
+                  <th>STOP-SOC (%)</th><th title="DC-Export">DC-Export</th><th>Aktion</th>
+                </tr>
+              </thead>
+              <tbody id="scheduleRowsDash"></tbody>
+            </table>
+            <div class="controls">
+              <button id="addScheduleRowBtn" class="icon-btn" title="Zeitplan hinzufügen" type="button">+</button>
+              <button id="loadScheduleBtn" class="btn btn-ghost btn-small" type="button">Laden</button>
+              <button id="saveScheduleBtn" class="btn btn-primary btn-small" type="button">Speichern</button>
+            </div>
+            <div class="meta" id="controlMsg">-</div>
+          </div>
+
+          <div class="chart-span-card">
+            <section id="automationPanel">
+              <p class="card-title">Kleine Börsenautomatik</p>
+              <h2 class="section-title" id="automationStatusTitle">—</h2>
+              <div class="automation-status-bar" id="automationStatusBarPanel">
+                <span id="automationOutcomePanel">—</span>
+                <span id="automationRuleCountPanel">—</span>
+                <span id="automationAvailableEnergyPanel">—</span>
+              </div>
+              <div class="automation-config-grid" id="automationConfigGrid">
+                <label class="settings-field"><span>Aktiviert</span><input type="checkbox" id="automationEnabled"></label>
+                <label class="settings-field"><span>Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
+                <label class="settings-field"><span>Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
+                <label class="settings-field"><span>Kapazität (kWh)</span><input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6"></label>
+                <label class="settings-field"><span>Effizienz (%)</span><input type="number" id="automationInverterEfficiency" min="1" max="100" value="85"></label>
+                <label class="settings-field"><span>Max Entladung (W)</span><input type="number" id="automationMaxDischargeW" value="-12000"></label>
+                <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" value="30"></label>
+              </div>
+              <div id="automationStagesContainer"></div>
+              <div class="sched-controls">
+                <button id="addAutomationStageBtn" class="btn btn-small" type="button">+ Stufe</button>
+                <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
     </div><!-- /.main-body -->
 
-    <!-- 3. Bottom Panel (chart, schedule, automation+log) -->
+    <!-- Bottom: Log only -->
     <div class="bottom-panel">
-
-      <!-- Zeitplan Card -->
-      <div class="bottom-card">
-        <p class="card-title">Zeitplan</p>
-        <h2 class="section-title">Börsenfenster und Regeln</h2>
-        <div class="schedule-flags">
-          <label><input type="checkbox" id="schedColGrid" checked> Grid-Spalte</label>
-          <label><input type="checkbox" id="schedColCharge"> Charge-Spalte</label>
-        </div>
-        <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
-          <p class="card-title">Aktueller Automationsplan</p>
-          <div class="automation-plan-meta">
-            <span id="planComputedAt">—</span>
-            <span id="planEnergyBudget">—</span>
-            <span id="planEstimatedRevenue">—</span>
-          </div>
-          <table class="sched-table automation-plan-table">
-            <thead><tr><th>Uhrzeit</th><th>Leistung (W)</th><th>Preis (ct/kWh)</th></tr></thead>
-            <tbody id="planSlotRows"></tbody>
-          </table>
-        </div>
-        <div class="meta">Gelb markierte Zeilen gehören zur kleinen Börsenautomatik.</div>
-        <table class="sched-table">
-          <thead>
-            <tr>
-              <th>Aktiv</th><th>Beginn</th><th>Ende</th><th>Grid (W)</th><th>Charge (A)</th>
-              <th>STOP-SOC (%)</th><th title="DC-Export">DC-Export</th><th>Aktion</th>
-            </tr>
-          </thead>
-          <tbody id="scheduleRowsDash"></tbody>
-        </table>
-        <div class="controls">
-          <button id="addScheduleRowBtn" class="icon-btn" title="Zeitplan hinzufügen" type="button">+</button>
-          <button id="loadScheduleBtn" class="btn btn-ghost btn-small" type="button">Laden</button>
-          <button id="saveScheduleBtn" class="btn btn-primary btn-small" type="button">Speichern</button>
-        </div>
-        <div class="meta" id="controlMsg">-</div>
-      </div>
-
-      <!-- Automation Card -->
-      <div class="bottom-card">
-        <section id="automationPanel">
-          <p class="card-title">Kleine Börsenautomatik</p>
-          <h2 class="section-title" id="automationStatusTitle">—</h2>
-          <div class="automation-status-bar" id="automationStatusBarPanel">
-            <span id="automationOutcomePanel">—</span>
-            <span id="automationRuleCountPanel">—</span>
-            <span id="automationAvailableEnergyPanel">—</span>
-          </div>
-          <div class="automation-config-grid" id="automationConfigGrid">
-            <label class="settings-field"><span>Aktiviert</span><input type="checkbox" id="automationEnabled"></label>
-            <label class="settings-field"><span>Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
-            <label class="settings-field"><span>Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
-            <label class="settings-field"><span>Kapazität (kWh)</span><input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6"></label>
-            <label class="settings-field"><span>Effizienz (%)</span><input type="number" id="automationInverterEfficiency" min="1" max="100" value="85"></label>
-            <label class="settings-field"><span>Max Entladung (W)</span><input type="number" id="automationMaxDischargeW" value="-12000"></label>
-            <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" value="30"></label>
-          </div>
-          <div id="automationStagesContainer"></div>
-          <div class="sched-controls">
-            <button id="addAutomationStageBtn" class="btn btn-small" type="button">+ Stufe</button>
-            <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
-          </div>
-        </section>
-      </div>
-
-      <!-- Systemprotokoll Card (separate) -->
       <div class="bottom-card">
         <p class="card-title">Systemprotokoll</p>
         <h2 class="section-title">Letzte Events</h2>
         <pre id="logBox" class="log-box">-</pre>
       </div>
-
-    </div><!-- /.bottom-panel -->
+    </div>
 
   </div><!-- /.app-shell -->
 

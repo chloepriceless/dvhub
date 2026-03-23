@@ -172,7 +172,7 @@ button {
 .main-body {
   display: grid;
   grid-template-columns: 260px 1fr 280px;
-  grid-template-rows: auto auto;
+  grid-template-rows: min-content auto;
   grid-template-areas:
     "left-rail  flow-center  right-rail"
     "chart-area chart-area   right-rail";
@@ -186,6 +186,15 @@ button {
 .chart-span {
   grid-area: chart-area;
   padding: 0 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chart-sub-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 /* --- Rails (left/right sidebars) --- */
@@ -266,10 +275,10 @@ button {
   padding: 6px;
 }
 
-/* --- Bottom panel — Zeitplan, Automation, Log --- */
+/* --- Bottom panel — Log only --- */
 .bottom-panel {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 8px;
   border-top: 1px solid var(--flow-border);
