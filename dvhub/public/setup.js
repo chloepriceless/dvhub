@@ -350,82 +350,6 @@ function getCurrentStepIndex(state) {
   return Math.max(0, (state?.stepOrder || []).indexOf(state?.activeStepId));
 }
 
-function describeSetupStep(state, stepId = state?.activeStepId) {
-  const steps = state?.steps || [];
-  const activeStep = steps.find((step) => step.id === stepId) || steps[0] || null;
-  const currentIndex = Math.max(0, steps.findIndex((step) => step.id === activeStep?.id));
-  const progressCurrent = steps.length ? currentIndex + 1 : 0;
-  const visibleFields = activeStep ? getVisibleSetupFieldsForStep(state, activeStep.id) : [];
-  const baseDescription = {
-    progressLabel: steps.length ? `Schritt ${progressCurrent} von ${steps.length}` : '',
-    progressValue: steps.length ? Math.round((progressCurrent / steps.length) * 100) : 0,
-    fieldCountLabel: activeStep?.id === REVIEW_STEP_ID
-      ? 'Zusammenfassung & Speichern'
-      : (visibleFields.length === 1 ? '1 Fokusfeld' : `${visibleFields.length} Fokusfelder`),
-    highlight: {
-      eyebrow: activeStep?.label || '',
-      title: activeStep?.title || '',
-      body: activeStep?.description || ''
-    },
-    note: ''
-  };
-
-  switch (activeStep?.id) {
-    case 'basics':
-      return {
-        ...baseDescription,
-        highlight: {
-          eyebrow: 'Erster Zugriff',
-          title: 'Nur die Daten, die DVhub direkt erreichbar machen',
-          body: 'HTTP-Port und optionales API-Token reichen für den ersten sicheren Einstieg.'
-        },
-        note: 'Alles Weitere bleibt später in der Einrichtung verfuegbar. Hier geht es nur um den schnellen, sicheren Start.'
-      };
-    case 'transport':
-      return {
-        ...baseDescription,
-        highlight: {
-          eyebrow: 'Herstellerprofil',
-          title: 'Nur Hersteller und Anlagenadresse werden im Setup gepflegt',
-          body: 'Technische Kommunikations- und Registerwerte kommen aus der Herstellerdatei. Im Setup bleibt nur die Auswahl des Profils und die Adresse der Anlage.'
-        },
-        note: 'Wenn spezielle Register oder Kommunikationswerte nötig sind, werden sie bewusst außerhalb des normalen Setups in der Herstellerdatei gepflegt.'
-      };
-    case 'dv':
-      return {
-        ...baseDescription,
-        highlight: {
-          eyebrow: 'Proxy & Richtung',
-          title: 'DV-Port und Vorzeichenlogik an einem Ort',
-          body: 'In diesem Schritt definierst du nur noch, wie DVhub den lokalen Proxy anbietet und wie Netzwerte interpretiert werden.'
-        },
-        note: 'Meter- und Registerdetails bleiben im Herstellerprofil, damit sie nicht versehentlich überschrieben werden.'
-      };
-    case 'services':
-      return {
-        ...baseDescription,
-        highlight: {
-          eyebrow: 'Optional zum Start',
-          title: 'Zeitzone zuerst, Dienste nur bei Bedarf',
-          body: 'Schedule und EPEX bleiben kompakt. Zusatzfelder erscheinen erst, wenn du den jeweiligen Dienst einschaltest.'
-        },
-        note: 'So bleibt der letzte Schritt klein, auch wenn du nur die Grundkonfiguration speichern willst.'
-      };
-    case REVIEW_STEP_ID:
-      return {
-        ...baseDescription,
-        highlight: {
-          eyebrow: 'Letzter Check',
-          title: 'Prüfen, was DVhub wirklich speichert und verwendet',
-          body: 'Vor dem Speichern siehst du die Kernwerte, aktive Dienste und wichtige Default- oder Fallback-Ergebnisse der aktuellen Konfiguration.'
-        },
-        note: 'Kontrolliere hier besonders Transport, Meter und optionale Dienste. Danach kannst du das Setup oben speichern.'
-      };
-    default:
-      return baseDescription;
-  }
-}
-
 function goToNextSetupStep(state) {
   const validatedState = validateSetupWizardState(state);
   const currentStepId = validatedState.activeStepId;
@@ -523,68 +447,6 @@ function buildInheritedSetupInfoSections(state) {
   return sections;
 }
 
-function buildSetupReviewSnapshot(state) {
-  const manufacturer = resolveWizardValue(state, 'manufacturer', 'victron');
-  const host = resolveWizardValue(state, 'victron.host', '');
-  const scheduleTimezone = resolveWizardValue(state, 'schedule.timezone', '');
-  const epexEnabled = Boolean(resolveWizardValue(state, 'epex.enabled', false));
-  const inheritedConnectionSections = buildInheritedSetupInfoSections(state);
-  const inheritedConnectionNotes = inheritedConnectionSections.flatMap((section) => section.notes);
-
-  const transportSection = {
-    id: 'transport',
-    title: 'Anlage',
-    entries: [
-      { label: 'Hersteller', value: formatReviewValue(manufacturer) },
-      { label: 'Anlagenadresse', value: formatReviewValue(host) }
-    ],
-    notes: ['Register- und Kommunikationswerte werden aus dem aktiven Herstellerprofil geladen.']
-  };
-
-  const serviceNotes = [];
-  if (epexEnabled && !hasOwnDraftValue(state, 'epex.timezone') && !isBlankValue(scheduleTimezone)) {
-    serviceNotes.push(`EPEX übernimmt die Setup-Zeitzone ${scheduleTimezone}, solange keine eigene Zeitzone gesetzt ist.`);
-  }
-
-  return [
-    {
-      id: 'basics',
-      title: 'Webzugriff',
-      entries: [
-        { label: 'HTTP Port', value: formatReviewValue(resolveWizardValue(state, 'httpPort', '')) },
-        { label: 'API Token', value: isBlankValue(resolveWizardValue(state, 'apiToken', '')) ? 'Nicht gesetzt' : 'Gesetzt' }
-      ],
-      notes: isBlankValue(resolveWizardValue(state, 'apiToken', ''))
-        ? ['Ohne API-Token bleibt der lokale Zugriff einfacher, externe Zugriffe sollten dann anderweitig abgesichert werden.']
-        : []
-    },
-    transportSection,
-    {
-      id: 'dv',
-      title: 'DV',
-      entries: [
-        { label: 'Proxy Host', value: formatReviewValue(resolveWizardValue(state, 'modbusListenHost', '')) },
-        { label: 'Proxy Port', value: formatReviewValue(resolveWizardValue(state, 'modbusListenPort', '')) },
-        { label: 'Vorzeichenlogik', value: resolveWizardValue(state, 'gridPositiveMeans', '') === 'grid_import' ? 'Positiv = Netzbezug' : 'Positiv = Einspeisung' }
-      ],
-      notes: [
-        'Meter- und DV-Register kommen aus dem Herstellerprofil und sind hier bewusst nicht editierbar.',
-        ...inheritedConnectionNotes
-      ]
-    },
-    {
-      id: 'services',
-      title: 'Dienste',
-      entries: [
-        { label: 'Zeitzone', value: formatReviewValue(scheduleTimezone) },
-        { label: 'EPEX', value: epexEnabled ? 'Aktiv' : 'Deaktiviert' },
-        { label: 'EPEX BZN', value: epexEnabled ? formatReviewValue(resolveWizardValue(state, 'epex.bzn', '')) : 'Nicht aktiv' }
-      ],
-      notes: serviceNotes
-    }
-  ];
-}
-
 function validateSetupSubmissionConfig(config, state = setupWizardState) {
   const baseState = state || setupWizardState || {};
   return createSetupWizardState({
@@ -635,18 +497,13 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
 const setupWizardHelpers = {
   applyDiscoveredSystemToSetupState,
   buildSetupFieldRenderModel,
-  buildSetupReviewSnapshot,
   buildSetupSaveOutcome,
   buildSetupSteps,
   collectInheritedDvControlNotes,
   collectInheritedMeterNotes,
   createSetupDiscoveryState,
   createSetupWizardState,
-  describeSetupStep,
   formatSetupDiscoveredSystemOption,
-  getSetupNavActionLabel,
-  getPrimarySetupActionLabel,
-  shouldPrimarySetupActionSave,
   getSetupFieldsForStep,
   getSetupFieldDefinitions,
   getSetupStepDefinitions,
@@ -657,7 +514,6 @@ const setupWizardHelpers = {
   resolveWizardValue,
   setActiveSetupStep,
   updateSetupDraftValue,
-  buildSetupSaveOutcome,
   validateSetupSubmissionConfig,
   validateSetupWizardState
 };
@@ -670,6 +526,101 @@ function setSetupWizardState(nextState) {
   setupDefinition = clone(nextState?.definition || setupDefinition || {});
   setupWizardState = validateSetupWizardState(nextState);
   return setupWizardState;
+}
+
+const SETUP_GROUP_ACCENTS = {
+  basics: 'cyan',
+  transport: 'green',
+  dv: 'yellow',
+  services: 'blue'
+};
+
+function createConfigGroup(label, accent) {
+  const group = document.createElement('div');
+  group.className = 'config-group';
+  if (accent) group.dataset.accent = accent;
+  const kicker = document.createElement('div');
+  kicker.className = 'config-group-kicker';
+  kicker.style.color = `var(--flow-${accent || 'green'})`;
+  kicker.textContent = label;
+  group.appendChild(kicker);
+  return group;
+}
+
+function createConfigRow(label, inputEl, opts) {
+  const row = document.createElement('div');
+  row.className = 'config-row';
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'config-row-label';
+  labelSpan.textContent = label;
+  if (opts?.required) {
+    const req = document.createElement('span');
+    req.className = 'config-required';
+    req.textContent = '*';
+    labelSpan.appendChild(req);
+  }
+  row.appendChild(labelSpan);
+  if (typeof inputEl === 'string') {
+    const val = document.createElement('strong');
+    val.className = 'config-row-value';
+    val.textContent = inputEl;
+    row.appendChild(val);
+  } else {
+    row.appendChild(inputEl);
+  }
+  return row;
+}
+
+function createConfigInput(field, value) {
+  let input;
+  if (field.type === 'boolean') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'config-checkbox';
+    input.checked = Boolean(value);
+  } else if (field.type === 'select') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    for (const opt of field.options || []) {
+      const option = document.createElement('option');
+      option.value = String(opt.value);
+      option.textContent = opt.label;
+      input.appendChild(option);
+    }
+    input.value = String(value);
+  } else if (field.type === 'dynamicSelect') {
+    input = document.createElement('select');
+    input.className = 'config-select';
+    const placeholder = document.createElement('option');
+    placeholder.value = String(value || '');
+    placeholder.textContent = value ? String(value) : 'Laden...';
+    input.appendChild(placeholder);
+    if (field.dynamicOptionsUrl) {
+      (apiFetch ? apiFetch(field.dynamicOptionsUrl) : fetch(field.dynamicOptionsUrl).then(r => r.json())).then(data => {
+        input.innerHTML = '';
+        for (const z of (data?.zones || [])) {
+          const opt = document.createElement('option');
+          opt.value = z.zone;
+          opt.textContent = z.zone;
+          input.appendChild(opt);
+        }
+        input.value = String(value || 'DE-LU');
+      }).catch(() => { placeholder.textContent = value || 'Fehler'; });
+    }
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
+    input.className = 'config-input';
+    if (field.min !== undefined) input.min = field.min;
+    if (field.max !== undefined) input.max = field.max;
+    if (field.step !== undefined) input.step = field.step;
+    input.value = value === null || value === undefined ? '' : String(value);
+    input.style.width = field.type === 'number' ? '70px' : '140px';
+  }
+  input.id = getFieldInputId(field.path);
+  input.dataset.path = field.path;
+  input.dataset.type = field.type;
+  return input;
 }
 
 function buildMetaText(meta) {
@@ -714,520 +665,87 @@ function summarizeBlockingErrors(state) {
     .join(' ');
 }
 
-function buildReviewLockedMessage(state) {
-  return `Die Prüfung ist erst verfügbar, wenn alle Pflichtangaben vollständig sind. ${summarizeBlockingErrors(state)}`;
-}
 
-function shouldPrimarySetupActionSave(state = setupWizardState) {
-  const currentIndex = getCurrentStepIndex(state);
-  const firstSaveStepIndex = (state?.stepOrder || []).length - 2;
-  return currentIndex >= Math.max(0, firstSaveStepIndex);
-}
+function renderSetupForm() {
+  const grid = document.getElementById('setupGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
 
-function getPrimarySetupActionLabel(state = setupWizardState) {
-  return shouldPrimarySetupActionSave(state) ? 'Jetzt speichern' : 'Zur Prüfung';
-}
+  const steps = getSetupStepDefinitions();
+  for (const step of steps) {
+    const fields = getVisibleSetupFieldsForStep(setupWizardState, step.id);
+    if (!fields.length) continue;
 
-function getSetupNavActionLabel(state = setupWizardState) {
-  return shouldPrimarySetupActionSave(state) ? 'Jetzt speichern' : 'Weiter';
-}
+    const accent = SETUP_GROUP_ACCENTS[step.id] || 'green';
+    const group = createConfigGroup(step.title, accent);
 
-function renderPrimarySetupAction() {
-  const button = document.getElementById('setupSaveBtn');
-  if (!button) return;
-  button.textContent = getPrimarySetupActionLabel(setupWizardState);
-}
+    for (const field of fields) {
+      const model = buildSetupFieldRenderModel(setupWizardState, field);
+      const input = createConfigInput(field, model.value);
+      const required = field.setup?.required || false;
+      group.appendChild(createConfigRow(field.label, input, { required }));
 
-function renderSetupSteps() {
-  const container = document.getElementById('setup-steps');
-  if (!container) return;
-  container.replaceChildren();
+      // Discovery button
+      if (model.discovery.visible) {
+        const actions = document.createElement('div');
+        actions.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost btn-small';
+        btn.dataset.discoveryRun = field.path;
+        btn.disabled = model.discovery.loading || !model.discovery.manufacturer;
+        btn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
+        actions.appendChild(btn);
 
-  const list = document.createElement('ol');
-  list.className = 'wizard-steps';
-
-  for (const step of setupWizardState.steps) {
-    const item = document.createElement('li');
-    item.className = 'setup-step-item';
-    const button = document.createElement('button');
-    const isActive = step.id === setupWizardState.activeStepId;
-    const isComplete = setupWizardState.completedStepIds.includes(step.id);
-    const isVisited = setupWizardState.visitedStepIds.includes(step.id);
-    const currentIndex = getCurrentStepIndex(setupWizardState);
-    const stepIndex = setupWizardState.stepOrder.indexOf(step.id);
-
-    button.type = 'button';
-    button.dataset.stepId = step.id;
-    button.className = 'setup-step-button';
-    button.disabled = stepIndex > currentIndex + 1 || (!isVisited && stepIndex > currentIndex);
-    button.setAttribute('aria-current', isActive ? 'step' : 'false');
-    if (isComplete) button.dataset.state = 'complete';
-    else if (isActive) button.dataset.state = 'active';
-    else if (isVisited) button.dataset.state = 'visited';
-
-    const index = document.createElement('span');
-    index.className = 'setup-step-index';
-    index.textContent = String(step.index + 1).padStart(2, '0');
-
-    const copy = document.createElement('span');
-    copy.className = 'setup-step-copy';
-
-    const title = document.createElement('strong');
-    title.className = 'setup-step-title';
-    title.textContent = step.title;
-
-    const summary = document.createElement('small');
-    summary.className = 'setup-step-meta';
-    if (!setupWizardState.validation.steps[step.id].valid) summary.textContent = 'Pflichtangaben fehlen';
-    else if (isComplete) summary.textContent = 'Bereit';
-    else if (isActive) summary.textContent = step.description;
-    else if (step.id === REVIEW_STEP_ID) summary.textContent = 'Zusammenfassung und letzter Check';
-    else summary.textContent = `${step.fieldCount} Felder im Fokus`;
-
-    copy.append(title, summary);
-    button.append(index, copy);
-    item.appendChild(button);
-    list.appendChild(item);
-  }
-
-  container.appendChild(list);
-}
-
-function renderField(field) {
-  const wrapper = document.createElement('label');
-  wrapper.className = 'settings-field setup-field';
-  if (field.type === 'boolean') wrapper.classList.add('checkbox-field');
-
-  const title = document.createElement('span');
-  title.className = 'settings-field-title';
-  title.textContent = field.label;
-  wrapper.appendChild(title);
-
-  let input;
-  const model = buildSetupFieldRenderModel(setupWizardState, field);
-  const { value } = model;
-  if (field.type === 'boolean') {
-    input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = Boolean(value);
-  } else if (field.type === 'select') {
-    input = document.createElement('select');
-    for (const optionDef of field.options || []) {
-      const option = document.createElement('option');
-      option.value = String(optionDef.value);
-      option.textContent = optionDef.label;
-      input.appendChild(option);
-    }
-    input.value = String(value);
-  } else if (field.type === 'dynamicSelect') {
-    input = document.createElement('select');
-    const placeholder = document.createElement('option');
-    placeholder.value = String(value || '');
-    placeholder.textContent = value ? String(value) : 'Laden...';
-    placeholder.selected = true;
-    input.appendChild(placeholder);
-    if (field.dynamicOptionsUrl) {
-      fetch(field.dynamicOptionsUrl).then(r => r.json()).then((data) => {
-        input.innerHTML = '';
-        for (const z of (data?.zones || [])) {
-          const opt = document.createElement('option');
-          opt.value = z.zone;
-          opt.textContent = z.zone + (z.days_covered > 0 ? ` (${z.days_covered} Tage)` : '');
-          input.appendChild(opt);
+        if (model.discovery.systems.length) {
+          for (const system of model.discovery.systems) {
+            const pickBtn = document.createElement('button');
+            pickBtn.type = 'button';
+            pickBtn.className = 'btn btn-ghost btn-small';
+            pickBtn.dataset.discoveryFieldPath = field.path;
+            pickBtn.dataset.discoverySelectSystem = system.id;
+            pickBtn.textContent = formatSetupDiscoveredSystemOption(system);
+            if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
+            actions.appendChild(pickBtn);
+          }
         }
-        input.value = String(value || 'DE-LU');
-      }).catch(() => { placeholder.textContent = value || 'Fehler'; });
-    }
-  } else {
-    input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : 'text';
-    if (field.min !== undefined) input.min = String(field.min);
-    if (field.max !== undefined) input.max = String(field.max);
-    input.value = value === null || value === undefined ? '' : String(value);
-  }
-
-  input.id = getFieldInputId(field.path);
-  input.dataset.path = field.path;
-  input.dataset.stepId = field.setup?.stepId || '';
-  wrapper.appendChild(input);
-
-  const help = document.createElement('small');
-  help.className = 'field-help';
-  const fieldErrors = setupWizardState.validation.fields[field.path] || [];
-  if (fieldErrors.length) wrapper.classList.add('has-error');
-  help.textContent = fieldErrors.length ? fieldErrors[0] : field.help || '';
-  wrapper.appendChild(help);
-
-  if (model.discovery.visible) {
-    const actions = document.createElement('div');
-    actions.className = 'settings-inline-actions settings-discovery-actions';
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'btn btn-secondary';
-    button.dataset.discoveryRun = field.path;
-    button.disabled = model.discovery.loading || !model.discovery.manufacturer;
-    button.textContent = model.discovery.loading ? 'Suche läuft...' : model.discovery.actionLabel;
-    actions.appendChild(button);
-
-    const note = document.createElement('small');
-    note.className = 'tools-note';
-    note.textContent = model.discovery.message;
-    actions.appendChild(note);
-    wrapper.appendChild(actions);
-
-    if (model.discovery.systems.length) {
-      const picker = document.createElement('div');
-      picker.className = 'settings-inline-actions settings-discovery-picker';
-      for (const system of model.discovery.systems) {
-        const applyButton = document.createElement('button');
-        applyButton.type = 'button';
-        applyButton.className = 'btn btn-ghost';
-        applyButton.dataset.discoveryFieldPath = field.path;
-        applyButton.dataset.discoverySelectSystem = system.id;
-        applyButton.textContent = formatSetupDiscoveredSystemOption(system);
-        if (system.id === model.discovery.selectedSystemId) {
-          applyButton.classList.add('is-active');
-        }
-        picker.appendChild(applyButton);
+        group.appendChild(actions);
       }
-      wrapper.appendChild(picker);
     }
+
+    grid.appendChild(group);
   }
 
-  return wrapper;
+  updateSetupSaveBar();
 }
 
-function renderSetupInheritedInfo(stepId, state = setupWizardState) {
-  if (stepId !== 'dv') return null;
-  const sections = buildInheritedSetupInfoSections(state);
-  if (!sections.length) return null;
-
-  const container = document.createElement('section');
-  container.className = 'compact-note-list setup-inherited-notes';
-
-  for (const section of sections) {
-    const card = document.createElement('article');
-    card.className = 'compact-note';
-
-    const title = document.createElement('strong');
-    title.textContent = section.title;
-    card.appendChild(title);
-
-    for (const note of section.notes) {
-      const line = document.createElement('span');
-      line.textContent = note;
-      card.appendChild(line);
-    }
-
-    container.appendChild(card);
-  }
-
-  return container;
-}
-
-function renderSetupWorkspace() {
-  const container = document.getElementById('setup-workspace');
-  const reviewPanel = document.getElementById('setup-review-panel');
-  if (!container) return;
-  container.replaceChildren();
-  if (reviewPanel) {
-    reviewPanel.replaceChildren();
-    reviewPanel.hidden = true;
-  }
-
-  const activeStep = setupWizardState.steps.find((step) => step.id === setupWizardState.activeStepId);
-  if (!activeStep) return;
-  const stepDescription = describeSetupStep(setupWizardState, activeStep.id);
-
-  const progress = document.createElement('div');
-  progress.className = 'setup-progress';
-
-  const progressHead = document.createElement('div');
-  progressHead.className = 'setup-progress-head';
-
-  const progressLabel = document.createElement('p');
-  progressLabel.className = 'eyebrow setup-progress-label';
-  progressLabel.textContent = stepDescription.progressLabel;
-
-  const progressCount = document.createElement('span');
-  progressCount.className = 'setup-progress-count';
-  progressCount.textContent = stepDescription.fieldCountLabel;
-
-  const progressBar = document.createElement('div');
-  progressBar.className = 'setup-progress-bar';
-  const progressFill = document.createElement('span');
-  progressFill.className = 'setup-progress-fill';
-  progressFill.style.width = `${stepDescription.progressValue}%`;
-  progressBar.appendChild(progressFill);
-
-  progressHead.append(progressLabel, progressCount);
-  progress.append(progressHead, progressBar);
-
-  const header = document.createElement('div');
-  header.className = 'panel-head setup-step-head';
-
-  const titleGroup = document.createElement('div');
-  const eyebrow = document.createElement('p');
-  eyebrow.className = 'card-title';
-  eyebrow.textContent = activeStep.label;
-  const title = document.createElement('h2');
-  title.className = 'section-title';
-  title.textContent = activeStep.title;
-  const intro = document.createElement('p');
-  intro.className = 'field-help setup-step-intro';
-  intro.textContent = activeStep.description;
-  titleGroup.append(eyebrow, title, intro);
-  header.appendChild(titleGroup);
-
-  const callout = document.createElement('section');
-  callout.className = 'setup-callout';
-
-  const calloutEyebrow = document.createElement('p');
-  calloutEyebrow.className = 'card-title setup-callout-eyebrow';
-  calloutEyebrow.textContent = stepDescription.highlight.eyebrow;
-
-  const calloutTitle = document.createElement('h3');
-  calloutTitle.className = 'setup-callout-title';
-  calloutTitle.textContent = stepDescription.highlight.title;
-
-  const calloutBody = document.createElement('p');
-  calloutBody.className = 'setup-callout-body';
-  calloutBody.textContent = stepDescription.highlight.body;
-
-  const calloutNote = document.createElement('p');
-  calloutNote.className = 'setup-callout-note';
-  calloutNote.textContent = stepDescription.note;
-
-  callout.append(calloutEyebrow, calloutTitle, calloutBody, calloutNote);
-
-  if (activeStep.id === REVIEW_STEP_ID) {
-    const review = document.createElement('section');
-    review.className = 'setup-review';
-
-    const reminder = document.createElement('div');
-    reminder.className = 'status-banner warn setup-review-reminder';
-    reminder.textContent = 'Diese Zusammenfassung ist noch nicht gespeichert. Prüfe die Werte und klicke danach auf "Jetzt speichern".';
-    review.appendChild(reminder);
-
-    for (const section of buildSetupReviewSnapshot(setupWizardState)) {
-      const card = document.createElement('article');
-      card.className = 'setup-review-card';
-
-      const cardHead = document.createElement('div');
-      cardHead.className = 'setup-review-head';
-
-      const cardTitle = document.createElement('h3');
-      cardTitle.className = 'setup-review-title';
-      cardTitle.textContent = section.title;
-
-      cardHead.appendChild(cardTitle);
-      card.appendChild(cardHead);
-
-      const list = document.createElement('dl');
-      list.className = 'setup-review-list';
-      for (const entry of section.entries) {
-        const term = document.createElement('dt');
-        term.textContent = entry.label;
-        const value = document.createElement('dd');
-        value.textContent = entry.value;
-        list.append(term, value);
-      }
-      card.appendChild(list);
-
-      if (Array.isArray(section.notes) && section.notes.length) {
-        const notes = document.createElement('ul');
-        notes.className = 'setup-review-notes';
-        for (const note of section.notes) {
-          const item = document.createElement('li');
-          item.textContent = note;
-          notes.appendChild(item);
-        }
-        card.appendChild(notes);
-      }
-
-      review.appendChild(card);
-    }
-
-    container.append(progress, header, callout);
-    if (reviewPanel) {
-      reviewPanel.hidden = false;
-      reviewPanel.appendChild(review);
-    } else {
-      container.appendChild(review);
-    }
-    return;
-  }
-
-  const fields = document.createElement('div');
-  fields.className = 'settings-fields compact setup-fields';
-  for (const field of getVisibleSetupFieldsForStep(setupWizardState, activeStep.id)) {
-    fields.appendChild(renderField(field));
-  }
-
-  const inheritedInfo = renderSetupInheritedInfo(activeStep.id, setupWizardState);
-  if (inheritedInfo) {
-    container.append(progress, header, callout, fields, inheritedInfo);
-    return;
-  }
-
-  container.append(progress, header, callout, fields);
-}
-
-function renderSetupErrors() {
-  const container = document.getElementById('setup-errors');
-  if (!container) return;
-  container.replaceChildren();
-  container.className = 'status-banner';
-
-  const stepErrors = setupWizardState.validation.summary.filter((entry) => entry.stepId === setupWizardState.activeStepId);
-  if (!stepErrors.length) {
-    container.classList.add('info');
-    container.textContent = 'Dieser Schritt ist bereit. Mit Weiter gehst du zur naechsten Setup-Seite.';
-    return;
-  }
-
-  container.classList.add('error');
-  const headline = document.createElement('strong');
-  headline.textContent = `${stepErrors.length} Angabe${stepErrors.length === 1 ? '' : 'n'} noch prüfen`;
-  const intro = document.createElement('p');
-  intro.className = 'setup-error-intro';
-  intro.textContent = 'Bitte diese Punkte korrigieren, bevor du in den naechsten Setup-Schritt wechselst.';
-  const list = document.createElement('ul');
-  list.className = 'setup-error-list';
-  for (const entry of stepErrors) {
-    const item = document.createElement('li');
-    item.textContent = entry.message;
-    list.appendChild(item);
-  }
-  container.append(headline, intro, list);
-}
-
-function renderSetupOutcome() {
-  const container = document.getElementById('setup-save-outcome');
-  if (!container) return;
-  container.replaceChildren();
-  container.hidden = true;
-  container.className = 'setup-save-outcome';
-
-  const outcome = setupWizardState.lastSaveOutcome;
-  if (!outcome) return;
-
-  container.hidden = false;
-  container.classList.add(outcome.kind === 'warn' ? 'is-warn' : 'is-success');
-
-  const card = document.createElement('section');
-  card.className = 'setup-save-card';
-
-  const title = document.createElement('h3');
-  title.className = 'setup-save-title';
-  title.textContent = outcome.title;
-
-  const summary = document.createElement('p');
-  summary.className = 'setup-save-summary';
-  summary.textContent = outcome.summary;
-
-  card.append(title, summary);
-
-  if (Array.isArray(outcome.restartItems) && outcome.restartItems.length) {
-    const restartTitle = document.createElement('strong');
-    restartTitle.className = 'setup-save-subtitle';
-    restartTitle.textContent = 'Neustart oder Neuverbindung noetig für:';
-    const restartList = document.createElement('ul');
-    restartList.className = 'setup-save-list';
-    for (const item of outcome.restartItems) {
-      const entry = document.createElement('li');
-      entry.textContent = item;
-      restartList.appendChild(entry);
-    }
-    card.append(restartTitle, restartList);
-  }
-
-  if (Array.isArray(outcome.warnings) && outcome.warnings.length) {
-    const warningTitle = document.createElement('strong');
-    warningTitle.className = 'setup-save-subtitle';
-    warningTitle.textContent = 'Backend-Warnungen';
-    const warningList = document.createElement('ul');
-    warningList.className = 'setup-save-list setup-save-list-warnings';
-    for (const warning of outcome.warnings) {
-      const entry = document.createElement('li');
-      entry.textContent = warning;
-      warningList.appendChild(entry);
-    }
-    card.append(warningTitle, warningList);
-  }
-
-  if (Array.isArray(outcome.nextSteps) && outcome.nextSteps.length) {
-    const nextTitle = document.createElement('strong');
-    nextTitle.className = 'setup-save-subtitle';
-    nextTitle.textContent = 'Als Naechstes';
-    const nextList = document.createElement('ul');
-    nextList.className = 'setup-save-list';
-    for (const step of outcome.nextSteps) {
-      const entry = document.createElement('li');
-      entry.textContent = step;
-      nextList.appendChild(entry);
-    }
-    card.append(nextTitle, nextList);
-  }
-
-  container.appendChild(card);
-}
-
-function renderSetupNav() {
-  const container = document.getElementById('setup-nav');
-  if (!container) return;
-  container.replaceChildren();
-
-  const currentIndex = getCurrentStepIndex(setupWizardState);
-  const isLastStep = currentIndex === setupWizardState.stepOrder.length - 1;
-  const isReviewStep = setupWizardState.activeStepId === REVIEW_STEP_ID;
-  const stepDescription = describeSetupStep(setupWizardState);
-
-  const copy = document.createElement('div');
-  copy.className = 'setup-nav-copy';
-
-  const copyTitle = document.createElement('strong');
-  copyTitle.textContent = isReviewStep ? 'Zusammenfassung prüfen und dann oben speichern' : 'Weiter zum naechsten Fokusblock';
-
-  const copyBody = document.createElement('span');
-  copyBody.textContent = stepDescription.note || 'Jeder Schritt zeigt nur die Felder, die du für diesen Abschnitt wirklich brauchst.';
-
-  copy.append(copyTitle, copyBody);
-
-  const backButton = document.createElement('button');
-  backButton.type = 'button';
-  backButton.className = 'btn btn-ghost';
-  backButton.dataset.action = 'back';
-  backButton.disabled = currentIndex === 0;
-  backButton.textContent = 'Zurück';
-
-  const nextButton = document.createElement('button');
-  nextButton.type = 'button';
-  nextButton.className = 'btn btn-primary';
-  nextButton.dataset.action = 'next';
-  nextButton.hidden = isReviewStep;
-  nextButton.textContent = getSetupNavActionLabel(setupWizardState);
-
-  container.append(copy, backButton, nextButton);
+function updateSetupSaveBar() {
+  const text = document.getElementById('setupSaveBarText');
+  if (!text) return;
+  const required = getSetupFieldDefinitions().filter(f => f.setup?.required);
+  const empty = required.filter(f => {
+    const input = document.getElementById(getFieldInputId(f.path));
+    if (!input) return true;
+    return f.type === 'boolean' ? false : !String(input.value).trim();
+  });
+  text.textContent = empty.length ? `${empty.length} Pflichtfeld${empty.length === 1 ? '' : 'er'} offen` : 'Bereit';
+  document.body.classList.add('has-changes');
 }
 
 function renderSetupWizard() {
-  renderPrimarySetupAction();
-  renderSetupSteps();
-  renderSetupWorkspace();
-  renderSetupErrors();
-  renderSetupOutcome();
-  renderSetupNav();
+  renderSetupForm();
   updateMeta();
 }
 
 function syncActiveWorkspaceFieldsToDraft() {
   const nextDraft = clone(setupWizardState.draftConfig || {});
-  for (const field of getVisibleSetupFieldsForStep(setupWizardState, setupWizardState.activeStepId)) {
-    const input = document.getElementById(getFieldInputId(field.path));
-    if (!input) continue;
-    setPath(nextDraft, field.path, parseFieldElementValue(field, input));
+  const steps = getSetupStepDefinitions();
+  for (const step of steps) {
+    for (const field of getVisibleSetupFieldsForStep(setupWizardState, step.id)) {
+      const input = document.getElementById(getFieldInputId(field.path));
+      if (!input) continue;
+      setPath(nextDraft, field.path, parseFieldElementValue(field, input));
+    }
   }
   if (hasPath(nextDraft, 'schedule.timezone')) {
     setPath(nextDraft, 'epex.timezone', getPath(nextDraft, 'schedule.timezone'));
@@ -1368,93 +886,9 @@ async function importSetupFile(file) {
   }
 }
 
-function handleWizardStepNavigation(requestedStepId) {
-  const currentIndex = getCurrentStepIndex(setupWizardState);
-  const requestedIndex = setupWizardState.stepOrder.indexOf(requestedStepId);
-  syncActiveWorkspaceFieldsToDraft();
-
-  if (requestedIndex > currentIndex) {
-    const nextState = goToNextSetupStep(setupWizardState);
-    setSetupWizardState(nextState);
-    if (nextState.activeStepId !== requestedStepId && nextState.activeStepId === setupWizardState.activeStepId) {
-      moveToFirstInvalidStep(nextState);
-      renderSetupWizard();
-      const message = requestedStepId === REVIEW_STEP_ID
-        ? buildReviewLockedMessage(setupWizardState)
-        : `Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(setupWizardState)}`;
-      setBanner(message, 'error');
-      return;
-    }
-  } else {
-    setSetupWizardState(setActiveSetupStep(setupWizardState, requestedStepId));
-  }
-
-  renderSetupWizard();
-}
-
-function handleWizardNav(action) {
-  const syncedState = syncActiveWorkspaceFieldsToDraft();
-  if (action === 'back') {
-    setSetupWizardState(goToPreviousSetupStep(syncedState));
-    renderSetupWizard();
-    return;
-  }
-
-  if (shouldPrimarySetupActionSave(syncedState)) {
-    if (syncedState.validation.isBlocking) {
-      moveToFirstInvalidStep(syncedState);
-      renderSetupWizard();
-      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
-      return;
-    }
-    saveSetup(clone(syncedState.draftConfig || {})).catch((error) => {
-      setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
-    });
-    return;
-  }
-
-  const nextState = goToNextSetupStep(syncedState);
-  setSetupWizardState(nextState);
-  if (nextState.activeStepId === syncedState.activeStepId) {
-    const requestedStepId = syncedState.stepOrder[getCurrentStepIndex(syncedState) + 1];
-    if (requestedStepId === REVIEW_STEP_ID && nextState.validation.isBlocking) moveToFirstInvalidStep(nextState);
-    renderSetupWizard();
-    const message = requestedStepId === REVIEW_STEP_ID
-      ? buildReviewLockedMessage(nextState)
-      : `Bitte zuerst die Pflichtangaben im aktuellen Schritt korrigieren. ${summarizeBlockingErrors(nextState)}`;
-    setBanner(message, 'error');
-    return;
-  }
-
-  renderSetupWizard();
-  setBanner('Schritt gespeichert. Du kannst weiter zur naechsten Setup-Seite gehen.', 'info');
-}
-
 if (typeof document !== 'undefined') {
-  document.getElementById('setupSaveBtn')?.addEventListener('click', () => {
-    const syncedState = syncActiveWorkspaceFieldsToDraft();
-    const nextState = validateSetupWizardState(syncedState);
-    setSetupWizardState(nextState);
-    if (nextState.validation.isBlocking) {
-      moveToFirstInvalidStep(nextState);
-      renderSetupWizard();
-      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
-      return;
-    }
-
-    if (!shouldPrimarySetupActionSave(nextState)) {
-      setSetupWizardState(setActiveSetupStep(nextState, REVIEW_STEP_ID));
-      renderSetupWizard();
-      setBanner('Alle Pflichtangaben sind bereit. Bitte pruefe jetzt die Zusammenfassung vor dem Speichern.', 'info');
-      return;
-    }
-
-    saveSetup(clone(nextState.draftConfig || {})).catch((error) => {
-      setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
-    });
-  });
-
-  document.getElementById('setupImportBtn')?.addEventListener('click', () => {
+  document.getElementById('setupImportLink')?.addEventListener('click', (event) => {
+    event.preventDefault();
     document.getElementById('setupImportFile')?.click();
   });
 
@@ -1464,28 +898,40 @@ if (typeof document !== 'undefined') {
     event.target.value = '';
   });
 
-  document.getElementById('setup-workspace')?.addEventListener('input', (event) => {
-    const path = event.target?.dataset?.path;
-    if (!path) return;
-    syncActiveWorkspaceFieldsToDraft();
-    renderSetupErrors();
-    renderSetupSteps();
+  document.getElementById('setupSaveBtn')?.addEventListener('click', () => {
+    const syncedState = syncActiveWorkspaceFieldsToDraft();
+    const nextState = validateSetupWizardState(syncedState);
+    setSetupWizardState(nextState);
+    if (nextState.validation.isBlocking) {
+      renderSetupWizard();
+      setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
+      return;
+    }
+    saveSetup(clone(nextState.draftConfig || {})).catch((error) => {
+      setBanner(`Setup konnte nicht gespeichert werden: ${error.message}`, 'error');
+    });
   });
 
-  document.getElementById('setup-workspace')?.addEventListener('change', (event) => {
+  document.getElementById('setupGrid')?.addEventListener('change', (event) => {
     const path = event.target?.dataset?.path;
     if (!path) return;
-    syncActiveWorkspaceFieldsToDraft();
     if (path === 'manufacturer') setupDiscoveryStates = {};
-    if (path === 'victron.transport') {
+    syncActiveWorkspaceFieldsToDraft();
+    if (path === 'victron.transport' || path === 'manufacturer') {
       renderSetupWizard();
       return;
     }
-    renderSetupErrors();
-    renderSetupSteps();
+    updateSetupSaveBar();
   });
 
-  document.getElementById('setup-workspace')?.addEventListener('click', (event) => {
+  document.getElementById('setupGrid')?.addEventListener('input', (event) => {
+    const path = event.target?.dataset?.path;
+    if (!path) return;
+    syncActiveWorkspaceFieldsToDraft();
+    updateSetupSaveBar();
+  });
+
+  document.getElementById('setupGrid')?.addEventListener('click', (event) => {
     const runButton = event.target.closest('[data-discovery-run]');
     if (runButton) {
       triggerSetupFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
@@ -1500,18 +946,6 @@ if (typeof document !== 'undefined') {
       selectionButton.dataset.discoveryFieldPath,
       selectionButton.dataset.discoverySelectSystem
     );
-  });
-
-  document.getElementById('setup-steps')?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-step-id]');
-    if (!button || button.disabled) return;
-    handleWizardStepNavigation(button.dataset.stepId);
-  });
-
-  document.getElementById('setup-nav')?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-action]');
-    if (!button) return;
-    handleWizardNav(button.dataset.action);
   });
 
   window.addEventListener('dvhub:unauthorized', () => {
