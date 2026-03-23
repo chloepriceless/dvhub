@@ -2907,8 +2907,8 @@ const web = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
     try {
-      const body = await readBody(req);
-      const { channel } = JSON.parse(body);
+      const body = await parseBody(req);
+      const channel = body?.channel;
       if (channel !== 'stable' && channel !== 'dev') {
         return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
       }
