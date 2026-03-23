@@ -3941,3 +3941,44 @@ button {
   .settings-layout { grid-template-columns: 1fr; }
   .settings-layout-nav { position: static; }
 }
+
+/* ============================================================
+   SETTINGS TABS (horizontal tab bar for merged settings page)
+   ============================================================ */
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--flow-border);
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.settings-tab {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  color: var(--flow-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.settings-tab:hover { color: var(--flow-text); }
+.settings-tab.is-active {
+  color: var(--flow-text);
+  border-bottom-color: var(--chart-positive);
+}
+.settings-content {
+  padding: 0 16px 16px;
+}
+.system-tab-content .page-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+@media (max-width: 768px) {
+  .system-tab-content .page-grid { grid-template-columns: 1fr; }
+}

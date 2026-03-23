@@ -26,8 +26,7 @@
         <a href="/">Leitstand</a>
         <a href="/history.html">Historie</a>
         <a href="/explorer.html">Explorer</a>
-        <a href="/settings.html">Einrichtung</a>
-        <a href="/tools.html">Wartung</a>
+        <a href="/settings.html">Einstellungen</a>
         <a class="is-active" href="/setup.html">Setup</a>
       </nav>
       <div class="topbar-right"></div>
@@ -36,54 +35,37 @@
     <main class="page-content">
       <!-- Page header -->
       <div class="page-header-card">
-        <div class="page-header-card-copy">
-          <p class="page-kicker">Einrichtung</p>
-          <h1>DVhub Inbetriebnahme</h1>
-          <p class="page-subtitle">Der Assistent führt dich durch die Pflichtangaben und übergibt danach in die vollständige Einrichtung.</p>
-        </div>
-        <div class="page-header-card-actions">
-          <a class="btn btn-ghost" href="/settings.html">Zur Einrichtung</a>
-          <a class="btn btn-primary" href="/">Zum Leitstand</a>
-        </div>
-      </div>
-
-      <!-- Setup status card -->
-      <div class="sub-card" style="margin-bottom:10px;">
         <div class="panel-head">
           <div>
-            <p class="card-kicker">Setup-Status</p>
-            <h2 class="section-title">Ersteinrichtung</h2>
+            <p class="card-kicker">Setup</p>
+            <h1 class="section-title" style="font-size:1.4rem;">DVhub Inbetriebnahme</h1>
+            <div id="setupBanner" class="status-banner" style="margin-top:6px;">Setup wird geladen...</div>
+            <div id="setupMeta" class="meta">-</div>
           </div>
-          <div style="display:flex;gap:8px;">
-            <button id="setupSaveBtn" class="btn btn-primary btn-small" type="button">Zur Prüfung</button>
-            <button id="setupImportBtn" class="btn btn-ghost btn-small" type="button">Vorhandene Config importieren</button>
+          <div class="controls" style="display:flex;gap:8px;">
+            <button id="setupSaveBtn" class="btn btn-primary btn-small" type="button">Zur Pr&uuml;fung</button>
+            <button id="setupImportBtn" class="btn btn-ghost btn-small" type="button">Config importieren</button>
           </div>
         </div>
-        <div id="setupBanner" class="status-banner" style="margin-top:8px;">Setup wird geladen...</div>
-        <div id="setupMeta" class="meta" style="margin-top:4px;">-</div>
-        <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
       </div>
+      <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
 
-      <!-- Setup shell: stepper sidebar + workspace -->
+      <!-- Setup wizard -->
       <div class="sub-card">
-        <div id="setup-shell" class="settings-shell setup-shell" style="display:grid;grid-template-columns:200px 1fr;gap:16px;align-items:start;">
-          <aside class="settings-sidebar setup-stepper" aria-label="Setup-Schritte" style="position:sticky;top:calc(48px + 16px);">
-            <div class="settings-sidebar-sticky">
-              <div class="settings-sidebar-head">
-                <p class="card-kicker">Ablauf</p>
-                <h2 class="section-title">Schritte</h2>
-                <p class="meta" style="margin-top:4px;">Der Assistent bleibt bewusst kompakt und führt von links nach rechts durch die Kernentscheidungen.</p>
-              </div>
-              <div id="setup-progress" class="setup-progress" style="margin-top:10px;"></div>
-              <div id="setup-steps" class="settings-sidebar-nav" style="margin-top:8px;"></div>
-            </div>
-          </aside>
+        <div id="setup-shell" class="setup-shell" style="display:flex;flex-direction:column;gap:16px;">
 
-          <section class="settings-workspace setup-stage">
+          <!-- Progress dots -->
+          <div id="setup-progress" class="setup-progress" style="display:flex;justify-content:center;gap:12px;padding:12px 0;"></div>
+
+          <!-- Step navigation (rendered by setup.js) -->
+          <div id="setup-steps" style="display:none;"></div>
+
+          <!-- Workspace -->
+          <section class="setup-stage" style="min-height:300px;">
             <div id="setup-callout" class="setup-callout"></div>
             <div id="setup-errors" class="status-banner" hidden></div>
             <div id="setup-workspace" class="settings-workspace-panel"></div>
-            <div id="setup-nav" class="panel-head" style="margin-top:12px;"></div>
+            <div id="setup-nav" class="panel-head" style="margin-top:16px;"></div>
           </section>
         </div>
       </div>
