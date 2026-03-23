@@ -115,10 +115,10 @@ function initFlowDiagram() {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const lines = [
-    { id: 'flowLinePV', d: 'M 250,55 C 250,95 250,135 250,165', color: cssVar('--node-pv', '#e3b341') },
+    { id: 'flowLinePV', d: 'M 250,40 C 250,75 250,110 250,150', color: cssVar('--node-pv', '#e3b341') },
     { id: 'flowLineBat', d: 'M 70,200 C 120,200 160,200 195,200', color: cssVar('--node-bat', '#3fb950') },
     { id: 'flowLineHouse', d: 'M 305,200 C 340,200 380,200 430,200', color: cssVar('--node-house', '#58a6ff') },
-    { id: 'flowLineGrid', d: 'M 250,235 C 250,275 250,315 250,355', color: cssVar('--ok', '#3fb950') }
+    { id: 'flowLineGrid', d: 'M 250,250 C 250,290 250,330 250,380', color: cssVar('--ok', '#3fb950') }
   ];
 
   for (const { id, d, color } of lines) {

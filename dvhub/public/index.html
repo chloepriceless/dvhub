@@ -81,6 +81,15 @@
           <div class="metric-row"><span>Letzte Modbus-Abfrage</span><strong id="kaModbus">-</strong></div>
         </div>
 
+        <!-- Netz-Detail Card (L1/L2/L3 aus Flow-Knoten hierher verschoben) -->
+        <div class="rail-card" data-accent="ctrl">
+          <p class="card-kicker">⚏ Netzphasen</p>
+          <div class="metric-row"><span>L1</span><strong id="l1">-</strong></div>
+          <div class="metric-row"><span>L2</span><strong id="l2">-</strong></div>
+          <div class="metric-row"><span>L3</span><strong id="l3">-</strong></div>
+          <div class="metric-row"><span>Gesamt</span><strong id="total">-</strong></div>
+        </div>
+
       </aside>
 
       <!-- Flow Center -->
@@ -111,17 +120,11 @@
             <div class="flow-node-sub">Verbrauch</div>
           </div>
 
-          <!-- Grid node overlay (bottom) -->
+          <!-- Grid node overlay (bottom) — compact, detail moved to left rail -->
           <div class="flow-node flow-node-grid" role="img" aria-label="Netzleistung">
             <div class="flow-node-icon">⚏</div>
             <div class="flow-node-value" id="flowNodeGridValue" style="color:var(--ok);">- W</div>
             <div class="flow-node-label" id="flowNodeGridLabel">Netz</div>
-            <div class="grid-detail">
-              <div class="metric-row"><span>L1</span><strong id="l1">-</strong></div>
-              <div class="metric-row"><span>L2</span><strong id="l2">-</strong></div>
-              <div class="metric-row"><span>L3</span><strong id="l3">-</strong></div>
-              <div class="metric-row"><span>Gesamt</span><strong id="total">-</strong></div>
-            </div>
           </div>
 
           <!-- Center ring -->
@@ -272,7 +275,7 @@
         <div class="meta" id="controlMsg">-</div>
       </div>
 
-      <!-- Automation + Log Card -->
+      <!-- Automation Card -->
       <div class="bottom-card">
         <section id="automationPanel">
           <p class="card-title">Kleine Börsenautomatik</p>
@@ -297,12 +300,13 @@
             <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
           </div>
         </section>
+      </div>
 
-        <section style="margin-top:12px;">
-          <p class="card-title">Systemprotokoll</p>
-          <h2 class="section-title">Letzte Events</h2>
-          <pre id="logBox" class="log-box">-</pre>
-        </section>
+      <!-- Systemprotokoll Card (separate) -->
+      <div class="bottom-card">
+        <p class="card-title">Systemprotokoll</p>
+        <h2 class="section-title">Letzte Events</h2>
+        <pre id="logBox" class="log-box">-</pre>
       </div>
 
     </div><!-- /.bottom-panel -->
