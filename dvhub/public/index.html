@@ -81,39 +81,6 @@
           <div class="metric-row"><span>Letzte Modbus-Abfrage</span><strong id="kaModbus">-</strong></div>
         </div>
 
-        <!-- Netz-Detail Card -->
-        <div class="rail-card" data-accent="ctrl">
-          <p class="card-kicker">⚏ Netzphasen</p>
-          <div class="metric-row"><span>L1</span><strong id="l1">-</strong></div>
-          <div class="metric-row"><span>L2</span><strong id="l2">-</strong></div>
-          <div class="metric-row"><span>L3</span><strong id="l3">-</strong></div>
-          <div class="metric-row"><span>Gesamt</span><strong id="total">-</strong></div>
-        </div>
-
-        <!-- Price Chart — in der linken Rail unter Netzphasen -->
-        <div class="rail-card rail-chart-card">
-          <div class="panel-head">
-            <p class="card-title">Day-Ahead-Preise (ct/kWh)</p>
-            <button id="refreshEpex" class="btn btn-primary btn-small" type="button">EPEX aktualisieren</button>
-          </div>
-          <div id="priceChartContainer" style="width:100%;position:relative;">
-            <canvas id="priceChartCanvas"></canvas>
-          </div>
-          <div id="tooltip" style="display:none;">-</div>
-          <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
-            <div class="chart-selection-copy">
-              <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
-              <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
-            </div>
-            <button id="createSelectionScheduleBtn" class="btn btn-ghost btn-small" type="button">Steuerung anlegen</button>
-          </div>
-          <div class="chart-comparison-summary">
-            <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
-            <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
-          </div>
-          <div class="meta" id="chartMeta">-</div>
-        </div>
-
       </aside>
 
       <!-- Flow Center -->
@@ -149,6 +116,15 @@
             <div class="flow-node-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L12 6"/><path d="M8 6 L16 6"/><path d="M9 6 L7 14"/><path d="M15 6 L17 14"/><path d="M7 14 L17 14"/><path d="M8 14 L5 22"/><path d="M16 14 L19 22"/><path d="M12 14 L12 22"/><path d="M4 10 L8.5 10"/><path d="M15.5 10 L20 10"/></svg></div>
             <div class="flow-node-value" id="flowNodeGridValue" style="color:var(--ok);">- W</div>
             <div class="flow-node-label" id="flowNodeGridLabel">Netz</div>
+          </div>
+
+          <!-- Netzphasen detail — rechts neben Grid-Knoten -->
+          <div class="flow-grid-detail">
+            <p class="card-kicker" style="font-size:0.6rem;margin-bottom:4px;">Netzphasen</p>
+            <div class="metric-row"><span>L1</span><strong id="l1">-</strong></div>
+            <div class="metric-row"><span>L2</span><strong id="l2">-</strong></div>
+            <div class="metric-row"><span>L3</span><strong id="l3">-</strong></div>
+            <div class="metric-row"><span>Ges.</span><strong id="total">-</strong></div>
           </div>
 
           <!-- Center ring -->
@@ -230,6 +206,32 @@
         </div>
 
       </aside>
+
+      <!-- Chart spanning left rail + flow center -->
+      <div class="chart-span">
+        <div class="chart-span-card">
+          <div class="panel-head">
+            <p class="card-title">Day-Ahead-Preise (ct/kWh)</p>
+            <button id="refreshEpex" class="btn btn-primary btn-small" type="button">EPEX aktualisieren</button>
+          </div>
+          <div id="priceChartContainer" style="width:100%;position:relative;">
+            <canvas id="priceChartCanvas"></canvas>
+          </div>
+          <div id="tooltip" style="display:none;">-</div>
+          <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
+            <div class="chart-selection-copy">
+              <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
+              <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
+            </div>
+            <button id="createSelectionScheduleBtn" class="btn btn-ghost btn-small" type="button">Steuerung anlegen</button>
+          </div>
+          <div class="chart-comparison-summary">
+            <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
+            <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
+          </div>
+          <div class="meta" id="chartMeta">-</div>
+        </div>
+      </div>
     </div><!-- /.main-body -->
 
     <!-- 3. Bottom Panel (chart, schedule, automation+log) -->
