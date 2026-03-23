@@ -237,27 +237,30 @@ button {
   border-color: rgba(88, 166, 255, 0.3);
 }
 
-/* --- Flow center --- */
+/* --- Flow center — column: flow diagram on top, chart below --- */
 .flow-center {
   display: flex;
-  align-items: stretch;
-  justify-content: center;
+  flex-direction: column;
   position: relative;
   padding: 6px;
+  gap: 8px;
+  overflow-y: auto;
 }
 
-/* --- Bottom panel --- */
+.flow-chart-card {
+  background: var(--flow-surface);
+  border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+}
+
+/* --- Bottom panel — Zeitplan, Automation, Log --- */
 .bottom-panel {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   padding: 8px;
   border-top: 1px solid var(--flow-border);
-}
-
-/* Chart spans full width on its own row */
-.bottom-panel > :first-child {
-  grid-column: 1 / -1;
 }
 
 .bottom-card {
