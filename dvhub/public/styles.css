@@ -171,7 +171,7 @@ button {
 /* --- Main body — 3-column grid --- */
 .main-body {
   display: grid;
-  grid-template-columns: 260px 1fr 280px;
+  grid-template-columns: 300px 1fr 320px;
   min-height: 0;
   overflow: hidden;
 }
@@ -205,7 +205,7 @@ button {
   background: var(--flow-surface);
   border: 1px solid var(--flow-border);
   border-radius: var(--flow-radius);
-  padding: 10px;
+  padding: 14px;
   backdrop-filter: blur(4px);
 }
 
@@ -240,7 +240,7 @@ button {
 /* --- Flow center --- */
 .flow-center {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   position: relative;
   padding: 6px;
@@ -274,24 +274,24 @@ button {
 /* --- Text components --- */
 .card-kicker,
 .card-title {
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--flow-text-muted);
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .section-title {
   font-family: var(--font-brand);
-  font-size: 1rem;
+  font-size: 1.1rem;
   font-weight: 600;
   color: var(--flow-text);
 }
 
 .card-value {
   font-family: var(--font-brand);
-  font-size: 1.6rem;
+  font-size: 1.8rem;
   font-weight: 700;
   color: var(--flow-text);
   line-height: 1;
@@ -325,8 +325,8 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.75rem;
-  padding: 2px 0;
+  font-size: 0.85rem;
+  padding: 3px 0;
 }
 
 .metric-row span:first-child {
@@ -417,8 +417,10 @@ button {
 /* --- Flow diagram --- */
 .flow-diagram {
   width: 100%;
-  max-width: 500px;
-  height: 340px;
+  max-width: 460px;
+  height: 100%;
+  max-height: 50vh;
+  min-height: 280px;
   position: relative;
   margin: 0 auto;
 }
