@@ -172,7 +172,7 @@ button {
 .main-body {
   display: grid;
   grid-template-columns: 260px 1fr 280px;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto auto;
   grid-template-areas:
     "left-rail  flow-center  right-rail"
     "chart-area chart-area   right-rail";
