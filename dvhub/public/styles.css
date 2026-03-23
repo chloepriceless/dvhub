@@ -172,7 +172,7 @@ button {
 .main-body {
   display: grid;
   grid-template-columns: 260px 1fr 280px;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr;
   grid-template-areas:
     "left-rail  flow-center  right-rail"
     "chart-area chart-area   right-rail";
@@ -185,7 +185,7 @@ button {
 .rail-right { grid-area: right-rail; }
 .chart-span {
   grid-area: chart-area;
-  padding: 6px 8px;
+  padding: 0 8px 6px;
 }
 
 /* --- Rails (left/right sidebars) --- */
@@ -260,7 +260,7 @@ button {
 /* --- Flow center --- */
 .flow-center {
   display: flex;
-  align-items: center;
+  align-items: start;
   justify-content: center;
   position: relative;
   padding: 6px;
@@ -434,9 +434,7 @@ button {
 .flow-diagram {
   width: 100%;
   max-width: 460px;
-  height: 100%;
-  max-height: 50vh;
-  min-height: 320px;
+  height: 380px;
   position: relative;
   margin: 0 auto;
   overflow: visible;
