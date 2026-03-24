@@ -24,10 +24,10 @@
         <img src="/assets/dvhub.jpg" alt="DVhub Logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;">
         <span>DVhub</span>
       </div>
-      <button class="topbar-burger" aria-label="Menü öffnen" aria-expanded="false"
-        ontouchstart="" onclick="var n=document.querySelector('.topbar-nav');this.classList.toggle('is-open');n.classList.toggle('is-open')">
+      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
+      <label for="menuToggle" class="topbar-burger" aria-label="Menü öffnen">
         <span></span><span></span><span></span>
-      </button>
+      </label>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a class="is-active" href="/">Leitstand</a>
         <a href="/history.html">Historie</a>
