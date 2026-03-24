@@ -246,7 +246,6 @@ button {
   border: 1px solid var(--flow-border);
   border-radius: var(--flow-radius);
   padding: 12px;
-  overflow-x: auto;
   max-width: 100%;
   box-sizing: border-box;
 }
@@ -1190,9 +1189,21 @@ button {
   .card-value { font-size: 1.6rem; }
   .chart-span { max-width: 100vw; overflow-x: auto; }
 
-  /* Schedule + automation cards — horizontal scroll if needed */
-  .chart-span-card { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: calc(100vw - 16px); }
-  .sched-table { min-width: 600px; }
+  /* Schedule table — compact for phone */
+  .sched-table { font-size: 0.5rem; }
+  .sched-table td { padding: 2px 2px; }
+  .sched-table th { padding: 2px 2px; font-size: 0.45rem; letter-spacing: 0; }
+  .sched-table input[type="number"],
+  .sched-table input[type="time"] {
+    width: 50px;
+    font-size: 0.55rem;
+    padding: 2px 3px;
+    min-height: 24px;
+  }
+  .sched-table input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+  }
 
   /* Automation config + tier grid — single column on phone */
   .automation-config-grid,
