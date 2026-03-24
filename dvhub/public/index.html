@@ -27,13 +27,6 @@
       <button class="topbar-burger" id="burgerBtn" aria-label="Menü öffnen" aria-expanded="false">
         <span></span><span></span><span></span>
       </button>
-      <script>
-        document.getElementById('burgerBtn').addEventListener('click', function() {
-          this.classList.toggle('is-open');
-          document.querySelector('.topbar-nav').classList.toggle('is-open');
-          this.setAttribute('aria-expanded', this.classList.contains('is-open'));
-        });
-      </script>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a class="is-active" href="/">Leitstand</a>
         <a href="/history.html">Historie</a>
@@ -328,5 +321,12 @@
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
   <script src="/app.js"></script>
+  <script>
+    document.getElementById('burgerBtn').addEventListener('click', function() {
+      this.classList.toggle('is-open');
+      document.querySelector('.topbar-nav').classList.toggle('is-open');
+      this.setAttribute('aria-expanded', this.classList.contains('is-open'));
+    });
+  </script>
 </body>
 </html>

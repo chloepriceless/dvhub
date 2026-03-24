@@ -1025,7 +1025,6 @@ button {
     order: -1;
     flex-direction: column;
     align-items: center;
-    overflow: hidden;
   }
 
   .rail {
@@ -1154,7 +1153,23 @@ button {
   .flow-node-label { font-size: 0.55rem; }
   .flow-node-sub { font-size: 0.55rem; }
 
-  .flow-node-grid { min-width: 90px; }
+  /* Reposition nodes for narrow screens */
+  .flow-node-pv {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .flow-node-bat {
+    left: 2px;
+  }
+  .flow-node-house {
+    right: 2px;
+  }
+  .flow-node-grid {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 0;
+    min-width: 90px;
+  }
 
   .center-ring {
     width: 80px;
