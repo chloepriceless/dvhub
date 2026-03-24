@@ -1579,6 +1579,7 @@ async function pollMeter() {
 
   const pvDc = Number(state.victron.pvPowerW || 0);
   const pvAc = Number(state.victron.acPvL1W || 0) + Number(state.victron.acPvL2W || 0) + Number(state.victron.acPvL3W || 0);
+  state.victron.pvAcW = Number(pvAc.toFixed(3));
   state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
 
   const gridW = state.meter.grid_total_w || 0;

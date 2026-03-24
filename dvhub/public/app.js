@@ -54,7 +54,7 @@ function setControlMsg(text, isErr = false) {
 function updateFlowDiagram(status) {
   const gridTotal = Number(status?.meter?.grid_total_w || 0);
   const batPower = Number(status?.victron?.batteryPowerW || 0);
-  const pvPower = Number(status?.victron?.pvPowerW || 0);
+  const pvPower = Number(status?.victron?.pvTotalW || status?.victron?.pvPowerW || 0);
   const loadW = Number(status?.victron?.selfConsumptionW || 0);
   const soc = Number(status?.victron?.soc || 0);
 
@@ -1241,6 +1241,7 @@ function renderDashboardStatus(status) {
   setText('soc', vic.soc == null ? '-' : `${vic.soc} %`);
   setText('batP', vic.batteryPowerW == null ? '-' : `${vic.batteryPowerW} W`);
   setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
+  setText('pvAc', vic.pvAcW == null ? '-' : `${vic.pvAcW} W`);
   setText('pvTotal', vic.pvTotalW == null ? '-' : `${vic.pvTotalW} W`);
   setText('gridSetpoint', vic.gridSetpointW == null ? '-' : `${vic.gridSetpointW} W`);
   const minSocRenderState = computeMinSocRenderState({
