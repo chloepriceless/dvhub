@@ -7,7 +7,9 @@ import path from 'node:path';
 import {
   createBundesnetzagenturApplicableValueService,
   extractBundesnetzagenturApplicableValuePublicationLinks,
-  parseBundesnetzagenturApplicableValueSheet
+  parseBundesnetzagenturApplicableValueSheet,
+  isRoundedFullFeedLabel,
+  selectApplicableValueCtKwh
 } from '../bundesnetzagentur-applicable-values.js';
 
 test('extractBundesnetzagenturApplicableValuePublicationLinks keeps unique xlsx publication links in page order', () => {
@@ -250,4 +252,157 @@ test('createBundesnetzagenturApplicableValueService persists fetched reference d
   const persisted = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
   assert.equal(persisted.updatedAt, '2026-03-10T12:00:00.000Z');
   assert.deepEqual(persisted.applicableValueTiersByMonth['2023-09'][0], { upToKwp: 10, ctKwh: 8.2 });
+});
+
+// ── isRoundedFullFeedLabel ──────────────────────────────────────────────────
+
+test('isRoundedFullFeedLabel returns true for "Volleinspeisung ... gerundet"', () => {
+  assert.equal(isRoundedFullFeedLabel('Volleinspeisung ... gerundet'), true);
+});
+
+test('isRoundedFullFeedLabel returns true for "volleinspeisung (gerundet)"', () => {
+  assert.equal(isRoundedFullFeedLabel('volleinspeisung (gerundet)'), true);
+});
+
+test('isRoundedFullFeedLabel returns false for "Teileinspeisung ... gerundet"', () => {
+  assert.equal(isRoundedFullFeedLabel('Teileinspeisung ... gerundet'), false);
+});
+
+test('isRoundedFullFeedLabel returns false for "Volleinspeisung" without gerundet', () => {
+  assert.equal(isRoundedFullFeedLabel('Volleinspeisung'), false);
+});
+
+// ── parseBundesnetzagenturApplicableValueSheet — Volleinspeisung support ────
+
+test('parseBundesnetzagenturApplicableValueSheet extracts both Teileinspeisung and Volleinspeisung tiers', () => {
+  const sharedStringsXml = `<?xml version="1.0" encoding="UTF-8"?>
+    <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <si><t>Anzulegende Werte in Cent/kWh - Marktprämienmodell:</t></si>
+      <si><t>Monat</t></si>
+      <si><t>bis 10 kW</t></si>
+      <si><t>bis 40 kW</t></si>
+      <si><t>ab 01.08.2025</t></si>
+      <si><t>Teileinspeisung (gerundet)</t></si>
+      <si><t>Volleinspeisung (gerundet)</t></si>
+    </sst>`;
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData>
+        <row r="2">
+          <c r="J2" t="s"><v>0</v></c>
+        </row>
+        <row r="3">
+          <c r="J3" t="s"><v>1</v></c>
+          <c r="K3" t="s"><v>2</v></c>
+          <c r="L3" t="s"><v>3</v></c>
+        </row>
+        <row r="4">
+          <c r="J4" t="s"><v>4</v></c>
+        </row>
+        <row r="5">
+          <c r="J5" t="s"><v>5</v></c>
+          <c r="K5"><v>7.79</v></c>
+          <c r="L5"><v>6.9</v></c>
+        </row>
+        <row r="6">
+          <c r="J6" t="s"><v>6</v></c>
+          <c r="K6"><v>12.35</v></c>
+          <c r="L6"><v>10.73</v></c>
+        </row>
+      </sheetData>
+    </worksheet>`;
+
+  const parsed = parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, sheetXml });
+
+  assert.deepEqual(parsed.applicableValueTiersByMonth['2025-08'], [
+    { upToKwp: 10, ctKwh: 7.79 },
+    { upToKwp: 40, ctKwh: 6.9 }
+  ]);
+  assert.deepEqual(parsed.fullFeedApplicableValueTiersByMonth['2025-08'], [
+    { upToKwp: 10, ctKwh: 12.35 },
+    { upToKwp: 40, ctKwh: 10.73 }
+  ]);
+});
+
+test('parseBundesnetzagenturApplicableValueSheet returns empty fullFeedApplicableValueTiersByMonth for old format (no Volleinspeisung)', () => {
+  const sharedStringsXml = `<?xml version="1.0" encoding="UTF-8"?>
+    <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <si><t>Anzulegende Werte in Cent/kWh - Marktprämienmodell:</t></si>
+      <si><t>Monat</t></si>
+      <si><t>bis 10 kW</t></si>
+      <si><t>bis 40 kW</t></si>
+      <si><t>ab 01.02.2022</t></si>
+      <si><t>Teileinspeisung (gerundet)</t></si>
+    </sst>`;
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData>
+        <row r="2">
+          <c r="J2" t="s"><v>0</v></c>
+        </row>
+        <row r="3">
+          <c r="J3" t="s"><v>1</v></c>
+          <c r="K3" t="s"><v>2</v></c>
+          <c r="L3" t="s"><v>3</v></c>
+        </row>
+        <row r="4">
+          <c r="J4" t="s"><v>4</v></c>
+        </row>
+        <row r="5">
+          <c r="J5" t="s"><v>5</v></c>
+          <c r="K5"><v>8.5</v></c>
+          <c r="L5"><v>7.4</v></c>
+        </row>
+      </sheetData>
+    </worksheet>`;
+
+  const parsed = parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, sheetXml });
+
+  assert.deepEqual(parsed.applicableValueTiersByMonth['2022-02'], [
+    { upToKwp: 10, ctKwh: 8.5 },
+    { upToKwp: 40, ctKwh: 7.4 }
+  ]);
+  assert.deepEqual(parsed.fullFeedApplicableValueTiersByMonth, {});
+});
+
+// ── selectApplicableValueCtKwh — feedType parameter ─────────────────────────
+
+test('selectApplicableValueCtKwh with no feedType returns partial feed value (backward compatible)', () => {
+  const referenceData = {
+    applicableValueTiersByMonth: {
+      '2024-06': [{ upToKwp: 10, ctKwh: 7.79 }]
+    },
+    fullFeedApplicableValueTiersByMonth: {
+      '2024-06': [{ upToKwp: 10, ctKwh: 12.35 }]
+    }
+  };
+
+  const result = selectApplicableValueCtKwh(referenceData, { commissionedAt: '2024-06-01', kwp: 5 });
+  assert.equal(result, 7.79);
+});
+
+test('selectApplicableValueCtKwh with feedType=full returns from fullFeedApplicableValueTiersByMonth', () => {
+  const referenceData = {
+    applicableValueTiersByMonth: {
+      '2024-06': [{ upToKwp: 10, ctKwh: 7.79 }]
+    },
+    fullFeedApplicableValueTiersByMonth: {
+      '2024-06': [{ upToKwp: 10, ctKwh: 12.35 }]
+    }
+  };
+
+  const result = selectApplicableValueCtKwh(referenceData, { commissionedAt: '2024-06-01', kwp: 5, feedType: 'full' });
+  assert.equal(result, 12.35);
+});
+
+test('selectApplicableValueCtKwh with feedType=full returns null when no full feed data for month', () => {
+  const referenceData = {
+    applicableValueTiersByMonth: {
+      '2020-06': [{ upToKwp: 10, ctKwh: 7.0 }]
+    },
+    fullFeedApplicableValueTiersByMonth: {}
+  };
+
+  const result = selectApplicableValueCtKwh(referenceData, { commissionedAt: '2020-06-01', kwp: 5, feedType: 'full' });
+  assert.equal(result, null);
 });
