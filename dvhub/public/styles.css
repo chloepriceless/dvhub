@@ -526,8 +526,11 @@ button {
   min-width: 130px;
 }
 
-/* Netzphasen detail — now lives inside .flow-center (sibling of .flow-diagram) */
+/* Netzphasen detail — lives inside .flow-center as sibling of .flow-diagram */
 .flow-grid-detail {
+  position: absolute;
+  bottom: 16px;
+  left: calc(50% + 60px);
   z-index: 2;
   background: var(--flow-surface);
   border: 1px solid var(--flow-border);
@@ -535,8 +538,6 @@ button {
   padding: 8px 12px;
   min-width: 120px;
   backdrop-filter: blur(4px);
-  /* Desktop: offset to right of grid node via margin */
-  margin: -40px 0 8px 58%;
 }
 
 /* Center ring */
@@ -1023,9 +1024,19 @@ button {
     min-width: unset;
   }
 
+  .flow-center {
+    flex-direction: column;
+  }
+
   .flow-diagram {
     max-width: 100%;
     height: 280px;
+  }
+
+  .flow-grid-detail {
+    position: static;
+    margin: 8px auto;
+    width: fit-content;
   }
 
   .chart-sub-row {
@@ -1143,6 +1154,7 @@ button {
 
   /* Grid detail — centered below diagram on mobile */
   .flow-grid-detail {
+    position: static;
     margin: 8px auto;
     width: fit-content;
   }
