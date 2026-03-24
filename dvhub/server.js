@@ -811,7 +811,7 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
   return {
     now: Number(now),
     dvControlValue: controlValue(),
-    dcExportMode: { enabled: cfg.dcExportMode?.enabled === true, priceThresholdCtKwh: cfg.dcExportMode?.priceThresholdCtKwh ?? null, pvDcW: Number(state.victron.pvPowerW || 0) },
+    dcExportMode: { enabled: cfg.dcExportMode?.enabled === true, priceThresholdCtKwh: cfg.dcExportMode?.priceThresholdCtKwh ?? null, pvTotalW: Number(state.victron.pvTotalW || 0), pvDcW: Number(state.victron.pvPowerW || 0) },
     dvRegs: state.dvRegs,
     ctrl: { ...state.ctrl, dvControl: state.ctrl.dvControl || null },
     keepalive: state.keepalive,
@@ -2174,11 +2174,11 @@ async function evaluateSchedule() {
     state.ctrl._dcSocGuardLogged = false;
   }
   if (dcExportActive) {
-    const pvDcW = Math.max(0, Number(state.victron.pvPowerW || 0));
+    const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
     const bufferW = Number(cfg.dcExportMode?.bufferW ?? 100);
-    if (pvDcW > 50) {
-      // Negativer Setpoint = Einspeisung. Export = DC-PV minus Puffer.
-      const exportW = Math.round(-(pvDcW - bufferW));
+    if (pvW > 50) {
+      // Negativer Setpoint = Einspeisung. Export = Gesamt-PV minus Puffer.
+      const exportW = Math.round(-(pvW - bufferW));
       const prev = state.schedule.active.gridSetpointW;
       const prevVal = prev?.value;
       // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
@@ -2187,14 +2187,14 @@ async function evaluateSchedule() {
         await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
         state.ctrl._dcExportLastWriteAt = now;
         if (!state.ctrl._dcExportLogged) {
-          pushLog('dc_export_mode_active', { pvDcW, exportW, bufferW });
+          pushLog('dc_export_mode_active', { pvW, exportW, bufferW });
           state.ctrl._dcExportLogged = true;
         }
       }
     } else {
-      // Kein DC-PV: Zurueck zum Default Setpoint
+      // Kein PV: Zurueck zum Default Setpoint
       if (state.ctrl._dcExportLogged) {
-        pushLog('dc_export_mode_idle', { pvDcW });
+        pushLog('dc_export_mode_idle', { pvW });
         state.ctrl._dcExportLogged = false;
       }
     }
@@ -2233,8 +2233,8 @@ async function evaluateSchedule() {
       }
     }
 
-    // Skip gridSetpointW if DC export mode is actively controlling it
-    if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvPowerW || 0)) > 50) {
+    // Skip gridSetpointW if export mode is actively controlling it
+    if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0)) > 50) {
       continue;
     }
     await applyControlTarget(target, eff.value, eff.source);
