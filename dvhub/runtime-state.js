@@ -22,6 +22,7 @@ const VICTRON_FIELDS = [
   'acPvL1W',
   'acPvL2W',
   'acPvL3W',
+  'pvAcW',
   'pvTotalW',
   'gridSetpointW',
   'minSocPct',
