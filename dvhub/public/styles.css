@@ -1078,6 +1078,10 @@ button {
   .app-shell {
     grid-template-rows: auto 1fr auto;
   }
+
+  .topbar {
+    position: relative;
+  }
 }
 
 /* --- Hamburger button (hidden on desktop) --- */
@@ -1146,9 +1150,14 @@ button {
 
   .topbar {
     flex-wrap: wrap;
-    height: auto;
+    height: auto !important;
     padding: 8px 12px;
     gap: 4px;
+    position: relative;
+  }
+
+  .app-shell {
+    grid-template-rows: auto 1fr auto !important;
   }
 
   .topbar-brand span { font-size: 0.85rem; }
@@ -1180,7 +1189,8 @@ button {
   .chart-span { max-width: 100vw; overflow-x: auto; }
 
   /* Schedule + automation cards — horizontal scroll if needed */
-  .chart-span-card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .chart-span-card { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: calc(100vw - 16px); }
+  .sched-table { min-width: 600px; }
 
   /* Automation config — single column on phone */
   .automation-config-grid {
