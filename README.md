@@ -26,12 +26,11 @@
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
 <p align="center">
-  <a href="assets/screenshots/dashboard-live-full-2026-03-11.png"><img src="assets/screenshots/dashboard-live-full-2026-03-11.png" alt="DVhub Leitstand live" width="440" /></a>
-  <a href="assets/screenshots/history-day-2026-03-10-full.png"><img src="assets/screenshots/history-day-2026-03-10-full.png" alt="DVhub History Tag 10.03.2026" width="440" /></a>
+  <a href="assets/screenshots/dashboard-live-full-2026-03-24.png"><img src="assets/screenshots/dashboard-live-full-2026-03-24.png" alt="DVhub Leitstand v0.4.0" width="880" /></a>
 </p>
 <p align="center">
-  <a href="assets/screenshots/history-month-2026-03-full.png"><img src="assets/screenshots/history-month-2026-03-full.png" alt="DVhub History März 2026" width="440" /></a>
-  <a href="assets/screenshots/history-year-2025-full.png"><img src="assets/screenshots/history-year-2025-full.png" alt="DVhub History Jahr 2025" width="440" /></a>
+  <a href="assets/screenshots/history-day-2026-03-24-full.png"><img src="assets/screenshots/history-day-2026-03-24-full.png" alt="DVhub Historie Tag 24.03.2026" width="440" /></a>
+  <a href="assets/screenshots/settings-control-2026-03-24.png"><img src="assets/screenshots/settings-control-2026-03-24.png" alt="DVhub Einstellungen Steuerung" width="440" /></a>
 </p>
 
 ---
