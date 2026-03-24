@@ -1077,6 +1077,20 @@ function buildFieldDefinitions() {
     },
     {
       section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen für Marktprämie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      key: 'dvCostMonthlyEur',
+      label: 'DV-Kosten monatlich (EUR)',
+      path: 'userEnergyPricing.dvCostMonthlyEur',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      placeholder: '8.50',
+      hint: 'Monatliche Kosten fuer Direktvermarktung (z.B. Luox: 8,50 EUR)',
+    },
+    {
+      section: 'pricing',
       group: 'mode',
       groupLabel: 'Eigener Strompreis',
       groupDescription: 'Hinterlege deinen vollständigen Bruttopreis inklusive MwSt, Netzentgelten, Umlagen und sonstigen kWh-basierten Bestandteilen.',
@@ -1497,6 +1511,7 @@ export function createDefaultConfig() {
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
+      dvCostMonthlyEur: 8.50,
       dynamicComponents: {
         energyMarkupCtKwh: 0,
         gridChargesCtKwh: 8.5,
@@ -1940,6 +1955,10 @@ function sanitizeUserEnergyPricing(value, warnings) {
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
   next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
   next.pvPlants = sanitizeUserEnergyPricingPvPlants(next.pvPlants, warnings);
+  const dvCostMonthlyEur = Number(next.dvCostMonthlyEur);
+  next.dvCostMonthlyEur = Number.isFinite(dvCostMonthlyEur) && dvCostMonthlyEur >= 0
+    ? roundCtKwh(dvCostMonthlyEur)
+    : 8.50;
   next.dynamicComponents = sanitizeDynamicComponents(next.dynamicComponents, warnings);
   next.module3Windows = sanitizeUserEnergyPricingWindows(next.module3Windows, warnings);
   next.costs = sanitizePricingCosts(next.costs, warnings);
