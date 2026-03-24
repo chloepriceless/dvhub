@@ -1898,3 +1898,431 @@ test('history price backfill API without a range delegates bounds selection to t
     end: null
   });
 });
+
+// ============================================================
+// DV Comparison KPI tests (Plan 01-02)
+// ============================================================
+
+function createDvStore({ energySlots, priceSlots = [] } = {}) {
+  return {
+    listAggregatedEnergySlots() {
+      return energySlots;
+    },
+    listPriceSlots() {
+      return priceSlots;
+    }
+  };
+}
+
+test('getSummary month view: hypFullFeedInEur uses Volleinspeisung AW minus 0.4 ct/kWh on total pvKwh', async () => {
+  // pvKwh=100, AW_VOLL=12.35 -> hypFullFeedInEur = 100 * (12.35-0.4) / 100 = 11.95
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 50, pvKwh: 100,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 50
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: ({ year, pvPlants } = {}) => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ commissionedAt, kwp, feedType } = {}) {
+        // Volleinspeisung: 12.35, Teileinspeisung: 7.79
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
+    'hypFullFeedInEur = pvKwh * (AW_VOLL - 0.4) / 100 = 100 * 11.95/100');
+});
+
+test('getSummary month view: hypSurplusFeedInEur uses Teileinspeisung AW minus 0.4 ct/kWh on exportKwh', async () => {
+  // exportKwh=60, AW_TEIL=7.79 -> hypSurplusFeedInEur = 60 * (7.79-0.4) / 100 = 4.43
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 60, pvKwh: 80,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  assert.equal(summary.kpis.hypSurplusFeedInEur, 4.43,
+    'hypSurplusFeedInEur = exportKwh * (AW_TEIL - 0.4) / 100 = 60 * 7.39/100');
+});
+
+test('getSummary month view: dvExcessEur = dvRevenueEur - hypSurplusFeedInEur', async () => {
+  // exportKwh=60, price=10ct -> exportRevenue=6.00
+  // marketPremium=0 (no AW market value)
+  // hypSurplusFeedInEur=4.43 -> dvExcessEur = 6.00 - 4.43 = 1.57
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 60, pvKwh: 80,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 10, priceEurMwh: 100 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  // exportRevenueEur = 60 * 10 / 100 = 6.00 (no market premium)
+  assert.equal(summary.kpis.dvExcessEur, 1.57,
+    'dvExcessEur = dvRevenueEur(6.00) - hypSurplusFeedInEur(4.43)');
+});
+
+test('getSummary month view: dvCostEur equals dvCostMonthlyEur for month view', async () => {
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 10, pvKwh: 20,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 10
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  assert.equal(summary.kpis.dvCostEur, 8.50, 'dvCostEur = dvCostMonthlyEur for month view');
+});
+
+test('getSummary year view: dvCostEur scales by number of active months', async () => {
+  // 3 slots in 3 different months with exportKwh > 0
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-01-15T10:00:00.000Z',
+          importKwh: 0, exportKwh: 10, pvKwh: 20,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 10
+        },
+        {
+          ts: '2025-02-15T10:00:00.000Z',
+          importKwh: 0, exportKwh: 10, pvKwh: 20,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 10
+        },
+        {
+          ts: '2025-03-15T10:00:00.000Z',
+          importKwh: 0, exportKwh: 10, pvKwh: 20,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 10
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-01-15T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 },
+        { ts: '2025-02-15T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 },
+        { ts: '2025-03-15T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-12-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'year', date: '2025' });
+  assert.equal(summary.kpis.dvCostEur, 25.50, 'dvCostEur = 3 active months * 8.50 = 25.50');
+});
+
+test('getSummary month view: dvNetAdvantageEur = dvExcessEur - dvCostEur', async () => {
+  // exportKwh=60, price=10ct -> exportRevenue=6.00
+  // hypSurplusFeedInEur=4.43 -> dvExcessEur=1.57
+  // dvCostMonthlyEur=8.50 -> dvNetAdvantageEur = 1.57 - 8.50 = -6.93
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 60, pvKwh: 80,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 10, priceEurMwh: 100 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  assert.equal(summary.kpis.dvNetAdvantageEur, -6.93,
+    'dvNetAdvantageEur = dvExcessEur(1.57) - dvCostEur(8.50) = -6.93');
+});
+
+test('getSummary: DV comparison fields are null when AW is null (no BNetzA data)', async () => {
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 60, pvKwh: 80,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh() { return null; }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  assert.equal(summary.kpis.hypFullFeedInEur, null, 'hypFullFeedInEur null when AW is null');
+  assert.equal(summary.kpis.hypSurplusFeedInEur, null, 'hypSurplusFeedInEur null when AW is null');
+  assert.equal(summary.kpis.dvExcessEur, null, 'dvExcessEur null when AW is null');
+  assert.equal(summary.kpis.dvNetAdvantageEur, null, 'dvNetAdvantageEur null when AW is null');
+});
+
+test('getSummary day view: DV comparison fields are null (only month/year views)', async () => {
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 60, pvKwh: 80,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-01'
+  });
+
+  const summary = await runtime.getSummary({ view: 'day', date: '2025-03-01' });
+  assert.equal(summary.kpis.hypFullFeedInEur, null, 'hypFullFeedInEur null for day view');
+  assert.equal(summary.kpis.hypSurplusFeedInEur, null, 'hypSurplusFeedInEur null for day view');
+  assert.equal(summary.kpis.dvExcessEur, null, 'dvExcessEur null for day view');
+  assert.equal(summary.kpis.dvNetAdvantageEur, null, 'dvNetAdvantageEur null for day view');
+});
+
+test('getSummary month view: negative price slot reduces eligible pvKwh for full-feed EV calc', async () => {
+  // Plant: commissionedAt=2025-03-01, kwp=10 -> 15min rule (Solarspitzengesetz)
+  // Slot 1: priceCtKwh=-5 (negative) -> pvKwh excluded from hypFullFeedInEur
+  // Slot 2: priceCtKwh=5 (positive) -> pvKwh included
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 30, pvKwh: 50,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        },
+        {
+          ts: '2025-03-01T10:15:00.000Z',
+          importKwh: 0, exportKwh: 30, pvKwh: 50,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 20
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: -5, priceEurMwh: -50 },
+        { ts: '2025-03-01T10:15:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      // 10 kWp plant commissioned 2025-03-01 -> 15min rule applies (Solarspitzengesetz, >= 2 kWp)
+      pvPlants: [{ commissionedAt: '2025-03-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        return feedType === 'full' ? 12.35 : 7.79;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  // Only slot 2 pvKwh=50 is eligible (slot 1 has negative price -> 15min rule)
+  // hypFullFeedInEur = 50 * (12.35 - 0.4) / 100 = 50 * 11.95 / 100 = 5.975 -> 5.98
+  assert.equal(summary.kpis.hypFullFeedInEur, 5.98,
+    'Only non-negative-price slot pvKwh counted for hypFullFeedInEur');
+});
+
+test('getSummary month view: rule=none plant keeps all pvKwh even when price is negative', async () => {
+  // Plant commissioned 2010 -> no curtailment rule
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 50, pvKwh: 100,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 50
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: -5, priceEurMwh: -50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2010-06-01', kwp: 5 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        // Pre-EEG 2023: only one AW, no full-feed distinction
+        return 12.35;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  // rule=none: all 100 pvKwh eligible even with negative price
+  // hypFullFeedInEur = 100 * (12.35 - 0.4) / 100 = 11.95
+  assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
+    'Pre-2016 plant (rule=none): pvKwh not reduced by negative price curtailment');
+});
+
+test('getSummary month view: pre-EEG-2023 plant falls back to single AW for both full and surplus EV', async () => {
+  // For pre-EEG 2023 plants, getApplicableValueCtKwh returns null for feedType='full'
+  // -> fallback to partial AW
+  const runtime = createHistoryRuntime({
+    store: createDvStore({
+      energySlots: [
+        {
+          ts: '2025-03-01T10:00:00.000Z',
+          importKwh: 0, exportKwh: 50, pvKwh: 100,
+          gridKwh: 0, batteryKwh: 0,
+          batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 50
+        }
+      ],
+      priceSlots: [
+        { ts: '2025-03-01T10:00:00.000Z', priceCtKwh: 5, priceEurMwh: 50 }
+      ]
+    }),
+    getPricingConfig: () => ({
+      pvPlants: [{ commissionedAt: '2020-06-01', kwp: 10 }],
+      dvCostMonthlyEur: 8.50
+    }),
+    getApplicableValueSummary: () => ({
+      applicableValueCtKwhByMonth: {},
+      getApplicableValueCtKwh({ feedType } = {}) {
+        // Pre-EEG 2023: only partial feed AW exists, full returns null
+        return feedType === 'full' ? null : 9.50;
+      }
+    }),
+    getCurrentDate: () => '2025-03-31'
+  });
+
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  // Both scenarios use same AW=9.50 (fallback from null full to partial)
+  // hypFullFeedInEur = 100 * (9.50 - 0.4) / 100 = 9.10
+  // hypSurplusFeedInEur = 50 * (9.50 - 0.4) / 100 = 4.55
+  assert.equal(summary.kpis.hypFullFeedInEur, 9.10,
+    'Pre-EEG 2023 plant: falls back to partial AW for full-feed scenario');
+  assert.equal(summary.kpis.hypSurplusFeedInEur, 4.55,
+    'Pre-EEG 2023 plant: uses partial AW for surplus scenario');
+});
