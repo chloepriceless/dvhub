@@ -82,6 +82,7 @@ body {
   color: var(--flow-text);
   line-height: 1.5;
   min-height: 100vh;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -1004,6 +1005,12 @@ button {
 }
 
 @media (max-width: 767px) {
+  /* Prevent horizontal overflow on mobile */
+  .app-shell {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
   .main-body {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -1011,9 +1018,15 @@ button {
       "left-rail"
       "right-rail"
       "chart-area";
+    overflow-x: hidden;
   }
 
-  .flow-center { order: -1; }
+  .flow-center {
+    order: -1;
+    flex-direction: column;
+    align-items: center;
+    overflow: hidden;
+  }
 
   .rail {
     flex-direction: column;
@@ -1024,13 +1037,11 @@ button {
     min-width: unset;
   }
 
-  .flow-center {
-    flex-direction: column;
-  }
-
   .flow-diagram {
     max-width: 100%;
+    width: 100%;
     height: 280px;
+    overflow: hidden;
   }
 
   .flow-grid-detail {
@@ -1120,37 +1131,31 @@ button {
 
   .topbar-brand span { font-size: 0.85rem; }
 
-  /* Flow diagram — compact */
-  .flow-center {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
+  /* Flow diagram — compact for phone */
   .flow-diagram {
-    height: 300px;
+    height: 260px;
     max-width: 100%;
     overflow: hidden;
   }
 
   .flow-node {
-    padding: 8px 12px;
-    min-width: 80px;
+    padding: 6px 10px;
+    min-width: 70px;
     border-radius: 10px;
   }
 
-  .flow-node-icon { font-size: 1.1rem; margin-bottom: 2px; }
-  .flow-node-value { font-size: 1rem; }
-  .flow-node-label { font-size: 0.58rem; }
-  .flow-node-sub { font-size: 0.58rem; }
+  .flow-node-icon { font-size: 1rem; margin-bottom: 2px; }
+  .flow-node-value { font-size: 0.9rem; }
+  .flow-node-label { font-size: 0.55rem; }
+  .flow-node-sub { font-size: 0.55rem; }
 
   .center-ring {
-    width: 90px;
-    height: 90px;
+    width: 80px;
+    height: 80px;
   }
-  .cr-val { font-size: 1rem; }
-  .cr-lbl { font-size: 0.55rem; }
-  .cr-sub { font-size: 0.55rem; }
+  .cr-val { font-size: 0.9rem; }
+  .cr-lbl { font-size: 0.5rem; }
+  .cr-sub { font-size: 0.5rem; }
 
   /* Grid detail — centered below diagram on mobile */
   .flow-grid-detail {
