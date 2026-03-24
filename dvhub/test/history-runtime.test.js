@@ -1941,10 +1941,10 @@ test('getSummary month view: hypFullFeedInEur uses Volleinspeisung AW minus 0.4 
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
     'hypFullFeedInEur = pvKwh * (AW_VOLL - 0.4) / 100 = 100 * 11.95/100');
 });
@@ -1975,10 +1975,10 @@ test('getSummary month view: hypSurplusFeedInEur uses Teileinspeisung AW minus 0
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   assert.equal(summary.kpis.hypSurplusFeedInEur, 4.43,
     'hypSurplusFeedInEur = exportKwh * (AW_TEIL - 0.4) / 100 = 60 * 7.39/100');
 });
@@ -2011,10 +2011,10 @@ test('getSummary month view: dvExcessEur = dvRevenueEur - hypSurplusFeedInEur', 
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   // exportRevenueEur = 60 * 10 / 100 = 6.00 (no market premium)
   assert.equal(summary.kpis.dvExcessEur, 1.57,
     'dvExcessEur = dvRevenueEur(6.00) - hypSurplusFeedInEur(4.43)');
@@ -2045,10 +2045,10 @@ test('getSummary month view: dvCostEur equals dvCostMonthlyEur for month view', 
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   assert.equal(summary.kpis.dvCostEur, 8.50, 'dvCostEur = dvCostMonthlyEur for month view');
 });
 
@@ -2092,10 +2092,10 @@ test('getSummary year view: dvCostEur scales by number of active months', async 
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-12-31'
+    getCurrentDate: () => '2026-02-01'
   });
 
-  const summary = await runtime.getSummary({ view: 'year', date: '2025' });
+  const summary = await runtime.getSummary({ view: 'year', date: '2025-01-01' });
   assert.equal(summary.kpis.dvCostEur, 25.50, 'dvCostEur = 3 active months * 8.50 = 25.50');
 });
 
@@ -2127,10 +2127,10 @@ test('getSummary month view: dvNetAdvantageEur = dvExcessEur - dvCostEur', async
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   assert.equal(summary.kpis.dvNetAdvantageEur, -6.93,
     'dvNetAdvantageEur = dvExcessEur(1.57) - dvCostEur(8.50) = -6.93');
 });
@@ -2154,14 +2154,15 @@ test('getSummary: DV comparison fields are null when AW is null (no BNetzA data)
       pvPlants: [{ commissionedAt: '2023-06-01', kwp: 10 }],
       dvCostMonthlyEur: 8.50
     }),
+    // No getApplicableValueCtKwh function -> uses applicableValueCtKwhByMonth lookup
+    // Empty byMonth map -> null AW for all plants
     getApplicableValueSummary: () => ({
-      applicableValueCtKwhByMonth: {},
-      getApplicableValueCtKwh() { return null; }
+      applicableValueCtKwhByMonth: {}
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   assert.equal(summary.kpis.hypFullFeedInEur, null, 'hypFullFeedInEur null when AW is null');
   assert.equal(summary.kpis.hypSurplusFeedInEur, null, 'hypSurplusFeedInEur null when AW is null');
   assert.equal(summary.kpis.dvExcessEur, null, 'dvExcessEur null when AW is null');
@@ -2239,10 +2240,10 @@ test('getSummary month view: negative price slot reduces eligible pvKwh for full
         return feedType === 'full' ? 12.35 : 7.79;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   // Only slot 2 pvKwh=50 is eligible (slot 1 has negative price -> 15min rule)
   // hypFullFeedInEur = 50 * (12.35 - 0.4) / 100 = 50 * 11.95 / 100 = 5.975 -> 5.98
   assert.equal(summary.kpis.hypFullFeedInEur, 5.98,
@@ -2276,10 +2277,10 @@ test('getSummary month view: rule=none plant keeps all pvKwh even when price is 
         return 12.35;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   // rule=none: all 100 pvKwh eligible even with negative price
   // hypFullFeedInEur = 100 * (12.35 - 0.4) / 100 = 11.95
   assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
@@ -2314,10 +2315,10 @@ test('getSummary month view: pre-EEG-2023 plant falls back to single AW for both
         return feedType === 'full' ? null : 9.50;
       }
     }),
-    getCurrentDate: () => '2025-03-31'
+    getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
   // Both scenarios use same AW=9.50 (fallback from null full to partial)
   // hypFullFeedInEur = 100 * (9.50 - 0.4) / 100 = 9.10
   // hypSurplusFeedInEur = 50 * (9.50 - 0.4) / 100 = 4.55

@@ -1,4 +1,5 @@
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
+import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year']);
@@ -1141,12 +1142,122 @@ export function createHistoryRuntime({
       applicableValueSummary
     });
     const weightedApplicableValueCtKwh = weightedApplicableValue.weightedApplicableValueCtKwh;
+
+    // Compute weighted AW for Volleinspeisung (full feed) using feedType='full'
+    // For pre-EEG 2023 plants, getApplicableValueCtKwh returns null for feedType='full'
+    // -> fall back to partial AW
+    const awFullCtKwh = (() => {
+      const plants = pricingConfig?.pvPlants;
+      if (!Array.isArray(plants) || plants.length === 0) return null;
+      const avSummary = applicableValueSummary;
+      if (typeof avSummary?.getApplicableValueCtKwh !== 'function') return weightedApplicableValueCtKwh;
+      let totalKwp = 0;
+      let weightedCt = 0;
+      let resolved = 0;
+      for (const plant of plants) {
+        const kwp = Number(plant?.kwp);
+        if (!Number.isFinite(kwp) || kwp <= 0) continue;
+        const ctFull = avSummary.getApplicableValueCtKwh({ commissionedAt: plant.commissionedAt, kwp, feedType: 'full' });
+        const ctPartial = avSummary.getApplicableValueCtKwh({ commissionedAt: plant.commissionedAt, kwp, feedType: 'partial' });
+        // If full-feed AW is null (pre-EEG 2023 plant), fall back to partial AW
+        // Explicit null check: Number(null) === 0 which is finite, so we must check null first
+        const ctFullVal = (ctFull != null && Number.isFinite(Number(ctFull))) ? Number(ctFull) : null;
+        const ctPartialVal = (ctPartial != null && Number.isFinite(Number(ctPartial))) ? Number(ctPartial) : null;
+        const ct = ctFullVal ?? ctPartialVal;
+        if (ct == null) return null;
+        totalKwp += kwp;
+        weightedCt += kwp * ct;
+        resolved += 1;
+      }
+      if (totalKwp <= 0 || resolved === 0) return weightedApplicableValueCtKwh;
+      return round2(weightedCt / totalKwp);
+    })();
+
+    // EV feed-in compensation (AW minus 0.4 ct/kWh)
+    const evFullCtKwh = getFeedInCompensationCtKwh({ applicableValueCtKwh: awFullCtKwh });
+    const evPartialCtKwh = getFeedInCompensationCtKwh({ applicableValueCtKwh: weightedApplicableValueCtKwh });
+
+    // Negative price curtailment rule for the configured plants
+    const negPriceRule = getEegNegativePriceRule({
+      commissionedAt: pricingConfig?.pvPlants?.[0]?.commissionedAt,
+      kwp: summarizeConfiguredPvCapacity(pricingConfig?.pvPlants)
+    });
+
     const solarMarketValueSummary = solarMarketValues || getSolarMarketValueSummary({
       year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year
     });
     const solarMarketValueMonthlyCtKwhByMonth = solarMarketValueSummary?.monthlyCtKwhByMonth || {};
     const pvCostCtKwh = Number(pricingConfig?.costs?.pvCtKwh);
     const batteryCostCtKwh = effectiveBatteryCostCtKwh(pricingConfig?.costs || {});
+
+    // Pre-pass: compute isNegPriceAffected per slot timestamp for negative price curtailment.
+    // For hour-based rules (6h/4h/tiered), track consecutive negative hours using hourly averages.
+    // For 15min rule: just check slot price directly.
+    // For 'none': always false.
+    const negPriceAffectedByTs = (() => {
+      const result = new Map();
+      if (negPriceRule.rule === 'none') return result; // all false (map returns undefined -> falsy)
+
+      const rawFiltered = energySlots.filter((slot) => {
+        const localDate = localDateString(slot.ts);
+        return localDate >= range.startDate && localDate < range.endDateExclusive;
+      });
+
+      if (negPriceRule.rule === '15min') {
+        for (const slot of rawFiltered) {
+          const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
+          const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
+          result.set(slot.ts, priceCtKwh != null && priceCtKwh < 0);
+        }
+        return result;
+      }
+
+      // Hour-based rules: group slots by hour key, compute hourly average price,
+      // then track consecutive negative hours
+      const slotsByHour = new Map();
+      for (const slot of rawFiltered) {
+        const ts = new Date(slot.ts);
+        const hourKey = `${ts.getUTCFullYear()}-${ts.getUTCMonth()}-${ts.getUTCDate()}-${ts.getUTCHours()}`;
+        if (!slotsByHour.has(hourKey)) slotsByHour.set(hourKey, []);
+        slotsByHour.get(hourKey).push(slot);
+      }
+
+      // Sort hours
+      const sortedHourKeys = [...slotsByHour.keys()].sort();
+      const hourNegative = new Map();
+      for (const hourKey of sortedHourKeys) {
+        const hourSlots = slotsByHour.get(hourKey);
+        let priceSum = 0;
+        let priceCount = 0;
+        for (const slot of hourSlots) {
+          const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
+          const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
+          if (priceCtKwh != null) { priceSum += priceCtKwh; priceCount += 1; }
+        }
+        hourNegative.set(hourKey, priceCount > 0 && (priceSum / priceCount) < 0);
+      }
+
+      // Track consecutive negative hours and mark affected slots
+      let consecutiveNegHours = 0;
+      for (const hourKey of sortedHourKeys) {
+        const isNeg = hourNegative.get(hourKey);
+        if (isNeg) {
+          consecutiveNegHours += 1;
+        } else {
+          consecutiveNegHours = 0;
+        }
+        const affected = isNegativePriceSlotAffected({
+          rule: negPriceRule.rule,
+          consecutiveNegativeHours: consecutiveNegHours,
+          year: Number(hourKey.split('-')[0]),
+          tiers: negPriceRule.tiers
+        });
+        for (const slot of slotsByHour.get(hourKey)) {
+          result.set(slot.ts, affected);
+        }
+      }
+      return result;
+    })();
 
     const slots = energySlots
       .filter((slot) => {
@@ -1209,6 +1320,18 @@ export function createHistoryRuntime({
         const marketPremiumCtKwh = premiumValuedExportKwh > 0 ? round2(marketPremiumCtTotal / premiumValuedExportKwh) : null;
         const grossReturnEur = round2(netEur + avoidedImportGrossEur);
 
+        // DV comparison: negative price curtailment per slot
+        const isNegPriceAffected = Boolean(negPriceAffectedByTs.get(slot.ts));
+        const negPriceEligiblePvKwh = isNegPriceAffected ? 0 : round2(Number(slot.pvKwh || 0));
+        const negPriceEligibleExportKwh = isNegPriceAffected ? 0 : round2(Number(slot.exportKwh || 0));
+        // Accumulate in ct to avoid EUR rounding per slot — divide by 100 at the end
+        const hypFullFeedInCtTotal = evFullCtKwh != null
+          ? round2(negPriceEligiblePvKwh * evFullCtKwh)
+          : null;
+        const hypSurplusFeedInCtTotal = evPartialCtKwh != null
+          ? round2(negPriceEligibleExportKwh * evPartialCtKwh)
+          : null;
+
         return {
           ...slot,
           ...flowValues,
@@ -1235,6 +1358,10 @@ export function createHistoryRuntime({
           marketPremiumCtTotal,
           marketPremiumEur,
           marketPremiumCtKwh,
+          negPriceEligiblePvKwh,
+          negPriceEligibleExportKwh,
+          hypFullFeedInCtTotal,
+          hypSurplusFeedInCtTotal,
           estimated: Boolean(slot.estimated),
           incomplete: Boolean(slot.incomplete) || missingImportPrice || missingMarketPrice
         };
@@ -1286,7 +1413,15 @@ export function createHistoryRuntime({
       premiumValuedExportKwh: totals.premiumValuedExportKwh + (slot.premiumValuedExportKwh || 0),
       marketPremiumCtTotal: totals.marketPremiumCtTotal + (slot.marketPremiumCtTotal || 0),
       marketPremiumEur: null,
-      marketPremiumCtKwh: null
+      marketPremiumCtKwh: null,
+      negPriceEligiblePvKwh: totals.negPriceEligiblePvKwh + (slot.negPriceEligiblePvKwh || 0),
+      negPriceEligibleExportKwh: totals.negPriceEligibleExportKwh + (slot.negPriceEligibleExportKwh || 0),
+      hypFullFeedInCtTotal: slot.hypFullFeedInCtTotal != null
+        ? (totals.hypFullFeedInCtTotal || 0) + slot.hypFullFeedInCtTotal
+        : totals.hypFullFeedInCtTotal,
+      hypSurplusFeedInCtTotal: slot.hypSurplusFeedInCtTotal != null
+        ? (totals.hypSurplusFeedInCtTotal || 0) + slot.hypSurplusFeedInCtTotal
+        : totals.hypSurplusFeedInCtTotal
     }), {
       importKwh: 0,
       exportKwh: 0,
@@ -1329,8 +1464,66 @@ export function createHistoryRuntime({
       premiumValuedExportKwh: 0,
       marketPremiumCtTotal: 0,
       marketPremiumEur: null,
-      marketPremiumCtKwh: null
+      marketPremiumCtKwh: null,
+      negPriceEligiblePvKwh: 0,
+      negPriceEligibleExportKwh: 0,
+      hypFullFeedInCtTotal: evFullCtKwh != null ? 0 : null,
+      hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null
     }));
+
+    // DV comparison KPIs: only for month and year views, null otherwise
+    if (view === 'month' || view === 'year') {
+      const hypFullFeedInEur = kpis.hypFullFeedInCtTotal != null
+        ? round2(kpis.hypFullFeedInCtTotal / 100)
+        : null;
+      const hypSurplusFeedInEur = kpis.hypSurplusFeedInCtTotal != null
+        ? round2(kpis.hypSurplusFeedInCtTotal / 100)
+        : null;
+      const dvRevenueEur = round2((kpis.exportRevenueEur || 0) + (kpis.marketPremiumCtTotal ? round2(kpis.marketPremiumCtTotal / 100) : 0));
+      const dvExcessEur = hypSurplusFeedInEur != null
+        ? round2(dvRevenueEur - hypSurplusFeedInEur)
+        : null;
+
+      const dvCostMonthlyEurVal = Number(pricingConfig?.dvCostMonthlyEur);
+      let dvCostEur = null;
+      if (Number.isFinite(dvCostMonthlyEurVal)) {
+        if (view === 'month') {
+          dvCostEur = round2(dvCostMonthlyEurVal);
+        } else {
+          // Year view: count distinct months with export > 0
+          const activeMonthSet = new Set(
+            slots.filter((s) => Number(s.exportKwh || 0) > 0).map((s) => localMonthString(s.ts))
+          );
+          const activeMonths = activeMonthSet.size > 0 ? activeMonthSet.size : 1;
+          dvCostEur = round2(dvCostMonthlyEurVal * activeMonths);
+        }
+      }
+
+      const dvNetAdvantageEur = dvExcessEur != null && dvCostEur != null
+        ? round2(dvExcessEur - dvCostEur)
+        : null;
+
+      Object.assign(kpis, {
+        hypFullFeedInEur,
+        hypSurplusFeedInEur,
+        dvExcessEur,
+        dvCostEur,
+        dvNetAdvantageEur,
+        awFullCtKwh: awFullCtKwh ?? null,
+        awPartialCtKwh: weightedApplicableValueCtKwh ?? null
+      });
+    } else {
+      Object.assign(kpis, {
+        hypFullFeedInEur: null,
+        hypSurplusFeedInEur: null,
+        dvExcessEur: null,
+        dvCostEur: null,
+        dvNetAdvantageEur: null,
+        awFullCtKwh: null,
+        awPartialCtKwh: null
+      });
+    }
+
     const capacityAppliedKpis = applyPvFullLoadHours({
       kpis,
       pricingConfig
