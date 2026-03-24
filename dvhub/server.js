@@ -126,6 +126,7 @@ const state = {
     acPvL1W: null,
     acPvL2W: null,
     acPvL3W: null,
+    pvAcW: null,
     pvTotalW: null,
     gridSetpointW: null,
     minSocPct: null,
