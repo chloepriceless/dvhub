@@ -112,7 +112,7 @@ const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE ===
 
 const state = {
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
-  ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false },
+  ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false, _dcExportPriceBlockLogged: false },
   keepalive: {
     modbusLastQuery: null,
     appPulse: { periodSec: cfg.keepalivePulseSec }
@@ -2174,28 +2174,41 @@ async function evaluateSchedule() {
     state.ctrl._dcSocGuardLogged = false;
   }
   if (dcExportActive) {
-    const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
-    const bufferW = Number(cfg.dcExportMode?.bufferW ?? 100);
-    if (pvW > 50) {
-      // Negativer Setpoint = Einspeisung. Export = Gesamt-PV minus Puffer.
-      const exportW = Math.round(-(pvW - bufferW));
-      const prev = state.schedule.active.gridSetpointW;
-      const prevVal = prev?.value;
-      // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
-      const timeSinceLastWrite = now - (state.ctrl._dcExportLastWriteAt || 0);
-      if (prevVal == null || Math.abs(exportW - prevVal) > 50 || timeSinceLastWrite > 60000) {
-        await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
-        state.ctrl._dcExportLastWriteAt = now;
-        if (!state.ctrl._dcExportLogged) {
-          pushLog('dc_export_mode_active', { pvW, exportW, bufferW });
-          state.ctrl._dcExportLogged = true;
-        }
+    // Negativpreis-Schutz: bei Preis < 0 ct/kWh Export pausieren (0 ct/kWh = weiter exportieren)
+    const currentPrice = priceNow ? Number(priceNow.ct_kwh) : null;
+    const priceBlocked = currentPrice !== null && currentPrice < 0;
+
+    if (priceBlocked) {
+      // Export pausiert wegen negativem Preis — kein Setpoint schreiben
+      if (!state.ctrl._dcExportPriceBlockLogged) {
+        pushLog('pv_export_price_blocked', { currentPrice });
+        state.ctrl._dcExportPriceBlockLogged = true;
       }
     } else {
-      // Kein PV: Zurueck zum Default Setpoint
-      if (state.ctrl._dcExportLogged) {
-        pushLog('dc_export_mode_idle', { pvW });
-        state.ctrl._dcExportLogged = false;
+      state.ctrl._dcExportPriceBlockLogged = false;
+      const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
+      const bufferW = Number(cfg.dcExportMode?.bufferW ?? 100);
+      if (pvW > 50) {
+        // Negativer Setpoint = Einspeisung. Export = Gesamt-PV minus Puffer.
+        const exportW = Math.round(-(pvW - bufferW));
+        const prev = state.schedule.active.gridSetpointW;
+        const prevVal = prev?.value;
+        // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
+        const timeSinceLastWrite = now - (state.ctrl._dcExportLastWriteAt || 0);
+        if (prevVal == null || Math.abs(exportW - prevVal) > 50 || timeSinceLastWrite > 60000) {
+          await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
+          state.ctrl._dcExportLastWriteAt = now;
+          if (!state.ctrl._dcExportLogged) {
+            pushLog('dc_export_mode_active', { pvW, exportW, bufferW, currentPrice });
+            state.ctrl._dcExportLogged = true;
+          }
+        }
+      } else {
+        // Kein PV: Zurueck zum Default Setpoint
+        if (state.ctrl._dcExportLogged) {
+          pushLog('dc_export_mode_idle', { pvW });
+          state.ctrl._dcExportLogged = false;
+        }
       }
     }
   } else if (state.ctrl._dcExportLogged) {
