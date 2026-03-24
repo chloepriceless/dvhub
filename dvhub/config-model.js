@@ -460,7 +460,7 @@ function buildFieldDefinitions() {
       path: 'dcExportMode.enabled',
       label: 'PV-Export-Modus aktivieren',
       type: 'boolean',
-      help: 'Wenn aktiv, wird der Grid Setpoint dynamisch auf -(Gesamt-PV-Leistung) gesetzt, sodass der Multi/Quattro die komplette PV-Produktion (DC + AC) ins Netz einspeist. Netto-Batteriestrom bleibt bei ca. 0A.'
+      help: 'Wenn aktiv, wird der Grid Setpoint dynamisch auf -(Gesamt-PV-Leistung) gesetzt, sodass der Multi/Quattro die komplette PV-Produktion (DC + AC) ins Netz einspeist. Netto-Batteriestrom bleibt bei ca. 0A. Bei negativen B\u00f6rsenpreisen wird der Export automatisch pausiert.'
     },
     {
       section: 'system',
