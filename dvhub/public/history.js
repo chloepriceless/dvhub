@@ -185,6 +185,38 @@ function renderKpis(summary) {
   const netValue = document.getElementById('historyKpiNet');
   if (netValue) netValue.style.color = net >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
 
+  // DV-Vergleich — nur Monat/Jahr
+  const dvView = String(summary?.view || '');
+  const dvVisible = (dvView === 'month' || dvView === 'year')
+    && kpis?.hypFullFeedInEur != null;
+  const dvSection = document.getElementById('historyDvComparisonSection');
+  if (dvSection) dvSection.style.display = dvVisible ? '' : 'none';
+
+  if (dvVisible) {
+    setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
+    setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
+
+    // DV-Mehrerlos: gruen wenn positiv, orange wenn negativ
+    const dvExcessEl = document.getElementById('historyKpiDvExcess');
+    if (dvExcessEl) {
+      dvExcessEl.textContent = fmtEur(kpis.dvExcessEur);
+      dvExcessEl.style.color = (kpis.dvExcessEur ?? 0) >= 0
+        ? 'var(--flow-green)'
+        : 'var(--flow-orange)';
+    }
+
+    setText('historyKpiDvCost', fmtEur(-(Math.abs(kpis.dvCostEur ?? 0))));
+
+    // Netto DV-Vorteil: gruen wenn positiv, orange wenn negativ
+    const dvNetEl = document.getElementById('historyKpiDvNetAdvantage');
+    if (dvNetEl) {
+      dvNetEl.textContent = fmtEur(kpis.dvNetAdvantageEur);
+      dvNetEl.style.color = (kpis.dvNetAdvantageEur ?? 0) >= 0
+        ? 'var(--flow-green)'
+        : 'var(--flow-orange)';
+    }
+  }
+
   const view = String(summary?.view || '');
   const premiumVisible = view === 'week' || view === 'month' || view === 'year';
   const displaySource = String(summary?.meta?.marketPremium?.displaySource || summary?.meta?.marketPremium?.source || '');
