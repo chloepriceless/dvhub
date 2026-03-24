@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.3.10 |
+| **Status** | `main` -- Version 0.4.0 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -511,6 +511,37 @@ Unter `userEnergyPricing` stehen für die History-Marktprämie zwei zusätzliche
 ---
 
 ## Changelog
+
+### 0.4.0 (2026-03-24)
+
+**Responsive Dashboard (iPhone 15 Pro Max):**
+
+- Hamburger-Navigation (CSS-only Checkbox-Hack, kein JS)
+- Flow-Diagramm skaliert auf 430px Viewport
+- Netzphasen-Detail unterhalb des Diagramms auf Mobile
+- Touch-optimierte Karten (44px Targets), kompakte Tabellen
+- Tier-Felder gestapelt (Label oben, Input darunter)
+- Keine horizontalen Scrollbars, keine versteckten Spalten
+
+**PV-Export-Modus (ehem. DC-Export-Modus):**
+
+- Umbenannt: DC-Export-Modus -> PV-Export-Modus
+- Nutzt jetzt pvTotalW (DC + AC) statt nur DC-PV fuer Grid Setpoint
+- Negativpreis-Schutz: Export pausiert automatisch bei EPEX < 0 ct/kWh
+- Bei Preis >= 0 wird sofort weiter exportiert
+
+**Dashboard-Verbesserungen:**
+
+- PV-Karte zeigt PV Gesamt als Hauptwert (DC-PV + AC-PV)
+- AC-PV-Wert wird aus Gesamtleistung und DC-PV berechnet
+- Tooltip-Icons (i) fuer alle Einstellungsfelder mit Help-Text
+
+**Einstellungen:**
+
+- Sinnvolle Defaults bei Erstinstallation (Strompreise, Batterie, Boersenautomatik)
+- PV-Kopplungsauswahl (AC/DC/AC+DC) mit Modbus-Endpunkt pro Hersteller
+- Standort-Eingabe mit OpenStreetMap-Picker (Koordinaten per Klick)
+- MILP als Default-Engine fuer Boersenautomatik
 
 ### 0.3.10 (2026-03-22)
 
