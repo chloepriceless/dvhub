@@ -123,6 +123,10 @@ function isRoundedPartialFeedLabel(value) {
   return /teileinspeisung/i.test(String(value || '')) && /gerundet/i.test(String(value || ''));
 }
 
+export function isRoundedFullFeedLabel(value) {
+  return /volleinspeisung/i.test(String(value || '')) && /gerundet/i.test(String(value || ''));
+}
+
 function normalizeTierEntries(tiers) {
   return (Array.isArray(tiers) ? tiers : [])
     .map((entry) => ({
@@ -141,12 +145,20 @@ function normalizeReferenceData(referenceData) {
     return result;
   }, {});
 
+  const fullFeedApplicableValueTiersByMonth = Object.entries(referenceData?.fullFeedApplicableValueTiersByMonth || {}).reduce((result, [monthKey, tiers]) => {
+    if (!/^\d{4}-\d{2}$/.test(monthKey)) return result;
+    const normalizedTiers = normalizeTierEntries(tiers);
+    if (normalizedTiers.length) result[monthKey] = normalizedTiers;
+    return result;
+  }, {});
+
   return {
     source: referenceData?.source || 'bundesnetzagentur',
     updatedAt: referenceData?.updatedAt || null,
     archiveUrl: referenceData?.archiveUrl || BUNDESNETZAGENTUR_ARCHIVE_URL,
     publications: Array.isArray(referenceData?.publications) ? referenceData.publications.map(String) : [],
-    applicableValueTiersByMonth
+    applicableValueTiersByMonth,
+    fullFeedApplicableValueTiersByMonth
   };
 }
 
@@ -171,9 +183,12 @@ function hasYear(referenceData, year) {
   return Object.keys(referenceData?.applicableValueTiersByMonth || {}).some((monthKey) => monthKey.startsWith(`${numericYear}-`));
 }
 
-function selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp } = {}) {
+export function selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp, feedType = 'partial' } = {}) {
   const monthKey = typeof commissionedAt === 'string' ? commissionedAt.slice(0, 7) : '';
-  const tiers = referenceData?.applicableValueTiersByMonth?.[monthKey];
+  const tierMap = feedType === 'full'
+    ? referenceData?.fullFeedApplicableValueTiersByMonth
+    : referenceData?.applicableValueTiersByMonth;
+  const tiers = tierMap?.[monthKey];
   if (!Array.isArray(tiers) || tiers.length === 0) return null;
   const numericKwp = normalizeNumber(kwp);
   if (!Number.isFinite(numericKwp) || numericKwp <= 0) return null;
@@ -183,16 +198,19 @@ function selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp } = {})
   return tiers[tiers.length - 1]?.ctKwh ?? null;
 }
 
-function buildApplicableValueSummary(referenceData, { year, pvPlants = [] } = {}) {
+function buildApplicableValueSummary(referenceData, { year, pvPlants = [], feedType = 'partial' } = {}) {
   const applicableValueCtKwhByMonth = {};
   for (const plant of Array.isArray(pvPlants) ? pvPlants : []) {
     const monthKey = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt.slice(0, 7) : '';
     if (!/^\d{4}-\d{2}$/.test(monthKey) || monthKey in applicableValueCtKwhByMonth) continue;
-    const ctKwh = selectApplicableValueCtKwh(referenceData, plant);
+    const ctKwh = selectApplicableValueCtKwh(referenceData, { ...plant, feedType });
     if (Number.isFinite(ctKwh)) applicableValueCtKwhByMonth[monthKey] = ctKwh;
   }
   if (Object.keys(applicableValueCtKwhByMonth).length === 0) {
-    for (const [monthKey, tiers] of Object.entries(referenceData?.applicableValueTiersByMonth || {})) {
+    const tierMap = feedType === 'full'
+      ? referenceData?.fullFeedApplicableValueTiersByMonth
+      : referenceData?.applicableValueTiersByMonth;
+    for (const [monthKey, tiers] of Object.entries(tierMap || {})) {
       if (Number.isInteger(Number(year)) && !monthKey.startsWith(`${Number(year)}-`)) continue;
       if (tiers[0] && Number.isFinite(tiers[0].ctKwh)) applicableValueCtKwhByMonth[monthKey] = tiers[0].ctKwh;
     }
@@ -203,8 +221,8 @@ function buildApplicableValueSummary(referenceData, { year, pvPlants = [] } = {}
     updatedAt: referenceData?.updatedAt || null,
     publications: Array.isArray(referenceData?.publications) ? [...referenceData.publications] : [],
     applicableValueCtKwhByMonth,
-    getApplicableValueCtKwh({ commissionedAt, kwp } = {}) {
-      return selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp });
+    getApplicableValueCtKwh({ commissionedAt, kwp, feedType: ft = feedType } = {}) {
+      return selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp, feedType: ft });
     }
   };
 }
@@ -279,9 +297,10 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
   const sharedStrings = parseSharedStringsXml(sharedStringsXml);
   const rows = parseWorksheetRows(sheetXml, sharedStrings);
   const applicableValueTiersByMonth = {};
+  const fullFeedApplicableValueTiersByMonth = {};
 
   const sectionStart = rows.findIndex((row) => Object.values(row.cells).some(isMarketPremiumHeading));
-  if (sectionStart < 0) return { applicableValueTiersByMonth };
+  if (sectionStart < 0) return { applicableValueTiersByMonth, fullFeedApplicableValueTiersByMonth };
 
   const rowsAfterSection = rows.slice(sectionStart + 1);
   const firstMonthRowIndex = rowsAfterSection.findIndex((row) => Object.values(row.cells).some((value) => parseMonthKeys(value).length > 0));
@@ -291,7 +310,7 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
   const labelColumn = headerBlock
     .flatMap((row) => Object.entries(row.cells))
     .find(([, value]) => value === 'Monat' || value === 'Inbetriebnahme')?.[0];
-  if (!labelColumn) return { applicableValueTiersByMonth };
+  if (!labelColumn) return { applicableValueTiersByMonth, fullFeedApplicableValueTiersByMonth };
 
   const tierColumns = headerBlock
     .flatMap((row) => Object.entries(row.cells))
@@ -299,7 +318,7 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
     .filter((entry) => Number.isFinite(entry.upToKwp))
     .filter((entry, index, items) => items.findIndex((candidate) => candidate.column === entry.column) === index)
     .sort((left, right) => columnToNumber(left.column) - columnToNumber(right.column));
-  if (!tierColumns.length) return { applicableValueTiersByMonth };
+  if (!tierColumns.length) return { applicableValueTiersByMonth, fullFeedApplicableValueTiersByMonth };
 
   let currentMonthKey = null;
   for (const row of rows.slice(sectionStart + 1)) {
@@ -311,7 +330,11 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
       currentMonthKey = monthKeys;
       continue;
     }
-    if (!currentMonthKey || !isRoundedPartialFeedLabel(label)) continue;
+    if (!currentMonthKey) continue;
+
+    const isPartial = isRoundedPartialFeedLabel(label);
+    const isFull = isRoundedFullFeedLabel(label);
+    if (!isPartial && !isFull) continue;
 
     const tiers = tierColumns.reduce((result, tierColumn) => {
       const ctKwh = round2(row.cells[tierColumn.column]);
@@ -324,13 +347,14 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
       return result;
     }, []);
     if (tiers.length) {
+      const targetMap = isFull ? fullFeedApplicableValueTiersByMonth : applicableValueTiersByMonth;
       for (const monthKey of currentMonthKey) {
-        applicableValueTiersByMonth[monthKey] = tiers;
+        targetMap[monthKey] = tiers;
       }
     }
   }
 
-  return { applicableValueTiersByMonth };
+  return { applicableValueTiersByMonth, fullFeedApplicableValueTiersByMonth };
 }
 
 export async function fetchBundesnetzagenturApplicableValueReferenceData({
@@ -349,6 +373,7 @@ export async function fetchBundesnetzagenturApplicableValueReferenceData({
   const archiveHtml = await archiveResponse.text();
   const publications = extractBundesnetzagenturApplicableValuePublicationLinks(archiveHtml);
   const applicableValueTiersByMonth = {};
+  const fullFeedApplicableValueTiersByMonth = {};
 
   for (const publicationUrl of publications) {
     const publicationResponse = await fetchImpl(publicationUrl);
@@ -361,13 +386,15 @@ export async function fetchBundesnetzagenturApplicableValueReferenceData({
     const sheetXml = findSheetXml(entries)?.toString('utf8') || '';
     const parsed = parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, sheetXml });
     Object.assign(applicableValueTiersByMonth, parsed.applicableValueTiersByMonth);
+    Object.assign(fullFeedApplicableValueTiersByMonth, parsed.fullFeedApplicableValueTiersByMonth);
   }
 
   return normalizeReferenceData({
     source: 'bundesnetzagentur',
     archiveUrl,
     publications,
-    applicableValueTiersByMonth
+    applicableValueTiersByMonth,
+    fullFeedApplicableValueTiersByMonth
   });
 }
 
