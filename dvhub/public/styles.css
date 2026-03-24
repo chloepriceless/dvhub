@@ -1205,10 +1205,22 @@ button {
     height: 16px;
   }
 
-  /* Automation config + tier grid — single column on phone */
+  /* Automation config + tier grid — single column, stacked */
   .automation-config-grid,
   .pricing-period-grid {
     grid-template-columns: 1fr;
+  }
+
+  .pricing-period-grid .settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .pricing-period-grid .settings-field span {
+    font-size: 0.6rem;
+  }
+  .pricing-period-grid .settings-field input {
+    width: 100%;
   }
 
   .metric-row {
