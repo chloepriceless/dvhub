@@ -1006,7 +1006,14 @@ button {
 @media (max-width: 767px) {
   .main-body {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "flow-center"
+      "left-rail"
+      "right-rail"
+      "chart-area";
   }
+
+  .flow-center { order: -1; }
 
   .rail {
     flex-direction: column;
@@ -1019,7 +1026,11 @@ button {
 
   .flow-diagram {
     max-width: 100%;
-    height: 240px;
+    height: 280px;
+  }
+
+  .chart-sub-row {
+    grid-template-columns: 1fr;
   }
 
   .bottom-panel {
@@ -1044,6 +1055,122 @@ button {
   .app-shell {
     grid-template-rows: auto 1fr auto;
   }
+}
+
+/* --- Hamburger button (hidden on desktop) --- */
+.topbar-burger {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 11;
+}
+.topbar-burger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--flow-text);
+  border-radius: 1px;
+  transition: transform 0.2s, opacity 0.2s;
+}
+.topbar-burger.is-open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.topbar-burger.is-open span:nth-child(2) { opacity: 0; }
+.topbar-burger.is-open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+/* --- Mobile: ≤480px (iPhone 15 Pro Max = 430px viewport) --- */
+@media (max-width: 480px) {
+  /* Hamburger nav */
+  .topbar-burger { display: flex; }
+
+  .topbar-nav {
+    display: none;
+    width: 100%;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 0;
+    order: 10;
+  }
+  .topbar-nav.is-open { display: flex; }
+
+  .topbar-nav a {
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 12px;
+    gap: 4px;
+  }
+
+  .topbar-brand span { font-size: 0.85rem; }
+
+  /* Flow diagram — compact */
+  .flow-diagram {
+    height: 300px;
+    max-width: 100%;
+  }
+
+  .flow-node {
+    padding: 8px 12px;
+    min-width: 80px;
+    border-radius: 10px;
+  }
+
+  .flow-node-icon { font-size: 1.1rem; margin-bottom: 2px; }
+  .flow-node-value { font-size: 1rem; }
+  .flow-node-label { font-size: 0.58rem; }
+  .flow-node-sub { font-size: 0.58rem; }
+
+  .center-ring {
+    width: 90px;
+    height: 90px;
+  }
+  .cr-val { font-size: 1rem; }
+  .cr-lbl { font-size: 0.55rem; }
+  .cr-sub { font-size: 0.55rem; }
+
+  /* Grid detail — below diagram instead of absolute */
+  .flow-grid-detail {
+    position: static;
+    margin: 8px auto 0;
+    width: fit-content;
+  }
+
+  /* Cards — touch friendly */
+  .rail-card { padding: 10px; }
+  .card-value { font-size: 1.6rem; }
+
+  .metric-row {
+    min-height: 44px;
+    align-items: center;
+  }
+
+  /* Control inputs — full width stacked */
+  .ctrl-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ctrl-row label {
+    width: 100%;
+  }
+  .ctrl-row input[type="number"] {
+    width: 100%;
+    min-height: 44px;
+    font-size: 1rem;
+  }
+  .ctrl-row .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  /* Bottom panel compact */
+  .bottom-card { font-size: 0.7rem; }
 }
 
 /* ============================================================

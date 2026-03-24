@@ -24,6 +24,9 @@
         <img src="/assets/dvhub.jpg" alt="DVhub Logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;">
         <span>DVhub</span>
       </div>
+      <button class="topbar-burger" aria-label="Menü öffnen" aria-expanded="false" onclick="this.classList.toggle('is-open');this.nextElementSibling.classList.toggle('is-open');this.setAttribute('aria-expanded',this.classList.contains('is-open'))">
+        <span></span><span></span><span></span>
+      </button>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a class="is-active" href="/">Leitstand</a>
         <a href="/history.html">Historie</a>
