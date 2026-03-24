@@ -1135,6 +1135,11 @@ button {
   .flow-diagram {
     height: 260px;
     max-width: 100%;
+    overflow: visible;
+  }
+
+  /* Hide SVG lines that extend beyond container */
+  .flow-diagram svg {
     overflow: hidden;
   }
 
@@ -1148,6 +1153,8 @@ button {
   .flow-node-value { font-size: 0.9rem; }
   .flow-node-label { font-size: 0.55rem; }
   .flow-node-sub { font-size: 0.55rem; }
+
+  .flow-node-grid { min-width: 90px; }
 
   .center-ring {
     width: 80px;
