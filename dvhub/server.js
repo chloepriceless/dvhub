@@ -3487,17 +3487,18 @@ if (IS_RUNTIME_PROCESS) {
   startMonitoringHeartbeat();
 }
 
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
   persistEnergy();
   liveTelemetryBuffer?.flush({ force: true });
   if (runtimeWorker) runtimeWorker.kill();
-  transport.destroy();
-  scanTransport.destroy();
+  // Close Modbus TCP connections gracefully (FIN, not RST)
+  await Promise.all([transport.destroy(), scanTransport.destroy()]);
   if (telemetryStore) telemetryStore.close();
   if (mbServer) mbServer.close();
   if (IS_WEB_PROCESS) web.close();
-  process.exit(0);
+  // Short delay to let TCP FIN packets flush before exiting
+  setTimeout(() => process.exit(0), 500).unref();
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
