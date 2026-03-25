@@ -979,7 +979,10 @@ function persistEnergy() {
       lastTs: state.energy.lastTs,
       savedAt: Date.now()
     };
-    fs.writeFileSync(ENERGY_PATH, JSON.stringify(data) + '\n', 'utf8');
+    // Atomic write: temp file + rename prevents corruption on crash/power loss
+    const tmpPath = ENERGY_PATH + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(data) + '\n', 'utf8');
+    fs.renameSync(tmpPath, ENERGY_PATH);
   } catch (e) {
     // silent - avoid recursive log if pushLog triggers persist
   }
@@ -2450,10 +2453,25 @@ function isLocalNetworkRequest(req) {
   return false;
 }
 
+// Sensitive endpoints that always require token auth, even from LAN
+const SENSITIVE_ENDPOINTS = new Set([
+  '/api/admin/update/check', '/api/admin/update/apply', '/api/admin/restart',
+  '/api/admin/health', '/api/config', '/api/config/import',
+  '/api/control/write', '/api/integration/eos/apply', '/api/integration/emhass/apply'
+]);
+
+function isSensitiveRequest(req) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  if (SENSITIVE_ENDPOINTS.has(url.pathname)) return req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
+  if (url.pathname === '/api/config' && req.method === 'POST') return true;
+  if (url.pathname.startsWith('/api/admin/')) return true;
+  return false;
+}
+
 function checkAuth(req, res) {
   if (!cfg.apiToken) return true;
-  // LAN / localhost requests bypass token check
-  if (isLocalNetworkRequest(req)) return true;
+  // LAN requests bypass token check for read-only/non-sensitive endpoints
+  if (isLocalNetworkRequest(req) && !isSensitiveRequest(req)) return true;
   const expected = Buffer.from(cfg.apiToken);
   const auth = req.headers.authorization || '';
   if (auth.startsWith('Bearer ')) {
@@ -2755,6 +2773,24 @@ function serveStatic(req, res) {
 const web = http.createServer(async (req, res) => {
   try {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  // CORS: restrict cross-origin API access to same origin only
+  const origin = req.headers.origin;
+  if (origin && url.pathname.startsWith('/api/')) {
+    const host = req.headers.host;
+    const allowedOrigins = [`http://${host}`, `https://${host}`];
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Max-Age', '3600');
+    }
+    if (req.method === 'OPTIONS') {
+      res.writeHead(allowedOrigins.includes(origin) ? 204 : 403, SECURITY_HEADERS);
+      res.end();
+      return;
+    }
+  }
 
   if (url.pathname === '/' && req.method === 'GET') {
     return servePage(res, loadedConfig.needsSetup ? 'setup.html' : 'index.html');
@@ -3502,6 +3538,18 @@ async function gracefulShutdown(signal) {
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled promise rejection:', reason);
+  pushLog('unhandled_rejection', { error: String(reason?.message || reason) });
+  persistEnergy();
+  liveTelemetryBuffer?.flush({ force: true });
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+  try { persistEnergy(); } catch {}
+  try { liveTelemetryBuffer?.flush({ force: true }); } catch {}
+  process.exit(1);
+});
 
 console.log('Config loaded:', {
   processRole: PROCESS_ROLE,
