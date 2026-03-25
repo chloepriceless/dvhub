@@ -1118,8 +1118,8 @@ function syncMinSocEditorFromReadback(value) {
   if (!slider) return;
   const fallbackValue = Number(slider.value);
   const normalizedValue = Number.isFinite(Number(value))
-    ? Math.round(Number(value))
-    : (Number.isFinite(fallbackValue) ? fallbackValue : 20);
+    ? Math.round(Number(value) / 5) * 5
+    : (Number.isFinite(fallbackValue) ? Math.round(fallbackValue / 5) * 5 : 20);
   slider.value = String(normalizedValue);
   syncMinSocEditorPreview(normalizedValue);
 }
@@ -1560,7 +1560,7 @@ function addScheduleRow(opts = {}) {
     <td><input type="time" class="sched-end" value="${escapeAttr(end)}" ${disabled} /></td>
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
-    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="1" ${disabled} /></label></td>
+    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="5" ${disabled} /></label></td>
     <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="DC-PV einspeisen statt laden" /></td>
     <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
