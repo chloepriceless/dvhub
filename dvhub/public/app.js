@@ -949,8 +949,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           title: { display: true, text: 'ct/kWh', color: '#9ca3af', font: { size: 11 } },
           ticks: { color: '#9ca3af', font: { size: 10 } },
           grid: { color: '#e5e7eb20', lineWidth: 1 },
-          beginAtZero: true,
-          min: 0
+          beginAtZero: true
         },
         kw: {
           position: 'right',
@@ -968,6 +967,48 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   // Set canvas container height
   container.style.height = '380px';
+
+  // Negative zone plugin - highlights negative-price time slots with a full-height
+  // red tint and draws a dashed zero line when negative values are visible.
+  const negativeZonePlugin = {
+    id: 'negativeZone',
+    beforeDatasetsDraw(chart) {
+      const yScale = chart.scales.y;
+      const ctx = chart.ctx;
+      const { top, bottom, left, right } = chart.chartArea;
+
+      // Full-height red tint behind each negative bar
+      const ds = chart.data.datasets.findIndex(d => d.label === 'Börsenpreis');
+      if (ds >= 0) {
+        const meta = chart.getDatasetMeta(ds);
+        ctx.save();
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.10)';
+        meta.data.forEach((bar, i) => {
+          const val = Number(data[i]?.ct_kwh);
+          if (val < 0) {
+            ctx.fillRect(bar.x - bar.width / 2, top, bar.width, bottom - top);
+          }
+        });
+        ctx.restore();
+      }
+
+      // Dashed zero line when negative values exist
+      if (yScale && yScale.min < 0) {
+        const zeroPixel = yScale.getPixelForValue(0);
+        if (zeroPixel < bottom) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.40)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(left, zeroPixel);
+          ctx.lineTo(right, zeroPixel);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+  };
 
   // Selection overlay plugin - draws highlight over selected bars
   const selectionHighlightPlugin = {
@@ -1000,7 +1041,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       });
     }
   };
-  config.plugins = [selectionHighlightPlugin, ...(config.plugins || [])];
+  config.plugins = [negativeZonePlugin, selectionHighlightPlugin, ...(config.plugins || [])];
 
   priceChartInstance = new Chart(canvas, config);
 
