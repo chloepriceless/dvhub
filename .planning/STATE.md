@@ -1,13 +1,13 @@
 # DVhub Project State
 
 ## Current Phase
-Phase 1: DV-Mehrerlös vs Einspeisevergütung — Plan 2/N complete
+Phase 1: DV-Mehrerlös vs Einspeisevergütung — Plan 3/3 complete
 
 ## Current Plan
-Plan 3 (next)
+Phase 1 complete — ready for next phase
 
 ## Progress
-Phase 1: 2 plan(s) complete
+Phase 1: 3 plan(s) complete
 
 ## Accumulated Context
 
@@ -29,6 +29,11 @@ Phase 1: 2 plan(s) complete
 - Test getCurrentDate set to future date to avoid history/live split causing duplicate slots
 - dvCostEur year view counts distinct months with exportKwh > 0 (not hardcoded 12)
 
+### Phase 1 — Plan 3: DV Comparison UI
+- DV comparison section wrapped in single container div (historyDvComparisonSection) toggled via setHidden — avoids toggling 5 rows individually
+- View check uses summary?.view || window._currentHistoryView for robustness across rendering code paths
+- dvCostEur displayed as -(Math.abs(...)) to ensure negative sign regardless of upstream value sign
+
 ## Session Info
-- Last session: 2026-03-25T00:35:00Z
-- Stopped at: Completed 01-02-PLAN.md
+- Last session: 2026-03-25T00:40:00Z
+- Stopped at: Completed 01-03-PLAN.md

@@ -16,4 +16,4 @@
 Plans:
 - [x] 01-01-PLAN.md — EEG rules lookup table (eeg-rules.js) with TDD
 - [x] 01-02-PLAN.md — Backend DV comparison KPI calculation + config extension
-- [ ] 01-03-PLAN.md — Frontend: 5 new rows in Gesamtbilanz card
+- [x] 01-03-PLAN.md — Frontend: 5 new rows in Gesamtbilanz card
