@@ -66,4 +66,9 @@
     getStoredApiToken,
     setStoredApiToken
   };
+
+  // Register service worker for PWA support
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 })();
