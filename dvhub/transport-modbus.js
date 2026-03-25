@@ -79,8 +79,29 @@ export function createModbusTransport() {
           clearTimeout(this.idleTimer);
           this.idleTimer = null;
         }
-        this._fail(new Error('pool cleanup'));
+        // Reject pending/queued requests without killing the socket yet
+        const p = this.pending;
+        if (p) {
+          this.pending = null;
+          if (p.timer) clearTimeout(p.timer);
+          p.reject(new Error('pool cleanup'));
+        }
+        for (const q of this.queue) {
+          if (q.timer) clearTimeout(q.timer);
+          q.reject(new Error('pool cleanup'));
+        }
+        this.queue = [];
+        this.buf = Buffer.alloc(0);
         mbPool.delete(this.key);
+        // Graceful close: send FIN instead of RST so the remote side
+        // sees a clean TCP disconnect and releases resources.
+        const sock = this.sock;
+        this.sock = null;
+        if (sock && !sock.destroyed) {
+          sock.end();
+          // Force-kill if the remote doesn't close within 2s
+          setTimeout(() => { if (!sock.destroyed) sock.destroy(); }, 2000).unref();
+        }
       },
       send(reqBuf, timeoutMs) {
         return new Promise((resolve, reject) => {
