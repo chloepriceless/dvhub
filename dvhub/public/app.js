@@ -592,8 +592,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   if (!Array.isArray(data) || data.length === 0) { canvas.style.display = 'none'; return; }
   canvas.style.display = '';
 
-  // Destroy previous chart
-  if (priceChartInstance) { priceChartInstance.destroy(); priceChartInstance = null; }
+  // Preserve legend hidden state across redraws so user toggles survive the 3s refresh
+  const prevHiddenDatasets = new Set();
+  if (priceChartInstance) {
+    priceChartInstance.data.datasets.forEach((ds, i) => {
+      if (priceChartInstance.getDatasetMeta(i).hidden) prevHiddenDatasets.add(ds.label);
+    });
+    priceChartInstance.destroy();
+    priceChartInstance = null;
+  }
 
   // --- Colors ---
   const chartPositive = cssVar('--chart-positive', '#0077ff');
@@ -1050,6 +1057,16 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   config.plugins = [negativeZonePlugin, selectionHighlightPlugin, ...(config.plugins || [])];
 
   priceChartInstance = new Chart(canvas, config);
+
+  // Restore legend hidden state from previous chart instance
+  if (prevHiddenDatasets.size) {
+    priceChartInstance.data.datasets.forEach((ds, i) => {
+      if (prevHiddenDatasets.has(ds.label)) {
+        priceChartInstance.getDatasetMeta(i).hidden = true;
+      }
+    });
+    priceChartInstance.update('none');
+  }
 
   // --- Click selection for schedule creation ---
   canvas.addEventListener('mouseleave', () => {
