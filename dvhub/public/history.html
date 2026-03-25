@@ -22,6 +22,10 @@
         <img src="/assets/dvhub.jpg" alt="DVhub Logo" style="width:28px;height:28px;border-radius:6px;object-fit:contain;">
         <span>DVhub</span>
       </div>
+      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
+      <label for="menuToggle" class="topbar-burger" aria-label="Menü öffnen">
+        <span></span><span></span><span></span>
+      </label>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a href="/">Leitstand</a>
         <a class="is-active" href="/history.html">Historie</a>
@@ -44,7 +48,7 @@
           <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <div class="history-nav-buttons" aria-label="Zeitraum wechseln" style="display:flex;gap:4px;">
               <button id="historyPrevBtn" class="btn btn-ghost btn-small" type="button" aria-label="Vorheriger Zeitraum">&#8592;</button>
-              <button id="historyNextBtn" class="btn btn-ghost btn-small" type="button" aria-label="Naechster Zeitraum">&#8594;</button>
+              <button id="historyNextBtn" class="btn btn-ghost btn-small" type="button" aria-label="Nächster Zeitraum">&#8594;</button>
             </div>
             <select id="historyView" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:4px 8px;border-radius:6px;font-size:0.75rem;">
               <option value="day">Tag</option>
@@ -186,7 +190,7 @@
 
       <!-- Detail cards -->
       <div class="page-grid" style="margin-bottom:10px;">
-        <!-- Marktpraemie -->
+        <!-- Marktprämie -->
         <article id="historyPremiumFields" class="sub-card" hidden>
           <div class="panel-head">
             <div>
