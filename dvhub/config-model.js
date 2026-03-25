@@ -2212,8 +2212,11 @@ export function loadConfigFile(configPath) {
 export function saveConfigFile(configPath, rawInput) {
   const normalized = normalizeConfigInput(rawInput);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
-  fs.chmodSync(configPath, 0o600);
+  // Atomic write: temp file + rename prevents corruption on crash/power loss
+  const tmpPath = configPath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
+  fs.chmodSync(tmpPath, 0o600);
+  fs.renameSync(tmpPath, configPath);
   return loadConfigFile(configPath);
 }
 
