@@ -123,8 +123,8 @@ function formatHistoryImportResult(result) {
   }
   if (result.mode === 'gap') {
     return result.windowsVisited
-      ? `Luecken-Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} offene Fenster bearbeitet, Job ${result.jobId}.`
-      : 'Keine offenen VRM-Luecken gefunden.';
+      ? `Lücken-Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} offene Fenster bearbeitet, Job ${result.jobId}.`
+      : 'Keine offenen VRM-Lücken gefunden.';
   }
   if (result.windowsVisited != null) {
     return `Backfill gestartet: ${result.importedRows} Werte, ${result.importedWindows}/${result.windowsVisited} Fenster mit Daten, Job ${result.jobId}.`;

@@ -1462,7 +1462,7 @@ function renderHealth(payload) {
   const serviceMeta = document.getElementById('serviceMeta');
   if (serviceMeta) {
     serviceMeta.textContent =
-      `Service: ${service.name || '-'} | Status: ${service.status || '-'} | Runtime: ${payload.runtime?.node || '-'} | Geprueft: ${fmtTs(payload.checkedAt)}`;
+      `Service: ${service.name || '-'} | Status: ${service.status || '-'} | Runtime: ${payload.runtime?.node || '-'} | Geprüft: ${fmtTs(payload.checkedAt)}`;
   }
 
   const restartButton = document.getElementById('restartServiceBtn');
@@ -1714,7 +1714,7 @@ function initSettingsPage() {
     pvPlantsValidation = [];
     renderSettingsShell();
     updateSaveBar();
-    setBanner('Aenderungen verworfen.', 'info');
+    setBanner('Änderungen verworfen.', 'info');
   });
 
   document.getElementById('reloadConfigBtn')?.addEventListener('click', () => loadConfig().catch((error) => {

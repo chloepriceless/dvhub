@@ -1136,7 +1136,7 @@ function renderCharts(summary) {
       actualNetEur: actualNetEur(item)
     })), [
       { key: 'actualCostEur', label: 'Kosten', className: 'history-series-cost' },
-      { key: 'exportRevenueEur', label: 'Erloese', className: 'history-series-revenue' },
+      { key: 'exportRevenueEur', label: 'Erlöse', className: 'history-series-revenue' },
       { key: 'actualNetEur', label: 'Netto', className: 'history-series-net' }
     ], fmtEur, 'EUR');
     renderDetailedDayChart('historyEnergyChart', dayEnergyLines);
