@@ -14,7 +14,10 @@ function fmtDmHm(ts) { return new Date(ts).toLocaleString('de-DE', { day: '2-dig
 function fmtCentValue(value, maximumFractionDigits = 2) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return '-';
-  return `${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits })} Cent`;
+  // Show 3 decimals for small values near zero so -0,008 doesn't display as "-0,00"
+  const digits = (maximumFractionDigits <= 2 && Math.abs(numericValue) > 0 && Math.abs(numericValue) < 1)
+    ? 3 : maximumFractionDigits;
+  return `${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: digits })} Cent`;
 }
 
 function fmtCentFromCt(ct) {
@@ -509,8 +512,11 @@ function buildChartSelectionRange(startIndex, endIndex) {
 }
 
 function fmtCt(value, digits = 2) {
-  if (!Number.isFinite(Number(value))) return '-';
-  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: digits })} ct/kWh`;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return '-';
+  // Show 3 decimals for small values near zero for better readability
+  const d = (digits <= 2 && Math.abs(v) > 0 && Math.abs(v) < 1) ? 3 : digits;
+  return `${v.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: d })} ct/kWh`;
 }
 
 function fmtSignedCt(value, digits = 2) {
