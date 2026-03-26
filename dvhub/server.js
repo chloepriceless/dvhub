@@ -80,6 +80,7 @@ import {
   resolveImportPriceCtKwhForSlot,
   configuredModule3Windows
 } from './user-energy-pricing.js';
+import { createModbusServer } from './modbus-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -757,25 +758,11 @@ function persistConfig() {
   }
 }
 
-// -- DI Context (Template for all module extractions) -----------------------
-// Every create* factory receives this ctx object. Modules use what they need.
-// getCfg() is a GETTER -- never pass cfg directly (prevents stale closure on hot-reload).
-// After each createXxx(ctx), extend ctx with the new module's public methods.
+// -- DI Context -----------------------
+// ctx is defined after all injected functions exist (after controlValue).
+// See ctx definition below for the full shape.
 // Init order = dependency order: utils (pure imports), pricing (pure imports),
 // then epex -> poller -> scheduler -> modbus-server -> routes.
-//
-// TODO(Phase 2): Move ctx definition after transport initialization.
-// For Phase 1, this documents the contract shape only.
-// const ctx = {
-//   state,                          // Shared mutable state (by reference)
-//   getCfg: () => cfg,              // Getter -- NEVER pass cfg directly
-//   transport,                      // Modbus/MQTT transport instance
-//   pushLog,                        // (event, details) => void -- writes to state.log
-//   telemetrySafeWrite,             // (action, opts) => Promise -- wraps telemetry store writes
-//   persistConfig                   // () => void -- saves and hot-reloads config
-// };
-// Phase 1: ctx created but not yet consumed by any factory.
-// Phase 2+: const epex = createEpexFetcher(ctx); ctx.epexNowNext = epex.epexNowNext;
 
 async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
@@ -1157,149 +1144,23 @@ function controlValue() {
   return state.ctrl.forcedOff ? 0 : 1;
 }
 
-function setReg(addr, value) { state.dvRegs[addr] = u16(value); }
-function getReg(addr) { return u16(state.dvRegs[addr] ?? 0); }
+// -- DI Context (activated in Phase 2) ---------------------------------------
+// Every create* factory receives this ctx object. Modules use what they need.
+// getCfg() is a GETTER -- never pass cfg directly (prevents stale closure on hot-reload).
+// After each createXxx(ctx), extend ctx with the new module's public methods.
+const ctx = {
+  state,
+  getCfg: () => cfg,
+  transport,
+  pushLog,
+  telemetrySafeWrite,
+  persistConfig,
+  setForcedOff,
+  clearForcedOff,
+  expireLeaseIfNeeded
+};
 
-function buildException(tid, unit, fc, code) {
-  const b = Buffer.alloc(9);
-  b.writeUInt16BE(tid, 0);
-  b.writeUInt16BE(0, 2);
-  b.writeUInt16BE(3, 4);
-  b.writeUInt8(unit, 6);
-  b.writeUInt8((fc | 0x80) & 0xff, 7);
-  b.writeUInt8(code, 8);
-  return b;
-}
-
-function buildReadResp(tid, unit, fc, addr, qty) {
-  const byteCount = qty * 2;
-  const out = Buffer.alloc(9 + byteCount);
-  out.writeUInt16BE(tid, 0);
-  out.writeUInt16BE(0, 2);
-  out.writeUInt16BE(3 + byteCount, 4);
-  out.writeUInt8(unit, 6);
-  out.writeUInt8(fc, 7);
-  out.writeUInt8(byteCount, 8);
-  const regs = [];
-  for (let i = 0; i < qty; i++) {
-    const v = getReg(addr + i);
-    regs.push(v);
-    out.writeUInt16BE(v, 9 + i * 2);
-  }
-  return { out, regs };
-}
-
-function handleWriteSignal(addr, values) {
-  if (addr === 0 && values.length >= 2) {
-    if (values[0] === 0 && values[1] === 0) return setForcedOff('fc16_addr0_0000');
-    if (values[0] === 0xffff && values[1] === 0xffff) return clearForcedOff('fc16_addr0_ffff');
-  }
-  if (addr === 3 && values.length >= 1) {
-    if (values[0] === 1) return setForcedOff('fc16_addr3_0001');
-    if (values[0] === 0) return clearForcedOff('fc16_addr3_0000');
-  }
-}
-
-function rememberModbusQuery({ remote, fc, addr, qty, sample }) {
-  state.keepalive.modbusLastQuery = {
-    ts: Date.now(),
-    remote,
-    fc,
-    addr,
-    qty,
-    sample
-  };
-}
-
-function processModbusFrame(frame, remote) {
-  if (frame.length < 8) return null;
-  const tid = frame.readUInt16BE(0);
-  const pid = frame.readUInt16BE(2);
-  const len = frame.readUInt16BE(4);
-  if (pid !== 0 || len < 2 || frame.length < 6 + len) return null;
-  const unit = frame.readUInt8(6);
-  const fc = frame.readUInt8(7);
-
-  expireLeaseIfNeeded();
-
-  if (fc === 3 || fc === 4) {
-    if (len < 6) return buildException(tid, unit, fc, 3);
-    const addr = frame.readUInt16BE(8);
-    const qty = frame.readUInt16BE(10);
-    if (qty < 1 || qty > 125) return buildException(tid, unit, fc, 3);
-    const { out, regs } = buildReadResp(tid, unit, fc, addr, qty);
-    rememberModbusQuery({ remote, fc, addr, qty, sample: regs.slice(0, 8) });
-    return out;
-  }
-
-  if (fc === 6) {
-    if (len < 6) return buildException(tid, unit, fc, 3);
-    const addr = frame.readUInt16BE(8);
-    const val = frame.readUInt16BE(10);
-    setReg(addr, val);
-    handleWriteSignal(addr, [val]);
-    pushLog('modbus_fc6', { remote, addr, value: val, forcedOff: state.ctrl.forcedOff });
-    return frame.subarray(0, 12);
-  }
-
-  if (fc === 16) {
-    if (len < 7) return buildException(tid, unit, fc, 3);
-    const addr = frame.readUInt16BE(8);
-    const qty = frame.readUInt16BE(10);
-    const bc = frame.readUInt8(12);
-    if (bc !== qty * 2) return buildException(tid, unit, fc, 3);
-    if (13 + bc > 6 + len) return buildException(tid, unit, fc, 3);
-
-    const values = [];
-    for (let i = 0; i < qty; i++) {
-      const v = frame.readUInt16BE(13 + i * 2);
-      values.push(v);
-      setReg(addr + i, v);
-    }
-    handleWriteSignal(addr, values);
-    pushLog('modbus_fc16', { remote, addr, qty, values, forcedOff: state.ctrl.forcedOff });
-
-    const ack = Buffer.alloc(12);
-    ack.writeUInt16BE(tid, 0);
-    ack.writeUInt16BE(0, 2);
-    ack.writeUInt16BE(6, 4);
-    ack.writeUInt8(unit, 6);
-    ack.writeUInt8(16, 7);
-    ack.writeUInt16BE(addr, 8);
-    ack.writeUInt16BE(qty, 10);
-    return ack;
-  }
-
-  return buildException(tid, unit, fc, 1);
-}
-
-let mbServer = null;
-function startModbusServer() {
-  const server = net.createServer((socket) => {
-    const remote = `${socket.remoteAddress}:${socket.remotePort}`;
-    let buffer = Buffer.alloc(0);
-
-    socket.on('data', (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length >= 7) {
-        const len = buffer.readUInt16BE(4);
-        const total = 6 + len;
-        if (buffer.length < total) break;
-
-        const frame = buffer.subarray(0, total);
-        buffer = buffer.subarray(total);
-        const resp = processModbusFrame(frame, remote);
-        if (resp) socket.write(resp);
-      }
-    });
-    socket.on('error', () => {});
-  });
-
-  server.listen(cfg.modbusListenPort, cfg.modbusListenHost, () => {
-    console.log(`Modbus server listening on ${cfg.modbusListenHost}:${cfg.modbusListenPort}`);
-  });
-  mbServer = server;
-}
+const modbus = createModbusServer(ctx);
 
 // Modbus-Client-Funktionen sind jetzt in transport-modbus.js / transport-mqtt.js
 
@@ -1519,10 +1380,10 @@ async function pollMeter() {
       };
     }
 
-    setReg(0, u16(total));
-    setReg(1, total < 0 ? 0xffff : 0x0000);
-    setReg(3, 0);
-    setReg(4, 0);
+    state.dvRegs[0] = u16(total);
+    state.dvRegs[1] = total < 0 ? 0xffff : 0x0000;
+    state.dvRegs[3] = 0;
+    state.dvRegs[4] = 0;
 
     updateEnergyIntegrals(state.meter.updatedAt, total);
   } catch (e) {
@@ -3380,7 +3241,7 @@ if (IS_WEB_PROCESS) {
 
 if (IS_RUNTIME_PROCESS) {
   loadEnergy();
-  startModbusServer();
+  modbus.start();
   setInterval(expireLeaseIfNeeded, 1000);
   setInterval(() => {
     liveTelemetryBuffer?.flush();
@@ -3484,7 +3345,7 @@ async function gracefulShutdown(signal) {
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
   if (telemetryStore) telemetryStore.close();
-  if (mbServer) mbServer.close();
+  modbus.close();
   if (IS_WEB_PROCESS) web.close();
   // Short delay to let TCP FIN packets flush before exiting
   setTimeout(() => process.exit(0), 500).unref();
