@@ -46,11 +46,11 @@ Plans:
   3. Both modules receive dependencies via the DI context (no direct imports of server.js internals)
   4. Graceful shutdown calls close()/stop() on both modules without timer or socket leaks
   5. All 39 test files pass and no new npm dependencies introduced
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Extract modbus-server.js factory, activate DI ctx in server.js
+- [ ] 02-02-PLAN.md -- Extract epex-fetch.js factory with timer lifecycle, update test
 
 ### Phase 3: Polling
 **Goal**: Device polling runs as an independent module while preserving exact mutation ordering between meter reads and energy integral updates
