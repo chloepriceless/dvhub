@@ -31,8 +31,8 @@ function extractFunction(source, name) {
 }
 
 function loadEpexSummaryHelper({ now, epexState }) {
-  const serverPath = path.join(repoRoot, 'server.js');
-  const source = fs.readFileSync(serverPath, 'utf8');
+  const epexPath = path.join(repoRoot, 'epex-fetch.js');
+  const source = fs.readFileSync(epexPath, 'utf8');
   const snippet = extractFunction(source, 'epexNowNext');
   const sandbox = {
     globalThis: {},
