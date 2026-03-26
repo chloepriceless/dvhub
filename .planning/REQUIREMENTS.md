@@ -16,7 +16,7 @@ Requirements for the monolith decomposition. Each maps to roadmap phases.
 ### Module Extraction
 
 - [x] **MODX-01**: user-energy-pricing.js extrahiert — effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, userEnergyPricingSummary, costSummary als Pure Functions
-- [ ] **MODX-02**: modbus-server.js extrahiert — createModbusServer Factory mit start()/close() Lifecycle, processModbusFrame, Register Read/Write
+- [x] **MODX-02**: modbus-server.js extrahiert — createModbusServer Factory mit start()/close() Lifecycle, processModbusFrame, Register Read/Write
 - [ ] **MODX-03**: epex-fetch.js extrahiert — createEpexFetcher Factory mit fetchEpexDay(), fetchVrmForecast(), epexNowNext()
 - [ ] **MODX-04**: polling.js extrahiert — createPoller Factory mit pollMeter(), pollPoint(), updateEnergyIntegrals(), start()/stop() Lifecycle. pollMeter + updateEnergyIntegrals bleiben zusammen (Mutation Ordering)
 - [ ] **MODX-05**: market-automation-builder.js extrahiert — createMarketAutomationBuilder Factory mit buildSmallMarketAutomationRules(), regenerateSmallMarketAutomationRules()
@@ -73,7 +73,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | FOUND-02 | Phase 1 | Complete |
 | FOUND-03 | Phase 1 | Complete |
 | MODX-01 | Phase 1 | Complete |
-| MODX-02 | Phase 2 | Pending |
+| MODX-02 | Phase 2 | Complete |
 | MODX-03 | Phase 2 | Pending |
 | MODX-04 | Phase 3 | Pending |
 | MODX-05 | Phase 4 | Pending |
