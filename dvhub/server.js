@@ -68,6 +68,11 @@ import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
+import {
+  nowIso, fmtTs, resolveLogLimit, u16, s16, parseBody,
+  roundCtKwh, berlinDateString, addDays, localMinutesOfDay,
+  gridDirection, MAX_BODY_BYTES
+} from './server-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -324,7 +329,7 @@ async function buildSmallMarketAutomationRules({
     return true;
   });
   const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
-  const dateStr = berlinDateString(new Date(now));
+  const dateStr = berlinDateString(new Date(now), cfg.epex.timezone);
   const refDate = new Date(`${dateStr}T12:00:00Z`);
   const utcMs = refDate.getTime();
   const localStr = new Intl.DateTimeFormat('en-GB', {
@@ -371,11 +376,11 @@ async function buildSmallMarketAutomationRules({
   if (sunTimesCache?.cache && freeSlots.length) {
     // Find sunrise for the latest slot date and sunset from the previous day
     const latestSlotTs = Math.max(...freeSlots.map(s => Number(s?.ts) || 0));
-    const latestSlotDate = berlinDateString(new Date(latestSlotTs));
+    const latestSlotDate = berlinDateString(new Date(latestSlotTs), cfg.epex.timezone);
     const sunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: latestSlotDate });
     if (sunTimes?.sunriseTs && sunTimes?.sunsetTs) {
       sunriseMsForPlanning = new Date(sunTimes.sunriseTs).getTime();
-      const prevDate = berlinDateString(new Date(latestSlotTs - 86400000));
+      const prevDate = berlinDateString(new Date(latestSlotTs - 86400000), cfg.epex.timezone);
       const prevSunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: prevDate });
       sunsetMsForPlanning = prevSunTimes?.sunsetTs
         ? new Date(prevSunTimes.sunsetTs).getTime()
@@ -513,7 +518,7 @@ async function buildSmallMarketAutomationRules({
       start: formatLocalHHMM(start, timeZone),
       end: formatLocalHHMM(end, timeZone),
       value: Number(expandedBestChain[index]?.powerW ?? automationConfig?.maxDischargeW ?? -40),
-      activeDate: berlinDateString(new Date(now)),
+      activeDate: berlinDateString(new Date(now), cfg.epex.timezone),
       slotTs: slot.ts,
       slotEndTs: slot.ts + SLOT_DURATION_MS,
       source: SMALL_MARKET_AUTOMATION_SOURCE,
@@ -525,7 +530,7 @@ async function buildSmallMarketAutomationRules({
 
 async function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
   const automationConfig = cfg.schedule?.smallMarketAutomation;
-  const runDate = berlinDateString(new Date(now));
+  const runDate = berlinDateString(new Date(now), cfg.epex.timezone);
   const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
   const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));
   const batteryCapacityKwh = automationConfig?.batteryCapacityKwh;
@@ -794,10 +799,10 @@ function buildCurrentRuntimeSnapshot() {
     now: Date.now(),
     meter: {
       ...state.meter,
-      l1Dir: gridDirection(state.meter.grid_l1_w),
-      l2Dir: gridDirection(state.meter.grid_l2_w),
-      l3Dir: gridDirection(state.meter.grid_l3_w),
-      totalDir: gridDirection(state.meter.grid_total_w),
+      l1Dir: gridDirection(state.meter.grid_l1_w, cfg.gridPositiveMeans),
+      l2Dir: gridDirection(state.meter.grid_l2_w, cfg.gridPositiveMeans),
+      l3Dir: gridDirection(state.meter.grid_l3_w, cfg.gridPositiveMeans),
+      totalDir: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans),
       semantics: { positiveMeans: cfg.gridPositiveMeans }
     },
     victron: state.victron,
@@ -966,7 +971,7 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
   }
 }
 
-const ENERGY_PATH = path.join(__dirname, 'energy_state.json');
+const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 
 function persistEnergy() {
   try {
@@ -992,7 +997,7 @@ function loadEnergy() {
   try {
     if (!fs.existsSync(ENERGY_PATH)) return;
     const data = JSON.parse(fs.readFileSync(ENERGY_PATH, 'utf8'));
-    const today = berlinDateString();
+    const today = berlinDateString(new Date(), cfg.epex.timezone);
     if (data.day === today) {
       state.energy.day = data.day;
       state.energy.importWh = Number(data.importWh) || 0;
@@ -1009,51 +1014,10 @@ function loadEnergy() {
   }
 }
 
-function nowIso() { return new Date().toISOString(); }
-function fmtTs(ts) { return ts ? new Date(ts).toISOString() : '-'; }
 function pushLog(event, details = {}) {
   const row = { ts: nowIso(), event, ...details };
   state.log.push(row);
   if (state.log.length > 1000) state.log.shift();
-}
-
-function resolveLogLimit(rawLimit, defaultLimit = 20, maxLimit = 200) {
-  const limit = Number(rawLimit);
-  if (!Number.isFinite(limit) || limit <= 0) return defaultLimit;
-  return Math.min(Math.floor(limit), maxLimit);
-}
-
-function u16(v) {
-  let x = Math.trunc(Number(v) || 0);
-  if (x < 0) x += 0x10000;
-  return x & 0xffff;
-}
-function s16(v) {
-  const x = Number(v) & 0xffff;
-  return x >= 0x8000 ? x - 0x10000 : x;
-}
-
-const MAX_BODY_BYTES = 256 * 1024; // 256 KB
-
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > MAX_BODY_BYTES) {
-        req.destroy();
-        return reject(new Error('body too large'));
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      if (!chunks.length) return resolve({});
-      const raw = Buffer.concat(chunks).toString('utf8');
-      try { resolve(JSON.parse(raw)); } catch { resolve({}); }
-    });
-    req.on('error', reject);
-  });
 }
 
 function validateScheduleRule(rule) {
@@ -1061,34 +1025,6 @@ function validateScheduleRule(rule) {
   if (typeof rule.target !== 'string') return false;
   if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
   return true;
-}
-
-function berlinDateString(d = new Date()) {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: cfg.epex.timezone }).format(d);
-}
-
-function addDays(dateStr, days) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  const yy = dt.getUTCFullYear();
-  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(dt.getUTCDate()).padStart(2, '0');
-  return `${yy}-${mm}-${dd}`;
-}
-
-function localMinutesOfDay(date = new Date()) {
-  const hh = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, hour: '2-digit', hour12: false }));
-  const mm = Number(date.toLocaleString('en-GB', { timeZone: cfg.schedule.timezone, minute: '2-digit', hour12: false }));
-  return hh * 60 + mm;
-}
-
-function gridDirection(value) {
-  const v = Number(value) || 0;
-  const positiveFeedIn = cfg.gridPositiveMeans !== 'grid_import';
-  if (v === 0) return { mode: 'neutral', label: 'neutral' };
-  const exporting = positiveFeedIn ? v > 0 : v < 0;
-  return exporting ? { mode: 'feed_in', label: 'Einspeisung' } : { mode: 'grid_import', label: 'Netzbezug' };
 }
 
 function expireLeaseIfNeeded() {
@@ -1465,7 +1401,7 @@ async function pollDvControlReadback(name, conf) {
 }
 
 function updateEnergyIntegrals(nowMs, totalW) {
-  const day = berlinDateString(new Date(nowMs));
+  const day = berlinDateString(new Date(nowMs), cfg.epex.timezone);
   if (state.energy.day !== day) {
     if (state.energy.day) {
       pushLog('energy_day_end', {
@@ -1493,7 +1429,7 @@ function updateEnergyIntegrals(nowMs, totalW) {
   state.energy.lastTs = nowMs;
   if (dtH <= 0) return;
 
-  const dir = gridDirection(totalW);
+  const dir = gridDirection(totalW, cfg.gridPositiveMeans);
   const pAbs = Math.abs(Number(totalW) || 0);
   const importW = dir.mode === 'grid_import' ? pAbs : 0;
   const exportW = dir.mode === 'feed_in' ? pAbs : 0;
@@ -1639,7 +1575,7 @@ async function fetchEpexFromDvhubApi(day, day2, bzn) {
   return p.data.map((entry) => {
     const ts = new Date(entry.ts).getTime();
     const eur = Number(entry.price);
-    const ds = berlinDateString(new Date(ts));
+    const ds = berlinDateString(new Date(ts), cfg.epex.timezone);
     return { ts, day: ds, eur_mwh: eur, ct_kwh: Number((eur / 10).toFixed(3)) };
   }).filter((row) => row.day === day || row.day === day2);
 }
@@ -1658,7 +1594,7 @@ async function fetchEpexFromEnergyCharts(day, day2, bzn) {
     const eur = Number(prices[i]);
     if (!Number.isFinite(sec) || !Number.isFinite(eur)) continue;
     const ts = sec * 1000;
-    const ds = berlinDateString(new Date(ts));
+    const ds = berlinDateString(new Date(ts), cfg.epex.timezone);
     if (ds !== day && ds !== day2) continue;
     data.push({ ts, day: ds, eur_mwh: eur, ct_kwh: Number((eur / 10).toFixed(3)) });
   }
@@ -1667,7 +1603,7 @@ async function fetchEpexFromEnergyCharts(day, day2, bzn) {
 
 async function fetchEpexDay() {
   if (!cfg.epex.enabled) return;
-  const day = berlinDateString();
+  const day = berlinDateString(new Date(), cfg.epex.timezone);
   const day2 = addDays(day, 1);
   const bzn = cfg.epex.bzn || 'DE-LU';
   try {
@@ -1818,10 +1754,6 @@ function epexNowNext() {
   };
 }
 
-function roundCtKwh(value) {
-  return Number(Number(value || 0).toFixed(2));
-}
-
 function configuredModule3Windows(pricing = cfg.userEnergyPricing || {}) {
   if (!pricing?.usesParagraph14aModule3) return [];
   return Object.entries(pricing.module3Windows || {})
@@ -1878,7 +1810,7 @@ function mixedCostCtKwh(costs = {}) {
 
 function resolveImportPriceCtKwhForSlot(row, pricing = cfg.userEnergyPricing || {}) {
   if (!row) return null;
-  const minuteOfDay = localMinutesOfDay(new Date(row.ts));
+  const minuteOfDay = localMinutesOfDay(new Date(row.ts), cfg.schedule.timezone);
   for (const window of configuredModule3Windows(pricing)) {
     if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
   }
@@ -2011,7 +1943,7 @@ async function runMeterScan(params = {}) {
 
 function effectiveTargetValue(target) {
   const now = Date.now();
-  const mod = localMinutesOfDay(new Date(now));
+  const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
   const hit = state.schedule.rules.find((r) => {
     if (r.target !== target || !scheduleMatch(r, mod)) return false;
@@ -2129,7 +2061,7 @@ async function applyControlTarget(target, value, source) {
 
 async function evaluateSchedule() {
   const now = Date.now();
-  const nowMin = localMinutesOfDay(new Date(now));
+  const nowMin = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
   await regenerateSmallMarketAutomationRules({ now });
   state.schedule.lastEvalAt = now;
 
@@ -2345,7 +2277,7 @@ function integrationState() {
     dvControlValue: controlValue(),
     forcedOff: state.ctrl.forcedOff,
     gridTotalW: state.meter.grid_total_w,
-    gridDirection: gridDirection(state.meter.grid_total_w).mode,
+    gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
     gridSetpointW: state.victron.gridSetpointW,
     minSocPct: state.victron.minSocPct,
     soc: state.victron.soc,
@@ -2467,6 +2399,47 @@ function isSensitiveRequest(req) {
   if (url.pathname.startsWith('/api/admin/')) return true;
   return false;
 }
+
+// --- Rate Limiting (in-memory, per IP) ---
+const rateLimitBuckets = new Map();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 120; // 120 req/min per IP (2/s avg)
+const RATE_LIMIT_ADMIN_MAX = 10;     // stricter for admin/mutation endpoints
+
+function getRateLimitKey(req) {
+  const raw = req.socket?.remoteAddress || '';
+  return raw.replace(/^::ffff:/, '');
+}
+
+function checkRateLimit(req, res) {
+  const ip = getRateLimitKey(req);
+  const now = Date.now();
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const isAdmin = url.pathname.startsWith('/api/admin/');
+  const limit = isAdmin ? RATE_LIMIT_ADMIN_MAX : RATE_LIMIT_MAX_REQUESTS;
+
+  let bucket = rateLimitBuckets.get(ip);
+  if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+    bucket = { windowStart: now, count: 0 };
+    rateLimitBuckets.set(ip, bucket);
+  }
+  bucket.count++;
+
+  if (bucket.count > limit) {
+    res.writeHead(429, { ...SECURITY_HEADERS, 'Retry-After': '60', 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Too many requests' }));
+    return false;
+  }
+  return true;
+}
+
+// Clean up stale buckets every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS * 2;
+  for (const [ip, bucket] of rateLimitBuckets) {
+    if (bucket.windowStart < cutoff) rateLimitBuckets.delete(ip);
+  }
+}, 300_000).unref();
 
 function checkAuth(req, res) {
   if (!cfg.apiToken) return true;
@@ -2797,6 +2770,7 @@ const web = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
+    if (!checkRateLimit(req, res)) return;
     if (!checkAuth(req, res)) return;
   }
 
@@ -2924,8 +2898,12 @@ const web = http.createServer(async (req, res) => {
       const channel = rawCfg.updateChannel || 'stable';
       let gitOutput = '';
 
-      // Discard any local modifications before switching (e.g. from manual scp deploys)
-      await execFileAsync('git', ['checkout', '--', '.'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+      // Save rollback point before any changes
+      const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+
+      // Stash local modifications instead of discarding them
+      const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+      const hasStash = !stashResult.stdout.includes('No local changes');
 
       if (channel === 'stable') {
         await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
@@ -2940,17 +2918,34 @@ const web = http.createServer(async (req, res) => {
         gitOutput = pull.stdout.trim();
       }
 
-      const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
-      pushLog('update_applied', {
-        channel,
-        gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
-        npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
-      });
+      // npm install + smoke test with automatic rollback on failure
+      try {
+        const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+        await execFileAsync('node', ['--check', 'server.js'], { cwd: __dirname, timeout: 5000 });
+        pushLog('update_applied', {
+          channel,
+          gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
+          npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
+        });
+      } catch (installErr) {
+        // Rollback: restore previous revision and dependencies
+        pushLog('update_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+        await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
+        await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 }).catch(() => {});
+        if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+        throw new Error(`Update rolled back (npm/syntax failed): ${installErr.message}`);
+      }
+
+      if (hasStash) {
+        pushLog('update_stash_discarded', { note: 'local changes were stashed before update and not restored' });
+      }
+
       scheduleServiceRestart();
       pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'update' });
       return json(res, 200, {
         ok: true, channel,
         gitOutput,
+        rolledBackFrom: rollbackRev.slice(0, 7),
         message: 'Update applied, service restart scheduled'
       });
     } catch (e) {
@@ -2976,7 +2971,14 @@ const web = http.createServer(async (req, res) => {
       if (SERVICE_ACTIONS_ENABLED) {
         const repoRoot = path.resolve(__dirname, '..');
         let gitOutput = '';
-        await execFileAsync('git', ['checkout', '--', '.'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+
+        // Save rollback point before any changes
+        const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+
+        // Stash local modifications instead of discarding them
+        const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+        const hasStash = !stashResult.stdout.includes('No local changes');
+
         await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
         if (channel === 'stable') {
           const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
@@ -2987,7 +2989,23 @@ const web = http.createServer(async (req, res) => {
           await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
           gitOutput = 'Switched to dev: origin/main';
         }
-        await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+
+        // npm install + smoke test with automatic rollback on failure
+        try {
+          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+          await execFileAsync('node', ['--check', 'server.js'], { cwd: __dirname, timeout: 5000 });
+        } catch (installErr) {
+          pushLog('channel_switch_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+          await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
+          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 }).catch(() => {});
+          if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+          throw new Error(`Channel switch rolled back (npm/syntax failed): ${installErr.message}`);
+        }
+
+        if (hasStash) {
+          pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });
+        }
+
         pushLog('update_channel_changed', { channel, gitOutput });
         scheduleServiceRestart();
         pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
@@ -3240,10 +3258,17 @@ const web = http.createServer(async (req, res) => {
       const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
       const body = await parseBody(req);
       const zone = body?.zone || cfg.epex.bzn || 'DE-LU';
+      const start = body?.start || '2020-01-01';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || isNaN(Date.parse(start))) {
+        return json(res, 400, { error: 'Invalid start date, expected YYYY-MM-DD' });
+      }
+      if (!/^[A-Z]{2}(-[A-Z]{2,4})?$/.test(zone)) {
+        return json(res, 400, { error: 'Invalid zone format' });
+      }
       const r = await fetch(`${baseUrl}/api/backfill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zone, start: body?.start || '2020-01-01' }),
+        body: JSON.stringify({ zone, start }),
         signal: AbortSignal.timeout(10000)
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -3493,7 +3518,7 @@ if (IS_RUNTIME_PROCESS) {
   scheduleEvaluateLoop();
   fetchEpexDay();
   setInterval(() => {
-    const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString();
+    const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString(new Date(), cfg.epex.timezone);
     if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
   }, 5 * 60 * 1000);
   setInterval(persistEnergy, 60000);
@@ -3516,7 +3541,7 @@ if (IS_RUNTIME_PROCESS) {
         await fetch(pushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=', { signal: AbortSignal.timeout(10000) });
       } catch (e) { /* silent */ }
     };
-    monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.battery?.soc ?? '?') + '%'), intervalMs);
+    monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
     setTimeout(() => sendHeartbeat('DVhub started'), 5000);
     console.log('  Monitoring heartbeat -> ' + pushUrl.substring(0, 60) + '...');
   }
