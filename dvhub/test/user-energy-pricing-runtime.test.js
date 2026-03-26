@@ -36,13 +36,13 @@ function extractFunction(source, name) {
 }
 
 function loadPricingHelpers() {
-  const serverPath = path.join(repoRoot, 'server.js');
-  const source = fs.readFileSync(serverPath, 'utf8');
+  const utilsSource = fs.readFileSync(path.join(repoRoot, 'server-utils.js'), 'utf8');
+  const serverSource = fs.readFileSync(path.join(repoRoot, 'server.js'), 'utf8');
   const snippets = [
-    extractFunction(source, 'roundCtKwh'),
-    extractFunction(source, 'effectiveBatteryCostCtKwh'),
-    extractFunction(source, 'mixedCostCtKwh'),
-    extractFunction(source, 'resolveLogLimit')
+    extractFunction(utilsSource, 'roundCtKwh'),
+    extractFunction(serverSource, 'effectiveBatteryCostCtKwh'),
+    extractFunction(serverSource, 'mixedCostCtKwh'),
+    extractFunction(utilsSource, 'resolveLogLimit')
   ].join('\n\n');
   const sandbox = { globalThis: {}, Number, Math };
   sandbox.globalThis = sandbox;
