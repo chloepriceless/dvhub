@@ -1,39 +1,84 @@
-# DVhub Project State
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-03-26T13:58:21Z"
+last_activity: 2026-03-26 -- Completed 01-02 user-energy-pricing extraction
+progress:
+  total_phases: 5
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+  percent: 100
+---
 
-## Current Phase
-Phase 1: DV-Mehrerlös vs Einspeisevergütung — Plan 3/3 complete
+# Project State
 
-## Current Plan
-Phase 1 complete — ready for next phase
+## Project Reference
 
-## Progress
-Phase 1: 3 plan(s) complete
+See: .planning/PROJECT.md (updated 2026-03-25)
+
+**Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
+**Current focus:** Phase 1 - Foundation and Leaf Module
+
+## Current Position
+
+Phase: 1 of 5 (Foundation and Leaf Module) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase 1 Complete
+Last activity: 2026-03-26 -- Completed 01-02 user-energy-pricing extraction
+
+Progress: [##########] 100% (Phase 1)
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 2
+- Average duration: 8 min
+- Total execution time: 0.27 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 01 | 2/2 | 16 min | 8 min |
+
+**Recent Trend:**
+- Last 5 plans: 9 min, 7 min
+- Trend: stable
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
-### Roadmap Evolution
-- Phase 1 added: Historie: DV-Mehrerlös vs Einspeisevergütung berechnen (anzulegender Wert, Negativpreis-Regelungen, gesetzliche Grundlagen je Inbetriebnahmedatum)
+### Decisions
 
-## Decisions
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
 
-### Phase 1 — Plan 1: EEG Rules + BNetzA Extension
-- isRoundedFullFeedLabel exported (plan spec); isRoundedPartialFeedLabel remains private
-- selectApplicableValueCtKwh changed to named export so plan 02 can import it for DV comparison
-- getFeedInCompensationCtKwh: explicit null check before Number() coercion (Number(null)===0 is finite)
-- feedType='partial' default on all BNetzA lookup functions for full backward compatibility
-- 72 pre-existing test failures confirmed unrelated via stash test — no regressions introduced
+- Roadmap: Merged research Phase 0+1 into single Phase 1 (coarse granularity -- DI contract + leaf extraction form one delivery unit)
+- Roadmap: 5 phases derived from dependency graph (leaf-first order mandatory)
+- Roadmap: QUAL-01 through QUAL-05 are cross-cutting gates applied to every phase, not assigned to a single phase
+- [Phase 01]: berlinDateString, localMinutesOfDay, gridDirection refactored to accept config params instead of closing over cfg
+- [Phase 01]: Default param values match original cfg defaults (Europe/Berlin, feed_in) for backward compatibility
+- [Phase 01]: configuredModule3Windows exported as public (not private helper) for userEnergyPricingSummary access
+- [Phase 01]: DI context documented as commented-out template; will be activated in Phase 2
+- [Phase 01]: resolveImportPriceCtKwhForSlot and slotComparison accept explicit timezone parameter
 
-### Phase 1 — Plan 2: DV Comparison KPI Calculation
-- hypFullFeedInCtTotal/hypSurplusFeedInCtTotal excluded from AGGREGATE_SUM_FIELDS to preserve null semantics (finalizeAggregateSums would convert null to 0)
-- awFullCtKwh uses explicit null check before Number() coercion (Number(null)===0 bug, same pattern as Plan 01)
-- Test getCurrentDate set to future date to avoid history/live split causing duplicate slots
-- dvCostEur year view counts distinct months with exportKwh > 0 (not hardcoded 12)
+### Pending Todos
 
-### Phase 1 — Plan 3: DV Comparison UI
-- DV comparison section wrapped in single container div (historyDvComparisonSection) toggled via setHidden — avoids toggling 5 rows individually
-- View check uses summary?.view || window._currentHistoryView for robustness across rendering code paths
-- dvCostEur displayed as -(Math.abs(...)) to ensure negative sign regardless of upstream value sign
+None yet.
 
-## Session Info
-- Last session: 2026-03-25T00:40:00Z
-- Stopped at: Completed 01-03-PLAN.md
+### Blockers/Concerns
+
+- Phase 4 (Automation Core) is highest risk -- schedule-eval touches hardware via transport, has complex async chains. Needs deeper research during planning.
+- system-discovery.test.js dynamically imports server.js -- needs analysis in Phase 1 to determine extraction impact.
+- modbus-server.js depends on setForcedOff/clearForcedOff (belongs to schedule-eval). During Phase 2, these stay in server.js as callbacks; re-wired in Phase 4.
+
+## Session Continuity
+
+Last session: 2026-03-26T13:58:21Z
+Stopped at: Completed 01-02-PLAN.md (Phase 1 complete)
+Resume file: None
