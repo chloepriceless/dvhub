@@ -73,6 +73,13 @@ import {
   roundCtKwh, berlinDateString, addDays, localMinutesOfDay,
   gridDirection, MAX_BODY_BYTES
 } from './server-utils.js';
+import {
+  effectiveBatteryCostCtKwh,
+  mixedCostCtKwh,
+  slotComparison,
+  resolveImportPriceCtKwhForSlot,
+  configuredModule3Windows
+} from './user-energy-pricing.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -749,6 +756,26 @@ function persistConfig() {
     pushLog('config_persist_error', { error: e.message });
   }
 }
+
+// -- DI Context (Template for all module extractions) -----------------------
+// Every create* factory receives this ctx object. Modules use what they need.
+// getCfg() is a GETTER -- never pass cfg directly (prevents stale closure on hot-reload).
+// After each createXxx(ctx), extend ctx with the new module's public methods.
+// Init order = dependency order: utils (pure imports), pricing (pure imports),
+// then epex -> poller -> scheduler -> modbus-server -> routes.
+//
+// TODO(Phase 2): Move ctx definition after transport initialization.
+// For Phase 1, this documents the contract shape only.
+// const ctx = {
+//   state,                          // Shared mutable state (by reference)
+//   getCfg: () => cfg,              // Getter -- NEVER pass cfg directly
+//   transport,                      // Modbus/MQTT transport instance
+//   pushLog,                        // (event, details) => void -- writes to state.log
+//   telemetrySafeWrite,             // (action, opts) => Promise -- wraps telemetry store writes
+//   persistConfig                   // () => void -- saves and hot-reloads config
+// };
+// Phase 1: ctx created but not yet consumed by any factory.
+// Phase 2+: const epex = createEpexFetcher(ctx); ctx.epexNowNext = epex.epexNowNext;
 
 async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
@@ -1443,7 +1470,7 @@ function updateEnergyIntegrals(nowMs, totalW) {
   // not the raw EPEX price. resolveImportPriceCtKwhForSlot handles fixed,
   // dynamic, and Paragraph 14a Module 3 pricing modes.
   const importSlot = { ts: nowMs, ct_kwh: epexCtKwh };
-  const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot) ?? epexCtKwh;
+  const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot, cfg.userEnergyPricing || {}, cfg.schedule?.timezone) ?? epexCtKwh;
   state.energy.costEur += (importW / 1000) * dtH * (importCtKwh / 100);
 
   // Export revenue: EPEX price is the actual feed-in compensation
@@ -1754,109 +1781,10 @@ function epexNowNext() {
   };
 }
 
-function configuredModule3Windows(pricing = cfg.userEnergyPricing || {}) {
-  if (!pricing?.usesParagraph14aModule3) return [];
-  return Object.entries(pricing.module3Windows || {})
-    .map(([id, window]) => {
-      const start = parseHHMM(window?.start);
-      const end = parseHHMM(window?.end);
-      const priceCtKwh = Number(window?.priceCtKwh);
-      if (window?.enabled !== true || start == null || end == null || !Number.isFinite(priceCtKwh)) return null;
-      return {
-        id,
-        label: window?.label ? String(window.label) : id,
-        start,
-        end,
-        priceCtKwh: roundCtKwh(priceCtKwh)
-      };
-    })
-    .filter(Boolean);
-}
-
-function slotMinuteMatchesWindow(minuteOfDay, window) {
-  if (!window) return false;
-  if (window.start <= window.end) return minuteOfDay >= window.start && minuteOfDay < window.end;
-  return minuteOfDay >= window.start || minuteOfDay < window.end;
-}
-
-function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
-  const base =
-    Number(marketCtKwh || 0)
-    + Number(components.energyMarkupCtKwh || 0)
-    + Number(components.gridChargesCtKwh || 0)
-    + Number(components.leviesAndFeesCtKwh || 0);
-  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
-}
-
-function effectiveBatteryCostCtKwh(costs = {}) {
-  const pvCtKwh = Number(costs?.pvCtKwh);
-  const base = Number(costs?.batteryBaseCtKwh);
-  if (!Number.isFinite(base) && !Number.isFinite(pvCtKwh)) return null;
-  const markup = Number(costs?.batteryLossMarkupPct || 0);
-  const combinedBase =
-    (Number.isFinite(pvCtKwh) ? pvCtKwh : 0)
-    + (Number.isFinite(base) ? base : 0);
-  return roundCtKwh(combinedBase * (1 + markup / 100));
-}
-
-function mixedCostCtKwh(costs = {}) {
-  const pvCtKwh = Number(costs?.pvCtKwh);
-  const batteryCtKwh = effectiveBatteryCostCtKwh(costs);
-  if (Number.isFinite(pvCtKwh) && Number.isFinite(batteryCtKwh)) return roundCtKwh((pvCtKwh + batteryCtKwh) / 2);
-  if (Number.isFinite(pvCtKwh)) return roundCtKwh(pvCtKwh);
-  if (Number.isFinite(batteryCtKwh)) return roundCtKwh(batteryCtKwh);
-  return null;
-}
-
-function resolveImportPriceCtKwhForSlot(row, pricing = cfg.userEnergyPricing || {}) {
-  if (!row) return null;
-  const minuteOfDay = localMinutesOfDay(new Date(row.ts), cfg.schedule.timezone);
-  for (const window of configuredModule3Windows(pricing)) {
-    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
-  }
-
-  if (pricing?.mode === 'fixed') {
-    const fixed = Number(pricing?.fixedGrossImportCtKwh);
-    return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
-  }
-
-  return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), pricing?.dynamicComponents || {});
-}
-
-function slotComparison(row, pricing = cfg.userEnergyPricing || {}) {
-  if (!row) return null;
-  const importPriceCtKwh = resolveImportPriceCtKwhForSlot(row, pricing);
-  const pvCtKwh = Number(pricing?.costs?.pvCtKwh);
-  const batteryCtKwh = effectiveBatteryCostCtKwh(pricing?.costs || {});
-  const mixedCt = mixedCostCtKwh(pricing?.costs || {});
-  const exportPriceCtKwh = roundCtKwh(Number(row.ct_kwh || 0));
-
-  const margins = [
-    Number.isFinite(pvCtKwh) ? { source: 'pv', marginCtKwh: roundCtKwh(exportPriceCtKwh - pvCtKwh) } : null,
-    Number.isFinite(batteryCtKwh) ? { source: 'battery', marginCtKwh: roundCtKwh(exportPriceCtKwh - batteryCtKwh) } : null,
-    Number.isFinite(mixedCt) ? { source: 'mixed', marginCtKwh: roundCtKwh(exportPriceCtKwh - mixedCt) } : null
-  ].filter(Boolean);
-  const best = margins.length
-    ? margins.reduce((winner, entry) => (winner == null || entry.marginCtKwh > winner.marginCtKwh ? entry : winner), null)
-    : null;
-
-  return {
-    ts: row.ts,
-    exportPriceCtKwh,
-    importPriceCtKwh,
-    spreadToImportCtKwh: Number.isFinite(importPriceCtKwh) ? roundCtKwh(exportPriceCtKwh - importPriceCtKwh) : null,
-    pvMarginCtKwh: Number.isFinite(pvCtKwh) ? roundCtKwh(exportPriceCtKwh - pvCtKwh) : null,
-    batteryMarginCtKwh: Number.isFinite(batteryCtKwh) ? roundCtKwh(exportPriceCtKwh - batteryCtKwh) : null,
-    mixedMarginCtKwh: Number.isFinite(mixedCt) ? roundCtKwh(exportPriceCtKwh - mixedCt) : null,
-    bestSource: best?.source || null,
-    bestMarginCtKwh: best?.marginCtKwh ?? null
-  };
-}
-
 function userEnergyPricingSummary() {
   const pricing = cfg.userEnergyPricing || {};
   const costs = pricing.costs || {};
-  const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing)) : [];
+  const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing, cfg.schedule?.timezone)) : [];
   const currentTs = epexNowNext()?.current?.ts;
   const current = slots.find((row) => row?.ts === currentTs) || null;
   const configured =
