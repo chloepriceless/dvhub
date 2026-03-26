@@ -62,10 +62,11 @@ Plans:
   3. Polling loop reads Victron battery, grid meter, and solar values at correct intervals and state.meter/state.victron/state.energy update correctly
   4. Cross-module wiring works: polling calls epexNowNext (from epex-fetch) and resolveImportPriceCtKwhForSlot (from user-energy-pricing) via injected references
   5. All 39 test files pass and graceful shutdown stops all polling timers cleanly
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md -- Create polling.js factory module (loadEnergy + createPoller with all polling functions)
+- [ ] 03-02-PLAN.md -- Wire polling.js into server.js, remove extracted functions, update lifecycle
 
 ### Phase 4: Automation Core
 **Goal**: The schedule evaluation brain and market automation rule builder operate as extracted modules while preserving exact hardware control behavior and async chains
@@ -118,6 +119,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation and Leaf Module | 0/2 | Not started | - |
 | 2. I/O Modules | 0/2 | Not started | - |
-| 3. Polling | 0/1 | Not started | - |
+| 3. Polling | 0/2 | Not started | - |
 | 4. Automation Core | 0/2 | Not started | - |
 | 5. HTTP Layer and Orchestrator Cleanup | 0/2 | Not started | - |
