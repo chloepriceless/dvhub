@@ -205,9 +205,19 @@ export function createMarketAutomationBuilder(ctx) {
     }
 
     // Overall energy budget: use the most generous (latest/sunrise) budget
+    let effectiveMinSocPct = automationConfig?.minSocPct ?? 30;
     if (batteryCapacityKwh > 0 && currentSocPct != null) {
       if (perSlotBudgets?.length) {
         availableEnergyKwh = perSlotBudgets[perSlotBudgets.length - 1].budgetKwh;
+        // Compute the effective dynamic min SOC for the last (most generous) slot
+        const lastSlotTs = Math.max(...perSlotBudgets.map(b => b.ts));
+        effectiveMinSocPct = Math.round(computeDynamicAutomationMinSocPct({
+          automationMinSocPct: automationConfig?.minSocPct,
+          globalMinSocPct: state.victron?.minSocPct ?? 10,
+          sunsetTs: sunsetMsForPlanning,
+          sunriseTs: sunriseMsForPlanning,
+          nowTs: lastSlotTs
+        }) * 10) / 10;
       } else {
         availableEnergyKwh = computeAvailableEnergyKwh({
           batteryCapacityKwh,
@@ -298,7 +308,7 @@ export function createMarketAutomationBuilder(ctx) {
 
     const expandedBestChain = expandChainSlots(plan.chain);
 
-    return (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
+    const rules = (plan.selectedSlotTimestamps || []).map((slotTs, index) => {
       const slot = freeSlots.find((entry) => Number(entry?.ts) === Number(slotTs));
       if (!slot) return null;
       const start = new Date(slot.ts);
@@ -318,6 +328,14 @@ export function createMarketAutomationBuilder(ctx) {
         displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
       };
     }).filter(Boolean);
+    // Attach planning metadata for the plan summary
+    rules._planMeta = {
+      availableEnergyKwh,
+      effectiveMinSocPct,
+      sunriseTs: sunriseMsForPlanning,
+      sunsetTs: sunsetMsForPlanning
+    };
+    return rules;
   }
 
   async function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
@@ -433,6 +451,9 @@ export function createMarketAutomationBuilder(ctx) {
     }
 
     const generatedRules = await buildSmallMarketAutomationRules(planInput);
+    const planMeta = generatedRules._planMeta || {};
+    delete generatedRules._planMeta;
+    const effectiveAvailableEnergyKwh = planMeta.availableEnergyKwh ?? availableEnergyKwh;
 
     // Build transparent plan summary for the UI
     const selectedSlotTimestamps = generatedRules
@@ -452,9 +473,13 @@ export function createMarketAutomationBuilder(ctx) {
         priceCtKwh: state.epex?.data?.find((s) => Number(s.ts) === ts)?.ct_kwh ?? null,
         powerW: generatedRules[index]?.value ?? null
       })),
-      availableEnergyKwh,
+      availableEnergyKwh: effectiveAvailableEnergyKwh,
       currentSocPct,
       minSocPct: automationConfig?.minSocPct,
+      effectiveMinSocPct: planMeta.effectiveMinSocPct ?? automationConfig?.minSocPct ?? 30,
+      dynamicSocFloor: (planMeta.effectiveMinSocPct ?? automationConfig?.minSocPct ?? 30) !== (automationConfig?.minSocPct ?? 30),
+      sunriseTs: planMeta.sunriseTs ? new Date(planMeta.sunriseTs).toISOString() : null,
+      sunsetTs: planMeta.sunsetTs ? new Date(planMeta.sunsetTs).toISOString() : null,
       maxDischargeW: automationConfig?.maxDischargeW,
       estimatedRevenueCt: generatedRules.reduce((sum, r) => {
         const slot = state.epex?.data?.find((s) => {
@@ -473,7 +498,7 @@ export function createMarketAutomationBuilder(ctx) {
       lastOutcome: generatedRules.length ? 'generated' : 'no_slots',
       generatedRuleCount: generatedRules.length,
       lastPriceSlotCount: priceSlotCount,
-      availableEnergyKwh,
+      availableEnergyKwh: effectiveAvailableEnergyKwh,
       lastSocPct: currentSocPct,
       selectedSlotTimestamps,
       plan: planSummary
