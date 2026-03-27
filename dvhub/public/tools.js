@@ -772,8 +772,15 @@ function initToolsPage() {
   if (bootstrapPlan.loadHealth) {
     loadHealth().catch((error) => setBanner('healthBanner', `Health-Status konnte nicht geladen werden: ${error.message}`, 'error'));
   }
-  // Auto-check for updates on page load
-  checkForUpdate().catch(() => {});
+  // Auto-check for updates only on tools page, with 10-minute cooldown to avoid GitHub rate limits
+  if (document.getElementById('checkUpdateBtn')) {
+    const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+    const cooldownMs = 10 * 60 * 1000;
+    if (Date.now() - lastCheck > cooldownMs) {
+      sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
+      checkForUpdate().catch(() => {});
+    }
+  }
   if (bootstrapPlan.loadHistoryImportStatus) {
     loadHistoryImportStatus().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };
