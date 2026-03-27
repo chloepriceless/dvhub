@@ -237,8 +237,12 @@ test('history import status prefers cached worker telemetry state when available
 test('server source wires small-market automation regeneration before schedule evaluation', async () => {
   const source = await fs.readFile(serverPath, 'utf8');
   assert.match(source, /regenerateSmallMarketAutomationRules/);
-  assert.match(source, /small_market_automation/);
-  assert.match(source, /autoManaged/);
+  // Constants moved to market-automation-builder.js -- verify import wiring
+  assert.match(source, /market-automation-builder/);
+  const mabPath = serverPath.replace('server.js', 'market-automation-builder.js');
+  const mabSource = await fs.readFile(mabPath, 'utf8');
+  assert.match(mabSource, /small_market_automation/);
+  assert.match(mabSource, /autoManaged/);
 });
 
 test('heavy runtime writes are converted into worker command requests before execution', () => {

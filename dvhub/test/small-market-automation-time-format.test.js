@@ -31,8 +31,8 @@ function extractFunction(source, name) {
 }
 
 function loadTimeFormattingHelpers() {
-  const serverPath = path.join(repoRoot, 'server.js');
-  const source = fs.readFileSync(serverPath, 'utf8');
+  const mabPath = path.join(repoRoot, 'market-automation-builder.js');
+  const source = fs.readFileSync(mabPath, 'utf8');
   const snippet = extractFunction(source, 'formatLocalHHMM');
   const sandbox = {
     globalThis: {},

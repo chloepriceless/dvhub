@@ -231,6 +231,10 @@ test('server schedule evaluator wires stop-soc auto-disable and dedicated loggin
 
 test('server delegates price-slot window filtering to shared automation helper', () => {
   const source = fs.readFileSync(serverPath, 'utf8');
-  assert.match(source, /filterSlotsByTimeWindow/);
+  // Filtering moved to market-automation-builder.js -- verify wiring
+  assert.match(source, /market-automation-builder/);
   assert.doesNotMatch(source, /function buildSearchWindowBounds/);
+  const mabPath = serverPath.replace('server.js', 'market-automation-builder.js');
+  const mabSource = fs.readFileSync(mabPath, 'utf8');
+  assert.match(mabSource, /filterSlotsByTimeWindow/);
 });
