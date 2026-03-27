@@ -40,6 +40,7 @@
   --chart-positive-highlight: #818cf8;
   --chart-negative-highlight: #ff9a8b;
   --schedule-automation-yellow: #f2c94c;
+  --schedule-user-cyan: #56d4e0;
 
   /* Fonts */
   --font-brand: 'Space Grotesk', sans-serif;
@@ -1898,6 +1899,11 @@ button {
   stroke-width: 1.5;
 }
 
+.price-bar.is-user-slot {
+  stroke: var(--schedule-user-cyan);
+  stroke-width: 1.5;
+}
+
 .sched-auto-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -1913,6 +1919,28 @@ button {
 .sched-row-automation input:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+/* User schedule rows — cyan to contrast with yellow automation */
+.shell-layout .sched-row-user {
+  background: color-mix(in srgb, var(--schedule-user-cyan) 12%, transparent);
+}
+
+.shell-layout .sched-row-user td {
+  border-top-color: color-mix(in srgb, var(--schedule-user-cyan) 30%, rgba(31, 76, 122, 0.7));
+  border-bottom-color: color-mix(in srgb, var(--schedule-user-cyan) 30%, rgba(31, 76, 122, 0.7));
+}
+
+.sched-user-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--schedule-user-cyan) 22%, transparent);
+  color: var(--schedule-user-cyan);
+  border: 1px solid color-mix(in srgb, var(--schedule-user-cyan) 40%, transparent);
 }
 
 /* --- Legacy log-box (scoped) --- */

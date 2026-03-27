@@ -576,7 +576,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 
 let priceChartInstance = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = []) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = []) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -606,6 +606,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const chartPositive = cssVar('--chart-positive', '#0077ff');
   const chartNegative = cssVar('--chart-negative', '#ef4444');
   const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
+  const chartUserSlot = cssVar('--schedule-user-cyan', '#56d4e0');
   const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartImport = cssVar('--chart-import', '#22c55e');
@@ -614,6 +615,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // --- Data prep ---
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
+  const userSlots = new Set((userSlotTimestamps || []).map(Number));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
   const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
 
@@ -661,9 +663,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     const ts = Number(d.ts);
     const isPast = ts < nowTs;
     const isAutomation = automationSlots.has(ts);
+    const isUserSlot = userSlots.has(ts);
     const isHighPos = highHighlights.has(i);
     const isHighNeg = lowHighlights.has(i);
     let color = isAutomation ? chartAutomation
+      : isUserSlot ? chartUserSlot
       : isHighNeg ? chartNegativeHighlight
       : isHighPos ? chartPositiveHighlight
       : (val < 0 ? chartNegative : chartPositive);
@@ -1347,14 +1351,23 @@ function renderDashboardStatus(status) {
 
   // Fetch forecast + history slots for chart overlay
   const today = new Date(status.now).toISOString().slice(0, 10);
-  const chartArgs = () => [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
+  const userSlotTimestamps = (status.schedule?.rules || [])
+    .filter(r => r.enabled !== false && !isSmallMarketAutomationRule(r))
+    .flatMap(r => {
+      const epexData = status.epex?.data || [];
+      return epexData.filter(s => {
+        const slotTime = new Date(s.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+        return slotTime >= (r.start || '') && slotTime < (r.end || '');
+      }).map(s => Number(s.ts));
+    });
+  const baseChartArgs = [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
   Promise.all([
     apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
     apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
   ]).then(([fc, hist]) => {
-    drawPriceChart(...chartArgs(), fc?.ok ? fc : null, hist?.slots || []);
+    drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps);
   }).catch(() => {
-    drawPriceChart(...chartArgs(), null, []);
+    drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps);
   });
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
@@ -1576,6 +1589,7 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
 
   tr.classList.toggle('sched-row-expired', expired);
   tr.classList.toggle('sched-row-automation', isAutomationRule);
+  tr.classList.toggle('sched-row-user', !isAutomationRule);
   tr.style.opacity = enabled ? (expired ? '0.55' : '1') : '0.4';
   return expired;
 }
