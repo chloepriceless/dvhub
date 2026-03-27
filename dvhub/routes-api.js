@@ -888,20 +888,22 @@ export function createApiRoutes(ctx) {
         const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
         const hasStash = !stashResult.stdout.includes('No local changes');
 
-        if (channel === 'stable') {
-          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-          const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-          if (!latestTag) throw new Error('No release tags found');
-          const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-          gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
-        } else {
-          await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
-          await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-          const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
-          gitOutput = pull.stdout.trim();
-        }
-
         try {
+          // --- git fetch + checkout (inside inner try for rollback coverage) ---
+          if (channel === 'stable') {
+            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            if (!latestTag) throw new Error('No release tags found');
+            const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
+          } else {
+            await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+            const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+            gitOutput = pull.stdout.trim();
+          }
+
+          // --- npm install + syntax check ---
           const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
           await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
           pushLog('update_applied', {
@@ -909,12 +911,12 @@ export function createApiRoutes(ctx) {
             gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
             npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
           });
-        } catch (installErr) {
-          pushLog('update_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+        } catch (updateErr) {
+          pushLog('update_rollback', { reason: updateErr.message, rollbackTo: rollbackRev.slice(0, 7) });
           await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
           await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
           if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-          throw new Error(`Update rolled back (npm/syntax failed): ${installErr.message}`);
+          throw new Error(`Update rolled back: ${updateErr.message}`);
         }
 
         if (hasStash) {
@@ -954,26 +956,29 @@ export function createApiRoutes(ctx) {
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
           const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
           const hasStash = !stashResult.stdout.includes('No local changes');
-          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-
-          if (channel === 'stable') {
-            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-            if (!latestTag) throw new Error('No release tags found');
-            await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-            gitOutput = `Switched to stable: ${latestTag}`;
-          } else {
-            await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-            gitOutput = 'Switched to dev: origin/main';
-          }
           try {
+            // --- git fetch + checkout (inside inner try for rollback coverage) ---
+            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+
+            if (channel === 'stable') {
+              const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+              if (!latestTag) throw new Error('No release tags found');
+              await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+              gitOutput = `Switched to stable: ${latestTag}`;
+            } else {
+              await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+              gitOutput = 'Switched to dev: origin/main';
+            }
+
+            // --- npm install + syntax check ---
             await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
             await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
-          } catch (installErr) {
-            pushLog('channel_switch_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+          } catch (switchErr) {
+            pushLog('channel_switch_rollback', { reason: switchErr.message, rollbackTo: rollbackRev.slice(0, 7) });
             await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
             await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
             if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-            throw new Error(`Channel switch rolled back (npm/syntax failed): ${installErr.message}`);
+            throw new Error(`Channel switch rolled back: ${switchErr.message}`);
           }
           if (hasStash) {
             pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });

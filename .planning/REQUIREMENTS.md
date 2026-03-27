@@ -1,97 +1,73 @@
-# Requirements: DVhub Server.js Decomposition (C1)
+# Requirements: DVhub v0.4.2 Security & Stability Hardening
 
-**Defined:** 2026-03-26
-**Core Value:** server.js von 3.669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7-8 fokussierte Module bei 100% API-Kompatibilität
+**Defined:** 2026-03-27
+**Core Value:** Automatische Batterie-Optimierung basierend auf EPEX Day-Ahead Preisen
 
-## v1 Requirements
+## v0.4.2 Requirements
 
-Requirements for the monolith decomposition. Each maps to roadmap phases.
+Requirements for this security/stability release. Each maps to roadmap phases.
 
-### Foundation
+### Security Hardening
 
-- [x] **FOUND-01**: DI Context Object definiert — exakte Shape `{ state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig }` dokumentiert und als Template-Pattern etabliert
-- [x] **FOUND-02**: getCfg() Getter Pattern implementiert — Module erhalten `getCfg: () => cfg` statt direkte cfg-Referenz, Config Hot-Reload propagiert korrekt
-- [x] **FOUND-03**: server-utils.js extrahiert — Pure Utility-Funktionen (nowIso, fmtTs, berlinDateString, addDays, localMinutesOfDay, gridDirection, u16, s16, parseBody, roundCtKwh, resolveLogLimit, shared constants) in eigenes Modul
+- [ ] **SEC-01**: Git Update-Endpoint speichert aktuelle Revision vor Update und fuehrt vollstaendigen Rollback (git checkout + npm install) durch wenn npm install fehlschlaegt
+- [x] **SEC-02**: LAN Auth-Bypass beschraenkt sich auf read-only Endpoints -- Hardware-Steuerung und Admin-Endpoints (Update, Restart) erfordern Token auch im LAN
+- [ ] **SEC-03**: Frontend-Code nutzt textContent/DOM-API statt innerHTML fuer dynamischen Content um XSS zu verhindern
+- [x] **SEC-04**: PostgreSQL-Queries in telemetry-store-pg.js nutzen ausschliesslich parameterized Queries -- keine Template-Literal-Interpolation fuer Tabellennamen/Spalten ohne assertSqlIdentifier-Validierung
 
-### Module Extraction
+### Bugfix
 
-- [x] **MODX-01**: user-energy-pricing.js extrahiert — effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, userEnergyPricingSummary, costSummary als Pure Functions
-- [x] **MODX-02**: modbus-server.js extrahiert — createModbusServer Factory mit start()/close() Lifecycle, processModbusFrame, Register Read/Write
-- [x] **MODX-03**: epex-fetch.js extrahiert — createEpexFetcher Factory mit fetchEpexDay(), fetchVrmForecast(), epexNowNext()
-- [x] **MODX-04**: polling.js extrahiert — createPoller Factory mit pollMeter(), pollPoint(), updateEnergyIntegrals(), start()/stop() Lifecycle. pollMeter + updateEnergyIntegrals bleiben zusammen (Mutation Ordering)
-- [x] **MODX-05**: market-automation-builder.js extrahiert — createMarketAutomationBuilder Factory mit buildSmallMarketAutomationRules(), regenerateSmallMarketAutomationRules()
-- [x] **MODX-06**: schedule-eval.js extrahiert — createScheduleEvaluator Factory mit evaluateSchedule(), applyControlTarget(), setForcedOff(), clearForcedOff(), start()/stop()
-- [x] **MODX-07**: routes-api.js extrahiert — createApiRoutes Factory mit handleRequest(req, res, url) für alle ~60 API Endpoints
+- [ ] **BUG-01**: Monitoring Heartbeat zeigt korrekten SOC-Wert (state.victron.soc statt state.battery?.soc)
 
-### Orchestrator
+## Future Requirements
 
-- [x] **ORCH-01**: server.js ist 926-Zeilen Orchestrator — Init, State, Config, Module-Wiring, HTTP Server, Polling Loops, Graceful Shutdown (926 vs ~500 geschaetzt: DI-Wiring groesser als projiziert, alle Funktionen sind legitimer Orchestrator-Code)
-- [x] **ORCH-02**: Graceful Shutdown ruft alle Module stop()/close() Methoden auf — kein Timer/Socket-Leak bei SIGTERM
+Deferred to future release. Tracked but not in current roadmap.
 
-### Quality Gates
+### Stability
 
-- [x] **QUAL-01**: Alle 39 bestehenden Test-Dateien bleiben grün nach jeder Extraktion (`npm test`) -- 137 pre-existing failures unchanged throughout all phases
-- [x] **QUAL-02**: Alle API Endpoints behalten exakt ihre URLs, Request- und Response-Formate (100% Backward Compat)
-- [x] **QUAL-03**: Keine neuen npm Dependencies eingeführt
-- [x] **QUAL-04**: Keine zirkulären Import-Abhängigkeiten zwischen extrahierten Modulen -- verified with manual grep, no module imports from server.js
-- [x] **QUAL-05**: Config Hot-Reload funktioniert weiterhin — Änderungen über /api/config POST werden sofort von allen Modulen gesehen via getCfg() Getter
+- **STAB-01**: unhandledRejection / uncaughtException Handler im Hauptprozess (C2)
+- **STAB-02**: Rate Limiting auf allen Endpoints (I2)
+- **STAB-03**: Energy State Race Condition mit File-Locking (I5)
 
-## v2 Requirements
+### Code Quality
 
-Deferred to future milestone. Tracked but not in current roadmap.
+- **QUAL-01**: Code-Duplikation bereinigen (round2, effectiveBatteryCostCtKwh, isSmallMarketAutomationRule) (I8)
 
-### Testing
+### Suggestions
 
-- **TEST-01**: Unit Tests für jedes extrahierte Modul (isoliert mit Mock-State)
-- **TEST-02**: Integration Test: Server starten → Poll → Schedule Eval → Verify End-to-End
-- **TEST-03**: Circular Dependency Check in CI (madge --circular)
-
-### Further Refactoring
-
-- **REFAC-01**: routes-api.js in Sub-Router aufsplitten (routes-admin.js, routes-config.js, routes-telemetry.js)
-- **REFAC-02**: Code-Duplikation round2/effectiveBatteryCostCtKwh deduplizieren (I8)
-- **REFAC-03**: TypeScript Migration für kritische Pfade (S7)
+- **SUGG-01**: Health-Check Endpoint ohne Auth fuer Monitoring/Docker (S1)
+- **SUGG-02**: Content-Length Header fuer JSON Responses (S2)
+- **SUGG-03**: Accessibility Improvements (S3)
+- **SUGG-04**: HTTP Access Logging (S4)
+- **SUGG-05**: Cache-Headers fuer Static Assets (S5)
+- **SUGG-06**: _old/ Verzeichnis entfernen (S6)
+- **SUGG-07**: JSDoc/TypeScript fuer kritische Pfade (S7)
+- **SUGG-08**: dvCostEur Display-Fix (S8)
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| API Endpoint Umbenennung | Frontend-Änderungen nötig, Scope-Creep Risiko |
-| EventEmitter State Pattern | Over-Engineering für Embedded Ein-Personen-Projekt |
-| Shared State Singleton Modul | Implizite Kopplung, schlechtere Testbarkeit |
-| Bug-Fixes (I1-I10) | Separates Milestone, nicht mit Refactoring mischen |
-| Suggestions (S1-S8) | Separates Milestone |
-| New Features | Rein internes Refactoring |
+| server.js weitere Aufteilung | v1.0 Refactoring abgeschlossen, Architektur stabil |
+| CORS-Konfiguration (I3) | Bereits in v1.0 implementiert |
+| Duplikat-Dateien loeschen (I6) | Separater Cleanup, kein Security-Thema |
+| Input-Validation /api/epex/backfill (I10) | Niedrigere Prioritaet, future milestone |
 | TypeScript Migration | Eigenes Projekt |
-| ES6 Classes | Codebase Convention ist Factory Functions |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Complete |
-| FOUND-02 | Phase 1 | Complete |
-| FOUND-03 | Phase 1 | Complete |
-| MODX-01 | Phase 1 | Complete |
-| MODX-02 | Phase 2 | Complete |
-| MODX-03 | Phase 2 | Complete |
-| MODX-04 | Phase 3 | Complete |
-| MODX-05 | Phase 4 | Complete |
-| MODX-06 | Phase 4 | Complete |
-| MODX-07 | Phase 5 | Complete |
-| ORCH-01 | Phase 5 | Complete |
-| ORCH-02 | Phase 5 | Complete |
-| QUAL-01 | All Phases | Complete |
-| QUAL-02 | All Phases | Complete |
-| QUAL-03 | All Phases | Complete |
-| QUAL-04 | All Phases | Complete |
-| QUAL-05 | All Phases | Complete |
+| SEC-01 | Phase 6 | Pending |
+| SEC-02 | Phase 6 | Complete |
+| SEC-03 | Phase 7 | Pending |
+| SEC-04 | Phase 6 | Complete |
+| BUG-01 | Phase 7 | Pending |
 
 **Coverage:**
-- v1 requirements: 17 total
-- Mapped to phases: 17
+- v0.4.2 requirements: 5 total
+- Mapped to phases: 5
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-26*
-*Last updated: 2026-03-27 -- all v1 requirements complete*
+*Requirements defined: 2026-03-27*
+*Last updated: 2026-03-27 after roadmap creation*
