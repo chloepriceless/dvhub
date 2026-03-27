@@ -35,6 +35,7 @@ function escapeAttr(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+const escapeHtml = (window.DVhubCommon || {}).escapeHtml || escapeAttr;
 
 function setText(id, text, cls) {
   const el = document.getElementById(id);
@@ -894,7 +895,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`PV Fc: ${Number(dp.raw).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.join(' <span style="opacity:0.4">|</span> ');
+            tt.innerHTML = parts.map(p => escapeHtml(p)).join(' <span style="opacity:0.4">|</span> ');
             tt.style.display = 'block';
             const rect = context.chart.canvas.getBoundingClientRect();
             const x = rect.left + tip.caretX + 14;
@@ -1849,22 +1850,22 @@ function renderAutomationStages() {
       <div class="pricing-period-grid">
         <label class="settings-field">
           <span>Entladeleistung (W, negativ = Einspeisung)</span>
-          <input type="number" data-stage-field="dischargeW" value="${stage.dischargeW}" />
+          <input type="number" data-stage-field="dischargeW" value="${escapeAttr(stage.dischargeW)}" />
         </label>
         <label class="settings-field">
           <span>Entlade-Slots (je 15 Min.)</span>
-          <input type="number" min="0" data-stage-field="dischargeSlots" value="${stage.dischargeSlots}" />
+          <input type="number" min="0" data-stage-field="dischargeSlots" value="${escapeAttr(stage.dischargeSlots)}" />
         </label>
         <label class="settings-field">
           <span>Cooldown-Leistung (W, negativ = Einspeisung)</span>
-          <input type="number" data-stage-field="cooldownW" value="${stage.cooldownW}" />
+          <input type="number" data-stage-field="cooldownW" value="${escapeAttr(stage.cooldownW)}" />
         </label>
         <label class="settings-field">
           <span>Cooldown-Slots (je 15 Min.)</span>
-          <input type="number" min="0" data-stage-field="cooldownSlots" value="${stage.cooldownSlots}" />
+          <input type="number" min="0" data-stage-field="cooldownSlots" value="${escapeAttr(stage.cooldownSlots)}" />
         </label>
       </div>
-      <button class="btn-small btn-danger remove-stage-btn" data-remove-stage="${stage.id}">Stufe entfernen</button>
+      <button class="btn-small btn-danger remove-stage-btn" data-remove-stage="${escapeAttr(stage.id)}">Stufe entfernen</button>
     `;
     container.appendChild(card);
   });
