@@ -1954,9 +1954,15 @@ function renderAutomationStatus(scheduleData) {
   if (outcomeEl) outcomeEl.textContent = outcomeLabels[sma.lastOutcome] || sma.lastOutcome || '\u2014';
   if (countEl) countEl.textContent = sma.generatedRuleCount != null ? `${sma.generatedRuleCount} Regeln aktiv` : '';
   if (energyEl) {
-    energyEl.textContent = sma.availableEnergyKwh != null
-      ? `${sma.availableEnergyKwh} kWh verfügbar`
-      : '';
+    if (sma.availableEnergyKwh != null) {
+      const plan = sma.plan;
+      const dynInfo = plan?.dynamicSocFloor
+        ? ` (Min-SOC ${plan.effectiveMinSocPct}% statt ${plan.minSocPct}%)`
+        : '';
+      energyEl.textContent = `${sma.availableEnergyKwh} kWh verfügbar${dynInfo}`;
+    } else {
+      energyEl.textContent = '';
+    }
   }
 
   // Render plan summary
@@ -1981,7 +1987,15 @@ function renderAutomationStatus(scheduleData) {
   if (budgetEl) {
     const parts = [];
     if (plan.availableEnergyKwh != null) parts.push(`${plan.availableEnergyKwh} kWh Energie`);
-    if (plan.currentSocPct != null) parts.push(`SOC ${plan.currentSocPct}% \u2192 ${plan.minSocPct ?? 0}%`);
+    if (plan.currentSocPct != null) {
+      const effectiveMin = plan.effectiveMinSocPct ?? plan.minSocPct ?? 0;
+      const configuredMin = plan.minSocPct ?? 0;
+      let socText = `SOC ${plan.currentSocPct}% \u2192 ${effectiveMin}%`;
+      if (plan.dynamicSocFloor) {
+        socText += ` (statt ${configuredMin}%, Sonnenaufgang)`;
+      }
+      parts.push(socText);
+    }
     budgetEl.textContent = parts.join(' \u2022 ') || '\u2014';
   }
   if (revenueEl) {
