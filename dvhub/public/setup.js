@@ -481,10 +481,10 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
   const bannerParts = [title];
   if (payload?.restartRequired) bannerParts.push('Einige Einstellungen werden erst nach einem Dienst-Neustart aktiv.');
   if (warnings.length) bannerParts.push(`Bitte ${warnings.length === 1 ? 'die Warnung' : 'die Warnungen'} unten prüfen.`);
-  bannerParts.push('Weiterleitung zur Einrichtung...');
+  bannerParts.push('Weiterleitung zum Leitstand...');
   const nextSteps = payload?.restartRequired
-    ? ['In der Einrichtung prüfen, welche Verbindungswerte aktiv sind.', 'Danach den DVhub-Dienst oder die betroffene Verbindung neu starten.']
-    : ['In der Einrichtung die vollstaendige Config prüfen und bei Bedarf weiter verfeinern.'];
+    ? ['Im Leitstand prüfen, ob alle Verbindungswerte aktiv sind.', 'Danach den DVhub-Dienst oder die betroffene Verbindung neu starten.']
+    : ['Der Leitstand zeigt jetzt die Live-Daten deiner Anlage.'];
   return {
     title,
     kind,
@@ -493,7 +493,7 @@ function buildSetupSaveOutcome(payload, source = 'setup') {
     warnings,
     restartItems,
     nextSteps,
-    redirectUrl: '/settings.html?setup=done',
+    redirectUrl: '/',
     redirectDelayMs: payload?.restartRequired || warnings.length ? 2600 : 1800
   };
 }
