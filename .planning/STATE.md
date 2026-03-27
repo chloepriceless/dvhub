@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-27T00:09:00Z"
-last_activity: 2026-03-27 -- Completed 03-01 polling.js extraction
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-27T00:18:31Z"
+last_activity: 2026-03-27 -- Completed 03-02 polling.js wiring
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
-**Current focus:** Phase 3 Polling -- polling.js module created, wiring next
+**Current focus:** Phase 3 Polling COMPLETE -- polling.js extracted and wired into server.js
 
 ## Current Position
 
-Phase: 3 of 5 (Polling)
-Plan: 1 of 2 in current phase
-Status: 03-01 Complete
-Last activity: 2026-03-27 -- Completed 03-01 polling.js extraction
+Phase: 3 of 5 (Polling) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: 03-02 Complete (Phase 3 done)
+Last activity: 2026-03-27 -- Completed 03-02 polling.js wiring into server.js
 
-Progress: [████████░░] 83% (Overall: 5/6 plans)
+Progress: [██████████] 100% (Overall: 6/6 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: 6 min
-- Total execution time: 0.5 hours
+- Total execution time: 0.6 hours
 
 **By Phase:**
 
@@ -45,11 +45,11 @@ Progress: [████████░░] 83% (Overall: 5/6 plans)
 |-------|-------|-------|----------|
 | 01 | 2/2 | 16 min | 8 min |
 | 02 | 2/2 | 11 min | 5.5 min |
-| 03 | 1/2 | 3 min | 3 min |
+| 03 | 2/2 | 9 min | 4.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 7 min, 5 min, 6 min, 3 min
-- Trend: improving
+- Last 5 plans: 7 min, 5 min, 6 min, 3 min, 6 min
+- Trend: stable
 
 *Updated after each plan completion*
 
@@ -76,6 +76,8 @@ Recent decisions affecting current work:
 - [Phase 03]: schedulePollLoop uses if (!stopping) guard instead of .finally() for graceful shutdown
 - [Phase 03]: Telemetry decoupled via ctx.onPollComplete callback instead of direct liveTelemetryBuffer access
 - [Phase 03]: loadEnergy kept as standalone export (not inside factory) for startup-time usage
+- [Phase 03]: ctx.onPollComplete callback placed in async init block; liveTelemetryBuffer captured by closure reference
+- [Phase 03]: Removed createSerialTaskRunner/normalizePollIntervalMs imports from server.js (moved to polling.js)
 
 ### Pending Todos
 
@@ -89,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T00:09:00Z
-Stopped at: Completed 03-01-PLAN.md
-Resume file: .planning/phases/03-polling/03-01-SUMMARY.md
+Last session: 2026-03-27T00:18:31Z
+Stopped at: Completed 03-02-PLAN.md
+Resume file: .planning/phases/03-polling/03-02-SUMMARY.md
