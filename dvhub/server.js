@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
-import * as crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -24,9 +23,7 @@ import {
 } from './runtime-performance.js';
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
-  buildHistoryImportStatusResponse,
-  buildRuntimeSnapshot,
-  buildWorkerBackedStatusResponse
+  buildRuntimeSnapshot
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
@@ -51,20 +48,13 @@ import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
-  nowIso, fmtTs, resolveLogLimit, u16, s16, parseBody,
-  roundCtKwh, addDays,
-  gridDirection, MAX_BODY_BYTES
+  nowIso, fmtTs, parseBody,
+  gridDirection
 } from './server-utils.js';
-import {
-  effectiveBatteryCostCtKwh,
-  mixedCostCtKwh,
-  slotComparison,
-  resolveImportPriceCtKwhForSlot,
-  configuredModule3Windows
-} from './user-energy-pricing.js';
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
+import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -360,8 +350,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     victron: runtimeSnapshot.victron,
     scan: state.scan,
     schedule: runtimeSnapshot.schedule,
-    costs: costSummary(),
-    userEnergyPricing: userEnergyPricingSummary(),
+    costs: ctx.costSummary(),
+    userEnergyPricing: ctx.userEnergyPricingSummary(),
     epex: { ...state.epex, summary: epex.epexNowNext() },
     telemetry: {
       ...runtimeSnapshot.telemetry,
@@ -388,24 +378,6 @@ function getCachedRuntimeStatusPayload() {
   return runtimeWorkerStatusPayload;
 }
 
-function buildApiStatusResponse(now = Date.now()) {
-  const runtimeSnapshot = buildCurrentRuntimeSnapshot();
-  return buildWorkerBackedStatusResponse({
-    cachedStatus: getCachedRuntimeStatusPayload(),
-    fallbackStatus: buildCurrentStatusPayload({ now, runtimeSnapshot }),
-    setup: configMetaPayload(),
-    runtime: buildRuntimeRouteMeta(now)
-  });
-}
-
-function buildApiHistoryImportStatusResponse() {
-  const runtimeSnapshot = buildCurrentRuntimeSnapshot();
-  return buildHistoryImportStatusResponse({
-    cachedStatus: getCachedRuntimeStatusPayload(),
-    fallbackTelemetryEnabled: !!cfg.telemetry?.enabled,
-    fallbackHistoryImport: runtimeSnapshot.historyImport
-  });
-}
 
 function historicalMarketValueBackfillYears({ bounds, now = new Date() } = {}) {
   const currentYear = new Date(now).getUTCFullYear();
@@ -515,12 +487,6 @@ function pushLog(event, details = {}) {
   if (state.log.length > 1000) state.log.shift();
 }
 
-function validateScheduleRule(rule) {
-  if (typeof rule !== 'object' || rule === null) return false;
-  if (typeof rule.target !== 'string') return false;
-  if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
-  return true;
-}
 
 function expireLeaseIfNeeded() {
   if (state.ctrl.forcedOff && Date.now() > state.ctrl.offUntil) {
@@ -605,358 +571,31 @@ const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
 
-function userEnergyPricingSummary() {
-  const pricing = cfg.userEnergyPricing || {};
-  const costs = pricing.costs || {};
-  const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing, cfg.schedule?.timezone)) : [];
-  const currentTs = epex.epexNowNext()?.current?.ts;
-  const current = slots.find((row) => row?.ts === currentTs) || null;
-  const configured =
-    (pricing.mode === 'fixed' && Number.isFinite(Number(pricing.fixedGrossImportCtKwh)))
-    || pricing.mode === 'dynamic';
+// -- ctx extensions for routes-api.js ---
+ctx.controlValue = controlValue;
+ctx.needsSetup = () => loadedConfig.needsSetup;
+ctx.getConfigPath = () => CONFIG_PATH;
+ctx.getRawCfg = () => rawCfg;
+ctx.getLoadedConfig = () => loadedConfig;
+ctx.getConfigDefinition = () => CONFIG_DEFINITION;
+ctx.getAppVersion = () => APP_VERSION;
+ctx.getTransportType = () => transport.type;
+ctx.getAppDir = () => __dirname;
+ctx.getRepoRoot = () => path.resolve(__dirname, '..');
+ctx.scanTransport = scanTransport;
+ctx.fetchEpexDay = () => epex.fetchEpexDay();
+ctx.fetchVrmForecast = () => epex.fetchVrmForecast();
+ctx.getCachedRuntimeStatusPayload = getCachedRuntimeStatusPayload;
+ctx.buildRuntimeRouteMeta = buildRuntimeRouteMeta;
+ctx.buildFallbackStatusPayload = (now) => buildCurrentStatusPayload({ now });
+ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 
-  return {
-    configured,
-    mode: pricing.mode || 'fixed',
-    usesParagraph14aModule3: pricing.usesParagraph14aModule3 === true,
-    dynamicComponents: {
-      energyMarkupCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.energyMarkupCtKwh || 0)),
-      gridChargesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.gridChargesCtKwh || 0)),
-      leviesAndFeesCtKwh: roundCtKwh(Number(pricing?.dynamicComponents?.leviesAndFeesCtKwh || 0)),
-      vatPct: roundCtKwh(Number(pricing?.dynamicComponents?.vatPct || 0))
-    },
-    fixedGrossImportCtKwh: Number.isFinite(Number(pricing.fixedGrossImportCtKwh))
-      ? roundCtKwh(Number(pricing.fixedGrossImportCtKwh))
-      : null,
-    module3Windows: configuredModule3Windows(pricing).map((window) => ({
-      id: window.id,
-      label: window.label,
-      start: window.start,
-      end: window.end,
-      priceCtKwh: window.priceCtKwh
-    })),
-    costs: {
-      pvCtKwh: Number.isFinite(Number(costs.pvCtKwh)) ? roundCtKwh(Number(costs.pvCtKwh)) : null,
-      batteryBaseCtKwh: Number.isFinite(Number(costs.batteryBaseCtKwh)) ? roundCtKwh(Number(costs.batteryBaseCtKwh)) : null,
-      batteryLossMarkupPct: roundCtKwh(Number(costs.batteryLossMarkupPct || 0)),
-      batteryEffectiveCtKwh: effectiveBatteryCostCtKwh(costs),
-      mixedCtKwh: mixedCostCtKwh(costs)
-    },
-    current,
-    slots
-  };
-}
+const routes = createApiRoutes(ctx);
+// After createApiRoutes returns, ctx.costSummary and ctx.userEnergyPricingSummary
+// are set by the factory (ctx mutation pattern).
 
-async function runMeterScan(params = {}) {
-  if (state.scan.running) throw new Error('scan already running');
-  const p = { ...cfg.scan, ...params };
-  p.start = Number(p.start);
-  p.end = Number(p.end);
-  p.step = Math.max(1, Number(p.step));
-  p.quantity = Math.max(1, Math.min(125, Number(p.quantity)));
-
-  state.scan.running = true;
-  state.scan.updatedAt = Date.now();
-  state.scan.params = p;
-  state.scan.rows = [];
-  state.scan.error = null;
-  pushLog('scan_start', p);
-
-  const rows = [];
-  try {
-    for (let addr = p.start; addr <= p.end; addr += p.step) {
-      try {
-        const regs = await scanTransport.mbRequest({
-          host: p.host,
-          port: p.port,
-          unitId: p.unitId,
-          fc: p.fc,
-          address: addr,
-          quantity: p.quantity,
-          timeoutMs: p.timeoutMs
-        });
-        const hasNonZero = regs.some((x) => Number(x) !== 0);
-        if (!p.onlyNonZero || hasNonZero) rows.push({ addr, regs, s16: regs.map((v) => s16(v)) });
-      } catch (e) {
-        rows.push({ addr, error: e.message });
-      }
-      if (rows.length >= 1000) break;
-    }
-    state.scan.rows = rows;
-    pushLog('scan_done', { rows: rows.length });
-  } catch (e) {
-    state.scan.error = e.message;
-    pushLog('scan_error', { error: e.message });
-  } finally {
-    state.scan.running = false;
-    state.scan.updatedAt = Date.now();
-  }
-}
-
-function keepaliveModbusPayload() {
-  return {
-    ok: !!state.keepalive.modbusLastQuery,
-    lastQuery: state.keepalive.modbusLastQuery,
-    now: Date.now()
-  };
-}
-
-function keepalivePulsePayload() {
-  const now = Date.now();
-  const slot = Math.floor(now / (cfg.keepalivePulseSec * 1000));
-  const slotTs = slot * cfg.keepalivePulseSec * 1000;
-  return {
-    ok: true,
-    periodSec: cfg.keepalivePulseSec,
-    pulseSlot: slot,
-    pulseTimestamp: slotTs,
-    now
-  };
-}
-
-function costSummary() {
-  return {
-    day: state.energy.day,
-    importWh: Number(state.energy.importWh.toFixed(3)),
-    exportWh: Number(state.energy.exportWh.toFixed(3)),
-    importKwh: Number((state.energy.importWh / 1000).toFixed(4)),
-    exportKwh: Number((state.energy.exportWh / 1000).toFixed(4)),
-    costEur: Number(state.energy.costEur.toFixed(4)),
-    revenueEur: Number(state.energy.revenueEur.toFixed(4)),
-    netEur: Number((state.energy.revenueEur - state.energy.costEur).toFixed(4)),
-    priceNowCtKwh: Number(epex.epexNowNext()?.current?.ct_kwh ?? 0),
-    userImportPriceNowCtKwh: Number(userEnergyPricingSummary()?.current?.importPriceCtKwh ?? 0)
-  };
-}
-
-function integrationState() {
-  return {
-    timestamp: Date.now(),
-    dvControlValue: controlValue(),
-    forcedOff: state.ctrl.forcedOff,
-    gridTotalW: state.meter.grid_total_w,
-    gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
-    gridSetpointW: state.victron.gridSetpointW,
-    minSocPct: state.victron.minSocPct,
-    soc: state.victron.soc,
-    batteryPowerW: state.victron.batteryPowerW,
-    pvTotalW: state.victron.pvTotalW,
-    scheduleActive: state.schedule.active,
-    costs: costSummary(),
-    userEnergyPricing: userEnergyPricingSummary()
-  };
-}
-
-// ── EOS (Akkudoktor) Integration ─────────────────────────────────────
-function eosState() {
-  const now = new Date();
-  const soc = Number(state.victron.soc ?? 0);
-  const gridTotal = Number(state.meter.grid_total_w ?? 0);
-  const posImport = cfg.gridPositiveMeans === 'grid_import';
-  const gridImportW = Math.max(0, posImport ? gridTotal : -gridTotal);
-  const gridExportW = Math.max(0, posImport ? -gridTotal : gridTotal);
-
-  return {
-    // Messwerte im EOS-Format (PUT /v1/measurement/data)
-    measurement: {
-      start_datetime: now.toISOString(),
-      interval: `${cfg.meterPollMs / 1000} seconds`,
-      battery_soc: [soc / 100],
-      battery_power: [Number(state.victron.batteryPowerW ?? 0)],
-      grid_import_w: [gridImportW],
-      grid_export_w: [gridExportW],
-      pv_power: [Number(state.victron.pvTotalW ?? 0)],
-      load_power: [Number(state.victron.selfConsumptionW ?? 0)],
-      power_l1_w: [Number(state.meter.grid_l1_w ?? 0)],
-      power_l2_w: [Number(state.meter.grid_l2_w ?? 0)],
-      power_l3_w: [Number(state.meter.grid_l3_w ?? 0)]
-    },
-    // Aktuelle Systeminfo
-    system: {
-      timestamp: now.toISOString(),
-      soc_pct: soc,
-      battery_power_w: Number(state.victron.batteryPowerW ?? 0),
-      pv_total_w: Number(state.victron.pvTotalW ?? 0),
-      grid_total_w: gridTotal,
-      grid_import_w: gridImportW,
-      grid_export_w: gridExportW,
-      grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
-      min_soc_pct: Number(state.victron.minSocPct ?? 0),
-      self_consumption_w: Number(state.victron.selfConsumptionW ?? 0)
-    },
-    // EPEX-Preise (fuer EOS prediction import)
-    prices: epexPriceArray()
-  };
-}
-
-// ── EMHASS Integration ───────────────────────────────────────────────
-function emhassState() {
-  const soc = Number(state.victron.soc ?? 0);
-  const prices = epexPriceArray();
-
-  return {
-    // Aktuelle Werte fuer soc_init
-    soc_init: soc / 100,
-    battery_power_w: Number(state.victron.batteryPowerW ?? 0),
-    pv_power_w: Number(state.victron.pvTotalW ?? 0),
-    load_power_w: Number(state.victron.selfConsumptionW ?? 0),
-    grid_power_w: Number(state.meter.grid_total_w ?? 0),
-    // EPEX-Preise als Array (EUR/kWh) fuer load_cost_forecast
-    load_cost_forecast: prices.map((p) => p.eur_kwh),
-    // Timestamps dazu
-    price_timestamps: prices.map((p) => p.ts_iso),
-    // Preise als prod_price_forecast (Einspeiseverguetung, hier identisch)
-    prod_price_forecast: prices.map((p) => p.eur_kwh),
-    // System-Metadaten
-    timestamp: new Date().toISOString(),
-    grid_setpoint_w: Number(state.victron.gridSetpointW ?? 0),
-    min_soc_pct: Number(state.victron.minSocPct ?? 0)
-  };
-}
-
-// ── EPEX-Preise als Array (fuer EOS + EMHASS) ───────────────────────
-function epexPriceArray() {
-  if (!state.epex.ok || !Array.isArray(state.epex.data)) return [];
-  return state.epex.data.map((row) => ({
-    ts: row.ts,
-    ts_iso: new Date(row.ts).toISOString(),
-    eur_mwh: Number(row.eur_mwh ?? 0),
-    eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
-    ct_kwh: Number(row.ct_kwh ?? 0)
-  }));
-}
-
-function isLocalNetworkRequest(req) {
-  const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
-  const addr = raw.replace(/^::ffff:/, '');
-  // Localhost
-  if (addr === '127.0.0.1' || addr === '::1') return true;
-  // Private/LAN ranges (RFC 1918)
-  const parts = addr.split('.').map(Number);
-  if (parts.length === 4) {
-    if (parts[0] === 10) return true;                                    // 10.0.0.0/8
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
-    if (parts[0] === 192 && parts[1] === 168) return true;               // 192.168.0.0/16
-  }
-  // IPv6 link-local
-  if (addr.startsWith('fe80:')) return true;
-  return false;
-}
-
-// Sensitive endpoints that always require token auth, even from LAN
-const SENSITIVE_ENDPOINTS = new Set([
-  '/api/admin/update/check', '/api/admin/update/apply', '/api/admin/restart',
-  '/api/admin/health', '/api/config', '/api/config/import',
-  '/api/control/write', '/api/integration/eos/apply', '/api/integration/emhass/apply'
-]);
-
-function isSensitiveRequest(req) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  if (SENSITIVE_ENDPOINTS.has(url.pathname)) return req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
-  if (url.pathname === '/api/config' && req.method === 'POST') return true;
-  if (url.pathname.startsWith('/api/admin/')) return true;
-  return false;
-}
-
-// --- Rate Limiting (in-memory, per IP) ---
-const rateLimitBuckets = new Map();
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 120; // 120 req/min per IP (2/s avg)
-const RATE_LIMIT_ADMIN_MAX = 10;     // stricter for admin/mutation endpoints
-
-function getRateLimitKey(req) {
-  const raw = req.socket?.remoteAddress || '';
-  return raw.replace(/^::ffff:/, '');
-}
-
-function checkRateLimit(req, res) {
-  const ip = getRateLimitKey(req);
-  const now = Date.now();
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const isAdmin = url.pathname.startsWith('/api/admin/');
-  const limit = isAdmin ? RATE_LIMIT_ADMIN_MAX : RATE_LIMIT_MAX_REQUESTS;
-
-  let bucket = rateLimitBuckets.get(ip);
-  if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
-    bucket = { windowStart: now, count: 0 };
-    rateLimitBuckets.set(ip, bucket);
-  }
-  bucket.count++;
-
-  if (bucket.count > limit) {
-    res.writeHead(429, { ...SECURITY_HEADERS, 'Retry-After': '60', 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Too many requests' }));
-    return false;
-  }
-  return true;
-}
-
-// Clean up stale buckets every 5 minutes
-setInterval(() => {
-  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS * 2;
-  for (const [ip, bucket] of rateLimitBuckets) {
-    if (bucket.windowStart < cutoff) rateLimitBuckets.delete(ip);
-  }
-}, 300_000).unref();
-
-function checkAuth(req, res) {
-  if (!cfg.apiToken) return true;
-  // LAN requests bypass token check for read-only/non-sensitive endpoints
-  if (isLocalNetworkRequest(req) && !isSensitiveRequest(req)) return true;
-  const expected = Buffer.from(cfg.apiToken);
-  const auth = req.headers.authorization || '';
-  if (auth.startsWith('Bearer ')) {
-    const token = Buffer.from(auth.slice(7));
-    if (token.length === expected.length && crypto.timingSafeEqual(token, expected)) return true;
-  }
-  const urlToken = new URL(req.url, `http://${req.headers.host}`).searchParams.get('token');
-  if (urlToken) {
-    const urlBuf = Buffer.from(urlToken);
-    if (urlBuf.length === expected.length && crypto.timingSafeEqual(urlBuf, expected)) return true;
-  }
-  res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
-  res.end(JSON.stringify({ error: 'unauthorized' }));
-  return false;
-}
-
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://dvhub.de https://*.tile.openstreetmap.org; connect-src 'self' https://api.dvhub.de"
-};
-
-function json(res, code, payload) {
-  res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(payload));
-}
-
-function text(res, code, payload) {
-  res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
-  res.end(String(payload));
-}
-
-function downloadJson(res, filename, payload) {
-  res.writeHead(200, {
-    ...SECURITY_HEADERS,
-    'content-type': 'application/json; charset=utf-8',
-    'content-disposition': `attachment; filename="${filename}"`
-  });
-  res.end(JSON.stringify(payload, null, 2));
-}
-
+// REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues)
 const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
-
-function redactConfig(config) {
-  const copy = JSON.parse(JSON.stringify(config));
-  for (const dotPath of REDACTED_PATHS) {
-    const parts = dotPath.split('.');
-    let obj = copy;
-    for (let i = 0; i < parts.length - 1; i++) { obj = obj?.[parts[i]]; if (!obj) break; }
-    if (obj && parts[parts.length - 1] in obj) obj[parts[parts.length - 1]] = '***';
-  }
-  return copy;
-}
 
 function restoreRedactedValues(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
@@ -977,26 +616,6 @@ function restoreRedactedValues(incoming, current) {
   return copy;
 }
 
-function configMetaPayload() {
-  return {
-    path: CONFIG_PATH,
-    exists: loadedConfig.exists,
-    valid: loadedConfig.valid,
-    parseError: loadedConfig.parseError,
-    needsSetup: loadedConfig.needsSetup,
-    warnings: loadedConfig.warnings || []
-  };
-}
-
-function configApiPayload() {
-  return {
-    ok: true,
-    meta: configMetaPayload(),
-    config: redactConfig(rawCfg),
-    effectiveConfig: redactConfig(cfg),
-    definition: CONFIG_DEFINITION
-  };
-}
 
 export async function buildSystemDiscoveryPayload({
   query = {},
@@ -1171,692 +790,443 @@ function scheduleServiceRestart() {
   helper.unref();
 }
 
-function servePage(res, filename) {
-  const publicDir = path.resolve(__dirname, 'public');
-  const file = path.resolve(publicDir, filename);
-  if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-  if (!fs.existsSync(file)) return text(res, 404, 'not found');
-  res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
-  fs.createReadStream(file).pipe(res);
-}
 
-function serveStatic(req, res) {
-  const urlPath = new URL(req.url, 'http://localhost').pathname;
-  const reqPath = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
-  const publicDir = path.resolve(__dirname, 'public');
-  const file = path.resolve(publicDir, reqPath.replace(/^\/+/, ''));
-  if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-  if (!fs.existsSync(file)) return text(res, 404, 'not found');
-  const ext = path.extname(file).toLowerCase();
-  const mime = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.ico': 'image/x-icon'
-  }[ext] || 'application/octet-stream';
-  res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime });
-  fs.createReadStream(file).pipe(res);
+// Local JSON response helper for admin routes (json/text/downloadJson moved to routes-api.js)
+function json(res, code, payload) {
+  res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
 }
 
 const web = http.createServer(async (req, res) => {
   try {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // CORS: restrict cross-origin API access to same origin only
-  const origin = req.headers.origin;
-  if (origin && url.pathname.startsWith('/api/')) {
-    const host = req.headers.host;
-    const allowedOrigins = [`http://${host}`, `https://${host}`];
-    if (allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.setHeader('Access-Control-Max-Age', '3600');
-    }
-    if (req.method === 'OPTIONS') {
-      res.writeHead(allowedOrigins.includes(origin) ? 204 : 403, SECURITY_HEADERS);
-      res.end();
-      return;
-    }
-  }
-
-  if (url.pathname === '/' && req.method === 'GET') {
-    return servePage(res, loadedConfig.needsSetup ? 'setup.html' : 'index.html');
-  }
-
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
-    if (!checkRateLimit(req, res)) return;
-    if (!checkAuth(req, res)) return;
-  }
-
-  if (url.pathname === '/dv/control-value' && req.method === 'GET') return text(res, 200, controlValue());
-
-  if (url.pathname === '/api/keepalive/modbus' && req.method === 'GET') return json(res, 200, keepaliveModbusPayload());
-  if (url.pathname === '/api/keepalive/pulse' && req.method === 'GET') return json(res, 200, keepalivePulsePayload());
-  if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
-
-  if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
-    const body = await parseBody(req);
-    if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
-      return json(res, 400, { ok: false, error: 'config object required' });
-    }
-    const result = saveAndApplyConfig(restoreRedactedValues(body.config, rawCfg));
-    pushLog('config_saved', {
-      changedPaths: result.changedPaths.length,
-      restartRequired: result.restartRequired,
-      source: url.pathname.endsWith('/import') ? 'import' : 'settings'
-    });
-    return json(res, 200, {
-      ok: true,
-      meta: configMetaPayload(),
-      config: rawCfg,
-      effectiveConfig: cfg,
-      changedPaths: result.changedPaths,
-      restartRequired: result.restartRequired,
-      restartRequiredPaths: result.restartRequiredPaths
-    });
-  }
-
-  if (url.pathname === '/api/config/export' && req.method === 'GET') {
-    return downloadJson(res, 'dvhub-config.json', rawCfg);
-  }
-
-  if (url.pathname === '/api/discovery/systems' && req.method === 'GET') {
-    const payload = await buildSystemDiscoveryPayload({
-      query: Object.fromEntries(url.searchParams)
-    });
-    return json(res, payload.ok ? 200 : 400, payload);
-  }
-
-  if (url.pathname === '/api/admin/health' && req.method === 'GET') {
-    return json(res, 200, await adminHealthPayload());
-  }
-
-  if (url.pathname === '/api/admin/service/restart' && req.method === 'POST') {
-    if (!SERVICE_ACTIONS_ENABLED) {
-      return json(res, 403, { ok: false, error: 'service actions disabled' });
-    }
-    const check = await runServiceCommand(['show', SERVICE_NAME, '--property=Id', '--value']);
-    if (!check.ok) {
-      return json(res, 500, { ok: false, error: check.error, command: check.command });
-    }
-    scheduleServiceRestart();
-    pushLog('service_restart_scheduled', { service: SERVICE_NAME });
-    return json(res, 202, {
-      ok: true,
-      accepted: true,
-      service: SERVICE_NAME,
-      message: 'Service restart scheduled'
-    });
-  }
-
-  // --- Software Update ---
-  if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
-    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
-    try {
-      const repoRoot = path.resolve(__dirname, '..');
-      const channel = rawCfg.updateChannel || 'stable';
-      await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
-      const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-
-      if (channel === 'stable') {
-        // Tag-based update check
-        let currentTag = null;
-        try {
-          currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        } catch { /* not on a tag */ }
-        let latestTag = null;
-        try {
-          latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0] || null;
-        } catch { /* no tags */ }
-        let changelog = '';
-        if (currentTag && latestTag && currentTag !== latestTag) {
-          try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
-        } else if (!currentTag && latestTag) {
-          try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
-        }
-        const updateAvailable = latestTag != null && latestTag !== currentTag;
-        return json(res, 200, {
-          ok: true, channel,
-          current: { version: APP_VERSION.versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
-          latest: { tag: latestTag, revision: null },
-          updateAvailable,
-          changelog: changelog ? changelog.split('\n').filter(Boolean) : []
-        });
-      } else {
-        // Dev: commit-based update check (original logic)
-        const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        const behind = Number((await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
-        const ahead = Number((await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
-        let changelog = '';
-        if (behind > 0) {
-          changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        }
-        return json(res, 200, {
-          ok: true, channel,
-          current: { version: APP_VERSION.versionLabel, tag: null, revision: localRev.slice(0, 7) },
-          latest: { tag: null, revision: remoteRev.slice(0, 7) },
-          behind, ahead,
-          updateAvailable: behind > 0,
-          changelog: changelog ? changelog.split('\n').filter(Boolean) : []
-        });
+    // CORS: restrict cross-origin API access to same origin only (defense-in-depth, stays in orchestrator)
+    const origin = req.headers.origin;
+    if (origin && url.pathname.startsWith('/api/')) {
+      const host = req.headers.host;
+      const allowedOrigins = [`http://${host}`, `https://${host}`];
+      if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Max-Age', '3600');
       }
-    } catch (e) {
-      return json(res, 500, { ok: false, error: e.message });
+      if (req.method === 'OPTIONS') {
+        res.writeHead(allowedOrigins.includes(origin) ? 204 : 403, SECURITY_HEADERS);
+        res.end();
+        return;
+      }
     }
-  }
 
-  if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
-    if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
-    try {
-      const repoRoot = path.resolve(__dirname, '..');
-      const channel = rawCfg.updateChannel || 'stable';
-      let gitOutput = '';
+    // Try simple/read-only routes first (routes-api.js)
+    const handled = await routes.handleRequest(req, res, url);
+    if (handled !== false) return;
 
-      // Save rollback point before any changes
-      const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+    // --- Admin/config POST routes (stay in orchestrator until Plan 2) ---
 
-      // Stash local modifications instead of discarding them
-      const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
-      const hasStash = !stashResult.stdout.includes('No local changes');
-
-      if (channel === 'stable') {
-        await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-        const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-        if (!latestTag) throw new Error('No release tags found');
-        const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-        gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
-      } else {
-        await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
-        await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-        const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
-        gitOutput = pull.stdout.trim();
-      }
-
-      // npm install + smoke test with automatic rollback on failure
-      try {
-        const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
-        await execFileAsync('node', ['--check', 'server.js'], { cwd: __dirname, timeout: 5000 });
-        pushLog('update_applied', {
-          channel,
-          gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
-          npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
-        });
-      } catch (installErr) {
-        // Rollback: restore previous revision and dependencies
-        pushLog('update_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
-        await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
-        await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 }).catch(() => {});
-        if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-        throw new Error(`Update rolled back (npm/syntax failed): ${installErr.message}`);
-      }
-
-      if (hasStash) {
-        pushLog('update_stash_discarded', { note: 'local changes were stashed before update and not restored' });
-      }
-
-      scheduleServiceRestart();
-      pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'update' });
-      return json(res, 200, {
-        ok: true, channel,
-        gitOutput,
-        rolledBackFrom: rollbackRev.slice(0, 7),
-        message: 'Update applied, service restart scheduled'
-      });
-    } catch (e) {
-      pushLog('update_error', { error: e.message });
-      return json(res, 500, { ok: false, error: e.message });
-    }
-  }
-
-  if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
-    try {
+    if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
       const body = await parseBody(req);
-      const channel = body?.channel;
-      if (channel !== 'stable' && channel !== 'dev') {
-        return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
+      if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
+        return json(res, 400, { ok: false, error: 'config object required' });
       }
+      const result = saveAndApplyConfig(restoreRedactedValues(body.config, rawCfg));
+      pushLog('config_saved', {
+        changedPaths: result.changedPaths.length,
+        restartRequired: result.restartRequired,
+        source: url.pathname.endsWith('/import') ? 'import' : 'settings'
+      });
+      return json(res, 200, {
+        ok: true,
+        config: rawCfg,
+        effectiveConfig: cfg,
+        changedPaths: result.changedPaths,
+        restartRequired: result.restartRequired,
+        restartRequiredPaths: result.restartRequiredPaths
+      });
+    }
 
-      // Always save channel preference to config (works even without service actions)
-      const next = JSON.parse(JSON.stringify(rawCfg || {}));
-      next.updateChannel = channel;
-      saveAndApplyConfig(next);
+    if (url.pathname === '/api/admin/health' && req.method === 'GET') {
+      return json(res, 200, await adminHealthPayload());
+    }
 
-      // If service actions are enabled, also switch git ref and restart
-      if (SERVICE_ACTIONS_ENABLED) {
+    if (url.pathname === '/api/admin/service/restart' && req.method === 'POST') {
+      if (!SERVICE_ACTIONS_ENABLED) {
+        return json(res, 403, { ok: false, error: 'service actions disabled' });
+      }
+      const check = await runServiceCommand(['show', SERVICE_NAME, '--property=Id', '--value']);
+      if (!check.ok) {
+        return json(res, 500, { ok: false, error: check.error, command: check.command });
+      }
+      scheduleServiceRestart();
+      pushLog('service_restart_scheduled', { service: SERVICE_NAME });
+      return json(res, 202, {
+        ok: true,
+        accepted: true,
+        service: SERVICE_NAME,
+        message: 'Service restart scheduled'
+      });
+    }
+
+    // --- Software Update ---
+    if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
+      if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
         const repoRoot = path.resolve(__dirname, '..');
+        const channel = rawCfg.updateChannel || 'stable';
+        await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+
+        if (channel === 'stable') {
+          let currentTag = null;
+          try {
+            currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          } catch { /* not on a tag */ }
+          let latestTag = null;
+          try {
+            latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0] || null;
+          } catch { /* no tags */ }
+          let changelog = '';
+          if (currentTag && latestTag && currentTag !== latestTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          } else if (!currentTag && latestTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          }
+          const updateAvailable = latestTag != null && latestTag !== currentTag;
+          return json(res, 200, {
+            ok: true, channel,
+            current: { version: APP_VERSION.versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
+            latest: { tag: latestTag, revision: null },
+            updateAvailable,
+            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+          });
+        } else {
+          const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          const behind = Number((await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+          const ahead = Number((await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+          let changelog = '';
+          if (behind > 0) {
+            changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          }
+          return json(res, 200, {
+            ok: true, channel,
+            current: { version: APP_VERSION.versionLabel, tag: null, revision: localRev.slice(0, 7) },
+            latest: { tag: null, revision: remoteRev.slice(0, 7) },
+            behind, ahead,
+            updateAvailable: behind > 0,
+            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+          });
+        }
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
+      if (!SERVICE_ACTIONS_ENABLED) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
+        const repoRoot = path.resolve(__dirname, '..');
+        const channel = rawCfg.updateChannel || 'stable';
         let gitOutput = '';
-
-        // Save rollback point before any changes
         const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-
-        // Stash local modifications instead of discarding them
         const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
         const hasStash = !stashResult.stdout.includes('No local changes');
 
-        await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
         if (channel === 'stable') {
+          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
           const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
           if (!latestTag) throw new Error('No release tags found');
-          await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-          gitOutput = `Switched to stable: ${latestTag}`;
+          const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+          gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
         } else {
+          await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
           await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-          gitOutput = 'Switched to dev: origin/main';
+          const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+          gitOutput = pull.stdout.trim();
         }
 
-        // npm install + smoke test with automatic rollback on failure
         try {
-          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+          const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
           await execFileAsync('node', ['--check', 'server.js'], { cwd: __dirname, timeout: 5000 });
+          pushLog('update_applied', {
+            channel,
+            gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
+            npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
+          });
         } catch (installErr) {
-          pushLog('channel_switch_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+          pushLog('update_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
           await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
           await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 }).catch(() => {});
           if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-          throw new Error(`Channel switch rolled back (npm/syntax failed): ${installErr.message}`);
+          throw new Error(`Update rolled back (npm/syntax failed): ${installErr.message}`);
         }
 
         if (hasStash) {
-          pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });
+          pushLog('update_stash_discarded', { note: 'local changes were stashed before update and not restored' });
         }
 
-        pushLog('update_channel_changed', { channel, gitOutput });
         scheduleServiceRestart();
-        pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
+        pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'update' });
         return json(res, 200, {
-          ok: true, channel, gitOutput,
-          message: `Channel switched to ${channel}, service restart scheduled`
+          ok: true, channel,
+          gitOutput,
+          rolledBackFrom: rollbackRev.slice(0, 7),
+          message: 'Update applied, service restart scheduled'
         });
+      } catch (e) {
+        pushLog('update_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
       }
-
-      // Without service actions: channel saved, next update check will use it
-      pushLog('update_channel_changed', { channel, note: 'config-only, service actions disabled' });
-      return json(res, 200, {
-        ok: true, channel,
-        message: `Channel preference saved to ${channel}. Git switch will happen on next update.`
-      });
-    } catch (e) {
-      pushLog('update_channel_error', { error: e.message });
-      return json(res, 500, { ok: false, error: e.message });
     }
-  }
 
-  // --- Telemetry Series Query API ---
-  if (url.pathname === '/api/telemetry/series' && req.method === 'GET') {
-    if (!telemetryStore?.querySeries) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-    const keys = (url.searchParams.get('keys') || 'battery_soc_pct').split(',').map(k => k.trim()).filter(Boolean);
-    const now = new Date();
-    const start = url.searchParams.get('start') || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const end = url.searchParams.get('end') || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
-    const maxRes = Number(url.searchParams.get('maxResolution')) || 900;
-    try {
-      const rows = await telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
-      return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
-    } catch (e) {
-      return json(res, 500, { ok: false, error: e.message });
+    if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const channel = body?.channel;
+        if (channel !== 'stable' && channel !== 'dev') {
+          return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
+        }
+        const next = JSON.parse(JSON.stringify(rawCfg || {}));
+        next.updateChannel = channel;
+        saveAndApplyConfig(next);
+
+        if (SERVICE_ACTIONS_ENABLED) {
+          const repoRoot = path.resolve(__dirname, '..');
+          let gitOutput = '';
+          const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+          const hasStash = !stashResult.stdout.includes('No local changes');
+          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+          if (channel === 'stable') {
+            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            if (!latestTag) throw new Error('No release tags found');
+            await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = `Switched to stable: ${latestTag}`;
+          } else {
+            await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = 'Switched to dev: origin/main';
+          }
+          try {
+            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 });
+            await execFileAsync('node', ['--check', 'server.js'], { cwd: __dirname, timeout: 5000 });
+          } catch (installErr) {
+            pushLog('channel_switch_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+            await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
+            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: __dirname, timeout: 60000 }).catch(() => {});
+            if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+            throw new Error(`Channel switch rolled back (npm/syntax failed): ${installErr.message}`);
+          }
+          if (hasStash) {
+            pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });
+          }
+          pushLog('update_channel_changed', { channel, gitOutput });
+          scheduleServiceRestart();
+          pushLog('service_restart_scheduled', { service: SERVICE_NAME, reason: 'channel_switch' });
+          return json(res, 200, {
+            ok: true, channel, gitOutput,
+            message: `Channel switched to ${channel}, service restart scheduled`
+          });
+        }
+
+        pushLog('update_channel_changed', { channel, note: 'config-only, service actions disabled' });
+        return json(res, 200, {
+          ok: true, channel,
+          message: `Channel preference saved to ${channel}. Git switch will happen on next update.`
+        });
+      } catch (e) {
+        pushLog('update_channel_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
-  }
 
-  // --- VRM Forecast API ---
-  if (url.pathname === '/api/forecast' && req.method === 'GET') {
-    if (!telemetryStore?.listForecasts) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-    const now = new Date();
-    const startParam = url.searchParams.get('start');
-    const endParam = url.searchParams.get('end');
-    const start = startParam || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const end = endParam || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3).toISOString();
-    const forecastType = url.searchParams.get('type') || null;
-    try {
-      const rows = await telemetryStore.listForecasts({ start, end, forecastType });
-      return json(res, 200, {
-        ok: true,
-        start,
-        end,
-        solar: rows.filter(r => r.type === 'solar_yield').map(r => ({ ts: r.ts, w: r.valueW })),
-        consumption: rows.filter(r => r.type === 'consumption').map(r => ({ ts: r.ts, w: r.valueW })),
-        lastFetchAt: state.forecast?.lastFetchAt || null,
-        total: rows.length
-      });
-    } catch (e) {
-      return json(res, 500, { ok: false, error: e.message });
+    // EOS -- Optimierungsergebnis empfangen und als Schedule-Regeln anwenden
+    if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const results = [];
+      if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+        results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
+      }
+      if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+        results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'eos_optimization'));
+      }
+      if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+        results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
+      }
+      pushLog('eos_apply', { targets: results.length, body });
+      telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+        optimizer: 'eos',
+        body,
+        source: 'eos_apply'
+      })));
+      return json(res, 200, { ok: true, results });
     }
-  }
 
-  if (url.pathname === '/api/forecast/refresh' && req.method === 'POST') {
-    epex.fetchVrmForecast().catch(e => pushLog('vrm_forecast_manual_error', { error: e.message }));
-    return json(res, 202, { ok: true, message: 'Forecast refresh started' });
-  }
-
-  if (url.pathname === '/api/status' && req.method === 'GET') {
-    expireLeaseIfNeeded();
-    return json(res, 200, buildApiStatusResponse(Date.now()));
-  }
-
-  if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary());
-
-  if (url.pathname === '/api/integration/home-assistant' && req.method === 'GET') return json(res, 200, integrationState());
-
-  if (url.pathname === '/api/integration/loxone' && req.method === 'GET') {
-    const s = integrationState();
-    const lines = Object.entries(s).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
-    return text(res, 200, lines.join('\n'));
-  }
-
-  // EOS (Akkudoktor) — Messwerte + Preise abrufen
-  if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
-
-  // EOS — Optimierungsergebnis empfangen und als Schedule-Regeln anwenden
-  if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
-    const body = await parseBody(req);
-    const results = [];
-    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
-      results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
+    // EMHASS -- Optimierungsergebnis empfangen und anwenden
+    if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const results = [];
+      if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+        results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
+      }
+      if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+        results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'emhass_optimization'));
+      }
+      if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+        results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
+      }
+      pushLog('emhass_apply', { targets: results.length, body });
+      telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
+        optimizer: 'emhass',
+        body,
+        source: 'emhass_apply'
+      })));
+      return json(res, 200, { ok: true, results });
     }
-    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
-      results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'eos_optimization'));
-    }
-    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
-      results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
-    }
-    pushLog('eos_apply', { targets: results.length, body });
-    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
-      optimizer: 'eos',
-      body,
-      source: 'eos_apply'
-    })));
-    return json(res, 200, { ok: true, results });
-  }
 
-  // EMHASS — Messwerte + Preise abrufen
-  if (url.pathname === '/api/integration/emhass' && req.method === 'GET') return json(res, 200, emhassState());
-
-  // EMHASS — Optimierungsergebnis empfangen und anwenden
-  if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
-    const body = await parseBody(req);
-    const results = [];
-    if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
-      results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
-    }
-    if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
-      results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'emhass_optimization'));
-    }
-    if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
-      results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
-    }
-    pushLog('emhass_apply', { targets: results.length, body });
-    telemetrySafeWrite(() => telemetryStore.writeOptimizerRun(buildOptimizerRunPayload({
-      optimizer: 'emhass',
-      body,
-      source: 'emhass_apply'
-    })));
-    return json(res, 200, { ok: true, results });
-  }
-
-  if (url.pathname === '/api/log' && req.method === 'GET') {
-    const limit = resolveLogLimit(url.searchParams.get('limit'));
-    return json(res, 200, { rows: state.log.slice(-limit) });
-  }
-
-  // Persistent DV signal log from database
-  if (url.pathname === '/api/log/dv-signals' && req.method === 'GET') {
-    if (!telemetryStore?.listControlEvents) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-    const limit = Number(url.searchParams.get('limit')) || 200;
-    const eventType = url.searchParams.get('type') || null;
-    try {
-      const rows = await telemetryStore.listControlEvents({ limit, eventType });
-      return json(res, 200, { ok: true, rows, total: rows.length });
-    } catch (e) {
-      return json(res, 500, { ok: false, error: e.message });
-    }
-  }
-
-  if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
-    return json(res, 200, buildApiHistoryImportStatusResponse());
-  }
-
-  if (url.pathname === '/api/history/import' && req.method === 'POST') {
-    if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-    const body = await parseBody(req);
-    if (body.mode === 'backfill') {
-      assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
-      const result = await historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
-      return json(res, result.ok ? 200 : 400, result);
-    }
-    const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
-    assertValidRuntimeCommand('history_import', {
-      provider,
-      requestedFrom: body.requestedFrom ?? body.start ?? null,
-      requestedTo: body.requestedTo ?? body.end ?? null,
-      interval: body.interval || '15mins'
-    });
-    const result = Array.isArray(body.rows) && body.rows.length
-      ? historyImportManager.importSamples({
+    if (url.pathname === '/api/history/import' && req.method === 'POST') {
+      if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      const body = await parseBody(req);
+      if (body.mode === 'backfill') {
+        assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
+        const result = await historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        return json(res, result.ok ? 200 : 400, result);
+      }
+      const provider = String(body.provider || cfg.telemetry?.historyImport?.provider || 'vrm');
+      assertValidRuntimeCommand('history_import', {
         provider,
-        requestedFrom: body.requestedFrom ?? null,
-        requestedTo: body.requestedTo ?? null,
-        sourceAccount: body.sourceAccount ?? null,
-        rows: body.rows
-      })
-      : await historyImportManager.importFromConfiguredSource({
-        start: body.requestedFrom ?? body.start,
-        end: body.requestedTo ?? body.end,
+        requestedFrom: body.requestedFrom ?? body.start ?? null,
+        requestedTo: body.requestedTo ?? body.end ?? null,
         interval: body.interval || '15mins'
       });
-    return json(res, result.ok ? 200 : 400, result);
-  }
-
-  if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
-    if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-    const body = await parseBody(req);
-    const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
-    assertValidRuntimeCommand('history_backfill', {
-      mode: requestedMode,
-      requestedBy: 'history_backfill_endpoint'
-    });
-    const result = await historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
-    return json(res, result.ok ? 200 : 400, result);
-  }
-
-  if (url.pathname === '/api/history/summary' && req.method === 'GET') {
-    if (!historyApi || typeof historyApi.getSummary !== 'function') {
-      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      const result = Array.isArray(body.rows) && body.rows.length
+        ? historyImportManager.importSamples({
+          provider,
+          requestedFrom: body.requestedFrom ?? null,
+          requestedTo: body.requestedTo ?? null,
+          sourceAccount: body.sourceAccount ?? null,
+          rows: body.rows
+        })
+        : await historyImportManager.importFromConfiguredSource({
+          start: body.requestedFrom ?? body.start,
+          end: body.requestedTo ?? body.end,
+          interval: body.interval || '15mins'
+        });
+      return json(res, result.ok ? 200 : 400, result);
     }
-    const result = await historyApi.getSummary({
-      view: url.searchParams.get('view'),
-      date: url.searchParams.get('date')
-    });
-    return json(res, result.status, result.body);
-  }
 
-  if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
-    if (!historyApi || typeof historyApi.postPriceBackfill !== 'function') {
-      return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-    }
-    const body = await parseBody(req);
-    const result = await historyApi.postPriceBackfill(body || {});
-    return json(res, result.status, result.body);
-  }
-
-  if (url.pathname === '/api/epex/refresh' && req.method === 'POST') {
-    await epex.fetchEpexDay();
-    return json(res, 200, { ok: state.epex.ok, error: state.epex.error });
-  }
-
-  if (url.pathname === '/api/epex/zones' && req.method === 'GET') {
-    try {
-      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
-      const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      return json(res, 200, data);
-    } catch (e) {
-      return json(res, 502, { error: e.message });
-    }
-  }
-
-  if (url.pathname === '/api/epex/gaps' && req.method === 'GET') {
-    try {
-      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
-      const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
-      const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      return json(res, 200, data);
-    } catch (e) {
-      return json(res, 502, { error: e.message });
-    }
-  }
-
-  if (url.pathname === '/api/epex/backfill' && req.method === 'POST') {
-    try {
-      const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+    if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
+      if (!historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       const body = await parseBody(req);
-      const zone = body?.zone || cfg.epex.bzn || 'DE-LU';
-      const start = body?.start || '2020-01-01';
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || isNaN(Date.parse(start))) {
-        return json(res, 400, { error: 'Invalid start date, expected YYYY-MM-DD' });
-      }
-      if (!/^[A-Z]{2}(-[A-Z]{2,4})?$/.test(zone)) {
-        return json(res, 400, { error: 'Invalid zone format' });
-      }
-      const r = await fetch(`${baseUrl}/api/backfill`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zone, start }),
-        signal: AbortSignal.timeout(10000)
+      const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
+      assertValidRuntimeCommand('history_backfill', {
+        mode: requestedMode,
+        requestedBy: 'history_backfill_endpoint'
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      return json(res, 200, data);
-    } catch (e) {
-      return json(res, 502, { error: e.message });
-    }
-  }
-
-  if (url.pathname === '/api/meter/scan' && req.method === 'POST') {
-    const body = await parseBody(req);
-    runMeterScan(body).catch((e) => {
-      state.scan.running = false;
-      state.scan.error = e.message;
-    });
-    return json(res, 200, { ok: true, running: true });
-  }
-
-  if (url.pathname === '/api/meter/scan' && req.method === 'GET') return json(res, 200, state.scan);
-
-  if (url.pathname === '/api/schedule' && req.method === 'GET') {
-    return json(res, 200, {
-      config: state.schedule.config,
-      rules: state.schedule.rules,
-      active: state.schedule.active,
-      lastWrite: state.schedule.lastWrite
-    });
-  }
-
-  if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
-    const body = await parseBody(req);
-    if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
-    const validRules = body.rules.filter(validateScheduleRule);
-    if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
-    // Preserve automation-managed and feedExcessDcPv rules — dashboard save only replaces grid/charge rules
-    const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
-    const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
-    const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isSmallMarketAutomationRule(r));
-    const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
-    const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
-    // If no feedExcessDcPv rules are sent, preserve existing ones (dashboard doesn't manage them)
-    const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
-    state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
-    pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
-    persistConfig();
-    return json(res, 200, { ok: true, count: state.schedule.rules.length });
-  }
-
-  if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
-    const body = await parseBody(req);
-    if (body.defaultGridSetpointW !== undefined) {
-      const v = Number(body.defaultGridSetpointW);
-      if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultGridSetpointW invalid' });
-      state.schedule.config.defaultGridSetpointW = v;
-    }
-    if (body.defaultChargeCurrentA !== undefined) {
-      const v = Number(body.defaultChargeCurrentA);
-      if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultChargeCurrentA invalid' });
-      state.schedule.config.defaultChargeCurrentA = v;
-    }
-    if (body.defaultFeedExcessDcPv !== undefined) {
-      const v = Number(body.defaultFeedExcessDcPv);
-      if (v !== 0 && v !== 1) return json(res, 400, { ok: false, error: 'defaultFeedExcessDcPv must be 0 or 1' });
-      state.schedule.config.defaultFeedExcessDcPv = v;
-    }
-    pushLog('schedule_config_updated', { config: state.schedule.config });
-    persistConfig();
-    return json(res, 200, { ok: true, config: state.schedule.config });
-  }
-
-  // GET /api/schedule/automation/config
-  if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
-    return json(res, 200, { ok: true, config: cfg.schedule?.smallMarketAutomation || {} });
-  }
-
-  // POST /api/schedule/automation/config
-  if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
-    const body = await parseBody(req);
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return json(res, 400, { ok: false, error: 'invalid body' });
+      const result = await historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
+      return json(res, result.ok ? 200 : 400, result);
     }
 
-    const allowedKeys = new Set([
-      'enabled',
-      'searchWindowStart',
-      'searchWindowEnd',
-      'targetSlotCount',
-      'maxDischargeW',
-      'batteryCapacityKwh',
-      'inverterEfficiencyPct',
-      'minSocPct',
-      'aggressivePremiumPct',
-      'location',
-      'stages'
-    ]);
-    const filteredBody = Object.fromEntries(
-      Object.entries(body).filter(([key]) => allowedKeys.has(key))
-    );
+    if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
+      if (!historyApi || typeof historyApi.postPriceBackfill !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const body = await parseBody(req);
+      const result = await historyApi.postPriceBackfill(body || {});
+      return json(res, result.status, result.body);
+    }
 
-    // Merge automation config into raw config and persist
-    const current = JSON.parse(JSON.stringify(rawCfg || {}));
-    current.schedule = current.schedule || {};
-    current.schedule.smallMarketAutomation = {
-      ...current.schedule.smallMarketAutomation,
-      ...filteredBody
-    };
-    saveAndApplyConfig(current);
-    ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
+    if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
+      const validRules = body.rules.filter((rule) => {
+        if (typeof rule !== 'object' || rule === null) return false;
+        if (typeof rule.target !== 'string') return false;
+        if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
+        return true;
+      });
+      if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
+      const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
+      const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
+      const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isSmallMarketAutomationRule(r));
+      const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
+      const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
+      const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
+      state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
+      pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
+      persistConfig();
+      return json(res, 200, { ok: true, count: state.schedule.rules.length });
+    }
 
-    return json(res, 200, { ok: true, config: cfg.schedule.smallMarketAutomation });
-  }
+    if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (body.defaultGridSetpointW !== undefined) {
+        const v = Number(body.defaultGridSetpointW);
+        if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultGridSetpointW invalid' });
+        state.schedule.config.defaultGridSetpointW = v;
+      }
+      if (body.defaultChargeCurrentA !== undefined) {
+        const v = Number(body.defaultChargeCurrentA);
+        if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultChargeCurrentA invalid' });
+        state.schedule.config.defaultChargeCurrentA = v;
+      }
+      if (body.defaultFeedExcessDcPv !== undefined) {
+        const v = Number(body.defaultFeedExcessDcPv);
+        if (v !== 0 && v !== 1) return json(res, 400, { ok: false, error: 'defaultFeedExcessDcPv must be 0 or 1' });
+        state.schedule.config.defaultFeedExcessDcPv = v;
+      }
+      pushLog('schedule_config_updated', { config: state.schedule.config });
+      persistConfig();
+      return json(res, 200, { ok: true, config: state.schedule.config });
+    }
 
-  if (url.pathname === '/api/control/write' && req.method === 'POST') {
-    const body = await parseBody(req);
-    const target = String(body.target || '');
-    const value = Number(body.value);
-    assertValidRuntimeCommand('control_write', { target, value });
-    state.schedule.manualOverride[target] = { value, at: Date.now() };
-    const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
-    return json(res, result.ok ? 200 : 500, result);
-  }
+    // GET /api/schedule/automation/config
+    if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+      return json(res, 200, { ok: true, config: cfg.schedule?.smallMarketAutomation || {} });
+    }
 
-  return serveStatic(req, res);
+    // POST /api/schedule/automation/config
+    if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return json(res, 400, { ok: false, error: 'invalid body' });
+      }
+      const allowedKeys = new Set([
+        'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
+        'maxDischargeW', 'batteryCapacityKwh', 'inverterEfficiencyPct',
+        'minSocPct', 'aggressivePremiumPct', 'location', 'stages'
+      ]);
+      const filteredBody = Object.fromEntries(
+        Object.entries(body).filter(([key]) => allowedKeys.has(key))
+      );
+      const current = JSON.parse(JSON.stringify(rawCfg || {}));
+      current.schedule = current.schedule || {};
+      current.schedule.smallMarketAutomation = {
+        ...current.schedule.smallMarketAutomation,
+        ...filteredBody
+      };
+      saveAndApplyConfig(current);
+      ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
+      return json(res, 200, { ok: true, config: cfg.schedule.smallMarketAutomation });
+    }
+
+    if (url.pathname === '/api/control/write' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const target = String(body.target || '');
+      const value = Number(body.value);
+      assertValidRuntimeCommand('control_write', { target, value });
+      state.schedule.manualOverride[target] = { value, at: Date.now() };
+      const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
+      return json(res, result.ok ? 200 : 500, result);
+    }
+
+    // Static file fallback
+    return routes.serveStatic(req, res);
   } catch (e) {
     console.error('HTTP handler error:', e);
     if (!res.headersSent) {
-      json(res, Number.isInteger(e?.statusCode) ? e.statusCode : 500, {
-        error: e?.statusCode ? e.message : 'internal server error'
-      });
+      res.writeHead(Number.isInteger(e?.statusCode) ? e.statusCode : 500,
+        { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: e?.statusCode ? e.message : 'internal server error' }));
     }
   }
 });
@@ -1883,6 +1253,7 @@ const web = http.createServer(async (req, res) => {
     store: telemetryStore,
     telemetryConfig: cfg.telemetry || {}
   }) : null;
+  ctx.historyImportManager = historyImportManager;
   if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
   historyRuntime = telemetryStore ? createHistoryRuntime({
     store: telemetryStore,
@@ -1897,6 +1268,7 @@ const web = http.createServer(async (req, res) => {
     appVersion: APP_VERSION,
     getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
   });
+  ctx.historyApi = historyApi;
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
     applicableValueService.refresh().catch((error) => {

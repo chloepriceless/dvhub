@@ -666,8 +666,8 @@ export function createApiRoutes(ctx) {
       return json(res, result.status, result.body);
     }
 
-    // Fall through to static file serving
-    return serveStatic(req, res);
+    // Unmatched route -- return false so orchestrator can try admin routes
+    return false;
   }
 
   // Expose response builders to orchestrator for buildCurrentStatusPayload
@@ -675,5 +675,5 @@ export function createApiRoutes(ctx) {
   ctx.costSummary = costSummary;
   ctx.userEnergyPricingSummary = userEnergyPricingSummary;
 
-  return { handleRequest };
+  return { handleRequest, serveStatic };
 }
