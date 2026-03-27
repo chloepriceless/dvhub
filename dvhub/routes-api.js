@@ -1,14 +1,19 @@
-// routes-api.js -- HTTP route handlers for simple/read-only API endpoints.
-// Extracted from server.js (Phase 5, Plan 01).
+// routes-api.js -- HTTP route handlers for ALL API endpoints.
+// Extracted from server.js (Phase 5, Plans 01+02).
 // Factory pattern: createApiRoutes(ctx) returns { handleRequest }.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, roundCtKwh, addDays, gridDirection } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
+import { buildOptimizerRunPayload } from './telemetry-runtime.js';
+
+const execFileAsync = promisify(execFile);
 
 export const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -19,6 +24,91 @@ export const SECURITY_HEADERS = {
 
 export function createApiRoutes(ctx) {
   const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
+
+  // ── Admin health payload builder ────────────────────────────────────
+  async function adminHealthPayload() {
+    const service = {
+      enabled: ctx.getServiceActionsEnabled(),
+      name: ctx.getServiceName(),
+      useSudo: ctx.getServiceUseSudo(),
+      status: 'disabled',
+      detail: 'Service-Aktionen sind per ENV deaktiviert.'
+    };
+
+    if (ctx.getServiceActionsEnabled()) {
+      const activeCheck = await ctx.runServiceCommand(['is-active', ctx.getServiceName()]);
+      const showCheck = await ctx.runServiceCommand(['show', ctx.getServiceName(), '--property=ActiveState,SubState,UnitFileState', '--value']);
+      service.status = activeCheck.ok ? (activeCheck.stdout || 'unknown') : 'unavailable';
+      service.detail = activeCheck.ok ? 'systemctl erreichbar' : activeCheck.error;
+      service.show = showCheck.ok ? showCheck.stdout : showCheck.error;
+    }
+
+    return {
+      ok: true,
+      checkedAt: Date.now(),
+      app: ctx.getAppVersion(),
+      service,
+      runtime: {
+        node: process.version,
+        platform: `${process.platform}/${process.arch}`,
+        pid: process.pid,
+        transport: ctx.getTransportType(),
+        uptimeSec: Math.round(process.uptime())
+      },
+      checks: [
+        {
+          id: 'config',
+          label: 'Config Datei',
+          ok: ctx.getLoadedConfig().exists && ctx.getLoadedConfig().valid,
+          detail: ctx.getLoadedConfig().exists
+            ? (ctx.getLoadedConfig().valid ? `gueltig unter ${ctx.getConfigPath()}` : `ungueltig: ${ctx.getLoadedConfig().parseError}`)
+            : `fehlt: ${ctx.getConfigPath()}`
+        },
+        {
+          id: 'setup',
+          label: 'Setup Status',
+          ok: !ctx.getLoadedConfig().needsSetup,
+          detail: ctx.getLoadedConfig().needsSetup ? 'Setup noch nicht abgeschlossen' : 'Setup abgeschlossen'
+        },
+        {
+          id: 'meter',
+          label: 'Live Meter Daten',
+          ok: state.meter.ok,
+          detail: state.meter.ok
+            ? `letztes Update ${fmtTs(state.meter.updatedAt)}`
+            : (state.meter.error || 'noch keine erfolgreichen Meter-Daten')
+        },
+        {
+          id: 'epex',
+          label: 'EPEX Feed',
+          ok: !getCfg().epex.enabled || state.epex.ok,
+          detail: !getCfg().epex.enabled
+            ? 'deaktiviert'
+            : state.epex.ok
+              ? `letztes Update ${fmtTs(state.epex.updatedAt)}`
+              : (state.epex.error || 'noch keine Preisdaten')
+        },
+        {
+          id: 'service_actions',
+          label: 'Restart Aktion',
+          ok: ctx.getServiceActionsEnabled() && service.status !== 'unavailable',
+          detail: ctx.getServiceActionsEnabled()
+            ? `Service ${ctx.getServiceName()}: ${service.status}`
+            : 'per ENV deaktiviert'
+        },
+        {
+          id: 'telemetry',
+          label: 'Interne Historie',
+          ok: !getCfg().telemetry?.enabled || state.telemetry.ok,
+          detail: !getCfg().telemetry?.enabled
+            ? 'deaktiviert'
+            : state.telemetry.dbPath
+              ? `DB ${state.telemetry.dbPath}, letztes Schreiben ${fmtTs(state.telemetry.lastWriteAt)}`
+              : (state.telemetry.lastError || 'noch keine Telemetrie-Initialisierung')
+        }
+      ]
+    };
+  }
 
   // ── Response helpers ─────────────────────────────────────────────────
   function json(res, code, payload) {
@@ -666,7 +756,415 @@ export function createApiRoutes(ctx) {
       return json(res, result.status, result.body);
     }
 
-    // Unmatched route -- return false so orchestrator can try admin routes
+    // --- Config POST / Import POST ---
+    if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
+        return json(res, 400, { ok: false, error: 'config object required' });
+      }
+      const result = ctx.saveAndApplyConfig(body.config);
+      pushLog('config_saved', {
+        changedPaths: result.changedPaths.length,
+        restartRequired: result.restartRequired,
+        source: url.pathname.endsWith('/import') ? 'import' : 'settings'
+      });
+      const freshCfg = getCfg();
+      return json(res, 200, {
+        ok: true,
+        meta: configMetaPayload(),
+        config: redactConfig(ctx.getRawCfg()),
+        effectiveConfig: redactConfig(freshCfg),
+        changedPaths: result.changedPaths,
+        restartRequired: result.restartRequired,
+        restartRequiredPaths: result.restartRequiredPaths
+      });
+    }
+
+    // --- Admin Health ---
+    if (url.pathname === '/api/admin/health' && req.method === 'GET') {
+      return json(res, 200, await adminHealthPayload());
+    }
+
+    // --- Admin Service Restart ---
+    if (url.pathname === '/api/admin/service/restart' && req.method === 'POST') {
+      if (!ctx.getServiceActionsEnabled()) {
+        return json(res, 403, { ok: false, error: 'service actions disabled' });
+      }
+      const check = await ctx.runServiceCommand(['show', ctx.getServiceName(), '--property=Id', '--value']);
+      if (!check.ok) {
+        return json(res, 500, { ok: false, error: check.error, command: check.command });
+      }
+      ctx.scheduleServiceRestart();
+      pushLog('service_restart_scheduled', { service: ctx.getServiceName() });
+      return json(res, 202, {
+        ok: true, accepted: true, service: ctx.getServiceName(),
+        message: 'Service restart scheduled'
+      });
+    }
+
+    // --- Software Update Check ---
+    if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
+        const repoRoot = ctx.getRepoRoot();
+        const channel = ctx.getRawCfg().updateChannel || 'stable';
+        await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+
+        if (channel === 'stable') {
+          let currentTag = null;
+          try {
+            currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          } catch { /* not on a tag */ }
+          let latestTag = null;
+          try {
+            latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0] || null;
+          } catch { /* no tags */ }
+          let changelog = '';
+          if (currentTag && latestTag && currentTag !== latestTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          } else if (!currentTag && latestTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          }
+          const updateAvailable = latestTag != null && latestTag !== currentTag;
+          return json(res, 200, {
+            ok: true, channel,
+            current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
+            latest: { tag: latestTag, revision: null },
+            updateAvailable,
+            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+          });
+        } else {
+          const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          const behind = Number((await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+          const ahead = Number((await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
+          let changelog = '';
+          if (behind > 0) {
+            changelog = (await execFileAsync('git', ['log', '--oneline', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          }
+          return json(res, 200, {
+            ok: true, channel,
+            current: { version: ctx.getAppVersion().versionLabel, tag: null, revision: localRev.slice(0, 7) },
+            latest: { tag: null, revision: remoteRev.slice(0, 7) },
+            behind, ahead,
+            updateAvailable: behind > 0,
+            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+          });
+        }
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- Software Update Apply ---
+    if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
+        const repoRoot = ctx.getRepoRoot();
+        const appDir = ctx.getAppDir();
+        const channel = ctx.getRawCfg().updateChannel || 'stable';
+        let gitOutput = '';
+        const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+        const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+        const hasStash = !stashResult.stdout.includes('No local changes');
+
+        if (channel === 'stable') {
+          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+          const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+          if (!latestTag) throw new Error('No release tags found');
+          const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+          gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
+        } else {
+          await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+          await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+          const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+          gitOutput = pull.stdout.trim();
+        }
+
+        try {
+          const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+          await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
+          pushLog('update_applied', {
+            channel,
+            gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
+            npmOutput: npmInstall.stdout.trim().split('\n').slice(-3).join('\n')
+          });
+        } catch (installErr) {
+          pushLog('update_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+          await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
+          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
+          if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+          throw new Error(`Update rolled back (npm/syntax failed): ${installErr.message}`);
+        }
+
+        if (hasStash) {
+          pushLog('update_stash_discarded', { note: 'local changes were stashed before update and not restored' });
+        }
+
+        ctx.scheduleServiceRestart();
+        pushLog('service_restart_scheduled', { service: ctx.getServiceName(), reason: 'update' });
+        return json(res, 200, {
+          ok: true, channel,
+          gitOutput,
+          rolledBackFrom: rollbackRev.slice(0, 7),
+          message: 'Update applied, service restart scheduled'
+        });
+      } catch (e) {
+        pushLog('update_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- Update Channel ---
+    if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
+      try {
+        const body = await parseBody(req);
+        const channel = body?.channel;
+        if (channel !== 'stable' && channel !== 'dev') {
+          return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
+        }
+        const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        next.updateChannel = channel;
+        ctx.saveAndApplyConfig(next);
+
+        if (ctx.getServiceActionsEnabled()) {
+          const repoRoot = ctx.getRepoRoot();
+          const appDir = ctx.getAppDir();
+          let gitOutput = '';
+          const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+          const hasStash = !stashResult.stdout.includes('No local changes');
+          await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+
+          if (channel === 'stable') {
+            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            if (!latestTag) throw new Error('No release tags found');
+            await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = `Switched to stable: ${latestTag}`;
+          } else {
+            await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = 'Switched to dev: origin/main';
+          }
+          try {
+            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+            await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
+          } catch (installErr) {
+            pushLog('channel_switch_rollback', { reason: installErr.message, rollbackTo: rollbackRev.slice(0, 7) });
+            await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
+            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
+            if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+            throw new Error(`Channel switch rolled back (npm/syntax failed): ${installErr.message}`);
+          }
+          if (hasStash) {
+            pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });
+          }
+          pushLog('update_channel_changed', { channel, gitOutput });
+          ctx.scheduleServiceRestart();
+          pushLog('service_restart_scheduled', { service: ctx.getServiceName(), reason: 'channel_switch' });
+          return json(res, 200, {
+            ok: true, channel, gitOutput,
+            message: `Channel switched to ${channel}, service restart scheduled`
+          });
+        }
+
+        pushLog('update_channel_changed', { channel, note: 'config-only, service actions disabled' });
+        return json(res, 200, {
+          ok: true, channel,
+          message: `Channel preference saved to ${channel}. Git switch will happen on next update.`
+        });
+      } catch (e) {
+        pushLog('update_channel_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- EOS Apply ---
+    if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const results = [];
+      if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+        results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
+      }
+      if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+        results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'eos_optimization'));
+      }
+      if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+        results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'eos_optimization'));
+      }
+      pushLog('eos_apply', { targets: results.length, body });
+      telemetrySafeWrite(() => ctx.telemetryStore?.writeOptimizerRun(buildOptimizerRunPayload({
+        optimizer: 'eos',
+        body,
+        source: 'eos_apply'
+      })));
+      return json(res, 200, { ok: true, results });
+    }
+
+    // --- EMHASS Apply ---
+    if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const results = [];
+      if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
+        results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
+      }
+      if (body.chargeCurrentA !== undefined && Number.isFinite(Number(body.chargeCurrentA))) {
+        results.push(await ctx.applyControlTarget('chargeCurrentA', Number(body.chargeCurrentA), 'emhass_optimization'));
+      }
+      if (body.minSocPct !== undefined && Number.isFinite(Number(body.minSocPct))) {
+        results.push(await ctx.applyControlTarget('minSocPct', Number(body.minSocPct), 'emhass_optimization'));
+      }
+      pushLog('emhass_apply', { targets: results.length, body });
+      telemetrySafeWrite(() => ctx.telemetryStore?.writeOptimizerRun(buildOptimizerRunPayload({
+        optimizer: 'emhass',
+        body,
+        source: 'emhass_apply'
+      })));
+      return json(res, 200, { ok: true, results });
+    }
+
+    // --- History Import ---
+    if (url.pathname === '/api/history/import' && req.method === 'POST') {
+      if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      const body = await parseBody(req);
+      if (body.mode === 'backfill') {
+        ctx.assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
+        const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        return json(res, result.ok ? 200 : 400, result);
+      }
+      const provider = String(body.provider || getCfg().telemetry?.historyImport?.provider || 'vrm');
+      ctx.assertValidRuntimeCommand('history_import', {
+        provider,
+        requestedFrom: body.requestedFrom ?? body.start ?? null,
+        requestedTo: body.requestedTo ?? body.end ?? null,
+        interval: body.interval || '15mins'
+      });
+      const result = Array.isArray(body.rows) && body.rows.length
+        ? ctx.historyImportManager.importSamples({
+          provider,
+          requestedFrom: body.requestedFrom ?? null,
+          requestedTo: body.requestedTo ?? null,
+          sourceAccount: body.sourceAccount ?? null,
+          rows: body.rows
+        })
+        : await ctx.historyImportManager.importFromConfiguredSource({
+          start: body.requestedFrom ?? body.start,
+          end: body.requestedTo ?? body.end,
+          interval: body.interval || '15mins'
+        });
+      return json(res, result.ok ? 200 : 400, result);
+    }
+
+    // --- History Backfill VRM ---
+    if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
+      if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      const body = await parseBody(req);
+      const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
+      ctx.assertValidRuntimeCommand('history_backfill', {
+        mode: requestedMode,
+        requestedBy: 'history_backfill_endpoint'
+      });
+      const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
+      return json(res, result.ok ? 200 : 400, result);
+    }
+
+    // --- History Backfill Prices ---
+    if (url.pathname === '/api/history/backfill/prices' && req.method === 'POST') {
+      if (!ctx.historyApi || typeof ctx.historyApi.postPriceBackfill !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const body = await parseBody(req);
+      const result = await ctx.historyApi.postPriceBackfill(body || {});
+      return json(res, result.status, result.body);
+    }
+
+    // --- Schedule Rules POST ---
+    if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
+      const validRules = body.rules.filter((rule) => {
+        if (typeof rule !== 'object' || rule === null) return false;
+        if (typeof rule.target !== 'string') return false;
+        if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
+        return true;
+      });
+      if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
+      const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
+      const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
+      const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isSmallMarketAutomationRule(r));
+      const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
+      const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
+      const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
+      state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
+      pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
+      ctx.persistConfig();
+      return json(res, 200, { ok: true, count: state.schedule.rules.length });
+    }
+
+    // --- Schedule Config POST ---
+    if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (body.defaultGridSetpointW !== undefined) {
+        const v = Number(body.defaultGridSetpointW);
+        if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultGridSetpointW invalid' });
+        state.schedule.config.defaultGridSetpointW = v;
+      }
+      if (body.defaultChargeCurrentA !== undefined) {
+        const v = Number(body.defaultChargeCurrentA);
+        if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultChargeCurrentA invalid' });
+        state.schedule.config.defaultChargeCurrentA = v;
+      }
+      if (body.defaultFeedExcessDcPv !== undefined) {
+        const v = Number(body.defaultFeedExcessDcPv);
+        if (v !== 0 && v !== 1) return json(res, 400, { ok: false, error: 'defaultFeedExcessDcPv must be 0 or 1' });
+        state.schedule.config.defaultFeedExcessDcPv = v;
+      }
+      pushLog('schedule_config_updated', { config: state.schedule.config });
+      ctx.persistConfig();
+      return json(res, 200, { ok: true, config: state.schedule.config });
+    }
+
+    // --- Schedule Automation Config GET ---
+    if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+      return json(res, 200, { ok: true, config: getCfg().schedule?.smallMarketAutomation || {} });
+    }
+
+    // --- Schedule Automation Config POST ---
+    if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return json(res, 400, { ok: false, error: 'invalid body' });
+      }
+      const allowedKeys = new Set([
+        'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
+        'maxDischargeW', 'batteryCapacityKwh', 'inverterEfficiencyPct',
+        'minSocPct', 'aggressivePremiumPct', 'location', 'stages'
+      ]);
+      const filteredBody = Object.fromEntries(
+        Object.entries(body).filter(([key]) => allowedKeys.has(key))
+      );
+      const current = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      current.schedule = current.schedule || {};
+      current.schedule.smallMarketAutomation = {
+        ...current.schedule.smallMarketAutomation,
+        ...filteredBody
+      };
+      ctx.saveAndApplyConfig(current);
+      ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
+      return json(res, 200, { ok: true, config: getCfg().schedule.smallMarketAutomation });
+    }
+
+    // --- Control Write POST ---
+    if (url.pathname === '/api/control/write' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const target = String(body.target || '');
+      const value = Number(body.value);
+      ctx.assertValidRuntimeCommand('control_write', { target, value });
+      state.schedule.manualOverride[target] = { value, at: Date.now() };
+      const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
+      return json(res, result.ok ? 200 : 500, result);
+    }
+
+    // Unmatched route -- return false so orchestrator can fall through to static files
     return false;
   }
 
