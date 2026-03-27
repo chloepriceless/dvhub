@@ -925,6 +925,7 @@ if (typeof document !== 'undefined') {
     const nextState = validateSetupWizardState(syncedState);
     setSetupWizardState(nextState);
     if (nextState.validation.isBlocking) {
+      moveToFirstInvalidStep(nextState);
       renderSetupWizard();
       setBanner(`Bitte zuerst alle Pflichtangaben korrigieren. ${summarizeBlockingErrors(setupWizardState)}`, 'error');
       return;
