@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-27T00:18:31Z"
-last_activity: 2026-03-27 -- Completed 03-02 polling.js wiring
+status: executing
+stopped_at: Completed 04-01 market-automation-builder.js extraction
+last_updated: "2026-03-27T02:14:19Z"
+last_activity: 2026-03-27 -- Completed 04-01 market-automation-builder.js extraction
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_plans: 8
+  completed_plans: 7
+  percent: 87
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
-**Current focus:** Phase 3 Polling COMPLETE -- polling.js extracted and wired into server.js
+**Current focus:** Phase 4 Automation Core -- market-automation-builder.js extracted
 
 ## Current Position
 
-Phase: 3 of 5 (Polling) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: 03-02 Complete (Phase 3 done)
-Last activity: 2026-03-27 -- Completed 03-02 polling.js wiring into server.js
+Phase: 4 of 5 (Automation Core)
+Plan: 1 of 2 in current phase
+Status: 04-01 Complete
+Last activity: 2026-03-27 -- Completed 04-01 market-automation-builder.js extraction
 
-Progress: [██████████] 100% (Overall: 6/6 plans)
+Progress: [████████░░] 87% (Overall: 7/8 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 6 min
-- Total execution time: 0.6 hours
+- Total plans completed: 7
+- Average duration: 7 min
+- Total execution time: 0.8 hours
 
 **By Phase:**
 
@@ -46,10 +46,11 @@ Progress: [██████████] 100% (Overall: 6/6 plans)
 | 01 | 2/2 | 16 min | 8 min |
 | 02 | 2/2 | 11 min | 5.5 min |
 | 03 | 2/2 | 9 min | 4.5 min |
+| 04 | 1/2 | 13 min | 13 min |
 
 **Recent Trend:**
-- Last 5 plans: 7 min, 5 min, 6 min, 3 min, 6 min
-- Trend: stable
+- Last 5 plans: 5 min, 6 min, 3 min, 6 min, 13 min
+- Trend: slight increase (larger extraction)
 
 *Updated after each plan completion*
 
@@ -78,6 +79,10 @@ Recent decisions affecting current work:
 - [Phase 03]: loadEnergy kept as standalone export (not inside factory) for startup-time usage
 - [Phase 03]: ctx.onPollComplete callback placed in async init block; liveTelemetryBuffer captured by closure reference
 - [Phase 03]: Removed createSerialTaskRunner/normalizePollIntervalMs imports from server.js (moved to polling.js)
+- [Phase 04]: Removed default parameter values from buildSmallMarketAutomationRules (callers always pass explicitly)
+- [Phase 04]: ctx.getSunTimesCacheForPlanning injected as ctx property for market-automation-builder
+- [Phase 04]: Bare regenerateSmallMarketAutomationRules calls updated to ctx.regenerateSmallMarketAutomationRules
+- [Phase 04]: berlinDateString removed from server.js server-utils import (only used in extracted functions)
 
 ### Pending Todos
 
@@ -91,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T00:18:31Z
-Stopped at: Completed 03-02-PLAN.md
-Resume file: .planning/phases/03-polling/03-02-SUMMARY.md
+Last session: 2026-03-27T02:14:19Z
+Stopped at: Completed 04-01 market-automation-builder.js extraction
+Resume file: .planning/phases/04-automation-core/04-02-PLAN.md

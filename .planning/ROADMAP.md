@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Foundation and Leaf Module** - Establish DI contract, extract utilities and user-energy-pricing as validation
 - [ ] **Phase 2: I/O Modules** - Extract modbus-server and epex-fetch (self-contained data acquisition)
-- [ ] **Phase 3: Polling** - Extract device polling loop with energy integration
+- [x] **Phase 3: Polling** - Extract device polling loop with energy integration (completed 2026-03-27)
 - [ ] **Phase 4: Automation Core** - Extract market-automation-builder and schedule-eval (highest risk)
 - [ ] **Phase 5: HTTP Layer and Orchestrator Cleanup** - Extract routes-api and reduce server.js to ~500-line orchestrator
 
@@ -62,7 +62,7 @@ Plans:
   3. Polling loop reads Victron battery, grid meter, and solar values at correct intervals and state.meter/state.victron/state.energy update correctly
   4. Cross-module wiring works: polling calls epexNowNext (from epex-fetch) and resolveImportPriceCtKwhForSlot (from user-energy-pricing) via injected references
   5. All 39 test files pass and graceful shutdown stops all polling timers cleanly
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 03-01-PLAN.md -- Create polling.js factory module (loadEnergy + createPoller with all polling functions)
@@ -78,11 +78,11 @@ Plans:
   3. applyControlTarget writes correct control signals to hardware via injected transport -- DV control target values match pre-extraction behavior exactly
   4. schedule-eval receives market-automation-builder functions via DI (not direct import) -- no circular dependencies between any extracted modules
   5. All 39 test files pass, config hot-reload propagates to both modules, and graceful shutdown stops the 15-second evaluation cycle cleanly
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- Extract market-automation-builder.js (SMA constants + createMarketAutomationBuilder factory), wire into server.js
+- [ ] 04-02-PLAN.md -- Extract schedule-eval.js (createScheduleEvaluator factory with timer lifecycle), wire into server.js
 
 ### Phase 5: HTTP Layer and Orchestrator Cleanup
 **Goal**: All ~60 API endpoints are served from an extracted routes module and server.js is a clean ~500-line orchestrator that owns only init, state, config, wiring, and shutdown
@@ -119,6 +119,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation and Leaf Module | 0/2 | Not started | - |
 | 2. I/O Modules | 0/2 | Not started | - |
-| 3. Polling | 0/2 | Not started | - |
+| 3. Polling | 0/2 | Complete    | 2026-03-27 |
 | 4. Automation Core | 0/2 | Not started | - |
 | 5. HTTP Layer and Orchestrator Cleanup | 0/2 | Not started | - |

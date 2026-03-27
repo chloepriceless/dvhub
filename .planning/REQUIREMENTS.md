@@ -19,7 +19,7 @@ Requirements for the monolith decomposition. Each maps to roadmap phases.
 - [x] **MODX-02**: modbus-server.js extrahiert — createModbusServer Factory mit start()/close() Lifecycle, processModbusFrame, Register Read/Write
 - [x] **MODX-03**: epex-fetch.js extrahiert — createEpexFetcher Factory mit fetchEpexDay(), fetchVrmForecast(), epexNowNext()
 - [x] **MODX-04**: polling.js extrahiert — createPoller Factory mit pollMeter(), pollPoint(), updateEnergyIntegrals(), start()/stop() Lifecycle. pollMeter + updateEnergyIntegrals bleiben zusammen (Mutation Ordering)
-- [ ] **MODX-05**: market-automation-builder.js extrahiert — createMarketAutomationBuilder Factory mit buildSmallMarketAutomationRules(), regenerateSmallMarketAutomationRules()
+- [x] **MODX-05**: market-automation-builder.js extrahiert — createMarketAutomationBuilder Factory mit buildSmallMarketAutomationRules(), regenerateSmallMarketAutomationRules()
 - [ ] **MODX-06**: schedule-eval.js extrahiert — createScheduleEvaluator Factory mit evaluateSchedule(), applyControlTarget(), setForcedOff(), clearForcedOff(), start()/stop()
 - [ ] **MODX-07**: routes-api.js extrahiert — createApiRoutes Factory mit handleRequest(req, res, url) für alle ~60 API Endpoints
 
@@ -76,7 +76,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | MODX-02 | Phase 2 | Complete |
 | MODX-03 | Phase 2 | Complete |
 | MODX-04 | Phase 3 | Complete |
-| MODX-05 | Phase 4 | Pending |
+| MODX-05 | Phase 4 | Complete |
 | MODX-06 | Phase 4 | Pending |
 | MODX-07 | Phase 5 | Pending |
 | ORCH-01 | Phase 5 | Pending |
