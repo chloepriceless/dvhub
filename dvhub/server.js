@@ -20,9 +20,7 @@ import {
   buildOptimizerRunPayload
 } from './telemetry-runtime.js';
 import {
-  createSerialTaskRunner,
-  createTelemetryWriteBuffer,
-  normalizePollIntervalMs
+  createTelemetryWriteBuffer
 } from './runtime-performance.js';
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
@@ -81,6 +79,7 @@ import {
 } from './user-energy-pricing.js';
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
+import { createPoller, loadEnergy } from './polling.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,7 +105,6 @@ const SUN_TIMES_CACHE_PATH = path.join(
   'sun-times-cache.json'
 );
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
-const MIN_POLL_INTERVAL_MS = 1000;
 const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
@@ -223,8 +221,6 @@ let runtimeWorkerState = {
   ready: false,
   lastError: null
 };
-const effectivePollIntervalMs = () => normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS);
-
 function getSmallMarketAutomationLocation(config = cfg) {
   return config?.schedule?.smallMarketAutomation?.location || null;
 }
@@ -987,47 +983,6 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
 
 const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 
-function persistEnergy() {
-  try {
-    const data = {
-      day: state.energy.day,
-      importWh: state.energy.importWh,
-      exportWh: state.energy.exportWh,
-      costEur: state.energy.costEur,
-      revenueEur: state.energy.revenueEur,
-      lastTs: state.energy.lastTs,
-      savedAt: Date.now()
-    };
-    // Atomic write: temp file + rename prevents corruption on crash/power loss
-    const tmpPath = ENERGY_PATH + '.tmp';
-    fs.writeFileSync(tmpPath, JSON.stringify(data) + '\n', 'utf8');
-    fs.renameSync(tmpPath, ENERGY_PATH);
-  } catch (e) {
-    // silent - avoid recursive log if pushLog triggers persist
-  }
-}
-
-function loadEnergy() {
-  try {
-    if (!fs.existsSync(ENERGY_PATH)) return;
-    const data = JSON.parse(fs.readFileSync(ENERGY_PATH, 'utf8'));
-    const today = berlinDateString(new Date(), cfg.epex.timezone);
-    if (data.day === today) {
-      state.energy.day = data.day;
-      state.energy.importWh = Number(data.importWh) || 0;
-      state.energy.exportWh = Number(data.exportWh) || 0;
-      state.energy.costEur = Number(data.costEur) || 0;
-      state.energy.revenueEur = Number(data.revenueEur) || 0;
-      state.energy.lastTs = Number(data.lastTs) || 0;
-      console.log(`Energy state restored for ${data.day}: import=${(state.energy.importWh / 1000).toFixed(2)}kWh export=${(state.energy.exportWh / 1000).toFixed(2)}kWh`);
-    } else {
-      console.log(`Energy state file is from ${data.day}, today is ${today} - starting fresh`);
-    }
-  } catch (e) {
-    console.error('Failed to load energy state:', e.message);
-  }
-}
-
 function pushLog(event, details = {}) {
   const row = { ts: nowIso(), event, ...details };
   state.log.push(row);
@@ -1163,24 +1118,9 @@ const ctx = {
 const modbus = createModbusServer(ctx);
 const epex = createEpexFetcher(ctx);
 ctx.epexNowNext = epex.epexNowNext;
-
-// Modbus-Client-Funktionen sind jetzt in transport-modbus.js / transport-mqtt.js
-
-function pointFromRegs(regs, conf) {
-  if (!regs || !regs.length) return null;
-  const scale = Number(conf.scale ?? 1);
-  const offset = Number(conf.offset ?? 0);
-  if (conf.quantity > 1 && conf.sumRegisters) {
-    let sum = 0;
-    for (const r of regs) sum += conf.signed ? s16(r) : r;
-    const v = sum * scale + offset;
-    return Number(v.toFixed(3));
-  }
-  let v = regs[0];
-  if (conf.signed) v = s16(v);
-  v = Number(v) * scale + offset;
-  return Number(v.toFixed(3));
-}
+ctx.energyPath = ENERGY_PATH;
+const poller = createPoller(ctx);
+ctx.requestPoll = poller.requestPoll;
 
 function toRawForWrite(value, conf) {
   const scale = Number(conf.scale ?? 1);
@@ -1232,227 +1172,6 @@ function toRawForWrite(value, conf) {
   }
 
   throw new Error(`unsupported writeType: ${conf.writeType}`);
-}
-
-async function pollPoint(name, conf) {
-  if (!conf?.enabled) return;
-  try {
-    if (transport.type === 'mqtt') {
-      const result = await transport.readPoint(name);
-      state.victron[name] = result.mqttValue;
-    } else {
-      const regs = await transport.mbRequest(conf);
-      state.victron[name] = pointFromRegs(regs, conf);
-    }
-    delete state.victron.errors[name];
-    state.victron.updatedAt = Date.now();
-  } catch (e) {
-    state.victron.errors[name] = e.message;
-    state.victron.updatedAt = Date.now();
-  }
-}
-
-function buildDvControlReadbackPollConfig(conf, victronConf) {
-  const address = Number(conf?.address);
-  if (!conf?.enabled || !Number.isFinite(address) || address <= 0) return null;
-  return {
-    enabled: true,
-    fc: 3,
-    address,
-    quantity: 1,
-    signed: false,
-    scale: 1,
-    offset: 0,
-    host: conf.host || victronConf?.host,
-    port: conf.port || victronConf?.port,
-    unitId: conf.unitId ?? victronConf?.unitId,
-    timeoutMs: conf.timeoutMs || victronConf?.timeoutMs
-  };
-}
-
-function buildDvControlReadbackPolls(cfg) {
-  return [
-    ['feedExcessDcPv', buildDvControlReadbackPollConfig(cfg?.dvControl?.feedExcessDcPv, cfg?.victron)],
-    ['dontFeedExcessAcPv', buildDvControlReadbackPollConfig(cfg?.dvControl?.dontFeedExcessAcPv, cfg?.victron)]
-  ].filter(([, conf]) => !!conf);
-}
-
-async function pollDvControlReadback(name, conf) {
-  if (transport.type !== 'modbus' || !conf?.enabled) return;
-  try {
-    const regs = await transport.mbRequest(conf);
-    state.victron[name] = pointFromRegs(regs, conf);
-    delete state.victron.errors[name];
-    state.victron.updatedAt = Date.now();
-  } catch (e) {
-    state.victron.errors[name] = e.message;
-    state.victron.updatedAt = Date.now();
-  }
-}
-
-function updateEnergyIntegrals(nowMs, totalW) {
-  const day = berlinDateString(new Date(nowMs), cfg.epex.timezone);
-  if (state.energy.day !== day) {
-    if (state.energy.day) {
-      pushLog('energy_day_end', {
-        day: state.energy.day,
-        importKwh: Number((state.energy.importWh / 1000).toFixed(4)),
-        exportKwh: Number((state.energy.exportWh / 1000).toFixed(4)),
-        costEur: Number(state.energy.costEur.toFixed(4)),
-        revenueEur: Number(state.energy.revenueEur.toFixed(4))
-      });
-    }
-    state.energy.day = day;
-    state.energy.importWh = 0;
-    state.energy.exportWh = 0;
-    state.energy.costEur = 0;
-    state.energy.revenueEur = 0;
-    state.energy.lastTs = nowMs;
-    persistEnergy();
-    return;
-  }
-  if (!state.energy.lastTs) {
-    state.energy.lastTs = nowMs;
-    return;
-  }
-  const dtH = Math.max(0, (nowMs - state.energy.lastTs) / 3600000);
-  state.energy.lastTs = nowMs;
-  if (dtH <= 0) return;
-
-  const dir = gridDirection(totalW, cfg.gridPositiveMeans);
-  const pAbs = Math.abs(Number(totalW) || 0);
-  const importW = dir.mode === 'grid_import' ? pAbs : 0;
-  const exportW = dir.mode === 'feed_in' ? pAbs : 0;
-  state.energy.importWh += importW * dtH;
-  state.energy.exportWh += exportW * dtH;
-
-  const currentEpex = epex.epexNowNext()?.current;
-  const epexCtKwh = Number(currentEpex?.ct_kwh ?? 0);
-
-  // Import cost: use the user's configured electricity price (Bezugspreis),
-  // not the raw EPEX price. resolveImportPriceCtKwhForSlot handles fixed,
-  // dynamic, and Paragraph 14a Module 3 pricing modes.
-  const importSlot = { ts: nowMs, ct_kwh: epexCtKwh };
-  const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot, cfg.userEnergyPricing || {}, cfg.schedule?.timezone) ?? epexCtKwh;
-  state.energy.costEur += (importW / 1000) * dtH * (importCtKwh / 100);
-
-  // Export revenue: EPEX price is the actual feed-in compensation
-  state.energy.revenueEur += (exportW / 1000) * dtH * (epexCtKwh / 100);
-}
-
-
-async function pollMeter() {
-  try {
-    let l1, l2, l3, total;
-    if (transport.type === 'mqtt') {
-      // MQTT: Werte aus Cache lesen (Venus OS: positiv = Import, negativ = Export)
-      const ml1 = transport.getCached('meter_l1') ?? 0;
-      const ml2 = transport.getCached('meter_l2') ?? 0;
-      const ml3 = transport.getCached('meter_l3') ?? 0;
-      const posImport = cfg.gridPositiveMeans === 'grid_import';
-      // Venus MQTT: positiv = Import → bei feed_in-Konvention invertieren
-      const sign = posImport ? 1 : -1;
-      l1 = ml1 * sign;
-      l2 = ml2 * sign;
-      l3 = ml3 * sign;
-      total = (ml1 + ml2 + ml3) * sign;
-      state.meter = {
-        ok: true, updatedAt: Date.now(), raw: [ml1, ml2, ml3],
-        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
-        error: null
-      };
-    } else {
-      // Modbus: Register lesen und signed interpretieren
-      const regs = await transport.mbRequest(cfg.meter);
-      const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
-      const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
-      const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
-      const rawTotal = rawL1 + rawL2 + rawL3;
-
-      const posImport = cfg.gridPositiveMeans === 'grid_import';
-      const sign = posImport ? 1 : -1;
-      l1 = rawL1 * sign;
-      l2 = rawL2 * sign;
-      l3 = rawL3 * sign;
-      total = rawTotal * sign;
-      state.meter = {
-        ok: true, updatedAt: Date.now(), raw: regs,
-        grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
-        error: null
-      };
-    }
-
-    state.dvRegs[0] = u16(total);
-    state.dvRegs[1] = total < 0 ? 0xffff : 0x0000;
-    state.dvRegs[3] = 0;
-    state.dvRegs[4] = 0;
-
-    updateEnergyIntegrals(state.meter.updatedAt, total);
-  } catch (e) {
-    state.meter.ok = false;
-    state.meter.error = e.message;
-    state.meter.updatedAt = Date.now();
-  }
-
-  await Promise.all([
-    pollPoint('soc', cfg.points.soc),
-    pollPoint('batteryPowerW', cfg.points.batteryPowerW),
-    pollPoint('pvPowerW', cfg.points.pvPowerW),
-    pollPoint('acPvL1W', cfg.points.acPvL1W),
-    pollPoint('acPvL2W', cfg.points.acPvL2W),
-    pollPoint('acPvL3W', cfg.points.acPvL3W),
-    pollPoint('gridSetpointW', cfg.points.gridSetpointW),
-    pollPoint('minSocPct', cfg.points.minSocPct),
-    pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
-    ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
-  ]);
-
-  const pvDc = Number(state.victron.pvPowerW || 0);
-  const pvAc = Number(state.victron.acPvL1W || 0) + Number(state.victron.acPvL2W || 0) + Number(state.victron.acPvL3W || 0);
-  state.victron.pvAcW = Number(pvAc.toFixed(3));
-  state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
-
-  const gridW = state.meter.grid_total_w || 0;
-  const posImport = cfg.gridPositiveMeans === 'grid_import';
-  state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
-  state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
-
-  const batP = Number(state.victron.batteryPowerW || 0);
-  state.victron.batteryChargeW = Math.max(0, batP);
-  state.victron.batteryDischargeW = Math.max(0, -batP);
-
-  const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
-  const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
-  const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
-  const gridExportW = Math.max(0, Number(state.victron.gridExportW || 0));
-  const batteryChargeW = Math.max(0, Number(state.victron.batteryChargeW || 0));
-  const batteryDischargeW = Math.max(0, Number(state.victron.batteryDischargeW || 0));
-
-  const solarToBatteryW = Math.max(0, Math.min(pvTotalW, batteryChargeW));
-  const gridToBatteryW = Math.max(0, batteryChargeW - solarToBatteryW);
-  const batteryToGridW = Math.max(0, Math.min(batteryDischargeW, gridExportW));
-  const batteryDirectUseW = Math.max(0, batteryDischargeW - batteryToGridW);
-  const gridDirectUseW = Math.max(0, gridImportW - gridToBatteryW);
-  const solarToGridW = Math.max(0, gridExportW - batteryToGridW);
-  const solarDirectUseW = Math.max(0, Math.min(pvTotalW, Math.max(0, loadW - gridDirectUseW - batteryDirectUseW)));
-
-  state.victron.solarDirectUseW = solarDirectUseW;
-  state.victron.solarToBatteryW = solarToBatteryW;
-  state.victron.solarToGridW = solarToGridW;
-  state.victron.gridDirectUseW = gridDirectUseW;
-  state.victron.gridToBatteryW = gridToBatteryW;
-  state.victron.batteryDirectUseW = batteryDirectUseW;
-  state.victron.batteryToGridW = batteryToGridW;
-
-  liveTelemetryBuffer?.capture({
-    ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
-    resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),
-    meter: { ...state.meter },
-    victron: { ...state.victron }
-  });
-  liveTelemetryBuffer?.flush();
-
-  publishRuntimeSnapshot();
 }
 
 function userEnergyPricingSummary() {
@@ -3009,6 +2728,11 @@ const web = http.createServer(async (req, res) => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
+  ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
+    liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron });
+    liveTelemetryBuffer?.flush();
+    publishRuntimeSnapshot();
+  };
   energyChartsMarketValueService = createEnergyChartsMarketValueService({
     marketValueStore: telemetryStore
   });
@@ -3055,7 +2779,7 @@ if (IS_WEB_PROCESS) {
 }
 
 if (IS_RUNTIME_PROCESS) {
-  loadEnergy();
+  loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
   modbus.start();
   setInterval(expireLeaseIfNeeded, 1000);
   setInterval(() => {
@@ -3072,15 +2796,6 @@ if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
     pid: process.pid
   });
   publishRuntimeSnapshot();
-}
-
-const pollMeterRunner = createSerialTaskRunner({
-  queueWhileRunning: false,
-  task: () => pollMeter()
-});
-
-function requestPollMeter() {
-  return pollMeterRunner.run();
 }
 
 if (IS_RUNTIME_PROCESS) {
@@ -3102,13 +2817,6 @@ if (IS_RUNTIME_PROCESS) {
       scheduleTransportRetry();
     });
   }
-  function schedulePollLoop() {
-    setTimeout(() => {
-      requestPollMeter().catch((e) => pushLog('poll_meter_error', { error: e.message })).finally(() => {
-        schedulePollLoop();
-      });
-    }, effectivePollIntervalMs());
-  }
   function scheduleEvaluateLoop() {
     setTimeout(() => {
       evaluateSchedule().catch((e) => pushLog('schedule_eval_error', { error: e.message })).finally(() => {
@@ -3117,11 +2825,9 @@ if (IS_RUNTIME_PROCESS) {
     }, Math.max(5000, Number(cfg.schedule.evaluateMs || 15000)));
   }
   initTransport();
-  requestPollMeter().catch((e) => console.error('Initial pollMeter error:', e));
-  schedulePollLoop();
+  poller.start();
   scheduleEvaluateLoop();
   epex.start();
-  setInterval(persistEnergy, 60000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
@@ -3147,7 +2853,7 @@ if (IS_RUNTIME_PROCESS) {
 
 async function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
-  persistEnergy();
+  poller.stop();
   liveTelemetryBuffer?.flush({ force: true });
   epex.stop();
   if (runtimeWorker) runtimeWorker.kill();
@@ -3164,12 +2870,12 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled promise rejection:', reason);
   pushLog('unhandled_rejection', { error: String(reason?.message || reason) });
-  persistEnergy();
+  try { poller.stop(); } catch {}
   liveTelemetryBuffer?.flush({ force: true });
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
-  try { persistEnergy(); } catch {}
+  try { poller.stop(); } catch {}
   try { liveTelemetryBuffer?.flush({ force: true }); } catch {}
   process.exit(1);
 });
