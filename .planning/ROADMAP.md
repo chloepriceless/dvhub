@@ -48,11 +48,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. All dynamic content injection in history.js, app.js, tools.js, settings.js, setup.js, and explorer.js uses textContent or DOM API methods -- zero innerHTML assignments with dynamic or user-controllable data remain
   2. Monitoring heartbeat payload includes the correct SOC value read from state.victron.soc (not state.battery?.soc or any other incorrect path)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
+- [x] 07-01-PLAN.md -- Shared escapeHtml utility + innerHTML XSS hardening in settings.js and app.js (SEC-03)
+- [ ] 07-02-PLAN.md -- Verify heartbeat SOC path is correct (BUG-01)
 
 ## Progress
 
@@ -63,4 +63,4 @@ Phases 6 and 7 are independent and can execute in any order.
 |-------|-----------|----------------|--------|-----------|
 | 1-5 | v1.0 | 11/11 | Complete | 2026-03-27 |
 | 6. Server-Side Security | 1/2 | In Progress|  | - |
-| 7. Frontend Security & Monitoring | v0.4.2 | 0/2 | Not started | - |
+| 7. Frontend Security & Monitoring | v0.4.2 | 1/2 | In Progress | - |
