@@ -280,7 +280,8 @@ export async function ensurePgSchema(pool) {
     WHERE schemaname = 'public' AND tableowner <> current_user
   `);
   for (const row of rows) {
-    await pool.query(`ALTER TABLE public.${row.tablename} OWNER TO current_user`);
+    const safeName = assertSqlIdentifier(row.tablename, 'tablename');
+    await pool.query(`ALTER TABLE public.${safeName} OWNER TO current_user`);
   }
 }
 
