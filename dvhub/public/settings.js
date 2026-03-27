@@ -496,11 +496,11 @@ function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [
       <div class="config-row-grid" data-pv-plant-id="${plant.id}" style="border-top:1px solid rgba(255,255,255,0.06);">
         <div class="config-row">
           <span class="config-row-label">Leistung (kWp)</span>
-          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${plant.kwp ?? ''}" style="width:80px;" />
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${escapeHtml(plant.kwp ?? '')}" style="width:80px;" />
         </div>
         <div class="config-row">
           <span class="config-row-label">Inbetriebnahme</span>
-          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${plant.commissionedAt || ''}" style="width:140px;" />
+          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${escapeHtml(plant.commissionedAt || '')}" style="width:140px;" />
         </div>
       </div>
       <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button></div>
@@ -1225,7 +1225,7 @@ function renderPricingPeriodsEditor() {
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Bezeichnung</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="label" type="text" value="${period.label || ''}" style="width:120px;" />
+            <input class="config-input" data-period-id="${period.id}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" style="width:120px;" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Modus</span>
@@ -1238,11 +1238,11 @@ function renderPricingPeriodsEditor() {
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Start</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="startDate" type="date" value="${period.startDate || ''}" style="width:140px;" />
+            <input class="config-input" data-period-id="${period.id}" data-period-path="startDate" type="date" value="${escapeHtml(period.startDate || '')}" style="width:140px;" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Ende</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="endDate" type="date" value="${period.endDate || ''}" style="width:140px;" />
+            <input class="config-input" data-period-id="${period.id}" data-period-path="endDate" type="date" value="${escapeHtml(period.endDate || '')}" style="width:140px;" />
           </div>
         </div>
         ${period.mode === 'fixed' ? `
