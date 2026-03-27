@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 05-01 routes-api.js extraction
-last_updated: "2026-03-27T04:04:32Z"
-last_activity: 2026-03-27 -- Completed 05-01 routes-api.js extraction
+status: in_progress
+stopped_at: Completed 05-02 admin route extraction
+last_updated: "2026-03-27T04:22:40Z"
+last_activity: 2026-03-27 -- Completed 05-02 admin route extraction
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 11
-  completed_plans: 9
-  percent: 82
+  completed_plans: 10
+  percent: 91
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
-**Current focus:** Phase 5 HTTP Layer -- routes-api.js factory created, simple routes extracted
+**Current focus:** Phase 5 HTTP Layer -- all route handlers in routes-api.js, server.js reduced to 934 lines
 
 ## Current Position
 
 Phase: 5 of 5 (HTTP Layer & Orchestrator Cleanup)
-Plan: 1 of 3 in current phase
-Status: 05-01 Complete
-Last activity: 2026-03-27 -- Completed 05-01 routes-api.js extraction
+Plan: 2 of 3 in current phase
+Status: 05-02 Complete
+Last activity: 2026-03-27 -- Completed 05-02 admin route extraction
 
-Progress: [████████░░] 82% (Overall: 9/11 plans)
+Progress: [█████████░] 91% (Overall: 10/11 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 9 min
-- Total execution time: 1.2 hours
+- Total execution time: 1.4 hours
 
 **By Phase:**
 
@@ -47,11 +47,11 @@ Progress: [████████░░] 82% (Overall: 9/11 plans)
 | 02 | 2/2 | 11 min | 5.5 min |
 | 03 | 2/2 | 9 min | 4.5 min |
 | 04 | 2/2 | 25 min | 12.5 min |
-| 05 | 1/3 | 14 min | 14 min |
+| 05 | 2/3 | 28 min | 14 min |
 
 **Recent Trend:**
-- Last 5 plans: 3 min, 6 min, 13 min, 12 min, 14 min
-- Trend: slightly increasing (Phase 5 HTTP layer extraction is larger scope)
+- Last 5 plans: 6 min, 13 min, 12 min, 14 min, 14 min
+- Trend: stable (Phase 5 plan size consistent)
 
 *Updated after each plan completion*
 
@@ -92,6 +92,10 @@ Recent decisions affecting current work:
 - [Phase 05]: serveStatic exposed in factory return alongside handleRequest for orchestrator fallback
 - [Phase 05]: Local json() helper kept in server.js for admin routes until Plan 2 extraction
 - [Phase 05]: costSummary/userEnergyPricingSummary exposed via ctx mutation (not factory return)
+- [Phase 05]: ctx.saveAndApplyConfig wraps restoreRedactedValues internally, route handlers pass raw body.config
+- [Phase 05]: adminHealthPayload moved to routes-api.js using ctx callbacks for all orchestrator data
+- [Phase 05]: EOS/EMHASS telemetry writes use ctx.telemetryStore?.writeOptimizerRun with optional chaining
+- [Phase 05]: Removed local json() helper and unused imports from server.js (buildOptimizerRunPayload, isSmallMarketAutomationRule, parseBody, fmtTs)
 
 ### Pending Todos
 
@@ -105,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T04:04:32Z
-Stopped at: Completed 05-01 routes-api.js extraction
-Resume file: .planning/phases/05-http-layer-and-orchestrator-cleanup/05-02-PLAN.md
+Last session: 2026-03-27T04:22:40Z
+Stopped at: Completed 05-02 admin route extraction
+Resume file: .planning/phases/05-http-layer-and-orchestrator-cleanup/05-03-PLAN.md

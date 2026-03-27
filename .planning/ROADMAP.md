@@ -122,4 +122,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. I/O Modules | 0/2 | Not started | - |
 | 3. Polling | 0/2 | Complete    | 2026-03-27 |
 | 4. Automation Core | 0/2 | Complete    | 2026-03-27 |
-| 5. HTTP Layer and Orchestrator Cleanup | 0/3 | Planning complete | - |
+| 5. HTTP Layer and Orchestrator Cleanup | 2/3 | In Progress|  |
