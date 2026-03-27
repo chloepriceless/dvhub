@@ -9,7 +9,7 @@ Requirements for this security/stability release. Each maps to roadmap phases.
 
 ### Security Hardening
 
-- [ ] **SEC-01**: Git Update-Endpoint speichert aktuelle Revision vor Update und fuehrt vollstaendigen Rollback (git checkout + npm install) durch wenn npm install fehlschlaegt
+- [x] **SEC-01**: Git Update-Endpoint speichert aktuelle Revision vor Update und fuehrt vollstaendigen Rollback (git checkout + npm install) durch wenn npm install fehlschlaegt
 - [x] **SEC-02**: LAN Auth-Bypass beschraenkt sich auf read-only Endpoints -- Hardware-Steuerung und Admin-Endpoints (Update, Restart) erfordern Token auch im LAN
 - [ ] **SEC-03**: Frontend-Code nutzt textContent/DOM-API statt innerHTML fuer dynamischen Content um XSS zu verhindern
 - [x] **SEC-04**: PostgreSQL-Queries in telemetry-store-pg.js nutzen ausschliesslich parameterized Queries -- keine Template-Literal-Interpolation fuer Tabellennamen/Spalten ohne assertSqlIdentifier-Validierung
@@ -57,7 +57,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | Phase 6 | Pending |
+| SEC-01 | Phase 6 | Complete |
 | SEC-02 | Phase 6 | Complete |
 | SEC-03 | Phase 7 | Pending |
 | SEC-04 | Phase 6 | Complete |
