@@ -1,5 +1,5 @@
 const common = typeof window !== 'undefined' ? window.DVhubCommon || {} : {};
-const { apiFetch, buildApiUrl, setStoredApiToken } = common;
+const { apiFetch, buildApiUrl, escapeHtml, setStoredApiToken } = common;
 
 let definition = null;
 let currentRawConfig = {};
@@ -1019,7 +1019,7 @@ function buildHistoryImportSummary(status) {
   if (!status) return 'Status wird geladen...';
   if (!status.enabled) return 'VRM-Backfill ist derzeit deaktiviert.';
   if (!status.ready) return 'VRM-Zugang ist noch nicht vollständig konfiguriert.';
-  return `VRM verbunden für Portal ${status.vrmPortalId || '-'}. Historischer Nachimport ist bereit.`;
+  return `VRM verbunden für Portal ${escapeHtml(status.vrmPortalId || '-')}. Historischer Nachimport ist bereit.`;
 }
 
 function renderHistoryImportPanel(destinationId) {
@@ -1051,7 +1051,7 @@ function renderHistoryImportPanel(destinationId) {
       </div>
       <div class="config-row">
         <span class="config-row-label">Portal ID</span>
-        <strong class="config-row-value">${currentHistoryImportStatus?.vrmPortalId || '-'}</strong>
+        <strong class="config-row-value">${escapeHtml(currentHistoryImportStatus?.vrmPortalId || '-')}</strong>
       </div>
     </div>
     <div class="config-row-grid">
@@ -1118,7 +1118,7 @@ function renderPvPlantsEditor() {
   section.className = 'config-group';
   section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
-    ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
     : '<div class="config-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
   section.innerHTML = buildMarketPremiumEditorMarkup({
     marketValueMode: marketValueModeDraft,
@@ -1188,10 +1188,10 @@ function renderEpexPriceSourceInfo() {
       const latest = bounds.latest ? new Date(bounds.latest).toLocaleDateString('de-DE') : null;
       const backlogRange = earliest && latest ? `${earliest} bis ${latest}` : `${hoursAvailable}h heute`;
       el.innerHTML = `
-        <strong>Bidding Zone:</strong> ${bzn} &nbsp;|&nbsp;
-        <strong>Letztes Update:</strong> ${updatedAt} &nbsp;|&nbsp;
-        <strong>Heute:</strong> ${datapoints} Slots (${hoursAvailable}h)
-        ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${backlogRange}` : ''}
+        <strong>Bidding Zone:</strong> ${escapeHtml(bzn)} &nbsp;|&nbsp;
+        <strong>Letztes Update:</strong> ${escapeHtml(updatedAt)} &nbsp;|&nbsp;
+        <strong>Heute:</strong> ${escapeHtml(datapoints)} Slots (${escapeHtml(hoursAvailable)}h)
+        ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${escapeHtml(backlogRange)}` : ''}
         <br><small style="opacity:0.7">Quelle: api.dvhub.de → EPEX SPOT Day-Ahead Auktion</small>
       `;
     }).catch(() => {
@@ -1207,7 +1207,7 @@ function renderPricingPeriodsEditor() {
   section.className = 'config-group';
   section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
-    ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${message}</div>`).join('')}</div>`
+    ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
     : '';
 
   section.innerHTML = `
