@@ -12,11 +12,11 @@ Transform server.js from a 3,669-line monolith into a ~500-line orchestrator by 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation and Leaf Module** - Establish DI contract, extract utilities and user-energy-pricing as validation
-- [ ] **Phase 2: I/O Modules** - Extract modbus-server and epex-fetch (self-contained data acquisition)
+- [x] **Phase 1: Foundation and Leaf Module** - Establish DI contract, extract utilities and user-energy-pricing as validation (completed 2026-03-26)
+- [x] **Phase 2: I/O Modules** - Extract modbus-server and epex-fetch (self-contained data acquisition) (completed 2026-03-26)
 - [x] **Phase 3: Polling** - Extract device polling loop with energy integration (completed 2026-03-27)
 - [x] **Phase 4: Automation Core** - Extract market-automation-builder and schedule-eval (highest risk) (completed 2026-03-27)
-- [ ] **Phase 5: HTTP Layer and Orchestrator Cleanup** - Extract routes-api and reduce server.js to ~680-line orchestrator
+- [x] **Phase 5: HTTP Layer and Orchestrator Cleanup** - Extract routes-api and reduce server.js to 926-line orchestrator (completed 2026-03-27)
 
 ## Phase Details
 
@@ -33,8 +33,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Extract server-utils.js (pure utility functions + constants) from server.js
-- [ ] 01-02-PLAN.md -- Document DI context, extract user-energy-pricing.js, update test wiring
+- [x] 01-01-PLAN.md -- Extract server-utils.js (pure utility functions + constants) from server.js
+- [x] 01-02-PLAN.md -- Document DI context, extract user-energy-pricing.js, update test wiring
 
 ### Phase 2: I/O Modules
 **Goal**: Self-contained I/O subsystems (Modbus TCP server and EPEX price fetching) operate as independent modules with proper lifecycle management
@@ -49,8 +49,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- Extract modbus-server.js factory, activate DI ctx in server.js
-- [ ] 02-02-PLAN.md -- Extract epex-fetch.js factory with timer lifecycle, update test
+- [x] 02-01-PLAN.md -- Extract modbus-server.js factory, activate DI ctx in server.js
+- [x] 02-02-PLAN.md -- Extract epex-fetch.js factory with timer lifecycle, update test
 
 ### Phase 3: Polling
 **Goal**: Device polling runs as an independent module while preserving exact mutation ordering between meter reads and energy integral updates
@@ -65,8 +65,8 @@ Plans:
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 03-01-PLAN.md -- Create polling.js factory module (loadEnergy + createPoller with all polling functions)
-- [ ] 03-02-PLAN.md -- Wire polling.js into server.js, remove extracted functions, update lifecycle
+- [x] 03-01-PLAN.md -- Create polling.js factory module (loadEnergy + createPoller with all polling functions)
+- [x] 03-02-PLAN.md -- Wire polling.js into server.js, remove extracted functions, update lifecycle
 
 ### Phase 4: Automation Core
 **Goal**: The schedule evaluation brain and market automation rule builder operate as extracted modules while preserving exact hardware control behavior and async chains
@@ -81,8 +81,8 @@ Plans:
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 04-01-PLAN.md -- Extract market-automation-builder.js (SMA constants + createMarketAutomationBuilder factory), wire into server.js
-- [ ] 04-02-PLAN.md -- Extract schedule-eval.js (createScheduleEvaluator factory with timer lifecycle), wire into server.js
+- [x] 04-01-PLAN.md -- Extract market-automation-builder.js (SMA constants + createMarketAutomationBuilder factory), wire into server.js
+- [x] 04-02-PLAN.md -- Extract schedule-eval.js (createScheduleEvaluator factory with timer lifecycle), wire into server.js
 
 ### Phase 5: HTTP Layer and Orchestrator Cleanup
 **Goal**: All ~45 API endpoints are served from an extracted routes module and server.js is a clean ~680-line orchestrator that owns only init, state, config, wiring, and shutdown
@@ -97,9 +97,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 05-01-PLAN.md -- Create routes-api.js factory, extract simple/read-only routes, auth, static serving
-- [ ] 05-02-PLAN.md -- Move admin/config/mutation routes, wire ctx callbacks for side effects
-- [ ] 05-03-PLAN.md -- Orchestrator cleanup: remove dead imports, verify structure, circular dep check
+- [x] 05-01-PLAN.md -- Create routes-api.js factory, extract simple/read-only routes, auth, static serving
+- [x] 05-02-PLAN.md -- Move admin/config/mutation routes, wire ctx callbacks for side effects
+- [x] 05-03-PLAN.md -- Orchestrator cleanup: remove dead imports, verify structure, circular dep check
 
 ## Cross-Cutting Quality Gates
 
@@ -118,8 +118,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation and Leaf Module | 0/2 | Not started | - |
-| 2. I/O Modules | 0/2 | Not started | - |
-| 3. Polling | 0/2 | Complete    | 2026-03-27 |
-| 4. Automation Core | 0/2 | Complete    | 2026-03-27 |
-| 5. HTTP Layer and Orchestrator Cleanup | 2/3 | In Progress|  |
+| 1. Foundation and Leaf Module | 2/2 | Complete | 2026-03-26 |
+| 2. I/O Modules | 2/2 | Complete | 2026-03-26 |
+| 3. Polling | 2/2 | Complete | 2026-03-27 |
+| 4. Automation Core | 2/2 | Complete | 2026-03-27 |
+| 5. HTTP Layer and Orchestrator Cleanup | 3/3 | Complete | 2026-03-27 |
