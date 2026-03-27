@@ -1,7 +1,5 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import net from 'node:net';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -376,7 +374,6 @@ function getCachedRuntimeStatusPayload() {
   return runtimeWorkerStatusPayload;
 }
 
-
 function historicalMarketValueBackfillYears({ bounds, now = new Date() } = {}) {
   const currentYear = new Date(now).getUTCFullYear();
   const earliestYear = Number(String(bounds?.earliest || '').slice(0, 4));
@@ -484,7 +481,6 @@ function pushLog(event, details = {}) {
   state.log.push(row);
   if (state.log.length > 1000) state.log.shift();
 }
-
 
 function expireLeaseIfNeeded() {
   if (state.ctrl.forcedOff && Date.now() > state.ctrl.offUntil) {
@@ -625,7 +621,6 @@ function restoreRedactedValues(incoming, current) {
   return copy;
 }
 
-
 export async function buildSystemDiscoveryPayload({
   query = {},
   discoverSystems = discoverConfiguredSystems,
@@ -714,9 +709,6 @@ function scheduleServiceRestart() {
   });
   helper.unref();
 }
-
-
-
 
 const web = http.createServer(async (req, res) => {
   try {
