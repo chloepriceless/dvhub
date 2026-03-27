@@ -600,7 +600,7 @@ function createConfigInput(field, value) {
     placeholder.textContent = value ? String(value) : 'Laden...';
     input.appendChild(placeholder);
     if (field.dynamicOptionsUrl) {
-      (apiFetch ? apiFetch(field.dynamicOptionsUrl) : fetch(field.dynamicOptionsUrl).then(r => r.json())).then(data => {
+      (apiFetch ? apiFetch(field.dynamicOptionsUrl).then(r => r.json()) : fetch(field.dynamicOptionsUrl).then(r => r.json())).then(data => {
         input.innerHTML = '';
         for (const z of (data?.zones || [])) {
           const opt = document.createElement('option');
