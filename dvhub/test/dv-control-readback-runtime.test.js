@@ -32,8 +32,8 @@ function extractFunction(source, name) {
 }
 
 function loadReadbackHelpers() {
-  const serverPath = path.join(repoRoot, 'server.js');
-  const source = fs.readFileSync(serverPath, 'utf8');
+  const pollingPath = path.join(repoRoot, 'polling.js');
+  const source = fs.readFileSync(pollingPath, 'utf8');
   const snippets = [
     extractFunction(source, 'buildDvControlReadbackPollConfig'),
     extractFunction(source, 'buildDvControlReadbackPolls')
