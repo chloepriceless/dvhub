@@ -292,7 +292,11 @@ function createSetupWizardState(payload = {}) {
   const initialStepId = resolveSetupStepId(payload.activeStepId, steps);
   const state = {
     definition,
-    draftConfig: clone(payload.config || {}),
+    draftConfig: clone(
+      payload.config && Object.keys(payload.config).length > 0
+        ? payload.config
+        : payload.effectiveConfig || {}
+    ),
     effectiveConfig: clone(payload.effectiveConfig || {}),
     meta: clone(payload.meta || {}),
     steps,
