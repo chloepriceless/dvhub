@@ -685,6 +685,12 @@ function initToolsPage() {
   document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
   document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
   document.getElementById('updateChannel')?.addEventListener('change', (e) => switchUpdateChannel(e.target.value));
+  // Sync channel dropdown with server config on page load
+  apiFetch('/api/config').then(r => r.json()).then(data => {
+    const ch = data?.effectiveConfig?.updateChannel || 'stable';
+    const sel = document.getElementById('updateChannel');
+    if (sel) sel.value = ch;
+  }).catch(() => {});
   document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());

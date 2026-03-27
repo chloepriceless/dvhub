@@ -1418,6 +1418,7 @@ const FIELD_DEFINITIONS = buildFieldDefinitions();
 export function createDefaultConfig() {
   return {
     manufacturer: 'victron',
+    updateChannel: 'stable',
     httpPort: 8080,
     apiToken: '',
     modbusListenHost: '0.0.0.0',
@@ -2082,6 +2083,8 @@ export function normalizeConfigInput(rawInput) {
   const { raw, warnings } = sanitizeRawConfig(rawInput);
   const persistedConfig = deepMerge(defaults, raw);
   if (!Array.isArray(persistedConfig.schedule?.rules)) persistedConfig.schedule.rules = [];
+  // Default BZN to DE-LU when EPEX is enabled but no zone is set
+  if (persistedConfig.epex?.enabled && !persistedConfig.epex?.bzn) persistedConfig.epex.bzn = 'DE-LU';
   const effectiveConfig = applyVictronDefaults(persistedConfig);
   return { rawConfig: raw, persistedConfig, effectiveConfig, warnings };
 }
