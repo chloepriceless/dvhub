@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.4.0 |
+| **Status** | `main` -- Version 0.4.1 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) |
 
@@ -122,8 +122,9 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 - **Kosten- und Preislogik** für Netz, PV und Akku über `userEnergyPricing`
 - **Datumsbasierte Bezugspreise** über `userEnergyPricing.periods`
 - **Paragraph 14a Modul 3** mit konfigurierbaren Preisfenstern
-- **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen mit energiebasierter Slot-Allokation
+- **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen mit energiebasierter Slot-Allokation und dynamischem SOC-Floor (Sonnenaufgang-basiert)
 - **PostgreSQL-Telemetrie** mit Persistenz, Rollups, historischem Nachimport und History-Analyse
+- **Modulare Architektur** mit 8 Factory-Modulen und DI Context Pattern
 
 ### Betriebsmodell
 
@@ -167,12 +168,13 @@ Die EPEX-Preiszone wird über einen dynamischen Selektor gewählt, der die verf�
 
 Der First-Run-Setup-Assistent führt Schritt für Schritt durch:
 
+- Alle Felder sind mit sinnvollen Defaults vorbelegt — nur die Victron-IP muss eingegeben werden
 - HTTP-Port und API-Token
-- Victron-Verbindung per Modbus oder MQTT
+- Victron-Verbindung per Modbus oder MQTT mit automatischer Systemerkennung
 - Meter- und DV-Basiswerte
 - EPEX-Grunddaten mit dynamischem Preiszonen-Selektor
 - Review-Schritt mit Validierung vor dem Speichern
-- Anzeige vererbter Meter- und DV-Register-Verbindungen im Review
+- Nach dem Speichern wird direkt zum Leitstand weitergeleitet
 
 ### Tools / Wartung
 
@@ -349,7 +351,7 @@ Type=simple
 User=dvhub
 Group=dvhub
 WorkingDirectory=/opt/dvhub/dvhub
-ExecStart=/usr/bin/node --experimental-sqlite /opt/dvhub/dvhub/server.js
+ExecStart=/usr/bin/node /opt/dvhub/dvhub/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=/etc/dvhub/config.json
 Environment=DV_ENABLE_SERVICE_ACTIONS=1
