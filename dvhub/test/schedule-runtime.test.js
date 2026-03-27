@@ -222,7 +222,9 @@ test('autoDisableStopSocScheduleRules ignores missing soc or non-grid rules', ()
 });
 
 test('server schedule evaluator wires stop-soc auto-disable and dedicated logging', () => {
-  const source = fs.readFileSync(serverPath, 'utf8');
+  // evaluateSchedule moved to schedule-eval.js -- verify wiring there
+  const schedEvalPath = serverPath.replace('server.js', 'schedule-eval.js');
+  const source = fs.readFileSync(schedEvalPath, 'utf8');
 
   assert.match(source, /autoDisableStopSocScheduleRules/);
   assert.match(source, /schedule_stop_soc_reached/);
