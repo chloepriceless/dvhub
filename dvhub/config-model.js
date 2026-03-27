@@ -1402,6 +1402,7 @@ function buildFieldDefinitions() {
       path: 'epex.priceApiUrl',
       label: 'Preis-API',
       type: 'select',
+      hidden: true,
       options: [
         { value: 'https://api.dvhub.de', label: 'DVhub API (api.dvhub.de)' },
         { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
@@ -2085,6 +2086,8 @@ export function normalizeConfigInput(rawInput) {
   if (!Array.isArray(persistedConfig.schedule?.rules)) persistedConfig.schedule.rules = [];
   // Default BZN to DE-LU when EPEX is enabled but no zone is set
   if (persistedConfig.epex?.enabled && !persistedConfig.epex?.bzn) persistedConfig.epex.bzn = 'DE-LU';
+  // Ensure priceApiUrl is always set (legacy configs may omit it)
+  if (persistedConfig.epex && !persistedConfig.epex.priceApiUrl) persistedConfig.epex.priceApiUrl = 'https://api.dvhub.de';
   const effectiveConfig = applyVictronDefaults(persistedConfig);
   return { rawConfig: raw, persistedConfig, effectiveConfig, warnings };
 }
