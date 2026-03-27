@@ -1778,6 +1778,15 @@ function initSettingsPage() {
       if (panel) panel.hidden = false;
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
+      // Auto-check for updates when switching to System tab
+      if (target === 'system' && typeof checkForUpdate === 'function') {
+        const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+        const cooldownMs = 10 * 60 * 1000;
+        if (Date.now() - lastCheck > cooldownMs) {
+          sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
+          checkForUpdate().catch(() => {});
+        }
+      }
     });
     // Restore tab from URL hash
     const hash = location.hash.replace('#', '');
