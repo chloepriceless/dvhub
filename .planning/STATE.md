@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-26T22:05:21Z"
-last_activity: 2026-03-26 -- Completed 02-02 epex-fetch extraction
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-27T00:09:00Z"
+last_activity: 2026-03-27 -- Completed 03-01 polling.js extraction
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 6
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
-**Current focus:** Phase 2 Complete - I/O Modules extracted (modbus-server.js + epex-fetch.js)
+**Current focus:** Phase 3 Polling -- polling.js module created, wiring next
 
 ## Current Position
 
-Phase: 2 of 5 (I/O Modules) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase 02 Complete
-Last activity: 2026-03-26 -- Completed 02-02 epex-fetch extraction
+Phase: 3 of 5 (Polling)
+Plan: 1 of 2 in current phase
+Status: 03-01 Complete
+Last activity: 2026-03-27 -- Completed 03-01 polling.js extraction
 
-Progress: [##########] 100% (Overall: 4/4 plans)
+Progress: [████████░░] 83% (Overall: 5/6 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 7 min
-- Total execution time: 0.45 hours
+- Total plans completed: 5
+- Average duration: 6 min
+- Total execution time: 0.5 hours
 
 **By Phase:**
 
@@ -45,9 +45,10 @@ Progress: [##########] 100% (Overall: 4/4 plans)
 |-------|-------|-------|----------|
 | 01 | 2/2 | 16 min | 8 min |
 | 02 | 2/2 | 11 min | 5.5 min |
+| 03 | 1/2 | 3 min | 3 min |
 
 **Recent Trend:**
-- Last 5 plans: 9 min, 7 min, 5 min, 6 min
+- Last 5 plans: 7 min, 5 min, 6 min, 3 min
 - Trend: improving
 
 *Updated after each plan completion*
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Kept net import in server.js despite no remaining usage (conservative approach)
 - [Phase 02]: ctx.telemetryStore/publishRuntimeSnapshot added after async init (not in ctx literal) because telemetryStore is created asynchronously
 - [Phase 02]: Removed buildPriceTelemetrySamples from server.js import (only usage was in fetchEpexDay, now in epex-fetch.js)
+- [Phase 03]: schedulePollLoop uses if (!stopping) guard instead of .finally() for graceful shutdown
+- [Phase 03]: Telemetry decoupled via ctx.onPollComplete callback instead of direct liveTelemetryBuffer access
+- [Phase 03]: loadEnergy kept as standalone export (not inside factory) for startup-time usage
 
 ### Pending Todos
 
@@ -85,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T22:05:21Z
-Stopped at: Completed 02-02-PLAN.md
-Resume file: .planning/phases/02-i-o-modules/02-02-SUMMARY.md
+Last session: 2026-03-27T00:09:00Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-polling/03-01-SUMMARY.md
