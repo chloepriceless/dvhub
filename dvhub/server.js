@@ -192,6 +192,10 @@ function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
   const latitude = Number(location?.latitude);
   const longitude = Number(location?.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  // 0,0 is Null Island (Gulf of Guinea) — treat as unconfigured, use German default
+  if (latitude === 0 && longitude === 0) {
+    return getSunTimesCacheForPlanning({ now, config: { ...config, schedule: { ...config.schedule, smallMarketAutomation: { ...config.schedule?.smallMarketAutomation, location: { label: 'Deutschland', latitude: 51.1657, longitude: 10.4515 } } } } });
+  }
 
   const year = new Date(now).getUTCFullYear();
   const requestedLocation = { latitude, longitude };
