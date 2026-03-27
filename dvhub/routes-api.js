@@ -148,19 +148,39 @@ export function createApiRoutes(ctx) {
     return false;
   }
 
-  // Sensitive endpoints that always require token auth, even from LAN
-  const SENSITIVE_ENDPOINTS = new Set([
-    '/api/admin/update/check', '/api/admin/update/apply', '/api/admin/restart',
-    '/api/admin/health', '/api/config', '/api/config/import',
-    '/api/control/write', '/api/integration/eos/apply', '/api/integration/emhass/apply'
+  // Read-only endpoints safe for LAN access without auth token.
+  // ALL other endpoints require auth, even from LAN. Default-deny.
+  const LAN_SAFE_ENDPOINTS = new Set([
+    '/api/keepalive/modbus',
+    '/api/keepalive/pulse',
+    '/api/config',           // GET only (read config)
+    '/api/config/export',
+    '/api/discovery/systems',
+    '/api/status',
+    '/api/costs',
+    '/api/integration/home-assistant',
+    '/api/integration/loxone',
+    '/api/integration/eos',
+    '/api/integration/emhass',
+    '/api/log',
+    '/api/log/dv-signals',
+    '/api/telemetry/series',
+    '/api/forecast',
+    '/api/epex/zones',
+    '/api/epex/gaps',
+    '/api/schedule',
+    '/api/history/import/status',
+    '/api/history/summary',
+    '/api/schedule/automation/config',
+    '/api/meter/scan',
+    '/dv/control-value',
   ]);
 
-  function isSensitiveRequest(req) {
+  function isLanSafeRequest(req) {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    if (SENSITIVE_ENDPOINTS.has(url.pathname)) return req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
-    if (url.pathname === '/api/config' && req.method === 'POST') return true;
-    if (url.pathname.startsWith('/api/admin/')) return true;
-    return false;
+    // Only GET requests to allowlisted endpoints bypass auth from LAN
+    if (req.method !== 'GET') return false;
+    return LAN_SAFE_ENDPOINTS.has(url.pathname);
   }
 
   // --- Rate Limiting (in-memory, per IP) ---
@@ -207,8 +227,8 @@ export function createApiRoutes(ctx) {
   function checkAuth(req, res) {
     const cfg = getCfg();
     if (!cfg.apiToken) return true;
-    // LAN requests bypass token check for read-only/non-sensitive endpoints
-    if (isLocalNetworkRequest(req) && !isSensitiveRequest(req)) return true;
+    // LAN requests bypass token check only for allowlisted read-only GET endpoints
+    if (isLocalNetworkRequest(req) && isLanSafeRequest(req)) return true;
     const expected = Buffer.from(cfg.apiToken);
     const auth = req.headers.authorization || '';
     if (auth.startsWith('Bearer ')) {
