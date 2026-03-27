@@ -21,7 +21,7 @@ Requirements for the monolith decomposition. Each maps to roadmap phases.
 - [x] **MODX-04**: polling.js extrahiert — createPoller Factory mit pollMeter(), pollPoint(), updateEnergyIntegrals(), start()/stop() Lifecycle. pollMeter + updateEnergyIntegrals bleiben zusammen (Mutation Ordering)
 - [x] **MODX-05**: market-automation-builder.js extrahiert — createMarketAutomationBuilder Factory mit buildSmallMarketAutomationRules(), regenerateSmallMarketAutomationRules()
 - [x] **MODX-06**: schedule-eval.js extrahiert — createScheduleEvaluator Factory mit evaluateSchedule(), applyControlTarget(), setForcedOff(), clearForcedOff(), start()/stop()
-- [ ] **MODX-07**: routes-api.js extrahiert — createApiRoutes Factory mit handleRequest(req, res, url) für alle ~60 API Endpoints
+- [x] **MODX-07**: routes-api.js extrahiert — createApiRoutes Factory mit handleRequest(req, res, url) für alle ~60 API Endpoints
 
 ### Orchestrator
 
@@ -78,7 +78,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | MODX-04 | Phase 3 | Complete |
 | MODX-05 | Phase 4 | Complete |
 | MODX-06 | Phase 4 | Complete |
-| MODX-07 | Phase 5 | Pending |
+| MODX-07 | Phase 5 | Complete |
 | ORCH-01 | Phase 5 | Pending |
 | ORCH-02 | Phase 5 | Pending |
 | QUAL-01 | All Phases | Pending |

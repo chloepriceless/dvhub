@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-02 schedule-eval.js extraction
-last_updated: "2026-03-27T02:30:12Z"
-last_activity: 2026-03-27 -- Completed 04-02 schedule-eval.js extraction
+status: completed
+stopped_at: Completed 05-01 routes-api.js extraction
+last_updated: "2026-03-27T04:04:32Z"
+last_activity: 2026-03-27 -- Completed 05-01 routes-api.js extraction
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** server.js von 3,669 Zeilen auf ~500 Zeilen reduzieren durch Extraktion in 7 fokussierte Module bei 100% API-Kompatibilitaet
-**Current focus:** Phase 4 Automation Core complete -- schedule-eval.js and market-automation-builder.js extracted
+**Current focus:** Phase 5 HTTP Layer -- routes-api.js factory created, simple routes extracted
 
 ## Current Position
 
-Phase: 4 of 5 (Automation Core)
-Plan: 2 of 2 in current phase
-Status: 04-02 Complete (Phase 4 done)
-Last activity: 2026-03-27 -- Completed 04-02 schedule-eval.js extraction
+Phase: 5 of 5 (HTTP Layer & Orchestrator Cleanup)
+Plan: 1 of 3 in current phase
+Status: 05-01 Complete
+Last activity: 2026-03-27 -- Completed 05-01 routes-api.js extraction
 
-Progress: [██████████] 100% (Overall: 8/8 plans)
+Progress: [████████░░] 82% (Overall: 9/11 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
-- Average duration: 8 min
-- Total execution time: 1.0 hours
+- Total plans completed: 9
+- Average duration: 9 min
+- Total execution time: 1.2 hours
 
 **By Phase:**
 
@@ -47,10 +47,11 @@ Progress: [██████████] 100% (Overall: 8/8 plans)
 | 02 | 2/2 | 11 min | 5.5 min |
 | 03 | 2/2 | 9 min | 4.5 min |
 | 04 | 2/2 | 25 min | 12.5 min |
+| 05 | 1/3 | 14 min | 14 min |
 
 **Recent Trend:**
-- Last 5 plans: 6 min, 3 min, 6 min, 13 min, 12 min
-- Trend: stable (Phase 4 larger extractions ~12 min avg)
+- Last 5 plans: 3 min, 6 min, 13 min, 12 min, 14 min
+- Trend: slightly increasing (Phase 5 HTTP layer extraction is larger scope)
 
 *Updated after each plan completion*
 
@@ -87,6 +88,10 @@ Recent decisions affecting current work:
 - [Phase 04]: API route applyControlTarget calls rewired to ctx.applyControlTarget (7 call sites)
 - [Phase 04]: evaluateSchedule uses ctx.onEvalComplete?.() callback instead of direct publishRuntimeSnapshot
 - [Phase 04]: Removed 9 unused imports from server.js (moved to schedule-eval.js)
+- [Phase 05]: handleRequest returns false for unmatched routes, allowing orchestrator to handle admin routes
+- [Phase 05]: serveStatic exposed in factory return alongside handleRequest for orchestrator fallback
+- [Phase 05]: Local json() helper kept in server.js for admin routes until Plan 2 extraction
+- [Phase 05]: costSummary/userEnergyPricingSummary exposed via ctx mutation (not factory return)
 
 ### Pending Todos
 
@@ -100,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T02:30:12Z
-Stopped at: Completed 04-02 schedule-eval.js extraction (Phase 4 complete)
-Resume file: Phase 5 planning (if applicable)
+Last session: 2026-03-27T04:04:32Z
+Stopped at: Completed 05-01 routes-api.js extraction
+Resume file: .planning/phases/05-http-layer-and-orchestrator-cleanup/05-02-PLAN.md
