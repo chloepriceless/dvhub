@@ -1249,28 +1249,28 @@ function renderPricingPeriodsEditor() {
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Bruttopreis (ct/kWh)</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(period.fixedGrossImportCtKwh ?? '')}" style="width:80px;" />
             </div>
           </div>
         ` : `
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Energie-Aufschlag</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.energyMarkupCtKwh ?? '')}" style="width:80px;" />
             </div>
             <div class="config-row">
               <span class="config-row-label">Netzentgelte</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.gridChargesCtKwh ?? '')}" style="width:80px;" />
             </div>
           </div>
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Umlagen &amp; Abgaben</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.leviesAndFeesCtKwh ?? '')}" style="width:80px;" />
             </div>
             <div class="config-row">
               <span class="config-row-label">MwSt (%)</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.vatPct ?? '')}" style="width:80px;" />
             </div>
           </div>
         `}
