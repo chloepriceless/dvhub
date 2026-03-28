@@ -23,7 +23,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 ### v0.4.2 Security & Stability Hardening
 
 - [ ] **Phase 6: Server-Side Security Hardening** - Git rollback, auth-bypass restriction, SQL injection prevention
-- [ ] **Phase 7: Frontend Security & Monitoring Fix** - XSS prevention across frontend files and heartbeat SOC correction
+- [x] **Phase 7: Frontend Security & Monitoring Fix** - XSS prevention across frontend files and heartbeat SOC correction (completed 2026-03-28)
 
 ## Phase Details
 
@@ -48,11 +48,12 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. All dynamic content injection in history.js, app.js, tools.js, settings.js, setup.js, and explorer.js uses textContent or DOM API methods -- zero innerHTML assignments with dynamic or user-controllable data remain
   2. Monitoring heartbeat payload includes the correct SOC value read from state.victron.soc (not state.battery?.soc or any other incorrect path)
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
 - [x] 07-01-PLAN.md -- Shared escapeHtml utility + innerHTML XSS hardening in settings.js and app.js (SEC-03)
 - [ ] 07-02-PLAN.md -- Verify heartbeat SOC path is correct (BUG-01)
+- [ ] 07-03-PLAN.md -- Gap closure: escapeHtml wrapping for plant.id/period.id in data-* attributes and remaining numeric value="" attributes in settings.js (SEC-03, BUG-01)
 
 ## Progress
 
@@ -63,4 +64,4 @@ Phases 6 and 7 are independent and can execute in any order.
 |-------|-----------|----------------|--------|-----------|
 | 1-5 | v1.0 | 11/11 | Complete | 2026-03-27 |
 | 6. Server-Side Security | 1/2 | In Progress|  | - |
-| 7. Frontend Security & Monitoring | v0.4.2 | 1/2 | In Progress | - |
+| 7. Frontend Security & Monitoring | 3/3 | Complete   | 2026-03-28 | - |
