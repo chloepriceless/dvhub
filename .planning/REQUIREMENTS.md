@@ -16,7 +16,7 @@ Requirements for this security/stability release. Each maps to roadmap phases.
 
 ### Bugfix
 
-- [ ] **BUG-01**: Monitoring Heartbeat zeigt korrekten SOC-Wert (state.victron.soc statt state.battery?.soc)
+- [x] **BUG-01**: Monitoring Heartbeat zeigt korrekten SOC-Wert (state.victron.soc statt state.battery?.soc)
 
 ## Future Requirements
 
@@ -61,7 +61,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | SEC-02 | Phase 6 | Complete |
 | SEC-03 | Phase 7 | Complete |
 | SEC-04 | Phase 6 | Complete |
-| BUG-01 | Phase 7 | Pending |
+| BUG-01 | Phase 7 | Complete |
 
 **Coverage:**
 - v0.4.2 requirements: 5 total
