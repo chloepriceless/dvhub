@@ -493,17 +493,17 @@ function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [
       <button id="addPvPlantBtn" class="btn btn-ghost btn-small" type="button">+ PV-Anlage</button>
     </div>
     ${plants.map((plant) => `
-      <div class="config-row-grid" data-pv-plant-id="${plant.id}" style="border-top:1px solid rgba(255,255,255,0.06);">
+      <div class="config-row-grid" data-pv-plant-id="${escapeHtml(plant.id)}" style="border-top:1px solid rgba(255,255,255,0.06);">
         <div class="config-row">
           <span class="config-row-label">Leistung (kWp)</span>
-          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${escapeHtml(plant.kwp ?? '')}" style="width:80px;" />
+          <input class="config-input" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${escapeHtml(plant.kwp ?? '')}" style="width:80px;" />
         </div>
         <div class="config-row">
           <span class="config-row-label">Inbetriebnahme</span>
-          <input class="config-input" data-pv-plant-id="${plant.id}" data-pv-plant-path="commissionedAt" type="date" value="${escapeHtml(plant.commissionedAt || '')}" style="width:140px;" />
+          <input class="config-input" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="commissionedAt" type="date" value="${escapeHtml(plant.commissionedAt || '')}" style="width:140px;" />
         </div>
       </div>
-      <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${plant.id}">Entfernen</button></div>
+      <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${escapeHtml(plant.id)}">Entfernen</button></div>
     `).join('')}
   `;
 }
@@ -1225,11 +1225,11 @@ function renderPricingPeriodsEditor() {
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Bezeichnung</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" style="width:120px;" />
+            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" style="width:120px;" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Modus</span>
-            <select class="config-select" data-period-id="${period.id}" data-period-path="mode">
+            <select class="config-select" data-period-id="${escapeHtml(period.id)}" data-period-path="mode">
               <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
               <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
             </select>
@@ -1238,43 +1238,43 @@ function renderPricingPeriodsEditor() {
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Start</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="startDate" type="date" value="${escapeHtml(period.startDate || '')}" style="width:140px;" />
+            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="startDate" type="date" value="${escapeHtml(period.startDate || '')}" style="width:140px;" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Ende</span>
-            <input class="config-input" data-period-id="${period.id}" data-period-path="endDate" type="date" value="${escapeHtml(period.endDate || '')}" style="width:140px;" />
+            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="endDate" type="date" value="${escapeHtml(period.endDate || '')}" style="width:140px;" />
           </div>
         </div>
         ${period.mode === 'fixed' ? `
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Bruttopreis (ct/kWh)</span>
-              <input class="config-input" data-period-id="${period.id}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${period.fixedGrossImportCtKwh ?? ''}" style="width:80px;" />
             </div>
           </div>
         ` : `
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Energie-Aufschlag</span>
-              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.energyMarkupCtKwh ?? ''}" style="width:80px;" />
             </div>
             <div class="config-row">
               <span class="config-row-label">Netzentgelte</span>
-              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.gridChargesCtKwh ?? ''}" style="width:80px;" />
             </div>
           </div>
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Umlagen &amp; Abgaben</span>
-              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${period.dynamicComponents?.leviesAndFeesCtKwh ?? ''}" style="width:80px;" />
             </div>
             <div class="config-row">
               <span class="config-row-label">MwSt (%)</span>
-              <input class="config-input" data-period-id="${period.id}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" style="width:80px;" />
+              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${period.dynamicComponents?.vatPct ?? ''}" style="width:80px;" />
             </div>
           </div>
         `}
-        <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-period="${period.id}">Entfernen</button></div>
+        <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-period="${escapeHtml(period.id)}">Entfernen</button></div>
       </div>
     `).join('')}
   `;
