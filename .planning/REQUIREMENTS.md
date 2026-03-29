@@ -27,9 +27,9 @@ Gruppiert nach Attack Surface für maximale Parallelisierung.
 
 ### UI & Branding
 
-- [ ] **UI-01**: Alle public pages nutzen compact-topbar statt page-topbar — neue CSS-Klasse `compact-topbar`
-- [ ] **UI-02**: Navigation vereinfacht zu Leitstand / Einrichtung / Wartung — Umbenennung Einstellungen→Einrichtung, Setup+Tools→Wartung
-- [ ] **UI-03**: `common.js` exponiert DVhub Branding API — `window.DVhubCommon` mit `getStoredApiToken()`, `apiFetch()`, `dvhub:unauthorized` Event
+- [x] **UI-01**: Alle public pages nutzen compact-topbar statt page-topbar — neue CSS-Klasse `compact-topbar`
+- [x] **UI-02**: Navigation vereinfacht zu Leitstand / Einrichtung / Wartung — Umbenennung Einstellungen→Einrichtung, Setup+Tools→Wartung
+- [x] **UI-03**: `common.js` exponiert DVhub Branding API — `window.DVhubCommon` mit `getStoredApiToken()`, `apiFetch()`, `dvhub:unauthorized` Event
 
 ### Code Quality
 
@@ -74,9 +74,9 @@ Deferred to future release.
 | HTTP-03 | Phase 9 | Complete |
 | FE-03 | Phase 9 | Complete |
 | FE-02 | Phase 10 | Pending |
-| UI-01 | Phase 10 | Pending |
-| UI-02 | Phase 10 | Pending |
-| UI-03 | Phase 10 | Pending |
+| UI-01 | Phase 10 | Complete |
+| UI-02 | Phase 10 | Complete |
+| UI-03 | Phase 10 | Complete |
 | QUAL-01 | Phase 11 | Pending |
 | QUAL-02 | Phase 11 | Pending |
 | QUAL-03 | Phase 11 | Pending |
