@@ -555,7 +555,8 @@ export function createApiRoutes(ctx) {
     const file = path.resolve(publicDir, filename);
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
     if (!fs.existsSync(file)) return text(res, 404, 'not found');
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+    const cacheControl = filename === 'setup.html' ? 'no-store' : 'no-cache';
+    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
     fs.createReadStream(file).pipe(res);
   }
 
@@ -577,7 +578,13 @@ export function createApiRoutes(ctx) {
       '.png': 'image/png',
       '.ico': 'image/x-icon'
     }[ext] || 'application/octet-stream';
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime });
+    let cacheControl;
+    if (ext === '.html') {
+      cacheControl = reqPath.includes('setup') ? 'no-store' : 'no-cache';
+    } else if (ext === '.js' || ext === '.css') {
+      cacheControl = 'max-age=3600';
+    }
+    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
     fs.createReadStream(file).pipe(res);
   }
 
