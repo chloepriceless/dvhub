@@ -205,7 +205,7 @@ function renderKpis(summary) {
         : 'var(--flow-orange)';
     }
 
-    setText('historyKpiDvCost', fmtEur(-(Math.abs(kpis.dvCostEur ?? 0))));
+    setText('historyKpiDvCost', fmtEur(kpis.dvCostEur ?? 0));
 
     // Netto DV-Vorteil: gruen wenn positiv, orange wenn negativ
     const dvNetEl = document.getElementById('historyKpiDvNetAdvantage');
