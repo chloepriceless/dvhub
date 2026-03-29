@@ -202,10 +202,8 @@ test('readme references the DVhub assets folder for logo and screenshot gallery'
   const readme = fs.readFileSync(readmePath, 'utf8');
 
   assert.match(readme, /assets\/dvhub\.jpg/);
-  assert.match(readme, /assets\/screenshots\/dashboard-live-full-2026-03-11\.png/);
-  assert.match(readme, /assets\/screenshots\/history-day-2026-03-10-full\.png/);
-  assert.match(readme, /assets\/screenshots\/history-month-2026-03-full\.png/);
-  assert.match(readme, /assets\/screenshots\/history-year-2025-full\.png/);
+  assert.match(readme, /assets\/screenshots\/dashboard-live-full-2026-03-24\.png/);
+  assert.match(readme, /assets\/screenshots\/history-day-2026-03-24-full\.png/);
   assert.doesNotMatch(readme, /docs\/dvhub-logo\.png|docs\/dashboard-desktop\.png/);
   assert.doesNotMatch(readme, /cd \/opt\/dvhub\/dv-control-webapp|WorkingDirectory=\/opt\/dvhub\/dv-control-webapp|ExecStart=\/usr\/bin\/node --experimental-sqlite \/opt\/dvhub\/dv-control-webapp\/server\.js/);
 });

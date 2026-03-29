@@ -35,18 +35,30 @@
     </header>
 
     <main class="page-content">
-      <!-- Page header -->
-      <div style="display:flex;justify-content:space-between;align-items:baseline;padding:16px 16px 0;">
-        <h1 style="font-family:var(--font-title);font-size:18px;font-weight:600;">Einstellungen</h1>
-        <small id="configMeta" style="font-size:11px;color:rgba(232,234,240,0.25);font-family:var(--font-mono);">-</small>
-      </div>
+      <div class="settings-compact-bar">
+        <!-- Page header -->
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:16px 16px 0;">
+          <h1 style="font-family:var(--font-title);font-size:18px;font-weight:600;">Einstellungen</h1>
+          <small id="configMeta" style="font-size:11px;color:rgba(232,234,240,0.25);font-family:var(--font-mono);">-</small>
+        </div>
 
-      <!-- Tabs -->
-      <div class="settings-tabs">
-        <button class="settings-tab is-active" data-tab="connection">Anlage</button>
-        <button class="settings-tab" data-tab="control">Steuerung</button>
-        <button class="settings-tab" data-tab="services">Preise</button>
-        <button class="settings-tab" data-tab="system">System</button>
+        <!-- Status -->
+        <div class="settings-topbar-status">
+          <div class="settings-topbar-status-head">
+            <span class="settings-topbar-status-title">Status</span>
+          </div>
+        </div>
+
+        <!-- Nav Tree -->
+        <nav id="settingsNavTree" class="app-nav-subtree"></nav>
+
+        <!-- Tabs -->
+        <div class="settings-tabs">
+          <button class="settings-tab is-active" data-tab="connection">Anlage</button>
+          <button class="settings-tab" data-tab="control">Steuerung</button>
+          <button class="settings-tab" data-tab="services">Preise</button>
+          <button class="settings-tab" data-tab="system">System</button>
+        </div>
       </div>
 
       <!-- Tab panels -->
@@ -74,7 +86,6 @@
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="serviceMeta">-</p>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;">
                 <button id="refreshHealthBtn" class="btn btn-ghost btn-small" type="button">Status neu laden</button>
-                <button id="restartServiceBtn" class="btn btn-danger btn-small" type="button">Dienst neu starten</button>
               </div>
             </div>
 
