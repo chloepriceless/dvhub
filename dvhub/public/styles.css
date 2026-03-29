@@ -3841,3 +3841,49 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 .config-banner.ok { background: rgba(76,227,108,0.08); border: 1px solid rgba(76,227,108,0.2); color: #4CE36C; }
 .config-banner.warn { background: rgba(255,211,46,0.08); border: 1px solid rgba(255,211,46,0.2); color: #FFD32E; }
 .config-banner.error { background: rgba(255,108,99,0.08); border: 1px solid rgba(255,108,99,0.2); color: rgba(255,108,99,0.85); }
+
+/* --- Settings Group Disclosure Affordance --- */
+.settings-group-accent {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--dvhub-electric, #00A8FF);
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.settings-group-copy {
+  font-family: var(--font-title);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--flow-text, #E8EAF0);
+}
+
+.settings-group-hint {
+  font-size: 0.75rem;
+  color: rgba(232, 234, 240, 0.4);
+  margin-top: 2px;
+}
+
+.settings-group-chevron {
+  transition: transform 0.2s ease;
+  color: rgba(232, 234, 240, 0.4);
+  font-size: 0.75rem;
+  margin-left: auto;
+}
+
+.settings-group summary:hover {
+  background: rgba(0, 168, 255, 0.06);
+}
+
+.settings-group summary:focus-visible {
+  outline: 2px solid var(--dvhub-electric, #00A8FF);
+  outline-offset: -2px;
+}
+
+.settings-group[open] {
+  border-color: rgba(0, 168, 255, 0.2);
+}
+
+.settings-group[open] .settings-group-chevron {
+  transform: rotate(90deg);
+}

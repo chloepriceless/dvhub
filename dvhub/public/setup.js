@@ -109,7 +109,7 @@ function buildSetupSteps(definitionLike = setupDefinition) {
     index: steps.length,
     label: `Schritt ${steps.length + 1}`,
     title: 'Prüfen & speichern',
-    description: 'Kontrolliere die wichtigsten Werte und die wirksamen Defaults, bevor DVhub die Config speichert.'
+    description: 'Die Zusammenfassung ist noch nicht gespeichert. Kontrolliere die wichtigsten Werte und klicke dann auf Jetzt speichern.'
   };
   return [...steps, reviewStep].map((step, index) => {
     const fields = getSetupFieldsForStep(step.id, definitionLike);
@@ -360,7 +360,10 @@ function goToNextSetupStep(state) {
   if (!validatedState.validation.steps[currentStepId]?.valid) return validatedState;
   const currentIndex = getCurrentStepIndex(validatedState);
   const nextStepId = validatedState.stepOrder[currentIndex + 1] || currentStepId;
-  if (nextStepId === REVIEW_STEP_ID && validatedState.validation.isBlocking) return validatedState;
+  if (nextStepId === REVIEW_STEP_ID && validatedState.validation.isBlocking) {
+    validatedState.blockingMessage = 'Prüfung ist erst verfügbar, wenn alle Pflichtfelder ausgefüllt sind.';
+    return validatedState;
+  }
   return {
     ...setActiveSetupStep(validatedState, nextStepId),
     completedStepIds: Array.from(new Set([...(validatedState.completedStepIds || []), currentStepId]))
