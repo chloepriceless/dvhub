@@ -187,19 +187,19 @@ export function createApiRoutes(ctx) {
   const rateLimitBuckets = new Map();
   const RATE_LIMIT_WINDOW_MS = 60_000;
   const RATE_LIMIT_MAX_REQUESTS = 120; // 120 req/min per IP (2/s avg)
-  const RATE_LIMIT_ADMIN_MAX = 10;     // stricter for admin/mutation endpoints
-
   function getRateLimitKey(req) {
     const raw = req.socket?.remoteAddress || '';
     return raw.replace(/^::ffff:/, '');
   }
 
   function checkRateLimit(req, res) {
+    if (isLocalNetworkRequest(req)) return true;
     const ip = getRateLimitKey(req);
     const now = Date.now();
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const isAdmin = url.pathname.startsWith('/api/admin/');
-    const limit = isAdmin ? RATE_LIMIT_ADMIN_MAX : RATE_LIMIT_MAX_REQUESTS;
+    // Admin endpoints are auth-protected — no rate limit needed for self-hosted app
+    if (url.pathname.startsWith('/api/admin/')) return true;
+    const limit = RATE_LIMIT_MAX_REQUESTS;
 
     let bucket = rateLimitBuckets.get(ip);
     if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
