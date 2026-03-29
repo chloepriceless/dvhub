@@ -59,7 +59,7 @@ Full details: `.planning/milestones/v0.4.2-ROADMAP.md`
 
 **Requirements:** HTTP-01, HTTP-02, HTTP-03, FE-03
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 09-01-PLAN.md — /health endpoint + Content-Length via Buffer.byteLength in json/text/downloadJson helpers
@@ -156,7 +156,7 @@ Plans:
 | 6. Server-Side Security | v0.4.2 | 2/2 | Complete | 2026-03-27 |
 | 7. Frontend Security & Monitoring | v0.4.2 | 3/3 | Complete | 2026-03-29 |
 | 8. Stability & Bug Fixes | v0.4.3 | 1/1 | Complete   | 2026-03-29 |
-| 9. HTTP Enhancements & Caching | v0.4.3 | 0/2 | Planning | -- |
+| 9. HTTP Enhancements & Caching | v0.4.3 | 0/2 | Complete    | 2026-03-29 |
 | 10. Frontend & UI Restructure | v0.4.3 | 0/2 | Pending | -- |
 | 11. Code Quality | v0.4.3 | 0/1 | Pending | -- |
 | 12. Tests & Documentation | v0.4.3 | 0/2 | Pending | -- |

@@ -15,15 +15,15 @@ Gruppiert nach Attack Surface für maximale Parallelisierung.
 
 ### HTTP Enhancements
 
-- [ ] **HTTP-01**: GET /health Endpoint antwortet ohne Auth mit 200 und JSON-Status — kompatibel mit Uptime Kuma und Docker HEALTHCHECK (`{ ok: bool, uptimeSec: N, version: string|null }`)
-- [ ] **HTTP-02**: JSON/Text Responses enthalten Content-Length Header via `Buffer.byteLength(body, 'utf8')` — korrektes Content-Framing inkl. Umlaute (NICHT `body.length` verwenden)
-- [ ] **HTTP-03**: Alle HTTP Requests werden geloggt (Methode, Pfad, Status, Dauer) via `res.on('finish')` — für Debugging und Monitoring
+- [x] **HTTP-01**: GET /health Endpoint antwortet ohne Auth mit 200 und JSON-Status — kompatibel mit Uptime Kuma und Docker HEALTHCHECK (`{ ok: bool, uptimeSec: N, version: string|null }`)
+- [x] **HTTP-02**: JSON/Text Responses enthalten Content-Length Header via `Buffer.byteLength(body, 'utf8')` — korrektes Content-Framing inkl. Umlaute (NICHT `body.length` verwenden)
+- [x] **HTTP-03**: Alle HTTP Requests werden geloggt (Methode, Pfad, Status, Dauer) via `res.on('finish')` — für Debugging und Monitoring
 
 ### Frontend
 
 - [x] **FE-01**: dvCostEur wird korrekt angezeigt — Negations-Bug behoben (1-Zeichen-Fix in `public/history.js:208`)
 - [ ] **FE-02**: Kritische interaktive Elemente haben aria-labels und keyboard-navigierbar — Accessibility-Basics
-- [ ] **FE-03**: Static Assets (JS, CSS) werden mit Cache-Control Headers ausgeliefert — Browser-Caching aktiviert (`no-store` für setup.html, `no-cache` für index.html, `max-age=3600` für JS/CSS)
+- [x] **FE-03**: Static Assets (JS, CSS) werden mit Cache-Control Headers ausgeliefert — Browser-Caching aktiviert (`no-store` für setup.html, `no-cache` für index.html, `max-age=3600` für JS/CSS)
 
 ### UI & Branding
 
@@ -69,10 +69,10 @@ Deferred to future release.
 | STAB-01 | Phase 8 | Complete |
 | STAB-02 | Phase 8 | Complete |
 | FE-01 | Phase 8 | Complete |
-| HTTP-01 | Phase 9 | Pending |
-| HTTP-02 | Phase 9 | Pending |
-| HTTP-03 | Phase 9 | Pending |
-| FE-03 | Phase 9 | Pending |
+| HTTP-01 | Phase 9 | Complete |
+| HTTP-02 | Phase 9 | Complete |
+| HTTP-03 | Phase 9 | Complete |
+| FE-03 | Phase 9 | Complete |
 | FE-02 | Phase 10 | Pending |
 | UI-01 | Phase 10 | Pending |
 | UI-02 | Phase 10 | Pending |
