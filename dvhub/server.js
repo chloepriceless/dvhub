@@ -718,6 +718,12 @@ const web = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    const reqStart = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - reqStart;
+      console.log(`${req.method} ${url.pathname} ${res.statusCode} ${ms}ms`);
+    });
+
     // CORS: restrict cross-origin API access to same origin only (defense-in-depth, stays in orchestrator)
     const origin = req.headers.origin;
     if (origin && url.pathname.startsWith('/api/')) {
