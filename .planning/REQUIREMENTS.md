@@ -33,9 +33,9 @@ Gruppiert nach Attack Surface für maximale Parallelisierung.
 
 ### Code Quality
 
-- [ ] **QUAL-01**: `round2`, `effectiveBatteryCostCtKwh` und `isSmallMarketAutomationRule` sind nicht dupliziert — eine kanonische Implementierung in server-utils.js
-- [ ] **QUAL-02**: `ctx.buildSmallMarketAutomationRules` ist entfernt — keine orphaned public API surface in market-automation-builder.js
-- [ ] **QUAL-03**: _old/ Verzeichnis ist entfernt — kein totes Holz im Repository
+- [x] **QUAL-01**: `round2`, `effectiveBatteryCostCtKwh` und `isSmallMarketAutomationRule` sind nicht dupliziert — eine kanonische Implementierung in server-utils.js
+- [x] **QUAL-02**: `ctx.buildSmallMarketAutomationRules` ist entfernt — keine orphaned public API surface in market-automation-builder.js
+- [x] **QUAL-03**: _old/ Verzeichnis ist entfernt — kein totes Holz im Repository
 
 ### Tests & Documentation
 
@@ -77,9 +77,9 @@ Deferred to future release.
 | UI-01 | Phase 10 | Complete |
 | UI-02 | Phase 10 | Complete |
 | UI-03 | Phase 10 | Complete |
-| QUAL-01 | Phase 11 | Pending |
-| QUAL-02 | Phase 11 | Pending |
-| QUAL-03 | Phase 11 | Pending |
+| QUAL-01 | Phase 11 | Complete |
+| QUAL-02 | Phase 11 | Complete |
+| QUAL-03 | Phase 11 | Complete |
 | TEST-01 | Phase 12 | Pending |
 | DOC-01 | Phase 12 | Pending |
 | DOC-02 | Phase 12 | Pending |
