@@ -897,9 +897,11 @@ process.on('unhandledRejection', (reason) => {
   pushLog('unhandled_rejection', { error: String(reason?.message || reason) });
   try { poller.stop(); } catch {}
   liveTelemetryBuffer?.flush({ force: true });
+  process.exit(1);
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
+  pushLog('uncaught_exception', { error: String(err?.message || err) });
   try { poller.stop(); } catch {}
   try { liveTelemetryBuffer?.flush({ force: true }); } catch {}
   process.exit(1);
