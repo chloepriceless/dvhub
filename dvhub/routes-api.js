@@ -112,22 +112,34 @@ export function createApiRoutes(ctx) {
 
   // ── Response helpers ─────────────────────────────────────────────────
   function json(res, code, payload) {
-    res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(payload));
+    const body = JSON.stringify(payload);
+    res.writeHead(code, {
+      ...SECURITY_HEADERS,
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': Buffer.byteLength(body, 'utf8')
+    });
+    res.end(body);
   }
 
   function text(res, code, payload) {
-    res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
-    res.end(String(payload));
+    const body = String(payload);
+    res.writeHead(code, {
+      ...SECURITY_HEADERS,
+      'content-type': 'text/plain; charset=utf-8',
+      'content-length': Buffer.byteLength(body, 'utf8')
+    });
+    res.end(body);
   }
 
   function downloadJson(res, filename, payload) {
+    const body = JSON.stringify(payload, null, 2);
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       'content-type': 'application/json; charset=utf-8',
-      'content-disposition': `attachment; filename="${filename}"`
+      'content-disposition': `attachment; filename="${filename}"`,
+      'content-length': Buffer.byteLength(body, 'utf8')
     });
-    res.end(JSON.stringify(payload, null, 2));
+    res.end(body);
   }
 
   // ── Auth / Rate Limiting ─────────────────────────────────────────────
