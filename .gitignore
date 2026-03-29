@@ -16,7 +16,6 @@ docs/plans/
 .claude/
 .vscode/
 .worktrees/
-.planning/
 *.swp
 *.swo
 *~
