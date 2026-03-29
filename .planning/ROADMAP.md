@@ -3,7 +3,8 @@
 ## Milestones
 
 - ✅ **v1.0 Server.js Monolith Decomposition** -- Phases 1-5 (shipped 2026-03-27)
-- 🚧 **v0.4.2 Security & Stability Hardening** -- Phases 6-7 (in progress)
+- ✅ **v0.4.2 Security & Stability Hardening** -- Phases 6-7 (shipped 2026-03-29)
+- 🚧 **v0.4.3 Stability, Quality & Cleanup** -- Phases 8-12 (in progress)
 
 ## Phases
 
@@ -20,48 +21,140 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 
 </details>
 
-### v0.4.2 Security & Stability Hardening
+<details>
+<summary>v0.4.2 Security & Stability Hardening (Phases 6-7) -- SHIPPED 2026-03-29</summary>
 
-- [ ] **Phase 6: Server-Side Security Hardening** - Git rollback, auth-bypass restriction, SQL injection prevention
-- [x] **Phase 7: Frontend Security & Monitoring Fix** - XSS prevention across frontend files and heartbeat SOC correction (completed 2026-03-28)
+- [x] Phase 6: Server-Side Security Hardening (2/2 plans) -- completed 2026-03-27
+- [x] Phase 7: Frontend Security & Monitoring Fix (3/3 plans) -- completed 2026-03-29
 
-## Phase Details
+Full details: `.planning/milestones/v0.4.2-ROADMAP.md`
 
-### Phase 6: Server-Side Security Hardening
-**Goal**: Server-side endpoints are protected against update rollback failures, unauthorized LAN access to dangerous operations, and SQL injection
-**Depends on**: Nothing (independent of previous milestone)
-**Requirements**: SEC-01, SEC-02, SEC-04
-**Success Criteria** (what must be TRUE):
-  1. When git-based update triggers npm install and it fails, the server automatically rolls back to the previously saved git revision and the system remains in a working state
-  2. LAN clients without auth tokens can only access read-only API endpoints -- attempts to hit hardware control, update, restart, or admin endpoints from LAN without a token return 401
-  3. All PostgreSQL queries in telemetry-store-pg.js use parameterized queries or assertSqlIdentifier-validated identifiers -- no raw template literal interpolation of user-controllable values reaches the database
-**Plans**: 2 plans
+</details>
 
-Plans:
-- [ ] 06-01-PLAN.md -- SQL identifier validation + LAN auth allowlist (SEC-04, SEC-02)
-- [ ] 06-02-PLAN.md -- Git update rollback hardening (SEC-01)
+## v0.4.3 Phases
 
-### Phase 7: Frontend Security & Monitoring Fix
-**Goal**: Frontend code is XSS-safe and monitoring heartbeat reports correct battery SOC
-**Depends on**: Nothing (independent of Phase 6)
-**Requirements**: SEC-03, BUG-01
-**Success Criteria** (what must be TRUE):
-  1. All dynamic content injection in history.js, app.js, tools.js, settings.js, setup.js, and explorer.js uses textContent or DOM API methods -- zero innerHTML assignments with dynamic or user-controllable data remain
-  2. Monitoring heartbeat payload includes the correct SOC value read from state.victron.soc (not state.battery?.soc or any other incorrect path)
-**Plans**: 3 plans
+### Phase 8: Stability & Bug Fixes
 
-Plans:
-- [x] 07-01-PLAN.md -- Shared escapeHtml utility + innerHTML XSS hardening in settings.js and app.js (SEC-03)
-- [ ] 07-02-PLAN.md -- Verify heartbeat SOC path is correct (BUG-01)
-- [ ] 07-03-PLAN.md -- Gap closure: escapeHtml wrapping for plant.id/period.id in data-* attributes and remaining numeric value="" attributes in settings.js (SEC-03, BUG-01)
+**Goal:** Aktive Produktionsfehler beheben bevor neue Fläche hinzugefügt wird.
+
+**Requirements:** STAB-01, STAB-02, FE-01
+
+**Delivers:**
+- Prozess den systemd nach unhandledRejection neu starten kann
+- Dashboard-Polling ohne 429-Fehler im LAN
+- Korrekte dvCostEur-Anzeige in der Historie
+
+**Plan structure:**
+- `08-01`: server.js + routes-api.js + history.js Bug-Fixes (3 Änderungen, ~10 Zeilen)
+
+**Files:** `server.js:895-906`, `routes-api.js:186-224`, `public/history.js:208`
+
+**skip_research:** true — alle Integration-Points sind exakt bekannt (Zeilen, Code-Pattern)
+
+---
+
+### Phase 9: HTTP Enhancements & Caching
+
+**Goal:** /health Endpoint, korrekte Content-Length Header (Umlaut-safe), Access Logging, Browser-Caching.
+
+**Requirements:** HTTP-01, HTTP-02, HTTP-03, FE-03
+
+**Delivers:**
+- Öffentlicher `/health` Endpoint für Uptime Kuma
+- Korrekter Content-Length Header via `Buffer.byteLength(body, 'utf8')` (Umlaute!)
+- Access Logs via `res.on('finish')` in server.js
+- Cache-Control Header für Static Assets
+
+**Plan structure:**
+- `09-01`: HTTP-01 + HTTP-02 (routes-api.js: health route + Buffer.byteLength in json/text helpers)
+- `09-02`: HTTP-03 + FE-03 (server.js: access logging + routes-api.js: cache-control headers)
+
+**Files:** `routes-api.js:114-122,539-580`, `server.js:717-753`
+
+**Critical pitfall:** HTTP-02 muss `Buffer.byteLength(body, 'utf8')` nutzen, NICHT `body.length` — deutsche Umlaute sind 2 UTF-8 Bytes aber 1 JS-Zeichen. `setup.html` muss `no-store` bekommen.
+
+**skip_research:** true — alle Patterns exakt spezifiziert in SUMMARY.md
+
+---
+
+### Phase 10: Frontend & UI Restructure
+
+**Goal:** Accessibility, compact Topbar, vereinfachte Navigation, DVhub Branding API.
+
+**Requirements:** FE-02, UI-01, UI-02, UI-03
+
+**Delivers:**
+- aria-labels für kritische interaktive Elemente
+- Kompakte Topbar (CSS-Klasse `compact-topbar`)
+- Navigation: Leitstand / Einrichtung / Wartung
+- `window.DVhubCommon` in common.js (Token-Storage, apiFetch, `dvhub:unauthorized` Event)
+- Macht ~40 branding/nav Tests grün
+
+**Plan structure:**
+- `10-01`: common.js DVhub Branding API + Kompakte Topbar HTML/CSS für alle public pages
+- `10-02`: Nav-Umbenennung (Einrichtung/Wartung), Setup-Copy, Settings-Compact-Bar + FE-02 aria-labels
+
+**Files:** `public/common.js`, `public/index.html`, `public/settings.html`, `public/tools.html`, `public/setup.html`, `public/styles.css`, `public/setup.js`
+
+**skip_research:** false — test/branding.test.js und test/dashboard-*.test.js vor Planung lesen um genaue Änderungen zu verstehen
+
+---
+
+### Phase 11: Code Quality
+
+**Goal:** Duplikate entfernen, orphaned API-Surface entfernen, totes Holz aufräumen.
+
+**Requirements:** QUAL-01, QUAL-02, QUAL-03
+
+**Delivers:**
+- Kanonische round2/effectiveBatteryCostCtKwh/isSmallMarketAutomationRule in server-utils.js
+- `ctx.buildSmallMarketAutomationRules` entfernt
+- _old/ Verzeichnis entfernt
+
+**Plan structure:**
+- `11-01`: QUAL-01 Dedup (server-utils.js Import in config-model.js, history-runtime.js, history-import.js, small-market-automation.js) + QUAL-02 + QUAL-03
+
+**Files:** `server-utils.js`, `config-model.js`, `history-runtime.js`, `history-import.js`, `small-market-automation.js`, `server.js:566`
+
+**Critical check:** Vor QUAL-01: `node --check server.js` — config-model.js hat bewusst zero imports; bei Circular-Dep diesen Skip überspringen
+
+**skip_research:** true — alle Dateien und Funktionen sind bekannt
+
+---
+
+### Phase 12: Tests & Documentation
+
+**Goal:** Alle 71 Test-Failures beheben, JSDoc, Hot-Reload verifizieren.
+
+**Requirements:** TEST-01, DOC-01, DOC-02
+
+**Delivers:**
+- 29 history-runtime Tests: async/await hinzufügen
+- 2 system-discovery Tests: buildSystemDiscoveryPayload aus system-discovery.js exportieren
+- Config-Model Tests: telemetry.dbPath + Interval-Normalisierung Felder hinzufügen
+- Verbleibende Tests (nach Phase 10): sollten grün sein
+- JSDoc für kritische Funktionen
+- Hot-Reload Verifikation
+
+**Plan structure:**
+- `12-01`: TEST-01 — async/await in history-runtime.test.js, buildSystemDiscoveryPayload Export, Config-Model Felder
+- `12-02`: DOC-01 + DOC-02 — JSDoc in server.js/routes-api.js/schedule-eval.js, Hot-Reload Test
+
+**Files:** `test/history-runtime.test.js`, `system-discovery.js`, `config-model.js`, `test/config-telemetry.test.js`, `server.js`, `routes-api.js`, `schedule-eval.js`
+
+**skip_research:** true — Test-Failures sind analysiert und kategorisiert
+
+---
 
 ## Progress
-
-**Execution Order:**
-Phases 6 and 7 are independent and can execute in any order.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-5 | v1.0 | 11/11 | Complete | 2026-03-27 |
-| 6. Server-Side Security | 1/2 | In Progress|  | - |
-| 7. Frontend Security & Monitoring | 3/3 | Complete   | 2026-03-28 | - |
+| 6. Server-Side Security | v0.4.2 | 2/2 | Complete | 2026-03-27 |
+| 7. Frontend Security & Monitoring | v0.4.2 | 3/3 | Complete | 2026-03-29 |
+| 8. Stability & Bug Fixes | v0.4.3 | 1/1 | Complete   | 2026-03-29 |
+| 9. HTTP Enhancements & Caching | v0.4.3 | 0/2 | Pending | — |
+| 10. Frontend & UI Restructure | v0.4.3 | 0/2 | Pending | — |
+| 11. Code Quality | v0.4.3 | 0/1 | Pending | — |
+| 12. Tests & Documentation | v0.4.3 | 0/2 | Pending | — |

@@ -1,73 +1,94 @@
-# Requirements: DVhub v0.4.2 Security & Stability Hardening
+# Requirements: DVhub v0.4.3 Stability, Quality & Cleanup
 
-**Defined:** 2026-03-27
+**Defined:** 2026-03-29
 **Core Value:** Automatische Batterie-Optimierung basierend auf EPEX Day-Ahead Preisen
 
-## v0.4.2 Requirements
+## v0.4.3 Requirements
 
-Requirements for this security/stability release. Each maps to roadmap phases.
-
-### Security Hardening
-
-- [x] **SEC-01**: Git Update-Endpoint speichert aktuelle Revision vor Update und fuehrt vollstaendigen Rollback (git checkout + npm install) durch wenn npm install fehlschlaegt
-- [x] **SEC-02**: LAN Auth-Bypass beschraenkt sich auf read-only Endpoints -- Hardware-Steuerung und Admin-Endpoints (Update, Restart) erfordern Token auch im LAN
-- [x] **SEC-03**: Frontend-Code nutzt textContent/DOM-API statt innerHTML fuer dynamischen Content um XSS zu verhindern
-- [x] **SEC-04**: PostgreSQL-Queries in telemetry-store-pg.js nutzen ausschliesslich parameterized Queries -- keine Template-Literal-Interpolation fuer Tabellennamen/Spalten ohne assertSqlIdentifier-Validierung
-
-### Bugfix
-
-- [x] **BUG-01**: Monitoring Heartbeat zeigt korrekten SOC-Wert (state.victron.soc statt state.battery?.soc)
-
-## Future Requirements
-
-Deferred to future release. Tracked but not in current roadmap.
+Alle offenen Punkte aus v1.0 Audit und v0.4.2 Review.
+Gruppiert nach Attack Surface für maximale Parallelisierung.
 
 ### Stability
 
-- **STAB-01**: unhandledRejection / uncaughtException Handler im Hauptprozess (C2)
-- **STAB-02**: Rate Limiting auf allen Endpoints (I2)
-- **STAB-03**: Energy State Race Condition mit File-Locking (I5)
+- [x] **STAB-01**: Server hat unhandledRejection / uncaughtException Handler im Hauptprozess — `process.exit(1)` in unhandledRejection, damit systemd den Prozess neu starten kann
+- [x] **STAB-02**: Rate Limiter exemptiert LAN-IPs (127.0.0.1, 192.168.x.x) — Bug-Fix: `isLocalNetworkRequest()` existiert bereits in routes-api.js aber wird in `checkRateLimit()` nicht aufgerufen; Dashboard-Polling über 120 req/min triggert aktuell 429-Fehler
+
+### HTTP Enhancements
+
+- [ ] **HTTP-01**: GET /health Endpoint antwortet ohne Auth mit 200 und JSON-Status — kompatibel mit Uptime Kuma und Docker HEALTHCHECK (`{ ok: bool, uptimeSec: N, version: string|null }`)
+- [ ] **HTTP-02**: JSON/Text Responses enthalten Content-Length Header via `Buffer.byteLength(body, 'utf8')` — korrektes Content-Framing inkl. Umlaute (NICHT `body.length` verwenden)
+- [ ] **HTTP-03**: Alle HTTP Requests werden geloggt (Methode, Pfad, Status, Dauer) via `res.on('finish')` — für Debugging und Monitoring
+
+### Frontend
+
+- [x] **FE-01**: dvCostEur wird korrekt angezeigt — Negations-Bug behoben (1-Zeichen-Fix in `public/history.js:208`)
+- [ ] **FE-02**: Kritische interaktive Elemente haben aria-labels und keyboard-navigierbar — Accessibility-Basics
+- [ ] **FE-03**: Static Assets (JS, CSS) werden mit Cache-Control Headers ausgeliefert — Browser-Caching aktiviert (`no-store` für setup.html, `no-cache` für index.html, `max-age=3600` für JS/CSS)
+
+### UI & Branding
+
+- [ ] **UI-01**: Alle public pages nutzen compact-topbar statt page-topbar — neue CSS-Klasse `compact-topbar`
+- [ ] **UI-02**: Navigation vereinfacht zu Leitstand / Einrichtung / Wartung — Umbenennung Einstellungen→Einrichtung, Setup+Tools→Wartung
+- [ ] **UI-03**: `common.js` exponiert DVhub Branding API — `window.DVhubCommon` mit `getStoredApiToken()`, `apiFetch()`, `dvhub:unauthorized` Event
 
 ### Code Quality
 
-- **QUAL-01**: Code-Duplikation bereinigen (round2, effectiveBatteryCostCtKwh, isSmallMarketAutomationRule) (I8)
+- [ ] **QUAL-01**: `round2`, `effectiveBatteryCostCtKwh` und `isSmallMarketAutomationRule` sind nicht dupliziert — eine kanonische Implementierung in server-utils.js
+- [ ] **QUAL-02**: `ctx.buildSmallMarketAutomationRules` ist entfernt — keine orphaned public API surface in market-automation-builder.js
+- [ ] **QUAL-03**: _old/ Verzeichnis ist entfernt — kein totes Holz im Repository
 
-### Suggestions
+### Tests & Documentation
 
-- **SUGG-01**: Health-Check Endpoint ohne Auth fuer Monitoring/Docker (S1)
-- **SUGG-02**: Content-Length Header fuer JSON Responses (S2)
-- **SUGG-03**: Accessibility Improvements (S3)
-- **SUGG-04**: HTTP Access Logging (S4)
-- **SUGG-05**: Cache-Headers fuer Static Assets (S5)
-- **SUGG-06**: _old/ Verzeichnis entfernen (S6)
-- **SUGG-07**: JSDoc/TypeScript fuer kritische Pfade (S7)
-- **SUGG-08**: dvCostEur Display-Fix (S8)
+- [ ] **TEST-01**: 71 pre-existing Test-Failures sind behoben — Kategorien: (A) async/await für 29 history-runtime Tests, (B) `buildSystemDiscoveryPayload` Export aus system-discovery.js, (C) UI/branding/nav Tests nach UI-01/02/03 Implementierung, (D) Config-Model Felder für telemetry
+- [ ] **DOC-01**: Kritische Funktionen in server.js, routes-api.js und schedule-eval.js haben JSDoc-Kommentare mit Parameter- und Return-Typen
+- [ ] **DOC-02**: getCfg() Hot-Reload ist durch einen Live-Server-Test verifiziert — nicht nur Code-Inspektion
+
+## Future Requirements
+
+Deferred to future release.
+
+### Performance
+- **PERF-01**: Input-Validation /api/epex/backfill (I10) — niedrigere Priorität
+- **PERF-02**: TypeScript Migration — eigenes Projekt
+
+### Deferred from v0.4.3
+- **STAB-03**: Energy State Schreibzugriffe File-Locking — NICHT NÖTIG: SerialTaskRunner in polling.js serialisiert bereits alle Schreibzugriffe; Node.js Single-Thread eliminiert Race Conditions
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
+| TypeScript Migration | Eigenes Projekt, zu groß für Patch-Milestone |
 | server.js weitere Aufteilung | v1.0 Refactoring abgeschlossen, Architektur stabil |
-| CORS-Konfiguration (I3) | Bereits in v1.0 implementiert |
-| Duplikat-Dateien loeschen (I6) | Separater Cleanup, kein Security-Thema |
-| Input-Validation /api/epex/backfill (I10) | Niedrigere Prioritaet, future milestone |
-| TypeScript Migration | Eigenes Projekt |
+| OAuth / externe Auth | Nicht im Scope dieser App |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | Phase 6 | Complete |
-| SEC-02 | Phase 6 | Complete |
-| SEC-03 | Phase 7 | Complete |
-| SEC-04 | Phase 6 | Complete |
-| BUG-01 | Phase 7 | Complete |
+| STAB-01 | Phase 8 | Complete |
+| STAB-02 | Phase 8 | Complete |
+| FE-01 | Phase 8 | Complete |
+| HTTP-01 | Phase 9 | Pending |
+| HTTP-02 | Phase 9 | Pending |
+| HTTP-03 | Phase 9 | Pending |
+| FE-03 | Phase 9 | Pending |
+| FE-02 | Phase 10 | Pending |
+| UI-01 | Phase 10 | Pending |
+| UI-02 | Phase 10 | Pending |
+| UI-03 | Phase 10 | Pending |
+| QUAL-01 | Phase 11 | Pending |
+| QUAL-02 | Phase 11 | Pending |
+| QUAL-03 | Phase 11 | Pending |
+| TEST-01 | Phase 12 | Pending |
+| DOC-01 | Phase 12 | Pending |
+| DOC-02 | Phase 12 | Pending |
 
 **Coverage:**
-- v0.4.2 requirements: 5 total
-- Mapped to phases: 5
+- v0.4.3 requirements: 17 total
+- Mapped to phases: 17
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-27*
-*Last updated: 2026-03-27 after roadmap creation*
+*Requirements defined: 2026-03-29*
+*Last updated: 2026-03-29 — revised after investigation: STAB-03 N/A, STAB-02 is bug-fix, TEST-01 breakdown clarified (async/await + export + UI + config), UI-01/02/03 added*

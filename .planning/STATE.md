@@ -1,80 +1,67 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-03-28T23:53:32.604Z"
-last_activity: 2026-03-27 -- Completed 07-01 frontend XSS hardening
+milestone: v0.4.3
+milestone_name: Stability, Quality & Cleanup
+status: Phase complete — ready for verification
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-29T00:49:25.561Z"
 progress:
-  total_phases: 2
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 100
+  total_phases: 5
+  completed_phases: 1
+  total_plans: 1
+  completed_plans: 1
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-27)
+See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Automatische Batterie-Optimierung basierend auf EPEX Day-Ahead Preisen
-**Current focus:** Phase 7 - Frontend Security & Monitoring Fix
+**Current focus:** Phase 8 — Stability & Bug Fixes
 
 ## Current Position
 
-Phase: 7 of 7 (Frontend Security & Monitoring Fix)
-Plan: 1 of 2 in current phase -- COMPLETE
-Status: In Progress
-Last activity: 2026-03-27 -- Completed 07-01 frontend XSS hardening
-
-Progress: [██████████] 100%
-
-## Performance Metrics
-
-**Velocity:**
-- Total plans completed: 1
-- Average duration: 1min
-- Total execution time: 0.02 hours
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 06 | 1 | 1min | 1min |
-| Phase 06 P02 | 1min | 1 tasks | 1 files |
-| Phase 07 P01 | 2min | 2 tasks | 3 files |
-| Phase 07-frontend-security-monitoring-fix P03 | 3min | 2 tasks | 2 files |
+Phase: 8 (Stability & Bug Fixes) — EXECUTING
+Plan: 1 of 1
+Milestone v0.4.3 started. ROADMAP created with 5 phases (8-12). Phase 8 ready to plan.
 
 ## Accumulated Context
 
 ### Decisions
 
-- [Roadmap]: Grouped 5 fixes into 2 phases by attack surface (server-side vs frontend/monitoring)
-- [Roadmap]: Phases 6 and 7 are independent -- can execute in any order
-- [Scope]: Deferred STAB-01/02/03, QUAL-01, SUGG-01-08 to future milestones
-- [06-01]: Used assertSqlIdentifier for defense-in-depth on pg_tables.tablename
-- [06-01]: Switched LAN auth from denylist to allowlist -- new endpoints require auth by default
-- [06-01]: Only GET requests to allowlisted endpoints bypass LAN auth
-- [Phase 06-02]: Moved git fetch+checkout inside existing inner try/catch for unified rollback
-- [07-01]: Shared escapeHtml in common.js rather than duplicating per file
-- [07-01]: app.js escapeHtml falls back to escapeAttr if common.js not yet loaded
-- [07-01]: Numeric values also escaped for defense-in-depth
-- [Phase 07-03]: Wrapped numeric value attrs with escapeHtml for defense-in-depth even though numeric fields are low XSS risk
-- [Phase 07-03]: BUG-01 marked complete: verified correct by 07-02, no code change needed
+- [v0.4.3]: STAB-03 N/A — SerialTaskRunner in polling.js serialisiert bereits alle State-Writes
+- [v0.4.3]: STAB-02 ist Bug-Fix (1-Liner), kein neues Feature — LAN-IP-Exemption in checkRateLimit() fehlt
+- [v0.4.3]: TEST-01 Kategorie A (29 Tests) = async/await fehlt, Features sind implementiert
+- [v0.4.3]: TEST-01 Kategorie C (UI tests) = nach Phase 10 automatisch grün
+- [v0.4.3]: HTTP-02 Critical Pitfall: Buffer.byteLength(body, 'utf8') NICHT body.length
+- [Phase 08]: process.exit(1) added as last call in unhandledRejection — without it Node.js runs in degraded zombie state and systemd never restarts
+- [Phase 08]: LAN exemption placed as very first line of checkRateLimit() — avoids writing rate-limit buckets for LAN IPs entirely
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-- BUG-01: Code review mentioned state.battery?.soc but actual code already uses state.victron?.soc -- needs verification during planning
+None.
 
 ## Session Continuity
 
-Last session: 2026-03-28T23:53:32.601Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-03-29T00:49:25.541Z
+Stopped at: Completed 08-01-PLAN.md
 Resume file: None
+
+## Test Failure Analysis (for Phase 12)
+
+71 unique failing tests (141 total counting duplicates):
+
+| Category | Count | Root Cause | Fix Phase |
+|----------|-------|-----------|-----------|
+| history-runtime | 29 | async getSummary called without await | 12 |
+| system-discovery | 2 | buildSystemDiscoveryPayload not exported | 12 |
+| branding/nav/UI | ~37 | UI changes not yet implemented | 10 |
+| config-model | 3 | telemetry fields missing | 12 |
+
+Key finding: history-runtime features ARE implemented (kpis.importKwh works correctly). Only missing async/await in test callbacks.
