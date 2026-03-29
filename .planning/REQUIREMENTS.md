@@ -22,7 +22,7 @@ Gruppiert nach Attack Surface für maximale Parallelisierung.
 ### Frontend
 
 - [x] **FE-01**: dvCostEur wird korrekt angezeigt — Negations-Bug behoben (1-Zeichen-Fix in `public/history.js:208`)
-- [ ] **FE-02**: Kritische interaktive Elemente haben aria-labels und keyboard-navigierbar — Accessibility-Basics
+- [x] **FE-02**: Kritische interaktive Elemente haben aria-labels und keyboard-navigierbar — Accessibility-Basics
 - [x] **FE-03**: Static Assets (JS, CSS) werden mit Cache-Control Headers ausgeliefert — Browser-Caching aktiviert (`no-store` für setup.html, `no-cache` für index.html, `max-age=3600` für JS/CSS)
 
 ### UI & Branding
@@ -73,7 +73,7 @@ Deferred to future release.
 | HTTP-02 | Phase 9 | Complete |
 | HTTP-03 | Phase 9 | Complete |
 | FE-03 | Phase 9 | Complete |
-| FE-02 | Phase 10 | Pending |
+| FE-02 | Phase 10 | Complete |
 | UI-01 | Phase 10 | Complete |
 | UI-02 | Phase 10 | Complete |
 | UI-03 | Phase 10 | Complete |
