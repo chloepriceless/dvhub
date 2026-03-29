@@ -587,6 +587,14 @@ export function createApiRoutes(ctx) {
       return servePage(res, ctx.needsSetup() ? 'setup.html' : 'index.html');
     }
 
+    if (url.pathname === '/health' && req.method === 'GET') {
+      return json(res, 200, {
+        ok: true,
+        uptimeSec: Math.round(process.uptime()),
+        version: ctx.getAppVersion().versionLabel || null
+      });
+    }
+
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
       if (!checkRateLimit(req, res)) return;
       if (!checkAuth(req, res)) return;
