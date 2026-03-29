@@ -563,7 +563,6 @@ const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
 const mab = createMarketAutomationBuilder(ctx);
-ctx.buildSmallMarketAutomationRules = mab.buildSmallMarketAutomationRules;
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
