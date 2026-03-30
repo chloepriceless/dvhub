@@ -508,7 +508,19 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 10,
       max: 22,
-      help: 'Bis zu dieser Uhrzeit muss der Akku den Ziel-SOC erreicht haben (f\u00fcr Abend-Einspeisung). 2 Stunden vorher wird der PV-Export ggf. deaktiviert. Standard: 17 Uhr.'
+      help: 'Bis zu dieser Uhrzeit muss der Akku den Ziel-SOC erreicht haben (für Abend-Einspeisung). Standard: 17 Uhr.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'PV-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte PV-Leistung (DC + AC) ins Netz einspeist.',
+      path: 'dcExportMode.chargeGuardHours',
+      label: 'SOC-Guard-Fenster (Stunden)',
+      type: 'number',
+      min: 1,
+      max: 6,
+      help: 'Wie viele Stunden vor der Lade-Deadline der DC-Export abgeschaltet wird, falls der Ziel-SOC noch nicht erreicht wurde. Standard: 2 Stunden.'
     },
 
     {
@@ -1438,7 +1450,8 @@ export function createDefaultConfig() {
       bufferW: 100,
       priceThresholdCtKwh: null,
       targetSocPct: 90,
-      chargeDeadlineHour: 17
+      chargeDeadlineHour: 17,
+      chargeGuardHours: 2
     },
     victron: {
       transport: 'modbus',

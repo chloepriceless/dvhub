@@ -33,6 +33,18 @@ export function isSmallMarketAutomationRule(rule) {
     || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
 }
 
+export function buildNeedsRegeneration({ runDate, lastState, priceSlotCount, currentSocPct, previousAutomationRules, batteryCapacityKwh, planIsLocked = false }) {
+  const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
+  const socChanged = !planIsLocked
+    && batteryCapacityKwh > 0
+    && currentSocPct != null
+    && lastState?.lastSocPct != null
+    && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
+  const neverPlannedToday = !lastState?.lastRunDate || lastState.lastRunDate !== runDate;
+  const missingRules = !previousAutomationRules.length && lastState?.lastOutcome !== 'no_slots';
+  return neverPlannedToday || missingRules || priceDataChanged || socChanged;
+}
+
 // --- Factory ---
 
 export function createMarketAutomationBuilder(ctx) {
@@ -396,22 +408,15 @@ export function createMarketAutomationBuilder(ctx) {
       return Number.isFinite(slotEndTs) && now >= slotEndTs && (now - slotEndTs) < 30 * 60 * 1000;
     }));
 
-    // Regenerate when SOC changed significantly (>5%) — energy budget may have shifted
-    // BUT only when the plan is NOT currently executing or locked.
-    const socChanged = !planIsLocked
-      && automationConfig?.batteryCapacityKwh > 0
-      && currentSocPct != null
-      && lastState?.lastSocPct != null
-      && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
-    // Only treat "no automation rules" as needing regeneration if we haven't
-    // already planned today.  When the outcome is 'no_slots', an empty rule
-    // list is expected and does NOT mean we need to re-plan every 15 seconds.
-    const neverPlannedToday = !lastState?.lastRunDate || lastState.lastRunDate !== runDate;
-    const missingRules = !previousAutomationRules.length && lastState?.lastOutcome !== 'no_slots';
-    const needsRegeneration = neverPlannedToday
-      || missingRules
-      || priceDataChanged
-      || socChanged;
+    const needsRegeneration = buildNeedsRegeneration({
+      runDate,
+      lastState,
+      priceSlotCount,
+      currentSocPct,
+      previousAutomationRules,
+      batteryCapacityKwh: automationConfig?.batteryCapacityKwh,
+      planIsLocked
+    });
 
     // Even if regeneration is needed, skip it while a plan is actively running
     if (planIsLocked && needsRegeneration && !priceDataChanged) {

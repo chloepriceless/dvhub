@@ -38,7 +38,7 @@ export function parseBody(req) {
     req.on('end', () => {
       if (!chunks.length) return resolve({});
       const raw = Buffer.concat(chunks).toString('utf8');
-      try { resolve(JSON.parse(raw)); } catch { resolve({}); }
+      try { resolve(JSON.parse(raw)); } catch { const e = new Error('invalid JSON body'); e.statusCode = 400; reject(e); }
     });
     req.on('error', reject);
   });
