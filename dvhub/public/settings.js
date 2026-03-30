@@ -256,7 +256,7 @@ if (typeof globalThis !== 'undefined') {
 }
 
 function shouldRenderHistoryImportPanel(destinationId) {
-  return destinationId === 'telemetry';
+  return destinationId === 'services';
 }
 
 function parseDateTimeLocal(value) {
