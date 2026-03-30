@@ -2,27 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { filterSlotsByTimeWindow, computeNextPeriodBounds } from '../small-market-automation.js';
-
-function buildNeedsRegeneration({
-  runDate,
-  lastState,
-  priceSlotCount,
-  currentSocPct,
-  previousAutomationRules,
-  batteryCapacityKwh
-}) {
-  const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
-  const socChanged = batteryCapacityKwh > 0
-    && currentSocPct != null
-    && lastState?.lastSocPct != null
-    && Math.abs(currentSocPct - lastState.lastSocPct) >= 5;
-
-  return !lastState?.lastRunDate
-    || lastState.lastRunDate !== runDate
-    || !previousAutomationRules.length
-    || priceDataChanged
-    || socChanged;
-}
+import { buildNeedsRegeneration } from '../market-automation-builder.js';
 
 const SLOT_MS = 15 * 60 * 1000;
 

@@ -92,7 +92,7 @@ export function createScheduleEvaluator(ctx) {
     if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
 
     const mo = state.schedule.manualOverride[target];
-    if (mo && (Date.now() - mo.at) < (cfg.schedule.manualOverrideTtlMs || 300000)) {
+    if (mo && (now - mo.at) < (cfg.schedule.manualOverrideTtlMs || 300000)) {
       return { value: Number(mo.value), source: 'manual_override', rule: null };
     }
     delete state.schedule.manualOverride[target];
@@ -286,10 +286,11 @@ export function createScheduleEvaluator(ctx) {
     // DC-Export deaktivieren damit der Akku noch laden kann.
     const dcTargetSoc = Number(cfg.dcExportMode?.targetSocPct ?? 90);
     const dcDeadlineHour = Number(cfg.dcExportMode?.chargeDeadlineHour ?? 17);
+    const dcChargeGuardHours = Number(cfg.dcExportMode?.chargeGuardHours ?? 2);
     const currentSoc = Number(state.victron.soc ?? 0);
     const currentHour = new Date(now).getHours();
-    if (dcExportActive && currentSoc < dcTargetSoc && currentHour >= (dcDeadlineHour - 2)) {
-      // Weniger als 2 Stunden bis Deadline und SOC noch nicht erreicht -> laden lassen
+    if (dcExportActive && currentSoc < dcTargetSoc && currentHour >= (dcDeadlineHour - dcChargeGuardHours)) {
+      // Weniger als chargeGuardHours Stunden bis Deadline und SOC noch nicht erreicht -> laden lassen
       dcExportActive = false;
       if (!state.ctrl._dcSocGuardLogged) {
         pushLog('dc_export_soc_guard', { currentSoc, dcTargetSoc, dcDeadlineHour, currentHour });

@@ -198,29 +198,40 @@ export function createApiRoutes(ctx) {
   // --- Rate Limiting (in-memory, per IP) ---
   const rateLimitBuckets = new Map();
   const RATE_LIMIT_WINDOW_MS = 60_000;
-  const RATE_LIMIT_MAX_REQUESTS = 120; // 120 req/min per IP (2/s avg)
+  const RATE_LIMIT_MAX_REQUESTS = 120;     // 120 req/min per IP for external (2/s avg)
+  const LAN_RATE_LIMIT_MAX_REQUESTS = 600; // 600 req/min for LAN (10/s avg) — compromised IoT protection
   function getRateLimitKey(req) {
     const raw = req.socket?.remoteAddress || '';
     return raw.replace(/^::ffff:/, '');
   }
 
   function checkRateLimit(req, res) {
-    if (isLocalNetworkRequest(req)) return true;
+    const isLan = isLocalNetworkRequest(req);
     const ip = getRateLimitKey(req);
     const now = Date.now();
     const url = new URL(req.url, `http://${req.headers.host}`);
     // Admin endpoints are auth-protected — no rate limit needed for self-hosted app
     if (url.pathname.startsWith('/api/admin/')) return true;
-    const limit = RATE_LIMIT_MAX_REQUESTS;
+    const limit = isLan ? LAN_RATE_LIMIT_MAX_REQUESTS : RATE_LIMIT_MAX_REQUESTS;
 
     let bucket = rateLimitBuckets.get(ip);
-    if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
-      bucket = { windowStart: now, count: 0 };
+    if (!bucket) {
+      bucket = { windowStart: now, count: 0, prevCount: 0 };
       rateLimitBuckets.set(ip, bucket);
+    }
+    if (now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+      bucket.prevCount = bucket.count;
+      bucket.windowStart = now;
+      bucket.count = 0;
     }
     bucket.count++;
 
-    if (bucket.count > limit) {
+    // Sliding window approximation: weight previous window by remaining fraction
+    const elapsed = now - bucket.windowStart;
+    const prevWeight = 1 - elapsed / RATE_LIMIT_WINDOW_MS;
+    const approxCount = bucket.count + Math.floor(bucket.prevCount * prevWeight);
+
+    if (approxCount > limit) {
       res.writeHead(429, { ...SECURITY_HEADERS, 'Retry-After': '60', 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'Too many requests' }));
       return false;
@@ -247,10 +258,14 @@ export function createApiRoutes(ctx) {
       const token = Buffer.from(auth.slice(7));
       if (token.length === expected.length && crypto.timingSafeEqual(token, expected)) return true;
     }
-    const urlToken = new URL(req.url, `http://${req.headers.host}`).searchParams.get('token');
-    if (urlToken) {
-      const urlBuf = Buffer.from(urlToken);
-      if (urlBuf.length === expected.length && crypto.timingSafeEqual(urlBuf, expected)) return true;
+    // ?token= only accepted for the config download endpoint (window.location.href redirect, no headers possible)
+    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+    if (reqUrl.pathname === '/api/config/export') {
+      const urlToken = reqUrl.searchParams.get('token');
+      if (urlToken) {
+        const urlBuf = Buffer.from(urlToken);
+        if (urlBuf.length === expected.length && crypto.timingSafeEqual(urlBuf, expected)) return true;
+      }
     }
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -614,7 +629,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
 
     if (url.pathname === '/api/config/export' && req.method === 'GET') {
-      return downloadJson(res, 'dvhub-config.json', ctx.getRawCfg());
+      return downloadJson(res, 'dvhub-config.json', redactConfig(ctx.getRawCfg()));
     }
 
     if (url.pathname === '/api/discovery/systems' && req.method === 'GET') {
@@ -1115,7 +1130,7 @@ export function createApiRoutes(ctx) {
         mode: requestedMode,
         requestedBy: 'history_backfill_endpoint'
       });
-      const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ ...body, mode: requestedMode });
+      const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: requestedMode, requestedBy: 'api' });
       return json(res, result.ok ? 200 : 400, result);
     }
 
@@ -1209,6 +1224,8 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/control/write' && req.method === 'POST') {
       const body = await parseBody(req);
       const target = String(body.target || '');
+      const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct']);
+      if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
       const value = Number(body.value);
       ctx.assertValidRuntimeCommand('control_write', { target, value });
       state.schedule.manualOverride[target] = { value, at: Date.now() };

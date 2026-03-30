@@ -51,7 +51,7 @@
     const headers = new Headers(options.headers || {});
     const token = getStoredApiToken();
     if (token && !headers.has('authorization')) headers.set('authorization', `Bearer ${token}`);
-    const response = await fetch(buildApiUrl(path), { ...options, headers });
+    const response = await fetch(path, { ...options, headers });
     if (response.status === 401) {
       window.dispatchEvent(new CustomEvent('dvhub:unauthorized'));
     }

@@ -56,7 +56,7 @@ export function autoDisableStopSocScheduleRules({ rules, nowMin, batterySocPct }
 
     const stopSocPct = Number(rule.stopSocPct);
     if (!Number.isFinite(stopSocPct)) return rule;
-    if (Number(batterySocPct) > stopSocPct) return rule;
+    if (Number(batterySocPct) >= stopSocPct) return rule;
 
     changed = true;
     disabledRuleIds.push(rule.id);
