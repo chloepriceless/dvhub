@@ -128,7 +128,7 @@
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker" style="color:var(--flow-yellow);">Historie</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Historische Nachimporte bleiben absichtlich in der Wartung, damit die Einstellungen ruhig und platzsparend bleibt.</p>
-              <div id="historyBannerTools" class="config-banner info" style="margin:8px 14px 0;">VRM-Status wird geladen...</div>
+              <div id="historyBanner" class="config-banner info" style="margin:8px 14px 0;">VRM-Status wird geladen...</div>
               <div class="config-row">
                 <span class="config-row-label">Von</span>
                 <input id="historyImportStart" type="datetime-local" class="config-input" />
@@ -146,7 +146,7 @@
               <p style="padding:0 14px 4px;font-size:11px;color:rgba(232,234,240,0.3);margin:0;">VRM-Stats werden für den Abgleich immer in 15-Minuten-Auflösung importiert.</p>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <button id="historyImportBtn" class="btn btn-primary btn-small" type="button">VRM-Historie importieren</button>
-                <button id="historyBackfillBtnTools" class="btn btn-ghost btn-small" type="button">VRM-Lücken schließen</button>
+                <button id="historyBackfillBtn" class="btn btn-ghost btn-small" type="button">VRM-Lücken schließen</button>
                 <button id="refreshHistoryBtn" class="btn btn-ghost btn-small" type="button">Status pr&uuml;fen</button>
               </div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="historyReason">Der normale Backfill prüft nur den letzten Zeitraum auf offene VRM-Lücken.</p>
