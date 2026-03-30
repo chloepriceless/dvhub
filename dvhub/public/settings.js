@@ -80,7 +80,7 @@ function createConfigRow(label, inputEl, opts) {
   return row;
 }
 
-function createConfigInput(field, value) {
+function createConfigInput(field, value, inherited) {
   let input;
   if (field.type === 'boolean') {
     input = document.createElement('input');
@@ -124,7 +124,14 @@ function createConfigInput(field, value) {
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
     input.value = value === null || value === undefined ? '' : String(value);
-    const valStr = String(input.value);
+    if ((input.value === '') && inherited !== null && inherited !== undefined && inherited !== '') {
+      if (field.empty === 'delete') {
+        input.placeholder = `Vererbt: ${inherited}`;
+      } else {
+        input.placeholder = String(inherited);
+      }
+    }
+    const valStr = String(input.value || input.placeholder || '');
     const charW = field.type === 'number' ? 10 : 8;
     input.style.width = `${Math.max(field.type === 'number' ? 80 : 120, valStr.length * charW + 30)}px`;
   }
@@ -958,7 +965,7 @@ function renderDestinationGrid(destinationId) {
 
     for (const field of allFields) {
       const model = buildFieldRenderModel(field);
-      const input = createConfigInput(field, model.value);
+      const input = createConfigInput(field, model.value, model.inherited);
       rowContainer.appendChild(createConfigRow(field.label, input, { help: field.help }));
       if (model.discovery.visible) {
         const discoveryRow = document.createElement('div');
