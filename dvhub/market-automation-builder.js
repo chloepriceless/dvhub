@@ -214,8 +214,17 @@ export function createMarketAutomationBuilder(ctx) {
       const prevSunsetMs = prevDaySunTimes?.sunsetTs ? new Date(prevDaySunTimes.sunsetTs).getTime() : null;
       const tomorrowSunriseMs = nextDaySunTimes?.sunriseTs ? new Date(nextDaySunTimes.sunriseTs).getTime() : null;
 
-      if (todaySunriseMs != null && now < todaySunriseMs) {
-        // Pre-sunrise: we're in the tail of last night's discharge window
+      // Also treat as pre-sunrise if we're still in the morning tail of last night's
+      // discharge window (periodBounds ends within 3h after today's sunrise).
+      // Without this, slots at e.g. 07:15–08:45 would switch to tonight's window and
+      // receive automationMinSocPct instead of the lower globalMinSocPct, shrinking
+      // the energy budget right when the battery should still be available.
+      const inMorningTail = periodBounds?.endTs != null
+        && todaySunriseMs != null
+        && periodBounds.endTs <= todaySunriseMs + 3 * 3600000;
+
+      if (todaySunriseMs != null && (now < todaySunriseMs || inMorningTail)) {
+        // Pre-sunrise or still in the morning tail of last night's discharge window
         sunriseMsForPlanning = todaySunriseMs;
         sunsetMsForPlanning = prevSunsetMs ?? (todaySunriseMs - 12 * 3600000);
       } else if (todaySunsetMs != null && tomorrowSunriseMs != null) {
