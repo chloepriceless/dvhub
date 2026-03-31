@@ -331,7 +331,7 @@ export function createMarketAutomationBuilder(ctx) {
           slots: freeSlots,
           stages: milpStages,
           maxDischargeW: automationConfig?.maxDischargeW,
-          availableKwh: availableForPlanning,
+          availableKwh: availableEnergyKwh, // actual battery energy, not PV-adjusted (PV scaling only applies to greedy chain truncation)
           perSlotBudgets: perSlotBudgets || null,
           slotDurationMs: SLOT_DURATION_MS,
           slotDurationH: SLOT_DURATION_HOURS
