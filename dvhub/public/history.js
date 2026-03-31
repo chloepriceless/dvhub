@@ -189,8 +189,8 @@ function renderKpis(summary) {
   const dvView = String(summary?.view || '');
   const dvVisible = (dvView === 'month' || dvView === 'year')
     && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
-  const dvSection = document.getElementById('historyDvComparisonSection');
-  if (dvSection) dvSection.style.display = dvVisible ? '' : 'none';
+  const dvCard = document.getElementById('historyDvCard');
+  if (dvCard) dvCard.style.display = dvVisible ? '' : 'none';
 
   if (dvVisible) {
     // Einspeisevergütung durch Direktvermarktung (Spot + Marktprämie)
