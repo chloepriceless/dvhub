@@ -188,11 +188,15 @@ function renderKpis(summary) {
   // DV-Vergleich — nur Monat/Jahr
   const dvView = String(summary?.view || '');
   const dvVisible = (dvView === 'month' || dvView === 'year')
-    && kpis?.hypFullFeedInEur != null;
+    && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
   const dvSection = document.getElementById('historyDvComparisonSection');
   if (dvSection) dvSection.style.display = dvVisible ? '' : 'none';
 
   if (dvVisible) {
+    // Einspeisevergütung durch Direktvermarktung (Spot + Marktprämie)
+    setText('historyKpiDvRevenue', fmtEur(kpis.dvRevenueEur));
+    setText('historyKpiDvRevenueRate', fmtCt(kpis.dvRevenueCtKwh));
+
     setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
     setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
 

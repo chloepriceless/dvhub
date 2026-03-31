@@ -1503,7 +1503,14 @@ export function createHistoryRuntime({
         ? round2(dvExcessEur - dvCostEur)
         : null;
 
+      const dvExportKwh = Number(kpis.exportKwh || 0);
+      const dvRevenueCtKwh = dvExportKwh > 0
+        ? round2((dvRevenueEur / dvExportKwh) * 100)
+        : null;
+
       Object.assign(kpis, {
+        dvRevenueEur,
+        dvRevenueCtKwh,
         hypFullFeedInEur,
         hypSurplusFeedInEur,
         dvExcessEur,
@@ -1514,6 +1521,8 @@ export function createHistoryRuntime({
       });
     } else {
       Object.assign(kpis, {
+        dvRevenueEur: null,
+        dvRevenueCtKwh: null,
         hypFullFeedInEur: null,
         hypSurplusFeedInEur: null,
         dvExcessEur: null,
