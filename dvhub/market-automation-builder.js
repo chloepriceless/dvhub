@@ -33,6 +33,21 @@ export function isSmallMarketAutomationRule(rule) {
     || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
 }
 
+/**
+ * Scale available battery energy upward to reflect reduced per-slot battery drain when PV
+ * is simultaneously feeding in. The inverter's total export target (maxDischargeW) remains
+ * unchanged; PV covers part of it, so the battery only needs to provide (maxAbs - pvW) per
+ * slot. Scaling availableKwh by (maxAbs / batteryDrain) makes the chain truncation logic
+ * (which uses powerW = maxDischargeW) yield the correct higher slot count.
+ */
+function pvAdjustedKwh(kwh, maxDischargeW, pvFeedInW) {
+  if (!pvFeedInW || pvFeedInW <= 0 || kwh == null || kwh <= 0 || !maxDischargeW) return kwh;
+  const maxAbs = Math.abs(maxDischargeW);
+  const batteryDrain = Math.max(1, maxAbs - pvFeedInW);
+  if (batteryDrain >= maxAbs) return kwh;
+  return Math.round(kwh * (maxAbs / batteryDrain) * 100) / 100;
+}
+
 export function buildNeedsRegeneration({ runDate, lastState, priceSlotCount, currentSocPct, previousAutomationRules, batteryCapacityKwh, planIsLocked = false }) {
   const priceDataChanged = priceSlotCount !== (lastState?.lastPriceSlotCount || 0);
   const socChanged = !planIsLocked
@@ -169,6 +184,10 @@ export function createMarketAutomationBuilder(ctx) {
     const currentSocPct = state.victron?.soc;
     let availableEnergyKwh = null;
 
+    // Current PV feed-in: if PV is active it covers part of the grid export target,
+    // so the battery drain per slot is reduced → same battery budget supports more slots.
+    const pvFeedInW = Math.max(0, Number(state.victron?.pvTotalW ?? state.victron?.pvPowerW ?? 0));
+
     // Dynamic SOC floor: sunrise/sunset-aware energy budgeting.
     // Each slot gets a time-dependent energy budget — morning slots near sunrise
     // can access more battery energy because the SOC floor is lower then.
@@ -178,41 +197,56 @@ export function createMarketAutomationBuilder(ctx) {
     let sunriseMsForPlanning = null;
 
     if (sunTimesCache?.cache && freeSlots.length) {
-      // Find sunrise for the latest slot date and sunset from the previous day
-      const latestSlotTs = Math.max(...freeSlots.map(s => Number(s?.ts) || 0));
-      const latestSlotDate = berlinDateString(new Date(latestSlotTs), cfg.epex.timezone);
-      const sunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: latestSlotDate });
-      if (sunTimes?.sunriseTs && sunTimes?.sunsetTs) {
-        sunriseMsForPlanning = new Date(sunTimes.sunriseTs).getTime();
-        const prevDate = berlinDateString(new Date(latestSlotTs - 86400000), cfg.epex.timezone);
-        const prevSunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: prevDate });
-        sunsetMsForPlanning = prevSunTimes?.sunsetTs
-          ? new Date(prevSunTimes.sunsetTs).getTime()
-          : sunriseMsForPlanning - 12 * 3600000;
+      // Determine the active overnight window based on now (not latestSlotTs).
+      // Using latestSlotTs caused the wrong window for same-day search windows: today's
+      // sunrise (already past) was used, making every slot return globalMin.
+      // Correct logic: before today's sunrise → last-night window; otherwise → tonight window.
+      const nowDateStr = berlinDateString(new Date(now), cfg.epex.timezone);
+      const prevDateStr = berlinDateString(new Date(now - 86400000), cfg.epex.timezone);
+      const nextDateStr = berlinDateString(new Date(now + 86400000), cfg.epex.timezone);
 
-        if (batteryCapacityKwh > 0 && currentSocPct != null) {
-          perSlotBudgets = freeSlots
-            .map(s => Number(s?.ts) || 0)
-            .sort((a, b) => a - b)
-            .map(ts => {
-              const dynamicMin = computeDynamicAutomationMinSocPct({
-                automationMinSocPct: automationConfig?.minSocPct,
-                globalMinSocPct: state.victron?.minSocPct ?? 10,
-                sunsetTs: sunsetMsForPlanning,
-                sunriseTs: sunriseMsForPlanning,
-                nowTs: ts
-              });
-              return {
-                ts,
-                budgetKwh: computeAvailableEnergyKwh({
-                  batteryCapacityKwh,
-                  currentSocPct,
-                  minSocPct: dynamicMin,
-                  inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
-                })
-              };
+      const todaySunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: nowDateStr });
+      const prevDaySunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: prevDateStr });
+      const nextDaySunTimes = readSunTimesForDate({ cache: sunTimesCache.cache, dateKey: nextDateStr });
+
+      const todaySunriseMs = todaySunTimes?.sunriseTs ? new Date(todaySunTimes.sunriseTs).getTime() : null;
+      const todaySunsetMs = todaySunTimes?.sunsetTs ? new Date(todaySunTimes.sunsetTs).getTime() : null;
+      const prevSunsetMs = prevDaySunTimes?.sunsetTs ? new Date(prevDaySunTimes.sunsetTs).getTime() : null;
+      const tomorrowSunriseMs = nextDaySunTimes?.sunriseTs ? new Date(nextDaySunTimes.sunriseTs).getTime() : null;
+
+      if (todaySunriseMs != null && now < todaySunriseMs) {
+        // Pre-sunrise: we're in the tail of last night's discharge window
+        sunriseMsForPlanning = todaySunriseMs;
+        sunsetMsForPlanning = prevSunsetMs ?? (todaySunriseMs - 12 * 3600000);
+      } else if (todaySunsetMs != null && tomorrowSunriseMs != null) {
+        // Daytime or after tonight's sunset: use tonight→tomorrow window
+        sunsetMsForPlanning = todaySunsetMs;
+        sunriseMsForPlanning = tomorrowSunriseMs;
+      }
+
+      if (batteryCapacityKwh > 0 && currentSocPct != null
+          && sunsetMsForPlanning != null && sunriseMsForPlanning != null) {
+        perSlotBudgets = freeSlots
+          .map(s => Number(s?.ts) || 0)
+          .sort((a, b) => a - b)
+          .map(ts => {
+            const dynamicMin = computeDynamicAutomationMinSocPct({
+              automationMinSocPct: automationConfig?.minSocPct,
+              globalMinSocPct: state.victron?.minSocPct ?? 10,
+              sunsetTs: sunsetMsForPlanning,
+              sunriseTs: sunriseMsForPlanning,
+              nowTs: ts
             });
-        }
+            return {
+              ts,
+              budgetKwh: computeAvailableEnergyKwh({
+                batteryCapacityKwh,
+                currentSocPct,
+                minSocPct: dynamicMin,
+                inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+              })
+            };
+          });
       }
     }
 
@@ -243,14 +277,21 @@ export function createMarketAutomationBuilder(ctx) {
     // Hard energy gate: if battery capacity is known and no energy available, skip planning
     if (availableEnergyKwh != null && availableEnergyKwh <= 0) return [];
 
+    // PV-adjusted energy for chain planning: if PV is feeding in, the battery drain per slot
+    // is (maxDischargeW - pvFeedInW), so the same battery energy supports more discharge slots.
+    // We scale up availableKwh proportionally so the truncation logic (which uses powerW =
+    // maxDischargeW) yields the correct higher slot count. The rule values themselves remain
+    // at maxDischargeW (the inverter handles the PV/battery split at runtime).
+    const availableForPlanning = pvAdjustedKwh(availableEnergyKwh, automationConfig?.maxDischargeW, pvFeedInW);
+
     // Generate multiple chain variants (1-stage, 2-stage, ... N-stage prefixes),
     // each energy-truncated to the available battery budget.
     const chainVariants = buildChainVariants({
       maxDischargeW: automationConfig?.maxDischargeW,
       stages: Array.isArray(automationConfig?.stages) && automationConfig.stages.length
         ? automationConfig.stages
-        : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: computeDefaultDischargeSlots(automationConfig, availableEnergyKwh), cooldownSlots: 0 }],
-      availableKwh: availableEnergyKwh,
+        : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: computeDefaultDischargeSlots(automationConfig, availableForPlanning), cooldownSlots: 0 }],
+      availableKwh: availableForPlanning,
       slotDurationH: SLOT_DURATION_HOURS
     });
 
@@ -281,7 +322,7 @@ export function createMarketAutomationBuilder(ctx) {
           slots: freeSlots,
           stages: milpStages,
           maxDischargeW: automationConfig?.maxDischargeW,
-          availableKwh: availableEnergyKwh,
+          availableKwh: availableForPlanning,
           perSlotBudgets: perSlotBudgets || null,
           slotDurationMs: SLOT_DURATION_MS,
           slotDurationH: SLOT_DURATION_HOURS
@@ -307,7 +348,7 @@ export function createMarketAutomationBuilder(ctx) {
         slots: freeSlots,
         stages: Array.isArray(automationConfig?.stages) ? automationConfig.stages : [],
         maxDischargeW: automationConfig?.maxDischargeW,
-        availableKwh: availableEnergyKwh,
+        availableKwh: availableForPlanning,
         slotDurationMs: SLOT_DURATION_MS,
         slotDurationH: SLOT_DURATION_HOURS
       });
@@ -344,6 +385,7 @@ export function createMarketAutomationBuilder(ctx) {
     rules._planMeta = {
       availableEnergyKwh,
       effectiveMinSocPct,
+      pvFeedInW,
       sunriseTs: sunriseMsForPlanning,
       sunsetTs: sunsetMsForPlanning
     };
@@ -483,6 +525,7 @@ export function createMarketAutomationBuilder(ctx) {
       minSocPct: automationConfig?.minSocPct,
       effectiveMinSocPct: planMeta.effectiveMinSocPct ?? automationConfig?.minSocPct ?? 30,
       dynamicSocFloor: (planMeta.effectiveMinSocPct ?? automationConfig?.minSocPct ?? 30) !== (automationConfig?.minSocPct ?? 30),
+      pvFeedInW: planMeta.pvFeedInW ?? 0,
       sunriseTs: planMeta.sunriseTs ? new Date(planMeta.sunriseTs).toISOString() : null,
       sunsetTs: planMeta.sunsetTs ? new Date(planMeta.sunsetTs).toISOString() : null,
       maxDischargeW: automationConfig?.maxDischargeW,

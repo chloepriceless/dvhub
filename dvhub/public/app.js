@@ -577,7 +577,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 
 let priceChartInstance = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = []) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -847,6 +847,21 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (Number(data[i].ts) <= nowTs) nowIdx = i;
   }
 
+  // --- Sunset / sunrise annotation lines (dynamic SOC-floor boundary) ---
+  function findClosestDataIdx(tsMs) {
+    if (tsMs == null || !Number.isFinite(tsMs)) return null;
+    let best = null;
+    let bestDiff = Infinity;
+    for (let i = 0; i < data.length; i++) {
+      const diff = Math.abs(Number(data[i].ts) - tsMs);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+    }
+    // Only use the index if the slot is within ±2h of the given timestamp
+    return best !== null && bestDiff <= 2 * 3600000 ? best : null;
+  }
+  const sunsetIdx = sunTimes?.sunsetTs ? findClosestDataIdx(Date.parse(sunTimes.sunsetTs)) : null;
+  const sunriseIdx = sunTimes?.sunriseTs ? findClosestDataIdx(Date.parse(sunTimes.sunriseTs)) : null;
+
   // --- Chart.js config ---
   const config = {
     type: 'bar',
@@ -922,7 +937,45 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 font: { weight: 'bold', size: 11 },
                 padding: { top: 2, bottom: 2, left: 4, right: 4 }
               }
-            }
+            },
+            ...(sunsetIdx != null ? {
+              sunsetLine: {
+                type: 'line',
+                xMin: sunsetIdx,
+                xMax: sunsetIdx,
+                borderColor: 'rgba(251,146,60,0.7)',
+                borderWidth: 1.5,
+                borderDash: [5, 4],
+                label: {
+                  display: true,
+                  content: 'Sonnenuntergang',
+                  position: 'start',
+                  backgroundColor: '#1a1a2ecc',
+                  color: 'rgba(251,146,60,0.9)',
+                  font: { size: 10 },
+                  padding: { top: 2, bottom: 2, left: 4, right: 4 }
+                }
+              }
+            } : {}),
+            ...(sunriseIdx != null ? {
+              sunriseLine: {
+                type: 'line',
+                xMin: sunriseIdx,
+                xMax: sunriseIdx,
+                borderColor: 'rgba(250,204,21,0.6)',
+                borderWidth: 1.5,
+                borderDash: [5, 4],
+                label: {
+                  display: true,
+                  content: 'Sonnenaufgang',
+                  position: 'start',
+                  backgroundColor: '#1a1a2ecc',
+                  color: 'rgba(250,204,21,0.85)',
+                  font: { size: 10 },
+                  padding: { top: 2, bottom: 2, left: 4, right: 4 }
+                }
+              }
+            } : {})
           }
         },
         zoom: {
@@ -1362,13 +1415,17 @@ function renderDashboardStatus(status) {
       }).map(s => Number(s.ts));
     });
   const baseChartArgs = [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
+  const smaPlan = status.schedule?.smallMarketAutomation?.plan;
+  const sunTimes = (smaPlan?.sunsetTs || smaPlan?.sunriseTs)
+    ? { sunsetTs: smaPlan.sunsetTs ?? null, sunriseTs: smaPlan.sunriseTs ?? null }
+    : null;
   Promise.all([
     apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
     apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
   ]).then(([fc, hist]) => {
-    drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps);
+    drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes);
   }).catch(() => {
-    drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps);
+    drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes);
   });
   setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
@@ -1974,7 +2031,8 @@ function renderAutomationStatus(scheduleData) {
       const dynInfo = plan?.dynamicSocFloor
         ? ` (Min-SOC ${plan.effectiveMinSocPct}% statt ${plan.minSocPct}%)`
         : '';
-      energyEl.textContent = `${sma.availableEnergyKwh} kWh verfügbar${dynInfo}`;
+      const pvInfo = plan?.pvFeedInW > 0 ? ` + ${plan.pvFeedInW} W PV` : '';
+      energyEl.textContent = `${sma.availableEnergyKwh} kWh verfügbar${pvInfo}${dynInfo}`;
     } else {
       energyEl.textContent = '';
     }
@@ -2001,7 +2059,8 @@ function renderAutomationStatus(scheduleData) {
   }
   if (budgetEl) {
     const parts = [];
-    if (plan.availableEnergyKwh != null) parts.push(`${plan.availableEnergyKwh} kWh Energie`);
+    if (plan.availableEnergyKwh != null) parts.push(`${plan.availableEnergyKwh} kWh Batterie`);
+    if (plan.pvFeedInW > 0) parts.push(`${plan.pvFeedInW} W PV`);
     if (plan.currentSocPct != null) {
       const effectiveMin = plan.effectiveMinSocPct ?? plan.minSocPct ?? 0;
       const configuredMin = plan.minSocPct ?? 0;
