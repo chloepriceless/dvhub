@@ -111,6 +111,11 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc?.enabled) return;
+
+    // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
+    if (state.ctrl._lastDvFeedIn === feedIn) return;
+    state.ctrl._lastDvFeedIn = feedIn;
+
     const results = {};
 
     // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
