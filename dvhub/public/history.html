@@ -70,8 +70,8 @@
         <div id="historyStatusInfo" class="history-status-info" hidden></div>
       </section>
 
-      <!-- KPI Cards — 6 columns -->
-      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;">
+      <!-- KPI Cards — scrollable flex strip -->
+      <div class="history-kpi-row">
 
         <!-- 1: Energiekosten -->
         <div class="config-group" data-accent="orange">
@@ -135,17 +135,33 @@
           <div class="config-row"><span class="config-row-label">Netto Cashflow</span><strong id="historyKpiBilanzNet" class="config-row-value">-</strong></div>
           <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiBilanzPvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
           <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiBilanzBatCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-          <!-- DV-Vergleich (nur Monat/Jahr) -->
-          <div id="historyDvComparisonSection" style="display:none;">
-            <div style="border-top:1px solid var(--border-color,#e0e0e0);margin:8px 0 4px;"></div>
-            <div class="config-row"><span class="config-row-label" style="font-weight:600;">Einspeisung (DV)</span><strong id="historyKpiDvRevenue" class="config-row-value" style="color:var(--flow-green);">-</strong></div>
-            <div class="config-row"><span class="config-row-label">Effektiver ct/kWh</span><strong id="historyKpiDvRevenueRate" class="config-row-value">-</strong></div>
-            <div style="border-top:1px solid var(--border-color,#e0e0e0);margin:8px 0 4px;"></div>
-            <div class="config-row"><span class="config-row-label">Hyp. Volleinspeisung</span><strong id="historyKpiHypFullFeedIn" class="config-row-value">-</strong></div>
-            <div class="config-row"><span class="config-row-label">Hyp. Ueberschuss-EEG</span><strong id="historyKpiHypSurplusFeedIn" class="config-row-value">-</strong></div>
-            <div class="config-row"><span class="config-row-label">DV-Mehrerlos</span><strong id="historyKpiDvExcess" class="config-row-value">-</strong></div>
+        </div>
+      </div>
+
+      <!-- DV-Einspeisevergütung (nur Monat/Jahr) -->
+      <div id="historyDvCard" class="chart-span-card" style="display:none;margin-bottom:10px;">
+        <div class="panel-head">
+          <div>
+            <p class="card-kicker">Direktvermarktung</p>
+            <h2 class="section-title">Einspeiseverg&uuml;tung durch DV</h2>
+          </div>
+        </div>
+        <div class="history-dv-grid">
+          <div class="history-dv-section">
+            <div class="history-dv-label">Tats&auml;chlich (DV)</div>
+            <div id="historyKpiDvRevenue" class="history-dv-value" style="color:var(--flow-green);">-</div>
+            <div class="config-row"><span class="config-row-label">ct/kWh (effektiv)</span><strong id="historyKpiDvRevenueRate" class="config-row-value">-</strong></div>
+          </div>
+          <div class="history-dv-section">
+            <div class="history-dv-label">Hypothetisch (EEG-Festsatz)</div>
+            <div class="config-row"><span class="config-row-label">Volleinspeisung</span><strong id="historyKpiHypFullFeedIn" class="config-row-value">-</strong></div>
+            <div class="config-row"><span class="config-row-label">&Uuml;berschuss-Einspeisung</span><strong id="historyKpiHypSurplusFeedIn" class="config-row-value">-</strong></div>
+          </div>
+          <div class="history-dv-section">
+            <div class="history-dv-label">Vergleich</div>
+            <div class="config-row"><span class="config-row-label">DV-Mehrerl&ouml;s</span><strong id="historyKpiDvExcess" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label">DV-Kosten</span><strong id="historyKpiDvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-            <div class="config-row"><span class="config-row-label" style="font-weight:600;">Netto DV-Vorteil</span><strong id="historyKpiDvNetAdvantage" class="config-row-value" style="font-weight:700;">-</strong></div>
+            <div class="config-row" style="margin-top:6px;"><span class="config-row-label" style="font-weight:600;">Netto DV-Vorteil</span><strong id="historyKpiDvNetAdvantage" class="config-row-value" style="font-weight:700;">-</strong></div>
           </div>
         </div>
       </div>
