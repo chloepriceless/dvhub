@@ -323,9 +323,21 @@ export function createMarketAutomationBuilder(ctx) {
       // When no custom stages are configured, use single-slot stages so the MILP
       // can place each slot independently at the most profitable time (non-contiguous).
       const hasCustomStages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length > 0;
-      const milpStages = hasCustomStages
-        ? automationConfig.stages
-        : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: 1, cooldownSlots: 0 }];
+      // For non-custom stages: include a partial-power stage for the leftover energy
+      // that cannot fill another full slot (e.g. 2 kWh remaining → -8000 W stage).
+      const milpStages = (() => {
+        if (hasCustomStages) return automationConfig.stages;
+        const s = [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: 1, cooldownSlots: 0 }];
+        if (availableEnergyKwh != null && availableEnergyKwh > 0 && automationConfig?.maxDischargeW) {
+          const maxAbsW = Math.abs(automationConfig.maxDischargeW);
+          const energyPerFullSlot = (maxAbsW / 1000) * SLOT_DURATION_HOURS;
+          const fullSlots = Math.floor(availableEnergyKwh / energyPerFullSlot);
+          const remainingKwh = availableEnergyKwh - fullSlots * energyPerFullSlot;
+          const partialW = remainingKwh > 0 ? Math.round((remainingKwh / SLOT_DURATION_HOURS) * 1000) : 0;
+          if (partialW >= 500) s.push({ dischargeW: -partialW, dischargeSlots: 1, cooldownSlots: 0 });
+        }
+        return s;
+      })();
       try {
         plan = await pickMilpPlan({
           slots: freeSlots,
@@ -401,7 +413,7 @@ export function createMarketAutomationBuilder(ctx) {
     return rules;
   }
 
-  async function regenerateSmallMarketAutomationRules({ now = Date.now() } = {}) {
+  async function regenerateSmallMarketAutomationRules({ now = Date.now(), force = false } = {}) {
     const cfg = getCfg();
     const automationConfig = cfg.schedule?.smallMarketAutomation;
     const runDate = berlinDateString(new Date(now), cfg.epex.timezone);
@@ -450,16 +462,17 @@ export function createMarketAutomationBuilder(ctx) {
 
     // Also lock the plan if we're between scheduled slots (gap < 30 min)
     // to prevent re-planning during cooldown phases between discharge bursts.
+    // force=true skips the gap lock (manual replan) but still respects active execution.
     const planHasFutureSlots = previousAutomationRules.some((rule) => {
       const slotTs = Number(rule?.slotTs);
       return Number.isFinite(slotTs) && slotTs > now;
     });
-    const planIsLocked = planIsExecuting || (planHasFutureSlots && previousAutomationRules.some((rule) => {
+    const planIsLocked = planIsExecuting || (!force && planHasFutureSlots && previousAutomationRules.some((rule) => {
       const slotEndTs = Number(rule?.slotEndTs);
       return Number.isFinite(slotEndTs) && now >= slotEndTs && (now - slotEndTs) < 30 * 60 * 1000;
     }));
 
-    const needsRegeneration = buildNeedsRegeneration({
+    const needsRegeneration = force || buildNeedsRegeneration({
       runDate,
       lastState,
       priceSlotCount,

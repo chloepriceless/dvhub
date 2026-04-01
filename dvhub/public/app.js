@@ -2002,6 +2002,26 @@ async function saveAutomationConfig() {
   }
 }
 
+async function replanAutomation() {
+  const btn = document.getElementById('replanAutomationBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const r = await apiFetch('/api/schedule/automation/replan', { method: 'POST' });
+    const out = await r.json();
+    if (!r.ok || !out.ok) {
+      setControlMsg(`Replan fehlgeschlagen: ${out.error || r.status}`, true);
+      return;
+    }
+    const kwhInfo = out.availableEnergyKwh != null ? ` (${out.availableEnergyKwh} kWh)` : '';
+    setControlMsg(`Neu geplant: ${out.generatedRuleCount} Regeln${kwhInfo}`);
+    await requestDashboardRefresh();
+  } catch (e) {
+    setControlMsg(`Replan-Fehler: ${e.message}`, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Neu planen'; }
+  }
+}
+
 function renderAutomationStatus(scheduleData) {
   const sma = scheduleData?.smallMarketAutomation;
   if (!sma) return;
@@ -2136,6 +2156,7 @@ function initDashboard() {
 
   document.getElementById('addAutomationStageBtn')?.addEventListener('click', addAutomationStage);
   document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
+  document.getElementById('replanAutomationBtn')?.addEventListener('click', replanAutomation);
 
   updateChartSelectionCallout();
   syncMinSocEditorPreview(document.getElementById('minSocSlider')?.value);

@@ -1220,6 +1220,26 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true, config: getCfg().schedule.smallMarketAutomation });
     }
 
+    // --- Schedule Automation Replan POST ---
+    // Force immediate re-planning. Bypasses the 30-min gap lock but still
+    // blocks if a discharge slot is actively executing right now.
+    if (url.pathname === '/api/schedule/automation/replan' && req.method === 'POST') {
+      try {
+        await ctx.regenerateSmallMarketAutomationRules({ force: true });
+      } catch (e) {
+        pushLog('sma_replan_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+      const sma = state.schedule?.smallMarketAutomation;
+      return json(res, 200, {
+        ok: true,
+        generatedRuleCount: sma?.generatedRuleCount ?? 0,
+        availableEnergyKwh: sma?.availableEnergyKwh ?? null,
+        lastOutcome: sma?.lastOutcome ?? null,
+        plan: sma?.plan ?? null
+      });
+    }
+
     // --- Control Write POST ---
     if (url.pathname === '/api/control/write' && req.method === 'POST') {
       const body = await parseBody(req);

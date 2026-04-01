@@ -908,6 +908,17 @@ button {
   margin-bottom: 8px;
 }
 
+.automation-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.automation-plan-header .card-title {
+  margin: 0;
+}
+
 .automation-plan-meta {
   display: flex;
   gap: 12px;
