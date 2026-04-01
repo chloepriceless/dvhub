@@ -3,6 +3,7 @@
 // Imports: small-market-automation.js, milp-optimizer.js, sun-times-cache.js, server-utils.js
 
 import { berlinDateString } from './server-utils.js';
+import { toFiniteNumber } from './util.js';
 import {
   buildAutomationRuleChain,
   buildChainVariants,
@@ -323,21 +324,9 @@ export function createMarketAutomationBuilder(ctx) {
       // When no custom stages are configured, use single-slot stages so the MILP
       // can place each slot independently at the most profitable time (non-contiguous).
       const hasCustomStages = Array.isArray(automationConfig?.stages) && automationConfig.stages.length > 0;
-      // For non-custom stages: include a partial-power stage for the leftover energy
-      // that cannot fill another full slot (e.g. 2 kWh remaining → -8000 W stage).
-      const milpStages = (() => {
-        if (hasCustomStages) return automationConfig.stages;
-        const s = [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: 1, cooldownSlots: 0 }];
-        if (availableEnergyKwh != null && availableEnergyKwh > 0 && automationConfig?.maxDischargeW) {
-          const maxAbsW = Math.abs(automationConfig.maxDischargeW);
-          const energyPerFullSlot = (maxAbsW / 1000) * SLOT_DURATION_HOURS;
-          const fullSlots = Math.floor(availableEnergyKwh / energyPerFullSlot);
-          const remainingKwh = availableEnergyKwh - fullSlots * energyPerFullSlot;
-          const partialW = remainingKwh > 0 ? Math.round((remainingKwh / SLOT_DURATION_HOURS) * 1000) : 0;
-          if (partialW >= 500) s.push({ dischargeW: -partialW, dischargeSlots: 1, cooldownSlots: 0 });
-        }
-        return s;
-      })();
+      const milpStages = hasCustomStages
+        ? automationConfig.stages
+        : [{ dischargeW: automationConfig?.maxDischargeW, dischargeSlots: 1, cooldownSlots: 0 }];
       try {
         plan = await pickMilpPlan({
           slots: freeSlots,
@@ -378,6 +367,45 @@ export function createMarketAutomationBuilder(ctx) {
         ? multiBlockPlan
         : singleBlockPlan;
       plan.engine = 'greedy';
+    }
+
+    // --- Partial remainder slot ---
+    // After the main plan uses N full slots, place any leftover energy at the most
+    // profitable free slot that comes AFTER the last planned slot ends.
+    // E.g. plan uses 18 kWh of 22 kWh available → 4 kWh left → best slot at -16000 W.
+    {
+      const maxAbsW = Math.abs(automationConfig?.maxDischargeW ?? 0);
+      if (maxAbsW > 0 && availableEnergyKwh != null && availableEnergyKwh > 0
+          && plan.selectedSlotTimestamps.length > 0) {
+        const planExpanded = expandChainSlots(plan.chain);
+        const planEnergyKwh = plan.selectedSlotTimestamps.reduce((sum, _ts, idx) => {
+          const pw = Math.abs(toFiniteNumber(planExpanded[idx]?.powerW, maxAbsW));
+          return sum + (pw / 1000) * SLOT_DURATION_HOURS;
+        }, 0);
+        const remainingKwh = Math.max(0, availableEnergyKwh - planEnergyKwh);
+        const partialW = remainingKwh > 0 ? Math.round((remainingKwh / SLOT_DURATION_HOURS) * 1000) : 0;
+
+        if (partialW >= 500) {
+          const lastSlotTs = Math.max(...plan.selectedSlotTimestamps.map(Number));
+          const selectedSet = new Set(plan.selectedSlotTimestamps.map(Number));
+          let bestSlot = null;
+          let bestCtKwh = -Infinity;
+          for (const s of freeSlots) {
+            const ts = Number(s?.ts);
+            if (selectedSet.has(ts) || ts <= lastSlotTs) continue;
+            const ctKwh = Number(s?.ct_kwh ?? -Infinity);
+            if (ctKwh > bestCtKwh) { bestCtKwh = ctKwh; bestSlot = s; }
+          }
+          // Only add if profitable (positive revenue at partial power)
+          if (bestSlot != null && (partialW / 1000) * SLOT_DURATION_HOURS * bestCtKwh > 0) {
+            plan = {
+              ...plan,
+              selectedSlotTimestamps: [...plan.selectedSlotTimestamps, Number(bestSlot.ts)],
+              chain: [...plan.chain, { powerW: -partialW, slots: 1 }]
+            };
+          }
+        }
+      }
     }
 
     const expandedBestChain = expandChainSlots(plan.chain);
