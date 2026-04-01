@@ -246,7 +246,10 @@
               <label><input type="checkbox" id="schedColCharge"> Charge-Spalte</label>
             </div>
             <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
-              <p class="card-title">Aktueller Automationsplan</p>
+              <div class="automation-plan-header">
+                <p class="card-title">Aktueller Automationsplan</p>
+                <button id="replanAutomationBtn" class="btn btn-small btn-ghost" type="button" title="Plan sofort neu berechnen">Neu planen</button>
+              </div>
               <div class="automation-plan-meta">
                 <span id="planComputedAt">—</span>
                 <span id="planEnergyBudget">—</span>
