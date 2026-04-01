@@ -107,7 +107,7 @@ export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = 
     if (!chain.length) continue;
 
     if (availableKwh != null && availableKwh > 0) {
-      const truncated = truncateChainToEnergy(chain, availableKwh, slotDurationH, true);
+      const truncated = truncateChainToEnergy(chain, availableKwh, slotDurationH);
       if (truncated.length) variants.push(truncated);
     } else {
       variants.push(chain);
@@ -120,10 +120,8 @@ export function buildChainVariants({ maxDischargeW, stages = [], availableKwh = 
 /**
  * Truncate a chain so its total energy consumption does not exceed availableKwh.
  * Preserves entries in order; reduces the last entry's slot count if partial.
- * When addPartialSlot=true, appends a reduced-power 1-slot entry for any
- * remaining energy that cannot fill another full slot (e.g. 2 kWh → -8000 W).
  */
-function truncateChainToEnergy(chain, availableKwh, slotDurationH = SLOT_DURATION_HOURS, addPartialSlot = false) {
+function truncateChainToEnergy(chain, availableKwh, slotDurationH = SLOT_DURATION_HOURS) {
   if (!Array.isArray(chain) || availableKwh <= 0) return [];
 
   const result = [];
@@ -136,27 +134,11 @@ function truncateChainToEnergy(chain, availableKwh, slotDurationH = SLOT_DURATIO
 
     const energyPerSlot = (powerW / 1000) * slotDurationH;
     const maxSlots = Math.floor(remainingKwh / energyPerSlot);
-    if (maxSlots <= 0) {
-      // Energy can't cover even one full slot — use remainder as partial
-      if (addPartialSlot && remainingKwh > 0) {
-        const partialW = Math.round((remainingKwh / slotDurationH) * 1000);
-        if (partialW >= 500) result.push({ powerW: entry.powerW < 0 ? -partialW : partialW, slots: 1 });
-      }
-      break;
-    }
+    if (maxSlots <= 0) break;
 
     const usedSlots = Math.min(slots, maxSlots);
     result.push({ powerW: entry.powerW, slots: usedSlots });
     remainingKwh -= usedSlots * energyPerSlot;
-
-    // Placed fewer full slots than the entry specified → energy-limited.
-    // Use leftover energy for a partial slot at this entry's power level.
-    if (usedSlots < slots && addPartialSlot && remainingKwh > 0) {
-      const partialW = Math.round((remainingKwh / slotDurationH) * 1000);
-      if (partialW >= 500) result.push({ powerW: entry.powerW < 0 ? -partialW : partialW, slots: 1 });
-      break;
-    }
-
     if (remainingKwh <= 0) break;
   }
 
