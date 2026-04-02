@@ -935,11 +935,17 @@ export function createApiRoutes(ctx) {
             try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
           }
           const updateAvailable = latestTag != null && latestTag !== currentTag;
+          let availableVersions = [];
+          try {
+            const allTags = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+            availableVersions = allTags ? allTags.split('\n').filter(Boolean).slice(0, 10) : [];
+          } catch { /* ignore */ }
           return json(res, 200, {
             ok: true, channel,
             current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
             latest: { tag: latestTag, revision: null },
             updateAvailable,
+            availableVersions,
             changelog: changelog ? changelog.split('\n').filter(Boolean) : []
           });
         } else {
@@ -968,6 +974,8 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
+        const body = await parseBody(req).catch(() => ({}));
+        const targetVersion = body?.version || null; // optional: install specific version
         const repoRoot = ctx.getRepoRoot();
         const appDir = ctx.getAppDir();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
@@ -980,10 +988,10 @@ export function createApiRoutes(ctx) {
           // --- git fetch + checkout (inside inner try for rollback coverage) ---
           if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-            if (!latestTag) throw new Error('No release tags found');
-            const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-            gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
+            const selectedTag = targetVersion || (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            if (!selectedTag) throw new Error('No release tags found');
+            const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
           } else {
             await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
@@ -994,6 +1002,18 @@ export function createApiRoutes(ctx) {
           // --- npm install + syntax check ---
           const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
           await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
+
+          // --- post-update.sh (system-level migrations: sudoers, setcap, packages, tls) ---
+          const postUpdateScript = path.join(repoRoot, 'post-update.sh');
+          try {
+            const fs = await import('node:fs');
+            fs.default.accessSync(postUpdateScript, fs.default.constants.X_OK);
+            const postResult = await execFileAsync('sudo', ['bash', postUpdateScript], { cwd: repoRoot, timeout: 120000 });
+            pushLog('post_update_applied', { output: (postResult.stdout || '').trim().split('\n').slice(-5).join('\n') });
+          } catch (postErr) {
+            pushLog('post_update_warning', { error: postErr.message });
+            // Don't fail the update if post-update fails — config migrations still run on restart
+          }
           pushLog('update_applied', {
             channel,
             gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),

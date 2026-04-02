@@ -90,6 +90,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -0 *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -15 *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 echo "  Sudoers: OK"
