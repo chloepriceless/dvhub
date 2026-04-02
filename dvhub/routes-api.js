@@ -642,7 +642,7 @@ export function createApiRoutes(ctx) {
     if (ext === '.html') {
       cacheControl = reqPath.includes('setup') ? 'no-store' : 'no-cache';
     } else if (ext === '.js' || ext === '.css') {
-      cacheControl = 'max-age=3600';
+      cacheControl = 'no-cache';
     }
     res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
     fs.createReadStream(file).pipe(res);
