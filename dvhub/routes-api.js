@@ -229,6 +229,7 @@ export function createApiRoutes(ctx) {
     '/api/schedule/automation/config',
     '/api/meter/scan',
     '/api/vpn/status',
+    '/api/vpn/config',
     '/api/vpn/history',
     '/dv/control-value',
   ]);
@@ -1302,6 +1303,12 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/vpn/status' && req.method === 'GET') {
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       return json(res, 200, ctx.vpnManager.getStatus());
+    }
+
+    if (url.pathname === '/api/vpn/config' && req.method === 'GET') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      const details = await ctx.vpnManager.getConfigDetails();
+      return json(res, 200, details);
     }
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {

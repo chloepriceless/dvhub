@@ -859,6 +859,146 @@ export function createVpnManager(ctx) {
     }
   }
 
+  // ── config details ──
+
+  async function getConfigDetails() {
+    const vc = vpnCfg();
+    const proto = vc.protocol || 'openvpn';
+    const name = vc.profileName || 'direktvermarkter';
+    const cfgPath = vc.configPath || configPath(name);
+
+    const details = {
+      profileName: name,
+      protocol: proto,
+      configPath: cfgPath,
+      configExists: false,
+      fields: []
+    };
+
+    try {
+      await fsPromises.access(cfgPath);
+      details.configExists = true;
+    } catch {
+      return details;
+    }
+
+    try {
+      const content = await fsPromises.readFile(cfgPath, 'utf8');
+
+      if (proto === 'openvpn') {
+        parseOpenVpnDetails(content, details);
+      } else if (proto === 'wireguard') {
+        parseWireGuardDetails(content, details);
+      } else if (proto === 'ipsec') {
+        parseIPSecDetails(content, details);
+      }
+    } catch { /* ignore read errors */ }
+
+    // add cert info from state
+    if (state.vpn.certExpiry) {
+      details.fields.push({ key: 'Zertifikat gültig bis', value: new Date(state.vpn.certExpiry).toLocaleDateString('de-DE', { year: 'numeric', month: '2-digit', day: '2-digit' }) });
+      details.fields.push({ key: 'Zertifikat Tage verbleibend', value: String(state.vpn.certDaysRemaining), warn: state.vpn.certDaysRemaining <= 30 });
+    }
+
+    return details;
+  }
+
+  function parseOpenVpnDetails(content, details) {
+    const lines = content.split(/\r?\n/);
+    const directives = {};
+
+    let inBlock = false;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line.startsWith('<') && !line.startsWith('</')) { inBlock = true; continue; }
+      if (line.startsWith('</')) { inBlock = false; continue; }
+      if (inBlock || !line || line.startsWith('#') || line.startsWith(';')) continue;
+      const parts = line.split(/\s+/);
+      directives[parts[0].toLowerCase()] = parts.slice(1).join(' ');
+    }
+
+    const f = details.fields;
+    if (directives.remote) f.push({ key: 'Remote Server', value: directives.remote });
+    if (directives.proto) f.push({ key: 'Protokoll', value: directives.proto.toUpperCase() });
+    if (directives.dev) f.push({ key: 'Device', value: directives.dev });
+    if (directives.port) f.push({ key: 'Port', value: directives.port });
+    if (directives['resolv-retry']) f.push({ key: 'DNS Retry', value: directives['resolv-retry'] });
+    if (directives.keepalive) f.push({ key: 'Keepalive', value: directives.keepalive });
+    if (directives['comp-lzo'] !== undefined) f.push({ key: 'Kompression', value: 'LZO' });
+    if (directives['remote-cert-tls']) f.push({ key: 'Remote Cert TLS', value: directives['remote-cert-tls'] });
+    if (directives.verb) f.push({ key: 'Verbosity', value: directives.verb });
+
+    f.push({ key: 'CA Zertifikat', value: content.includes('<ca>') ? 'inline' : (directives.ca || 'nicht gesetzt') });
+    f.push({ key: 'Client Zertifikat', value: content.includes('<cert>') ? 'inline' : (directives.cert || 'nicht gesetzt') });
+    f.push({ key: 'Private Key', value: content.includes('<key>') ? 'inline' : (directives.key || 'nicht gesetzt') });
+    if (content.includes('<tls-auth>') || directives['tls-auth']) f.push({ key: 'TLS Auth', value: 'gesetzt' });
+
+    // forced directives
+    f.push({ key: 'script-security', value: directives['script-security'] || '0', forced: true });
+    f.push({ key: 'persist-tun', value: 'ja', forced: true });
+    f.push({ key: 'persist-key', value: 'ja', forced: true });
+  }
+
+  function parseWireGuardDetails(content, details) {
+    const lines = content.split(/\r?\n/);
+    let section = null;
+    const f = details.fields;
+
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const secMatch = line.match(/^\[(\w+)\]$/);
+      if (secMatch) { section = secMatch[1]; continue; }
+      const kvMatch = line.match(/^(\w+)\s*=\s*(.+)/);
+      if (!kvMatch) continue;
+      const [, key, val] = kvMatch;
+
+      if (section === 'Interface') {
+        if (key === 'Address') f.push({ key: 'Tunnel-Adresse', value: val });
+        if (key === 'DNS') f.push({ key: 'DNS', value: val });
+        if (key === 'PrivateKey') f.push({ key: 'Private Key', value: val.slice(0, 8) + '...' });
+      }
+      if (section === 'Peer') {
+        if (key === 'PublicKey') f.push({ key: 'Peer Public Key', value: val.slice(0, 8) + '...' });
+        if (key === 'Endpoint') f.push({ key: 'Endpoint', value: val });
+        if (key === 'AllowedIPs') f.push({ key: 'Allowed IPs', value: val });
+        if (key === 'PersistentKeepalive') f.push({ key: 'Keepalive', value: val + 's' });
+      }
+    }
+  }
+
+  function parseIPSecDetails(content, details) {
+    const lines = content.split(/\r?\n/);
+    let section = null;
+    let connName = null;
+    const f = details.fields;
+
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const connMatch = line.match(/^conn\s+(\S+)/);
+      if (connMatch) {
+        section = 'conn';
+        if (connMatch[1] !== '%default') connName = connMatch[1];
+        continue;
+      }
+      if (/^(config|ca)\s+/.test(line)) { section = null; continue; }
+      const kvMatch = line.match(/^(\w+)\s*=\s*(.+)/);
+      if (!kvMatch || section !== 'conn' || !connName) continue;
+      const [, key, val] = kvMatch;
+
+      if (key === 'right') f.push({ key: 'Remote Endpoint', value: val });
+      if (key === 'rightsubnet') f.push({ key: 'Remote Subnet', value: val });
+      if (key === 'left') f.push({ key: 'Local Endpoint', value: val });
+      if (key === 'leftsubnet') f.push({ key: 'Local Subnet', value: val });
+      if (key === 'authby') f.push({ key: 'Auth', value: val });
+      if (key === 'auto') f.push({ key: 'Auto', value: val });
+      if (key === 'ike') f.push({ key: 'IKE', value: val });
+      if (key === 'esp') f.push({ key: 'ESP', value: val });
+    }
+    if (connName) f.push({ key: 'Connection Name', value: connName });
+  }
+
   // ── status ──
 
   function getStatus() {
@@ -885,6 +1025,7 @@ export function createVpnManager(ctx) {
       return validateOvpnConfig(content);
     },
     getStatus,
+    getConfigDetails,
     checkCertExpiry,
     close: async () => {
       stopWatchdog();

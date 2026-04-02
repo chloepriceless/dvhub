@@ -1742,6 +1742,32 @@ function renderVpnUploadPanel() {
     statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
   });
 
+  // fetch VPN config details
+  const configDiv = document.createElement('div');
+  configDiv.style.cssText = 'padding:0 14px 14px;font-size:0.75rem;';
+  panel.appendChild(configDiv);
+
+  apiFetch('/api/vpn/config').then(r => r.json()).then(cfg => {
+    if (!cfg || !cfg.configExists) {
+      configDiv.innerHTML = '<span style="opacity:0.5;">Kein VPN-Profil importiert.</span>';
+      return;
+    }
+    if (!cfg.fields || !cfg.fields.length) return;
+
+    let html = '<div style="margin-top:6px;border:1px solid var(--flow-border,#333);border-radius:8px;overflow:hidden;">';
+    html += '<div style="padding:6px 10px;font-weight:600;font-size:0.72rem;background:var(--flow-surface,#1a1a2e);color:var(--node-vpn,#7F77DD);">Importierte VPN-Konfiguration</div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;">';
+    cfg.fields.forEach((f, i) => {
+      const bg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)';
+      const labelStyle = f.forced ? 'opacity:0.6;' : '';
+      const valStyle = f.warn ? 'color:var(--c-amber-600);font-weight:600;' : f.forced ? 'opacity:0.6;' : '';
+      const badge = f.forced ? ' <span style="font-size:0.6rem;opacity:0.5;background:var(--node-vpn,#7F77DD);color:#fff;padding:1px 4px;border-radius:3px;">forced</span>' : '';
+      html += `<tr style="background:${bg};"><td style="padding:3px 10px;white-space:nowrap;${labelStyle}">${escapeHtml(f.key)}${badge}</td><td style="padding:3px 10px;font-family:monospace;${valStyle}">${escapeHtml(f.value)}</td></tr>`;
+    });
+    html += '</table></div>';
+    configDiv.innerHTML = html;
+  }).catch(() => {});
+
   // upload handler (deferred to avoid event timing issues)
   setTimeout(() => {
     document.getElementById('vpnUploadBtn')?.addEventListener('click', handleVpnUpload);
