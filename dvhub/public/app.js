@@ -1002,15 +1002,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             color: '#9ca3af',
             font: { size: 10 },
             maxRotation: 0,
-            autoSkip: true,
-            maxTicksLimit: 24,
+            autoSkip: false,
             callback: function(value) {
               const d = data[value];
-              if (!d) return '';
+              if (!d) return null;
               const date = new Date(d.ts);
-              const m = date.getMinutes();
-              if (m === 0) return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
-              return '';
+              if (date.getMinutes() !== 0) return null;
+              const h = date.getHours();
+              if (data.length > 100 && h % 2 !== 0) return null;
+              return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
             }
           },
           grid: { color: '#e5e7eb20', lineWidth: 1 }
