@@ -1724,23 +1724,67 @@ function renderVpnUploadPanel() {
   statusDiv.style.cssText = 'padding:0 14px 14px;font-size:0.78rem;';
   panel.appendChild(statusDiv);
 
+  // VPN action buttons
+  const actionsDiv = document.createElement('div');
+  actionsDiv.style.cssText = 'padding:0 14px 10px;display:flex;gap:8px;align-items:center;';
+  actionsDiv.innerHTML = `
+    <button id="vpnSettingsStart" class="btn btn-small" style="background:var(--node-vpn,#7F77DD);color:#fff;">Verbinden</button>
+    <button id="vpnSettingsStop" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Trennen</button>
+    <button id="vpnSettingsRestart" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Reconnect</button>
+    <span id="vpnSettingsActionResult" style="font-size:0.72rem;margin-left:6px;"></span>
+  `;
+  panel.appendChild(actionsDiv);
+
+  async function vpnSettingsAction(action, btn) {
+    const resultEl = document.getElementById('vpnSettingsActionResult');
+    btn.disabled = true;
+    if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = ''; }
+    try {
+      const r = await apiFetch('/api/vpn/' + action, { method: 'POST' });
+      const out = await r.json();
+      if (resultEl) {
+        resultEl.textContent = out.ok ? (action === 'stop' ? 'Getrennt' : 'OK') : (out.error || 'Fehler');
+        resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
+      }
+      refreshVpnSettingsStatus();
+    } catch (e) {
+      if (resultEl) { resultEl.textContent = e.message; resultEl.style.color = 'var(--err)'; }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  setTimeout(() => {
+    document.getElementById('vpnSettingsStart')?.addEventListener('click', function() { vpnSettingsAction('start', this); });
+    document.getElementById('vpnSettingsStop')?.addEventListener('click', function() { vpnSettingsAction('stop', this); });
+    document.getElementById('vpnSettingsRestart')?.addEventListener('click', function() { vpnSettingsAction('restart', this); });
+  }, 0);
+
   // fetch VPN status
-  apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
-    if (!vpn || !vpn.enabled) {
-      statusDiv.textContent = 'VPN ist deaktiviert.';
-      return;
-    }
-    const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-    let html = `<strong>Status:</strong> ${labels[vpn.status] || vpn.status}`;
-    if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
-    if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
-    if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-      html += ` | <span style="color:var(--c-amber-600);">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
-    }
-    statusDiv.innerHTML = html;
-  }).catch(() => {
-    statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
-  });
+  function refreshVpnSettingsStatus() {
+    apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
+      const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
+      const colors = { connected: 'var(--ok,#22c55e)', error: 'var(--err,#ef4444)', connecting: 'var(--c-amber-600,#d97706)', disconnected: 'var(--flow-text-muted,#9ca3af)' };
+      let html = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${colors[vpn.status] || '#888'};margin-right:6px;"></span>`;
+      html += `<strong style="color:${colors[vpn.status] || '#888'};">${labels[vpn.status] || vpn.status || 'unbekannt'}</strong>`;
+      if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
+      if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
+      if (vpn.uptimeSeconds > 0) {
+        const h = Math.floor(vpn.uptimeSeconds / 3600);
+        const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
+        html += ` | Uptime: ${h > 0 ? h + 'h ' : ''}${m}m`;
+      }
+      if (vpn.reconnectAttempts > 0) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
+      if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
+        html += ` | <span style="color:var(--c-amber-600);">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
+      }
+      if (vpn.lastError) html += ` | <span style="color:var(--err);">${escapeHtml(vpn.lastError)}</span>`;
+      statusDiv.innerHTML = html;
+    }).catch(() => {
+      statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
+    });
+  }
+  refreshVpnSettingsStatus();
 
   // fetch VPN config details
   const configDiv = document.createElement('div');

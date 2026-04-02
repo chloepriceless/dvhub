@@ -1332,6 +1332,21 @@ function renderDashboardStatus(status) {
   // VPN Rail-Card
   renderVpnCard(status.vpn);
 
+  // VPN status in DV card
+  const dvVpnRow = document.getElementById('dvVpnRow');
+  if (dvVpnRow) {
+    const vpn = status.vpn;
+    if (vpn && vpn.enabled) {
+      dvVpnRow.style.display = '';
+      const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
+      const text = labels[vpn.status] || vpn.status || '-';
+      const extra = vpn.tunIp ? ` (${vpn.tunIp})` : '';
+      setText('dvVpnStatus', text + extra, vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : ''));
+    } else {
+      dvVpnRow.style.display = 'none';
+    }
+  }
+
   const dvIndicators = resolveDvControlIndicators(status);
   setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
   setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
