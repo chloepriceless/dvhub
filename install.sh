@@ -318,6 +318,12 @@ echo "[5/7] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
 npm install --omit=dev
 
+# Allow node to bind privileged ports (e.g. 502 for Modbus with VPN)
+NODE_BIN="$(command -v node)"
+if [[ -n "$NODE_BIN" ]]; then
+  setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
+fi
+
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
