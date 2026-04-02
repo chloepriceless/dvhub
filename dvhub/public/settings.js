@@ -1693,6 +1693,90 @@ function exportConfig() {
   window.location.href = buildApiUrl('/api/config/export');
 }
 
+// ── System Updates (OS packages) ──
+
+async function loadSystemInfo() {
+  const banner = document.getElementById('systemInfoBanner');
+  if (!banner) return;
+  try {
+    const r = await apiFetch('/api/admin/system/info');
+    const info = await r.json();
+    if (!info.ok) { banner.textContent = 'Systeminfo nicht verfügbar'; return; }
+    let html = `<strong>${escapeHtml(info.hostname)}</strong>`;
+    html += ` | Kernel: ${escapeHtml(info.kernel)}`;
+    html += ` | Node: ${escapeHtml(info.nodeVersion)}`;
+    html += ` | Uptime: ${escapeHtml(info.uptime)}`;
+    if (info.memory) html += ` | RAM: ${info.memory.usedMb}/${info.memory.totalMb} MB`;
+    if (info.disk) html += ` | Disk: ${escapeHtml(info.disk.used)}/${escapeHtml(info.disk.size)} (${escapeHtml(info.disk.usePct)})`;
+    banner.innerHTML = html;
+  } catch {
+    banner.textContent = 'Systeminfo konnte nicht geladen werden.';
+  }
+}
+
+async function checkSystemUpdates() {
+  const banner = document.getElementById('systemUpdatesBanner');
+  const list = document.getElementById('systemUpdatesList');
+  const actions = document.getElementById('systemUpdatesActions');
+  const meta = document.getElementById('systemUpdatesMeta');
+  if (!banner) return;
+  banner.style.display = '';
+  banner.textContent = 'Prüfe auf System-Updates...';
+  if (list) list.style.display = 'none';
+  if (actions) actions.style.display = 'none';
+  try {
+    const r = await apiFetch('/api/admin/system/updates/check');
+    const data = await r.json();
+    if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
+    if (data.totalCount === 0) {
+      banner.innerHTML = '<span style="color:var(--ok);">System ist aktuell — keine Updates verfügbar.</span>';
+      if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
+      return;
+    }
+    const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheits-Updates)` : '';
+    banner.innerHTML = `<strong style="color:var(--c-amber-600);">${data.totalCount} Updates verfügbar${secNote}</strong>`;
+    if (list && data.packages.length > 0) {
+      list.style.display = '';
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;">';
+      html += '<tr style="opacity:0.6;"><td style="padding:2px 6px;">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
+      for (const p of data.packages) {
+        html += `<tr><td style="padding:2px 6px;font-family:monospace;">${escapeHtml(p.name)}</td><td style="opacity:0.6;">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
+      }
+      html += '</table>';
+      list.innerHTML = html;
+    }
+    if (actions) actions.style.display = '';
+    if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
+  } catch (e) {
+    banner.textContent = 'Fehler beim Prüfen: ' + e.message;
+  }
+}
+
+async function applySystemUpdates() {
+  const banner = document.getElementById('systemUpdatesBanner');
+  const actions = document.getElementById('systemUpdatesActions');
+  const btn = document.getElementById('applySystemUpdatesBtn');
+  if (!banner) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Updates werden installiert...'; }
+  banner.innerHTML = '<span style="color:var(--c-amber-600);">Updates werden installiert — das kann einige Minuten dauern...</span>';
+  try {
+    const r = await apiFetch('/api/admin/system/updates/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await r.json();
+    if (data.ok) {
+      banner.innerHTML = `<span style="color:var(--ok);">${data.upgraded} Pakete aktualisiert.</span>`;
+      if (actions) actions.style.display = 'none';
+      const list = document.getElementById('systemUpdatesList');
+      if (list) list.style.display = 'none';
+    } else {
+      banner.innerHTML = `<span style="color:var(--err);">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
+    }
+  } catch (e) {
+    banner.innerHTML = `<span style="color:var(--err);">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Alle Updates installieren'; }
+  }
+}
+
 async function restartService() {
   const res = await apiFetch('/api/admin/service/restart', { method: 'POST' });
   const payload = await res.json();
@@ -1951,6 +2035,11 @@ function initSettingsPage() {
   document.getElementById('restartServiceBtn')?.addEventListener('click', () => restartService().catch((error) => {
     setHealthBanner(`Restart fehlgeschlagen: ${error.message}`, 'error');
   }));
+
+  // System Updates (OS packages)
+  document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', checkSystemUpdates);
+  document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', applySystemUpdates);
+  loadSystemInfo();
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

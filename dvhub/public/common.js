@@ -77,11 +77,10 @@
     setStoredApiToken
   };
 
-  // Register service worker for PWA support — force update on version change
+  // Unregister any old service workers — DVhub is a LAN app, SW caching causes stale UI
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(regs => {
-      for (const reg of regs) reg.update();
+      for (const reg of regs) reg.unregister();
     });
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 })();
