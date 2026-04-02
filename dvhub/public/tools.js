@@ -665,6 +665,77 @@ async function switchUpdateChannel(newChannel) {
   }
 }
 
+// ── VPN Diagnose ──────────────────────────────────────────────────────
+let vpnLogData = [];
+
+async function loadVpnStatus() {
+  const banner = document.getElementById('vpnToolStatus');
+  if (!banner) return;
+  try {
+    const r = await apiFetch('/api/vpn/status');
+    const vpn = await r.json();
+    if (!vpn || !vpn.enabled) { banner.textContent = 'VPN ist deaktiviert.'; return; }
+    const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
+    let html = `<strong>${labels[vpn.status] || vpn.status}</strong>`;
+    if (vpn.tunIp) html += ` | IP: ${vpn.tunIp}`;
+    if (vpn.profileName) html += ` | Profil: ${vpn.profileName}`;
+    if (vpn.uptimeSeconds > 0) {
+      const h = Math.floor(vpn.uptimeSeconds / 3600);
+      const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
+      html += ` | Uptime: ${h > 0 ? h + 'h ' : ''}${m}m`;
+    }
+    if (vpn.reconnectAttempts) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
+    if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
+      html += ` | <span style="color:var(--c-amber-600);">Cert: ${vpn.certDaysRemaining}d</span>`;
+    }
+    if (vpn.lastError) html += ` | Fehler: ${vpn.lastError}`;
+    banner.innerHTML = html;
+  } catch {
+    banner.textContent = 'VPN-Status konnte nicht geladen werden.';
+  }
+}
+
+async function vpnAction(action) {
+  try {
+    await apiFetch(`/api/vpn/${action}`, { method: 'POST' });
+    await loadVpnStatus();
+  } catch (e) {
+    const banner = document.getElementById('vpnToolStatus');
+    if (banner) banner.textContent = `Fehler: ${e.message}`;
+  }
+}
+
+async function loadVpnLog() {
+  try {
+    const r = await apiFetch('/api/vpn/history');
+    vpnLogData = await r.json();
+    renderVpnLog();
+  } catch {
+    vpnLogData = [];
+    renderVpnLog();
+  }
+}
+
+function renderVpnLog() {
+  const tbody = document.getElementById('vpnLogRows');
+  if (!tbody) return;
+  const filter = document.getElementById('vpnLogFilter')?.value || 'all';
+
+  let rows = vpnLogData;
+  if (filter !== 'all') {
+    rows = rows.filter(e => e.event && e.event.includes(filter));
+  }
+
+  tbody.innerHTML = rows.slice().reverse().map(e => {
+    const ts = e.ts ? new Date(e.ts).toLocaleString('de-DE') : '-';
+    const details = Object.entries(e)
+      .filter(([k]) => k !== 'ts' && k !== 'event')
+      .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+      .join(', ');
+    return `<tr><td>${ts}</td><td>${e.event || '-'}</td><td>${details || '-'}</td></tr>`;
+  }).join('');
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -695,6 +766,15 @@ function initToolsPage() {
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());
   document.getElementById('dvLogSource')?.addEventListener('change', () => loadDvSignalLog());
+
+  // VPN tools
+  document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));
+  document.getElementById('vpnToolStop')?.addEventListener('click', () => vpnAction('stop'));
+  document.getElementById('vpnToolRestart')?.addEventListener('click', () => vpnAction('restart'));
+  document.getElementById('loadVpnLog')?.addEventListener('click', () => loadVpnLog());
+  document.getElementById('refreshVpnLog')?.addEventListener('click', () => loadVpnLog());
+  document.getElementById('vpnLogFilter')?.addEventListener('change', () => renderVpnLog());
+  loadVpnStatus();
   document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

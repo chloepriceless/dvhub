@@ -84,6 +84,20 @@
           <div class="metric-row"><span>Letzte Modbus-Abfrage</span><strong id="kaModbus">-</strong></div>
         </div>
 
+        <div class="rail-card" data-accent="vpn" id="vpnCard" style="display:none;">
+          <p class="card-kicker" style="color:var(--node-vpn);">VPN-Tunnel</p>
+          <div id="vpnStatus" class="card-value" style="color:var(--node-vpn);">-</div>
+          <div class="metric-row"><span>Tunnel-IP</span><strong id="vpnTunIp">-</strong></div>
+          <div class="metric-row"><span>Uptime</span><strong id="vpnUptime">-</strong></div>
+          <div class="metric-row"><span>Reconnects</span><strong id="vpnReconnects">0</strong></div>
+          <div id="vpnCertWarn" class="metric-row" style="display:none;color:var(--c-amber-600);">
+            <span>Zertifikat</span><strong id="vpnCertDays">-</strong>
+          </div>
+          <div style="margin-top:8px;">
+            <button id="vpnReconnectBtn" class="btn-xs" style="background:var(--node-vpn);color:#fff;">Reconnect</button>
+          </div>
+        </div>
+
       </aside>
 
       <!-- Flow Center -->

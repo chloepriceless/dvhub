@@ -91,6 +91,12 @@ const SECTIONS = [
     label: 'EPEX',
     description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
     destination: 'services'
+  },
+  {
+    id: 'vpn',
+    label: 'VPN-Tunnel',
+    description: 'OpenVPN-Verbindung zum Direktvermarkter.',
+    destination: 'connection'
   }
 ];
 
@@ -198,7 +204,9 @@ const restartSensitivePrefixes = [
   'schedule.evaluateMs',
   'manufacturer',
   'victron.host',
-  'pvCoupling'
+  'pvCoupling',
+  'vpn.enabled',
+  'vpn.protocol'
 ];
 
 function addSetupWizardMetadata(fields) {
@@ -1420,6 +1428,111 @@ function buildFieldDefinitions() {
         { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
+    },
+    {
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.'
+    },
+    {
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
+      path: 'vpn.enabled',
+      label: 'VPN-Tunnel aktivieren',
+      type: 'boolean',
+      help: 'Aktiviert den VPN-Tunnel zum Direktvermarkter.'
+    },
+    {
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
+      path: 'vpn.protocol',
+      label: 'VPN-Protokoll',
+      type: 'select',
+      options: [
+        { value: 'openvpn', label: 'OpenVPN' },
+        { value: 'wireguard', label: 'WireGuard' },
+        { value: 'ipsec', label: 'IPSec / StrongSwan' }
+      ],
+      help: 'Tunnel-Protokoll. Aktuell wird nur OpenVPN unterstützt.'
+    },
+    {
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
+      path: 'vpn.autoConnect',
+      label: 'Automatisch verbinden',
+      type: 'boolean',
+      help: 'Tunnel beim DVhub-Start automatisch aufbauen.'
+    },
+    {
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
+      path: 'vpn.profileName',
+      label: 'Profilname',
+      type: 'text',
+      help: 'Name des VPN-Profils unter /etc/dvhub/vpn/profiles/.'
+    },
+    {
+      section: 'vpn',
+      group: 'watchdog',
+      groupLabel: 'Watchdog',
+      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.'
+    },
+    {
+      section: 'vpn',
+      group: 'watchdog',
+      groupLabel: 'Watchdog',
+      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
+      path: 'vpn.watchdog.enabled',
+      label: 'Watchdog aktiv',
+      type: 'boolean',
+      help: 'Tunnel-Zustand periodisch prüfen und bei Ausfall neu verbinden.'
+    },
+    {
+      section: 'vpn',
+      group: 'watchdog',
+      groupLabel: 'Watchdog',
+      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
+      path: 'vpn.watchdog.intervalMs',
+      label: 'Healthcheck-Intervall (ms)',
+      type: 'number',
+      min: 1000,
+      max: 300000,
+      step: 1000,
+      help: 'Abstand zwischen den Healthchecks in Millisekunden.'
+    },
+    {
+      section: 'vpn',
+      group: 'watchdog',
+      groupLabel: 'Watchdog',
+      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
+      path: 'vpn.watchdog.failThreshold',
+      label: 'Fehlversuche bis Reconnect',
+      type: 'number',
+      min: 1,
+      max: 20,
+      help: 'Anzahl aufeinanderfolgender Healthcheck-Fehler bis zum Reconnect.'
+    },
+    {
+      section: 'vpn',
+      group: 'watchdog',
+      groupLabel: 'Watchdog',
+      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
+      path: 'vpn.watchdog.maxBackoffMs',
+      label: 'Maximales Backoff (ms)',
+      type: 'number',
+      min: 5000,
+      max: 600000,
+      step: 1000,
+      help: 'Obere Grenze für das exponentielle Reconnect-Backoff.'
     }
   ];
 
@@ -1579,6 +1692,18 @@ export function createDefaultConfig() {
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
       priceApiUrl: 'https://api.dvhub.de'
+    },
+    vpn: {
+      enabled: false,
+      protocol: 'openvpn',
+      autoConnect: true,
+      profileName: 'direktvermarkter',
+      watchdog: {
+        enabled: true,
+        intervalMs: 10000,
+        failThreshold: 3,
+        maxBackoffMs: 120000
+      }
     }
   };
 }

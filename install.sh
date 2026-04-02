@@ -259,7 +259,7 @@ assert_supported_layout
 
 echo "[1/7] Pakete installieren"
 apt-get update
-apt-get install -y curl ca-certificates git sudo postgresql
+apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
@@ -321,6 +321,7 @@ npm install --omit=dev
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
+mkdir -p "$CONFIG_DIR/vpn/profiles"
 mkdir -p "$DATA_DIR"
 if [[ ! -f "$CONFIG_PATH" ]]; then
   cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
@@ -345,6 +346,8 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
+chmod 700 "$CONFIG_DIR/vpn"
+chmod 700 "$CONFIG_DIR/vpn/profiles"
 
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then
@@ -369,12 +372,34 @@ fi
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
+OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
+WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
+WG_PATH="$(command -v wg || echo /usr/bin/wg)"
+IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
+LN_PATH="$(command -v ln || echo /usr/bin/ln)"
+RM_PATH="$(command -v rm || echo /usr/bin/rm)"
+IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
+KILL_PATH="$(command -v kill || echo /usr/bin/kill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
 cat >"${SUDOERS_FILE}" <<SUDOERS
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.service *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_PATH} show *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} reload
+${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-*
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -0 *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -15 *
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 

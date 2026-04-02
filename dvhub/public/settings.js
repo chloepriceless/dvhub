@@ -1020,6 +1020,10 @@ function renderDestinationGrid(destinationId) {
   if (shouldRenderHistoryImportPanel(destinationId)) {
     mount.appendChild(renderHistoryImportPanel(destinationId));
   }
+
+  if (destinationId === 'connection') {
+    mount.appendChild(renderVpnUploadPanel());
+  }
 }
 
 function buildHistoryImportSummary(status) {
@@ -1675,6 +1679,119 @@ async function restartService() {
   window.setTimeout(() => {
     window.location.reload();
   }, 8000);
+}
+
+function renderVpnUploadPanel() {
+  const panel = document.createElement('section');
+  panel.className = 'config-group';
+  panel.dataset.accent = 'purple';
+
+  const kicker = document.createElement('div');
+  kicker.className = 'config-group-kicker';
+  kicker.textContent = 'VPN-Profil hochladen';
+  kicker.style.color = 'var(--node-vpn, #7F77DD)';
+  panel.appendChild(kicker);
+
+  const desc = document.createElement('p');
+  desc.style.cssText = 'font-size:0.78rem;opacity:0.7;padding:0 14px 8px;margin:0;';
+  desc.textContent = '.ovpn- oder WireGuard .conf-Datei hochladen. Bei OpenVPN optional separate Zertifikate. Private Keys werden sicher gespeichert und nie per API zurückgegeben.';
+  panel.appendChild(desc);
+
+  const form = document.createElement('div');
+  form.style.cssText = 'padding:0 14px 14px;';
+  form.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <label style="font-size:0.78rem;font-weight:600;">VPN-Konfiguration (.ovpn / .conf)</label>
+      <input type="file" id="vpnOvpnFile" accept=".ovpn,.conf" style="font-size:0.78rem;">
+      <label style="font-size:0.78rem;font-weight:600;margin-top:4px;">Optionale Dateien</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <div><span style="font-size:0.7rem;opacity:0.6;">ca.crt</span><input type="file" id="vpnCaFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
+        <div><span style="font-size:0.7rem;opacity:0.6;">client.crt</span><input type="file" id="vpnCertFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
+        <div><span style="font-size:0.7rem;opacity:0.6;">client.key</span><input type="file" id="vpnKeyFile" accept=".key,.pem" style="font-size:0.7rem;width:100%;"></div>
+        <div><span style="font-size:0.7rem;opacity:0.6;">ta.key / ipsec.secrets</span><input type="file" id="vpnTaFile" accept=".key,.pem,.secrets" style="font-size:0.7rem;width:100%;"></div>
+      </div>
+      <button id="vpnUploadBtn" type="button" class="btn btn-small" style="margin-top:6px;background:var(--node-vpn,#7F77DD);color:#fff;align-self:flex-start;">
+        Hochladen
+      </button>
+      <div id="vpnUploadResult" style="font-size:0.75rem;min-height:1.2em;"></div>
+    </div>
+  `;
+  panel.appendChild(form);
+
+  // VPN status summary
+  const statusDiv = document.createElement('div');
+  statusDiv.id = 'vpnSettingsStatus';
+  statusDiv.style.cssText = 'padding:0 14px 14px;font-size:0.78rem;';
+  panel.appendChild(statusDiv);
+
+  // fetch VPN status
+  apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
+    if (!vpn || !vpn.enabled) {
+      statusDiv.textContent = 'VPN ist deaktiviert.';
+      return;
+    }
+    const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
+    let html = `<strong>Status:</strong> ${labels[vpn.status] || vpn.status}`;
+    if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
+    if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
+    if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
+      html += ` | <span style="color:var(--c-amber-600);">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
+    }
+    statusDiv.innerHTML = html;
+  }).catch(() => {
+    statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
+  });
+
+  // upload handler (deferred to avoid event timing issues)
+  setTimeout(() => {
+    document.getElementById('vpnUploadBtn')?.addEventListener('click', handleVpnUpload);
+  }, 0);
+
+  return panel;
+}
+
+async function handleVpnUpload() {
+  const resultEl = document.getElementById('vpnUploadResult');
+  const ovpnInput = document.getElementById('vpnOvpnFile');
+  if (!ovpnInput?.files?.length) {
+    if (resultEl) resultEl.textContent = 'Bitte .ovpn- oder .conf-Datei auswaehlen.';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('config', ovpnInput.files[0]);
+
+  const caInput = document.getElementById('vpnCaFile');
+  if (caInput?.files?.length) formData.append('ca', caInput.files[0]);
+  const certInput = document.getElementById('vpnCertFile');
+  if (certInput?.files?.length) formData.append('cert', certInput.files[0]);
+  const keyInput = document.getElementById('vpnKeyFile');
+  if (keyInput?.files?.length) formData.append('key', keyInput.files[0]);
+  const taInput = document.getElementById('vpnTaFile');
+  if (taInput?.files?.length) {
+    const file = taInput.files[0];
+    // Route to correct field based on filename
+    if (file.name === 'ipsec.secrets' || file.name.endsWith('.secrets')) {
+      formData.append('secrets', file);
+    } else {
+      formData.append('ta', file);
+    }
+  }
+
+  if (resultEl) resultEl.textContent = 'Hochladen...';
+
+  try {
+    const r = await apiFetch('/api/vpn/config/upload', { method: 'POST', body: formData });
+    const out = await r.json();
+    if (resultEl) {
+      resultEl.textContent = out.ok
+        ? `Profil "${out.profile}" importiert.`
+        : `Fehler: ${(out.errors || [out.error]).join(', ')}`;
+      resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
+    }
+  } catch (e) {
+    if (resultEl) { resultEl.textContent = `Upload fehlgeschlagen: ${e.message}`; resultEl.style.color = 'var(--err)'; }
+  }
 }
 
 function initSettingsPage() {

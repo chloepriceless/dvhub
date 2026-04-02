@@ -111,5 +111,17 @@
     "enabled": true,
     "bzn": "DE-LU",
     "timezone": "Europe/Berlin"
+  },
+  "vpn": {
+    "enabled": false,
+    "protocol": "openvpn",
+    "autoConnect": true,
+    "profileName": "direktvermarkter",
+    "watchdog": {
+      "enabled": true,
+      "intervalMs": 10000,
+      "failThreshold": 3,
+      "maxBackoffMs": 120000
+    }
   }
 }

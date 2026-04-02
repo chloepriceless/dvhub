@@ -76,6 +76,26 @@ const HISTORY_IMPORT_FIELDS = [
   'lastError'
 ];
 
+const VPN_FIELDS = [
+  'enabled',
+  'status',
+  'protocol',
+  'tunIp',
+  'remoteIp',
+  'upSince',
+  'uptimeSeconds',
+  'bytesSent',
+  'bytesReceived',
+  'lastModbusActivity',
+  'reconnectAttempts',
+  'lastReconnectAt',
+  'lastError',
+  'certExpiry',
+  'certDaysRemaining',
+  'watchdogOk',
+  'profileName'
+];
+
 const RUNTIME_FIELDS = [
   'ready',
   'busy',
@@ -140,13 +160,19 @@ function buildHistoryImportSnapshot(historyImport = null) {
   return pickFields(historyImport, HISTORY_IMPORT_FIELDS);
 }
 
+function buildVpnSnapshot(vpn = null) {
+  if (!vpn || typeof vpn !== 'object') return null;
+  return pickFields(vpn, VPN_FIELDS);
+}
+
 export function buildRuntimeSnapshot({
   now = Date.now(),
   meter = {},
   victron = {},
   schedule = {},
   telemetry = {},
-  historyImport = null
+  historyImport = null,
+  vpn = null
 } = {}) {
   return {
     capturedAt: normalizeIso(now),
@@ -154,7 +180,8 @@ export function buildRuntimeSnapshot({
     victron: buildVictronSnapshot(victron),
     schedule: buildScheduleSnapshot(schedule),
     telemetry: buildTelemetrySnapshot(telemetry),
-    historyImport: buildHistoryImportSnapshot(historyImport)
+    historyImport: buildHistoryImportSnapshot(historyImport),
+    vpn: buildVpnSnapshot(vpn)
   };
 }
 
@@ -172,6 +199,7 @@ export function buildWebStatusResponse({
       ...buildTelemetrySnapshot(snapshot.telemetry),
       historyImport: buildHistoryImportSnapshot(snapshot.historyImport)
     },
+    vpn: buildVpnSnapshot(snapshot.vpn),
     runtime: pickFields(runtime, RUNTIME_FIELDS)
   };
 }

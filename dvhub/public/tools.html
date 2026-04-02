@@ -264,6 +264,45 @@
           </table>
         </div>
 
+        <!-- VPN-Diagnose -->
+        <div class="sub-card">
+          <div class="panel-head">
+            <div>
+              <p class="card-kicker" style="color:var(--node-vpn,#7F77DD);">VPN</p>
+              <h2 class="section-title">VPN-Tunnel Diagnose</h2>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button id="vpnToolStart" class="btn btn-ghost btn-small" type="button">Start</button>
+              <button id="vpnToolStop" class="btn btn-ghost btn-small" type="button">Stop</button>
+              <button id="vpnToolRestart" class="btn btn-ghost btn-small" type="button">Restart</button>
+            </div>
+          </div>
+          <p class="meta" style="margin-top:6px;">VPN-Status, Event-Log und manuelle Steuerung des Tunnels zum Direktvermarkter.</p>
+          <div id="vpnToolStatus" class="status-banner" style="margin-top:8px;">Status wird geladen...</div>
+          <div class="controls" style="margin-top:10px;">
+            <button id="loadVpnLog" class="btn btn-primary btn-small" type="button">Log laden</button>
+            <button id="refreshVpnLog" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
+            <label style="font-size:0.72rem;color:var(--flow-text-muted);">Filter:
+              <select id="vpnLogFilter" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:3px 6px;border-radius:6px;font-size:0.72rem;">
+                <option value="all">Alle VPN-Events</option>
+                <option value="connected">Verbindungen</option>
+                <option value="reconnect">Reconnects</option>
+                <option value="error">Fehler</option>
+              </select>
+            </label>
+          </div>
+          <table class="data-table" style="margin-top:8px;width:100%;font-size:0.72rem;">
+            <thead>
+              <tr>
+                <th>Zeitpunkt</th>
+                <th>Event</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="vpnLogRows"></tbody>
+          </table>
+        </div>
+
         <!-- Modbus-Scan -->
         <div class="sub-card">
           <div class="panel-head">

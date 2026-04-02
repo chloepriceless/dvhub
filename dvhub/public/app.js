@@ -1329,6 +1329,9 @@ function renderDashboardStatus(status) {
   setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
   setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
 
+  // VPN Rail-Card
+  renderVpnCard(status.vpn);
+
   const dvIndicators = resolveDvControlIndicators(status);
   setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
   setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
@@ -2110,8 +2113,50 @@ function renderAutomationStatus(scheduleData) {
   }
 }
 
+function renderVpnCard(vpn) {
+  const card = document.getElementById('vpnCard');
+  if (!card) return;
+  if (!vpn || !vpn.enabled) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  const statusLabels = {
+    connected: 'Verbunden',
+    connecting: 'Verbinde...',
+    disconnected: 'Getrennt',
+    error: 'Fehler'
+  };
+  const statusTone = vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : '');
+  setText('vpnStatus', statusLabels[vpn.status] || vpn.status || '-', statusTone);
+  setText('vpnTunIp', vpn.tunIp || '-');
+
+  if (vpn.uptimeSeconds != null && vpn.uptimeSeconds > 0) {
+    const h = Math.floor(vpn.uptimeSeconds / 3600);
+    const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
+    setText('vpnUptime', h > 0 ? `${h}h ${m}m` : `${m}m`);
+  } else {
+    setText('vpnUptime', '-');
+  }
+
+  setText('vpnReconnects', String(vpn.reconnectAttempts || 0));
+
+  const certWarn = document.getElementById('vpnCertWarn');
+  if (certWarn) {
+    if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
+      certWarn.style.display = '';
+      setText('vpnCertDays', `${vpn.certDaysRemaining} Tage`);
+    } else {
+      certWarn.style.display = 'none';
+    }
+  }
+}
+
 function initDashboard() {
   initFlowDiagram();
+  document.getElementById('vpnReconnectBtn')?.addEventListener('click', async () => {
+    try {
+      await apiFetch('/api/vpn/restart', { method: 'POST' });
+    } catch { /* ignore */ }
+  });
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);

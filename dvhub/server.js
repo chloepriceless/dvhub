@@ -51,6 +51,7 @@ import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
+import { createVpnManager } from './vpn-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -334,7 +335,8 @@ function buildCurrentRuntimeSnapshot() {
     victron: state.victron,
     schedule: state.schedule,
     telemetry: state.telemetry,
-    historyImport: historyImportManager ? historyImportManager.getStatus() : null
+    historyImport: historyImportManager ? historyImportManager.getStatus() : null,
+    vpn: state.vpn
   });
 }
 
@@ -556,6 +558,8 @@ const ctx = {
 };
 
 const modbus = createModbusServer(ctx);
+const vpnManager = createVpnManager(ctx);
+ctx.vpnManager = vpnManager;
 const epex = createEpexFetcher(ctx);
 ctx.epexNowNext = epex.epexNowNext;
 ctx.energyPath = ENERGY_PATH;
@@ -817,6 +821,11 @@ if (IS_WEB_PROCESS) {
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
   modbus.start();
+  if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
+    vpnManager.start().catch(err => {
+      pushLog('vpn_start_error', { error: err.message });
+    });
+  }
   setInterval(expireLeaseIfNeeded, 1000);
   setInterval(() => {
     liveTelemetryBuffer?.flush();
@@ -891,6 +900,7 @@ async function gracefulShutdown(signal) {
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
   if (telemetryStore) telemetryStore.close();
   modbus.close();
+  await vpnManager.close();
   if (IS_WEB_PROCESS) web.close();
   // Short delay to let TCP FIN packets flush before exiting
   setTimeout(() => process.exit(0), 500).unref();

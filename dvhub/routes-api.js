@@ -110,6 +110,49 @@ export function createApiRoutes(ctx) {
     };
   }
 
+  // ── Multipart helpers (VPN config upload) ────────────────────────────
+  function readRawBody(req, maxBytes) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on('data', chunk => {
+        size += chunk.length;
+        if (size > maxBytes) {
+          req.destroy();
+          reject(new Error('body too large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      req.on('error', reject);
+    });
+  }
+
+  function parseMultipartBody(body, boundary) {
+    const parts = [];
+    const delimiter = '--' + boundary;
+    const sections = body.split(delimiter).slice(1); // skip preamble
+
+    for (const section of sections) {
+      if (section.startsWith('--')) break; // end boundary
+      const headerEnd = section.indexOf('\r\n\r\n');
+      if (headerEnd < 0) continue;
+      const headers = section.substring(0, headerEnd);
+      const data = section.substring(headerEnd + 4).replace(/\r\n$/, '');
+
+      const nameMatch = headers.match(/name="([^"]+)"/);
+      const filenameMatch = headers.match(/filename="([^"]+)"/);
+
+      parts.push({
+        name: nameMatch ? nameMatch[1] : null,
+        filename: filenameMatch ? filenameMatch[1] : null,
+        data
+      });
+    }
+    return parts;
+  }
+
   // ── Response helpers ─────────────────────────────────────────────────
   function json(res, code, payload) {
     const body = JSON.stringify(payload);
@@ -185,6 +228,8 @@ export function createApiRoutes(ctx) {
     '/api/history/summary',
     '/api/schedule/automation/config',
     '/api/meter/scan',
+    '/api/vpn/status',
+    '/api/vpn/history',
     '/dv/control-value',
   ]);
 
@@ -1251,6 +1296,95 @@ export function createApiRoutes(ctx) {
       state.schedule.manualOverride[target] = { value, at: Date.now() };
       const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
       return json(res, result.ok ? 200 : 500, result);
+    }
+
+    // --- VPN Endpoints ---
+    if (url.pathname === '/api/vpn/status' && req.method === 'GET') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      return json(res, 200, ctx.vpnManager.getStatus());
+    }
+
+    if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      try {
+        await ctx.vpnManager.start();
+        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/vpn/stop' && req.method === 'POST') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      try {
+        await ctx.vpnManager.stop();
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/vpn/restart' && req.method === 'POST') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      try {
+        await ctx.vpnManager.restart();
+        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/vpn/history' && req.method === 'GET') {
+      const vpnEvents = state.log
+        .filter(e => e.event && e.event.startsWith('vpn_'))
+        .slice(-50);
+      return json(res, 200, vpnEvents);
+    }
+
+    if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
+      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+
+      const contentType = req.headers['content-type'] || '';
+
+      // Support both multipart and JSON upload
+      if (contentType.includes('multipart/form-data')) {
+        const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
+        if (!boundaryMatch) return json(res, 400, { ok: false, error: 'missing boundary' });
+
+        const rawBody = await readRawBody(req, 2 * 1024 * 1024); // 2MB limit
+        const parts = parseMultipartBody(rawBody, boundaryMatch[1]);
+
+        const configPart = parts.find(p =>
+          p.name === 'ovpn' || p.name === 'config' ||
+          (p.filename && (p.filename.endsWith('.ovpn') || p.filename.endsWith('.conf')))
+        );
+        if (!configPart) return json(res, 400, { ok: false, error: 'missing config file part (.ovpn or .conf)' });
+
+        const certFiles = {};
+        for (const p of parts) {
+          if (p.name === 'ca' || (p.filename && p.filename === 'ca.crt')) certFiles.ca = p.data;
+          if (p.name === 'cert' || (p.filename && p.filename === 'client.crt')) certFiles.cert = p.data;
+          if (p.name === 'key' || (p.filename && p.filename === 'client.key')) certFiles.key = p.data;
+          if (p.name === 'ta' || (p.filename && p.filename === 'ta.key')) certFiles.ta = p.data;
+          if (p.name === 'secrets' || (p.filename && p.filename === 'ipsec.secrets')) certFiles.secrets = p.data;
+        }
+
+        const result = await ctx.vpnManager.importConfig(configPart.data, certFiles);
+        return json(res, result.ok ? 200 : 400, result);
+      }
+
+      // JSON body: { ovpn/config: "...", ca: "...", cert: "...", key: "...", secrets: "..." }
+      const body = await parseBody(req);
+      const configContent = body.ovpn || body.config;
+      if (!configContent) return json(res, 400, { ok: false, error: 'missing ovpn/config field' });
+      const result = await ctx.vpnManager.importConfig(configContent, {
+        ca: body.ca || null,
+        cert: body.cert || null,
+        key: body.key || null,
+        ta: body.ta || null,
+        secrets: body.secrets || null
+      });
+      return json(res, result.ok ? 200 : 400, result);
     }
 
     // Unmatched route -- return false so orchestrator can fall through to static files
