@@ -821,8 +821,9 @@ if (IS_WEB_PROCESS) {
 
   // HTTPS with self-signed cert (optional)
   const httpsPort = cfg.httpsPort || null;
-  const tlsCert = cfg.tlsCertPath || path.join(CONFIG_DIR, 'tls', 'cert.pem');
-  const tlsKey = cfg.tlsKeyPath || path.join(CONFIG_DIR, 'tls', 'key.pem');
+  const configDir = path.dirname(CONFIG_PATH);
+  const tlsCert = cfg.tlsCertPath || path.join(configDir, 'tls', 'cert.pem');
+  const tlsKey = cfg.tlsKeyPath || path.join(configDir, 'tls', 'key.pem');
   if (httpsPort) {
     try {
       const certData = fs.readFileSync(tlsCert);
