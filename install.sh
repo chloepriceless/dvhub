@@ -431,7 +431,7 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/node --experimental-sqlite ${APP_DIR}/server.js
+ExecStart=/usr/bin/node ${APP_DIR}/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=${CONFIG_PATH}
 Environment=DV_ENABLE_SERVICE_ACTIONS=1
