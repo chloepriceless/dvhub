@@ -1004,8 +1004,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 24,
-            callback: function(value, index) {
-              const d = data[index];
+            callback: function(value) {
+              const d = data[value];
               if (!d) return '';
               const date = new Date(d.ts);
               const m = date.getMinutes();
