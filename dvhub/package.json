@@ -10,7 +10,9 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js",
+    "test:sqlite": "node --experimental-sqlite --test test/sqlite/*.test.js",
+    "test:all": "node --experimental-sqlite --test"
   },
   "repository": {
     "type": "git",
