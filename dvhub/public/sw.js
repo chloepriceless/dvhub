@@ -1,24 +1,7 @@
-// DVhub Service Worker — caches UI shell, API calls always go to network
-const CACHE_NAME = 'dvhub-v1';
-const SHELL_ASSETS = [
-  '/',
-  '/styles.css',
-  '/common.js',
-  '/app.js',
-  '/history.js',
-  '/setup.js',
-  '/tools.js',
-  '/manifest.json',
-  '/assets/logo-192.png',
-  '/assets/logo-512.png',
-  '/assets/favicon-32.png',
-  '/assets/apple-touch-icon.png'
-];
+// DVhub Service Worker — network-first for JS/CSS/HTML, offline fallback only
+const CACHE_NAME = 'dvhub-v2';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS))
-  );
   self.skipWaiting();
 });
 
@@ -34,35 +17,19 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API calls and DV endpoints always go to network (live data)
+  // API calls — always network, never cache
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
     return;
   }
 
-  // External resources (fonts, CDN scripts) — network first, cache fallback
-  if (url.origin !== self.location.origin) {
-    event.respondWith(
-      fetch(event.request).then((response) => {
+  // Everything else — network first, cache fallback (offline support)
+  event.respondWith(
+    fetch(event.request).then((response) => {
+      if (response.ok) {
         const clone = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        return response;
-      }).catch(() => caches.match(event.request))
-    );
-    return;
-  }
-
-  // UI shell — stale-while-revalidate (serve cached, update in background)
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request).then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => cached);
-
-      return cached || fetchPromise;
-    })
+      }
+      return response;
+    }).catch(() => caches.match(event.request))
   );
 });

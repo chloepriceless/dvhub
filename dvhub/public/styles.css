@@ -112,6 +112,8 @@ button {
   display: grid;
   grid-template-rows: 44px 1fr auto;
   min-height: 100vh;
+  max-width: 1920px;
+  margin: 0 auto;
 }
 
 /* --- Topbar --- */
@@ -3504,8 +3506,10 @@ button {
 
 .page-content {
   padding: 16px 24px;
-  max-width: 100%;
+  max-width: 1400px;
   margin: 0 auto;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 
@@ -3727,6 +3731,9 @@ button {
 }
 .settings-content {
   padding: 0 16px 16px;
+  max-width: 1400px;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 .system-tab-content .page-grid {
   display: grid;
@@ -3778,6 +3785,8 @@ button {
   border-radius: 10px;
   border-left: 3px solid rgba(123,151,178,0.18);
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .config-group[data-accent="green"]  { border-left-color: var(--flow-green, #4CE36C); }
 .config-group[data-accent="yellow"] { border-left-color: var(--flow-yellow, #FFD32E); }
