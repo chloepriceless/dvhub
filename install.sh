@@ -418,6 +418,10 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -0 *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -15 *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 

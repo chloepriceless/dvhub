@@ -910,6 +910,84 @@ export function createApiRoutes(ctx) {
       });
     }
 
+    // --- System Updates (OS packages) ---
+    if (url.pathname === '/api/admin/system/updates/check' && req.method === 'GET') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
+        await execFileAsync('sudo', ['apt-get', 'update', '-qq'], { timeout: 30000 });
+        const { stdout } = await execFileAsync('sudo', ['apt', 'list', '--upgradable'], { timeout: 15000 });
+        const lines = stdout.split('\n').filter(l => l.includes('/'));
+        const packages = lines.map(l => {
+          const match = l.match(/^([^\s/]+)\/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]/);
+          return match ? { name: match[1], newVersion: match[2], currentVersion: match[3] } : null;
+        }).filter(Boolean);
+        const securityCount = lines.filter(l => l.includes('-security')).length;
+        return json(res, 200, {
+          ok: true,
+          totalCount: packages.length,
+          securityCount,
+          packages: packages.slice(0, 50),
+          checkedAt: new Date().toISOString()
+        });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/admin/system/updates/apply' && req.method === 'POST') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      try {
+        const body = await parseBody(req).catch(() => ({}));
+        const securityOnly = body?.securityOnly === true;
+        let result;
+        if (securityOnly) {
+          result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
+        } else {
+          result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
+        }
+        // Re-apply setcap in case node was upgraded
+        const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
+        await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
+
+        const outputLines = (result.stdout || '').split('\n');
+        const upgraded = outputLines.filter(l => /^Setting up/.test(l)).map(l => l.replace('Setting up ', '').replace(/ \(.*/, ''));
+        pushLog('system_updates_applied', { count: upgraded.length, securityOnly, packages: upgraded.slice(0, 20) });
+        return json(res, 200, {
+          ok: true,
+          upgraded: upgraded.length,
+          packages: upgraded.slice(0, 50),
+          message: `${upgraded.length} Pakete aktualisiert`
+        });
+      } catch (e) {
+        pushLog('system_updates_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    if (url.pathname === '/api/admin/system/info' && req.method === 'GET') {
+      try {
+        const uptimeOut = (await execFileAsync('uptime', ['-p'], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
+        const hostnameOut = (await execFileAsync('hostname', [], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
+        const memOut = (await execFileAsync('free', ['-m'], { timeout: 5000 }).catch(() => ({ stdout: '' }))).stdout;
+        const memMatch = memOut.match(/Mem:\s+(\d+)\s+(\d+)/);
+        const diskOut = (await execFileAsync('df', ['-h', '/'], { timeout: 5000 }).catch(() => ({ stdout: '' }))).stdout;
+        const diskMatch = diskOut.match(/\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+%)/);
+        const kernelOut = (await execFileAsync('uname', ['-r'], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
+        const nodeVersion = process.version;
+        return json(res, 200, {
+          ok: true,
+          hostname: hostnameOut,
+          uptime: uptimeOut,
+          kernel: kernelOut,
+          nodeVersion,
+          memory: memMatch ? { totalMb: +memMatch[1], usedMb: +memMatch[2] } : null,
+          disk: diskMatch ? { size: diskMatch[1], used: diskMatch[2], available: diskMatch[3], usePct: diskMatch[4] } : null
+        });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
     // --- Software Update Check ---
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });

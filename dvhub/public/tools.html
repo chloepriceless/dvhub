@@ -93,6 +93,24 @@
           <div id="updateMeta" class="meta" style="margin-top:4px;">-</div>
         </div>
 
+        <!-- System Updates -->
+        <div class="sub-card">
+          <div class="panel-head">
+            <div>
+              <p class="card-kicker">System</p>
+              <h2 class="section-title">Betriebssystem</h2>
+            </div>
+            <button id="checkSystemUpdatesBtn" class="btn btn-ghost btn-small" type="button">Prüfen</button>
+          </div>
+          <div id="systemInfoBanner" class="status-banner" style="margin-top:8px;">Systeminfo wird geladen...</div>
+          <div id="systemUpdatesBanner" class="status-banner" style="margin-top:6px;display:none;"></div>
+          <div id="systemUpdatesList" style="display:none;margin-top:6px;max-height:200px;overflow-y:auto;font-size:0.72rem;"></div>
+          <div id="systemUpdatesActions" style="display:none;margin-top:8px;display:flex;gap:6px;">
+            <button id="applySystemUpdatesBtn" class="btn btn-primary btn-small" type="button">Alle Updates installieren</button>
+          </div>
+          <div id="systemUpdatesMeta" class="meta" style="margin-top:4px;">-</div>
+        </div>
+
         <!-- Config Import / Export -->
         <div class="sub-card">
           <div class="panel-head">
