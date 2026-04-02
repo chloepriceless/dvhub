@@ -396,7 +396,7 @@ IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
 LN_PATH="$(command -v ln || echo /usr/bin/ln)"
 RM_PATH="$(command -v rm || echo /usr/bin/rm)"
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
-KILL_PATH="$(command -v kill || echo /usr/bin/kill)"
+KILL_PATH="$(which kill 2>/dev/null || echo /usr/bin/kill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
 cat >"${SUDOERS_FILE}" <<SUDOERS
