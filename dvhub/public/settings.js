@@ -2039,6 +2039,18 @@ function initSettingsPage() {
   // System Updates (OS packages)
   document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', checkSystemUpdates);
   document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', applySystemUpdates);
+  document.getElementById('rebootSystemBtn')?.addEventListener('click', async () => {
+    if (!confirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.')) return;
+    const resultEl = document.getElementById('rebootResult');
+    if (resultEl) { resultEl.textContent = 'Neustart...'; resultEl.style.color = 'var(--c-amber-600)'; }
+    try {
+      await apiFetch('/api/admin/system/reboot', { method: 'POST' });
+      if (resultEl) { resultEl.textContent = 'System startet neu — Seite wird in 30s neu geladen...'; }
+      setTimeout(() => window.location.reload(), 30000);
+    } catch (e) {
+      if (resultEl) { resultEl.textContent = 'Fehler: ' + e.message; resultEl.style.color = 'var(--err)'; }
+    }
+  });
   loadSystemInfo();
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {

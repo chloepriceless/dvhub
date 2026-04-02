@@ -95,6 +95,8 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 echo "  Sudoers: OK"

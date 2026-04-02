@@ -72,21 +72,14 @@ test('all public HTML entrypoints use DVhub branding and remove legacy product c
   }
 });
 
-test('shell navigation uses the simplified Leitstand, Einrichtung, and Wartung structure', () => {
-  // tools.html and setup.html use the Einrichtung/Wartung nav labels
-  for (const fileName of ['tools.html', 'setup.html']) {
-    const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
-    assert.match(html, />Leitstand</);
-    assert.match(html, />Einrichtung</);
-    assert.match(html, />Wartung</);
-    assert.doesNotMatch(html, />Tools</);
-  }
-  // index.html and settings.html use Einstellungen and don't expose the Wartung link
-  for (const fileName of ['index.html', 'settings.html']) {
+test('shell navigation uses Leitstand and Einstellungen without Wartung link', () => {
+  // All pages use Einstellungen and don't expose Wartung or Tools
+  for (const fileName of ['index.html', 'settings.html', 'setup.html']) {
     const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
     assert.match(html, />Leitstand</);
     assert.match(html, />Einstellungen</);
     assert.doesNotMatch(html, />Tools</);
+    assert.doesNotMatch(html, />Wartung</);
   }
 });
 

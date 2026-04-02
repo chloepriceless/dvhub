@@ -939,14 +939,14 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/admin/system/updates/apply' && req.method === 'POST') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
-        const body = await parseBody(req).catch(() => ({}));
-        const securityOnly = body?.securityOnly === true;
-        let result;
-        if (securityOnly) {
-          result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
-        } else {
-          result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
+        // Wait for any running apt/dpkg lock (max 60s)
+        for (let i = 0; i < 12; i++) {
+          try {
+            await execFileAsync('sudo', ['fuser', '/var/lib/dpkg/lock-frontend'], { timeout: 3000 });
+            await new Promise(r => setTimeout(r, 5000)); // lock held, wait 5s
+          } catch { break; } // fuser exits non-zero = no lock
         }
+        const result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
         // Re-apply setcap in case node was upgraded
         const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
         await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
@@ -988,6 +988,16 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
       }
+    }
+
+    if (url.pathname === '/api/admin/system/reboot' && req.method === 'POST') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      pushLog('system_reboot', {});
+      json(res, 200, { ok: true, message: 'System wird neu gestartet...' });
+      setTimeout(() => {
+        execFileAsync('sudo', ['reboot'], { timeout: 5000 }).catch(() => {});
+      }, 1000);
+      return;
     }
 
     // --- Software Update Check ---
