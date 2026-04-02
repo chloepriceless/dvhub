@@ -59,6 +59,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const CONFIG_PATH = process.env.DV_APP_CONFIG || path.join(__dirname, 'config.json');
 const execFileAsync = promisify(execFile);
+import { runMigrations, checkSystemRequirements } from './migration-runner.js';
+
+// Run config migrations before loading config
+const migrationResult = await runMigrations(CONFIG_PATH);
+if (migrationResult.applied.length > 0) {
+  console.log(`Config migrated: v${migrationResult.fromVersion} → v${migrationResult.toVersion}`);
+}
+const systemWarnings = checkSystemRequirements();
+if (systemWarnings.length > 0) {
+  for (const w of systemWarnings) console.warn(`System: ${w.message}`);
+}
+
 const CONFIG_DEFINITION = getConfigDefinition();
 let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
@@ -87,6 +99,7 @@ const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
 const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE === 'monolith';
 
 const state = {
+  systemWarnings,
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
   ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false, _dcExportPriceBlockLogged: false },
   keepalive: {
