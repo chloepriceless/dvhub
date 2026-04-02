@@ -587,6 +587,29 @@ function setBanner(message, kind = 'info') {
   el.className = `config-banner ${kind}`;
 }
 
+function showSettingsRestartButton() {
+  const el = document.getElementById('settingsBanner');
+  if (!el) return;
+  if (el.querySelector('#settingsRestartBtn')) return;
+  const btn = document.createElement('button');
+  btn.id = 'settingsRestartBtn';
+  btn.className = 'btn btn-danger btn-small';
+  btn.style.cssText = 'margin-left:12px;vertical-align:middle;';
+  btn.textContent = 'Jetzt neu starten';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Wird neu gestartet...';
+    try {
+      await restartService();
+    } catch (e) {
+      setBanner('Restart fehlgeschlagen: ' + e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Jetzt neu starten';
+    }
+  });
+  el.appendChild(btn);
+}
+
 function buildMetaText(meta) {
   const parts = [
     `Datei: ${meta.path || '-'}`,
@@ -1543,10 +1566,12 @@ async function saveConfig(config, source = 'settings') {
     meta: payload.meta
   });
 
-  const restartNote = payload.restartRequired
-    ? ` Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`
-    : '';
-  setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
+  if (payload.restartRequired) {
+    setBanner(`Konfiguration gespeichert. Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`, 'warn');
+    showSettingsRestartButton();
+  } else {
+    setBanner('Konfiguration gespeichert.', 'success');
+  }
   await loadHistoryImportStatus();
   renderSettingsShell();
   return true;
