@@ -77,8 +77,11 @@
     setStoredApiToken
   };
 
-  // Register service worker for PWA support
+  // Register service worker for PWA support — force update on version change
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      for (const reg of regs) reg.update();
+    });
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 })();

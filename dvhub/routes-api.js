@@ -642,6 +642,8 @@ export function createApiRoutes(ctx) {
     let cacheControl;
     if (ext === '.html') {
       cacheControl = reqPath.includes('setup') ? 'no-store' : 'no-cache';
+    } else if (reqPath === '/sw.js') {
+      cacheControl = 'no-store';
     } else if (ext === '.js' || ext === '.css') {
       cacheControl = 'no-cache';
     }
