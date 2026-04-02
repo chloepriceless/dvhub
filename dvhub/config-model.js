@@ -373,16 +373,16 @@ function buildFieldDefinitions() {
       help: 'IP oder Interface für den Modbus-Server.'
     },
     {
-      section: 'system',
-      group: 'general',
-      groupLabel: 'Grundsystem',
-      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
+      section: 'vpn',
+      group: 'tunnel',
+      groupLabel: 'VPN-Tunnel',
+      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
       path: 'modbusListenPort',
       label: 'Modbus Listen Port',
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht.'
+      help: 'Port fuer den Modbus-Proxy. Bei VPN-Setups auf 502 setzen (Direktvermarkter erwartet Port 502). Ohne VPN: 1502 (kein Root noetig).'
     },
     {
       section: 'system',
