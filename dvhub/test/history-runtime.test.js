@@ -107,14 +107,14 @@ const pricingConfig = {
   ]
 };
 
-test('history runtime computes slot-level import cost, export revenue, and unresolved counters', () => {
+test('history runtime computes slot-level import cost, export revenue, and unresolved counters', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({
+  const summary = await runtime.getSummary({
     view: 'week',
     date: '2026-03-09'
   });
@@ -156,7 +156,7 @@ test('history runtime computes slot-level import cost, export revenue, and unres
   assert.equal(summary.rows[0].batteryShareKwh, 0);
 });
 
-test('history runtime splits self-consumption cost across grid pv and battery shares', () => {
+test('history runtime splits self-consumption cost across grid pv and battery shares', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -190,7 +190,7 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({
+  const summary = await runtime.getSummary({
     view: 'day',
     date: '2026-03-09'
   });
@@ -213,13 +213,15 @@ test('history runtime splits self-consumption cost across grid pv and battery sh
     avoidedImportBatteryGrossEur: 0.06,
     selfConsumptionCostEur: 0.17,
     opportunityCostEur: 0.03,
+    opportunityCostPvEur: 0.02,
+    opportunityCostBatteryEur: 0.01,
     importCostEur: 0.12,
     exportRevenueEur: 0,
     netEur: -0.17
   });
 });
 
-test('history runtime computes avoided import gross values for slots, rows, and kpis', () => {
+test('history runtime computes avoided import gross values for slots, rows, and kpis', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -253,7 +255,7 @@ test('history runtime computes avoided import gross values for slots, rows, and 
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({
+  const summary = await runtime.getSummary({
     view: 'day',
     date: '2026-03-09'
   });
@@ -269,7 +271,7 @@ test('history runtime computes avoided import gross values for slots, rows, and 
   assert.equal(summary.slots[0].avoidedImportBatteryGrossEur, 0.06);
 });
 
-test('history runtime matches export revenue per slot even when price timestamps only align by bucket', () => {
+test('history runtime matches export revenue per slot even when price timestamps only align by bucket', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -321,7 +323,7 @@ test('history runtime matches export revenue per slot even when price timestamps
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({
+  const summary = await runtime.getSummary({
     view: 'week',
     date: '2026-03-09'
   });
@@ -332,7 +334,7 @@ test('history runtime matches export revenue per slot even when price timestamps
   assert.equal(summary.rows[0].exportRevenueEur, 0.23);
 });
 
-test('history runtime prices all imported energy with the import tariff even when part of the slot is not direct load share', () => {
+test('history runtime prices all imported energy with the import tariff even when part of the slot is not direct load share', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -366,7 +368,7 @@ test('history runtime prices all imported energy with the import tariff even whe
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({
+  const summary = await runtime.getSummary({
     view: 'day',
     date: '2026-03-09'
   });
@@ -377,7 +379,7 @@ test('history runtime prices all imported energy with the import tariff even whe
   assert.equal(summary.kpis.gridCostEur, 0.3);
 });
 
-test('history runtime exposes aggregated net-analysis payloads with real export costs separated from avoided import', () => {
+test('history runtime exposes aggregated net-analysis payloads with real export costs separated from avoided import', async () => {
   const pricing = {
     mode: 'fixed',
     fixedGrossImportCtKwh: 30,
@@ -442,15 +444,15 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const week = runtime.getSummary({
+  const week = await runtime.getSummary({
     view: 'week',
     date: '2026-03-09'
   });
-  const month = runtime.getSummary({
+  const month = await runtime.getSummary({
     view: 'month',
     date: '2026-03-09'
   });
-  const year = runtime.getSummary({
+  const year = await runtime.getSummary({
     view: 'year',
     date: '2026-03-09'
   });
@@ -483,6 +485,8 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
     avoidedImportPvGrossEur: 0,
     avoidedImportBatteryGrossEur: 0,
     opportunityCostEur: 0,
+    opportunityCostPvEur: 0,
+    opportunityCostBatteryEur: 0,
     selfConsumptionCostEur: 0.08,
     netEur: 0.04,
     grossReturnEur: 0.04,
@@ -517,17 +521,17 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
   assert.equal(year.charts.periodCombinedBars[0].grossReturnEur, -0.44);
 });
 
-test('history runtime groups day, week, month, and year views with correct totals', () => {
+test('history runtime groups day, week, month, and year views with correct totals', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const day = runtime.getSummary({ view: 'day', date: '2026-03-09' });
-  const week = runtime.getSummary({ view: 'week', date: '2026-03-09' });
-  const month = runtime.getSummary({ view: 'month', date: '2026-03-09' });
-  const year = runtime.getSummary({ view: 'year', date: '2026-03-09' });
+  const day = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-03-09' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
 
   assert.equal(day.rows.length, 2);
   assert.equal(week.rows.length, 2);
@@ -538,7 +542,7 @@ test('history runtime groups day, week, month, and year views with correct total
   assert.equal(year.rows[1].label, '2026-04');
 });
 
-test('history runtime aggregates export and premium-eligible energy without cumulative rounding loss', () => {
+test('history runtime aggregates export and premium-eligible energy without cumulative rounding loss', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -612,21 +616,21 @@ test('history runtime aggregates export and premium-eligible energy without cumu
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.kpis.exportKwh, 1.01);
   assert.equal(year.rows[0].exportKwh, 1.01);
   assert.equal(year.kpis.premiumEligibleExportKwh, 1.01);
 });
 
-test('history runtime omits slot-level series payloads for annual responses', () => {
+test('history runtime omits slot-level series payloads for annual responses', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-03-09' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
 
   assert.deepEqual(year.series, {
     financial: [],
@@ -637,7 +641,7 @@ test('history runtime omits slot-level series payloads for annual responses', ()
   assert.equal(year.charts.periodCombinedBars.length, 2);
 });
 
-test('history runtime reads annual energy slots in monthly chunks to limit peak memory', () => {
+test('history runtime reads annual energy slots in monthly chunks to limit peak memory', async () => {
   const calls = [];
   const runtime = createHistoryRuntime({
     store: {
@@ -653,7 +657,7 @@ test('history runtime reads annual energy slots in monthly chunks to limit peak 
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  runtime.getSummary({
+  await runtime.getSummary({
     view: 'year',
     date: '2026-03-09',
     solarMarketValues: {
@@ -676,15 +680,15 @@ test('history runtime reads annual energy slots in monthly chunks to limit peak 
   });
 });
 
-test('history runtime exposes chart-ready series with split costs and estimation metadata', () => {
+test('history runtime exposes chart-ready series with split costs and estimation metadata', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const day = runtime.getSummary({ view: 'day', date: '2026-03-09' });
-  const week = runtime.getSummary({ view: 'week', date: '2026-03-09' });
+  const day = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
 
   assert.equal(Array.isArray(day.charts?.dayEnergyLines), true);
   assert.equal(day.charts.dayEnergyLines[0].label, '12:00');
@@ -714,7 +718,7 @@ test('history runtime exposes chart-ready series with split costs and estimation
   });
 });
 
-test('history runtime carries extended vrm flow values into rows and kpis', () => {
+test('history runtime carries extended vrm flow values into rows and kpis', async () => {
   const slots = [
     {
       ts: '2026-03-08T11:00:00.000Z',
@@ -747,7 +751,7 @@ test('history runtime carries extended vrm flow values into rows and kpis', () =
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const summary = runtime.getSummary({ view: 'day', date: '2026-03-08' });
+  const summary = await runtime.getSummary({ view: 'day', date: '2026-03-08' });
 
   assert.equal(summary.kpis.solarDirectUseKwh, 0.7);
   assert.equal(summary.kpis.pvAcKwh, 0.5);
@@ -760,7 +764,7 @@ test('history runtime carries extended vrm flow values into rows and kpis', () =
   assert.equal(summary.charts.dayEnergyLines[0].solarDirectUseKwh, 0.7);
 });
 
-test('history runtime reads past days from history scope and the current day from live scope', () => {
+test('history runtime reads past days from history scope and the current day from live scope', async () => {
   const calls = [];
   const runtime = createHistoryRuntime({
     store: {
@@ -776,14 +780,14 @@ test('history runtime reads past days from history scope and the current day fro
     getCurrentDate: () => '2026-03-10'
   });
 
-  runtime.getSummary({ view: 'day', date: '2026-03-09' });
-  runtime.getSummary({ view: 'day', date: '2026-03-10' });
+  await runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  await runtime.getSummary({ view: 'day', date: '2026-03-10' });
 
   assert.deepEqual(calls[0].scopes, ['history']);
   assert.deepEqual(calls[1].scopes, ['live']);
 });
 
-test('history runtime splits ranges that span today into history and live queries', () => {
+test('history runtime splits ranges that span today into history and live queries', async () => {
   const calls = [];
   const runtime = createHistoryRuntime({
     store: {
@@ -799,7 +803,7 @@ test('history runtime splits ranges that span today into history and live querie
     getCurrentDate: () => '2026-03-10'
   });
 
-  runtime.getSummary({ view: 'week', date: '2026-03-10' });
+  await runtime.getSummary({ view: 'week', date: '2026-03-10' });
 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].scopes, ['history']);
@@ -810,7 +814,7 @@ test('history runtime splits ranges that span today into history and live querie
   assert.equal(calls[1].end, '2026-03-15T23:00:00.000Z');
 });
 
-test('history runtime reads materialized slots first and falls back to aggregated raw slots only when needed', () => {
+test('history runtime reads materialized slots first and falls back to aggregated raw slots only when needed', async () => {
   let materializedCalls = 0;
   let rawCalls = 0;
   const runtime = createHistoryRuntime({
@@ -845,14 +849,14 @@ test('history runtime reads materialized slots first and falls back to aggregate
     getCurrentDate: () => '2026-03-10'
   });
 
-  const summary = runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  const summary = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
 
   assert.equal(materializedCalls, 1);
   assert.equal(rawCalls, 1);
   assert.equal(summary.rows.length, 1);
 });
 
-test('history runtime derives current-year solar market value from monthly values weighted by exported energy', () => {
+test('history runtime derives current-year solar market value from monthly values weighted by exported energy', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
     getPricingConfig: () => pricingConfig,
@@ -866,7 +870,7 @@ test('history runtime derives current-year solar market value from monthly value
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-03-09' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
 
   assert.equal(year.rows[0].solarMarketValueCtKwh, 5);
   assert.equal(year.rows[0].solarCompensationEur, 0.03);
@@ -881,7 +885,7 @@ test('history runtime derives current-year solar market value from monthly value
   assert.equal(year.kpis.solarCompensationEur, 0.1);
 });
 
-test('history runtime uses official annual solar market value for completed years', () => {
+test('history runtime uses official annual solar market value for completed years', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -914,7 +918,7 @@ test('history runtime uses official annual solar market value for completed year
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2025-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2025-06-01' });
 
   assert.deepEqual(year.meta.solarMarketValue, {
     year: 2025,
@@ -925,7 +929,7 @@ test('history runtime uses official annual solar market value for completed year
   assert.equal(year.kpis.solarCompensationEur, 0.09);
 });
 
-test('history runtime computes weighted applicable value and premium-eligible export for annual premium input', () => {
+test('history runtime computes weighted applicable value and premium-eligible export for annual premium input', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -995,13 +999,13 @@ test('history runtime computes weighted applicable value and premium-eligible ex
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.kpis.weightedApplicableValueCtKwh, 7.97);
   assert.equal(year.kpis.premiumEligibleExportKwh, 1.25);
 });
 
-test('history runtime resolves plant-specific applicable values via lookup function for equal commissioning months', () => {
+test('history runtime resolves plant-specific applicable values via lookup function for equal commissioning months', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -1043,14 +1047,14 @@ test('history runtime resolves plant-specific applicable values via lookup funct
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.kpis.weightedApplicableValueCtKwh, 6.93);
   assert.equal(year.meta.marketPremium.configuredPlantCount, 2);
   assert.equal(year.meta.marketPremium.resolvedPlantCount, 2);
 });
 
-test('history runtime computes annual market premium from official annual market value and weighted applicable value', () => {
+test('history runtime computes annual market premium from official annual market value and weighted applicable value', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -1126,7 +1130,7 @@ test('history runtime computes annual market premium from official annual market
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.kpis.annualMarketValueCtKwh, 5.5);
   assert.equal(year.kpis.weightedApplicableValueCtKwh, 7.97);
@@ -1134,7 +1138,7 @@ test('history runtime computes annual market premium from official annual market
   assert.equal(year.kpis.marketPremiumEur, 0.03);
 });
 
-test('history runtime derives current-year market premium from available monthly market values until the official annual value exists', () => {
+test('history runtime derives current-year market premium from available monthly market values until the official annual value exists', async () => {
   const energySlots = [
     {
       ts: '2027-01-10T10:00:00.000Z',
@@ -1210,7 +1214,7 @@ test('history runtime derives current-year market premium from available monthly
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2027-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2027-06-01' });
 
   assert.equal(year.kpis.annualMarketValueCtKwh, 5.17);
   assert.equal(year.kpis.weightedApplicableValueCtKwh, 8.2);
@@ -1220,7 +1224,7 @@ test('history runtime derives current-year market premium from available monthly
   assert.equal(year.meta.marketPremium.availableMarketValueMonths, 2);
 });
 
-test('history runtime exposes monthly and cross-month weekly market premium rates for aggregate rows', () => {
+test('history runtime exposes monthly and cross-month weekly market premium rates for aggregate rows', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots({ start, end }) {
@@ -1298,9 +1302,9 @@ test('history runtime exposes monthly and cross-month weekly market premium rate
     })
   });
 
-  const week = runtime.getSummary({ view: 'week', date: '2026-02-01' });
-  const month = runtime.getSummary({ view: 'month', date: '2026-02-15' });
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-02-01' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   const januaryWeekRow = week.rows.find((row) => row.label === '2026-01-31');
   const februaryWeekRow = week.rows.find((row) => row.label === '2026-02-01');
@@ -1338,7 +1342,7 @@ test('history runtime exposes monthly and cross-month weekly market premium rate
   assert.equal(year.kpis.marketPremiumCtKwh, 3.03);
 });
 
-test('history runtime uses monthly market value for month view when no annual value exists yet', () => {
+test('history runtime uses monthly market value for month view when no annual value exists yet', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots({ start, end }) {
@@ -1385,7 +1389,7 @@ test('history runtime uses monthly market value for month view when no annual va
     })
   });
 
-  const month = runtime.getSummary({ view: 'month', date: '2027-02-10' });
+  const month = await runtime.getSummary({ view: 'month', date: '2027-02-10' });
 
   assert.equal(month.kpis.periodMarketValueCtKwh, 4.5);
   assert.equal(month.kpis.marketPremiumCtKwh, 3.7);
@@ -1393,7 +1397,7 @@ test('history runtime uses monthly market value for month view when no annual va
   assert.equal(month.meta.marketPremium.displaySource, 'official_monthly');
 });
 
-test('history runtime keeps month premium on monthly market values when configured globally', () => {
+test('history runtime keeps month premium on monthly market values when configured globally', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots({ start, end }) {
@@ -1457,7 +1461,7 @@ test('history runtime keeps month premium on monthly market values when configur
     })
   });
 
-  const month = runtime.getSummary({ view: 'month', date: '2026-02-15' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15' });
 
   assert.equal(month.kpis.periodMarketValueCtKwh, 4.5);
   assert.equal(month.kpis.marketPremiumCtKwh, 3.7);
@@ -1465,7 +1469,7 @@ test('history runtime keeps month premium on monthly market values when configur
   assert.equal(month.meta.marketPremium.displaySource, 'official_monthly_configured');
 });
 
-test('history runtime sums yearly premium from monthly market values when configured globally', () => {
+test('history runtime sums yearly premium from monthly market values when configured globally', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots({ start, end }) {
@@ -1544,7 +1548,7 @@ test('history runtime sums yearly premium from monthly market values when config
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.rows[0].marketPremiumEur, 0.03);
   assert.equal(year.rows[1].marketPremiumEur, 0.09);
@@ -1555,7 +1559,7 @@ test('history runtime sums yearly premium from monthly market values when config
   assert.equal(year.meta.marketPremium.displaySource, 'configured_monthly');
 });
 
-test('history runtime counts current-year premium-eligible export for all non-negative price slots even when later months lack market values', () => {
+test('history runtime counts current-year premium-eligible export for all non-negative price slots even when later months lack market values', async () => {
   const energySlots = [
     {
       ts: '2027-01-10T10:00:00.000Z',
@@ -1631,13 +1635,13 @@ test('history runtime counts current-year premium-eligible export for all non-ne
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2027-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2027-06-01' });
 
   assert.equal(year.kpis.premiumEligibleExportKwh, 1.75);
   assert.equal(year.kpis.marketPremiumEur, 0.05);
 });
 
-test('history runtime derives annual premium eur from the displayed annual premium rate for all eligible export in running annual mode', () => {
+test('history runtime derives annual premium eur from the displayed annual premium rate for all eligible export in running annual mode', async () => {
   const energySlots = [
     {
       ts: '2027-01-10T10:00:00.000Z',
@@ -1698,7 +1702,7 @@ test('history runtime derives annual premium eur from the displayed annual premi
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2027-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2027-06-01' });
 
   assert.equal(year.meta.marketPremium.source, 'derived_monthly_running');
   assert.equal(year.kpis.premiumEligibleExportKwh, 10);
@@ -1706,7 +1710,7 @@ test('history runtime derives annual premium eur from the displayed annual premi
   assert.equal(year.kpis.marketPremiumEur, -0.38);
 });
 
-test('history runtime does not produce market premium for past years when the official annual market value is missing', () => {
+test('history runtime does not produce market premium for past years when the official annual market value is missing', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -1752,7 +1756,7 @@ test('history runtime does not produce market premium for past years when the of
     })
   });
 
-  const year = runtime.getSummary({ view: 'year', date: '2026-06-01' });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   assert.equal(year.kpis.annualMarketValueCtKwh, null);
   assert.equal(year.kpis.weightedApplicableValueCtKwh, 8.2);
@@ -1760,7 +1764,7 @@ test('history runtime does not produce market premium for past years when the of
   assert.equal(year.kpis.marketPremiumEur, null);
 });
 
-test('history runtime exposes pv full-load hours from configured plant capacity', () => {
+test('history runtime exposes pv full-load hours from configured plant capacity', async () => {
   const runtime = createHistoryRuntime({
     store: {
       listAggregatedEnergySlots() {
@@ -1794,7 +1798,7 @@ test('history runtime exposes pv full-load hours from configured plant capacity'
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const day = runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  const day = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
 
   assert.equal(day.kpis.configuredPvCapacityKwp, 29.7);
   assert.equal(day.kpis.pvFullLoadHours, 1);

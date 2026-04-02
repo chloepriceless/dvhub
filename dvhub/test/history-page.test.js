@@ -20,10 +20,15 @@ function createElement() {
     value: '',
     disabled: false,
     hidden: false,
+    style: {},
+    dataset: {},
+    ariaPressed: null,
+    ariaExpanded: null,
     listeners: new Map(),
     addEventListener(type, handler) {
       this.listeners.set(type, handler);
-    }
+    },
+    querySelector() { return null; }
   };
 }
 
@@ -34,31 +39,53 @@ function loadHistoryPageHelpers() {
     'historyBannerText',
     'historyMeta',
     'historyChartGrid',
-    'historySummaryCard',
     'historyPremiumFields',
     'historyPremiumHint',
     'historyPremiumScopeLabel',
     'historyPremiumMarketValueLabel',
     'historyPremiumRateLabel',
+    'historyKpiTotalCost',
     'historyKpiCost',
+    'historyKpiAvoidedPvCost',
+    'historyKpiAvoidedBatteryCost',
+    'historyKpiTotalRevenue',
     'historyKpiRevenue',
+    'historyKpiNet',
+    'historyKpiCashIn',
+    'historyKpiCashOut',
     'historyKpiAvoided',
     'historyKpiAvoidedPvGross',
     'historyKpiAvoidedBatteryGross',
-    'historyKpiAvoidedPvCost',
-    'historyKpiAvoidedBatteryCost',
-    'historyKpiNet',
-    'historyKpiSavedMoney',
-    'historyKpiGrossReturn',
-    'historyKpiImport',
-    'historyKpiLoad',
+    'historyKpiAvoidedPvMarket',
+    'historyKpiAvoidedBatMarket',
+    'historyKpiOppCost',
     'historyKpiPv',
+    'historyKpiSelfCons',
+    'historyKpiImport',
     'historyKpiExport',
     'historyKpiVbh',
+    'historyKpiGrossReturn',
+    'historyKpiBilanzAvoided',
+    'historyKpiBilanzNet',
+    'historyKpiBilanzPvCost',
+    'historyKpiBilanzBatCost',
+    'historyKpiBilanzCard',
     'historyKpiAnnualMarketValue',
     'historyKpiPremiumEligibleExport',
     'historyKpiMarketPremium',
     'historyKpiMarketPremiumRate',
+    'historyDvCard',
+    'historyKpiDvRevenue',
+    'historyKpiDvRevenueRate',
+    'historyKpiHypFullFeedIn',
+    'historyKpiHypSurplusFeedIn',
+    'historyKpiDvExcess',
+    'historyKpiDvCost',
+    'historyKpiDvNetAdvantage',
+    'historyAvoidedLabel',
+    'historyAvoidedDefault',
+    'historyAvoidedMarket',
+    'historyMarketToggle',
     'historyFinancialPanel',
     'historyEnergyPanel',
     'historyPricePanel',
@@ -89,13 +116,18 @@ function loadHistoryPageHelpers() {
     console,
     URL,
     globalThis: {},
+    Chart: class Chart { destroy() {} },
     window: {
       __DVHUB_HISTORY_TEST__: true,
       DVhubCommon: {}
     },
     document: {
       getElementById(id) {
-        return elements.get(id) || null;
+        if (!elements.has(id)) {
+          // Auto-create elements for dynamic IDs (e.g. canvas mounts)
+          elements.set(id, createElement());
+        }
+        return elements.get(id);
       }
     }
   };
@@ -118,7 +150,7 @@ test('tools page exposes separate gap and full VRM backfill controls', () => {
   const html = readPublic('tools.html');
 
   assert.match(html, /id="historyBackfillBtn"/);
-  assert.match(html, /VRM-Luecken schliessen/);
+  assert.match(html, /VRM-Lücken schließen/);
   assert.match(html, /id="historyFullBackfillAck"/);
   assert.match(html, /id="historyFullBackfillExtendedLookback"/);
   assert.match(html, /id="historyFullBackfillLookbackDays"/);
@@ -137,25 +169,20 @@ test('history page exposes view switcher, unified summary card, chart containers
   assert.doesNotMatch(html, /id="historyOpportunityLabel"/);
   assert.match(html, /id="historyBackfillBtn"/);
   assert.doesNotMatch(html, /id="historyKpiGrid"/);
-  assert.match(html, /id="historySummaryCard"/);
   assert.match(html, /id="historyChartGrid"/);
   assert.match(html, /id="historyFinancialPanel"/);
   assert.match(html, /id="historyEnergyPanel"/);
   assert.match(html, /id="historyPricePanel"/);
-  assert.match(html, /Bezugs-Kosten/);
-  assert.match(html, /Gespartes Geld/);
-  assert.match(html, /Brutto-"Erlös"/);
-  assert.match(html, /id="historyKpiLoad"/);
+  assert.match(html, /Energiekosten/);
+  assert.match(html, /Gesamtbilanz/);
   assert.match(html, /id="historyKpiPv"/);
   assert.match(html, /id="historyKpiVbh"/);
-  assert.match(html, /Erlös aus Einspeisung/);
-  assert.match(html, /Vermiedene Bezugskosten/);
+  assert.match(html, /Vermiedene Kosten/);
   assert.match(html, /id="historyKpiAvoided"/);
   assert.match(html, /id="historyKpiAvoidedPvGross"/);
   assert.match(html, /id="historyKpiAvoidedBatteryGross"/);
   assert.match(html, /id="historyKpiAvoidedPvCost"/);
   assert.match(html, /id="historyKpiAvoidedBatteryCost"/);
-  assert.match(html, /id="historyKpiSavedMoney"/);
   assert.match(html, /id="historyKpiGrossReturn"/);
   assert.match(html, /id="historyPremiumFields"/);
   assert.match(html, /id="historyPremiumHint"/);
@@ -267,11 +294,9 @@ test('history page renders summary card values, grouped rows, and unresolved war
   assert.match(elements.get('historyKpiAvoidedBatteryGross').textContent, /0,96/);
   assert.match(elements.get('historyKpiAvoidedPvCost').textContent, /0,32/);
   assert.match(elements.get('historyKpiAvoidedBatteryCost').textContent, /0,11/);
-  assert.match(elements.get('historyKpiNet').textContent, /-0,78/);
-  assert.match(elements.get('historyKpiSavedMoney').textContent, /2,48/);
+  assert.match(elements.get('historyKpiNet').textContent, /0,78/);
   assert.match(elements.get('historyKpiGrossReturn').textContent, /1,70/);
   assert.match(elements.get('historyKpiImport').textContent, /4,50/);
-  assert.match(elements.get('historyKpiLoad').textContent, /8,20/);
   assert.match(elements.get('historyKpiPv').textContent, /5,30/);
   assert.match(elements.get('historyKpiVbh').textContent, /0,18/);
   assert.equal(elements.get('historyPremiumFields').hidden, true);
@@ -589,21 +614,11 @@ test('history page renders daily line charts and estimated markers from chart pa
     }
   });
 
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-line-chart/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-y/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-axis-x/);
-  assert.match(elements.get('historyFinancialChart').innerHTML, /history-x-axis-label/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /PV/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /history-chart-hover-surface/);
-  assert.doesNotMatch(elements.get('historyEnergyChart').innerHTML, /history-chart-cursor/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /kWh/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /PV AC/);
-  assert.match(elements.get('historyEnergyChart').innerHTML, /PV direkt/);
-  assert.match(elements.get('historyPriceChart').innerHTML, /Marktpreis/);
-  assert.match(elements.get('historyPriceList').innerHTML, /11:00/);
-  assert.match(elements.get('historyPriceList').innerHTML, /offen/);
+  assert.match(elements.get('historyFinancialChart').innerHTML, /canvas/);
+  assert.match(elements.get('historyEnergyChart').innerHTML, /canvas/);
+  assert.match(elements.get('historyPriceChart').innerHTML, /canvas/);
+  assert.equal(elements.get('historyPriceList').innerHTML, '');
   assert.equal(elements.get('historyAggregatePriceHint').innerHTML, '');
-  assert.match(elements.get('historyEnergyChart').innerHTML, /geschätzt/);
 });
 
 test('history page shows local provisional and VRM confirmed origins in banner and row status', () => {

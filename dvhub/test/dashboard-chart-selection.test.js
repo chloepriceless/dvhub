@@ -281,6 +281,7 @@ test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back
       grid: -40,
       charge: 80,
       stopSocPct: 25,
+      dcExport: false,
       ruleId: 'grid_1'
     }
   ]);
@@ -308,15 +309,13 @@ test('dashboard escapes dynamic schedule and plan row template values', () => {
   assert.match(app, /<td>\$\{escapeAttr\(slot\.priceCtKwh != null \? \(Number\(slot\.priceCtKwh\)\)\.toFixed\(2\) : '\\u2014'\)\} ct\/kWh<\/td>/);
 });
 
-test('dashboard places the schedule panel directly after the price engine panel', () => {
+test('dashboard places the schedule panel directly after the price chart panel', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const priceIndex = html.indexOf('Preis-Engine');
+  const chartIndex = html.indexOf('Day-Ahead-Preise');
   const scheduleIndex = html.indexOf('<p class="card-title">Zeitplan</p>');
-  const controlIndex = html.indexOf('Manuelle Eingriffe');
 
-  assert.ok(priceIndex >= 0);
-  assert.ok(scheduleIndex > priceIndex);
-  assert.ok(controlIndex > scheduleIndex);
+  assert.ok(chartIndex >= 0);
+  assert.ok(scheduleIndex > chartIndex);
 });
 
 test('dashboard source preserves automation metadata and yellow rule styling', () => {
@@ -324,7 +323,7 @@ test('dashboard source preserves automation metadata and yellow rule styling', (
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
   const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
-  assert.match(html, /kleine Börsenautomatik/);
+  assert.match(html, /Börsenautomatik/);
   assert.match(css, /\.sched-row-automation/);
   assert.match(css, /--schedule-automation-yellow/);
   assert.match(app, /displayTone/);
