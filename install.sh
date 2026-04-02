@@ -328,7 +328,18 @@ echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
 mkdir -p "$CONFIG_DIR/vpn/profiles"
+mkdir -p "$CONFIG_DIR/tls"
 mkdir -p "$DATA_DIR"
+
+# Generate self-signed TLS certificate if not present
+if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
+  echo "   Generiere Self-Signed TLS Zertifikat..."
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$CONFIG_DIR/tls/key.pem" \
+    -out "$CONFIG_DIR/tls/cert.pem" \
+    -days 3650 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
+  chmod 600 "$CONFIG_DIR/tls/key.pem"
+fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
   cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
 fi

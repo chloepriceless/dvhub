@@ -1,6 +1,7 @@
 {
   "manufacturer": "victron",
-  "httpPort": 8080,
+  "httpPort": 80,
+  "httpsPort": 443,
   "modbusListenHost": "0.0.0.0",
   "modbusListenPort": 1502,
   "offLeaseMs": 480000,

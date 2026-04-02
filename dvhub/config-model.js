@@ -192,6 +192,7 @@ const SETUP_WIZARD_FIELD_META = {
 
 const restartSensitivePrefixes = [
   'httpPort',
+  'httpsPort',
   'modbusListenHost',
   'modbusListenPort',
   'meterPollMs',
@@ -349,7 +350,19 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port der Weboberflaeche.'
+      help: 'Port der Weboberflaeche (Standard: 80).'
+    },
+    {
+      section: 'system',
+      group: 'general',
+      groupLabel: 'Grundsystem',
+      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
+      path: 'httpsPort',
+      label: 'HTTPS Port',
+      type: 'number',
+      min: 0,
+      max: 65535,
+      help: 'Port fuer HTTPS mit Self-Signed Zertifikat. 0 oder leer = deaktiviert. Zertifikate liegen unter /etc/dvhub/tls/.'
     },
     {
       section: 'system',

@@ -1,5 +1,7 @@
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -816,6 +818,26 @@ if (IS_WEB_PROCESS) {
   web.listen(cfg.httpPort, () => {
     console.log(`Web server listening on :${cfg.httpPort}`);
   });
+
+  // HTTPS with self-signed cert (optional)
+  const httpsPort = cfg.httpsPort || null;
+  const tlsCert = cfg.tlsCertPath || path.join(CONFIG_DIR, 'tls', 'cert.pem');
+  const tlsKey = cfg.tlsKeyPath || path.join(CONFIG_DIR, 'tls', 'key.pem');
+  if (httpsPort) {
+    try {
+      const certData = fs.readFileSync(tlsCert);
+      const keyData = fs.readFileSync(tlsKey);
+      const webTls = https.createServer({ cert: certData, key: keyData }, web.listeners('request')[0]);
+      webTls.listen(httpsPort, () => {
+        console.log(`HTTPS server listening on :${httpsPort}`);
+      });
+      webTls.on('error', (err) => {
+        console.error(`HTTPS server error: ${err.message}`);
+      });
+    } catch (e) {
+      console.warn(`HTTPS disabled: ${e.message}`);
+    }
+  }
 }
 
 if (IS_RUNTIME_PROCESS) {
