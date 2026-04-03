@@ -88,7 +88,9 @@ test('buildMilpSchedule with cheap/expensive prices produces charge rules during
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -111,7 +113,9 @@ test('buildMilpSchedule produces discharge rules during most expensive hours', a
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -159,7 +163,9 @@ test('power constraints respected: charge <= maxChargeW, discharge <= maxDischar
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -185,7 +191,9 @@ test('returns null when HiGHS is not available (graceful degradation)', async ()
     pvSlots: make15minPvSlots([0, 0]),
     loadSlots: makeHourlyLoadSlots([500, 500]),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (higgsAvailable) {
@@ -205,7 +213,9 @@ test('output format matches schedule-builder input: array of { ts, endTs, powerW
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -238,7 +248,9 @@ test('15min price/PV slots are aggregated to 1h via aggregateTo1h before MILP', 
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -268,7 +280,9 @@ test('1h load slots pass through to MILP without re-aggregation', async () => {
     pvSlots: make15minPvSlots(pv),
     loadSlots,
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
@@ -290,7 +304,9 @@ test('1h MILP results are expanded back to 15min slots', async () => {
     pvSlots: make15minPvSlots(pv),
     loadSlots: makeHourlyLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   if (!higgsAvailable) {
