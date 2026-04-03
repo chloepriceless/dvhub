@@ -11,6 +11,9 @@ import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules } from './schedule-builder.js';
 import { createEosAdapter } from './eos-adapter.js';
+import { enrichPriceSlotsWithCosts } from './cost-model.js';
+import { createMispelTracker } from './mispel-tracker.js';
+import { assessMultiDayHold } from './multi-day.js';
 
 /**
  * Estimate net grid cost over the horizon for a given schedule.
@@ -25,7 +28,6 @@ import { createEosAdapter } from './eos-adapter.js';
  */
 export function estimateNetCost(schedule, priceSlots, pvSlots, loadSlots) {
   let totalCostCt = 0;
-  const FEED_IN_FACTOR = 0.8; // Feed-in tariff is ~80% of spot price (conservative)
 
   for (const slot of schedule) {
     const dtHours = (slot.endTs - slot.ts) / 3_600_000;
@@ -41,21 +43,24 @@ export function estimateNetCost(schedule, priceSlots, pvSlots, loadSlots) {
     const pvW = pv ? pv.powerW : 0;
     const loadW = load ? load.powerW : 0;
 
+    const importPrice = price.importCtKwh ?? price.ctKwh;
+    const feedInPrice = price.feedInCtKwh ?? price.ctKwh * 0.8;
+
     if (slot.powerW > 0) {
       // Charging: grid imports more
       const gridImportW = Math.max(0, loadW - pvW + slot.powerW);
-      totalCostCt += gridImportW * price.ctKwh * dtHours / 1000;
+      totalCostCt += gridImportW * importPrice * dtHours / 1000;
     } else {
       // Discharging: battery offsets load or exports surplus
       const dischW = Math.abs(slot.powerW);
       const netLoad = loadW - pvW - dischW;
       if (netLoad > 0) {
         // Still importing from grid but less
-        totalCostCt += netLoad * price.ctKwh * dtHours / 1000;
+        totalCostCt += netLoad * importPrice * dtHours / 1000;
       } else {
-        // Exporting surplus
+        // Exporting surplus -- use feed-in price
         const exportW = Math.abs(netLoad);
-        totalCostCt -= exportW * price.ctKwh * FEED_IN_FACTOR * dtHours / 1000;
+        totalCostCt -= exportW * feedInPrice * dtHours / 1000;
       }
     }
   }
@@ -150,6 +155,9 @@ export function createOptimizerService(ctx) {
     lastForecastVersion: -1
   };
 
+  // MiSpeL tracker (created once, accumulates yearly feed-in/withdrawal)
+  const mispelTracker = createMispelTracker(state, getCfg, pushLog);
+
   // EOS adapter (created once, used when enabled)
   const eosAdapter = createEosAdapter(ctx);
 
@@ -176,17 +184,19 @@ export function createOptimizerService(ctx) {
 
       // 2. Normalize forecast (ISO -> epoch-ms)
       const normalized = normalizeForecast(forecastResponse);
-      const priceSlots = normalized.price.slots;
       const pvSlots = normalized.pv.slots;
       const loadSlots = normalized.load.slots;
 
-      if (priceSlots.length === 0) {
+      if (normalized.price.slots.length === 0) {
         state.optimizer.error = 'No price data available';
         return;
       }
 
+      // 2b. Enrich price slots with fully-loaded costs (OPTI-06)
+      const enrichedPriceSlots = enrichPriceSlotsWithCosts(normalized.price.slots, cfg);
+
       // 3. Per-slot confidence average (NOT state.forecast.pv.confidence -- issue #7)
-      const confidence = averageSlotConfidence([...pvSlots, ...priceSlots]);
+      const confidence = averageSlotConfidence([...pvSlots, ...enrichedPriceSlots]);
 
       // 4. Battery params from config + confidence gating
       const batteryParams = {
@@ -210,39 +220,82 @@ export function createOptimizerService(ctx) {
       const allowGridCharge = cfg.optimizer.allowGridCharge ?? false;
       const allowGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
 
+      // 6b. Multi-day awareness pre-filter (OPTI-09)
+      const avgFeedIn = enrichedPriceSlots.length > 0
+        ? enrichedPriceSlots.reduce((s, p) => s + (p.feedInCtKwh ?? 0), 0) / enrichedPriceSlots.length
+        : 0;
+      const avgImport = enrichedPriceSlots.length > 0
+        ? enrichedPriceSlots.reduce((s, p) => s + (p.importCtKwh ?? 0), 0) / enrichedPriceSlots.length
+        : 0;
+      const rtEff = cfg.optimizer?.roundTripEfficiency ?? 0.92;
+
+      const multiDayResult = assessMultiDayHold(
+        pvSlots, loadSlots,
+        cfg.optimizer?.batteryCapacityWh ?? 10000,
+        avgFeedIn, avgImport, rtEff
+      );
+
+      let effectiveAllowGridDischarge = allowGridDischarge;
+      if (multiDayResult.holdBattery) {
+        effectiveAllowGridDischarge = false; // Suppress feed-in today
+        pushLog('optimizer_multi_day_hold', {
+          reason: multiDayResult.reason,
+          tomorrowPvKwh: multiDayResult.tomorrowPvKwh,
+          tomorrowDeficitKwh: multiDayResult.tomorrowDeficitKwh
+        });
+      }
+
+      // 6c. MiSpeL profitability check (OPTI-08)
+      const mispelMode = cfg.optimizer?.mispel?.mode ?? 'none';
+      let effectivePriceSlots = enrichedPriceSlots;
+      if (mispelMode !== 'none') {
+        effectivePriceSlots = enrichedPriceSlots.map(slot => {
+          const result = mispelTracker.isGridChargeProfitable(slot.importCtKwh);
+          return {
+            ...slot,
+            importCtKwh: result.adjustedImportCtKwh
+          };
+        });
+      }
+
       // 7. Choose optimizer based on tier and strategy
       const strategy = cfg.optimizer.strategy ?? 'auto';
       let internalSchedule;
 
       if (strategy === 'heuristic' || (strategy === 'auto' && tier === 1)) {
         internalSchedule = buildHeuristicSchedule({
-          priceSlots, pvSlots, loadSlots,
+          priceSlots: effectivePriceSlots, pvSlots, loadSlots,
           batteryModel, confidenceGate: gate,
-          allowGridCharge, allowGridDischarge
+          allowGridCharge, allowGridDischarge: effectiveAllowGridDischarge
         });
       } else {
         // Tier 2+: try MILP, fall back to heuristic
         internalSchedule = await buildMilpSchedule({
-          priceSlots, pvSlots, loadSlots,
+          priceSlots: effectivePriceSlots, pvSlots, loadSlots,
           batteryModel, confidenceGate: gate,
-          allowGridCharge, allowGridDischarge
+          allowGridCharge, allowGridDischarge: effectiveAllowGridDischarge
         });
         if (internalSchedule === null) {
           // MILP unavailable (Tier 1 or HiGHS missing), fall back
           internalSchedule = buildHeuristicSchedule({
-            priceSlots, pvSlots, loadSlots,
+            priceSlots: effectivePriceSlots, pvSlots, loadSlots,
             batteryModel, confidenceGate: gate,
-            allowGridCharge, allowGridDischarge
+            allowGridCharge, allowGridDischarge: effectiveAllowGridDischarge
           });
         }
       }
 
-      // 7. EOS adapter (when enabled on Tier 2+)
+      // 7b. EOS adapter (when enabled on Tier 2+)
       let eosSchedule = null;
       if (cfg.optimizer.eosProxy?.enabled && tier >= 2) {
         try {
+          // Send enriched forecast with fully-loaded prices to EOS
           const forecastResp = ctx.forecastService.buildForecastResponse();
-          await eosAdapter.pushForecast(forecastResp);
+          const enrichedForecast = {
+            ...forecastResp,
+            price: { ...forecastResp.price, slots: enrichedPriceSlots }
+          };
+          await eosAdapter.pushForecast(enrichedForecast);
           eosSchedule = await eosAdapter.pullSchedule();
         } catch (err) {
           pushLog('optimizer_eos_error', { error: err.message });
@@ -271,8 +324,8 @@ export function createOptimizerService(ctx) {
       } else if (primarySource === 'best') {
         // Estimate net-cost delta over horizon for each schedule
         if (eosSchedule && eosSchedule.length > 0) {
-          const internalCost = estimateNetCost(internalSchedule, priceSlots, pvSlots, loadSlots);
-          const eosCost = estimateNetCost(eosSchedule, priceSlots, pvSlots, loadSlots);
+          const internalCost = estimateNetCost(internalSchedule, effectivePriceSlots, pvSlots, loadSlots);
+          const eosCost = estimateNetCost(eosSchedule, effectivePriceSlots, pvSlots, loadSlots);
           if (eosCost < internalCost) {
             winningSchedule = eosSchedule;
             source = 'eos';
@@ -321,6 +374,17 @@ export function createOptimizerService(ctx) {
       state.optimizer.error = null;
       state.optimizer.runCount++;
       state.optimizer.lastForecastVersion = currentVersion;
+
+      // 14b. Update MiSpeL yearly tracker (OPTI-08)
+      if (mispelMode !== 'none' && state.victron) {
+        const gridPowerW = state.victron.gridPower ?? 0; // positive = import, negative = export
+        const dtMs = 30 * 60 * 1000; // 30min between runs (approximate)
+        const dtH = dtMs / 3_600_000;
+
+        const feedInWh = gridPowerW < 0 ? Math.abs(gridPowerW) * dtH : 0;
+        const gridWithdrawalWh = gridPowerW > 0 ? gridPowerW * dtH : 0;
+        mispelTracker.update(feedInWh, gridWithdrawalWh);
+      }
 
       // 15. Log
       pushLog('optimizer_run', {
@@ -389,6 +453,6 @@ export function createOptimizerService(ctx) {
     start,
     close,
     getSchedule: () => state.optimizer.lastSchedule,
-    getStatus: () => state.optimizer
+    getStatus: () => ({ ...state.optimizer, mispel: state.optimizer.mispel })
   };
 }
