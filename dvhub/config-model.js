@@ -1719,6 +1719,26 @@ function buildFieldDefinitions() {
     },
     {
       section: 'optimizer',
+      group: 'optimizerGeneral',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Batterie-Optimierung und Schedule-Generierung.',
+      path: 'optimizer.allowGridCharge',
+      label: 'Netzladen erlauben',
+      type: 'boolean',
+      help: 'Erlaubt dem Optimizer die Batterie aus dem Netz zu laden (z.B. bei guenstigen Strompreisen). Ohne dies wird nur PV-Ueberschuss gespeichert.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerGeneral',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Batterie-Optimierung und Schedule-Generierung.',
+      path: 'optimizer.allowGridDischarge',
+      label: 'Netzentladung erlauben (Pauschaloption)',
+      type: 'boolean',
+      help: 'Erlaubt dem Optimizer Batterieenergie ins Netz zu entladen (Grid-Arbitrage). Erfordert die Pauschaloption nach EEG. Ohne dies wird nur fuer Eigenverbrauch entladen.'
+    },
+    {
+      section: 'optimizer',
       group: 'optimizerBattery',
       groupLabel: 'Batterie-Parameter',
       groupDescription: 'Physikalische Kennwerte des Batteriespeichers.'

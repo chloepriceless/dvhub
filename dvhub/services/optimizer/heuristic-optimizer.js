@@ -31,9 +31,11 @@ import { simulateSoc } from './battery-model.js';
  * @param {number} params.confidenceGate.maxDischargeW - Adjusted max discharge W
  * @param {boolean} params.confidenceGate.allowSell - Whether discharge/sell is allowed
  * @param {number} params.confidenceGate.chargeWindowMultiplier - Charge window scaling factor
+ * @param {boolean} [params.allowGridCharge=false] - Allow charging from grid (Netzladen)
+ * @param {boolean} [params.allowGridDischarge=false] - Allow discharging to grid (Pauschaloption)
  * @returns {Array<{ts: number, endTs: number, powerW: number, confidence: number}>}
  */
-export function buildHeuristicSchedule({ priceSlots, pvSlots, loadSlots, batteryModel, confidenceGate }) {
+export function buildHeuristicSchedule({ priceSlots, pvSlots, loadSlots, batteryModel, confidenceGate, allowGridCharge = false, allowGridDischarge = false }) {
   if (!priceSlots || priceSlots.length === 0) return [];
 
   // 1. Calculate average price
@@ -47,12 +49,12 @@ export function buildHeuristicSchedule({ priceSlots, pvSlots, loadSlots, battery
     .sort((a, b) => a.ctKwh - b.ctKwh);
 
   // 3. Find expensive slots (> 130% of average), sorted most expensive first
-  //    Only if confidence gate allows selling
-  const expensiveSlots = confidenceGate.allowSell
-    ? priceSlots
-        .filter(s => s.ctKwh > avgPrice * 1.3)
-        .sort((a, b) => b.ctKwh - a.ctKwh)
-    : [];
+  //    Grid discharge (Batterie→Netz) requires allowGridDischarge AND confidence gate
+  //    Self-consume discharge (Batterie→Eigenverbrauch) is always allowed
+  const canGridDischarge = allowGridDischarge && confidenceGate.allowSell;
+  const expensiveSlots = priceSlots
+    .filter(s => s.ctKwh > avgPrice * 1.3)
+    .sort((a, b) => b.ctKwh - a.ctKwh);
 
   // Helper: find corresponding PV slot by matching ts range
   function findPvSlot(ts) {
@@ -61,29 +63,50 @@ export function buildHeuristicSchedule({ priceSlots, pvSlots, loadSlots, battery
 
   const schedule = [];
 
-  // 4. Generate charge rules for cheap slots without PV surplus
-  const chargeW = Math.round(batteryModel.maxChargeW * confidenceGate.chargeWindowMultiplier);
-  for (const slot of cheapSlots) {
-    const pvSlot = findPvSlot(slot.ts);
-    // Skip if PV surplus > 500W (battery charges from PV naturally)
-    if (pvSlot && pvSlot.powerW > 500) continue;
+  // 4. Generate charge rules for cheap slots
+  //    Only create grid-charge rules if allowGridCharge is true
+  //    PV-charge rules are never needed (Victron ESS handles PV→Battery natively)
+  if (allowGridCharge) {
+    const chargeW = Math.round(batteryModel.maxChargeW * confidenceGate.chargeWindowMultiplier);
+    for (const slot of cheapSlots) {
+      const pvSlot = findPvSlot(slot.ts);
+      // Skip if PV surplus > 500W (battery charges from PV naturally)
+      if (pvSlot && pvSlot.powerW > 500) continue;
 
-    schedule.push({
-      ts: slot.ts,
-      endTs: slot.endTs,
-      powerW: chargeW,  // Positive = charge
-      confidence: slot.confidence
-    });
+      schedule.push({
+        ts: slot.ts,
+        endTs: slot.endTs,
+        powerW: chargeW,  // Positive = charge from grid
+        confidence: slot.confidence
+      });
+    }
   }
 
   // 5. Generate discharge rules for expensive slots
   for (const slot of expensiveSlots) {
-    schedule.push({
-      ts: slot.ts,
-      endTs: slot.endTs,
-      powerW: -confidenceGate.maxDischargeW,  // Negative = discharge
-      confidence: slot.confidence
-    });
+    // Find expected load to cap discharge at self-consumption level
+    const loadSlot = loadSlots.find(l => l.ts <= slot.ts && l.endTs > slot.ts);
+    const expectedLoadW = loadSlot ? loadSlot.powerW : 0;
+
+    if (canGridDischarge) {
+      // Pauschaloption: discharge full power to grid (arbitrage)
+      schedule.push({
+        ts: slot.ts,
+        endTs: slot.endTs,
+        powerW: -confidenceGate.maxDischargeW,
+        confidence: slot.confidence
+      });
+    } else if (expectedLoadW > 100) {
+      // No Pauschaloption: discharge only for self-consumption (capped at load)
+      const selfConsumeW = Math.min(confidenceGate.maxDischargeW, expectedLoadW);
+      schedule.push({
+        ts: slot.ts,
+        endTs: slot.endTs,
+        powerW: -selfConsumeW,  // Discharge capped at expected load
+        confidence: slot.confidence
+      });
+    }
+    // If no load expected and no grid discharge allowed: skip (no discharge)
   }
 
   // 6. Sort schedule by timestamp for SOC simulation

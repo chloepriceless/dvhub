@@ -206,26 +206,33 @@ export function createOptimizerService(ctx) {
         currentSocPct: state.victron?.soc ?? 50 // D-06: anchor to reality
       };
 
-      // 6. Choose optimizer based on tier and strategy
+      // 6. Grid permission flags from config
+      const allowGridCharge = cfg.optimizer.allowGridCharge ?? false;
+      const allowGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
+
+      // 7. Choose optimizer based on tier and strategy
       const strategy = cfg.optimizer.strategy ?? 'auto';
       let internalSchedule;
 
       if (strategy === 'heuristic' || (strategy === 'auto' && tier === 1)) {
         internalSchedule = buildHeuristicSchedule({
           priceSlots, pvSlots, loadSlots,
-          batteryModel, confidenceGate: gate
+          batteryModel, confidenceGate: gate,
+          allowGridCharge, allowGridDischarge
         });
       } else {
         // Tier 2+: try MILP, fall back to heuristic
         internalSchedule = await buildMilpSchedule({
           priceSlots, pvSlots, loadSlots,
-          batteryModel, confidenceGate: gate
+          batteryModel, confidenceGate: gate,
+          allowGridCharge, allowGridDischarge
         });
         if (internalSchedule === null) {
           // MILP unavailable (Tier 1 or HiGHS missing), fall back
           internalSchedule = buildHeuristicSchedule({
             priceSlots, pvSlots, loadSlots,
-            batteryModel, confidenceGate: gate
+            batteryModel, confidenceGate: gate,
+            allowGridCharge, allowGridDischarge
           });
         }
       }

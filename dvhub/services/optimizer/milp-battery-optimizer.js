@@ -43,7 +43,7 @@ async function getHiGHS() {
  * @returns {Promise<Array<{ts: number, endTs: number, powerW: number, confidence: number}>|null>}
  *   Array of 15min slots or null if HiGHS unavailable
  */
-export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batteryModel, confidenceGate }) {
+export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batteryModel, confidenceGate, allowGridCharge = false, allowGridDischarge = false }) {
   const solver = await getHiGHS();
   if (!solver) return null;
 
@@ -120,6 +120,25 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   // SOC dynamics for t >= 1
   for (let t = 1; t < N; t++) {
     lp += ` soc_dyn_${t}: soc_${t} - soc_${t - 1} - ${effCharge} charge_${t} + ${effDischarge} discharge_${t} = 0\n`;
+  }
+
+  // Grid constraint: if no grid charge allowed, charge can only come from PV surplus
+  // If no grid discharge allowed, discharge is capped at load (self-consume only)
+  if (!allowGridCharge) {
+    for (let t = 0; t < N; t++) {
+      const pv = getPv(t);
+      const load = getLoad(t);
+      const pvSurplus = Math.max(0, pv - load);
+      // Charge limited to PV surplus (no grid charging)
+      lp += ` grid_charge_${t}: charge_${t} <= ${Math.round(pvSurplus)}\n`;
+    }
+  }
+  if (!allowGridDischarge) {
+    for (let t = 0; t < N; t++) {
+      const load = getLoad(t);
+      // Discharge limited to load (self-consume only, no grid export)
+      lp += ` grid_discharge_${t}: discharge_${t} <= ${Math.round(Math.max(0, load))}\n`;
+    }
   }
 
   // Variable bounds

@@ -50,11 +50,9 @@ const defaultGate = {
   chargeWindowMultiplier: 1.0
 };
 
-test('cheap overnight + expensive afternoon: produces charge and discharge rules', () => {
-  // 8 slots: 4 cheap (5 ct), 4 expensive (40 ct) -- avg = 22.5 ct
-  // cheap threshold < 22.5 * 0.7 = 15.75, expensive > 22.5 * 1.3 = 29.25
+test('Pauschaloption (full arbitrage): produces charge and discharge rules', () => {
   const prices = [5, 5, 5, 5, 40, 40, 40, 40];
-  const pv = [0, 0, 0, 0, 0, 0, 0, 0]; // No PV
+  const pv = [0, 0, 0, 0, 0, 0, 0, 0];
   const load = [500, 500, 500, 500, 500, 500, 500, 500];
 
   const result = buildHeuristicSchedule({
@@ -62,7 +60,9 @@ test('cheap overnight + expensive afternoon: produces charge and discharge rules
     pvSlots: makePvSlots(pv),
     loadSlots: makeLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: true
   });
 
   assert.ok(Array.isArray(result));
@@ -70,6 +70,54 @@ test('cheap overnight + expensive afternoon: produces charge and discharge rules
   const dischargeRules = result.filter(r => r.powerW < 0);
   assert.ok(chargeRules.length > 0, 'should have charge rules for cheap hours');
   assert.ok(dischargeRules.length > 0, 'should have discharge rules for expensive hours');
+});
+
+test('default (no grid): no charge and no grid-discharge rules', () => {
+  const prices = [5, 5, 5, 5, 40, 40, 40, 40];
+  const pv = [0, 0, 0, 0, 0, 0, 0, 0];
+  const load = [500, 500, 500, 500, 500, 500, 500, 500];
+
+  const result = buildHeuristicSchedule({
+    priceSlots: makePriceSlots(prices),
+    pvSlots: makePvSlots(pv),
+    loadSlots: makeLoadSlots(load),
+    batteryModel: defaultBattery,
+    confidenceGate: defaultGate,
+    allowGridCharge: false,
+    allowGridDischarge: false
+  });
+
+  const chargeRules = result.filter(r => r.powerW > 0);
+  assert.equal(chargeRules.length, 0, 'no grid charge rules without allowGridCharge');
+  // Self-consume discharge allowed (capped at load)
+  const dischargeRules = result.filter(r => r.powerW < 0);
+  for (const r of dischargeRules) {
+    assert.ok(Math.abs(r.powerW) <= 500, 'discharge capped at expected load (500W)');
+  }
+});
+
+test('gridCharge only: charge from grid but no grid discharge', () => {
+  const prices = [5, 5, 5, 5, 40, 40, 40, 40];
+  const pv = [0, 0, 0, 0, 0, 0, 0, 0];
+  const load = [500, 500, 500, 500, 500, 500, 500, 500];
+
+  const result = buildHeuristicSchedule({
+    priceSlots: makePriceSlots(prices),
+    pvSlots: makePvSlots(pv),
+    loadSlots: makeLoadSlots(load),
+    batteryModel: defaultBattery,
+    confidenceGate: defaultGate,
+    allowGridCharge: true,
+    allowGridDischarge: false
+  });
+
+  const chargeRules = result.filter(r => r.powerW > 0);
+  const dischargeRules = result.filter(r => r.powerW < 0);
+  assert.ok(chargeRules.length > 0, 'grid charge allowed');
+  // Discharge capped at load (self-consume only)
+  for (const r of dischargeRules) {
+    assert.ok(Math.abs(r.powerW) <= 500, 'discharge capped at load without Pauschaloption');
+  }
 });
 
 test('high PV forecast reduces charge rules during PV surplus periods', () => {
@@ -83,7 +131,8 @@ test('high PV forecast reduces charge rules during PV surplus periods', () => {
     pvSlots: makePvSlots(pv),
     loadSlots: makeLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true, allowGridDischarge: true
   });
 
   const withoutPv = buildHeuristicSchedule({
@@ -91,7 +140,8 @@ test('high PV forecast reduces charge rules during PV surplus periods', () => {
     pvSlots: makePvSlots([0, 0, 0, 0, 0, 0, 0, 0]),
     loadSlots: makeLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true, allowGridDischarge: true
   });
 
   // With PV surplus, fewer charge rules because battery charges from PV naturally
@@ -112,11 +162,16 @@ test('allowSell=false: no discharge/sell rules generated', () => {
     pvSlots: makePvSlots(pv),
     loadSlots: makeLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: noSellGate
+    confidenceGate: noSellGate,
+    allowGridCharge: true, allowGridDischarge: true
   });
 
+  // Even with allowGridDischarge, if confidenceGate.allowSell is false, no grid discharge
   const dischargeRules = result.filter(r => r.powerW < 0);
-  assert.equal(dischargeRules.length, 0, 'no discharge rules when allowSell=false');
+  // Self-consume still allowed (capped at load), but grid discharge blocked by !allowSell
+  for (const r of dischargeRules) {
+    assert.ok(Math.abs(r.powerW) <= 500, 'discharge capped at load when allowSell=false');
+  }
 });
 
 test('SOC simulation validates feasibility -- uses appliedPowerW for adjustment', () => {
@@ -132,7 +187,8 @@ test('SOC simulation validates feasibility -- uses appliedPowerW for adjustment'
     pvSlots: makePvSlots(pv),
     loadSlots: makeLoadSlots(load),
     batteryModel: highSocBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true, allowGridDischarge: true
   });
 
   // Should still produce a valid schedule (may have clipped charge slots)
@@ -167,7 +223,8 @@ test('slots use normalized format { ts, endTs, ctKwh, confidence }', () => {
     pvSlots: makePvSlots(pv),
     loadSlots: makeLoadSlots(load),
     batteryModel: defaultBattery,
-    confidenceGate: defaultGate
+    confidenceGate: defaultGate,
+    allowGridCharge: true, allowGridDischarge: true
   });
 
   // Every output slot must have ts, endTs, powerW, confidence
