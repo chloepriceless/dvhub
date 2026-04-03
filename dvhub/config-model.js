@@ -97,6 +97,12 @@ const SECTIONS = [
     label: 'Prognose',
     description: 'PV-Ertrag, Last und Wetter-Vorhersage.',
     destination: 'services'
+  },
+  {
+    id: 'optimizer',
+    label: 'Optimierung',
+    description: 'Batterie-Optimierung und Schedule-Generierung.',
+    destination: 'services'
   }
 ];
 
@@ -1677,6 +1683,159 @@ function buildFieldDefinitions() {
       min: 5,
       max: 50,
       help: 'Wenn freier Speicherplatz unter diesen Wert faellt, werden aelteste Daten komprimiert (Standard: 20%).'
+    },
+
+    // --- Optimizer / Optimierung ---
+    {
+      section: 'optimizer',
+      group: 'optimizerGeneral',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Batterie-Optimierung und Schedule-Generierung.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerGeneral',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Batterie-Optimierung und Schedule-Generierung.',
+      path: 'optimizer.enabled',
+      label: 'Optimierung aktivieren',
+      type: 'boolean',
+      help: 'Aktiviert die automatische Batterie-Optimierung basierend auf Forecast-Daten.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerGeneral',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Batterie-Optimierung und Schedule-Generierung.',
+      path: 'optimizer.strategy',
+      label: 'Optimizer-Strategie',
+      type: 'select',
+      options: [
+        { value: 'auto', label: 'Automatisch (Tier-abhaengig)' },
+        { value: 'heuristic', label: 'Heuristik (regelbasiert)' },
+        { value: 'milp', label: 'MILP (HiGHS Solver)' }
+      ],
+      help: 'auto: Heuristik auf Tier 1, MILP auf Tier 2+. heuristic/milp: erzwingt die gewaehlte Strategie.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.batteryCapacityWh',
+      label: 'Batteriekapazitaet (Wh)',
+      type: 'number',
+      min: 1000,
+      max: 200000,
+      help: 'Nutzbare Kapazitaet des Batteriespeichers in Wattstunden (z.B. 10000 fuer 10 kWh).'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.roundTripEfficiency',
+      label: 'Round-Trip-Effizienz (0.0-1.0)',
+      type: 'number',
+      min: 0.5,
+      max: 1.0,
+      step: 0.01,
+      help: 'Gesamteffizienz Laden+Entladen. LiFePO4 typisch 0.92, Blei 0.80-0.85.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.maxChargeW',
+      label: 'Max. Ladeleistung (W)',
+      type: 'number',
+      min: 100,
+      max: 50000,
+      help: 'Maximale Ladeleistung des Wechselrichters/Batterie in Watt.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.maxDischargeW',
+      label: 'Max. Entladeleistung (W)',
+      type: 'number',
+      min: 100,
+      max: 50000,
+      help: 'Maximale Entladeleistung des Wechselrichters/Batterie in Watt.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.minSocPct',
+      label: 'Min. SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      help: 'Minimaler Ladezustand in Prozent. Batterie wird nicht unter diesen Wert entladen.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerBattery',
+      groupLabel: 'Batterie-Parameter',
+      groupDescription: 'Physikalische Kennwerte des Batteriespeichers.',
+      path: 'optimizer.maxSocPct',
+      label: 'Max. SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      help: 'Maximaler Ladezustand in Prozent. Batterie wird nicht ueber diesen Wert geladen.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerSource',
+      groupLabel: 'Optimierungsquelle',
+      groupDescription: 'Primaere Quelle fuer die Optimierung.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerSource',
+      groupLabel: 'Optimierungsquelle',
+      groupDescription: 'Primaere Quelle fuer die Optimierung.',
+      path: 'optimizer.primarySource',
+      label: 'Primaere Quelle',
+      type: 'select',
+      options: [
+        { value: 'internal', label: 'Interner Optimizer' },
+        { value: 'eos', label: 'EOS (extern)' },
+        { value: 'best', label: 'Bester (Vergleich)' }
+      ],
+      help: 'internal: nur interner Optimizer. eos: nur EOS. best: vergleicht beide und nimmt den besseren.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerSource',
+      groupLabel: 'Optimierungsquelle',
+      groupDescription: 'Primaere Quelle fuer die Optimierung.',
+      path: 'optimizer.eosProxy.enabled',
+      label: 'EOS-Proxy aktivieren',
+      type: 'boolean',
+      help: 'Aktiviert die Verbindung zum co-hosted EOS Optimierungs-Service.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerSource',
+      groupLabel: 'Optimierungsquelle',
+      groupDescription: 'Primaere Quelle fuer die Optimierung.',
+      path: 'optimizer.eosProxy.url',
+      label: 'EOS URL',
+      type: 'text',
+      help: 'URL des EOS-Service (Standard: http://localhost:8503).'
     }
   ];
 
@@ -1867,6 +2026,22 @@ export function createDefaultConfig() {
       retention: {
         strategy: 'smart',
         minFreeDiskPct: 20
+      }
+    },
+    optimizer: {
+      enabled: false,
+      strategy: 'auto',
+      batteryCapacityWh: 10000,
+      roundTripEfficiency: 0.92,
+      maxChargeW: 3000,
+      maxDischargeW: 3000,
+      minSocPct: 10,
+      maxSocPct: 100,
+      primarySource: 'internal',
+      eosProxy: {
+        enabled: false,
+        url: 'http://localhost:8503',
+        version: 'v0.3.0'
       }
     }
   };
