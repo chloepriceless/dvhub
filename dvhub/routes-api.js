@@ -742,28 +742,15 @@ export function createApiRoutes(ctx) {
       }
     }
 
-    // --- VRM Forecast API ---
+    // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---
     if (url.pathname === '/api/forecast' && req.method === 'GET') {
-      if (!ctx.telemetryStore?.listForecasts) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-      const now = new Date();
-      const startParam = url.searchParams.get('start');
-      const endParam = url.searchParams.get('end');
-      const start = startParam || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const end = endParam || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3).toISOString();
-      const forecastType = url.searchParams.get('type') || null;
+      if (!ctx.forecastService) return json(res, 503, { ok: false, error: 'forecast service not available' });
       try {
-        const rows = await ctx.telemetryStore.listForecasts({ start, end, forecastType });
-        return json(res, 200, {
-          ok: true,
-          start,
-          end,
-          solar: rows.filter(r => r.type === 'solar_yield').map(r => ({ ts: r.ts, w: r.valueW })),
-          consumption: rows.filter(r => r.type === 'consumption').map(r => ({ ts: r.ts, w: r.valueW })),
-          lastFetchAt: state.forecast?.lastFetchAt || null,
-          total: rows.length
-        });
+        const payload = ctx.forecastService.buildForecastResponse();
+        return json(res, 200, { ok: true, ...payload });
       } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
+        pushLog('forecast_api_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'forecast generation failed' });
       }
     }
 

@@ -54,6 +54,7 @@ import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
+import { createForecastService } from './services/forecast/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -586,6 +587,8 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
+const forecast = createForecastService(ctx);
+ctx.forecastService = forecast;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
@@ -902,6 +905,7 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   epex.start();
+  forecast.start().catch(err => console.error('Forecast service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
@@ -931,6 +935,7 @@ async function gracefulShutdown(signal) {
   scheduler.stop();
   liveTelemetryBuffer?.flush({ force: true });
   epex.stop();
+  await forecast.close();
   if (runtimeWorker) runtimeWorker.kill();
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
