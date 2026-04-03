@@ -1047,6 +1047,11 @@ function renderDestinationGrid(destinationId) {
   if (destinationId === 'connection') {
     mount.appendChild(renderVpnUploadPanel());
   }
+
+  // If only one card in the grid, span full width
+  if (mount.children.length === 1) {
+    mount.children[0].style.gridColumn = '1 / -1';
+  }
 }
 
 function buildHistoryImportSummary(status) {
@@ -1058,7 +1063,8 @@ function buildHistoryImportSummary(status) {
 
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
-  panel.className = 'config-group';
+  panel.className = 'config-group config-group--full';
+  panel.style.gridColumn = '1 / -1';
   panel.dataset.accent = 'yellow';
 
   const actionState = buildHistoryImportActionState({
@@ -1149,7 +1155,8 @@ function updatePvPlantField(plantId, path, value) {
 
 function renderPvPlantsEditor() {
   const section = document.createElement('section');
-  section.className = 'config-group';
+  section.className = 'config-group config-group--full';
+  section.style.gridColumn = '1 / -1';
   section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
     ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
@@ -1238,7 +1245,8 @@ function renderEpexPriceSourceInfo() {
 
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
-  section.className = 'config-group';
+  section.className = 'config-group config-group--full';
+  section.style.gridColumn = '1 / -1';
   section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
     ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
@@ -2098,13 +2106,16 @@ function initSettingsPage() {
       if (panel) panel.hidden = false;
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
-      // Auto-check for updates when switching to System tab
-      if (target === 'system' && typeof checkForUpdate === 'function') {
-        const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
-        const cooldownMs = 10 * 60 * 1000;
-        if (Date.now() - lastCheck > cooldownMs) {
-          sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-          checkForUpdate().catch(() => {});
+      // Auto-load health + check for updates when switching to System tab
+      if (target === 'system') {
+        loadHealth().catch(() => {});
+        if (typeof checkForUpdate === 'function') {
+          const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+          const cooldownMs = 10 * 60 * 1000;
+          if (Date.now() - lastCheck > cooldownMs) {
+            sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
+            checkForUpdate().catch(() => {});
+          }
         }
       }
     });

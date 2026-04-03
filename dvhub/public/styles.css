@@ -3774,6 +3774,8 @@ button {
   gap: 12px;
 }
 @media (min-width: 700px)  { .config-grid { grid-template-columns: 1fr 1fr; } }
+.config-grid > .config-group:only-child,
+.config-grid > .config-group--full { grid-column: 1 / -1; }
 
 /* Group card with accent left-border */
 .config-group {
@@ -3784,6 +3786,7 @@ button {
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   box-sizing: border-box;
   min-width: 0;
+  overflow: hidden;
   overflow-wrap: break-word;
 }
 .config-group[data-accent="green"]  { border-left-color: var(--flow-green, #4CE36C); }
@@ -3796,7 +3799,7 @@ button {
 /* 2-column row grid inside cards */
 .config-row-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 @media (max-width: 900px) { .config-row-grid { grid-template-columns: 1fr; } }
 
@@ -3818,10 +3821,12 @@ button {
   padding: 11px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-size: 14px;
+  min-width: 0;
+  gap: 8px;
 }
 .config-row:last-child { border-bottom: none; }
 .config-row-grid .config-row:nth-child(odd) { border-right: 1px solid rgba(255,255,255,0.04); }
-.config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; }
+.config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 .config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
 .config-help-icon {
   display: inline-block;
@@ -3853,7 +3858,7 @@ button {
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   pointer-events: none;
 }
-.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; }
+.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Config inputs */
 .config-input {
@@ -3876,6 +3881,8 @@ button {
   padding: 7px 12px;
   color: var(--flow-text, #e8eaf0);
   font-size: 13px;
+  min-width: 0;
+  max-width: 100%;
 }
 .config-checkbox { accent-color: var(--flow-green, #4CE36C); width: 18px; height: 18px; }
 
