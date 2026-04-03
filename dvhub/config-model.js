@@ -1856,6 +1856,40 @@ function buildFieldDefinitions() {
       label: 'EOS URL',
       type: 'text',
       help: 'URL des EOS-Service (Standard: http://localhost:8503).'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerMispel',
+      groupLabel: 'MiSpeL / Pauschaloption',
+      groupDescription: 'Messung im Speicher-Ladefall -- Pauschaloption nach EEG fuer Anlagen bis 30 kWp.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerMispel',
+      groupLabel: 'MiSpeL / Pauschaloption',
+      groupDescription: 'Messung im Speicher-Ladefall -- Pauschaloption nach EEG fuer Anlagen bis 30 kWp.',
+      path: 'optimizer.mispel.mode',
+      label: 'MiSpeL Modus',
+      type: 'select',
+      options: [
+        { value: 'none', label: 'Deaktiviert' },
+        { value: 'pauschal', label: 'Pauschaloption' },
+        { value: 'abgrenzung', label: 'Abgrenzung' }
+      ],
+      help: 'Pauschaloption nur fuer Anlagen bis 30 kWp. EU-Genehmigung ausstehend.'
+    },
+    {
+      section: 'optimizer',
+      group: 'optimizerMispel',
+      groupLabel: 'MiSpeL / Pauschaloption',
+      groupDescription: 'Messung im Speicher-Ladefall -- Pauschaloption nach EEG fuer Anlagen bis 30 kWp.',
+      path: 'optimizer.mispel.pvKwp',
+      label: 'PV-Anlagenleistung kWp',
+      type: 'number',
+      min: 0.1,
+      max: 30,
+      step: 0.1,
+      help: 'Installierte PV-Leistung fuer Gruenstrom-Berechnung (500 kWh/kWp).'
     }
   ];
 
@@ -2062,6 +2096,10 @@ export function createDefaultConfig() {
         enabled: false,
         url: 'http://localhost:8503',
         version: 'v0.3.0'
+      },
+      mispel: {
+        mode: 'none',       // 'none' | 'pauschal' | 'abgrenzung' (D-24)
+        pvKwp: 10           // Installed PV capacity in kWp (D-25)
       }
     }
   };
