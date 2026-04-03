@@ -91,6 +91,12 @@ const SECTIONS = [
     label: 'EPEX',
     description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
     destination: 'services'
+  },
+  {
+    id: 'forecast',
+    label: 'Prognose',
+    description: 'PV-Ertrag, Last und Wetter-Vorhersage.',
+    destination: 'services'
   }
 ];
 
@@ -1420,6 +1426,232 @@ function buildFieldDefinitions() {
         { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
+    },
+
+    // --- Forecast / Prognose ---
+    {
+      section: 'forecast',
+      group: 'forecastGeneral',
+      groupLabel: 'Prognose',
+      groupDescription: 'Grundeinstellungen fuer PV-, Last- und Wetter-Vorhersage.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastGeneral',
+      groupLabel: 'Prognose',
+      groupDescription: 'Grundeinstellungen fuer PV-, Last- und Wetter-Vorhersage.',
+      path: 'forecast.enabled',
+      label: 'Prognose aktivieren',
+      type: 'boolean',
+      help: 'Aktiviert die automatische Prognose-Engine fuer PV-Ertrag, Lastprofil und Wettervorhersage.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastLocation',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      path: 'forecast.location.latitude',
+      label: 'Breitengrad (Latitude)',
+      type: 'number',
+      min: -90,
+      max: 90,
+      step: 0.0001,
+      help: 'Breitengrad des Anlagenstandorts (z.B. 48.1484 fuer Riedlingen).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastLocation',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      path: 'forecast.location.longitude',
+      label: 'Laengengrad (Longitude)',
+      type: 'number',
+      min: -180,
+      max: 180,
+      step: 0.0001,
+      help: 'Laengengrad des Anlagenstandorts (z.B. 9.4763 fuer Riedlingen).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.configLevel',
+      label: 'Konfigurationsstufe',
+      type: 'select',
+      options: [
+        { value: 'simple', label: 'Einfach (kWp + Standort)' },
+        { value: 'standard', label: 'Standard (+ Neigung + Azimut)' },
+        { value: 'detailed', label: 'Detailliert (Multi-String)' }
+      ],
+      help: 'Einfach: grobe Vorhersage mit Default-Annahmen. Standard: gute Vorhersage mit Neigung/Azimut. Detailliert: Multi-String-Konfiguration pro Dachflaeche.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.totalKwp',
+      label: 'PV-Leistung (kWp)',
+      type: 'number',
+      min: 0.1,
+      max: 1000,
+      step: 0.1,
+      help: 'Gesamte installierte PV-Leistung in Kilowatt-Peak.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.tiltDeg',
+      label: 'Neigungswinkel (Grad)',
+      type: 'number',
+      min: 0,
+      max: 90,
+      help: 'Neigung der PV-Module in Grad (Standard: 35). 0 = flach, 90 = senkrecht.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.azimuthDeg',
+      label: 'Ausrichtung (Azimut, Grad)',
+      type: 'number',
+      min: 0,
+      max: 360,
+      help: 'Himmelsrichtung der Module (Standard: 180 = Sued). 90 = Ost, 270 = West.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.strings',
+      label: 'String-Konfiguration (JSON)',
+      type: 'json',
+      help: 'Fuer den Detailliert-Modus: Array mit Objekten je String, z.B. [{"kwp":5,"tiltDeg":30,"azimuthDeg":180}].'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.model',
+      label: 'PV-Prognose-Modell',
+      type: 'select',
+      options: [
+        { value: 'solcast', label: 'Solcast API' },
+        { value: 'pvlib', label: 'pvlib (lokal)' },
+        { value: 'both', label: 'Beide (Solcast + pvlib)' }
+      ],
+      help: 'Solcast: Cloud-API (10 Calls/Tag). pvlib: lokale Berechnung (Tier 2+). Beide: Ensemble fuer hoehere Genauigkeit.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.enabled',
+      label: 'Solcast aktivieren',
+      type: 'boolean',
+      help: 'Aktiviert den Solcast PV-Forecast-Dienst.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.apiKey',
+      label: 'Solcast API Key',
+      type: 'password',
+      help: 'API-Schluessel fuer Solcast. Erhaeltlich unter https://toolkit.solcast.com.au/'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.siteId',
+      label: 'Solcast Site ID',
+      type: 'text',
+      help: 'Rooftop-Site-ID aus dem Solcast-Dashboard.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastWeather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Quelle fuer Solarstrahlungs- und Temperaturprognosen.',
+      path: 'forecast.weather.provider',
+      label: 'Wetter-Provider',
+      type: 'text',
+      help: 'Wetterdaten-Anbieter (Standard: open_meteo).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastWeather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Quelle fuer Solarstrahlungs- und Temperaturprognosen.',
+      path: 'forecast.weather.fetchIntervalMs',
+      label: 'Abruf-Intervall (ms)',
+      type: 'number',
+      min: 600000,
+      max: 86400000,
+      step: 60000,
+      help: 'Wie oft Wetterdaten abgerufen werden (Standard: 3600000 = 1 Stunde).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastLoad',
+      groupLabel: 'Lastprognose',
+      groupDescription: 'Verbrauchsvorhersage basierend auf historischen Daten.',
+      path: 'forecast.load.model',
+      label: 'Last-Modell',
+      type: 'select',
+      options: [
+        { value: 'sql_weekday', label: 'SQL Wochentags-Muster' },
+        { value: 'constant', label: 'Konstant' }
+      ],
+      help: 'sql_weekday: nutzt historische Verbrauchsdaten gleicher Wochentage. constant: fester Wert.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastLoad',
+      groupLabel: 'Lastprognose',
+      groupDescription: 'Verbrauchsvorhersage basierend auf historischen Daten.',
+      path: 'forecast.load.defaultPowerW',
+      label: 'Standard-Verbrauch (W)',
+      type: 'number',
+      min: 0,
+      max: 100000,
+      help: 'Fallback-Verbrauch in Watt wenn keine historischen Daten vorliegen (Standard: 800W).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastRetention',
+      groupLabel: 'Datenhaltung',
+      groupDescription: 'Aufbewahrung und Komprimierung von Forecast-Daten.',
+      path: 'forecast.retention.strategy',
+      label: 'Retention-Strategie',
+      type: 'select',
+      options: [
+        { value: 'smart', label: 'Smart (platzbewusst)' },
+        { value: 'fixed', label: 'Feste Aufbewahrung' }
+      ],
+      help: 'Smart: behaelt alle Daten solange > 20% Speicher frei. Fixed: loescht nach fester Frist.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastRetention',
+      groupLabel: 'Datenhaltung',
+      groupDescription: 'Aufbewahrung und Komprimierung von Forecast-Daten.',
+      path: 'forecast.retention.minFreeDiskPct',
+      label: 'Min. freier Speicher (%)',
+      type: 'number',
+      min: 5,
+      max: 50,
+      help: 'Wenn freier Speicherplatz unter diesen Wert faellt, werden aelteste Daten komprimiert (Standard: 20%).'
     }
   ];
 
@@ -1579,6 +1811,38 @@ export function createDefaultConfig() {
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
       priceApiUrl: 'https://api.dvhub.de'
+    },
+    forecast: {
+      enabled: true,
+      location: {
+        latitude: null,
+        longitude: null
+      },
+      pv: {
+        configLevel: 'simple',
+        totalKwp: null,
+        tiltDeg: 35,
+        azimuthDeg: 180,
+        strings: [],
+        model: 'solcast'
+      },
+      solcast: {
+        enabled: true,
+        apiKey: '',
+        siteId: ''
+      },
+      weather: {
+        provider: 'open_meteo',
+        fetchIntervalMs: 3600000
+      },
+      load: {
+        model: 'sql_weekday',
+        defaultPowerW: 800
+      },
+      retention: {
+        strategy: 'smart',
+        minFreeDiskPct: 20
+      }
     }
   };
 }

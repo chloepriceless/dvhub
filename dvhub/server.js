@@ -603,7 +603,7 @@ const routes = createApiRoutes(ctx);
 // are set by the factory (ctx mutation pattern).
 
 // REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues)
-const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
+const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'forecast.solcast.apiKey'];
 
 function restoreRedactedValues(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
