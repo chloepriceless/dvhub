@@ -21,6 +21,8 @@ let pvPlantsDraft = [];
 let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
+let forecastStringsDraft = [];
+let forecastTierCache = null;
 
 const GROUP_ACCENTS = {
   connection: 'green', transport: 'green', victron: 'green',
@@ -30,7 +32,10 @@ const GROUP_ACCENTS = {
   telemetry: 'cyan', vrm: 'cyan',
   webserver: 'purple', http: 'purple', api: 'purple',
   mqtt: 'orange',
-  epex: 'green', pricing: 'yellow', pvPlants: 'blue'
+  epex: 'green', pricing: 'yellow', pvPlants: 'blue',
+  forecast: 'cyan', forecastGeneral: 'cyan', forecastLocation: 'blue',
+  forecastPv: 'green', forecastSolcast: 'yellow', forecastWeather: 'blue',
+  forecastLoad: 'orange', forecastRetention: 'purple'
 };
 
 function getGroupAccent(section) {
@@ -661,7 +666,17 @@ function isFieldVisible(field) {
 
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
-    if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
+    // Support 'equals' (show when value matches) and 'notEquals' (show when value differs)
+    if ('equals' in field.visibleWhenPath) {
+      if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
+    }
+    if ('notEquals' in field.visibleWhenPath) {
+      if (valuesEqual(currentValue, field.visibleWhenPath.notEquals)) return false;
+    }
+    // Support 'oneOf' (show when value is in the array)
+    if (Array.isArray(field.visibleWhenPath.oneOf)) {
+      if (!field.visibleWhenPath.oneOf.some(v => valuesEqual(currentValue, v))) return false;
+    }
   }
 
   if (Array.isArray(field.visibleWhenTransport) && field.visibleWhenTransport.length) {
@@ -951,6 +966,197 @@ function createSummaryCard(title, text) {
   return card;
 }
 
+// --- Forecast section helpers ---
+
+/**
+ * Render RAM tier info card for the forecast section header.
+ * Reads tier info from cached /api/status or state.forecast.
+ */
+function renderForecastTierInfo() {
+  const tierDiv = document.createElement('div');
+  tierDiv.className = 'config-row-grid';
+  tierDiv.style.cssText = 'margin:4px 0 8px;';
+
+  const tierLabel = forecastTierCache
+    ? `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`
+    : 'Wird ermittelt...';
+
+  const row = document.createElement('div');
+  row.className = 'config-row';
+  const label = document.createElement('span');
+  label.className = 'config-row-label';
+  label.textContent = 'Erkannte RAM-Stufe';
+  row.appendChild(label);
+  const val = document.createElement('strong');
+  val.className = 'config-row-value';
+  val.id = 'forecastTierValue';
+  val.textContent = tierLabel;
+  row.appendChild(val);
+  tierDiv.appendChild(row);
+
+  // Fetch tier info if not cached
+  if (!forecastTierCache && typeof apiFetch === 'function') {
+    apiFetch(buildApiUrl('/api/status')).then(r => r.json()).then(data => {
+      if (data?.forecast?.tier) {
+        forecastTierCache = { tier: data.forecast.tier, totalMB: data.forecast.totalMB || '?' };
+        const el = document.getElementById('forecastTierValue');
+        if (el) el.textContent = `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`;
+      }
+    }).catch(() => { /* silent */ });
+  }
+
+  return tierDiv;
+}
+
+/**
+ * Render multi-string editor for PV detailed configuration mode (D-11).
+ * Dynamic list of { label, kwp, tiltDeg, azimuthDeg } entries.
+ */
+function renderForecastStringEditor() {
+  // Initialize draft from config if empty
+  if (!forecastStringsDraft.length) {
+    const cfgStrings = getVisibilityValue('forecast.pv.strings');
+    if (Array.isArray(cfgStrings) && cfgStrings.length > 0) {
+      forecastStringsDraft = cfgStrings.map(s => ({ ...s }));
+    } else {
+      forecastStringsDraft = [{ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 }];
+    }
+  }
+
+  const section = document.createElement('div');
+  section.className = 'config-group';
+  section.dataset.accent = 'green';
+
+  const kicker = document.createElement('div');
+  kicker.className = 'config-group-kicker';
+  kicker.style.color = 'var(--flow-green)';
+  kicker.textContent = 'PV-Strings (Detailliert)';
+  section.appendChild(kicker);
+
+  const desc = document.createElement('p');
+  desc.style.cssText = 'padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;';
+  desc.textContent = 'Konfigurieren Sie jeden PV-String einzeln (je Dachflaeche / Ausrichtung).';
+  section.appendChild(desc);
+
+  const list = document.createElement('div');
+  list.id = 'forecastStringsList';
+  list.style.cssText = 'padding:4px 14px;';
+
+  for (let i = 0; i < forecastStringsDraft.length; i++) {
+    list.appendChild(renderStringRow(i));
+  }
+  section.appendChild(list);
+
+  const addRow = document.createElement('div');
+  addRow.style.cssText = 'padding:8px 14px;';
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn btn-ghost btn-small';
+  addBtn.textContent = '+ String hinzufuegen';
+  addBtn.addEventListener('click', () => {
+    forecastStringsDraft.push({
+      label: `String ${forecastStringsDraft.length + 1}`,
+      kwp: 5,
+      tiltDeg: 35,
+      azimuthDeg: 180
+    });
+    syncForecastStringsToDraft();
+    renderSettingsShell();
+    updateSaveBar();
+  });
+  addRow.appendChild(addBtn);
+  section.appendChild(addRow);
+
+  return section;
+}
+
+function renderStringRow(index) {
+  const s = forecastStringsDraft[index];
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;align-items:center;margin-bottom:6px;';
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.className = 'config-input';
+  labelInput.placeholder = 'Bezeichnung';
+  labelInput.value = s.label || '';
+  labelInput.addEventListener('input', () => {
+    forecastStringsDraft[index].label = labelInput.value;
+    syncForecastStringsToDraft();
+    updateSaveBar();
+  });
+  row.appendChild(labelInput);
+
+  const kwpInput = document.createElement('input');
+  kwpInput.type = 'number';
+  kwpInput.className = 'config-input';
+  kwpInput.placeholder = 'kWp';
+  kwpInput.min = '0.1';
+  kwpInput.step = '0.1';
+  kwpInput.value = s.kwp ?? '';
+  kwpInput.style.textAlign = 'right';
+  kwpInput.addEventListener('input', () => {
+    forecastStringsDraft[index].kwp = parseFloat(kwpInput.value) || 0;
+    syncForecastStringsToDraft();
+    updateSaveBar();
+  });
+  row.appendChild(kwpInput);
+
+  const tiltInput = document.createElement('input');
+  tiltInput.type = 'number';
+  tiltInput.className = 'config-input';
+  tiltInput.placeholder = 'Neigung';
+  tiltInput.min = '0';
+  tiltInput.max = '90';
+  tiltInput.value = s.tiltDeg ?? '';
+  tiltInput.style.textAlign = 'right';
+  tiltInput.addEventListener('input', () => {
+    forecastStringsDraft[index].tiltDeg = parseInt(tiltInput.value, 10) || 0;
+    syncForecastStringsToDraft();
+    updateSaveBar();
+  });
+  row.appendChild(tiltInput);
+
+  const azInput = document.createElement('input');
+  azInput.type = 'number';
+  azInput.className = 'config-input';
+  azInput.placeholder = 'Azimut';
+  azInput.min = '0';
+  azInput.max = '360';
+  azInput.value = s.azimuthDeg ?? '';
+  azInput.style.textAlign = 'right';
+  azInput.addEventListener('input', () => {
+    forecastStringsDraft[index].azimuthDeg = parseInt(azInput.value, 10) || 0;
+    syncForecastStringsToDraft();
+    updateSaveBar();
+  });
+  row.appendChild(azInput);
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'btn btn-ghost btn-small';
+  removeBtn.style.color = 'var(--err)';
+  removeBtn.textContent = 'X';
+  removeBtn.addEventListener('click', () => {
+    forecastStringsDraft.splice(index, 1);
+    if (!forecastStringsDraft.length) {
+      forecastStringsDraft.push({ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 });
+    }
+    syncForecastStringsToDraft();
+    renderSettingsShell();
+    updateSaveBar();
+  });
+  row.appendChild(removeBtn);
+
+  return row;
+}
+
+function syncForecastStringsToDraft() {
+  if (!currentDraftConfig.forecast) currentDraftConfig.forecast = {};
+  if (!currentDraftConfig.forecast.pv) currentDraftConfig.forecast.pv = {};
+  currentDraftConfig.forecast.pv.strings = forecastStringsDraft.map(s => ({ ...s }));
+}
+
 // getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
 
 // Fields hidden from UI (managed automatically, user should not edit)
@@ -1031,12 +1237,26 @@ function renderDestinationGrid(destinationId) {
       rowContainer.appendChild(mapRow);
     }
 
+    // Forecast section: prepend RAM tier info card
+    if (section.id === 'forecast') {
+      const tierInfo = renderForecastTierInfo();
+      if (tierInfo) group.insertBefore(tierInfo, group.firstChild.nextSibling);
+    }
+
     mount.appendChild(group);
 
     if (section.id === 'pricing') {
       // EPEX price source info removed — redundant with EPEX config group
       mount.appendChild(renderPvPlantsEditor());
       mount.appendChild(renderPricingPeriodsEditor());
+    }
+
+    // Forecast section: append multi-string editor when in detailed mode
+    if (section.id === 'forecast') {
+      const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
+      if (configLevel === 'detailed') {
+        mount.appendChild(renderForecastStringEditor());
+      }
     }
   }
 
@@ -1469,6 +1689,8 @@ function applyConfigPayload(payload) {
   }));
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
+  forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
+  forecastTierCache = null;
   settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
@@ -2023,6 +2245,7 @@ function initSettingsPage() {
     }));
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];
+    forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
     renderSettingsShell();
     updateSaveBar();
     setBanner('Änderungen verworfen.', 'info');

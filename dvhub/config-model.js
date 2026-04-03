@@ -1497,6 +1497,7 @@ function buildFieldDefinitions() {
       min: 0.1,
       max: 1000,
       step: 0.1,
+      visibleWhenPath: { path: 'forecast.pv.configLevel', oneOf: ['simple', 'standard'] },
       help: 'Gesamte installierte PV-Leistung in Kilowatt-Peak.'
     },
     {
@@ -1509,6 +1510,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       max: 90,
+      visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'standard' },
       help: 'Neigung der PV-Module in Grad (Standard: 35). 0 = flach, 90 = senkrecht.'
     },
     {
@@ -1521,6 +1523,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       max: 360,
+      visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'standard' },
       help: 'Himmelsrichtung der Module (Standard: 180 = Sued). 90 = Ost, 270 = West.'
     },
     {
@@ -1529,8 +1532,9 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
       path: 'forecast.pv.strings',
-      label: 'String-Konfiguration (JSON)',
+      label: 'String-Konfiguration',
       type: 'json',
+      visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'detailed' },
       help: 'Fuer den Detailliert-Modus: Array mit Objekten je String, z.B. [{"kwp":5,"tiltDeg":30,"azimuthDeg":180}].'
     },
     {

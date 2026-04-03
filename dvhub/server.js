@@ -374,7 +374,17 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     telemetry: {
       ...runtimeSnapshot.telemetry,
       historyImport: runtimeSnapshot.historyImport
-    }
+    },
+    forecast: state.forecast ? {
+      tier: state.forecast.tier,
+      totalMB: state.forecast.totalMB,
+      workerReady: state.forecast.workerReady,
+      pvModel: state.forecast.pv?.model || null,
+      pvLastFetchAt: state.forecast.pv?.lastFetchAt || null,
+      loadLastFetchAt: state.forecast.load?.lastFetchAt || null,
+      weatherLastFetchAt: state.forecast.weather?.lastFetchAt || null,
+      weatherError: state.forecast.weather?.error || null
+    } : null
   };
 }
 
