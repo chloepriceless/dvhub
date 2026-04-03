@@ -93,10 +93,10 @@ const SECTIONS = [
     destination: 'services'
   },
   {
-    id: 'vpn',
-    label: 'VPN-Tunnel',
-    description: 'OpenVPN-Verbindung zum Direktvermarkter.',
-    destination: 'connection'
+    id: 'forecast',
+    label: 'Prognose',
+    description: 'PV-Ertrag, Last und Wetter-Vorhersage.',
+    destination: 'services'
   }
 ];
 
@@ -192,7 +192,6 @@ const SETUP_WIZARD_FIELD_META = {
 
 const restartSensitivePrefixes = [
   'httpPort',
-  'httpsPort',
   'modbusListenHost',
   'modbusListenPort',
   'meterPollMs',
@@ -205,9 +204,7 @@ const restartSensitivePrefixes = [
   'schedule.evaluateMs',
   'manufacturer',
   'victron.host',
-  'pvCoupling',
-  'vpn.enabled',
-  'vpn.protocol'
+  'pvCoupling'
 ];
 
 function addSetupWizardMetadata(fields) {
@@ -350,19 +347,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port der Weboberflaeche (Standard: 80).'
-    },
-    {
-      section: 'system',
-      group: 'general',
-      groupLabel: 'Grundsystem',
-      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
-      path: 'httpsPort',
-      label: 'HTTPS Port',
-      type: 'number',
-      min: 0,
-      max: 65535,
-      help: 'Port fuer HTTPS mit Self-Signed Zertifikat. 0 oder leer = deaktiviert. Zertifikate liegen unter /etc/dvhub/tls/.'
+      help: 'Port der Weboberflaeche.'
     },
     {
       section: 'system',
@@ -386,16 +371,16 @@ function buildFieldDefinitions() {
       help: 'IP oder Interface für den Modbus-Server.'
     },
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
+      section: 'system',
+      group: 'general',
+      groupLabel: 'Grundsystem',
+      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
       path: 'modbusListenPort',
       label: 'Modbus Listen Port',
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port fuer den Modbus-Proxy. Bei VPN-Setups auf 502 setzen (Direktvermarkter erwartet Port 502). Ohne VPN: 1502 (kein Root noetig).'
+      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht.'
     },
     {
       section: 'system',
@@ -1442,110 +1427,231 @@ function buildFieldDefinitions() {
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
     },
+
+    // --- Forecast / Prognose ---
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.'
+      section: 'forecast',
+      group: 'forecastGeneral',
+      groupLabel: 'Prognose',
+      groupDescription: 'Grundeinstellungen fuer PV-, Last- und Wetter-Vorhersage.'
     },
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
-      path: 'vpn.enabled',
-      label: 'VPN-Tunnel aktivieren',
+      section: 'forecast',
+      group: 'forecastGeneral',
+      groupLabel: 'Prognose',
+      groupDescription: 'Grundeinstellungen fuer PV-, Last- und Wetter-Vorhersage.',
+      path: 'forecast.enabled',
+      label: 'Prognose aktivieren',
       type: 'boolean',
-      help: 'Aktiviert den VPN-Tunnel zum Direktvermarkter.'
+      help: 'Aktiviert die automatische Prognose-Engine fuer PV-Ertrag, Lastprofil und Wettervorhersage.'
     },
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
-      path: 'vpn.protocol',
-      label: 'VPN-Protokoll',
+      section: 'forecast',
+      group: 'forecastLocation',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      path: 'forecast.location.latitude',
+      label: 'Breitengrad (Latitude)',
+      type: 'number',
+      min: -90,
+      max: 90,
+      step: 0.0001,
+      help: 'Breitengrad des Anlagenstandorts (z.B. 48.1484 fuer Riedlingen).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastLocation',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      path: 'forecast.location.longitude',
+      label: 'Laengengrad (Longitude)',
+      type: 'number',
+      min: -180,
+      max: 180,
+      step: 0.0001,
+      help: 'Laengengrad des Anlagenstandorts (z.B. 9.4763 fuer Riedlingen).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.configLevel',
+      label: 'Konfigurationsstufe',
       type: 'select',
       options: [
-        { value: 'openvpn', label: 'OpenVPN' },
-        { value: 'wireguard', label: 'WireGuard' },
-        { value: 'ipsec', label: 'IPSec / StrongSwan' }
+        { value: 'simple', label: 'Einfach (kWp + Standort)' },
+        { value: 'standard', label: 'Standard (+ Neigung + Azimut)' },
+        { value: 'detailed', label: 'Detailliert (Multi-String)' }
       ],
-      help: 'Tunnel-Protokoll. Aktuell wird nur OpenVPN unterstützt.'
+      help: 'Einfach: grobe Vorhersage mit Default-Annahmen. Standard: gute Vorhersage mit Neigung/Azimut. Detailliert: Multi-String-Konfiguration pro Dachflaeche.'
     },
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
-      path: 'vpn.autoConnect',
-      label: 'Automatisch verbinden',
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.totalKwp',
+      label: 'PV-Leistung (kWp)',
+      type: 'number',
+      min: 0.1,
+      max: 1000,
+      step: 0.1,
+      help: 'Gesamte installierte PV-Leistung in Kilowatt-Peak.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.tiltDeg',
+      label: 'Neigungswinkel (Grad)',
+      type: 'number',
+      min: 0,
+      max: 90,
+      help: 'Neigung der PV-Module in Grad (Standard: 35). 0 = flach, 90 = senkrecht.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.azimuthDeg',
+      label: 'Ausrichtung (Azimut, Grad)',
+      type: 'number',
+      min: 0,
+      max: 360,
+      help: 'Himmelsrichtung der Module (Standard: 180 = Sued). 90 = Ost, 270 = West.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.strings',
+      label: 'String-Konfiguration (JSON)',
+      type: 'json',
+      help: 'Fuer den Detailliert-Modus: Array mit Objekten je String, z.B. [{"kwp":5,"tiltDeg":30,"azimuthDeg":180}].'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
+      path: 'forecast.pv.model',
+      label: 'PV-Prognose-Modell',
+      type: 'select',
+      options: [
+        { value: 'solcast', label: 'Solcast API' },
+        { value: 'pvlib', label: 'pvlib (lokal)' },
+        { value: 'both', label: 'Beide (Solcast + pvlib)' }
+      ],
+      help: 'Solcast: Cloud-API (10 Calls/Tag). pvlib: lokale Berechnung (Tier 2+). Beide: Ensemble fuer hoehere Genauigkeit.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.enabled',
+      label: 'Solcast aktivieren',
       type: 'boolean',
-      help: 'Tunnel beim DVhub-Start automatisch aufbauen.'
+      help: 'Aktiviert den Solcast PV-Forecast-Dienst.'
     },
     {
-      section: 'vpn',
-      group: 'tunnel',
-      groupLabel: 'VPN-Tunnel',
-      groupDescription: 'OpenVPN-Verbindung zum Direktvermarkter.',
-      path: 'vpn.profileName',
-      label: 'Profilname',
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.apiKey',
+      label: 'Solcast API Key',
+      type: 'password',
+      help: 'API-Schluessel fuer Solcast. Erhaeltlich unter https://toolkit.solcast.com.au/'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastSolcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast API fuer PV-Prognose (Cloud-basiert, 10 Calls/Tag im Free-Tier).',
+      path: 'forecast.solcast.siteId',
+      label: 'Solcast Site ID',
       type: 'text',
-      help: 'Name des VPN-Profils unter /etc/dvhub/vpn/profiles/.'
+      help: 'Rooftop-Site-ID aus dem Solcast-Dashboard.'
     },
     {
-      section: 'vpn',
-      group: 'watchdog',
-      groupLabel: 'Watchdog',
-      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.'
+      section: 'forecast',
+      group: 'forecastWeather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Quelle fuer Solarstrahlungs- und Temperaturprognosen.',
+      path: 'forecast.weather.provider',
+      label: 'Wetter-Provider',
+      type: 'text',
+      help: 'Wetterdaten-Anbieter (Standard: open_meteo).'
     },
     {
-      section: 'vpn',
-      group: 'watchdog',
-      groupLabel: 'Watchdog',
-      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
-      path: 'vpn.watchdog.enabled',
-      label: 'Watchdog aktiv',
-      type: 'boolean',
-      help: 'Tunnel-Zustand periodisch prüfen und bei Ausfall neu verbinden.'
-    },
-    {
-      section: 'vpn',
-      group: 'watchdog',
-      groupLabel: 'Watchdog',
-      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
-      path: 'vpn.watchdog.intervalMs',
-      label: 'Healthcheck-Intervall (ms)',
+      section: 'forecast',
+      group: 'forecastWeather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Quelle fuer Solarstrahlungs- und Temperaturprognosen.',
+      path: 'forecast.weather.fetchIntervalMs',
+      label: 'Abruf-Intervall (ms)',
       type: 'number',
-      min: 1000,
-      max: 300000,
-      step: 1000,
-      help: 'Abstand zwischen den Healthchecks in Millisekunden.'
+      min: 600000,
+      max: 86400000,
+      step: 60000,
+      help: 'Wie oft Wetterdaten abgerufen werden (Standard: 3600000 = 1 Stunde).'
     },
     {
-      section: 'vpn',
-      group: 'watchdog',
-      groupLabel: 'Watchdog',
-      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
-      path: 'vpn.watchdog.failThreshold',
-      label: 'Fehlversuche bis Reconnect',
-      type: 'number',
-      min: 1,
-      max: 20,
-      help: 'Anzahl aufeinanderfolgender Healthcheck-Fehler bis zum Reconnect.'
+      section: 'forecast',
+      group: 'forecastLoad',
+      groupLabel: 'Lastprognose',
+      groupDescription: 'Verbrauchsvorhersage basierend auf historischen Daten.',
+      path: 'forecast.load.model',
+      label: 'Last-Modell',
+      type: 'select',
+      options: [
+        { value: 'sql_weekday', label: 'SQL Wochentags-Muster' },
+        { value: 'constant', label: 'Konstant' }
+      ],
+      help: 'sql_weekday: nutzt historische Verbrauchsdaten gleicher Wochentage. constant: fester Wert.'
     },
     {
-      section: 'vpn',
-      group: 'watchdog',
-      groupLabel: 'Watchdog',
-      groupDescription: 'Automatische Überwachung und Reconnect bei Verbindungsabbruch.',
-      path: 'vpn.watchdog.maxBackoffMs',
-      label: 'Maximales Backoff (ms)',
+      section: 'forecast',
+      group: 'forecastLoad',
+      groupLabel: 'Lastprognose',
+      groupDescription: 'Verbrauchsvorhersage basierend auf historischen Daten.',
+      path: 'forecast.load.defaultPowerW',
+      label: 'Standard-Verbrauch (W)',
       type: 'number',
-      min: 5000,
-      max: 600000,
-      step: 1000,
-      help: 'Obere Grenze für das exponentielle Reconnect-Backoff.'
+      min: 0,
+      max: 100000,
+      help: 'Fallback-Verbrauch in Watt wenn keine historischen Daten vorliegen (Standard: 800W).'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastRetention',
+      groupLabel: 'Datenhaltung',
+      groupDescription: 'Aufbewahrung und Komprimierung von Forecast-Daten.',
+      path: 'forecast.retention.strategy',
+      label: 'Retention-Strategie',
+      type: 'select',
+      options: [
+        { value: 'smart', label: 'Smart (platzbewusst)' },
+        { value: 'fixed', label: 'Feste Aufbewahrung' }
+      ],
+      help: 'Smart: behaelt alle Daten solange > 20% Speicher frei. Fixed: loescht nach fester Frist.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastRetention',
+      groupLabel: 'Datenhaltung',
+      groupDescription: 'Aufbewahrung und Komprimierung von Forecast-Daten.',
+      path: 'forecast.retention.minFreeDiskPct',
+      label: 'Min. freier Speicher (%)',
+      type: 'number',
+      min: 5,
+      max: 50,
+      help: 'Wenn freier Speicherplatz unter diesen Wert faellt, werden aelteste Daten komprimiert (Standard: 20%).'
     }
   ];
 
@@ -1706,16 +1812,36 @@ export function createDefaultConfig() {
       timezone: 'Europe/Berlin',
       priceApiUrl: 'https://api.dvhub.de'
     },
-    vpn: {
-      enabled: false,
-      protocol: 'openvpn',
-      autoConnect: true,
-      profileName: 'direktvermarkter',
-      watchdog: {
+    forecast: {
+      enabled: true,
+      location: {
+        latitude: null,
+        longitude: null
+      },
+      pv: {
+        configLevel: 'simple',
+        totalKwp: null,
+        tiltDeg: 35,
+        azimuthDeg: 180,
+        strings: [],
+        model: 'solcast'
+      },
+      solcast: {
         enabled: true,
-        intervalMs: 10000,
-        failThreshold: 3,
-        maxBackoffMs: 120000
+        apiKey: '',
+        siteId: ''
+      },
+      weather: {
+        provider: 'open_meteo',
+        fetchIntervalMs: 3600000
+      },
+      load: {
+        model: 'sql_weekday',
+        defaultPowerW: 800
+      },
+      retention: {
+        strategy: 'smart',
+        minFreeDiskPct: 20
       }
     }
   };
