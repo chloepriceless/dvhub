@@ -7,6 +7,10 @@ import { detectRamTier } from './ram-tier.js';
 import { createForecastStore } from './forecast-store.js';
 import { createWeatherFetch } from './weather-fetch.js';
 import { createSolcastClient } from './solcast-client.js';
+import { createForecastSolar } from './forecast-solar.js';
+import { createVrmForecast } from './vrm-forecast.js';
+import { createOpenMeteoSolar } from './open-meteo-solar.js';
+import { createPvnodeClient } from './pvnode-client.js';
 import { createPvForecast } from './pv-forecast.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
@@ -44,8 +48,12 @@ export function createForecastService(ctx) {
   // Create subsystems
   const weatherFetch = createWeatherFetch(ctx, { store });
   const solcastClient = createSolcastClient(ctx, { store });
+  const forecastSolar = createForecastSolar(ctx, { store });
+  const vrmForecast = createVrmForecast(ctx);
+  const openMeteoSolar = createOpenMeteoSolar(ctx, { store });
+  const pvnodeClient = createPvnodeClient(ctx, { store });
   const pythonBridge = tier >= 2 ? createPythonBridge(ctx, { tier }) : null;
-  const pvForecast = createPvForecast(ctx, { tier, store, pythonBridge, solcastClient });
+  const pvForecast = createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
   const loadForecast = createLoadForecast(ctx, { store });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
 

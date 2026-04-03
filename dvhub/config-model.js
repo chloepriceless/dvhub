@@ -1449,27 +1449,31 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'forecastLocation',
       groupLabel: 'Standort',
-      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      groupDescription: 'Wird automatisch vom Anlagen-Standort uebernommen (Allgemeine Einstellungen > Standort).',
       path: 'forecast.location.latitude',
       label: 'Breitengrad (Latitude)',
       type: 'number',
       min: -90,
       max: 90,
       step: 0.0001,
-      help: 'Breitengrad des Anlagenstandorts (z.B. 48.1484 fuer Riedlingen).'
+      readOnly: true,
+      inheritFrom: 'schedule.smallMarketAutomation.location.latitude',
+      help: 'Wird automatisch vom Anlagen-Standort uebernommen. Aendern unter Allgemeine Einstellungen > Standort.'
     },
     {
       section: 'forecast',
       group: 'forecastLocation',
       groupLabel: 'Standort',
-      groupDescription: 'Koordinaten fuer Wetter- und Sonnenstandsberechnung.',
+      groupDescription: 'Wird automatisch vom Anlagen-Standort uebernommen (Allgemeine Einstellungen > Standort).',
       path: 'forecast.location.longitude',
       label: 'Laengengrad (Longitude)',
       type: 'number',
       min: -180,
       max: 180,
       step: 0.0001,
-      help: 'Laengengrad des Anlagenstandorts (z.B. 9.4763 fuer Riedlingen).'
+      readOnly: true,
+      inheritFrom: 'schedule.smallMarketAutomation.location.longitude',
+      help: 'Wird automatisch vom Anlagen-Standort uebernommen. Aendern unter Allgemeine Einstellungen > Standort.'
     },
     {
       section: 'forecast',
@@ -1498,7 +1502,8 @@ function buildFieldDefinitions() {
       max: 1000,
       step: 0.1,
       visibleWhenPath: { path: 'forecast.pv.configLevel', oneOf: ['simple', 'standard'] },
-      help: 'Gesamte installierte PV-Leistung in Kilowatt-Peak.'
+      inheritFrom: 'userEnergyPricing.pvPlants.0.kwp',
+      help: 'Gesamte installierte PV-Leistung in Kilowatt-Peak. Wird automatisch aus der PV-Anlagen-Konfiguration uebernommen (aktuell eingetragen unter Preise > PV-Anlagen).'
     },
     {
       section: 'forecast',
@@ -1506,12 +1511,13 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
       path: 'forecast.pv.tiltDeg',
-      label: 'Neigungswinkel (Grad)',
+      label: 'Dachneigung (Grad)',
       type: 'number',
       min: 0,
       max: 90,
+      default: 35,
       visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'standard' },
-      help: 'Neigung der PV-Module in Grad (Standard: 35). 0 = flach, 90 = senkrecht.'
+      help: 'Neigung deines Dachs in Grad. Typisch: Flachdach = 0-10, Satteldach = 25-45, Steilddach = 45-60. Standard-Annahme: 35 Grad.'
     },
     {
       section: 'forecast',
@@ -1519,12 +1525,13 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
       path: 'forecast.pv.azimuthDeg',
-      label: 'Ausrichtung (Azimut, Grad)',
+      label: 'Dachausrichtung (Himmelsrichtung)',
       type: 'number',
       min: 0,
       max: 360,
+      default: 180,
       visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'standard' },
-      help: 'Himmelsrichtung der Module (Standard: 180 = Sued). 90 = Ost, 270 = West.'
+      help: 'Wohin zeigt dein Dach? 0 = Nord, 90 = Ost, 180 = Sued (optimal), 270 = West. Bei Ost-West-Dach waehle Detailliert-Modus fuer separate Strings.'
     },
     {
       section: 'forecast',
@@ -1532,10 +1539,10 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
       path: 'forecast.pv.strings',
-      label: 'String-Konfiguration',
+      label: 'PV-Strings (Dachflaechen)',
       type: 'json',
       visibleWhenPath: { path: 'forecast.pv.configLevel', equals: 'detailed' },
-      help: 'Fuer den Detailliert-Modus: Array mit Objekten je String, z.B. [{"kwp":5,"tiltDeg":30,"azimuthDeg":180}].'
+      help: 'Jede Dachflaeche ist ein "String" mit eigener Leistung und Ausrichtung. Beispiel: Sued-Dach mit 15 kWp und Ost-Dach mit 10 kWp als separate Strings anlegen. Die Felder: kWp = Leistung dieser Flaeche, Neigung = Dachwinkel (35 = typisch), Ausrichtung = Himmelsrichtung (180 = Sued).'
     },
     {
       section: 'forecast',
@@ -1543,14 +1550,18 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'Anlagenparameter fuer die PV-Ertragsprognose.',
       path: 'forecast.pv.model',
-      label: 'PV-Prognose-Modell',
+      label: 'PV-Prognose-Quelle',
       type: 'select',
       options: [
-        { value: 'solcast', label: 'Solcast API' },
-        { value: 'pvlib', label: 'pvlib (lokal)' },
-        { value: 'both', label: 'Beide (Solcast + pvlib)' }
+        { value: 'auto', label: 'Automatisch (alle verfuegbaren)' },
+        { value: 'forecast_solar', label: 'Forecast.Solar (kostenlos, kein Key)' },
+        { value: 'open_meteo', label: 'Open-Meteo Solar (kostenlos, kein Key)' },
+        { value: 'solcast', label: 'Solcast (10 Calls/Tag, Key noetig)' },
+        { value: 'pvnode', label: 'pvnode (15min, Key noetig)' },
+        { value: 'pvlib', label: 'pvlib lokal (Tier 2+)' },
+        { value: 'both', label: 'Ensemble (alle Quellen mitteln)' }
       ],
-      help: 'Solcast: Cloud-API (10 Calls/Tag). pvlib: lokale Berechnung (Tier 2+). Beide: Ensemble fuer hoehere Genauigkeit.'
+      help: 'Automatisch: nutzt alle verfuegbaren Quellen und mittelt. Kostenlos ohne Key: Forecast.Solar + Open-Meteo Solar. Mit kostenlosem Key: Solcast (10/Tag) + pvnode (15min). Lokal: pvlib (Tier 2+). VRM-Vorhersage wird immer zusaetzlich einbezogen wenn VRM-Token vorhanden.'
     },
     {
       section: 'forecast',
@@ -1581,6 +1592,16 @@ function buildFieldDefinitions() {
       label: 'Solcast Site ID',
       type: 'text',
       help: 'Rooftop-Site-ID aus dem Solcast-Dashboard.'
+    },
+    {
+      section: 'forecast',
+      group: 'forecastPvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.io PV-Prognose mit 15-Minuten-Aufloesung (kostenloser Account verfuegbar).',
+      path: 'forecast.pvnode.apiKey',
+      label: 'pvnode API Key',
+      type: 'password',
+      help: 'API-Schluessel fuer pvnode.io. Kostenloser Account unter https://pvnode.io — liefert 15-Minuten-Prognosen fuer +1 Tag.'
     },
     {
       section: 'forecast',

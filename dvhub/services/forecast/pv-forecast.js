@@ -124,7 +124,7 @@ export function mergePvForecasts(solcastRows, pvlibRows) {
  * @param {object} deps - { tier, store, pythonBridge, solcastClient }
  * @returns {{ start: Function, close: Function, runForecast: Function }}
  */
-export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient }) {
+export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient }) {
   const { state, getCfg, pushLog } = ctx;
   let intervalId = null;
 
@@ -151,14 +151,54 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
   async function runForecast() {
     const cfg = getCfg();
     const pvCfg = cfg.forecast?.pv;
-    const model = pvCfg?.model || 'solcast';
+    const model = pvCfg?.model || 'auto';
     const isTier1 = tier === 1;
 
     let solcastResult = [];
     let pvlibResult = [];
+    let forecastSolarResult = [];
+    let vrmResult = [];
 
-    // --- Solcast ---
-    if (isTier1 || model === 'solcast' || model === 'both') {
+    // --- VRM Forecast (always try if available — free, already fetched by epex-fetch) ---
+    if (vrmForecast?.isAvailable()) {
+      try {
+        vrmResult = await vrmForecast.readPvForecast() || [];
+      } catch (err) {
+        pushLog('pv_vrm_error', { error: err.message });
+      }
+    }
+
+    // --- Forecast.Solar (free, no API key, all tiers) ---
+    if (model === 'auto' || model === 'forecast_solar' || model === 'both') {
+      try {
+        forecastSolarResult = await forecastSolar.fetchForecast() || [];
+      } catch (err) {
+        pushLog('pv_forecast_solar_error', { error: err.message });
+      }
+    }
+
+    // --- Open-Meteo Solar (free, uses existing weather data, no extra API call) ---
+    let openMeteoResult = [];
+    if (model === 'auto' || model === 'open_meteo' || model === 'both') {
+      try {
+        openMeteoResult = await openMeteoSolar.generateForecast() || [];
+      } catch (err) {
+        pushLog('pv_open_meteo_solar_error', { error: err.message });
+      }
+    }
+
+    // --- pvnode (needs API key, 15-min resolution) ---
+    let pvnodeResult = [];
+    if (model === 'pvnode' || model === 'both' || (model === 'auto' && pvnodeClient?.isConfigured)) {
+      try {
+        pvnodeResult = await pvnodeClient.fetchForecast() || [];
+      } catch (err) {
+        pushLog('pv_pvnode_error', { error: err.message });
+      }
+    }
+
+    // --- Solcast (needs API key) ---
+    if (model === 'solcast' || model === 'both' || (model === 'auto' && cfg.forecast?.solcast?.apiKey)) {
       try {
         solcastResult = await solcastClient.fetchPvForecast() || [];
       } catch (err) {

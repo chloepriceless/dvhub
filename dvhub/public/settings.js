@@ -143,6 +143,12 @@ function createConfigInput(field, value, inherited) {
   input.id = fieldId(field.path);
   input.dataset.path = field.path;
   input.dataset.type = field.type;
+  if (field.readOnly) {
+    input.readOnly = true;
+    input.disabled = true;
+    input.style.opacity = '0.6';
+    input.title = field.help || 'Dieses Feld wird automatisch uebernommen';
+  }
   return input;
 }
 
@@ -643,6 +649,14 @@ function renderFieldValueFromConfigs(field, {
   const effectiveValue = getPath(effectiveConfig, field.path);
   const optionalOverride = field.empty === 'delete';
 
+  // inheritFrom: auto-populate from another config path if current value is empty/zero
+  if (field.inheritFrom && (!draftDefined || draftValue === 0 || draftValue === null || draftValue === undefined || draftValue === '')) {
+    const inheritedVal = getPath(effectiveConfig, field.inheritFrom) || getPath(draftConfig, field.inheritFrom);
+    if (inheritedVal !== undefined && inheritedVal !== null && inheritedVal !== 0) {
+      return { value: inheritedVal, inherited: null };
+    }
+  }
+
   if (optionalOverride && !draftDefined) {
     return { value: '', inherited: effectiveValue };
   }
@@ -1035,8 +1049,14 @@ function renderForecastStringEditor() {
 
   const desc = document.createElement('p');
   desc.style.cssText = 'padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;';
-  desc.textContent = 'Konfigurieren Sie jeden PV-String einzeln (je Dachflaeche / Ausrichtung).';
+  desc.textContent = 'Jede Dachflaeche mit eigener Ausrichtung als separaten String anlegen. Beispiel: Sued-Dach 15 kWp + Ost-Garage 5 kWp.';
   section.appendChild(desc);
+
+  // Column headers
+  const headerRow = document.createElement('div');
+  headerRow.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;padding:4px 14px;font-size:11px;color:rgba(232,234,240,0.4);';
+  headerRow.innerHTML = '<span>Bezeichnung</span><span style="text-align:right">kWp</span><span style="text-align:right">Neigung°</span><span style="text-align:right">Richtung°</span><span></span>';
+  section.appendChild(headerRow);
 
   const list = document.createElement('div');
   list.id = 'forecastStringsList';
@@ -1078,7 +1098,8 @@ function renderStringRow(index) {
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
   labelInput.className = 'config-input';
-  labelInput.placeholder = 'Bezeichnung';
+  labelInput.placeholder = 'z.B. Sued-Dach, Ost-Garage';
+  labelInput.title = 'Name dieser Dachflaeche (frei waehlbar)';
   labelInput.value = s.label || '';
   labelInput.addEventListener('input', () => {
     forecastStringsDraft[index].label = labelInput.value;
@@ -1095,6 +1116,7 @@ function renderStringRow(index) {
   kwpInput.step = '0.1';
   kwpInput.value = s.kwp ?? '';
   kwpInput.style.textAlign = 'right';
+  kwpInput.title = 'Installierte Leistung dieser Dachflaeche in kWp';
   kwpInput.addEventListener('input', () => {
     forecastStringsDraft[index].kwp = parseFloat(kwpInput.value) || 0;
     syncForecastStringsToDraft();
@@ -1105,11 +1127,12 @@ function renderStringRow(index) {
   const tiltInput = document.createElement('input');
   tiltInput.type = 'number';
   tiltInput.className = 'config-input';
-  tiltInput.placeholder = 'Neigung';
+  tiltInput.placeholder = 'Neigung°';
   tiltInput.min = '0';
   tiltInput.max = '90';
   tiltInput.value = s.tiltDeg ?? '';
   tiltInput.style.textAlign = 'right';
+  tiltInput.title = 'Dachneigung in Grad (0=flach, 35=typisch, 90=senkrecht)';
   tiltInput.addEventListener('input', () => {
     forecastStringsDraft[index].tiltDeg = parseInt(tiltInput.value, 10) || 0;
     syncForecastStringsToDraft();
@@ -1120,11 +1143,12 @@ function renderStringRow(index) {
   const azInput = document.createElement('input');
   azInput.type = 'number';
   azInput.className = 'config-input';
-  azInput.placeholder = 'Azimut';
+  azInput.placeholder = 'Richtung°';
   azInput.min = '0';
   azInput.max = '360';
   azInput.value = s.azimuthDeg ?? '';
   azInput.style.textAlign = 'right';
+  azInput.title = 'Himmelsrichtung (0=Nord, 90=Ost, 180=Sued, 270=West)';
   azInput.addEventListener('input', () => {
     forecastStringsDraft[index].azimuthDeg = parseInt(azInput.value, 10) || 0;
     syncForecastStringsToDraft();
