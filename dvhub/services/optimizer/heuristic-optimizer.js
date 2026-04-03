@@ -2,6 +2,7 @@
 // Charges during cheapest hours, discharges during most expensive hours.
 // Uses normalized forecast slots with { ts, endTs, ctKwh/powerW, confidence }.
 // Uses appliedPowerW from simulateSoc for feasibility adjustment.
+// Uses importCtKwh from cost-model enrichment (falls back to ctKwh for backward compat).
 
 import { simulateSoc } from './battery-model.js';
 
@@ -16,7 +17,7 @@ import { simulateSoc } from './battery-model.js';
  * 5. Validate with simulateSoc, adjust clipped slots using appliedPowerW
  *
  * @param {object} params
- * @param {Array<{ts: number, endTs: number, ctKwh: number, confidence: number}>} params.priceSlots - Normalized price slots
+ * @param {Array<{ts: number, endTs: number, ctKwh: number, importCtKwh?: number, feedInCtKwh?: number, confidence: number}>} params.priceSlots - Normalized price slots (enriched with cost-model when available)
  * @param {Array<{ts: number, endTs: number, powerW: number, confidence: number}>} params.pvSlots - Normalized PV slots
  * @param {Array<{ts: number, endTs: number, powerW: number, confidence: number}>} params.loadSlots - Normalized load slots
  * @param {object} params.batteryModel - Battery parameters
@@ -38,23 +39,29 @@ import { simulateSoc } from './battery-model.js';
 export function buildHeuristicSchedule({ priceSlots, pvSlots, loadSlots, batteryModel, confidenceGate, allowGridCharge = false, allowGridDischarge = false }) {
   if (!priceSlots || priceSlots.length === 0) return [];
 
-  // 1. Calculate average price
+  // 1. Calculate average price (using importCtKwh from cost-model enrichment, fallback to ctKwh)
   let priceSum = 0;
-  for (const s of priceSlots) priceSum += s.ctKwh;
+  for (const s of priceSlots) priceSum += s.importCtKwh ?? s.ctKwh;
   const avgPrice = priceSum / priceSlots.length;
 
   // 2. Find cheap slots (< 70% of average), sorted cheapest first
   const cheapSlots = priceSlots
-    .filter(s => s.ctKwh < avgPrice * 0.7)
-    .sort((a, b) => a.ctKwh - b.ctKwh);
+    .filter(s => (s.importCtKwh ?? s.ctKwh) < avgPrice * 0.7)
+    .sort((a, b) => (a.importCtKwh ?? a.ctKwh) - (b.importCtKwh ?? b.ctKwh));
 
   // 3. Find expensive slots (> 130% of average), sorted most expensive first
   //    Grid discharge (Batterie→Netz) requires allowGridDischarge AND confidence gate
   //    Self-consume discharge (Batterie→Eigenverbrauch) is always allowed
+  //    For feed-in revenue, use feedInCtKwh from cost-model enrichment (fallback to ctKwh)
   const canGridDischarge = allowGridDischarge && confidenceGate.allowSell;
   const expensiveSlots = priceSlots
-    .filter(s => s.ctKwh > avgPrice * 1.3)
-    .sort((a, b) => b.ctKwh - a.ctKwh);
+    .filter(s => (s.importCtKwh ?? s.ctKwh) > avgPrice * 1.3)
+    .sort((a, b) => {
+      // For discharge sorting, use feedInCtKwh when available (feed-in tariff determines revenue)
+      const aRevenue = canGridDischarge ? (a.feedInCtKwh ?? a.ctKwh) : (a.importCtKwh ?? a.ctKwh);
+      const bRevenue = canGridDischarge ? (b.feedInCtKwh ?? b.ctKwh) : (b.importCtKwh ?? b.ctKwh);
+      return bRevenue - aRevenue;
+    });
 
   // Helper: find corresponding PV slot by matching ts range
   function findPvSlot(ts) {

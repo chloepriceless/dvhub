@@ -2,6 +2,7 @@
 // Produces globally optimal 48h battery schedule using HiGHS solver with 1h resolution.
 // Aggregates 15min price/PV to 1h via aggregateTo1h, load slots pass through as-is.
 // Results expanded back to 15min slots for schedule-builder compatibility.
+// Uses importCtKwh from cost-model enrichment (falls back to ctKwh for backward compat).
 
 import { aggregateTo1h } from './forecast-normalizer.js';
 
@@ -83,10 +84,10 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   //            soc_t (continuous, bounded)
   // Objective: Minimize SUM_t [ (load_t - pv_t + charge_t - discharge_t) * price_t * dt ]
 
-  // Build objective
+  // Build objective (using importCtKwh from cost-model enrichment, fallback to ctKwh)
   const objTerms = [];
   for (let t = 0; t < N; t++) {
-    const price = priceHourly[t].ctKwh;
+    const price = priceHourly[t].importCtKwh ?? priceHourly[t].ctKwh;
     const load = getLoad(t);
     const pv = getPv(t);
     const netLoadCost = (load - pv) * price * dt; // Constant term (ignored by solver)

@@ -2,6 +2,7 @@
 // Sends DVhub forecasts to co-hosted EOS and receives optimized schedules.
 // Consistent { ok, error } contract -- NEVER throws (addresses Codex review concern).
 import http from 'node:http';
+import { toEosStrompreisArray } from './cost-model.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -100,12 +101,19 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       ]);
     }
 
-    // Price forecast: array of [timestamp_epoch, ct_kwh] pairs
+    // Price forecast: use fully-loaded prices for EOS (D-20) when enriched
     if (forecastResponse.price?.slots?.length) {
-      payload.price_forecast = forecastResponse.price.slots.map(s => [
-        Math.floor(new Date(s.ts).getTime() / 1000),
-        Number(s.ctKwh) || 0
-      ]);
+      const enrichedSlots = forecastResponse.price.slots;
+      if (enrichedSlots[0]?.importCtKwh != null) {
+        // Use pre-computed fully-loaded prices via toEosStrompreisArray
+        payload.strompreis_euro_pro_wh = toEosStrompreisArray(enrichedSlots);
+      } else {
+        // Fallback: raw ctKwh (backwards compat)
+        payload.price_forecast = enrichedSlots.map(s => [
+          Math.floor(new Date(s.ts).getTime() / 1000),
+          Number(s.ctKwh) || 0
+        ]);
+      }
     }
 
     // Load forecast: array of [timestamp_epoch, watts] pairs
