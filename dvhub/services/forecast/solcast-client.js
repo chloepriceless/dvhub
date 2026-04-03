@@ -109,6 +109,7 @@ export function createSolcastClient(ctx, { store }) {
       state.forecast.pv.lastFetchAt = Date.now();
       state.forecast.pv.data = rows;
       state.forecast.pv.model = 'solcast';
+      ctx.bumpForecastVersion?.();
 
       pushLog('solcast_fetch_ok', { count: rows.length, callsToday });
       return rows;

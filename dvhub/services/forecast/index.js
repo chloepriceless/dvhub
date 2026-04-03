@@ -29,6 +29,14 @@ export function createForecastService(ctx) {
   // Detect hardware tier
   const { tier, totalMB } = detectRamTier();
 
+  // Version counter: increments on any forecast data change.
+  // Optimizer polls this to detect when re-optimization is needed (D-02).
+  let forecastVersion = 0;
+
+  /** Increment forecast version. Called by subsystems when data changes. */
+  function bumpForecastVersion() { forecastVersion++; }
+  ctx.bumpForecastVersion = bumpForecastVersion;
+
   // Initialize forecast state with tier-gated flags
   state.forecast = {
     tier,
@@ -181,5 +189,5 @@ export function createForecastService(ctx) {
     };
   }
 
-  return { start, close, tier, store, buildForecastResponse };
+  return { start, close, tier, store, buildForecastResponse, get forecastVersion() { return forecastVersion; } };
 }

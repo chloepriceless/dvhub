@@ -113,6 +113,7 @@ export function createWeatherFetch(ctx, { store }) {
       state.forecast.weather.lastFetchAt = Date.now();
       state.forecast.weather.data = rows;
       state.forecast.weather.error = null;
+      ctx.bumpForecastVersion?.();
 
       pushLog('weather_fetch_ok', { count: rows.length });
     } catch (error) {

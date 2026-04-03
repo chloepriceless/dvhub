@@ -239,6 +239,7 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: merged,
         confidence: 0.5
       };
+      ctx.bumpForecastVersion?.();
     } else if (pvlibResult.length > 0) {
       // pvlib-only results
       for (const row of pvlibResult) {
@@ -255,6 +256,7 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: pvlibResult,
         confidence: 0.4
       };
+      ctx.bumpForecastVersion?.();
     } else if (solcastResult.length > 0) {
       // Solcast-only results
       for (const row of solcastResult) {
@@ -271,6 +273,7 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: solcastResult,
         confidence: 0.6
       };
+      ctx.bumpForecastVersion?.();
     }
 
     pushLog('pv_forecast_complete', {

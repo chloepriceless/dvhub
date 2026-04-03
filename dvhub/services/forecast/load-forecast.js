@@ -125,6 +125,7 @@ export function createLoadForecast(ctx, { store }) {
       state.forecast.load.data = slots;
       state.forecast.load.lastFetchAt = now.toISOString();
       state.forecast.load.confidence = confidence;
+      ctx.bumpForecastVersion?.();
 
       pushLog('load_forecast_updated', {
         slots: slots.length,
