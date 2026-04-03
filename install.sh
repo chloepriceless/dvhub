@@ -220,6 +220,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_CHANNEL="$2"
       shift 2
       ;;
+    --with-eos)
+      EOS_INSTALL=1
+      shift
+      ;;
     *)
       echo "Unbekannter Parameter: $1" >&2
       exit 1
@@ -351,6 +355,66 @@ if command -v python3 &>/dev/null; then
   fi
 else
   echo "Python3 not found. PV forecast will use Solcast API only (Tier 1 mode)."
+fi
+
+# --- EOS (Akkudoktor) Installation (Tier 2+ only, optional) ---
+install_eos() {
+  local RAM_MB
+  RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+  if [ "$RAM_MB" -lt 3000 ]; then
+    echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier 1)"
+    return 0
+  fi
+
+  echo "  EOS: Pruefe Installation..."
+
+  # Check if Docker is available
+  if command -v docker &>/dev/null; then
+    echo "  EOS: Docker gefunden, verwende Docker Image"
+    local EOS_VERSION="v0.3.0"
+    local EOS_IMAGE="akkudoktor/eos:${EOS_VERSION}"
+
+    # Pull image if not present (idempotent)
+    if ! docker image inspect "$EOS_IMAGE" &>/dev/null; then
+      echo "  EOS: Lade Docker Image ${EOS_IMAGE}..."
+      docker pull "$EOS_IMAGE" || { echo "  EOS: Docker Pull fehlgeschlagen"; return 1; }
+    fi
+
+    # Create systemd service for EOS Docker container
+    # SECURITY: Bind to 127.0.0.1 ONLY (not 0.0.0.0) -- EOS is co-hosted, no external access
+    cat > /etc/systemd/system/dvhub-eos.service << 'EOSUNIT'
+[Unit]
+Description=DVhub EOS Optimizer (Akkudoktor)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+ExecStartPre=-/usr/bin/docker rm -f dvhub-eos
+ExecStart=/usr/bin/docker run --name dvhub-eos --rm -p 127.0.0.1:8503:8503 akkudoktor/eos:v0.3.0
+ExecStop=/usr/bin/docker stop dvhub-eos
+
+[Install]
+WantedBy=multi-user.target
+EOSUNIT
+
+    systemctl daemon-reload
+    echo "  EOS: systemd Service dvhub-eos.service erstellt"
+    echo "  EOS: Starte mit: systemctl enable --now dvhub-eos"
+
+  else
+    echo "  EOS: Docker nicht gefunden. Installiere Docker oder verwende pip:"
+    echo "  EOS:   pip install akkudoktor-eos==0.3.0"
+    echo "  EOS:   Dann manuell als systemd Service einrichten."
+  fi
+}
+
+if [ "${EOS_INSTALL:-0}" = "1" ]; then
+  install_eos
+else
+  echo "  EOS: Uebersprungen (--with-eos Flag nicht gesetzt)"
 fi
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
