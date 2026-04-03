@@ -324,6 +324,35 @@ if [[ -n "$NODE_BIN" ]]; then
   setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
 fi
 
+# --- Python venv for PV forecast (optional, Tier 2+) ---
+echo "Setting up Python forecast environment..."
+VENV_DIR="/opt/dvhub/forecast-venv"
+REQUIREMENTS="$APP_DIR/python/requirements.txt"
+
+if command -v python3 &>/dev/null; then
+  PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  echo "Found Python $PYTHON_VERSION"
+
+  # Ensure python3-venv is available
+  if ! python3 -m venv --help &>/dev/null 2>&1; then
+    echo "Installing python3-venv..."
+    sudo apt-get install -y python3-venv 2>/dev/null || true
+  fi
+
+  if [ -f "$REQUIREMENTS" ]; then
+    echo "Creating forecast venv at $VENV_DIR..."
+    sudo mkdir -p "$(dirname "$VENV_DIR")"
+    sudo python3 -m venv "$VENV_DIR"
+    sudo "$VENV_DIR/bin/pip" install --upgrade pip
+    sudo "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
+    echo "Forecast venv created successfully."
+  else
+    echo "No requirements.txt found, skipping Python forecast setup."
+  fi
+else
+  echo "Python3 not found. PV forecast will use Solcast API only (Tier 1 mode)."
+fi
+
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
