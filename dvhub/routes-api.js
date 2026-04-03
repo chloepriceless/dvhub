@@ -217,6 +217,7 @@ export function createApiRoutes(ctx) {
     '/api/integration/loxone',
     '/api/integration/eos',
     '/api/integration/emhass',
+    '/api/optimizer/status',
     '/api/log',
     '/api/log/dv-signals',
     '/api/telemetry/series',
@@ -700,6 +701,15 @@ export function createApiRoutes(ctx) {
       const s = integrationState();
       const lines = Object.entries(s).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
       return text(res, 200, lines.join('\n'));
+    }
+
+    // Optimizer status endpoint
+    if (url.pathname === '/api/optimizer/status' && req.method === 'GET') {
+      const status = ctx.optimizerService?.getStatus() || {
+        enabled: false,
+        error: 'Optimizer service not initialized'
+      };
+      return json(res, 200, status);
     }
 
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen

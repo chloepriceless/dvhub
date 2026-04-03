@@ -55,6 +55,7 @@ import { createPoller, loadEnergy } from './polling.js';
 import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 import { createForecastService } from './services/forecast/index.js';
+import { createOptimizerService } from './services/optimizer/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -599,6 +600,8 @@ ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
 const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
+const optimizer = createOptimizerService(ctx);
+ctx.optimizerService = optimizer;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
@@ -916,6 +919,7 @@ if (IS_RUNTIME_PROCESS) {
   scheduler.start();
   epex.start();
   forecast.start().catch(err => console.error('Forecast service start error:', err.message));
+  optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
@@ -946,6 +950,7 @@ async function gracefulShutdown(signal) {
   liveTelemetryBuffer?.flush({ force: true });
   epex.stop();
   await forecast.close();
+  await optimizer.close();
   if (runtimeWorker) runtimeWorker.kill();
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
