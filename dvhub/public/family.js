@@ -405,7 +405,12 @@
     setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
 
     setText('tf-grid', energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen');
-    setText('ts-grid', energy.feedingToGrid ? 'Verdienen gerade' : (typeof price.nowCtKwh === 'number' ? 'Kosten ' + price.nowCtKwh.toFixed(1) + ' ct' : ''));
+    // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
+    // raw EPEX spot. Fall back to EPEX spot only if the tariff-adjusted price is
+    // unavailable so the row never shows a confusing number.
+    var importPrice = typeof price.importCtKwh === 'number' ? price.importCtKwh
+      : (typeof price.nowCtKwh === 'number' ? price.nowCtKwh : null);
+    setText('ts-grid', energy.feedingToGrid ? 'Verdienen gerade' : (importPrice != null ? 'Kosten ' + importPrice.toFixed(1) + ' ct' : ''));
 
     // Greeting (vorkalkuliert per D-07/D-13)
     if (greeting.hello) setText('g-hello', greeting.hello);
@@ -493,8 +498,8 @@
     ];
     panelData.grid.stats = [
       { label: 'Gerade', val: formatKw(Math.abs(energy.gridKw || 0)) + (energy.feedingToGrid ? ' ein' : ' bez'), delta: '', up: energy.feedingToGrid },
-      { label: 'Preis jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true },
-      { label: 'Min/Max heute', val: (typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—') + ' / ' + (typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—') + ' ct', delta: '', up: true }
+      { label: 'Bezug jetzt', val: typeof price.importCtKwh === 'number' ? price.importCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.nowCtKwh === 'number' ? 'EPEX ' + price.nowCtKwh.toFixed(1) + ' ct' : '', up: true },
+      { label: 'EPEX min/max heute', val: (typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—') + ' / ' + (typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—') + ' ct', delta: '', up: true }
     ];
     panelData.forecast.stats = [
       { label: 'Heute', val: forecast.pv && forecast.pv.today ? (forecast.pv.today.kwhTotal || 0).toFixed(1) + ' kWh' : '—', delta: '', up: true },

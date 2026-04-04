@@ -270,6 +270,31 @@ describe('price section', () => {
     const { price } = svc.buildFamilyStatus();
     assert.ok(price);
     assert.equal(price.nowCtKwh, null);
+    assert.equal(price.importCtKwh, null);
+  });
+
+  it('importCtKwh reflects costs.userImportPriceNowCtKwh (tariff-adjusted, not raw EPEX)', () => {
+    const ctx = createMockCtx();
+    ctx.buildFallbackStatusPayload = () => ({
+      victron: { soc: 50, batteryPowerW: 0, pvTotalW: 0 },
+      meter: { grid_total_w: -800 },
+      epex: { ok: true, data: [] },
+      costs: {
+        netEur: 0, costEur: 0, revenueEur: 0,
+        priceNowCtKwh: 6.454,             // EPEX spot
+        userImportPriceNowCtKwh: 26.9     // actual user import incl. fees/taxes
+      }
+    });
+    const svc = createFamilyService(ctx);
+    const { price } = svc.buildFamilyStatus();
+    assert.equal(price.nowCtKwh, 28.5, 'nowCtKwh stays the EPEX spot from epexNowNext');
+    assert.equal(price.importCtKwh, 26.9, 'importCtKwh reflects userImportPriceNowCtKwh');
+  });
+
+  it('importCtKwh is null when costs.userImportPriceNowCtKwh is absent', () => {
+    const svc = createFamilyService(createMockCtx()); // default mock has no userImportPriceNowCtKwh
+    const { price } = svc.buildFamilyStatus();
+    assert.equal(price.importCtKwh, null);
   });
 });
 

@@ -249,14 +249,27 @@ export function createFamilyService(ctx) {
 
   /**
    * Price section. Reads from ctx.epexNowNext() + state.epex.data.
+   *
+   * Exposes two distinct prices, since the raw EPEX spot is not what a
+   * dynamic-tariff customer actually pays on import:
+   *   - nowCtKwh        : current EPEX spot (wholesale, market signal)
+   *   - importCtKwh     : user's actual import price incl. grid fees, taxes,
+   *                       VAT (from costs.userImportPriceNowCtKwh). This is
+   *                       the number the UI should show when labelled as
+   *                       "Kosten" or "Bezug".
    */
-  function derivePriceSection(epexNN, epexState) {
+  function derivePriceSection(epexNN, epexState, costs) {
+    const importCtKwh = (costs && typeof costs.userImportPriceNowCtKwh === 'number' && Number.isFinite(costs.userImportPriceNowCtKwh))
+      ? Math.round(costs.userImportPriceNowCtKwh * 100) / 100
+      : null;
+
     if (!epexNN) {
       return {
         nowCtKwh: null,
         nextHourCtKwh: null,
         todayMinCtKwh: null,
         todayMaxCtKwh: null,
+        importCtKwh,
         slots: []
       };
     }
@@ -275,7 +288,7 @@ export function createFamilyService(ctx) {
         }))
       : [];
 
-    return { nowCtKwh, nextHourCtKwh, todayMinCtKwh, todayMaxCtKwh, slots };
+    return { nowCtKwh, nextHourCtKwh, todayMinCtKwh, todayMaxCtKwh, importCtKwh, slots };
   }
 
   /**
@@ -420,7 +433,7 @@ export function createFamilyService(ctx) {
     const ev = deriveEvSection(victron, cfg);
     const devices = deriveDevicesSection();
     const forecast = deriveForecastSection(forecastResponse);
-    const price = derivePriceSection(epexNN, epexState);
+    const price = derivePriceSection(epexNN, epexState, costs);
     const optimizer = deriveOptimizerSection(optimizerStatus);
     const savings = deriveSavingsSection(costs);
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
