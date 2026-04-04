@@ -502,9 +502,23 @@ export function createFamilyService(ctx) {
 
   async function start() {
     pushLog?.('family_service_started', {});
-    // Kick off one immediate refresh so the first tablet poll after boot has
-    // today's data (best-effort — errors are logged and the section stays null).
-    await refreshTodayKpis();
+    // server.js wires `ctx.historyApi` inside an async IIFE that races the
+    // synchronous top-level code that calls familyService.start(). Poll ctx
+    // with a short backoff (up to ~10 s) before firing the first refresh,
+    // otherwise the first tablet poll after boot reports today=null and the
+    // UI has to wait for the 60 s interval to tick.
+    (async () => {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (ctx.historyApi && typeof ctx.historyApi.getSummary === 'function') {
+          await refreshTodayKpis();
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      pushLog?.('family_today_kpis_bootstrap_timeout', {});
+    })().catch((err) => {
+      pushLog?.('family_today_kpis_bootstrap_error', { error: err.message });
+    });
     todayKpisTimer = setInterval(() => {
       refreshTodayKpis().catch((err) => {
         pushLog?.('family_today_kpis_timer_error', { error: err.message });
