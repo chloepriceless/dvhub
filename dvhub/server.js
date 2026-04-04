@@ -56,6 +56,7 @@ import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 import { createForecastService } from './services/forecast/index.js';
 import { createOptimizerService } from './services/optimizer/index.js';
+import { createFamilyService } from './services/family/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -602,6 +603,10 @@ const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
 const optimizer = createOptimizerService(ctx);
 ctx.optimizerService = optimizer;
+// buildFallbackStatusPayload is assigned later (line ~622) -- family service uses
+// it lazily via ctx at call time, so wiring order here is safe.
+const familyService = createFamilyService(ctx);
+ctx.familyService = familyService;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
@@ -920,6 +925,7 @@ if (IS_RUNTIME_PROCESS) {
   epex.start();
   forecast.start().catch(err => console.error('Forecast service start error:', err.message));
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
+  familyService.start().catch(err => console.error('Family service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
@@ -951,6 +957,7 @@ async function gracefulShutdown(signal) {
   epex.stop();
   await forecast.close();
   await optimizer.close();
+  await familyService.close();
   if (runtimeWorker) runtimeWorker.kill();
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);

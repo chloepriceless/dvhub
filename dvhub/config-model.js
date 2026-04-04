@@ -2114,6 +2114,24 @@ export function createDefaultConfig() {
       paragraph14a: {
         reductionCtKwh: 0                 // §14a Reduktion ct/kWh (Netzbetreiber-abhaengig, jaehrlich)
       }
+    },
+    family: {
+      // Family Dashboard (Phase 03, DASH-02/DASH-03)
+      useAsRoot: false,                    // D-04 — Phase 03 default: Leitstand bleibt Root
+      screensaver: {
+        enabled: true,                     // D-16
+        defaultTimeoutSec: 120,            // 2 Minuten Default
+        windows: [],                       // D-17 — time-window overrides (empty = use default)
+        dimOpacity: 0.3                    // Zielopazitaet waehrend Dimming
+      },
+      presence: {
+        pollIntervalMs: 2000,              // D-19 — Dashboard pollt /api/family/presence
+        webhookEnabled: true
+      },
+      branding: {
+        title: 'Unser Zuhause',
+        backgroundImage: '/assets/family-scene.png'  // D-20 optional, CSS-Fallback auf Gradient
+      }
     }
   };
 }

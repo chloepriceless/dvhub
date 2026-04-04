@@ -222,6 +222,8 @@ export function createApiRoutes(ctx) {
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
+    '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
+    '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
     '/api/epex/zones',
     '/api/epex/gaps',
     '/api/schedule',
@@ -710,6 +712,44 @@ export function createApiRoutes(ctx) {
         error: 'Optimizer service not initialized'
       };
       return json(res, 200, status);
+    }
+
+    // --- Family Dashboard API (DASH-02, DASH-03) ---
+    // Aggregated status payload polled every 5s by the family dashboard.
+    // LAN-allowlisted read path: tablet on the local network can reach it
+    // without a Bearer token. See LAN_SAFE_ENDPOINTS above.
+    if (url.pathname === '/api/family/status' && req.method === 'GET') {
+      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
+      try {
+        const payload = ctx.familyService.buildFamilyStatus();
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('family_api_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'family status failed' });
+      }
+    }
+
+    // Presence state read — screensaver wake polling (D-19). LAN-safe GET.
+    if (url.pathname === '/api/family/presence' && req.method === 'GET') {
+      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
+      return json(res, 200, { ok: true, ...ctx.familyService.getPresence() });
+    }
+
+    // Presence webhook (D-08, D-19). POSTs always require auth token —
+    // isLanSafeRequest rejects non-GET requests by design. Loxone/HA/MQTT
+    // integrations configure the Bearer token in Phase 04.
+    if (url.pathname === '/api/family/presence' && req.method === 'POST') {
+      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
+      let body;
+      try {
+        body = await parseBody(req);
+      } catch (e) {
+        return json(res, 400, { ok: false, error: 'invalid json' });
+      }
+      const detected = body?.detected === true;
+      const source = typeof body?.source === 'string' ? body.source : 'unknown';
+      ctx.familyService.setPresence({ detected, source });
+      return json(res, 200, { ok: true });
     }
 
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
