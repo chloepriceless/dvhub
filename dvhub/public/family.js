@@ -175,14 +175,61 @@
   var pathCoords = {};        // fl.id -> { x1, y1, x2, y2, cx, cy } (forward orientation)
   var lastFlowDirection = {}; // fl.id -> 'forward' | 'reverse' — cached so we only rewrite d on flip
   function addFlowToSvg(g, fl) {
-    // Wrap every flow in a <g> so updateFlowState can show/hide the whole
-    // link (path + particles + label) with a single display toggle.
+    // Scaffold only: group + dashed path + label. Particles are created
+    // lazily by ensureFlowParticles() when the flow first becomes active,
+    // and re-created whenever direction flips. That way SMIL animateMotion
+    // always starts fresh against the correct path orientation (Chrome/Safari
+    // ignore path.d mutations on already-running animateMotion references).
     var fg = document.createElementNS(NS, 'g'); fg.id = 'fg-' + fl.id; fg.style.display = 'none';
     var pa = document.createElementNS(NS, 'path'); pa.id = fl.id; pa.setAttribute('fill', 'none'); pa.setAttribute('stroke', fl.hex); pa.setAttribute('stroke-width', fl.w); pa.setAttribute('stroke-dasharray', '10 18'); pa.setAttribute('opacity', '0.35'); pa.setAttribute('stroke-linecap', 'round'); pa.style.animation = 'fd 1.2s linear infinite'; fg.appendChild(pa); pathEls[fl.id] = pa;
-    for (var i = 0; i < fl.p; i++) { var c = document.createElementNS(NS, 'circle'); c.setAttribute('r', fl.w > 2 ? '5' : '4'); c.setAttribute('fill', fl.hex); c.setAttribute('filter', 'url(#gl)'); c.setAttribute('opacity', '0.9'); var am = document.createElementNS(NS, 'animateMotion'); am.setAttribute('dur', fl.dur + 's'); am.setAttribute('repeatCount', 'indefinite'); am.setAttribute('begin', (i * (fl.dur / fl.p)).toFixed(2) + 's'); var mp = document.createElementNS(NS, 'mpath'); mp.setAttribute('href', '#' + fl.id); am.appendChild(mp); c.appendChild(am); fg.appendChild(c); }
-    for (var j = 0; j < fl.wh; j++) { var w = document.createElementNS(NS, 'circle'); w.setAttribute('r', '2.5'); w.setAttribute('fill', '#fff'); w.setAttribute('opacity', '0.4'); var am2 = document.createElementNS(NS, 'animateMotion'); am2.setAttribute('dur', fl.dur + 's'); am2.setAttribute('repeatCount', 'indefinite'); am2.setAttribute('begin', ((j + .5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2) + 's'); var mp2 = document.createElementNS(NS, 'mpath'); mp2.setAttribute('href', '#' + fl.id); am2.appendChild(mp2); w.appendChild(am2); fg.appendChild(w); }
-    var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.7'); tx.id = 'ft-' + fl.id; fg.appendChild(tx); lblEls[fl.id] = tx;
+    var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.85'); tx.setAttribute('text-anchor', 'middle'); tx.id = 'ft-' + fl.id; fg.appendChild(tx); lblEls[fl.id] = tx;
     g.appendChild(fg);
+  }
+
+  /**
+   * Build (or rebuild) the animated particles for one flow. Rewrites the
+   * path `d` attribute so the stroke orientation matches `reverse`, strips
+   * any stale circles, then appends fresh <circle><animateMotion> pairs.
+   * Fresh SMIL elements pick up the current path immediately — mutating an
+   * existing animateMotion's mpath does not propagate in Chrome/Safari.
+   */
+  function ensureFlowParticles(fl, reverse) {
+    var fg = document.getElementById('fg-' + fl.id);
+    if (!fg) return;
+    var pc = pathCoords[fl.id];
+    if (!pc) return; // rebuildAll setTimeout hasn't populated coords yet
+    var d = reverse
+      ? 'M' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1)
+      : 'M' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1);
+    if (pathEls[fl.id]) pathEls[fl.id].setAttribute('d', d);
+    // Strip existing circles (the path and text label stay).
+    var old = fg.querySelectorAll('circle');
+    for (var k = 0; k < old.length; k++) old[k].parentNode.removeChild(old[k]);
+    var label = lblEls[fl.id];
+    function addCircle(r, fill, opacity, begin) {
+      var c = document.createElementNS(NS, 'circle');
+      c.setAttribute('r', r);
+      c.setAttribute('fill', fill);
+      if (fill !== '#fff') c.setAttribute('filter', 'url(#gl)');
+      c.setAttribute('opacity', opacity);
+      var am = document.createElementNS(NS, 'animateMotion');
+      am.setAttribute('dur', fl.dur + 's');
+      am.setAttribute('repeatCount', 'indefinite');
+      am.setAttribute('begin', begin + 's');
+      var mp = document.createElementNS(NS, 'mpath');
+      mp.setAttribute('href', '#' + fl.id);
+      am.appendChild(mp);
+      c.appendChild(am);
+      // Insert before label so the text stays on top of the particles.
+      if (label && label.parentNode === fg) fg.insertBefore(c, label);
+      else fg.appendChild(c);
+    }
+    for (var i = 0; i < fl.p; i++) {
+      addCircle(fl.w > 2 ? 5 : 4, fl.hex, '0.9', (i * (fl.dur / fl.p)).toFixed(2));
+    }
+    for (var j = 0; j < fl.wh; j++) {
+      addCircle(2.5, '#fff', '0.4', ((j + 0.5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2));
+    }
   }
   function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; pathCoords = {}; lastFlowDirection = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
   var lastDeviceFlows = [];
@@ -226,10 +273,11 @@
 
   /**
    * Toggle each of the 4 main flows (solar→home, home↔bat, home→ev, home↔grid)
-   * based on actual power. Hides flows below 50 W, reverses direction for
-   * battery discharge and grid import by rewriting the path `d` attribute
-   * with swapped endpoints (the dashed stroke animation and particle
-   * animateMotion then follow the new orientation automatically).
+   * based on actual power. Hides flows below 50 W. Rebuilds particles via
+   * ensureFlowParticles() whenever a flow transitions from hidden→visible or
+   * changes direction — SMIL animateMotion cannot be retargeted on a running
+   * element, so a fresh rebuild is the only reliable way to make the particles
+   * follow a reversed path (battery discharge: bat→home, grid import: grid→home).
    */
   function updateFlowState(energy) {
     if (!energy) return;
@@ -244,24 +292,30 @@
       f4: { kw: Math.abs(gridKw),          reverse: gridKw > 0 }      // importing flips grid→home
     };
     var THRESHOLD_KW = 0.05; // 50 W — below this we consider the link idle
-    Object.keys(states).forEach(function (id) {
-      var s = states[id];
-      var fg = document.getElementById('fg-' + id);
+    flows.forEach(function (fl) {
+      var s = states[fl.id];
+      if (!s) return;
+      var fg = document.getElementById('fg-' + fl.id);
+      if (!fg) return;
       var active = s.kw > THRESHOLD_KW;
-      if (fg) fg.style.display = active ? '' : 'none';
-      var label = lblEls[id];
+      var dir = s.reverse ? 'reverse' : 'forward';
+      var label = lblEls[fl.id];
       if (label) label.textContent = active ? s.kw.toFixed(1) + ' kW' : '';
-      if (active && pathCoords[id]) {
-        var dir = s.reverse ? 'reverse' : 'forward';
-        if (lastFlowDirection[id] !== dir) {
-          var pc = pathCoords[id];
-          var d = s.reverse
-            ? 'M' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1)
-            : 'M' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1);
-          if (pathEls[id]) pathEls[id].setAttribute('d', d);
-          lastFlowDirection[id] = dir;
-        }
+      if (!active) {
+        fg.style.display = 'none';
+        // Drop particles so SMIL timers stop entirely when hidden — they will
+        // be recreated on the next transition to active.
+        var stale = fg.querySelectorAll('circle');
+        for (var k = 0; k < stale.length; k++) stale[k].parentNode.removeChild(stale[k]);
+        lastFlowDirection[fl.id] = null;
+        return;
       }
+      // Active: rebuild particles if we just became active or direction flipped.
+      if (lastFlowDirection[fl.id] !== dir) {
+        ensureFlowParticles(fl, s.reverse);
+        lastFlowDirection[fl.id] = dir;
+      }
+      fg.style.display = '';
     });
   }
   function rebuildAll() { rebuildAllWithDevices(null); }
