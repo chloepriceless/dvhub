@@ -532,7 +532,10 @@
   }
 
   function slotClick(idx) {
-    if (!editMode) return;
+    // Always open the picker on click — requiring edit mode first left the
+    // slot bar feeling dead (users didn't realise they had to press the gear
+    // icon first). The gear toggle still tints the bar as a visual affordance
+    // for the picker action, but it's no longer a gate.
     editingSlot = idx;
     openPicker(idx);
   }
@@ -805,8 +808,9 @@
       { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true }
     ];
     // Panel "Verlauf heute" charts — 24 hourly values per panel from
-    // data.today.charts. Only assign if the array is present and non-empty
-    // so the panel chart section stays hidden when telemetry is disabled.
+    // data.today.charts (96 for price, native 15-min EPEX resolution).
+    // Only assign if the array is present and non-empty so the panel chart
+    // section stays hidden when telemetry is disabled.
     var tc = today.charts || {};
     function hasChartData(arr) { return Array.isArray(arr) && arr.length > 0; }
     panelData.solar.chart = hasChartData(tc.solar) ? tc.solar : null;
@@ -814,6 +818,9 @@
     panelData.bat.chart = hasChartData(tc.bat) ? tc.bat : null;
     panelData.grid.chart = hasChartData(tc.grid) ? tc.grid : null;
     panelData.price.chart = hasChartData(tc.price) ? tc.price : null;
+    // Forecast panel: reuse today.charts.solar as the PV curve. When a real
+    // forecast service is configured Phase 04 will replace this with next48h.
+    panelData.forecast.chart = hasChartData(tc.solar) ? tc.solar : null;
     panelData.optimizer.stats = [
       { label: 'Jetzt', val: optimizer.currentActionLabel || optimizer.currentAction || '—', delta: '', up: true },
       { label: 'Als nächstes', val: optimizer.nextActionLabel || '—', delta: '', up: true },
