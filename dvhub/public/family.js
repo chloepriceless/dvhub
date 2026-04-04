@@ -111,6 +111,10 @@
   }
 
   /* ===================== DEVICE CARDS ===================== */
+  // Initial value matches the empty device list that rebuildAll() at boot
+  // already produces, so the first applyFamilyStatus → updateDevices([]) does
+  // NOT re-rebuild the SVG and tear down Chrome's freshly-started SMIL timers.
+  var lastDeviceFlowKey = '';
   function updateDevices(devices) {
     var tray = document.getElementById('devices-tray');
     var visible = (devices || []).filter(function (d) { return d && d.watts >= DEVICE_THRESHOLD_W; });
@@ -158,7 +162,17 @@
       };
     });
 
-    rebuildAllWithDevices(visible);
+    // Only rebuild the SVG flow graph when the actual set of visible devices
+    // changes. Rebuilding clears the DOM and re-inserts SMIL <animateMotion>
+    // elements — Chrome's SMIL implementation is unreliable when doing that
+    // repeatedly on a live page, so a noisy poll cycle with no device
+    // additions/removals would otherwise kill particle flows after the first
+    // cycle. Watts changes still update the existing cards in place above.
+    var newKey = visible.map(function (d) { return d.id; }).join('|');
+    if (newKey !== lastDeviceFlowKey) {
+      lastDeviceFlowKey = newKey;
+      rebuildAllWithDevices(visible);
+    }
   }
 
   function formatW(w) { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
