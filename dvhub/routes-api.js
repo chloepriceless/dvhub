@@ -752,6 +752,12 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true });
     }
 
+    // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
+    // Served via servePage so the filename 'family.html' stays inside publicDir.
+    if (url.pathname === '/family' && req.method === 'GET') {
+      return servePage(res, 'family.html');
+    }
+
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
 

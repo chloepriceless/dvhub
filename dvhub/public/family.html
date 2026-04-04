@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>DVhub &mdash; Familie</title>
+<!--
+  Family Dashboard (DASH-01)
+  Ported from dvhub-Erweiterung/energiefluss dashboard/energiefluss-photorealistic.html.
+  Decisions: D-01 (copy+adapt), D-02 (no topbar / Kiosk feel), D-03 (/family URL),
+  D-09 (5 main tags), D-10 (forecast/price/optimizer widgets), D-11 (device cards),
+  D-12 (configurable bottom-bar), D-13 (surplus greeting + mood pill),
+  D-20 (optional background image with fallback), D-22 (offline fallback),
+  D-24 (dark mode only). Inline JS is externalised to /family.js because CSP
+  script-src does not include 'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
+-->
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --f:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  --solar:#F7B731;--solar-g:rgba(247,183,49,0.5);
+  --bat:#26de81;--bat-g:rgba(38,222,129,0.5);
+  --home:#4b7bec;--home-g:rgba(75,123,236,0.5);
+  --ev:#a55eea;--ev-g:rgba(165,94,234,0.5);
+  --grid:#fd9644;--grid-g:rgba(253,150,68,0.5);
+  --device:#78909c;
+}
+html,body{height:100%;overflow:hidden;touch-action:manipulation}
+body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+.viewport{position:relative;width:100%;height:100vh;overflow:hidden}
+.bg{position:absolute;inset:0;background:url('/assets/family-scene.png') center center/cover no-repeat;background-color:#0c1220;transform:scale(1.02);animation:drift 50s ease-in-out infinite alternate}
+@keyframes drift{0%{transform:scale(1.02)}100%{transform:scale(1.05) translate(-0.5%,-0.3%)}}
+.bg-dim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.35) 0%,rgba(0,0,0,.05) 25%,rgba(0,0,0,0) 45%,rgba(0,0,0,.15) 65%,rgba(0,0,0,.7) 88%,rgba(0,0,0,.92) 100%);pointer-events:none}
+.greeting{position:absolute;top:0;left:0;right:0;z-index:30;padding:24px 28px 16px;pointer-events:none}
+.greeting *{pointer-events:none}
+.greeting-top{display:flex;justify-content:space-between;align-items:flex-start}
+.greeting-hello{font-size:14px;font-weight:500;color:rgba(255,255,255,.5);margin-bottom:2px}
+.greeting-msg{font-size:22px;font-weight:700;letter-spacing:-.5px;line-height:1.3}
+.greeting-mood{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:5px 14px;background:rgba(38,222,129,.1);border:1px solid rgba(38,222,129,.15);border-radius:100px;font-size:12px;font-weight:600;color:var(--bat)}
+.greeting-mood.warn{background:rgba(253,150,68,.1);border-color:rgba(253,150,68,.15);color:var(--grid)}
+.greeting-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.greeting-time{font-size:28px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.8)}
+.greeting-date{font-size:11px;color:rgba(255,255,255,.35);font-weight:500}
+
+.tag{position:absolute;z-index:20;background:rgba(8,10,16,.5);backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);border-radius:20px;padding:14px 20px;text-align:left;animation:fadeIn .8s ease backwards;transition:transform .3s cubic-bezier(.34,1.56,.64,1),background .3s;cursor:pointer;-webkit-user-select:none;user-select:none;min-width:140px;overflow:visible}
+.tag:hover,.tag:active{transform:scale(1.08);background:rgba(8,10,16,.7)}
+.tag:active{transition-duration:.12s}
+.tag-emoji{font-size:24px;margin-bottom:6px;pointer-events:none}
+.tag-friendly{font-size:13px;font-weight:600;color:rgba(255,255,255,.85);line-height:1.3;margin-bottom:4px;pointer-events:none}
+.tag-val{font-size:20px;font-weight:800;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1;pointer-events:none}
+.tag-status{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:600;pointer-events:none}
+.tag-dot{position:absolute;width:8px;height:8px;border-radius:50%;pointer-events:none}
+.tag-solar{top:6%;left:32%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
+.tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
+.tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
+.tag-home{top:38%;left:50%;transform:translateX(-50%);border:1.5px solid rgba(75,123,236,.25);padding:18px 26px;animation-delay:0s;min-width:170px}
+.tag-home .tag-emoji{font-size:28px}.tag-home .tag-friendly{font-size:15px}.tag-home .tag-val{color:var(--home);font-size:26px}
+.tag-home:hover,.tag-home:active{transform:translateX(-50%) scale(1.08)}.tag-home .tag-dot{display:none}
+.tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
+.tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
+.tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
+.tag-ev{top:32%;right:5%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
+.tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(165,94,234,.12);color:var(--ev)}
+.tag-ev .tag-dot{background:var(--ev);box-shadow:0 0 12px var(--ev-g);left:-12px;top:50%;transform:translateY(-50%)}
+.tag-grid{top:10%;right:6%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
+.tag-grid .tag-val{color:var(--grid)}.tag-grid .tag-status{background:rgba(253,150,68,.12);color:var(--grid)}
+.tag-grid .tag-dot{background:var(--grid);box-shadow:0 0 12px var(--grid-g);bottom:-12px;left:50%;transform:translateX(-50%)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+.tag-home{animation-name:fadeIn}
+
+/* Device mini cards */
+.devices-tray{
+  position:absolute;z-index:22;
+  bottom:155px;left:20px;right:20px;
+  display:flex;gap:8px;align-items:flex-end;
+  justify-content:center;
+  flex-wrap:wrap;
+  pointer-events:none;
+  transition:opacity .4s;
+}
+.dev-card{
+  background:rgba(8,10,16,.6);backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2);
+  border:1px solid rgba(255,255,255,.1);border-radius:14px;
+  padding:10px 14px 12px;text-align:center;min-width:95px;
+  cursor:pointer;pointer-events:auto;-webkit-user-select:none;user-select:none;
+  transition:transform .35s cubic-bezier(.34,1.56,.64,1),opacity .35s,background .2s;
+  animation:devPop .4s cubic-bezier(.34,1.56,.64,1) backwards;
+}
+.dev-card:active{transform:scale(1.1);background:rgba(8,10,16,.8)}
+.dev-card.leaving{opacity:0;transform:scale(.8) translateY(10px);transition:transform .3s ease,opacity .3s ease}
+@keyframes devPop{from{opacity:0;transform:scale(.7) translateY(16px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.dev-emoji{font-size:22px;margin-bottom:4px;pointer-events:none}
+.dev-name{font-size:9px;font-weight:600;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px}
+.dev-watts{font-size:17px;font-weight:800;letter-spacing:-.5px;pointer-events:none;font-variant-numeric:tabular-nums;margin-bottom:6px}
+.dev-bar-wrap{width:100%;height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;pointer-events:none}
+.dev-bar{height:100%;border-radius:2px;transition:width .8s ease;min-width:2px}
+
+.flow-svg{position:absolute;inset:0;width:100%;height:100%;z-index:15;pointer-events:none}
+
+/* D-10 — Forecast / Preis / Optimizer widgets (right side, new in Phase 03) */
+.widgets{position:absolute;z-index:21;top:50%;right:20px;transform:translateY(-50%);display:flex;flex-direction:column;gap:10px;pointer-events:auto;max-width:220px}
+.widget{background:rgba(8,10,16,.55);backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:12px 16px;cursor:pointer;transition:transform .2s,background .2s}
+.widget:active{transform:scale(.98);background:rgba(8,10,16,.75)}
+.widget-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.4);margin-bottom:6px}
+.widget-main{font-size:20px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.widget-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:4px}
+@media(max-width:768px){.widgets{position:static;flex-direction:row;padding:8px 16px;max-width:100%;transform:none}.widget{flex:1;min-width:0}}
+
+/* D-22 — offline banner */
+.offline-banner{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:40;padding:6px 18px;background:rgba(253,150,68,0.15);border:1px solid rgba(253,150,68,0.35);border-radius:0 0 12px 12px;font-size:11px;color:var(--grid);display:none}
+
+.bot{position:absolute;bottom:0;left:0;right:0;z-index:25;padding:0 20px 16px;pointer-events:none}
+.glass{max-width:920px;margin:0 auto;background:rgba(8,10,16,.5);backdrop-filter:blur(40px) saturate(1.4);-webkit-backdrop-filter:blur(40px) saturate(1.4);border:1px solid rgba(255,255,255,.06);border-radius:20px;padding:14px 20px;animation:fadeIn .7s ease .5s backwards;pointer-events:auto;position:relative}
+.slots{display:flex;align-items:stretch;gap:0;width:100%}
+.slot{flex:1;text-align:center;padding:8px 6px;border-radius:12px;cursor:pointer;transition:background .2s;position:relative;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.slot:active{background:rgba(255,255,255,.05)}
+.slot+.slot{border-left:1px solid rgba(255,255,255,.04)}
+.slot-icon{font-size:16px;margin-bottom:2px;pointer-events:none}
+.slot-val{font-size:17px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot-label{font-size:8px;font-weight:600;color:rgba(255,255,255,.25);margin-top:2px;text-transform:uppercase;letter-spacing:.6px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot-edit{position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.08);display:none;align-items:center;justify-content:center;font-size:8px;color:rgba(255,255,255,.3);pointer-events:none}
+.glass.editing .slot-edit{display:flex}
+.glass.editing .slot{background:rgba(255,255,255,.03);border:1px dashed rgba(255,255,255,.1);margin:0 2px;border-radius:10px}
+.edit-toggle{
+  position:absolute;top:10px;right:10px;
+  display:flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:50%;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);
+  cursor:pointer;flex-shrink:0;
+  font-size:12px;color:rgba(255,255,255,.3);
+  transition:background .2s,color .2s;pointer-events:auto;z-index:2;
+}
+.edit-toggle:active,.edit-toggle.active{background:rgba(255,255,255,.12);color:rgba(255,255,255,.6)}
+.picker-overlay{position:fixed;inset:0;z-index:110;pointer-events:none;opacity:0;transition:opacity .25s}
+.picker-overlay.open{pointer-events:all;opacity:1}
+.picker-overlay .overlay-bg{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+.picker{
+  position:absolute;bottom:0;left:0;right:0;
+  background:rgba(14,16,24,.95);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);
+  border-top:1px solid rgba(255,255,255,.08);border-radius:20px 20px 0 0;
+  padding:16px 20px 28px;max-height:60vh;overflow-y:auto;
+  transform:translateY(100%);transition:transform .35s cubic-bezier(.32,1.2,.54,1);
+  -webkit-overflow-scrolling:touch;
+}
+.picker-overlay.open .picker{transform:translateY(0)}
+.picker-title{font-size:14px;font-weight:700;margin-bottom:14px;color:rgba(255,255,255,.7)}
+.picker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.picker-item{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);
+  border-radius:12px;cursor:pointer;transition:background .2s,border-color .2s;
+}
+.picker-item:active,.picker-item.selected{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15)}
+.picker-item-icon{font-size:20px;flex-shrink:0}
+.picker-item-name{font-size:12px;font-weight:600;color:rgba(255,255,255,.7)}
+.picker-item-desc{font-size:9px;color:rgba(255,255,255,.3);margin-top:1px}
+
+.overlay{position:fixed;inset:0;z-index:100;pointer-events:none;opacity:0;transition:opacity .35s}
+.overlay.open{pointer-events:all;opacity:1}
+.overlay-bg{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.panel{position:absolute;bottom:0;left:0;right:0;background:rgba(14,16,24,.92);backdrop-filter:blur(60px) saturate(1.5);-webkit-backdrop-filter:blur(60px) saturate(1.5);border-top:1px solid rgba(255,255,255,.08);border-radius:24px 24px 0 0;padding:0 24px 32px;max-height:75vh;overflow-y:auto;transform:translateY(100%);transition:transform .45s cubic-bezier(.32,1.2,.54,1);-webkit-overflow-scrolling:touch}
+.overlay.open .panel{transform:translateY(0)}
+.panel-handle{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.15);margin:12px auto 20px}
+.panel-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px}
+.panel-icon{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:10px}
+.panel-title{font-size:22px;font-weight:800;letter-spacing:-.5px}
+.panel-subtitle{font-size:12px;color:rgba(255,255,255,.4);margin-top:2px}
+.panel-close{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);border:none;color:rgba(255,255,255,.5);font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;flex-shrink:0;margin-top:4px;font-family:var(--f)}
+.panel-close:active{background:rgba(255,255,255,.2)}
+.panel-summary{font-size:14px;color:rgba(255,255,255,.6);line-height:1.6;margin-bottom:20px}
+.panel-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px}
+.stat-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);border-radius:14px;padding:14px 16px}
+.stat-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.3);margin-bottom:6px}
+.stat-val{font-size:22px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.stat-delta{font-size:10px;font-weight:600;margin-top:4px}
+.stat-delta.up{color:var(--bat)}.stat-delta.down{color:#e84118}
+.panel-chart{position:relative;width:100%;height:160px;margin-bottom:20px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.04);border-radius:14px;padding:12px}
+.chart-label{font-size:10px;font-weight:600;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.panel-details{display:flex;flex-direction:column;gap:8px}
+.detail-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.03);border-radius:10px}
+.detail-key{font-size:12px;color:rgba(255,255,255,.4);font-weight:500}
+.detail-val{font-size:13px;font-weight:600}
+.api-hint{margin-top:16px;padding:12px 16px;background:rgba(75,123,236,.06);border:1px solid rgba(75,123,236,.1);border-radius:12px;font-size:11px;color:rgba(255,255,255,.45);line-height:1.5}
+.api-hint code{background:rgba(255,255,255,.08);padding:1px 6px;border-radius:4px;font-size:10px;font-family:'SF Mono',monospace}
+@media(max-width:768px){
+  .greeting-msg{font-size:18px}.greeting-time{font-size:22px}
+  .tag{padding:10px 14px;border-radius:14px;min-width:120px}
+  .tag-emoji{font-size:20px;margin-bottom:4px}.tag-friendly{font-size:11px}
+  .tag-val{font-size:16px!important}.tag-home .tag-val{font-size:20px!important}
+  .tag-home{padding:14px 20px;min-width:140px}
+  .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}
+  .glass{padding:12px 16px}.glass-top{flex-wrap:wrap;gap:8px}.glass-metric{min-width:70px}
+  .panel-stats{grid-template-columns:repeat(2,1fr)}.panel{max-height:85vh}
+  .dev-card{min-width:78px;padding:8px 10px}.dev-watts{font-size:14px}
+  .devices-tray{bottom:130px;gap:6px}
+  .dev-name{max-width:65px;font-size:8px}
+}
+</style>
+</head>
+<body>
+<div class="viewport">
+  <div class="bg"></div>
+  <div class="bg-dim"></div>
+  <div class="greeting"><div class="greeting-top"><div><div class="greeting-hello" id="g-hello">Guten Tag</div><div class="greeting-msg" id="g-msg">Dein Haus produziert mehr<br>Strom als es braucht</div><div class="greeting-mood" id="g-mood">Alles l&auml;uft perfekt</div></div><div class="greeting-right"><div class="greeting-time" id="g-time">14:32</div><div class="greeting-date" id="g-date"></div></div></div></div>
+  <svg class="flow-svg" id="flowSvg" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gl"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g id="flowGroup"></g></svg>
+
+  <div class="tag tag-solar" id="tag-solar" data-panel="solar"><span class="tag-dot"></span><div class="tag-emoji">&#9728;&#65039;</div><div class="tag-friendly" id="tf-solar">Sonne gibt Vollgas</div><div class="tag-val" id="v-s">4.8 kW</div><div class="tag-status" id="ts-solar">Toller Tag!</div></div>
+  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Verbrauch normal</div><div class="tag-val" id="v-h">3.2 kW</div></div>
+  <div class="tag tag-bat" id="tag-bat" data-panel="bat"><span class="tag-dot"></span><div class="tag-emoji">&#128267;</div><div class="tag-friendly" id="tf-bat">Batterie l&auml;dt</div><div class="tag-val" id="v-b">78%</div><div class="tag-status" id="ts-bat">+1.2 kW</div></div>
+  <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji">&#128664;</div><div class="tag-friendly" id="tf-ev">Auto l&auml;dt mit Solar</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-status" id="ts-ev">Fertig ca. 22 Uhr</div></div>
+  <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Wir speisen ein</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">Verdienen gerade</div></div>
+
+  <div class="devices-tray" id="devices-tray"></div>
+
+  <!-- D-10 Forecast/Preis/Optimizer widgets (right side) -->
+  <div class="widgets" id="widgets">
+    <div class="widget widget-forecast" data-panel="forecast">
+      <div class="widget-title">PV Morgen</div>
+      <canvas id="forecast-chart" style="width: 100%; height: 80px;"></canvas>
+    </div>
+    <div class="widget widget-price" data-panel="price">
+      <div class="widget-title">Strompreis</div>
+      <div class="widget-main"><span id="price-now">&mdash;</span></div>
+      <div class="widget-sub">Min <span id="price-min">&mdash;</span> &middot; Max <span id="price-max">&mdash;</span></div>
+    </div>
+    <div class="widget widget-optimizer" data-panel="optimizer">
+      <div class="widget-title">Optimizer</div>
+      <div class="widget-main" id="optimizer-action">&mdash;</div>
+      <div class="widget-sub">Als n&auml;chstes: <span id="optimizer-next">&mdash;</span></div>
+    </div>
+  </div>
+
+  <div class="bot"><div class="glass" id="glass">
+    <div class="slots" id="slots"></div>
+    <div class="edit-toggle" id="editBtn" data-action="toggle-edit">&#9881;</div>
+  </div></div>
+</div>
+<div class="picker-overlay" id="pickerOverlay">
+  <div class="overlay-bg" data-action="close-picker"></div>
+  <div class="picker" id="picker">
+    <div class="picker-title" id="picker-title">Kennzahl w&auml;hlen</div>
+    <div class="picker-grid" id="pickerGrid"></div>
+  </div>
+</div>
+<div class="overlay" id="overlay"><div class="overlay-bg" data-action="close-panel"></div><div class="panel" id="panel"><div class="panel-handle"></div><div class="panel-head"><div><div class="panel-icon" id="p-icon"></div><div class="panel-title" id="p-title"></div><div class="panel-subtitle" id="p-sub"></div></div><button class="panel-close" data-action="close-panel">&times;</button></div><div class="panel-summary" id="p-summary"></div><div class="panel-stats" id="p-stats"></div><div class="panel-chart"><div class="chart-label">Verlauf heute</div><canvas id="p-chart"></canvas></div><div class="panel-details" id="p-details"></div><div class="api-hint" id="p-api" style="display:none"></div></div></div>
+
+<script src="/common.js"></script>
+<script src="/chart.min.js"></script>
+<script src="/family.js"></script>
+</body>
+</html>
