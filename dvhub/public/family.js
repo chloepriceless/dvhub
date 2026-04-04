@@ -171,70 +171,83 @@
     { from: 'tag-home', to: 'tag-ev', hex: '#a55eea', w: 2, p: 2, wh: 1, dur: 2.0, id: 'f3' },
     { from: 'tag-home', to: 'tag-grid', hex: '#fd9644', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
   ];
-  var pathEls = {}, lblEls = {};
-  var pathCoords = {};        // fl.id -> { x1, y1, x2, y2, cx, cy } (forward orientation)
-  var lastFlowDirection = {}; // fl.id -> 'forward' | 'reverse' — cached so we only rewrite d on flip
+  var pathEls = {}, lblEls = {};         // pathEls[fl.id] = { fwd, rev } — two <path> elements per flow
+  var particleGroupEls = {};             // particleGroupEls[fl.id] = { fwd, rev } — two <g> with circles+animateMotion
+  var pathCoords = {};                   // fl.id -> { x1, y1, x2, y2, cx, cy } (forward orientation)
+  var lastFlowDirection = {};            // fl.id -> 'forward' | 'reverse' — cached to avoid redundant visibility writes
   function addFlowToSvg(g, fl) {
-    // Scaffold only: group + dashed path + label. Particles are created
-    // lazily by ensureFlowParticles() when the flow first becomes active,
-    // and re-created whenever direction flips. That way SMIL animateMotion
-    // always starts fresh against the correct path orientation (Chrome/Safari
-    // ignore path.d mutations on already-running animateMotion references).
-    var fg = document.createElementNS(NS, 'g'); fg.id = 'fg-' + fl.id; fg.style.display = 'none';
-    var pa = document.createElementNS(NS, 'path'); pa.id = fl.id; pa.setAttribute('fill', 'none'); pa.setAttribute('stroke', fl.hex); pa.setAttribute('stroke-width', fl.w); pa.setAttribute('stroke-dasharray', '10 18'); pa.setAttribute('opacity', '0.35'); pa.setAttribute('stroke-linecap', 'round'); pa.style.animation = 'fd 1.2s linear infinite'; fg.appendChild(pa); pathEls[fl.id] = pa;
+    // Dual-path layout to work around Chrome SMIL limitations: each flow has
+    // two <path> elements (forward + reverse) and two matching particle
+    // groups built at load time, so all <animateMotion> elements exist
+    // before SMIL starts. Show/hide toggles visibility on the outer group
+    // (visibility:hidden pauses rendering without killing the animation
+    // timeline, unlike display:none which tears down the SMIL state).
+    // Direction flip swaps visibility between the fwd/rev particle groups.
+    var fg = document.createElementNS(NS, 'g'); fg.id = 'fg-' + fl.id; fg.style.visibility = 'hidden';
+
+    function makePath(suffix) {
+      var pa = document.createElementNS(NS, 'path');
+      pa.id = fl.id + suffix;
+      pa.setAttribute('fill', 'none');
+      pa.setAttribute('stroke', fl.hex);
+      pa.setAttribute('stroke-width', fl.w);
+      pa.setAttribute('stroke-dasharray', '10 18');
+      pa.setAttribute('opacity', '0.35');
+      pa.setAttribute('stroke-linecap', 'round');
+      pa.style.animation = 'fd 1.2s linear infinite';
+      return pa;
+    }
+    var paFwd = makePath('-fwd'); fg.appendChild(paFwd);
+    var paRev = makePath('-rev'); paRev.style.visibility = 'hidden'; fg.appendChild(paRev);
+    pathEls[fl.id] = { fwd: paFwd, rev: paRev };
+
+    function makeParticleGroup(pathSuffix) {
+      var pg = document.createElementNS(NS, 'g');
+      pg.id = 'fg-' + fl.id + pathSuffix;
+      for (var i = 0; i < fl.p; i++) {
+        var c = document.createElementNS(NS, 'circle');
+        c.setAttribute('r', fl.w > 2 ? '5' : '4');
+        c.setAttribute('fill', fl.hex);
+        c.setAttribute('filter', 'url(#gl)');
+        c.setAttribute('opacity', '0.9');
+        var am = document.createElementNS(NS, 'animateMotion');
+        am.setAttribute('dur', fl.dur + 's');
+        am.setAttribute('repeatCount', 'indefinite');
+        am.setAttribute('begin', (i * (fl.dur / fl.p)).toFixed(2) + 's');
+        var mp = document.createElementNS(NS, 'mpath');
+        mp.setAttribute('href', '#' + fl.id + pathSuffix);
+        am.appendChild(mp);
+        c.appendChild(am);
+        pg.appendChild(c);
+      }
+      for (var j = 0; j < fl.wh; j++) {
+        var w = document.createElementNS(NS, 'circle');
+        w.setAttribute('r', '2.5');
+        w.setAttribute('fill', '#fff');
+        w.setAttribute('opacity', '0.4');
+        var am2 = document.createElementNS(NS, 'animateMotion');
+        am2.setAttribute('dur', fl.dur + 's');
+        am2.setAttribute('repeatCount', 'indefinite');
+        am2.setAttribute('begin', ((j + 0.5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2) + 's');
+        var mp2 = document.createElementNS(NS, 'mpath');
+        mp2.setAttribute('href', '#' + fl.id + pathSuffix);
+        am2.appendChild(mp2);
+        w.appendChild(am2);
+        pg.appendChild(w);
+      }
+      return pg;
+    }
+    var pgFwd = makeParticleGroup('-fwd'); fg.appendChild(pgFwd);
+    var pgRev = makeParticleGroup('-rev'); pgRev.style.visibility = 'hidden'; fg.appendChild(pgRev);
+    particleGroupEls[fl.id] = { fwd: pgFwd, rev: pgRev };
+
     var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.85'); tx.setAttribute('text-anchor', 'middle'); tx.id = 'ft-' + fl.id; fg.appendChild(tx); lblEls[fl.id] = tx;
     g.appendChild(fg);
   }
-
-  /**
-   * Build (or rebuild) the animated particles for one flow. Rewrites the
-   * path `d` attribute so the stroke orientation matches `reverse`, strips
-   * any stale circles, then appends fresh <circle><animateMotion> pairs.
-   * Fresh SMIL elements pick up the current path immediately — mutating an
-   * existing animateMotion's mpath does not propagate in Chrome/Safari.
-   */
-  function ensureFlowParticles(fl, reverse) {
-    var fg = document.getElementById('fg-' + fl.id);
-    if (!fg) return;
-    var pc = pathCoords[fl.id];
-    if (!pc) return; // rebuildAll setTimeout hasn't populated coords yet
-    var d = reverse
-      ? 'M' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1)
-      : 'M' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1);
-    if (pathEls[fl.id]) pathEls[fl.id].setAttribute('d', d);
-    // Strip existing circles (the path and text label stay).
-    var old = fg.querySelectorAll('circle');
-    for (var k = 0; k < old.length; k++) old[k].parentNode.removeChild(old[k]);
-    var label = lblEls[fl.id];
-    function addCircle(r, fill, opacity, begin) {
-      var c = document.createElementNS(NS, 'circle');
-      c.setAttribute('r', r);
-      c.setAttribute('fill', fill);
-      if (fill !== '#fff') c.setAttribute('filter', 'url(#gl)');
-      c.setAttribute('opacity', opacity);
-      var am = document.createElementNS(NS, 'animateMotion');
-      am.setAttribute('dur', fl.dur + 's');
-      am.setAttribute('repeatCount', 'indefinite');
-      am.setAttribute('begin', begin + 's');
-      var mp = document.createElementNS(NS, 'mpath');
-      mp.setAttribute('href', '#' + fl.id);
-      am.appendChild(mp);
-      c.appendChild(am);
-      // Insert before label so the text stays on top of the particles.
-      if (label && label.parentNode === fg) fg.insertBefore(c, label);
-      else fg.appendChild(c);
-    }
-    for (var i = 0; i < fl.p; i++) {
-      addCircle(fl.w > 2 ? 5 : 4, fl.hex, '0.9', (i * (fl.dur / fl.p)).toFixed(2));
-    }
-    for (var j = 0; j < fl.wh; j++) {
-      addCircle(2.5, '#fff', '0.4', ((j + 0.5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2));
-    }
-  }
-  function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; pathCoords = {}; lastFlowDirection = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
+  function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; particleGroupEls = {}; pathCoords = {}; lastFlowDirection = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
   var lastDeviceFlows = [];
   function rebuildAllWithDevices(visibleDevices) {
-    var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; pathCoords = {}; lastFlowDirection = {};
+    var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; particleGroupEls = {}; pathCoords = {}; lastFlowDirection = {};
     flows.forEach(function (fl) { addFlowToSvg(g, fl); });
     lastDeviceFlows = [];
     if (visibleDevices) {
@@ -258,12 +271,15 @@
         if (len < 1) return;
         var nx = -dy / len, ny = dx / len, bulge = len * .15;
         var cx = mx + nx * bulge, cy = my + ny * bulge;
-        // Store forward-orientation coords so updateFlowState can rewrite d
-        // in either direction (forward = from→to, reverse = to→from) without
-        // needing to recompute the geometry.
+        // Store forward-orientation coords for reference. Both forward and
+        // reverse <path> elements are updated so the two particle groups
+        // have correct geometry from load time onwards.
         pathCoords[fl.id] = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, cx: cx, cy: cy };
-        if (pathEls[fl.id]) pathEls[fl.id].setAttribute('d', 'M' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1));
-        if (lblEls[fl.id]) { lblEls[fl.id].setAttribute('x', ((e.x1 + cx) / 2).toFixed(0)); lblEls[fl.id].setAttribute('y', ((e.y1 + cy) / 2 - 8).toFixed(0)); lblEls[fl.id].setAttribute('text-anchor', 'middle'); }
+        var dFwd = 'M' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1);
+        var dRev = 'M' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1);
+        var pe = pathEls[fl.id];
+        if (pe) { if (pe.fwd) pe.fwd.setAttribute('d', dFwd); if (pe.rev) pe.rev.setAttribute('d', dRev); }
+        if (lblEls[fl.id]) { lblEls[fl.id].setAttribute('x', ((e.x1 + cx) / 2).toFixed(0)); lblEls[fl.id].setAttribute('y', ((e.y1 + cy) / 2 - 8).toFixed(0)); }
       });
       // Re-apply last known flow state after a rebuild so show/hide and
       // direction survive resizes and panel opens.
@@ -273,11 +289,12 @@
 
   /**
    * Toggle each of the 4 main flows (solar→home, home↔bat, home→ev, home↔grid)
-   * based on actual power. Hides flows below 50 W. Rebuilds particles via
-   * ensureFlowParticles() whenever a flow transitions from hidden→visible or
-   * changes direction — SMIL animateMotion cannot be retargeted on a running
-   * element, so a fresh rebuild is the only reliable way to make the particles
-   * follow a reversed path (battery discharge: bat→home, grid import: grid→home).
+   * based on actual power. Both forward and reverse particle groups exist
+   * in the DOM from page load (so SMIL animateMotion starts correctly under
+   * Chrome); this function only swaps `visibility` on the outer flow group
+   * (show/hide) and on the two inner particle/path groups (direction).
+   * visibility:hidden does not tear down the SMIL timeline, so particles
+   * keep their position cache even while hidden.
    */
   function updateFlowState(energy) {
     if (!energy) return;
@@ -298,24 +315,24 @@
       var fg = document.getElementById('fg-' + fl.id);
       if (!fg) return;
       var active = s.kw > THRESHOLD_KW;
-      var dir = s.reverse ? 'reverse' : 'forward';
       var label = lblEls[fl.id];
-      if (label) label.textContent = active ? s.kw.toFixed(1) + ' kW' : '';
-      if (!active) {
-        fg.style.display = 'none';
-        // Drop particles so SMIL timers stop entirely when hidden — they will
-        // be recreated on the next transition to active.
-        var stale = fg.querySelectorAll('circle');
-        for (var k = 0; k < stale.length; k++) stale[k].parentNode.removeChild(stale[k]);
-        lastFlowDirection[fl.id] = null;
-        return;
+      if (label) label.textContent = active ? formatKw(s.kw) : '';
+      fg.style.visibility = active ? 'visible' : 'hidden';
+      if (!active) return;
+      // Swap visibility between the pre-built fwd/rev path + particle pairs.
+      var dir = s.reverse ? 'reverse' : 'forward';
+      if (lastFlowDirection[fl.id] === dir) return;
+      var pe = pathEls[fl.id];
+      var pg = particleGroupEls[fl.id];
+      if (pe && pe.fwd && pe.rev) {
+        pe.fwd.style.visibility = s.reverse ? 'hidden' : 'visible';
+        pe.rev.style.visibility = s.reverse ? 'visible' : 'hidden';
       }
-      // Active: rebuild particles if we just became active or direction flipped.
-      if (lastFlowDirection[fl.id] !== dir) {
-        ensureFlowParticles(fl, s.reverse);
-        lastFlowDirection[fl.id] = dir;
+      if (pg && pg.fwd && pg.rev) {
+        pg.fwd.style.visibility = s.reverse ? 'hidden' : 'visible';
+        pg.rev.style.visibility = s.reverse ? 'visible' : 'hidden';
       }
-      fg.style.display = '';
+      lastFlowDirection[fl.id] = dir;
     });
   }
   function rebuildAll() { rebuildAllWithDevices(null); }
@@ -475,8 +492,14 @@
   }
 
   function formatKw(v) {
-    if (typeof v !== 'number') return '—';
-    return v.toFixed(1) + ' kW';
+    if (typeof v !== 'number' || !isFinite(v)) return '—';
+    // Sub-kilowatt values render as integer watts (e.g. 842 W) so the tablet
+    // doesn't flatten 0.842 kW → "0.8 kW"; from 1 kW upwards switch to two
+    // decimals so 2.24 kW stays readable without eating horizontal space.
+    if (Math.abs(v) < 1.0) {
+      return Math.round(v * 1000) + ' W';
+    }
+    return v.toFixed(2) + ' kW';
   }
 
   function formatPct(v) {
@@ -595,7 +618,7 @@
     ];
     panelData.bat.stats = [
       { label: 'Stand', val: formatPct(battery.socPct), delta: battery.mode || '', up: true },
-      { label: 'Leistung', val: typeof battery.powerKw === 'number' ? (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW' : '—', delta: '', up: true },
+      { label: 'Leistung', val: typeof battery.powerKw === 'number' ? (battery.powerKw > 0 ? '+' + formatKw(battery.powerKw) : formatKw(battery.powerKw)) : '—', delta: '', up: true },
       { label: 'Heute',
         val: typeof today.batteryChargeKwh === 'number' && typeof today.batteryDischargeKwh === 'number'
           ? '+' + today.batteryChargeKwh.toFixed(1) + ' / -' + today.batteryDischargeKwh.toFixed(1) + ' kWh'
