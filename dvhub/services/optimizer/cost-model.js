@@ -96,33 +96,48 @@ export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
 
 /**
  * Enrich an array of normalized price slots with import and feed-in costs.
- * Reads tariff and paragraph14a from config, applies computeSlotCosts to each slot.
- * Preserves all original slot properties (ts, endTs, ctKwh, confidence).
+ * Reads ALL pricing data from existing userEnergyPricing config — no duplicate fields.
+ *
+ * Sources:
+ * - Tariff type + surcharges: userEnergyPricing.mode + dynamicComponents
+ * - Fixed price: userEnergyPricing.fixedGrossImportCtKwh
+ * - §14a: userEnergyPricing.usesParagraph14aModule3 + module3Windows
+ * - Feed-in tariff: from pvPlants anzulegender Wert (or default 7.78)
  *
  * @param {Array<{ts: number, endTs: number, ctKwh: number, confidence: number}>} priceSlots
- * @param {object} cfg - Config object with cfg.optimizer.tariff and cfg.optimizer.paragraph14a
+ * @param {object} cfg - Full config object
+ * @param {object} [options] - Optional overrides
+ * @param {number} [options.applicableValueCtKwh] - Anzulegender Wert from bundesnetzagentur-applicable-values
  * @returns {Array<{ts: number, endTs: number, ctKwh: number, confidence: number, importCtKwh: number, feedInCtKwh: number}>}
  */
-export function enrichPriceSlotsWithCosts(priceSlots, cfg) {
-  // Fallback: if optimizer.tariff not fully configured, derive from userEnergyPricing.dynamicComponents
-  const dc = cfg.userEnergyPricing?.dynamicComponents ?? {};
+export function enrichPriceSlotsWithCosts(priceSlots, cfg, options = {}) {
+  const uep = cfg.userEnergyPricing ?? {};
+  const dc = uep.dynamicComponents ?? {};
+
+  // Build tariff from userEnergyPricing (single source of truth)
   const tariff = {
-    type: cfg.optimizer?.tariff?.type ?? (cfg.userEnergyPricing?.mode ?? 'dynamic'),
-    netzentgeltCtKwh: cfg.optimizer?.tariff?.netzentgeltCtKwh ?? dc.gridChargesCtKwh ?? 9.26,
-    kwkCtKwh: cfg.optimizer?.tariff?.kwkCtKwh ?? 0.446,
-    offshoreCtKwh: cfg.optimizer?.tariff?.offshoreCtKwh ?? 0.941,
-    stromnevCtKwh: cfg.optimizer?.tariff?.stromnevCtKwh ?? 1.559,
-    stromsteuerCtKwh: cfg.optimizer?.tariff?.stromsteuerCtKwh ?? 2.05,
-    konzessionsabgabeCtKwh: cfg.optimizer?.tariff?.konzessionsabgabeCtKwh ?? 1.66,
-    vertriebsaufschlagCtKwh: cfg.optimizer?.tariff?.vertriebsaufschlagCtKwh ?? dc.energyMarkupCtKwh ?? 0,
-    vatPct: cfg.optimizer?.tariff?.vatPct ?? dc.vatPct ?? 19,
-    fixedCtKwh: cfg.optimizer?.tariff?.fixedCtKwh ?? cfg.userEnergyPricing?.fixedGrossImportCtKwh ?? 30,
-    minCtKwh: cfg.optimizer?.tariff?.minCtKwh ?? 20,
-    feedInMode: cfg.optimizer?.tariff?.feedInMode ?? 'fixed',
-    feedInCtKwh: cfg.optimizer?.tariff?.feedInCtKwh ?? 7.78,
-    feedInSpotFactor: cfg.optimizer?.tariff?.feedInSpotFactor ?? 1.0
+    type: uep.mode ?? 'dynamic',
+    netzentgeltCtKwh: dc.gridChargesCtKwh ?? 9.26,
+    kwkCtKwh: dc.kwkCtKwh ?? 0.446,
+    offshoreCtKwh: dc.offshoreCtKwh ?? 0.941,
+    stromnevCtKwh: dc.stromnevCtKwh ?? 1.559,
+    stromsteuerCtKwh: dc.stromsteuerCtKwh ?? 2.05,
+    konzessionsabgabeCtKwh: dc.konzessionsabgabeCtKwh ?? 1.66,
+    vertriebsaufschlagCtKwh: dc.energyMarkupCtKwh ?? 0,
+    vatPct: dc.vatPct ?? 19,
+    fixedCtKwh: uep.fixedGrossImportCtKwh ?? 30,
+    minCtKwh: 20,
+    // Feed-in: from anzulegender Wert (pvPlants) or fallback
+    feedInMode: uep.marketValueMode === 'monthly' ? 'spot' : 'fixed',
+    feedInCtKwh: options.applicableValueCtKwh ?? 7.78,
+    feedInSpotFactor: 1.0
   };
-  const paragraph14a = cfg.optimizer?.paragraph14a ?? { enabled: false, reductionCtKwh: 0 };
+
+  // §14a from existing userEnergyPricing (not duplicate optimizer fields)
+  const paragraph14a = {
+    enabled: uep.usesParagraph14aModule3 ?? false,
+    reductionCtKwh: cfg.optimizer?.paragraph14a?.reductionCtKwh ?? 0
+  };
 
   return priceSlots.map(slot => {
     const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);

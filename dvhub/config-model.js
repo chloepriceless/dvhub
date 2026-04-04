@@ -1891,90 +1891,12 @@ function buildFieldDefinitions() {
       step: 0.1,
       help: 'Installierte PV-Leistung fuer Gruenstrom-Berechnung (500 kWh/kWp).'
     },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.tariff.type',
-      label: 'Tariftyp',
-      type: 'select',
-      options: [
-        { value: 'dynamic', label: 'Dynamisch (Spot + Umlagen)' },
-        { value: 'fixed', label: 'Festpreis' },
-        { value: 'mixed', label: 'Gemischt (Spot mit Mindestpreis)' }
-      ],
-      help: 'Dynamisch: Spot-Preis + alle Umlagen + MwSt. Festpreis: fester ct/kWh-Wert. Gemischt: Spot mit Mindestpreis-Absicherung.'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.tariff.netzentgeltCtKwh',
-      label: 'Netzentgelt ct/kWh',
-      type: 'number',
-      min: 0,
-      max: 30,
-      step: 0.01,
-      help: 'Netzentgelt in ct/kWh (Standard 2026: 9.26). Vom Netzbetreiber abhaengig.'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.tariff.feedInCtKwh',
-      label: 'Einspeiseverguetung ct/kWh',
-      type: 'number',
-      min: 0,
-      max: 20,
-      step: 0.01,
-      help: 'Feste Einspeiseverguetung in ct/kWh (Standard: 7.78 fuer Anlagen bis 10 kWp, Inbetriebnahme 2026).'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.tariff.feedInMode',
-      label: 'Einspeise-Modus',
-      type: 'select',
-      options: [
-        { value: 'fixed', label: 'Feste Verguetung' },
-        { value: 'spot', label: 'Spot-basiert' }
-      ],
-      help: 'Feste Verguetung: EEG-Einspeiseverguetung. Spot-basiert: Einspeisepreis folgt dem Spot-Preis.'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.paragraph14a.enabled',
-      label: '14a Modul 3 aktiv',
-      type: 'boolean',
-      help: 'Aktiviert die Netzentgelt-Reduktion nach §14a EnWG Modul 3 fuer steuerbare Verbrauchseinrichtungen (Wallbox, Waermepumpe, Speicher). Die Reduktion wird auf die Netzentgelte aus den dynamischen Preisbestandteilen angewandt.'
-    },
-    {
-      section: 'optimizer',
-      group: 'optimizerKostenmodell',
-      groupLabel: 'Kostenmodell',
-      groupDescription: 'Tariftyp, Netzentgelt und Einspeiseverguetung fuer die Kostenberechnung.',
-      path: 'optimizer.paragraph14a.reductionCtKwh',
-      label: '14a Reduktion ct/kWh',
-      type: 'number',
-      min: 0,
-      max: 15,
-      step: 0.01,
-      help: 'Netzentgelt-Reduktion in ct/kWh — wird jaehrlich vom Netzbetreiber mitgeteilt und vom Netzentgelt in den Bezugspreisbestandteilen abgezogen. Typisch 3-6 ct/kWh je nach Netzbetreiber und Region.'
-    }
+    // Kostenmodell: kein eigener Bereich im Optimizer-Menü.
+    // Der Optimizer nutzt automatisch die bestehenden Datenquellen:
+    //   - Tariftyp + Netzentgelt + Umlagen + MwSt: aus userEnergyPricing (Pricing-Sektion)
+    //   - Einspeiseverguetung: aus pvPlants Inbetriebnahmedatum (anzulegender Wert)
+    //   - §14a Modul 3: aus userEnergyPricing (Pricing-Sektion)
+    // Siehe cost-model.js enrichPriceSlotsWithCosts() fuer die Fallback-Logik.
   ];
 
   return addSetupWizardMetadata(fields.filter((entry) => entry.path));
@@ -2185,25 +2107,12 @@ export function createDefaultConfig() {
         mode: 'none',       // 'none' | 'pauschal' | 'abgrenzung' (D-24)
         pvKwp: 10           // Installed PV capacity in kWp (D-25)
       },
-      tariff: {
-        type: 'dynamic',                  // 'dynamic' | 'fixed' | 'mixed'
-        fixedCtKwh: 30,                   // Fixed tariff rate (ct/kWh)
-        minCtKwh: 20,                     // Floor price for mixed mode (ct/kWh)
-        netzentgeltCtKwh: 9.26,           // Network charge
-        kwkCtKwh: 0.446,                  // CHP surcharge
-        offshoreCtKwh: 0.941,             // Offshore wind surcharge
-        stromnevCtKwh: 1.559,             // StromNEV surcharge
-        stromsteuerCtKwh: 2.05,           // Electricity tax
-        konzessionsabgabeCtKwh: 1.66,     // Concession fee
-        vertriebsaufschlagCtKwh: 0,       // Retail markup
-        vatPct: 19,                       // VAT percentage
-        feedInMode: 'fixed',              // 'fixed' | 'spot'
-        feedInCtKwh: 7.78,                // Fixed feed-in rate (ct/kWh)
-        feedInSpotFactor: 1.0             // Spot feed-in factor
-      },
+      // Kostenmodell: KEINE eigenen Tarif-Felder hier.
+      // Der Optimizer nutzt userEnergyPricing.mode, .dynamicComponents, .fixedGrossImportCtKwh,
+      // .usesParagraph14aModule3, und den anzulegenden Wert aus pvPlants.
+      // Siehe cost-model.js enrichPriceSlotsWithCosts() fuer die Logik.
       paragraph14a: {
-        enabled: false,                   // Whether 14a Modul 3 reduction is active
-        reductionCtKwh: 0                 // Reduction amount (ct/kWh)
+        reductionCtKwh: 0                 // §14a Reduktion ct/kWh (Netzbetreiber-abhaengig, jaehrlich)
       }
     }
   };
