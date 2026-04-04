@@ -417,9 +417,26 @@
     var W = window.innerWidth, H = window.innerHeight;
     flowSvg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     var allFlows = flows.concat(lastDeviceFlows);
+    // Hide flows whose endpoint tag is display:none (e.g. tag-ev when no
+    // wallbox is connected). offsetParent === null is the cheap
+    // display-none test; checking getBoundingClientRect.width === 0 would
+    // also work. Hidden endpoint → hide the whole flow group so no stray
+    // arc/particles remain from the previous layout.
+    function endpointHidden(el) { return !el || el.offsetParent === null; }
     allFlows.forEach(function (fl) {
       var fe = document.getElementById(fl.from), te = document.getElementById(fl.to);
       if (!fe || !te) return;
+      // If either endpoint is display:none (hidden EV tag on installs with
+      // no wallbox, for example) force the whole flow group to visibility
+      // hidden and skip geometry updates — getBoundingClientRect on a
+      // display:none element returns zeros and would otherwise produce a
+      // malformed zero-length path that Chrome renders as a stuck pixel.
+      if (endpointHidden(fe) || endpointHidden(te)) {
+        var fg = document.getElementById('fg-' + fl.id);
+        if (fg) fg.style.visibility = 'hidden';
+        lastFlowDirection[fl.id] = null; // force re-apply once endpoints are visible again
+        return;
+      }
       var e = edge(fe, te);
       var mx = (e.x1 + e.x2) / 2, my = (e.y1 + e.y2) / 2;
       var dx = e.x2 - e.x1, dy = e.y2 - e.y1, len = Math.sqrt(dx * dx + dy * dy);
@@ -656,6 +673,23 @@
     var evMode = ev.mode || 'idle';
     setText('tf-ev', evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt');
     setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
+    // Hide the EV tag entirely when no wallbox reports power and no vehicle
+    // SoC is known — on installs without an EV integration the empty tile
+    // was sitting on top of the right edge widgets and looked broken.
+    // Phase 04 will populate ev.vehicles[] when an integration is wired.
+    var evConnected = (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
+      || (typeof ev.socPct === 'number' && ev.socPct !== null)
+      || (Array.isArray(ev.vehicles) && ev.vehicles.length > 0);
+    var evTag = document.getElementById('tag-ev');
+    if (evTag) {
+      var wasHidden = evTag.style.display === 'none';
+      evTag.style.display = evConnected ? '' : 'none';
+      // When the tag becomes visible/invisible the flow endpoints move, so
+      // reposition the SVG paths without tearing down the SMIL timers.
+      if (wasHidden !== !evConnected && typeof repositionFlows === 'function') {
+        setTimeout(repositionFlows, 0);
+      }
+    }
 
     setText('tf-grid', energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen');
     // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
