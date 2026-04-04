@@ -350,8 +350,64 @@
     });
   }
   function rebuildAll() { rebuildAllWithDevices(null); }
+
+  /**
+   * Update path `d` attributes and label positions for every flow without
+   * tearing down the SVG subtree. After rewriting the paths we call
+   * beginElement() on each animateMotion so the particle animation restarts
+   * against the new path geometry — Chrome's SMIL implementation snapshots
+   * the motion path at animation start, so a naked d mutation would leave
+   * the particles moving along the old curve. This keeps flows alive across
+   * viewport resizes and late layout shifts (font loading, tag content
+   * width changes) without relying on addFlowToSvg's dynamic SMIL insertion
+   * which stops working after the first post-load rebuild.
+   */
+  function repositionFlows() {
+    var flowSvg = document.getElementById('flowSvg');
+    if (!flowSvg) return;
+    var W = window.innerWidth, H = window.innerHeight;
+    flowSvg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    var allFlows = flows.concat(lastDeviceFlows);
+    allFlows.forEach(function (fl) {
+      var fe = document.getElementById(fl.from), te = document.getElementById(fl.to);
+      if (!fe || !te) return;
+      var e = edge(fe, te);
+      var mx = (e.x1 + e.x2) / 2, my = (e.y1 + e.y2) / 2;
+      var dx = e.x2 - e.x1, dy = e.y2 - e.y1, len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 1) return;
+      var nx = -dy / len, ny = dx / len, bulge = len * .15;
+      var cx = mx + nx * bulge, cy = my + ny * bulge;
+      pathCoords[fl.id] = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, cx: cx, cy: cy };
+      var dFwd = 'M' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1);
+      var dRev = 'M' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1);
+      var pe = pathEls[fl.id];
+      if (pe) { if (pe.fwd) pe.fwd.setAttribute('d', dFwd); if (pe.rev) pe.rev.setAttribute('d', dRev); }
+      if (lblEls[fl.id]) { lblEls[fl.id].setAttribute('x', ((e.x1 + cx) / 2).toFixed(0)); lblEls[fl.id].setAttribute('y', ((e.y1 + cy) / 2 - 8).toFixed(0)); }
+      // Restart SMIL animations so circles follow the new path.
+      var pg = particleGroupEls[fl.id];
+      if (pg) {
+        [pg.fwd, pg.rev].forEach(function (group) {
+          if (!group) return;
+          var anims = group.querySelectorAll('animateMotion');
+          for (var k = 0; k < anims.length; k++) {
+            try { if (typeof anims[k].beginElement === 'function') anims[k].beginElement(); } catch (_e) { /* ignore */ }
+          }
+        });
+      }
+    });
+  }
+
   rebuildAll();
-  window.addEventListener('resize', function () { rebuildAll(); positionTray(); renderSlots(); updateSlotValues(); });
+  // Late layout passes — font loading and tag content width changes can shift
+  // the home tag a few pixels after the initial rebuild. Re-measure once the
+  // fonts settle and again after a short delay so the flow endpoints catch up
+  // with the final positions (without tearing down particle timers).
+  if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+    document.fonts.ready.then(function () { repositionFlows(); });
+  }
+  setTimeout(repositionFlows, 500);
+  setTimeout(repositionFlows, 1500);
+  window.addEventListener('resize', function () { repositionFlows(); positionTray(); renderSlots(); updateSlotValues(); });
   var sty = document.createElement('style'); sty.textContent = '@keyframes fd{to{stroke-dashoffset:-50}}'; document.head.appendChild(sty);
 
   function positionTray() {
@@ -735,7 +791,10 @@
   /* ===================== VISIBILITY HANDLER (Pitfall 2) ===================== */
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') {
-      rebuildAll();
+      // Reposition paths (layout may have shifted while the tab was hidden)
+      // but keep the SMIL timers — rebuilding here would break Chrome's
+      // dynamically-inserted animateMotion just like resize used to.
+      repositionFlows();
       pollFamilyStatus();
     }
   });
