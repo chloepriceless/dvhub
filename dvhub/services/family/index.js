@@ -44,10 +44,12 @@ export function createFamilyService(ctx) {
   let cached = null;
   let cachedAt = 0;
 
-  // Today-KPIs snapshot refreshed in the background (60s) via historyApi.getSummary.
-  // buildFamilyStatus reads this synchronously — stays null until first refresh
-  // completes or until historyApi is unavailable (telemetry disabled).
+  // Today-KPIs + downsampled hourly chart arrays refreshed in the background
+  // (60s) via historyApi.getSummary. buildFamilyStatus reads this synchronously
+  // — stays null until first refresh completes or until historyApi is
+  // unavailable (telemetry disabled).
   let todayKpis = null;
+  let todayCharts = null;
   let todayKpisAt = 0;
   let todayKpisTimer = null;
 
@@ -70,7 +72,7 @@ export function createFamilyService(ctx) {
    * Reads the last snapshot refreshed by refreshTodayKpis(); returns null when
    * telemetry is disabled or the first refresh hasn't completed yet.
    */
-  function deriveTodaySection(kpis) {
+  function deriveTodaySection(kpis, charts) {
     if (!kpis || typeof kpis !== 'object') return null;
     const round1 = (n) => (typeof n === 'number' && Number.isFinite(n))
       ? Math.round(n * 10) / 10
@@ -83,7 +85,53 @@ export function createFamilyService(ctx) {
       batteryChargeKwh: round1(kpis.batteryChargeKwh),
       batteryDischargeKwh: round1(kpis.batteryDischargeKwh),
       selfConsumptionKwh: round1(kpis.selfConsumptionKwh),
+      charts: charts || null,
       updatedAt: todayKpisAt || null
+    };
+  }
+
+  /**
+   * Downsample 15-min history slots into 24 hourly buckets. `fieldOrFn` is
+   * either a key on each slot or a function returning the slot's contribution.
+   * Values are summed per hour (for kWh → kW-avg) and rounded to 2 decimals.
+   * Returns a fixed-length [24] array so Chart.js can render a full-day line
+   * even when the day is still in progress (future hours come out as 0).
+   */
+  function toHourlyBuckets(slots, fieldOrFn, { average = false } = {}) {
+    if (!Array.isArray(slots) || slots.length === 0) return null;
+    const sums = new Array(24).fill(0);
+    const counts = new Array(24).fill(0);
+    for (const slot of slots) {
+      if (!slot || !slot.ts) continue;
+      const h = new Date(slot.ts).getHours();
+      if (!Number.isFinite(h) || h < 0 || h > 23) continue;
+      const raw = typeof fieldOrFn === 'function' ? fieldOrFn(slot) : Number(slot[fieldOrFn] || 0);
+      if (!Number.isFinite(raw)) continue;
+      sums[h] += raw;
+      counts[h] += 1;
+    }
+    return sums.map((s, i) => {
+      const v = average && counts[i] > 0 ? s / counts[i] : s;
+      return Math.round(v * 100) / 100;
+    });
+  }
+
+  /**
+   * Build per-panel 24h hourly chart arrays from historyApi dayEnergyLines +
+   * dayPriceLines. Each array is 24 numbers (00:00-23:00 local). Signs follow
+   * the UI's internal convention: positive grid = import, positive bat = net
+   * charge over that hour, negative = discharge.
+   */
+  function buildTodayCharts(historyBody) {
+    if (!historyBody || !historyBody.charts) return null;
+    const energyLines = historyBody.charts.dayEnergyLines;
+    const priceLines = historyBody.charts.dayPriceLines;
+    return {
+      solar: toHourlyBuckets(energyLines, 'pvKwh'),
+      home: toHourlyBuckets(energyLines, 'loadKwh'),
+      bat: toHourlyBuckets(energyLines, (s) => (Number(s.batteryChargeKwh || 0) - Number(s.batteryDischargeKwh || 0))),
+      grid: toHourlyBuckets(energyLines, (s) => (Number(s.importKwh || 0) - Number(s.exportKwh || 0))),
+      price: toHourlyBuckets(priceLines, 'userImportPriceCtKwh', { average: true })
     };
   }
 
@@ -437,7 +485,7 @@ export function createFamilyService(ctx) {
     const optimizer = deriveOptimizerSection(optimizerStatus);
     const savings = deriveSavingsSection(costs);
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
-    const today = deriveTodaySection(todayKpis);
+    const today = deriveTodaySection(todayKpis, todayCharts);
 
     const payload = {
       now,
@@ -496,6 +544,7 @@ export function createFamilyService(ctx) {
   async function refreshTodayKpis() {
     if (!ctx.historyApi || typeof ctx.historyApi.getSummary !== 'function') {
       todayKpis = null;
+      todayCharts = null;
       return;
     }
     try {
@@ -503,6 +552,7 @@ export function createFamilyService(ctx) {
       const result = await ctx.historyApi.getSummary({ view: 'day', date: today });
       if (result && result.body && result.body.kpis) {
         todayKpis = result.body.kpis;
+        todayCharts = buildTodayCharts(result.body);
         todayKpisAt = Date.now();
         // Invalidate the buildFamilyStatus cache so the next call surfaces the
         // fresh `today` section without waiting 2 s.

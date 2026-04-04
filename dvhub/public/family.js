@@ -93,8 +93,15 @@
     if (d.chart) {
       var ctx = document.getElementById('p-chart').getContext('2d');
       var hrs = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, '0') + ':00'; });
-      var isBat = key === 'bat', isGrid = key === 'grid';
-      panelChart = new Chart(ctx, { type: 'line', data: { labels: hrs, datasets: [{ data: d.chart, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(14,16,24,.9)', titleColor: '#fff', bodyColor: '#ccc', borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10, callbacks: { label: function (c) { return isBat ? c.parsed.y + '%' : c.parsed.y.toFixed(1) + ' kW'; } } } }, scales: { x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } }, y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return isBat ? v + '%' : v + 'kW'; } }, border: { display: false }, beginAtZero: !isGrid } } } });
+      // Unit per panel: price chart shows ct/kWh, everything else shows kW.
+      // Signed panels (bat, grid) skip beginAtZero so Chart.js auto-scales
+      // the y-axis to include negative values (discharge / export).
+      var isPrice = key === 'price';
+      var isSigned = (key === 'bat' || key === 'grid');
+      var unitFn = isPrice
+        ? function (v) { return (typeof v === 'number' ? v.toFixed(1) : v) + ' ct'; }
+        : function (v) { return (typeof v === 'number' ? v.toFixed(2) : v) + ' kW'; };
+      panelChart = new Chart(ctx, { type: 'line', data: { labels: hrs, datasets: [{ data: d.chart, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(14,16,24,.9)', titleColor: '#fff', bodyColor: '#ccc', borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10, callbacks: { label: function (c) { return unitFn(c.parsed.y); } } } }, scales: { x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } }, y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return unitFn(v); } }, border: { display: false }, beginAtZero: !isSigned } } } });
       document.querySelector('.panel-chart').style.display = '';
     } else { document.querySelector('.panel-chart').style.display = 'none'; }
     document.getElementById('overlay').classList.add('open');
@@ -625,21 +632,47 @@
     if (greeting.time) setText('g-time', greeting.time);
     if (greeting.date) setText('g-date', greeting.date);
 
-    // Live stats for bottom-bar slots (D-12)
+    // Live stats for bottom-bar slots (D-12). The family service emits savings
+    // values as pre-formatted strings ("0.44"), so parseFloat is required —
+    // a typeof === 'number' check would always hit the '--' fallback.
     var savings = data.savings || {};
-    var forecast = data.forecast || {};
+    var today = data.today || {};
+    function parseNum(v) { var n = typeof v === 'number' ? v : parseFloat(v); return (typeof n === 'number' && isFinite(n)) ? n : null; }
+    var savedEurN = parseNum(savings.todayEur);
+    var feedEurN = parseNum(savings.feedInRevenueEur);
+    var avoidedEurN = parseNum(savings.avoidedCostEur);
+    var monthEurN = parseNum(savings.monthEur);
     liveStats.sr = typeof energy.solarKw === 'number' && energy.solarKw > 0 && typeof energy.homeKw === 'number'
       ? Math.round(Math.min(100, (Math.min(energy.solarKw, energy.homeKw) / Math.max(energy.solarKw, 0.01)) * 100))
       : '--';
     liveStats.autarkie = typeof energy.solarKw === 'number' && typeof energy.homeKw === 'number' && energy.homeKw > 0
       ? Math.max(0, Math.round(Math.min(100, ((energy.homeKw - Math.max(0, energy.gridKw || 0)) / energy.homeKw) * 100)))
       : '--';
-    liveStats.savedEur = typeof savings.todayEur === 'number' ? savings.todayEur.toFixed(2) : '--';
-    liveStats.feedEur = typeof savings.feedInRevenueEur === 'number' ? savings.feedInRevenueEur.toFixed(2) : '--';
-    liveStats.avoidedEur = typeof savings.avoidedCostEur === 'number' ? savings.avoidedCostEur.toFixed(2) : '--';
-    liveStats.monthEur = typeof savings.monthEur === 'number' ? Math.round(savings.monthEur) : '--';
-    liveStats.dayYield = forecast && forecast.pv && forecast.pv.today && typeof forecast.pv.today.kwhTotal === 'number'
-      ? forecast.pv.today.kwhTotal.toFixed(1) : '--';
+    liveStats.savedEur = savedEurN != null ? savedEurN.toFixed(2) : '--';
+    liveStats.feedEur = feedEurN != null ? feedEurN.toFixed(2) : '--';
+    liveStats.avoidedEur = avoidedEurN != null ? avoidedEurN.toFixed(2) : '--';
+    liveStats.monthEur = monthEurN != null ? Math.round(monthEurN) : '--';
+    // Today-derived metrics from real telemetry counters in data.today. CO2
+    // factor: 0.4 kg/kWh (German grid avg 2024). Tree equivalent: ~25 kg
+    // CO2/year absorbed. Solar-km: ~6 km/kWh (EV avg 16.6 kWh/100km). Wash
+    // cycle ~1.5 kWh. Netflix streaming ~0.08 kWh/h.
+    liveStats.dayYield = typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) : '--';
+    if (typeof today.selfConsumptionKwh === 'number') {
+      var co2Kg = today.selfConsumptionKwh * 0.4;
+      liveStats.co2 = co2Kg.toFixed(1);
+      liveStats.trees = (co2Kg / 25).toFixed(2);
+    } else {
+      liveStats.co2 = '--'; liveStats.trees = '--';
+    }
+    liveStats.solarKm = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh * 6) : '--';
+    liveStats.washes = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 1.5) : '--';
+    liveStats.netflixH = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 0.08) : '--';
+    if (typeof today.importKwh === 'number' && typeof today.exportKwh === 'number') {
+      var netKwh = today.exportKwh - today.importKwh; // positive = net export
+      liveStats.netBalance = (netKwh >= 0 ? '+' : '') + netKwh.toFixed(1);
+    } else {
+      liveStats.netBalance = '--';
+    }
     updateSlotValues();
 
     // Devices (Phase 03: empty array, Phase 04 fills this in)
@@ -715,6 +748,16 @@
       { label: 'Min heute', val: typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true },
       { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true }
     ];
+    // Panel "Verlauf heute" charts — 24 hourly values per panel from
+    // data.today.charts. Only assign if the array is present and non-empty
+    // so the panel chart section stays hidden when telemetry is disabled.
+    var tc = today.charts || {};
+    function hasChartData(arr) { return Array.isArray(arr) && arr.length > 0; }
+    panelData.solar.chart = hasChartData(tc.solar) ? tc.solar : null;
+    panelData.home.chart = hasChartData(tc.home) ? tc.home : null;
+    panelData.bat.chart = hasChartData(tc.bat) ? tc.bat : null;
+    panelData.grid.chart = hasChartData(tc.grid) ? tc.grid : null;
+    panelData.price.chart = hasChartData(tc.price) ? tc.price : null;
     panelData.optimizer.stats = [
       { label: 'Jetzt', val: optimizer.currentActionLabel || optimizer.currentAction || '—', delta: '', up: true },
       { label: 'Als nächstes', val: optimizer.nextActionLabel || '—', delta: '', up: true },
