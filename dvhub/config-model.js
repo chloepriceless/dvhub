@@ -1766,7 +1766,7 @@ function buildFieldDefinitions() {
       min: 0.5,
       max: 1.0,
       step: 0.01,
-      help: 'Gesamteffizienz Laden+Entladen. LiFePO4 typisch 0.92, Blei 0.80-0.85.'
+      help: 'Gesamteffizienz Batterie + Wechselrichter (Laden+Entladen). Hochvolt-Speicher (48V DC): ~0.90-0.92 (LFP 95% * WR 95%). Niedervolt-Speicher (z.B. 24V/48V AC-gekoppelt): ~0.80-0.85 (LFP 92% * WR 87-92%). Blei-Saeure: ~0.70-0.78.'
     },
     {
       section: 'optimizer',
@@ -1960,7 +1960,7 @@ function buildFieldDefinitions() {
       path: 'optimizer.paragraph14a.enabled',
       label: '14a Modul 3 aktiv',
       type: 'boolean',
-      help: 'Aktiviert die Netzentgelt-Reduktion nach 14a EnWG Modul 3 fuer steuerbare Verbrauchseinrichtungen.'
+      help: 'Aktiviert die Netzentgelt-Reduktion nach §14a EnWG Modul 3 fuer steuerbare Verbrauchseinrichtungen (Wallbox, Waermepumpe, Speicher). Die Reduktion wird auf die Netzentgelte aus den dynamischen Preisbestandteilen angewandt.'
     },
     {
       section: 'optimizer',
@@ -1973,7 +1973,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 15,
       step: 0.01,
-      help: 'Netzentgelt-Reduktion durch 14a Modul 3 in ct/kWh. Vom Netzbetreiber abhaengig.'
+      help: 'Netzentgelt-Reduktion in ct/kWh — wird jaehrlich vom Netzbetreiber mitgeteilt und vom Netzentgelt in den Bezugspreisbestandteilen abgezogen. Typisch 3-6 ct/kWh je nach Netzbetreiber und Region.'
     }
   ];
 

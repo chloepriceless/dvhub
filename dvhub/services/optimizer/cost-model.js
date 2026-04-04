@@ -104,8 +104,25 @@ export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
  * @returns {Array<{ts: number, endTs: number, ctKwh: number, confidence: number, importCtKwh: number, feedInCtKwh: number}>}
  */
 export function enrichPriceSlotsWithCosts(priceSlots, cfg) {
-  const tariff = cfg.optimizer.tariff;
-  const paragraph14a = cfg.optimizer.paragraph14a;
+  // Fallback: if optimizer.tariff not fully configured, derive from userEnergyPricing.dynamicComponents
+  const dc = cfg.userEnergyPricing?.dynamicComponents ?? {};
+  const tariff = {
+    type: cfg.optimizer?.tariff?.type ?? (cfg.userEnergyPricing?.mode ?? 'dynamic'),
+    netzentgeltCtKwh: cfg.optimizer?.tariff?.netzentgeltCtKwh ?? dc.gridChargesCtKwh ?? 9.26,
+    kwkCtKwh: cfg.optimizer?.tariff?.kwkCtKwh ?? 0.446,
+    offshoreCtKwh: cfg.optimizer?.tariff?.offshoreCtKwh ?? 0.941,
+    stromnevCtKwh: cfg.optimizer?.tariff?.stromnevCtKwh ?? 1.559,
+    stromsteuerCtKwh: cfg.optimizer?.tariff?.stromsteuerCtKwh ?? 2.05,
+    konzessionsabgabeCtKwh: cfg.optimizer?.tariff?.konzessionsabgabeCtKwh ?? 1.66,
+    vertriebsaufschlagCtKwh: cfg.optimizer?.tariff?.vertriebsaufschlagCtKwh ?? dc.energyMarkupCtKwh ?? 0,
+    vatPct: cfg.optimizer?.tariff?.vatPct ?? dc.vatPct ?? 19,
+    fixedCtKwh: cfg.optimizer?.tariff?.fixedCtKwh ?? cfg.userEnergyPricing?.fixedGrossImportCtKwh ?? 30,
+    minCtKwh: cfg.optimizer?.tariff?.minCtKwh ?? 20,
+    feedInMode: cfg.optimizer?.tariff?.feedInMode ?? 'fixed',
+    feedInCtKwh: cfg.optimizer?.tariff?.feedInCtKwh ?? 7.78,
+    feedInSpotFactor: cfg.optimizer?.tariff?.feedInSpotFactor ?? 1.0
+  };
+  const paragraph14a = cfg.optimizer?.paragraph14a ?? { enabled: false, reductionCtKwh: 0 };
 
   return priceSlots.map(slot => {
     const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);
