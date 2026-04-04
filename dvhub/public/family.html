@@ -105,6 +105,12 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .widget-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.4);margin-bottom:6px}
 .widget-main{font-size:20px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
 .widget-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:4px}
+/* Chart.js responsive containment: Chart.js with responsive:true + maintainAspectRatio:false
+   ignores inline canvas dimensions and sizes the canvas to its parent's offsetHeight.
+   Without a fixed-height, position:relative wrapper the parent auto-grows from the canvas,
+   triggering a ResizeObserver feedback loop (infinite zoom). */
+.widget-chart-wrap{position:relative;width:100%;height:80px;overflow:hidden}
+.widget-chart-wrap>canvas{position:absolute;inset:0;width:100%!important;height:100%!important}
 @media(max-width:768px){.widgets{position:static;flex-direction:row;padding:8px 16px;max-width:100%;transform:none}.widget{flex:1;min-width:0}}
 
 /* D-22 — offline banner */
@@ -217,7 +223,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   <div class="widgets" id="widgets">
     <div class="widget widget-forecast" data-panel="forecast">
       <div class="widget-title">PV Morgen</div>
-      <canvas id="forecast-chart" style="width: 100%; height: 80px;"></canvas>
+      <div class="widget-chart-wrap"><canvas id="forecast-chart"></canvas></div>
     </div>
     <div class="widget widget-price" data-panel="price">
       <div class="widget-title">Strompreis</div>
