@@ -172,16 +172,22 @@
     { from: 'tag-home', to: 'tag-grid', hex: '#fd9644', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
   ];
   var pathEls = {}, lblEls = {};
+  var pathCoords = {};        // fl.id -> { x1, y1, x2, y2, cx, cy } (forward orientation)
+  var lastFlowDirection = {}; // fl.id -> 'forward' | 'reverse' — cached so we only rewrite d on flip
   function addFlowToSvg(g, fl) {
-    var pa = document.createElementNS(NS, 'path'); pa.id = fl.id; pa.setAttribute('fill', 'none'); pa.setAttribute('stroke', fl.hex); pa.setAttribute('stroke-width', fl.w); pa.setAttribute('stroke-dasharray', '10 18'); pa.setAttribute('opacity', '0.35'); pa.setAttribute('stroke-linecap', 'round'); pa.style.animation = 'fd 1.2s linear infinite'; g.appendChild(pa); pathEls[fl.id] = pa;
-    for (var i = 0; i < fl.p; i++) { var c = document.createElementNS(NS, 'circle'); c.setAttribute('r', fl.w > 2 ? '5' : '4'); c.setAttribute('fill', fl.hex); c.setAttribute('filter', 'url(#gl)'); c.setAttribute('opacity', '0.9'); var am = document.createElementNS(NS, 'animateMotion'); am.setAttribute('dur', fl.dur + 's'); am.setAttribute('repeatCount', 'indefinite'); am.setAttribute('begin', (i * (fl.dur / fl.p)).toFixed(2) + 's'); var mp = document.createElementNS(NS, 'mpath'); mp.setAttribute('href', '#' + fl.id); am.appendChild(mp); c.appendChild(am); g.appendChild(c); }
-    for (var j = 0; j < fl.wh; j++) { var w = document.createElementNS(NS, 'circle'); w.setAttribute('r', '2.5'); w.setAttribute('fill', '#fff'); w.setAttribute('opacity', '0.4'); var am2 = document.createElementNS(NS, 'animateMotion'); am2.setAttribute('dur', fl.dur + 's'); am2.setAttribute('repeatCount', 'indefinite'); am2.setAttribute('begin', ((j + .5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2) + 's'); var mp2 = document.createElementNS(NS, 'mpath'); mp2.setAttribute('href', '#' + fl.id); am2.appendChild(mp2); w.appendChild(am2); g.appendChild(w); }
-    var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.55'); tx.id = 'ft-' + fl.id; g.appendChild(tx); lblEls[fl.id] = tx;
+    // Wrap every flow in a <g> so updateFlowState can show/hide the whole
+    // link (path + particles + label) with a single display toggle.
+    var fg = document.createElementNS(NS, 'g'); fg.id = 'fg-' + fl.id; fg.style.display = 'none';
+    var pa = document.createElementNS(NS, 'path'); pa.id = fl.id; pa.setAttribute('fill', 'none'); pa.setAttribute('stroke', fl.hex); pa.setAttribute('stroke-width', fl.w); pa.setAttribute('stroke-dasharray', '10 18'); pa.setAttribute('opacity', '0.35'); pa.setAttribute('stroke-linecap', 'round'); pa.style.animation = 'fd 1.2s linear infinite'; fg.appendChild(pa); pathEls[fl.id] = pa;
+    for (var i = 0; i < fl.p; i++) { var c = document.createElementNS(NS, 'circle'); c.setAttribute('r', fl.w > 2 ? '5' : '4'); c.setAttribute('fill', fl.hex); c.setAttribute('filter', 'url(#gl)'); c.setAttribute('opacity', '0.9'); var am = document.createElementNS(NS, 'animateMotion'); am.setAttribute('dur', fl.dur + 's'); am.setAttribute('repeatCount', 'indefinite'); am.setAttribute('begin', (i * (fl.dur / fl.p)).toFixed(2) + 's'); var mp = document.createElementNS(NS, 'mpath'); mp.setAttribute('href', '#' + fl.id); am.appendChild(mp); c.appendChild(am); fg.appendChild(c); }
+    for (var j = 0; j < fl.wh; j++) { var w = document.createElementNS(NS, 'circle'); w.setAttribute('r', '2.5'); w.setAttribute('fill', '#fff'); w.setAttribute('opacity', '0.4'); var am2 = document.createElementNS(NS, 'animateMotion'); am2.setAttribute('dur', fl.dur + 's'); am2.setAttribute('repeatCount', 'indefinite'); am2.setAttribute('begin', ((j + .5) * (fl.dur / Math.max(fl.wh + fl.p, 1))).toFixed(2) + 's'); var mp2 = document.createElementNS(NS, 'mpath'); mp2.setAttribute('href', '#' + fl.id); am2.appendChild(mp2); w.appendChild(am2); fg.appendChild(w); }
+    var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.7'); tx.id = 'ft-' + fl.id; fg.appendChild(tx); lblEls[fl.id] = tx;
+    g.appendChild(fg);
   }
-  function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
+  function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; pathCoords = {}; lastFlowDirection = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
   var lastDeviceFlows = [];
   function rebuildAllWithDevices(visibleDevices) {
-    var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {};
+    var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; pathCoords = {}; lastFlowDirection = {};
     flows.forEach(function (fl) { addFlowToSvg(g, fl); });
     lastDeviceFlows = [];
     if (visibleDevices) {
@@ -205,10 +211,58 @@
         if (len < 1) return;
         var nx = -dy / len, ny = dx / len, bulge = len * .15;
         var cx = mx + nx * bulge, cy = my + ny * bulge;
+        // Store forward-orientation coords so updateFlowState can rewrite d
+        // in either direction (forward = from→to, reverse = to→from) without
+        // needing to recompute the geometry.
+        pathCoords[fl.id] = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, cx: cx, cy: cy };
         if (pathEls[fl.id]) pathEls[fl.id].setAttribute('d', 'M' + e.x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + e.x2.toFixed(1) + ' ' + e.y2.toFixed(1));
-        if (lblEls[fl.id]) { lblEls[fl.id].setAttribute('x', ((e.x1 + cx) / 2).toFixed(0)); lblEls[fl.id].setAttribute('y', ((e.y1 + cy) / 2 - 8).toFixed(0)); }
+        if (lblEls[fl.id]) { lblEls[fl.id].setAttribute('x', ((e.x1 + cx) / 2).toFixed(0)); lblEls[fl.id].setAttribute('y', ((e.y1 + cy) / 2 - 8).toFixed(0)); lblEls[fl.id].setAttribute('text-anchor', 'middle'); }
       });
+      // Re-apply last known flow state after a rebuild so show/hide and
+      // direction survive resizes and panel opens.
+      if (lastStatus && lastStatus.energy) updateFlowState(lastStatus.energy);
     }, 60);
+  }
+
+  /**
+   * Toggle each of the 4 main flows (solar→home, home↔bat, home→ev, home↔grid)
+   * based on actual power. Hides flows below 50 W, reverses direction for
+   * battery discharge and grid import by rewriting the path `d` attribute
+   * with swapped endpoints (the dashed stroke animation and particle
+   * animateMotion then follow the new orientation automatically).
+   */
+  function updateFlowState(energy) {
+    if (!energy) return;
+    var batteryKw = Number(energy.batteryKw || 0);
+    var gridKw = Number(energy.gridKw || 0);       // positive = import, negative = export (post grid-sign fix)
+    var solarKw = Number(energy.solarKw || 0);
+    var evKw = Number(energy.evKw || 0);
+    var states = {
+      f1: { kw: Math.max(0, solarKw),      reverse: false },
+      f2: { kw: Math.abs(batteryKw),       reverse: batteryKw < 0 },  // discharging flips bat→home
+      f3: { kw: Math.max(0, evKw),         reverse: false },
+      f4: { kw: Math.abs(gridKw),          reverse: gridKw > 0 }      // importing flips grid→home
+    };
+    var THRESHOLD_KW = 0.05; // 50 W — below this we consider the link idle
+    Object.keys(states).forEach(function (id) {
+      var s = states[id];
+      var fg = document.getElementById('fg-' + id);
+      var active = s.kw > THRESHOLD_KW;
+      if (fg) fg.style.display = active ? '' : 'none';
+      var label = lblEls[id];
+      if (label) label.textContent = active ? s.kw.toFixed(1) + ' kW' : '';
+      if (active && pathCoords[id]) {
+        var dir = s.reverse ? 'reverse' : 'forward';
+        if (lastFlowDirection[id] !== dir) {
+          var pc = pathCoords[id];
+          var d = s.reverse
+            ? 'M' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1)
+            : 'M' + pc.x1.toFixed(1) + ' ' + pc.y1.toFixed(1) + ' Q' + pc.cx.toFixed(1) + ' ' + pc.cy.toFixed(1) + ' ' + pc.x2.toFixed(1) + ' ' + pc.y2.toFixed(1);
+          if (pathEls[id]) pathEls[id].setAttribute('d', d);
+          lastFlowDirection[id] = dir;
+        }
+      }
+    });
   }
   function rebuildAll() { rebuildAllWithDevices(null); }
   rebuildAll();
@@ -448,6 +502,9 @@
     if (data.forecast) renderForecastWidget(data.forecast);
     if (data.price) renderPriceWidget(data.price);
     if (data.optimizer) renderOptimizerWidget(data.optimizer);
+
+    // Flow animations: hide idle links, reverse direction on discharge/import
+    updateFlowState(energy);
 
     // Also update panel stats so touch-to-open shows live data
     updatePanelStats(data);
