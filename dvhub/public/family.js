@@ -101,7 +101,37 @@
       var unitFn = isPrice
         ? function (v) { return (typeof v === 'number' ? v.toFixed(1) : v) + ' ct'; }
         : function (v) { return (typeof v === 'number' ? v.toFixed(2) : v) + ' kW'; };
-      panelChart = new Chart(ctx, { type: 'line', data: { labels: hrs, datasets: [{ data: d.chart, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(14,16,24,.9)', titleColor: '#fff', bodyColor: '#ccc', borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10, callbacks: { label: function (c) { return unitFn(c.parsed.y); } } } }, scales: { x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } }, y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return unitFn(v); } }, border: { display: false }, beginAtZero: !isSigned } } } });
+      panelChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: hrs, datasets: [{ data: d.chart, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          // mode:'index' + intersect:false makes mouseover AND touchmove reveal
+          // the value at whichever x the finger/pointer is over, even between
+          // line segments. Essential on the tablet where there are no hover
+          // events and the chart is touch-driven.
+          interaction: { mode: 'index', intersect: false, axis: 'x' },
+          hover: { mode: 'index', intersect: false, axis: 'x' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              backgroundColor: 'rgba(14,16,24,.92)', titleColor: '#fff', bodyColor: '#ccc',
+              borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10,
+              displayColors: false,
+              callbacks: {
+                title: function (items) { return items && items[0] ? items[0].label + ' Uhr' : ''; },
+                label: function (c) { return unitFn(c.parsed.y); }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } },
+            y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return unitFn(v); } }, border: { display: false }, beginAtZero: !isSigned }
+          }
+        }
+      });
       document.querySelector('.panel-chart').style.display = '';
     } else { document.querySelector('.panel-chart').style.display = 'none'; }
     document.getElementById('overlay').classList.add('open');
@@ -679,7 +709,7 @@
     updateDevices(data.devices || []);
 
     // Widgets (D-10)
-    if (data.forecast) renderForecastWidget(data.forecast);
+    renderForecastWidget(data.forecast, data.today);
     if (data.price) renderPriceWidget(data.price);
     if (data.optimizer) renderOptimizerWidget(data.optimizer);
 
@@ -792,15 +822,29 @@
   /* ===================== WIDGET RENDERERS (D-10) ===================== */
   var forecastChart = null;
 
-  function renderForecastWidget(forecast) {
-    if (!forecast || !forecast.pv || !Array.isArray(forecast.pv.next48h)) return;
+  function renderForecastWidget(forecast, today) {
     var canvas = document.getElementById('forecast-chart');
     if (!canvas || typeof window.Chart === 'undefined') return;
-    var labels = forecast.pv.next48h.map(function (s) {
-      var d = new Date(s.ts);
-      return String(d.getHours()).padStart(2, '0') + ':00';
-    });
-    var values = forecast.pv.next48h.map(function (s) { return typeof s.kw === 'number' ? s.kw : 0; });
+    var labels, values, titleText;
+    var next48h = forecast && forecast.pv && Array.isArray(forecast.pv.next48h) ? forecast.pv.next48h : [];
+    if (next48h.length > 0) {
+      // Real forecast service output (Solcast / pvlib). Prefer this when
+      // available because it spans "morgen".
+      labels = next48h.map(function (s) { var d = new Date(s.ts); return String(d.getHours()).padStart(2, '0') + ':00'; });
+      values = next48h.map(function (s) { return typeof s.kw === 'number' ? s.kw : 0; });
+      titleText = 'PV Morgen';
+    } else if (today && today.charts && Array.isArray(today.charts.solar) && today.charts.solar.length === 24) {
+      // Fallback for installs where /api/forecast is empty (no Solcast key,
+      // pvlib disabled): show today's actual PV production from history so
+      // the card isn't blank.
+      labels = today.charts.solar.map(function (_, i) { return String(i).padStart(2, '0') + ':00'; });
+      values = today.charts.solar.slice();
+      titleText = 'PV heute';
+    } else {
+      return;
+    }
+    var titleEl = document.querySelector('.widget-forecast .widget-title');
+    if (titleEl && titleEl.textContent !== titleText) titleEl.textContent = titleText;
     // Pitfall 1 — reuse instance to avoid memory leak
     if (forecastChart) {
       forecastChart.data.labels = labels;
@@ -810,7 +854,19 @@
       forecastChart = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: { labels: labels, datasets: [{ data: values, borderColor: '#F7B731', backgroundColor: 'rgba(247,183,49,0.12)', fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: 'rgba(255,255,255,0.3)', maxTicksLimit: 8 } }, y: { ticks: { color: 'rgba(255,255,255,0.3)' }, beginAtZero: true } } }
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: 'rgba(14,16,24,.9)', titleColor: '#fff', bodyColor: '#ccc',
+              borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 8, padding: 8,
+              callbacks: { label: function (c) { return c.parsed.y.toFixed(2) + ' kW'; } }
+            }
+          },
+          scales: { x: { ticks: { color: 'rgba(255,255,255,0.3)', maxTicksLimit: 8 } }, y: { ticks: { color: 'rgba(255,255,255,0.3)' }, beginAtZero: true } }
+        }
       });
     }
   }

@@ -131,7 +131,11 @@ export function createFamilyService(ctx) {
       home: toHourlyBuckets(energyLines, 'loadKwh'),
       bat: toHourlyBuckets(energyLines, (s) => (Number(s.batteryChargeKwh || 0) - Number(s.batteryDischargeKwh || 0))),
       grid: toHourlyBuckets(energyLines, (s) => (Number(s.importKwh || 0) - Number(s.exportKwh || 0))),
-      price: toHourlyBuckets(priceLines, 'userImportPriceCtKwh', { average: true })
+      // Price panel is labelled "EPEX Strompreis" and needs the real
+      // wholesale market curve. The user-tariff line is already surfaced
+      // via price.importCtKwh on the Netz panel, so keep the two
+      // consumers visually distinct.
+      price: toHourlyBuckets(priceLines, 'marketPriceCtKwh', { average: true })
     };
   }
 
