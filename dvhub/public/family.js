@@ -92,7 +92,19 @@
     if (panelChart) { panelChart.destroy(); panelChart = null; }
     if (d.chart) {
       var ctx = document.getElementById('p-chart').getContext('2d');
-      var hrs = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, '0') + ':00'; });
+      // Derive x-axis labels from the chart array length — 96 = 15-min EPEX
+      // resolution (00:00, 00:15, …, 23:45), 24 = hourly (00:00..23:00).
+      var hrs;
+      if (d.chart.length === 96) {
+        hrs = [];
+        for (var hh = 0; hh < 24; hh++) {
+          for (var mm = 0; mm < 60; mm += 15) {
+            hrs.push(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'));
+          }
+        }
+      } else {
+        hrs = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, '0') + ':00'; });
+      }
       // Unit per panel: price chart shows ct/kWh, everything else shows kW.
       // Signed panels (bat, grid) skip beginAtZero so Chart.js auto-scales
       // the y-axis to include negative values (discharge / export).
@@ -768,10 +780,24 @@
       { label: 'Bezug jetzt', val: typeof price.importCtKwh === 'number' ? price.importCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.nowCtKwh === 'number' ? 'EPEX ' + price.nowCtKwh.toFixed(1) + ' ct' : '', up: true },
       { label: 'EPEX min/max heute', val: (typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—') + ' / ' + (typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—') + ' ct', delta: '', up: true }
     ];
+    // Forecast panel: "Heute" pulls the real counter from today.pvKwh
+    // because the forecast service frequently has no slots (no Solcast key
+    // configured on small installs). "Morgen" and "Peak morgen" still
+    // require actual forecast output and fall back to "—" when the
+    // forecast service is empty. Peak heute is derived from the 24-bucket
+    // today.charts.solar so we can at least show a real number now.
+    var tomorrowKwh = forecast.pv && forecast.pv.tomorrow && typeof forecast.pv.tomorrow.kwhTotal === 'number' && forecast.pv.tomorrow.kwhTotal > 0
+      ? forecast.pv.tomorrow.kwhTotal.toFixed(1) + ' kWh' : '—';
+    var tomorrowPeak = forecast.pv && forecast.pv.tomorrow && typeof forecast.pv.tomorrow.peakKw === 'number' && forecast.pv.tomorrow.peakKw > 0
+      ? forecast.pv.tomorrow.peakKw.toFixed(2) + ' kW' : '—';
+    var peakHeuteKw = null;
+    if (today.charts && Array.isArray(today.charts.solar)) {
+      peakHeuteKw = today.charts.solar.reduce(function (m, v) { return typeof v === 'number' && v > m ? v : m; }, 0);
+    }
     panelData.forecast.stats = [
-      { label: 'Heute', val: forecast.pv && forecast.pv.today ? (forecast.pv.today.kwhTotal || 0).toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Morgen', val: forecast.pv && forecast.pv.tomorrow ? (forecast.pv.tomorrow.kwhTotal || 0).toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Peak morgen', val: forecast.pv && forecast.pv.tomorrow ? (forecast.pv.tomorrow.peakKw || 0).toFixed(1) + ' kW' : '—', delta: '', up: true }
+      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
+      { label: 'Peak heute', val: peakHeuteKw != null && peakHeuteKw > 0 ? peakHeuteKw.toFixed(2) + ' kW' : '—', delta: '', up: true },
+      { label: 'Morgen', val: tomorrowKwh, delta: tomorrowPeak !== '—' ? 'Peak ' + tomorrowPeak : 'keine Prognose', up: true }
     ];
     panelData.price.stats = [
       { label: 'Jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true },

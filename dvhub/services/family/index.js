@@ -132,11 +132,36 @@ export function createFamilyService(ctx) {
       bat: toHourlyBuckets(energyLines, (s) => (Number(s.batteryChargeKwh || 0) - Number(s.batteryDischargeKwh || 0))),
       grid: toHourlyBuckets(energyLines, (s) => (Number(s.importKwh || 0) - Number(s.exportKwh || 0))),
       // Price panel is labelled "EPEX Strompreis" and needs the real
-      // wholesale market curve. The user-tariff line is already surfaced
-      // via price.importCtKwh on the Netz panel, so keep the two
-      // consumers visually distinct.
-      price: toHourlyBuckets(priceLines, 'marketPriceCtKwh', { average: true })
+      // wholesale market curve at the native 15-minute resolution EPEX
+      // publishes. Downsampling to 24 hourly buckets would wash out the
+      // intraday swings that drive optimizer decisions, which is exactly
+      // what users open this panel to see.
+      price: toQuarterHourlyBuckets(priceLines, 'marketPriceCtKwh')
     };
+  }
+
+  /**
+   * Build a fixed-length 96-bucket array (15-min resolution × 24 h) from
+   * chronological slot rows. Slots are placed by their local hour+minute.
+   * Missing buckets are left as null so Chart.js renders them as gaps
+   * instead of collapsing the line to zero.
+   */
+  function toQuarterHourlyBuckets(slots, field) {
+    if (!Array.isArray(slots) || slots.length === 0) return null;
+    const buckets = new Array(96).fill(null);
+    for (const slot of slots) {
+      if (!slot || !slot.ts) continue;
+      const d = new Date(slot.ts);
+      const h = d.getHours();
+      const m = d.getMinutes();
+      if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+      const idx = h * 4 + Math.floor(m / 15);
+      if (idx < 0 || idx > 95) continue;
+      const raw = Number(slot[field]);
+      if (!Number.isFinite(raw)) continue;
+      buckets[idx] = Math.round(raw * 100) / 100;
+    }
+    return buckets;
   }
 
   function deriveEnergySection(victron, meter) {
