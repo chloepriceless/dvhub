@@ -108,9 +108,10 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 /* Chart.js responsive containment: Chart.js with responsive:true + maintainAspectRatio:false
    ignores inline canvas dimensions and sizes the canvas to its parent's offsetHeight.
    Without a fixed-height, position:relative wrapper the parent auto-grows from the canvas,
-   triggering a ResizeObserver feedback loop (infinite zoom). */
-.widget-chart-wrap{position:relative;width:100%;height:80px;overflow:hidden}
-.widget-chart-wrap>canvas{position:absolute;inset:0;width:100%!important;height:100%!important}
+   triggering a ResizeObserver feedback loop (infinite zoom). The wrapper alone is enough;
+   forcing width/height !important on the canvas clobbers Chart.js's internal sizing and
+   renders the chart blank. */
+.widget-chart-wrap{position:relative;width:100%;height:80px}
 @media(max-width:768px){.widgets{position:static;flex-direction:row;padding:8px 16px;max-width:100%;transform:none}.widget{flex:1;min-width:0}}
 
 /* D-22 — offline banner */
