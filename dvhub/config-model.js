@@ -1725,7 +1725,7 @@ function buildFieldDefinitions() {
       path: 'optimizer.allowGridCharge',
       label: 'Netzladen erlauben',
       type: 'boolean',
-      help: 'Erlaubt dem Optimizer die Batterie aus dem Netz zu laden (z.B. bei guenstigen Strompreisen). Ohne dies wird nur PV-Ueberschuss gespeichert.'
+      help: 'Erlaubt dem Optimizer die Batterie aus dem Netz zu laden (z.B. guenstig mit §14a Modul 3). Ohne dies wird nur PV-Ueberschuss gespeichert. Nicht gleichzeitig mit Netzentladung — ausser bei Pauschaloption/Abgrenzungsoption.'
     },
     {
       section: 'optimizer',
@@ -1733,9 +1733,9 @@ function buildFieldDefinitions() {
       groupLabel: 'Optimierung',
       groupDescription: 'Batterie-Optimierung und Schedule-Generierung.',
       path: 'optimizer.allowGridDischarge',
-      label: 'Netzentladung erlauben (Pauschaloption)',
+      label: 'Netzentladung erlauben',
       type: 'boolean',
-      help: 'Erlaubt dem Optimizer Batterieenergie ins Netz zu entladen (Grid-Arbitrage). Erfordert die Pauschaloption nach EEG. Ohne dies wird nur fuer Eigenverbrauch entladen.'
+      help: 'Erlaubt dem Optimizer Batterieenergie ins Netz zu entladen (Direktvermarktung oder Einspeiseverguetung). Nicht gleichzeitig mit Netzladen — ausser bei Pauschaloption/Abgrenzungsoption (MiSpeL).'
     },
     {
       section: 'optimizer',

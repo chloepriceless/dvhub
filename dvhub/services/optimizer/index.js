@@ -173,6 +173,8 @@ export function createOptimizerService(ctx) {
     if (isRunning) return; // Skip if already running
 
     const cfg = getCfg();
+    // Sync status with current config (hot-reload aware)
+    state.optimizer.enabled = cfg.optimizer?.enabled ?? false;
     if (!cfg.optimizer?.enabled) return; // Gate per run, NOT in start()
 
     isRunning = true;
@@ -217,8 +219,24 @@ export function createOptimizerService(ctx) {
       };
 
       // 6. Grid permission flags from config
-      const allowGridCharge = cfg.optimizer.allowGridCharge ?? false;
-      const allowGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
+      //    RULE: Both flags simultaneously = only with Pauschaloption or Abgrenzungsoption.
+      //    Without MiSpeL: either charge OR discharge, never both (no grid arbitrage).
+      const rawGridCharge = cfg.optimizer.allowGridCharge ?? false;
+      const rawGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
+      const mispelActive = ['pauschal', 'abgrenzung'].includes(cfg.optimizer?.mispel?.mode);
+
+      let allowGridCharge = rawGridCharge;
+      let allowGridDischarge = rawGridDischarge;
+
+      if (rawGridCharge && rawGridDischarge && !mispelActive) {
+        // Both set without Pauschaloption/Abgrenzung — enforce: only one allowed
+        // Prefer discharge (DV/Einspeisung is the more common use case)
+        allowGridCharge = false;
+        pushLog('optimizer_grid_guard', {
+          reason: 'allowGridCharge + allowGridDischarge ohne Pauschaloption/Abgrenzung nicht erlaubt. Netzladen deaktiviert.',
+          mispelMode: cfg.optimizer?.mispel?.mode ?? 'none'
+        });
+      }
 
       // 6b. Multi-day awareness pre-filter (OPTI-09)
       const avgFeedIn = enrichedPriceSlots.length > 0
