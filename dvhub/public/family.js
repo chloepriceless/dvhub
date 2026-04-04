@@ -460,23 +460,31 @@
     var battery = data.battery || {};
     var ev = data.ev || {};
     var forecast = data.forecast || {};
+    var today = data.today || {};
     var price = data.price || {};
     var optimizer = data.optimizer || {};
 
+    // "Heute" rows pull from data.today (real telemetry counters from
+    // /api/history/summary), not forecast. Forecast kWh is used for
+    // the "Morgen" row on the forecast widget/panel only.
     panelData.solar.stats = [
       { label: 'Gerade', val: formatKw(energy.solarKw), delta: energy.surplus ? 'Überschuss' : '', up: true },
-      { label: 'Heute', val: forecast.pv && forecast.pv.today ? (forecast.pv.today.kwhTotal || 0).toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Peak heute', val: forecast.pv && forecast.pv.today ? (forecast.pv.today.peakKw || 0).toFixed(1) + ' kW' : '—', delta: '', up: true }
+      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
+      { label: 'Eingespeist', val: typeof today.exportKwh === 'number' ? today.exportKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true }
     ];
     panelData.home.stats = [
       { label: 'Gerade', val: formatKw(energy.homeKw), delta: '', up: true },
-      { label: 'Heute', val: forecast.load && forecast.load.today ? (forecast.load.today.kwhTotal || 0).toFixed(1) + ' kWh' : '—', delta: '', up: true },
+      { label: 'Heute', val: typeof today.loadKwh === 'number' ? today.loadKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
       { label: 'Eigenverbrauch', val: liveStats.sr === '--' ? '—' : liveStats.sr + '%', delta: '', up: true }
     ];
     panelData.bat.stats = [
       { label: 'Stand', val: formatPct(battery.socPct), delta: battery.mode || '', up: true },
       { label: 'Leistung', val: typeof battery.powerKw === 'number' ? (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW' : '—', delta: '', up: true },
-      { label: 'Reicht', val: typeof battery.runtimeHours === 'number' ? '~' + battery.runtimeHours.toFixed(1) + ' h' : '—', delta: '', up: true }
+      { label: 'Heute',
+        val: typeof today.batteryChargeKwh === 'number' && typeof today.batteryDischargeKwh === 'number'
+          ? '+' + today.batteryChargeKwh.toFixed(1) + ' / -' + today.batteryDischargeKwh.toFixed(1) + ' kWh'
+          : (typeof battery.runtimeHours === 'number' ? '~' + battery.runtimeHours.toFixed(1) + ' h' : '—'),
+        delta: '', up: true }
     ];
     panelData.ev.stats = [
       { label: 'Leistung', val: formatKw(ev.powerKw), delta: ev.mode || '', up: true },

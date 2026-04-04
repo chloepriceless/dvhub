@@ -386,6 +386,79 @@ describe('null-safety', () => {
     const status = svc.buildFamilyStatus();
     assert.deepStrictEqual(status.optimizer, { enabled: false });
   });
+
+  it('buildFamilyStatus returns today=null when historyApi is not provided', () => {
+    const svc = createFamilyService(createMockCtx());
+    const status = svc.buildFamilyStatus();
+    assert.equal(status.today, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 8b: today section (real telemetry counters via historyApi)
+// ---------------------------------------------------------------------------
+
+describe('today section (historyApi)', () => {
+  function mockHistoryApi(kpis) {
+    return {
+      getSummary: async ({ view, date }) => ({
+        status: 200,
+        body: {
+          view,
+          date,
+          kpis: kpis || {
+            pvKwh: 55.44,
+            loadKwh: 55.87,
+            importKwh: 3.47,
+            exportKwh: 7.92,
+            batteryChargeKwh: 14.85,
+            batteryDischargeKwh: 23.01,
+            selfConsumptionKwh: 55.85
+          }
+        }
+      })
+    };
+  }
+
+  it('exposes today=kwh counters rounded to 1 decimal after refreshTodayKpis()', async () => {
+    const ctx = createMockCtx();
+    ctx.historyApi = mockHistoryApi();
+    const svc = createFamilyService(ctx);
+    await svc.refreshTodayKpis();
+    const status = svc.buildFamilyStatus();
+    assert.ok(status.today, 'today section should be populated after refresh');
+    assert.equal(status.today.pvKwh, 55.4);
+    assert.equal(status.today.loadKwh, 55.9);
+    assert.equal(status.today.importKwh, 3.5);
+    assert.equal(status.today.exportKwh, 7.9);
+    assert.equal(status.today.batteryChargeKwh, 14.9);
+    assert.equal(status.today.batteryDischargeKwh, 23.0);
+    assert.equal(typeof status.today.updatedAt, 'number');
+  });
+
+  it('refreshTodayKpis invalidates the 2s buildFamilyStatus cache', async () => {
+    const ctx = createMockCtx();
+    ctx.historyApi = mockHistoryApi();
+    const svc = createFamilyService(ctx);
+    const a = svc.buildFamilyStatus();          // today=null (first call, no refresh yet)
+    assert.equal(a.today, null);
+    await svc.refreshTodayKpis();
+    const b = svc.buildFamilyStatus();          // must be a fresh object with today populated
+    assert.notStrictEqual(a, b);
+    assert.ok(b.today);
+    assert.equal(b.today.pvKwh, 55.4);
+  });
+
+  it('swallows historyApi errors and leaves today=null', async () => {
+    const ctx = createMockCtx();
+    ctx.historyApi = { getSummary: async () => { throw new Error('db offline'); } };
+    const svc = createFamilyService(ctx);
+    await svc.refreshTodayKpis();
+    const status = svc.buildFamilyStatus();
+    assert.equal(status.today, null);
+    const errLog = ctx._logs.find((l) => l.type === 'family_today_kpis_error');
+    assert.ok(errLog, 'should log family_today_kpis_error on historyApi failure');
+  });
 });
 
 // ---------------------------------------------------------------------------

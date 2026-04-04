@@ -19,6 +19,7 @@
 // recomputation storm when mehrere Tablets pollen.
 
 const CACHE_TTL_MS = 2000;
+const TODAY_KPIS_REFRESH_MS = 60_000;
 
 /**
  * Create the family service. Aggregates cross-service data into the
@@ -26,10 +27,11 @@ const CACHE_TTL_MS = 2000;
  *
  * @param {object} ctx - DI context { state, getCfg, pushLog,
  *   buildFallbackStatusPayload, forecastService, optimizerService,
- *   epexNowNext, costSummary }
+ *   epexNowNext, costSummary, historyApi }
  * @returns {{ start: Function, close: Function,
  *             buildFamilyStatus: Function,
- *             setPresence: Function, getPresence: Function }}
+ *             setPresence: Function, getPresence: Function,
+ *             refreshTodayKpis: Function }}
  */
 export function createFamilyService(ctx) {
   const { getCfg, pushLog } = ctx;
@@ -41,6 +43,13 @@ export function createFamilyService(ctx) {
   // Response cache (Research Pitfall 9).
   let cached = null;
   let cachedAt = 0;
+
+  // Today-KPIs snapshot refreshed in the background (60s) via historyApi.getSummary.
+  // buildFamilyStatus reads this synchronously — stays null until first refresh
+  // completes or until historyApi is unavailable (telemetry disabled).
+  let todayKpis = null;
+  let todayKpisAt = 0;
+  let todayKpisTimer = null;
 
   // --------------------------------------------------------------------
   // Section derivers -- each takes the already-computed status payload
@@ -56,6 +65,28 @@ export function createFamilyService(ctx) {
    * Energy flow section. Computes solar / home / grid / battery / ev kW
    * from victron + meter state.
    */
+  /**
+   * Today section — actual kWh counters from telemetry history (not forecast).
+   * Reads the last snapshot refreshed by refreshTodayKpis(); returns null when
+   * telemetry is disabled or the first refresh hasn't completed yet.
+   */
+  function deriveTodaySection(kpis) {
+    if (!kpis || typeof kpis !== 'object') return null;
+    const round1 = (n) => (typeof n === 'number' && Number.isFinite(n))
+      ? Math.round(n * 10) / 10
+      : null;
+    return {
+      pvKwh: round1(kpis.pvKwh),
+      loadKwh: round1(kpis.loadKwh),
+      importKwh: round1(kpis.importKwh),
+      exportKwh: round1(kpis.exportKwh),
+      batteryChargeKwh: round1(kpis.batteryChargeKwh),
+      batteryDischargeKwh: round1(kpis.batteryDischargeKwh),
+      selfConsumptionKwh: round1(kpis.selfConsumptionKwh),
+      updatedAt: todayKpisAt || null
+    };
+  }
+
   function deriveEnergySection(victron, meter) {
     const solarKw = kw(victron?.pvTotalW);
     const batteryKw = kw(victron?.batteryPowerW); // positive = charging
@@ -393,6 +424,7 @@ export function createFamilyService(ctx) {
     const optimizer = deriveOptimizerSection(optimizerStatus);
     const savings = deriveSavingsSection(costs);
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
+    const today = deriveTodaySection(todayKpis);
 
     const payload = {
       now,
@@ -401,6 +433,7 @@ export function createFamilyService(ctx) {
       ev,
       devices,
       forecast,
+      today,
       price,
       optimizer,
       savings,
@@ -442,14 +475,54 @@ export function createFamilyService(ctx) {
     return { ...presence };
   }
 
+  /**
+   * Fetch today's energy KPIs from historyApi and cache them. Called once on
+   * start() and then every 60 s. Also exposed on the public API so tests and
+   * diagnostic paths can trigger a synchronous refresh before asserting.
+   */
+  async function refreshTodayKpis() {
+    if (!ctx.historyApi || typeof ctx.historyApi.getSummary !== 'function') {
+      todayKpis = null;
+      return;
+    }
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await ctx.historyApi.getSummary({ view: 'day', date: today });
+      if (result && result.body && result.body.kpis) {
+        todayKpis = result.body.kpis;
+        todayKpisAt = Date.now();
+        // Invalidate the buildFamilyStatus cache so the next call surfaces the
+        // fresh `today` section without waiting 2 s.
+        cached = null;
+      }
+    } catch (err) {
+      pushLog?.('family_today_kpis_error', { error: err.message });
+    }
+  }
+
   async function start() {
-    // Stateless aggregator — no timers, no resources to acquire.
     pushLog?.('family_service_started', {});
+    // Kick off one immediate refresh so the first tablet poll after boot has
+    // today's data (best-effort — errors are logged and the section stays null).
+    await refreshTodayKpis();
+    todayKpisTimer = setInterval(() => {
+      refreshTodayKpis().catch((err) => {
+        pushLog?.('family_today_kpis_timer_error', { error: err.message });
+      });
+    }, TODAY_KPIS_REFRESH_MS);
+    // unref so the interval does not hold the event loop open during shutdown.
+    if (todayKpisTimer && typeof todayKpisTimer.unref === 'function') {
+      todayKpisTimer.unref();
+    }
   }
 
   async function close() {
     cached = null;
+    if (todayKpisTimer) {
+      clearInterval(todayKpisTimer);
+      todayKpisTimer = null;
+    }
   }
 
-  return { start, close, buildFamilyStatus, setPresence, getPresence };
+  return { start, close, buildFamilyStatus, setPresence, getPresence, refreshTodayKpis };
 }
