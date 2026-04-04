@@ -60,8 +60,15 @@ export function createFamilyService(ctx) {
     const solarKw = kw(victron?.pvTotalW);
     const batteryKw = kw(victron?.batteryPowerW); // positive = charging
     const evKw = kw(victron?.evPowerW); // placeholder; many installs lack EV data
-    // grid_total_w convention: positive = import, negative = export (default)
-    const gridTotalW = Number(meter?.grid_total_w || 0);
+    // Normalize to internal convention: positive gridKw = import, negative = export.
+    // The meter exposes `semantics.positiveMeans` which is "feed_in" on Victron
+    // (the default — positive raw grid_total_w means feeding into the grid) or
+    // "grid_import" on some third-party meters. Flip the sign when the raw meter
+    // uses feed_in-positive so the downstream pipeline and UI (family.js line 429
+    // autarkie calc) can uniformly treat positive gridKw as import.
+    const positiveMeans = meter?.semantics?.positiveMeans || 'feed_in';
+    const rawGridW = Number(meter?.grid_total_w || 0);
+    const gridTotalW = positiveMeans === 'feed_in' ? -rawGridW : rawGridW;
     const gridKw = kw(gridTotalW);
     const feedingToGrid = gridTotalW < 0;
 

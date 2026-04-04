@@ -21,7 +21,7 @@ function createMockCtx(overrides = {}) {
       ...overrides.victron
     },
     meter: {
-      grid_total_w: -400,         // negative = export
+      grid_total_w: 400,          // positive = export (meter default: semantics.positiveMeans === 'feed_in')
       ...overrides.meter
     },
     epex: {
@@ -184,7 +184,7 @@ describe('energy section', () => {
     assert.equal(energy.solarKw, 4.8);
   });
 
-  it('feedingToGrid is true when grid_total_w is negative (exporting)', () => {
+  it('feedingToGrid is true when grid_total_w is positive (exporting, feed_in semantics)', () => {
     const svc = createFamilyService(createMockCtx());
     const { energy } = svc.buildFamilyStatus();
     assert.equal(energy.feedingToGrid, true);
@@ -340,14 +340,14 @@ describe('greeting section (D-13)', () => {
   it('mood is "good" when surplus, "warn" otherwise', () => {
     const svcSurplus = createFamilyService(createMockCtx({
       victron: { pvTotalW: 5000, batteryPowerW: 0 },
-      meter: { grid_total_w: -500 }
+      meter: { grid_total_w: 500 }     // positive = export (feed_in semantics)
     }));
     const s1 = svcSurplus.buildFamilyStatus();
     assert.equal(s1.greeting.mood, 'good');
 
     const svcDeficit = createFamilyService(createMockCtx({
       victron: { pvTotalW: 200, batteryPowerW: -1000 },
-      meter: { grid_total_w: 2000 }
+      meter: { grid_total_w: -2000 }   // negative = import (feed_in semantics)
     }));
     const s2 = svcDeficit.buildFamilyStatus();
     assert.equal(s2.greeting.mood, 'warn');
