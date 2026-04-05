@@ -962,8 +962,94 @@
       // dynamically-inserted animateMotion just like resize used to.
       repositionFlows();
       pollFamilyStatus();
+      // Visibility returning is an activity event — re-arm the screensaver timer
+      resetInactivity();
     }
   });
+
+  /* =======================================================================
+     SCREENSAVER STATE MACHINE (DASH-03, D-16 in-dashboard dimming,
+     D-17 time-window configurable timeout, D-19 presence-hook wake,
+     D-23 no service worker — in-memory state only)
+     ======================================================================= */
+  var screensaverOn = false;
+  var inactivityTimer = null;
+  var lastActivityAt = Date.now();
+  var presencePollTimer = null;
+
+  function currentHHMM() {
+    var d = new Date();
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    return hh + ':' + mm;
+  }
+
+  function computeTimeout() {
+    // Fallback: if the deferred module script hasn't loaded yet, use the safe default.
+    // Subsequent activity/poll ticks will pick up the real helper once it's on window.
+    var logic = window.FamilyScreensaverLogic;
+    var cfg = (lastStatus && lastStatus.config && lastStatus.config.screensaver) || null;
+    if (!logic) return (cfg && cfg.enabled === false) ? 0 : (cfg && cfg.defaultTimeoutSec) || 120;
+    return logic.getActiveTimeout(cfg || { defaultTimeoutSec: 120, windows: [], enabled: true }, currentHHMM());
+  }
+
+  function enterScreensaver() {
+    if (screensaverOn) return;
+    screensaverOn = true;
+    document.body.classList.add('screensaver');
+  }
+
+  function exitScreensaver() {
+    if (!screensaverOn) return;
+    screensaverOn = false;
+    document.body.classList.remove('screensaver');
+  }
+
+  function resetInactivity() {
+    lastActivityAt = Date.now();
+    if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
+    if (screensaverOn) exitScreensaver();
+    var timeoutSec = computeTimeout();
+    if (timeoutSec > 0) {
+      inactivityTimer = setTimeout(enterScreensaver, timeoutSec * 1000);
+    }
+  }
+
+  // Any user activity resets the inactivity timer (D-16, D-17)
+  ['touchstart', 'pointerdown', 'keydown', 'mousemove'].forEach(function (ev) {
+    window.addEventListener(ev, resetInactivity, { passive: true });
+  });
+
+  // Presence polling for wake-on-presence (D-19)
+  async function pollPresence() {
+    try {
+      var res = await apiFetchCompat(FAMILY_PRESENCE_URL);
+      if (!res || !res.ok) return;
+      var data = await res.json();
+      if (data && data.detected && screensaverOn) {
+        exitScreensaver();
+        resetInactivity();
+      }
+    } catch (err) { /* silent — presence is best-effort */ }
+  }
+
+  function startPresencePolling() {
+    if (presencePollTimer) return;
+    var interval = (lastStatus && lastStatus.config && lastStatus.config.presence && lastStatus.config.presence.pollIntervalMs) || 2000;
+    presencePollTimer = setInterval(pollPresence, interval);
+  }
+
+  // Bootstrap screensaver AFTER the deferred module script has set window.FamilyScreensaverLogic.
+  // DOMContentLoaded fires after module scripts execute — safe to initialise here.
+  function bootstrapScreensaver() {
+    resetInactivity();
+    startPresencePolling();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootstrapScreensaver);
+  } else {
+    bootstrapScreensaver();
+  }
 
   /* ===================== BOOTSTRAP ===================== */
   pollFamilyStatus();
