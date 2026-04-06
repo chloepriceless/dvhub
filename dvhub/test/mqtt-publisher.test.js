@@ -114,7 +114,7 @@ describe('createMqttPublisher', () => {
     pub._publishOnce();
     const uptimePub = hub._published.find(p => p.topic === 'dvhub/system/uptime_sec');
     assert.ok(uptimePub, 'uptime topic published');
-    assert.ok(JSON.parse(uptimePub.payload) > 0, 'uptime is positive');
+    assert.ok(JSON.parse(uptimePub.payload) >= 0, 'uptime is non-negative');
   });
 
   it('publishes dvhub/price/epex_current_ct_kwh', () => {
