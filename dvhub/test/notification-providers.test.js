@@ -78,9 +78,10 @@ describe('createTelegramProvider', () => {
     await p.notify({ level: 'info', title: 'Test_Special*Chars', body: 'Value [100]' });
 
     const body = JSON.parse(mock_.requests[0].body);
-    // Special chars should be escaped
-    assert.ok(!body.text.includes('_Special'), 'underscore should be escaped');
-    assert.ok(body.text.includes('\\*') || body.text.includes('\\_'), 'special chars escaped');
+    // Special chars should be escaped with backslash
+    assert.ok(body.text.includes('\\_'), 'underscore should be escaped with backslash');
+    assert.ok(body.text.includes('\\*'), 'asterisk should be escaped with backslash');
+    assert.ok(body.text.includes('\\['), 'bracket should be escaped in body');
   });
 
   it('returns { ok: false, error } on API failure', async () => {
