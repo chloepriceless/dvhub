@@ -57,6 +57,12 @@ import { createVpnManager } from './vpn-manager.js';
 import { createForecastService } from './services/forecast/index.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
+import { createMqttHub } from './services/mqtt/index.js';
+import { createMqttPublisher } from './services/mqtt/publisher.js';
+import { publishHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
+import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
+import { createDeviceService } from './services/devices/index.js';
+import { createNotificationService } from './services/notifications/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -608,6 +614,20 @@ ctx.optimizerService = optimizer;
 const familyService = createFamilyService(ctx);
 ctx.familyService = familyService;
 
+// Phase 04: Integrations (v0.8)
+// Created unconditionally so routes-api.js can access them via ctx.
+// Started conditionally in IS_RUNTIME_PROCESS block below.
+const mqttHub = createMqttHub(ctx);
+ctx.mqttHub = mqttHub;
+const mqttPublisher = createMqttPublisher(mqttHub, ctx);
+ctx.mqttPublisher = mqttPublisher;
+const teslamateService = createTeslamateSubscriber(mqttHub, ctx);
+ctx.teslamateService = teslamateService;
+const deviceService = createDeviceService(ctx, mqttHub);
+ctx.deviceService = deviceService;
+const notificationService = createNotificationService(ctx);
+ctx.notificationService = notificationService;
+
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
 ctx.needsSetup = () => loadedConfig.needsSetup;
@@ -806,6 +826,10 @@ const web = http.createServer(async (req, res) => {
     liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron });
     liveTelemetryBuffer?.flush();
     publishRuntimeSnapshot();
+    // Phase 04: Fire-and-forget notification evaluation on each poll cycle
+    notificationService.evaluate(state, Date.now()).catch(err =>
+      pushLog('notification_eval_error', { error: err.message })
+    );
   };
   energyChartsMarketValueService = createEnergyChartsMarketValueService({
     marketValueStore: telemetryStore
@@ -878,6 +902,14 @@ if (IS_WEB_PROCESS) {
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
   modbus.start();
+  // Phase 04: Start integration services (runtime-only — MQTT connections, device polling, notifications)
+  mqttHub.start().then(() => {
+    mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
+    teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
+    publishHaDiscoveryTopics(mqttHub, getCfg).catch(err => console.error('HA Discovery error:', err.message));
+  }).catch(err => console.error('MQTT Hub start error:', err.message));
+  deviceService.start().catch(err => console.error('Device service start error:', err.message));
+  notificationService.start().catch(err => console.error('Notification service start error:', err.message));
   if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
     vpnManager.start().catch(err => {
       pushLog('vpn_start_error', { error: err.message });
@@ -958,6 +990,12 @@ async function gracefulShutdown(signal) {
   await forecast.close();
   await optimizer.close();
   await familyService.close();
+  // Phase 04: Shutdown integration services (reverse init order, Hub last)
+  await notificationService.close().catch(() => {});
+  await deviceService.close().catch(() => {});
+  await teslamateService.close().catch(() => {});
+  await mqttPublisher.close().catch(() => {});
+  await mqttHub.close().catch(() => {});
   if (runtimeWorker) runtimeWorker.kill();
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
