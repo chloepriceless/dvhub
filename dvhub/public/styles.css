@@ -3961,3 +3961,66 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 .settings-group[open] .settings-group-chevron {
   transform: rotate(90deg);
 }
+
+/* ==========================================================================
+   Phase 04: Forecast & Optimizer Charts (INTG-01)
+   ========================================================================== */
+.chart-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+.overlay-toggle-label {
+  font-size: 0.65rem;
+  color: var(--flow-text-muted, #5a6a8a);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.savings-card .savings-value {
+  font-size: 1.8rem;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+}
+.savings-card .savings-value.positive { color: var(--ok, #3fb950); }
+.savings-card .savings-value.negative { color: var(--danger, #ff7b72); }
+.savings-breakdown .metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  padding: 2px 0;
+}
+.chart-skeleton {
+  background: rgba(80,100,160,0.1);
+  border-radius: 6px;
+  height: 200px;
+  animation: skeleton-pulse 2s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Integration badges (Phase 04) */
+.intg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(63,185,80,0.12);
+}
+.intg-badge:has(.dot-danger) {
+  background: rgba(255,123,114,0.12);
+}
+@media (max-width: 1080px) {
+  .chart-section-head { flex-wrap: wrap; }
+}
+@media (max-width: 768px) {
+  .intg-badge { display: none !important; }
+}
