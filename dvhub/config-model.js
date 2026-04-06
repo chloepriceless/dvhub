@@ -2132,6 +2132,29 @@ export function createDefaultConfig() {
         title: 'Unser Zuhause',
         backgroundImage: '/assets/family-scene.png'  // D-20 optional, CSS-Fallback auf Gradient
       }
+    },
+    // Phase 04 — Integration config sections (INTG-02, INTG-03)
+    mqtt: {
+      brokerUrl: '',                                 // External broker URL; empty = embedded fallback
+      embeddedBroker: { enabled: false, port: 1883 }, // T-04-02: host always 127.0.0.1 (hardcoded, not configurable)
+      publishIntervalMs: 5000,                       // D-03: state broadcast interval
+      topicPrefix: 'dvhub',                          // Prefix for all published topics
+      username: '',                                  // REDACTED via routes-api.js
+      password: '',                                  // REDACTED via routes-api.js
+      haDiscovery: { enabled: false, prefix: 'homeassistant' }  // D-20: HA Auto-Discovery
+    },
+    integrations: {
+      tesla: { enabled: false, teslamateCarId: 1, name: 'Tesla', snapshotIntervalSec: 300 }
+    },
+    devices: [],
+    notifications: {
+      enabled: false,
+      providers: {
+        telegram: { enabled: false, botToken: '', chatId: '' },
+        pushover: { enabled: false, appToken: '', userKey: '' }
+      },
+      triggers: [],
+      throttle: { minIntervalSec: 300, quietHoursStart: '22:00', quietHoursEnd: '07:00' }
     }
   };
 }

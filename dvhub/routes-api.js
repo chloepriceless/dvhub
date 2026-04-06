@@ -235,13 +235,18 @@ export function createApiRoutes(ctx) {
     '/api/vpn/config',
     '/api/vpn/history',
     '/dv/control-value',
+    '/api/devices',                // Phase 04 — device list (INTG-05)
+    '/api/integrations/status',    // Phase 04 — integration status overview
   ]);
 
   function isLanSafeRequest(req) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     // Only GET requests to allowlisted endpoints bypass auth from LAN
     if (req.method !== 'GET') return false;
-    return LAN_SAFE_ENDPOINTS.has(url.pathname);
+    if (LAN_SAFE_ENDPOINTS.has(url.pathname)) return true;
+    // Dynamic segments for device endpoints (INTG-05)
+    if (url.pathname.startsWith('/api/devices/')) return true;
+    return false;
   }
 
   // --- Rate Limiting (in-memory, per IP) ---
@@ -557,7 +562,7 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Config helpers ───────────────────────────────────────────────────
-  const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
+  const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'mqtt.username', 'mqtt.password', 'notifications.providers.telegram.botToken', 'notifications.providers.telegram.chatId', 'notifications.providers.pushover.appToken', 'notifications.providers.pushover.userKey'];
 
   function redactConfig(config) {
     const copy = JSON.parse(JSON.stringify(config));
