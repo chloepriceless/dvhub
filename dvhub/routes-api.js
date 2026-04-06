@@ -428,7 +428,9 @@ export function createApiRoutes(ctx) {
 
   function integrationState() {
     const cfg = getCfg();
-    return {
+
+    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
+    const base = {
       timestamp: Date.now(),
       dvControlValue: ctx.controlValue(),
       forcedOff: state.ctrl.forcedOff,
@@ -443,6 +445,45 @@ export function createApiRoutes(ctx) {
       costs: costSummary(),
       userEnergyPricing: userEnergyPricingSummary()
     };
+
+    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
+    const forecastResp = ctx.forecastService?.buildForecastResponse?.();
+    if (forecastResp) {
+      // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
+      const pvSlots = forecastResp.pv?.slots || [];
+      const pvDurationH = forecastResp.pv?.resolution === '15min' ? 0.25 : 1;
+      const pvTodayKwh = pvSlots.reduce((sum, s) => sum + ((s.powerW || 0) * pvDurationH) / 1000, 0);
+
+      const loadSlots = forecastResp.load?.slots || [];
+      const loadDurationH = forecastResp.load?.resolution === '1h' ? 1 : 0.25;
+      const loadTodayKwh = loadSlots.reduce((sum, s) => sum + ((s.powerW || 0) * loadDurationH) / 1000, 0);
+
+      base.dvhub_forecast = {
+        pvTodayKwh: Math.round(pvTodayKwh * 100) / 100,
+        loadTodayKwh: Math.round(loadTodayKwh * 100) / 100,
+        pvModel: forecastResp.meta?.pvModel || null,
+        generatedAt: forecastResp.meta?.generatedAt || null
+      };
+    }
+
+    const optStatus = ctx.optimizerService?.getStatus?.();
+    if (optStatus) {
+      // Uses ACTUAL field names: source (NOT primarySource), rulesCount (NOT schedule.rules.length)
+      base.dvhub_optimizer = {
+        enabled: optStatus.enabled ?? false,
+        source: optStatus.source || null,
+        lastRunAt: optStatus.lastRunAt || null,
+        rulesCount: optStatus.rulesCount ?? 0,
+        error: optStatus.error || null
+      };
+    }
+
+    const teslaState = ctx.teslamateService?.getState?.();
+    if (teslaState && Object.values(teslaState).some(v => v != null)) {
+      base.dvhub_tesla = teslaState;
+    }
+
+    return base;
   }
 
   // -- EOS (Akkudoktor) Integration --
@@ -761,6 +802,77 @@ export function createApiRoutes(ctx) {
     // Served via servePage so the filename 'family.html' stays inside publicDir.
     if (url.pathname === '/family' && req.method === 'GET') {
       return servePage(res, 'family.html');
+    }
+
+    // --- Device API (D-15, INTG-05) ---
+    // GET /api/devices — device list
+    if (url.pathname === '/api/devices' && req.method === 'GET') {
+      const devices = ctx.deviceService?.getDevices() || [];
+      return json(res, 200, devices);
+    }
+
+    // GET /api/devices/:id — single device with history from PostgreSQL
+    if (url.pathname.startsWith('/api/devices/') && req.method === 'GET') {
+      const deviceId = decodeURIComponent(url.pathname.split('/api/devices/')[1]);
+      if (!deviceId) return json(res, 400, { error: 'Missing device ID' });
+      const devices = ctx.deviceService?.getDevices() || [];
+      const device = devices.find(d => d.id === deviceId);
+      if (!device) return json(res, 404, { error: 'Device not found' });
+      let history = [];
+      if (ctx.db) {
+        try {
+          const result = await ctx.db.query(
+            'SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT 288',
+            [deviceId]
+          );
+          history = result.rows;
+        } catch (err) {
+          pushLog('device_history_error', { device: deviceId, error: err.message });
+        }
+      }
+      return json(res, 200, { ...device, history });
+    }
+
+    // GET /api/integrations/status — integration status overview (D-08)
+    if (url.pathname === '/api/integrations/status' && req.method === 'GET') {
+      const mqttCfg = getCfg().mqtt || {};
+      const payload = {
+        timestamp: Date.now(),
+        mqtt: {
+          connected: ctx.mqttHub?.connected ?? false,
+          broker: mqttCfg.brokerUrl || 'embedded',
+          embedded: !mqttCfg.brokerUrl,
+          topicCount: ctx.mqttPublisher?.topicCount ?? 0
+        },
+        tesla: {
+          enabled: getCfg().integrations?.tesla?.enabled ?? false,
+          state: ctx.teslamateService?.getState() || null,
+          lastUpdate: ctx.teslamateService?.lastUpdateAt || null
+        },
+        homeAssistant: {
+          haDiscovery: mqttCfg.haDiscovery?.enabled ?? false,
+          topicsPublished: ctx.mqttPublisher?.topicCount ?? 0
+        },
+        loxone: {
+          configured: !!getCfg().loxone
+        },
+        devices: {
+          total: ctx.deviceService?.getDevices()?.length ?? 0,
+          online: ctx.deviceService?.getDevices()?.filter(d => d.online)?.length ?? 0,
+          list: ctx.deviceService?.getDevices() || []
+        },
+        notifications: {
+          enabled: getCfg().notifications?.enabled ?? false,
+          providers: Object.entries(getCfg().notifications?.providers || {})
+            .filter(([, v]) => v.enabled).map(([k]) => k)
+        }
+      };
+      return json(res, 200, payload);
+    }
+
+    // Integrations page HTML route
+    if (url.pathname === '/integrations' && req.method === 'GET') {
+      return servePage(res, 'integrations.html');
     }
 
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen

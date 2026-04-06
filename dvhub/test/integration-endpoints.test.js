@@ -240,9 +240,10 @@ test('dvhub_optimizer uses "source" field not "primarySource"', async () => {
   const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
   const fnBody = fnMatch[0];
 
-  // Must use optStatus.source, NOT optStatus.primarySource
+  // Must use optStatus.source, NOT optStatus.primarySource as a property access
   assert.ok(fnBody.includes('.source'), 'optimizer data must use .source field');
-  assert.ok(!fnBody.includes('primarySource'), 'optimizer data must NOT use primarySource');
+  // Allow "primarySource" in comments, but not as a property access (e.g., .primarySource)
+  assert.ok(!fnBody.includes('.primarySource'), 'optimizer data must NOT use .primarySource property');
 });
 
 // ===== New endpoint tests =====
