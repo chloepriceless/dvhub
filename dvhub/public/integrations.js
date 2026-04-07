@@ -15,9 +15,15 @@
 
   var lastData = null;
 
+  function apiFetch(path, opts) {
+    var common = window.DVhubCommon;
+    if (common && typeof common.apiFetch === 'function') return common.apiFetch(path, opts);
+    return fetch(path, opts);
+  }
+
   async function fetchStatus() {
     try {
-      var res = await window.apiFetch('/api/integrations/status');
+      var res = await apiFetch('/api/integrations/status');
       if (!res.ok) throw new Error('Fetch failed');
       lastData = await res.json();
       renderAll(lastData);
@@ -73,7 +79,8 @@
       case 'tesla':
         if (!data.enabled) return 'disabled';
         if (!data.lastUpdate) return 'offline';
-        return (Date.now() - data.lastUpdate > STALE_THRESHOLD_MS) ? 'stale' : 'online';
+        var lastMs = typeof data.lastUpdate === 'string' ? new Date(data.lastUpdate).getTime() : (data.lastUpdate || 0);
+        return (Date.now() - lastMs > STALE_THRESHOLD_MS) ? 'stale' : 'online';
       case 'homeAssistant': return data.haDiscovery ? 'online' : 'disabled';
       case 'loxone': return data.configured ? 'online' : 'disabled';
       case 'devices': return data.total > 0 ? 'online' : 'disabled';

@@ -55,11 +55,16 @@
   let refreshTimer = null;
 
   // ---------------------------------------------------------------------------
-  // Data fetching helpers — use window.apiFetch from common.js
+  // Data fetching helpers
   // ---------------------------------------------------------------------------
+  function apiFetch(path, opts) {
+    var common = window.DVhubCommon;
+    if (common && typeof common.apiFetch === 'function') return common.apiFetch(path, opts);
+    return fetch(path, opts);
+  }
   async function fetchForecastData() {
     try {
-      const res = await window.apiFetch('/api/forecast');
+      const res = await apiFetch('/api/forecast');
       if (!res.ok) return null;
       const data = await res.json();
       return data.ok ? data : null;
@@ -70,7 +75,7 @@
 
   async function fetchOptimizerData() {
     try {
-      const res = await window.apiFetch('/api/optimizer/status');
+      const res = await apiFetch('/api/optimizer/status');
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -80,7 +85,7 @@
 
   async function fetchCostData() {
     try {
-      const res = await window.apiFetch('/api/costs');
+      const res = await apiFetch('/api/costs');
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -356,7 +361,7 @@
 
   async function updateBadges() {
     try {
-      var res = await window.apiFetch('/api/integrations/status');
+      var res = await apiFetch('/api/integrations/status');
       if (!res.ok) return;
       var data = await res.json();
       setBadgeState('badge-mqtt', data.mqtt?.connected);
