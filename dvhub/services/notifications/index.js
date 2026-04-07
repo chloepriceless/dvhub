@@ -173,7 +173,7 @@ export function createNotificationService(ctx) {
   /** @type {object|null} previous state snapshot for change detection */
   let prevState = null;
 
-  function start() {
+  async function start() {
     const cfg = getCfg();
     const nCfg = cfg.notifications;
     if (!nCfg?.enabled) return;

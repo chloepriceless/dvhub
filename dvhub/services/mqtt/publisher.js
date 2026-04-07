@@ -90,7 +90,7 @@ export function createMqttPublisher(hub, ctx) {
     lastTopicCount = topics.length;
   }
 
-  function start() {
+  async function start() {
     const interval = getIntervalMs();
     pushLog(`[MQTT Publisher] Starting with ${interval}ms interval`);
     // Publish immediately on start, then on interval
