@@ -4025,6 +4025,14 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   .intg-badge { display: none !important; }
 }
 
+/* Forecast & Optimizer section — outside main-body grid to avoid chart-area overlap */
+.forecast-optimizer-section {
+  padding: 0 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* Integrations page (Phase 04-07) */
 .intg-page {
   max-width: 800px;

@@ -335,38 +335,38 @@
         </div>
       </div>
 
-      <!-- Forecast & Optimizer Section (Phase 04, INTG-01) -->
-      <div class="chart-span">
-        <div class="chart-section-head">
-          <h3 class="section-title">Forecast &amp; Optimizer</h3>
-          <label class="overlay-toggle-label">
-            <input type="checkbox" id="overlay-toggle"> Overlay: PV / Last
-          </label>
-        </div>
+    </div><!-- /.main-body -->
 
-        <div class="chart-span-card" id="pv-forecast-card">
-          <span class="card-kicker">PV-PROGNOSE VS. IST</span>
-          <div class="chart-skeleton" id="pv-forecast-skeleton"></div>
-          <canvas id="pv-forecast-chart" role="img" aria-label="PV-Prognose vs. Ist" style="display:none"></canvas>
-        </div>
+    <!-- Forecast & Optimizer Section (Phase 04, INTG-01) — OUTSIDE grid to avoid chart-area overlap -->
+    <div class="forecast-optimizer-section">
+      <div class="chart-section-head">
+        <h3 class="section-title">Forecast &amp; Optimizer</h3>
+        <label class="overlay-toggle-label">
+          <input type="checkbox" id="overlay-toggle"> Overlay: PV / Last
+        </label>
+      </div>
 
-        <div class="chart-sub-row">
-          <div class="chart-span-card" id="gantt-card">
-            <span class="card-kicker">OPTIMIZER-SCHEDULE</span>
-            <div class="chart-skeleton" id="gantt-skeleton"></div>
-            <canvas id="gantt-chart" role="img" aria-label="Optimizer-Schedule Timeline" style="display:none"></canvas>
-          </div>
-          <div class="savings-card chart-span-card" id="savings-card">
-            <span class="card-kicker">ERSPARNIS HEUTE</span>
-            <div class="savings-value card-value" id="savings-total">--</div>
-            <div class="savings-breakdown" id="savings-breakdown">
-              <!-- metric-rows populated by leitstand-charts.js -->
-            </div>
+      <div class="chart-span-card" id="pv-forecast-card">
+        <span class="card-kicker">PV-PROGNOSE VS. IST</span>
+        <div class="chart-skeleton" id="pv-forecast-skeleton"></div>
+        <canvas id="pv-forecast-chart" role="img" aria-label="PV-Prognose vs. Ist" style="display:none"></canvas>
+      </div>
+
+      <div class="chart-sub-row">
+        <div class="chart-span-card" id="gantt-card">
+          <span class="card-kicker">OPTIMIZER-SCHEDULE</span>
+          <div class="chart-skeleton" id="gantt-skeleton"></div>
+          <canvas id="gantt-chart" role="img" aria-label="Optimizer-Schedule Timeline" style="display:none"></canvas>
+        </div>
+        <div class="savings-card chart-span-card" id="savings-card">
+          <span class="card-kicker">ERSPARNIS HEUTE</span>
+          <div class="savings-value card-value" id="savings-total">--</div>
+          <div class="savings-breakdown" id="savings-breakdown">
+            <!-- metric-rows populated by leitstand-charts.js -->
           </div>
         </div>
       </div>
-
-    </div><!-- /.main-body -->
+    </div>
 
     <!-- Bottom: Log only -->
     <div class="bottom-panel">
