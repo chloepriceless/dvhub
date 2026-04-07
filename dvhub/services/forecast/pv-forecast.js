@@ -274,13 +274,50 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         confidence: 0.6
       };
       ctx.bumpForecastVersion?.();
+    } else if (pvnodeResult.length > 0) {
+      state.forecast.pv = {
+        lastFetchAt: new Date().toISOString(),
+        model: 'pvnode',
+        data: pvnodeResult,
+        confidence: 0.5
+      };
+      ctx.bumpForecastVersion?.();
+    } else if (forecastSolarResult.length > 0) {
+      state.forecast.pv = {
+        lastFetchAt: new Date().toISOString(),
+        model: 'forecast_solar',
+        data: forecastSolarResult,
+        confidence: 0.35
+      };
+      ctx.bumpForecastVersion?.();
+    } else if (openMeteoResult.length > 0) {
+      state.forecast.pv = {
+        lastFetchAt: new Date().toISOString(),
+        model: 'open_meteo',
+        data: openMeteoResult,
+        confidence: 0.3
+      };
+      ctx.bumpForecastVersion?.();
+    } else if (vrmResult.length > 0) {
+      // VRM as last fallback — always available if VRM token configured
+      state.forecast.pv = {
+        lastFetchAt: new Date().toISOString(),
+        model: 'vrm',
+        data: vrmResult,
+        confidence: 0.25
+      };
+      ctx.bumpForecastVersion?.();
     }
 
     pushLog('pv_forecast_complete', {
       model,
       tier,
       solcastCount: solcastResult.length,
-      pvlibCount: pvlibResult.length
+      pvlibCount: pvlibResult.length,
+      forecastSolarCount: forecastSolarResult.length,
+      openMeteoCount: openMeteoResult.length,
+      pvnodeCount: pvnodeResult.length,
+      vrmCount: vrmResult.length
     });
   }
 

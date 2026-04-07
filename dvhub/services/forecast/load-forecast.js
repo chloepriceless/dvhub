@@ -89,7 +89,7 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
  * @param {{ store: object }} options - forecast store with insertLoadForecast
  * @returns {{ start: Function, close: Function, runForecast: Function }}
  */
-export function createLoadForecast(ctx, { store }) {
+export function createLoadForecast(ctx, { store, vrmForecast }) {
   const { state, getCfg, pushLog, db } = ctx;
   let intervalHandle = null;
 
@@ -134,6 +134,23 @@ export function createLoadForecast(ctx, { store }) {
       });
     } catch (err) {
       pushLog('load_forecast_error', { error: err.message });
+    }
+
+    // VRM consumption fallback — if SQL produced no slots, use VRM data
+    if ((!state.forecast.load.data || state.forecast.load.data.length === 0) && vrmForecast?.isAvailable()) {
+      try {
+        const vrmLoad = await vrmForecast.readLoadForecast();
+        if (vrmLoad && vrmLoad.length > 0) {
+          const slots = vrmLoad.map(r => ({ ts_utc: r.ts_utc, power_w: r.power_w, confidence: 0.25 }));
+          state.forecast.load.data = slots;
+          state.forecast.load.lastFetchAt = new Date().toISOString();
+          state.forecast.load.confidence = 0.25;
+          ctx.bumpForecastVersion?.();
+          pushLog('load_forecast_vrm_fallback', { slots: slots.length });
+        }
+      } catch (err) {
+        pushLog('load_forecast_vrm_error', { error: err.message });
+      }
     }
   }
 

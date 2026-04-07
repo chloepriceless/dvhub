@@ -62,7 +62,7 @@ export function createForecastService(ctx) {
   const pvnodeClient = createPvnodeClient(ctx, { store });
   const pythonBridge = tier >= 2 ? createPythonBridge(ctx, { tier }) : null;
   const pvForecast = createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
-  const loadForecast = createLoadForecast(ctx, { store });
+  const loadForecast = createLoadForecast(ctx, { store, vrmForecast });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
 
   /**
