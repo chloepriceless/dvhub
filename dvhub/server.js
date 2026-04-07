@@ -301,6 +301,8 @@ function persistConfig() {
 // Init order = dependency order: utils (pure imports), pricing (pure imports),
 // then epex -> poller -> scheduler -> modbus-server -> routes.
 
+let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
+
 async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
@@ -316,7 +318,7 @@ async function createTelemetryStoreIfEnabled() {
     state.telemetry.dbPath = `postgresql://${dbConfig.host || 'localhost'}:${dbConfig.port || 5432}/${dbConfig.name || 'dvhub'}`;
     state.telemetry.ok = true;
     state.telemetry.lastError = null;
-    store._pool = pool; // expose raw pool for ctx.db (forecast services need raw SQL)
+    dbPool = pool; // save reference for ctx.db
     return store;
   } catch (error) {
     state.telemetry.enabled = true;
@@ -590,7 +592,7 @@ const ctx = {
   setForcedOff,
   clearForcedOff,
   expireLeaseIfNeeded,
-  get db() { return this._db || null; }, // lazy getter — set after telemetry store init
+  get db() { return dbPool; }, // lazy getter — dbPool set during createTelemetryStoreIfEnabled()
 };
 
 const modbus = createModbusServer(ctx);
@@ -822,7 +824,7 @@ const web = http.createServer(async (req, res) => {
 (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
-  ctx._db = telemetryStore?._pool || null; // raw pg pool — accessed via ctx.db getter
+  // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
@@ -958,7 +960,7 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   epex.start();
-  forecast.start({ db: telemetryStore?._pool || null }).catch(err => console.error('Forecast service start error:', err.message));
+  forecast.start().catch(err => console.error('Forecast service start error:', err.message));
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
