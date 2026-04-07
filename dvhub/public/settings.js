@@ -1667,6 +1667,9 @@ function countChangedFields() {
 }
 
 function parseFieldInput(field) {
+  // JSON fields (e.g. forecast.pv.strings) are managed by custom handlers, not form inputs
+  if (field.type === 'json') return undefined;
+
   const input = document.getElementById(fieldId(field.path));
   if (!input) return undefined;
 
