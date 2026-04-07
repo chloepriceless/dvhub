@@ -91,8 +91,7 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
  */
 export function createLoadForecast(ctx, { store, vrmForecast }) {
   const { state, getCfg, pushLog } = ctx;
-  // db accessed lazily via ctx.db — not destructured at create time because
-  // ctx.db is set after createTelemetryStoreIfEnabled() which runs AFTER factory creation
+  // ctx.db is a getter — always reads the current value (set after telemetry store init)
   const getDb = () => ctx.db;
   let intervalHandle = null;
 

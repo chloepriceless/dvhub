@@ -589,7 +589,8 @@ const ctx = {
   persistConfig,
   setForcedOff,
   clearForcedOff,
-  expireLeaseIfNeeded
+  expireLeaseIfNeeded,
+  get db() { return this._db || null; }, // lazy getter — set after telemetry store init
 };
 
 const modbus = createModbusServer(ctx);
@@ -821,7 +822,7 @@ const web = http.createServer(async (req, res) => {
 (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
-  ctx.db = telemetryStore?._pool || null; // raw pg pool for forecast services (vrm-forecast, load-forecast)
+  ctx._db = telemetryStore?._pool || null; // raw pg pool — accessed via ctx.db getter
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
