@@ -1689,6 +1689,7 @@ function parseFieldInput(field) {
 
 function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
+  syncForecastStringsToDraft(); // MUST run after syncRenderedFieldsToDraft to override string-coerced value
   const next = clone(currentDraftConfig || {});
   next.userEnergyPricing = next.userEnergyPricing || {};
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
