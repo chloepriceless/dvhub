@@ -316,6 +316,7 @@ async function createTelemetryStoreIfEnabled() {
     state.telemetry.dbPath = `postgresql://${dbConfig.host || 'localhost'}:${dbConfig.port || 5432}/${dbConfig.name || 'dvhub'}`;
     state.telemetry.ok = true;
     state.telemetry.lastError = null;
+    store._pool = pool; // expose raw pool for ctx.db (forecast services need raw SQL)
     return store;
   } catch (error) {
     state.telemetry.enabled = true;
@@ -820,6 +821,7 @@ const web = http.createServer(async (req, res) => {
 (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
+  ctx.db = telemetryStore?._pool || null; // raw pg pool for forecast services (vrm-forecast, load-forecast)
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
