@@ -71,7 +71,6 @@ export function createForecastService(ctx) {
   async function start(opts) {
     // db passed explicitly from server.js — telemetry pool is ready by the time start() is called
     const db = opts?.db || null;
-    pushLog('forecast_start_debug', { hasOpts: !!opts, hasDb: !!db, dbType: typeof db, dbQueryType: typeof db?.query });
     if (db) {
       ctx._db = db; // make available to subsystems via ctx
       await store.ensureSchema(db);

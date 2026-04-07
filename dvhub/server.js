@@ -909,7 +909,7 @@ if (IS_RUNTIME_PROCESS) {
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
     teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
-    publishHaDiscoveryTopics(mqttHub, getCfg).catch(err => console.error('HA Discovery error:', err.message));
+    publishHaDiscoveryTopics(mqttHub, ctx.getCfg).catch(err => console.error('HA Discovery error:', err.message));
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));
@@ -958,7 +958,6 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   epex.start();
-  console.log('[DEBUG-SRV] telemetryStore:', !!telemetryStore, '_pool:', !!telemetryStore?._pool, 'keys:', telemetryStore ? Object.keys(telemetryStore).filter(k => k.startsWith('_')).join(',') : 'null');
   forecast.start({ db: telemetryStore?._pool || null }).catch(err => console.error('Forecast service start error:', err.message));
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
