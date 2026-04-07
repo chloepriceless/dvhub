@@ -2135,6 +2135,7 @@ export function createDefaultConfig() {
     },
     // Phase 04 — Integration config sections (INTG-02, INTG-03)
     mqtt: {
+      enabled: false,                                // Master switch — set true in settings to activate MQTT Hub
       brokerUrl: '',                                 // External broker URL; empty = embedded fallback
       embeddedBroker: { enabled: false, port: 1883 }, // T-04-02: host always 127.0.0.1 (hardcoded, not configurable)
       publishIntervalMs: 5000,                       // D-03: state broadcast interval

@@ -82,6 +82,7 @@ export function createMqttHub(ctx) {
 
   async function start() {
     const mqttCfg = getMqttConfig();
+    if (!mqttCfg.enabled) return; // Master switch off — skip MQTT entirely
 
     // Step 1: Start embedded broker if needed
     if (shouldUseEmbeddedBroker()) {
