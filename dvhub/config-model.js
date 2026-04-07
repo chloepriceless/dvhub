@@ -2652,6 +2652,7 @@ function sanitizeRawConfig(rawInput) {
     }
 
     if (field.type === 'array') continue;
+    if (field.type === 'json') continue; // json fields (e.g. forecast.pv.strings) are preserved as-is
 
     setPath(raw, field.path, currentValue == null ? '' : String(currentValue));
   }
