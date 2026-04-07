@@ -121,7 +121,10 @@
       return;
     }
 
-    const labels = pvSlots.map(function (s) { return new Date(s.start); });
+    const labels = pvSlots.map(function (s) {
+      var d = new Date(s.start);
+      return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+    });
     const forecastKw = pvSlots.map(function (s) { return s.powerW / 1000; });
 
     const datasets = [
@@ -157,8 +160,7 @@
       data: { labels: labels, datasets: datasets },
       options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
     };
-    config.options.scales.x.type = 'time';
-    config.options.scales.x.time = { unit: 'hour', displayFormats: { hour: 'HH:mm' } };
+    config.options.scales.x.ticks = { maxTicksLimit: 12, maxRotation: 45, font: { size: 10 } };
     config.options.scales.y.title = { display: true, text: 'kW', color: '#5a6a8a', font: { size: 10 } };
     config.options.scales.y.beginAtZero = true;
     config.options.plugins.tooltip.callbacks = {
@@ -246,11 +248,21 @@
     };
 
     config.options.indexAxis = 'y';
+    // Use linear scale with ms timestamps (no date adapter needed)
+    var allMs = barData.flatMap(function (b) { return b.x; });
+    var minMs = Math.min.apply(null, allMs) || Date.now();
+    var maxMs = Math.max.apply(null, allMs) || (Date.now() + 86400000);
     config.options.scales.x = {
-      type: 'time',
-      time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } },
+      type: 'linear',
+      min: minMs,
+      max: maxMs,
       grid: { color: 'rgba(90, 106, 138, 0.15)' },
-      ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 } }
+      ticks: {
+        color: '#5a6a8a',
+        font: { family: 'JetBrains Mono', size: 9 },
+        callback: function (val) { return new Date(val).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); },
+        maxTicksLimit: 12
+      }
     };
     config.options.scales.y = {
       type: 'category',
