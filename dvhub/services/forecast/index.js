@@ -68,9 +68,11 @@ export function createForecastService(ctx) {
   /**
    * Start the forecast service: ensure DB schema, start all subsystems.
    */
-  async function start() {
-    if (ctx.db) {
-      await store.ensureSchema(ctx.db);
+  async function start({ db } = {}) {
+    // db passed explicitly from server.js — telemetry pool is ready by the time start() is called
+    if (db) {
+      ctx._db = db; // make available to subsystems via ctx
+      await store.ensureSchema(db);
       pushLog('forecast_schema_ready', { tier });
     }
     await weatherFetch.start();
