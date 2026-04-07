@@ -176,7 +176,15 @@ export function createForecastService(ctx) {
    */
   function buildForecastResponse() {
     const cfg = getCfg();
+    const pv = buildPvSection();
+    const load = buildLoadSection();
+
+    // Legacy compat for app.js drawPriceChart: expects forecast.solar[{ts,w}] and forecast.consumption[{ts,w}]
+    const solar = pv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+    const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+
     return {
+      ok: true,
       meta: {
         generatedAt: new Date().toISOString(),
         horizon: '72h',
@@ -185,8 +193,11 @@ export function createForecastService(ctx) {
         loadModel: cfg.forecast?.load?.model || 'sql_weekday'
       },
       price: buildPriceSection(),
-      pv: buildPvSection(),
-      load: buildLoadSection()
+      pv,
+      load,
+      // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
+      solar,
+      consumption
     };
   }
 
