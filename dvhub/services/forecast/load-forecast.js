@@ -138,8 +138,10 @@ export function createLoadForecast(ctx, { store, vrmForecast }) {
       pushLog('load_forecast_error', { error: err.message });
     }
 
-    // VRM consumption fallback — if SQL produced no slots, use VRM data
-    if ((!state.forecast.load.data || state.forecast.load.data.length === 0) && vrmForecast?.isAvailable()) {
+    // VRM consumption fallback — if SQL produced no meaningful data (all zeros = cold start), use VRM
+    const loadData = state.forecast.load.data || [];
+    const hasRealData = loadData.some(s => (s.power_w || s.powerW || 0) > 0);
+    if (!hasRealData && vrmForecast?.isAvailable()) {
       try {
         const vrmLoad = await vrmForecast.readLoadForecast();
         if (vrmLoad && vrmLoad.length > 0) {

@@ -4032,6 +4032,13 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   flex-direction: column;
   gap: 8px;
 }
+.forecast-optimizer-section .chart-span-card canvas {
+  width: 100% !important;
+  height: 200px !important;
+}
+.forecast-optimizer-section .chart-skeleton {
+  height: 200px;
+}
 
 /* Integrations page (Phase 04-07) */
 .intg-page {
