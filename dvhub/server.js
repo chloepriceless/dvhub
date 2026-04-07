@@ -958,6 +958,7 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   epex.start();
+  console.log('[DEBUG-SRV] telemetryStore:', !!telemetryStore, '_pool:', !!telemetryStore?._pool, 'keys:', telemetryStore ? Object.keys(telemetryStore).filter(k => k.startsWith('_')).join(',') : 'null');
   forecast.start({ db: telemetryStore?._pool || null }).catch(err => console.error('Forecast service start error:', err.message));
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
