@@ -1632,6 +1632,7 @@ function syncRenderedFieldsToDraft() {
     const input = document.getElementById(fieldId(field.path));
     if (!input) continue;
     const parsed = parseFieldInput(field);
+    if (parsed === undefined) continue; // json-type fields return undefined — skip
     if (parsed && parsed.action === 'delete') deletePath(next, field.path);
     else setPath(next, field.path, parsed);
   }
