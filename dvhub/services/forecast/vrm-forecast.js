@@ -10,18 +10,19 @@
  * @param {object} ctx - DI context { state, getCfg, pushLog, db }
  */
 export function createVrmForecast(ctx) {
-  const { state, pushLog, db } = ctx;
+  const { state, pushLog } = ctx;
+  const getDb = () => ctx.db; // lazy — ctx.db set after telemetry store init
 
   /**
    * Read PV forecast from VRM data already in vrm_forecasts table.
    * Returns array of { ts_utc, power_w } for solar_yield forecast.
    */
   async function readPvForecast() {
-    if (!db) return null;
+    if (!getDb()) return null;
 
     try {
       const now = new Date().toISOString();
-      const result = await db.query(`
+      const result = await getDb().query(`
         SELECT ts_utc, value_w
         FROM vrm_forecasts
         WHERE forecast_type = 'solar_yield'
@@ -55,11 +56,11 @@ export function createVrmForecast(ctx) {
    * Returns array of { ts_utc, power_w } for consumption forecast.
    */
   async function readLoadForecast() {
-    if (!db) return null;
+    if (!getDb()) return null;
 
     try {
       const now = new Date().toISOString();
-      const result = await db.query(`
+      const result = await getDb().query(`
         SELECT ts_utc, value_w
         FROM vrm_forecasts
         WHERE forecast_type = 'consumption'

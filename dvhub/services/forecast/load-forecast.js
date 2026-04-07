@@ -90,7 +90,10 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
  * @returns {{ start: Function, close: Function, runForecast: Function }}
  */
 export function createLoadForecast(ctx, { store, vrmForecast }) {
-  const { state, getCfg, pushLog, db } = ctx;
+  const { state, getCfg, pushLog } = ctx;
+  // db accessed lazily via ctx.db — not destructured at create time because
+  // ctx.db is set after createTelemetryStoreIfEnabled() which runs AFTER factory creation
+  const getDb = () => ctx.db;
   let intervalHandle = null;
 
   /**
@@ -102,7 +105,7 @@ export function createLoadForecast(ctx, { store, vrmForecast }) {
 
     try {
       const sql = buildLoadForecastQuery();
-      const result = await db.query(sql, [new Date().toISOString()]);
+      const result = await getDb().query(sql, [new Date().toISOString()]);
       const sqlRows = result.rows;
 
       const now = new Date();
@@ -159,7 +162,7 @@ export function createLoadForecast(ctx, { store, vrmForecast }) {
    * Runs forecast immediately, then every 6 hours via setInterval.
    */
   async function start() {
-    if (!db) {
+    if (!getDb()) {
       pushLog('load_forecast_skip', { reason: 'no_db' });
       return;
     }
