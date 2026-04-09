@@ -91,6 +91,18 @@ const SECTIONS = [
     label: 'EPEX',
     description: 'Börsenpreis-Abruf für Day-Ahead-Preise.',
     destination: 'services'
+  },
+  {
+    id: 'ml',
+    label: 'ML & Forecast-Korrektur',
+    description: 'ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+    destination: 'services'
+  },
+  {
+    id: 'llm',
+    label: 'LLM & Nachrichten',
+    description: 'TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+    destination: 'services'
   }
 ];
 
@@ -1420,6 +1432,201 @@ function buildFieldDefinitions() {
         { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
+    },
+
+    // --- ML & Forecast-Korrektur ---
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlEnabled',
+      label: 'ML-Korrektur aktiviert',
+      type: 'boolean',
+      help: 'Aktiviert die ML-basierte PV-Forecast-Korrektur (Tier 2+).'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlModelDir',
+      label: 'Modell-Verzeichnis',
+      type: 'text',
+      help: 'Pfad fuer trainierte ML-Modelle.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlTrainingHour',
+      label: 'Training-Stunde (UTC)',
+      type: 'number',
+      min: 0,
+      max: 23,
+      help: 'Stunde fuer taegliches Re-Training (UTC).'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlTrainingMinute',
+      label: 'Training-Minute',
+      type: 'number',
+      min: 0,
+      max: 59,
+      help: 'Minute fuer taegliches Re-Training.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlRollbackThreshold',
+      label: 'Rollback-Schwelle (%)',
+      type: 'number',
+      min: 1,
+      max: 100,
+      help: 'Neues Modell wird verworfen wenn MAE um diesen Prozentsatz steigt.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlMinDataDays',
+      label: 'Min. Datentage (Linear)',
+      type: 'number',
+      min: 7,
+      max: 365,
+      help: 'Mindestanzahl Tage fuer Linear-Regression-Training.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlLgbmDataDays',
+      label: 'Min. Datentage (LightGBM)',
+      type: 'number',
+      min: 30,
+      max: 365,
+      help: 'Mindestanzahl Tage fuer LightGBM-Training.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.mlSlidingWindowMonths',
+      label: 'Datenfenster (Monate)',
+      type: 'number',
+      min: 3,
+      max: 24,
+      help: 'Sliding Window fuer Trainingsdaten.'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.sfEnabled',
+      label: 'StatsForecast aktiviert',
+      type: 'boolean',
+      help: 'StatsForecast Lastvorhersage statt SQL-Rollups (Tier 2+).'
+    },
+    {
+      section: 'ml',
+      group: 'mlCorrection',
+      groupLabel: 'ML & Forecast-Korrektur',
+      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
+      path: 'ml.sfUseMstl',
+      label: 'MSTL aktiviert',
+      type: 'boolean',
+      help: 'MSTL Multi-Saisonalitaet (Tier 3). Tier 2 nutzt einfaches AutoARIMA.'
+    },
+
+    // --- LLM & Nachrichten ---
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmEnabled',
+      label: 'LLM aktiviert',
+      type: 'boolean',
+      help: 'Aktiviert TinyLlama Nachrichtengenerierung (Tier 3 only).'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmOllamaUrl',
+      label: 'Ollama URL',
+      type: 'text',
+      help: 'URL des lokalen Ollama REST API.'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmModel',
+      label: 'LLM Modell',
+      type: 'text',
+      help: 'Ollama Modellname.'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmMaxMessagesPerDay',
+      label: 'Max. Nachrichten/Tag',
+      type: 'number',
+      min: 5,
+      max: 50,
+      help: 'Maximale Anzahl LLM-generierter Nachrichten pro Tag.'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmStatusIntervalMin',
+      label: 'Status-Intervall (min)',
+      type: 'number',
+      min: 15,
+      max: 180,
+      help: 'Intervall fuer stuendliche Status-Nachrichten in Minuten.'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmTemperature',
+      label: 'Temperatur',
+      type: 'number',
+      min: 0,
+      max: 1.5,
+      step: 0.1,
+      help: 'LLM Sampling-Temperatur (0.0=deterministisch, 1.0=kreativ).'
+    },
+    {
+      section: 'llm',
+      group: 'llmMessages',
+      groupLabel: 'LLM & Nachrichten',
+      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
+      path: 'llm.llmMaxTokens',
+      label: 'Max. Tokens',
+      type: 'number',
+      min: 50,
+      max: 500,
+      help: 'Maximale Antwortlaenge in Tokens.'
     }
   ];
 
@@ -1579,6 +1786,27 @@ export function createDefaultConfig() {
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
       priceApiUrl: 'https://api.dvhub.de'
+    },
+    ml: {
+      mlEnabled: true,
+      mlModelDir: '/opt/dvhub/ml-models',
+      mlTrainingHour: 21,
+      mlTrainingMinute: 30,
+      mlRollbackThreshold: 10,
+      mlMinDataDays: 30,
+      mlLgbmDataDays: 90,
+      mlSlidingWindowMonths: 12,
+      sfEnabled: true,
+      sfUseMstl: true
+    },
+    llm: {
+      llmEnabled: true,
+      llmOllamaUrl: 'http://127.0.0.1:11434',
+      llmModel: 'tinyllama',
+      llmMaxMessagesPerDay: 20,
+      llmStatusIntervalMin: 60,
+      llmTemperature: 0.7,
+      llmMaxTokens: 200
     }
   };
 }
