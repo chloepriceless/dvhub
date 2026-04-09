@@ -386,23 +386,252 @@
   }
 
   // ---------------------------------------------------------------------------
+  // 6. Forecast Comparison Chart (D-21, D-22, D-23) — 6 overlaid forecast lines
+  // ---------------------------------------------------------------------------
+  var forecastCompChart = null;
+
+  var COMPARISON_DATASETS = [
+    { key: 'actual',  label: 'Ist-Werte',      color: '#e8eaf0', dash: [],     width: 2   },
+    { key: 'ml',      label: 'ML-korrigiert',   color: '#A78BFA', dash: [],     width: 2.5 },
+    { key: 'pvlib',   label: 'pvlib',           color: '#e3b341', dash: [6, 3], width: 1.5 },
+    { key: 'solcast', label: 'Solcast',         color: '#58a6ff', dash: [6, 3], width: 1.5 },
+    { key: 'vrm',     label: 'VRM',             color: '#bc8cff', dash: [4, 4], width: 1.5 },
+    { key: 'merged',  label: 'Merged pre-ML',   color: '#22D3EE', dash: [2, 4], width: 1.5 }
+  ];
+
+  function initForecastComparisonChart() {
+    var canvas = document.getElementById('forecastComparisonChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    var datasets = COMPARISON_DATASETS.map(function (ds) {
+      return {
+        label: ds.label,
+        data: [],
+        borderColor: ds.color,
+        backgroundColor: 'transparent',
+        borderWidth: ds.width,
+        borderDash: ds.dash,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: false
+      };
+    });
+
+    var config = {
+      type: 'line',
+      data: { labels: [], datasets: datasets },
+      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+    };
+    config.options.scales.x.ticks = {
+      maxTicksLimit: 12,
+      maxRotation: 0,
+      color: '#5a6a8a',
+      font: { family: 'JetBrains Mono', size: 10 }
+    };
+    config.options.scales.y.title = {
+      display: true,
+      text: 'Leistung (W)',
+      color: '#5a6a8a',
+      font: { size: 10 }
+    };
+    config.options.scales.y.beginAtZero = true;
+    config.options.plugins.tooltip.callbacks = {
+      label: function (ctx) {
+        return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(0) + ' W';
+      }
+    };
+
+    forecastCompChart = new Chart(canvas, config);
+    buildComparisonLegend();
+  }
+
+  function buildComparisonLegend() {
+    var container = document.getElementById('forecastCompLegend');
+    if (!container || !forecastCompChart) return;
+    container.innerHTML = '';
+    container.style.display = 'flex';
+    container.style.gap = '10px';
+    container.style.flexWrap = 'wrap';
+    container.style.padding = '8px 0 0';
+    container.style.fontSize = '10px';
+
+    COMPARISON_DATASETS.forEach(function (ds, i) {
+      var item = document.createElement('span');
+      item.style.display = 'inline-flex';
+      item.style.alignItems = 'center';
+      item.style.gap = '4px';
+      item.style.cursor = 'pointer';
+      item.style.color = ds.color;
+      item.style.fontWeight = '600';
+      item.style.userSelect = 'none';
+
+      var swatch = document.createElement('span');
+      swatch.style.display = 'inline-block';
+      swatch.style.width = '12px';
+      swatch.style.height = '3px';
+      swatch.style.background = ds.color;
+      swatch.style.borderRadius = '2px';
+
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(ds.label));
+
+      item.addEventListener('click', function () {
+        var meta = forecastCompChart.getDatasetMeta(i);
+        meta.hidden = !meta.hidden;
+        item.style.opacity = meta.hidden ? '0.3' : '1';
+        forecastCompChart.update('none');
+      });
+
+      container.appendChild(item);
+    });
+  }
+
+  function updateForecastComparisonChart(forecastData) {
+    var card = document.getElementById('forecastComparisonCard');
+    var skeleton = document.getElementById('forecastCompSkeleton');
+
+    if (!forecastCompChart) initForecastComparisonChart();
+    if (!forecastCompChart) return;
+
+    // Extract ML-corrected PV slots (final merged forecast)
+    var pvSlots = forecastData && forecastData.pv && forecastData.pv.slots ? forecastData.pv.slots : [];
+    // Extract raw PV (pre-ML merged) slots
+    var rawPvSlots = forecastData && forecastData.rawPv && forecastData.rawPv.slots ? forecastData.rawPv.slots : [];
+
+    if (pvSlots.length === 0 && rawPvSlots.length === 0) {
+      // Show empty state
+      if (card) card.style.display = '';
+      if (skeleton) {
+        skeleton.style.display = '';
+        skeleton.textContent = 'Noch keine Vergleichsdaten vorhanden';
+        skeleton.style.lineHeight = '200px';
+        skeleton.style.textAlign = 'center';
+        skeleton.style.color = '#5a6a8a';
+        skeleton.style.fontSize = '0.85rem';
+        skeleton.style.animation = 'none';
+      }
+      return;
+    }
+
+    // Use whichever slot array is longer for labels
+    var refSlots = pvSlots.length >= rawPvSlots.length ? pvSlots : rawPvSlots;
+    var labels = refSlots.map(function (s) {
+      var d = new Date(s.start);
+      var h = d.getHours().toString().padStart(2, '0');
+      var m = d.getMinutes().toString().padStart(2, '0');
+      return h + ':' + m;
+    });
+
+    // Build data arrays: [actual, ml, pvlib, solcast, vrm, merged]
+    var mlData = pvSlots.map(function (s) { return s.powerW || 0; });
+    var mergedData = rawPvSlots.map(function (s) { return s.powerW || 0; });
+
+    // Individual source data (may not be present in all API responses)
+    var sources = forecastData && forecastData.sources ? forecastData.sources : {};
+    var pvlibData = sources.pvlib ? sources.pvlib.map(function (s) { return s.powerW || 0; }) : [];
+    var solcastData = sources.solcast ? sources.solcast.map(function (s) { return s.powerW || 0; }) : [];
+    var vrmData = sources.vrm ? sources.vrm.map(function (s) { return s.powerW || 0; }) : [];
+    var actualData = sources.actual ? sources.actual.map(function (s) { return s.powerW || 0; }) : [];
+
+    forecastCompChart.data.labels = labels;
+    forecastCompChart.data.datasets[0].data = actualData;  // Ist-Werte
+    forecastCompChart.data.datasets[1].data = mlData;       // ML-korrigiert
+    forecastCompChart.data.datasets[2].data = pvlibData;    // pvlib
+    forecastCompChart.data.datasets[3].data = solcastData;  // Solcast
+    forecastCompChart.data.datasets[4].data = vrmData;      // VRM
+    forecastCompChart.data.datasets[5].data = mergedData;   // Merged pre-ML
+    forecastCompChart.update('none');
+
+    // Show card, hide skeleton
+    if (card) card.style.display = '';
+    if (skeleton) skeleton.style.display = 'none';
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7. ML Badge (D-26) — active/collecting/error state indicator
+  // ---------------------------------------------------------------------------
+  function updateMlBadge(mlStatus) {
+    var badge = document.getElementById('badge-ml');
+    if (!badge) return;
+
+    if (!mlStatus || mlStatus.tier < 2 || !mlStatus.mlEnabled) {
+      badge.style.display = 'none';
+      return;
+    }
+
+    var dot = badge.querySelector('.dot');
+    if (!dot) return;
+
+    // Reset dot classes
+    dot.classList.remove('dot-ok', 'dot-warn', 'dot-danger');
+
+    var dataStatus = mlStatus.dataStatus || '';
+    if (dataStatus === 'active') {
+      dot.classList.add('dot-ok');
+      var modelType = mlStatus.modelType || 'Linear';
+      var version = mlStatus.modelVersion || 0;
+      var mae = mlStatus.mae || '?';
+      badge.title = 'ML aktiv -- ' + modelType + ' v' + version + ', MAE ' + mae + 'W';
+    } else if (dataStatus === 'collecting') {
+      dot.classList.add('dot-warn');
+      var days = mlStatus.datadays || '?';
+      badge.title = 'ML sammelt Daten (' + days + '/30 Tage)';
+    } else if (dataStatus === 'error') {
+      dot.classList.add('dot-danger');
+      badge.title = 'ML Fehler -- letztes Training fehlgeschlagen';
+    } else {
+      dot.classList.add('dot-warn');
+      badge.title = 'ML Status unbekannt';
+    }
+
+    badge.style.display = '';
+
+    // Click navigates to ML settings
+    if (!badge._mlClickBound) {
+      badge.addEventListener('click', function () {
+        window.location.href = '/settings.html#ml';
+      });
+      badge._mlClickBound = true;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // ML status fetch helper
+  // ---------------------------------------------------------------------------
+  async function fetchMlStatus() {
+    try {
+      var res = await apiFetch('/api/ml/status');
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Refresh orchestrator
   // ---------------------------------------------------------------------------
   async function refreshAllCharts() {
     var results = await Promise.allSettled([
       fetchForecastData(),
       fetchOptimizerData(),
-      fetchCostData()
+      fetchCostData(),
+      fetchMlStatus()
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
     var optimizerData = results[1].status === 'fulfilled' ? results[1].value : null;
     var costData = results[2].status === 'fulfilled' ? results[2].value : null;
+    var mlStatus = results[3].status === 'fulfilled' ? results[3].value : null;
 
     renderPvForecastChart(forecastData);
     renderGanttChart(optimizerData);
     renderSavingsCard(costData);
     updateBadges();
+
+    // ML additions
+    updateMlBadge(mlStatus);
+    if (forecastData) updateForecastComparisonChart(forecastData);
   }
 
   // ---------------------------------------------------------------------------
@@ -410,6 +639,7 @@
   // ---------------------------------------------------------------------------
   function init() {
     initOverlayToggle();
+    initForecastComparisonChart();
     refreshAllCharts();
     refreshTimer = setInterval(refreshAllCharts, REFRESH_MS);
   }

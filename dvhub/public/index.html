@@ -49,6 +49,9 @@
         <span class="intg-badge" id="badge-loxone" data-system="loxone" title="Loxone" hidden>
           <span class="dot dot-ok"></span> Loxone
         </span>
+        <span class="intg-badge" id="badge-ml" data-system="ml" title="ML Forecast" style="display:none;">
+          <span class="dot"></span> ML
+        </span>
         <span id="connStatus" class="dot dot-ok" title="Verbindungsstatus"></span>
         <span id="nowTime" style="font-size:0.65rem;color:var(--flow-text-muted);font-family:var(--font-mono);">--:--</span>
       </div>
@@ -350,6 +353,20 @@
         <span class="card-kicker">PV-PROGNOSE VS. IST</span>
         <div class="chart-skeleton" id="pv-forecast-skeleton"></div>
         <canvas id="pv-forecast-chart" role="img" aria-label="PV-Prognose vs. Ist" style="display:none"></canvas>
+      </div>
+
+      <div class="chart-span-card" id="forecastComparisonCard" style="display:none;">
+        <div class="chart-skeleton" id="forecastCompSkeleton">
+          <div class="skeleton-bar"></div>
+        </div>
+        <div class="chart-head">
+          <span class="chart-title">Forecast-Vergleich</span>
+          <span class="chart-subtitle" id="forecastCompSubtitle">48h</span>
+        </div>
+        <div style="position:relative;height:200px;">
+          <canvas id="forecastComparisonChart"></canvas>
+        </div>
+        <div class="chart-legend" id="forecastCompLegend"></div>
       </div>
 
       <div class="chart-sub-row">
