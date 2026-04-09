@@ -93,9 +93,9 @@ test('dashboard chart styles expose highlight signal colors', () => {
 test('dashboard source uses cent chart labels and highlight fills', () => {
   const app = fs.readFileSync(appPath, 'utf8');
 
-  assert.match(app, /formatChartCentValue/);
+  assert.match(app, /formatChartCentValue\(vv\)/);
   assert.match(app, /getChartHighlightSets\(vals,/);
-  assert.match(app, /enableFocusBand/);
+  assert.match(app, /enableFocusBand:\s*vals\.some\(\(value\)\s*=>\s*Number\.isFinite\(value\)\s*&&\s*value\s*>=\s*-0\.01\s*&&\s*value\s*<=\s*0\.01\)/);
   assert.match(app, /chartPositiveHighlight/);
   assert.match(app, /chartNegativeHighlight/);
   assert.match(app, /createPriceChartScale\(/);

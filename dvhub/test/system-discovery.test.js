@@ -3,45 +3,39 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import vm from 'node:vm';
+import { createDefaultConfig } from '../config-model.js';
 
 async function loadSystemDiscoveryModule() {
   return import(new URL(`../system-discovery.js?ts=${Date.now()}`, import.meta.url));
 }
 
-// Extract buildSystemDiscoveryPayload from server.js source without importing the
-// full module (which pulls in heavy dependencies like pg that may not be installed
-// in every environment).
-function loadBuildSystemDiscoveryPayload() {
+let serverModulePromise = null;
+
+async function loadServerModule() {
+  if (serverModulePromise) return serverModulePromise;
   const repoDir = fileURLToPath(new URL('..', import.meta.url));
-  const serverSource = fs.readFileSync(path.join(repoDir, 'server.js'), 'utf8');
-  // Find the start of the function declaration
-  const startMarker = 'export async function buildSystemDiscoveryPayload(';
-  const startIdx = serverSource.indexOf(startMarker);
-  if (startIdx < 0) return null;
-  // First match parentheses to skip past the parameter list
-  let parenDepth = 0;
-  let paramEnd = startIdx + startMarker.length;
-  for (let i = startIdx + startMarker.length - 1; i < serverSource.length; i++) {
-    if (serverSource[i] === '(') parenDepth++;
-    else if (serverSource[i] === ')') parenDepth--;
-    if (parenDepth === 0) { paramEnd = i; break; }
-  }
-  // Find the function body opening brace after the closing ')'
-  const bodyStart = serverSource.indexOf('{', paramEnd + 1);
-  if (bodyStart < 0) return null;
-  // Walk forward counting braces to find the matching '}'
-  let depth = 0;
-  let endIdx = bodyStart;
-  for (let i = bodyStart; i < serverSource.length; i++) {
-    if (serverSource[i] === '{') depth++;
-    else if (serverSource[i] === '}') depth--;
-    if (depth === 0) { endIdx = i; break; }
-  }
-  const fnSource = serverSource.slice(startIdx, endIdx + 1).replace(/^export\s+/, '');
-  const sandbox = { String, Math };
-  vm.runInNewContext(fnSource, sandbox);
-  return sandbox.buildSystemDiscoveryPayload;
+  const configPath = path.join(repoDir, `.tmp-system-discovery-${Date.now()}.json`);
+  const config = createDefaultConfig();
+  config.manufacturer = '';
+  config.victron = { ...config.victron, host: '' };
+  config.telemetry = { ...config.telemetry, enabled: false };
+  config.epex = { ...config.epex, enabled: false };
+  fs.writeFileSync(configPath, JSON.stringify(config), 'utf8');
+
+  const previousRole = process.env.DVHUB_PROCESS_ROLE;
+  const previousConfigPath = process.env.DV_APP_CONFIG;
+  process.env.DVHUB_PROCESS_ROLE = 'test';
+  process.env.DV_APP_CONFIG = configPath;
+
+  serverModulePromise = import(new URL(`../server.js?ts=${Date.now()}`, import.meta.url)).finally(() => {
+    fs.rmSync(configPath, { force: true });
+    if (previousRole == null) delete process.env.DVHUB_PROCESS_ROLE;
+    else process.env.DVHUB_PROCESS_ROLE = previousRole;
+    if (previousConfigPath == null) delete process.env.DV_APP_CONFIG;
+    else process.env.DV_APP_CONFIG = previousConfigPath;
+  });
+
+  return serverModulePromise;
 }
 
 test('discoverSystems dispatches by manufacturer and deduplicates normalized results', async () => {
@@ -97,7 +91,8 @@ test('discoverSystems returns an empty list on provider timeout and rejects unkn
 });
 
 test('buildSystemDiscoveryPayload returns manufacturer-scoped API responses', async () => {
-  const buildSystemDiscoveryPayload = loadBuildSystemDiscoveryPayload();
+  const module = await loadServerModule().catch(() => ({}));
+  const { buildSystemDiscoveryPayload } = module;
 
   assert.equal(typeof buildSystemDiscoveryPayload, 'function');
 
@@ -121,7 +116,8 @@ test('buildSystemDiscoveryPayload returns manufacturer-scoped API responses', as
 });
 
 test('buildSystemDiscoveryPayload turns discovery failures into explicit API errors with empty systems', async () => {
-  const buildSystemDiscoveryPayload = loadBuildSystemDiscoveryPayload();
+  const module = await loadServerModule().catch(() => ({}));
+  const { buildSystemDiscoveryPayload } = module;
 
   assert.equal(typeof buildSystemDiscoveryPayload, 'function');
 
@@ -133,6 +129,6 @@ test('buildSystemDiscoveryPayload turns discovery failures into explicit API err
   });
 
   assert.equal(payload.ok, false);
-  assert.ok(Array.isArray(payload.systems) && payload.systems.length === 0);
+  assert.deepEqual(payload.systems, []);
   assert.match(payload.error, /network unavailable/i);
 });

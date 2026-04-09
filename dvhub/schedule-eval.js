@@ -82,7 +82,7 @@ export function createScheduleEvaluator(ctx) {
       if (r.target !== target || !scheduleMatch(r, mod)) return false;
       // SMA rules carry absolute slot timestamps -- enforce them so a rule
       // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
-      if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
+      if (isSmallMarketAutomationRule(r) && r.slotTs != null) {
         const slotTs = Number(r.slotTs);
         const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
         if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;

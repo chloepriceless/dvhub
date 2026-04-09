@@ -12,9 +12,7 @@ function loadPvPlantHelpers() {
     console,
     globalThis: {},
     window: {
-      DVhubCommon: {
-        escapeHtml: (v) => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-      },
+      DVhubCommon: {},
       addEventListener() {},
       setTimeout() {}
     }
@@ -89,8 +87,8 @@ test('market premium editor markup keeps global mode separate from pv plants lis
   assert.match(markup, /Marktwert-Modus/);
   assert.match(markup, /Jahresmarktwert/);
   assert.match(markup, /Monatsmarktwert/);
-  assert.match(markup, /Marktprämie/);
-  assert.match(markup, /1 konfiguriert/);
+  assert.match(markup, /<h3>PV-Anlagen<\/h3>/);
+  assert.match(markup, /1 konfigurierte Anlagen/);
 });
 
 test('pv plant validation reports missing commissioning date and invalid capacity', () => {

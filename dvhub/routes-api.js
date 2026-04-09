@@ -110,49 +110,6 @@ export function createApiRoutes(ctx) {
     };
   }
 
-  // ── Multipart helpers (VPN config upload) ────────────────────────────
-  function readRawBody(req, maxBytes) {
-    return new Promise((resolve, reject) => {
-      const chunks = [];
-      let size = 0;
-      req.on('data', chunk => {
-        size += chunk.length;
-        if (size > maxBytes) {
-          req.destroy();
-          reject(new Error('body too large'));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-      req.on('error', reject);
-    });
-  }
-
-  function parseMultipartBody(body, boundary) {
-    const parts = [];
-    const delimiter = '--' + boundary;
-    const sections = body.split(delimiter).slice(1); // skip preamble
-
-    for (const section of sections) {
-      if (section.startsWith('--')) break; // end boundary
-      const headerEnd = section.indexOf('\r\n\r\n');
-      if (headerEnd < 0) continue;
-      const headers = section.substring(0, headerEnd);
-      const data = section.substring(headerEnd + 4).replace(/\r\n$/, '');
-
-      const nameMatch = headers.match(/name="([^"]+)"/);
-      const filenameMatch = headers.match(/filename="([^"]+)"/);
-
-      parts.push({
-        name: nameMatch ? nameMatch[1] : null,
-        filename: filenameMatch ? filenameMatch[1] : null,
-        data
-      });
-    }
-    return parts;
-  }
-
   // ── Response helpers ─────────────────────────────────────────────────
   function json(res, code, payload) {
     const body = JSON.stringify(payload);
@@ -217,13 +174,10 @@ export function createApiRoutes(ctx) {
     '/api/integration/loxone',
     '/api/integration/eos',
     '/api/integration/emhass',
-    '/api/optimizer/status',
     '/api/log',
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
-    '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
-    '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
     '/api/epex/zones',
     '/api/epex/gaps',
     '/api/schedule',
@@ -231,22 +185,14 @@ export function createApiRoutes(ctx) {
     '/api/history/summary',
     '/api/schedule/automation/config',
     '/api/meter/scan',
-    '/api/vpn/status',
-    '/api/vpn/config',
-    '/api/vpn/history',
     '/dv/control-value',
-    '/api/devices',                // Phase 04 — device list (INTG-05)
-    '/api/integrations/status',    // Phase 04 — integration status overview
   ]);
 
   function isLanSafeRequest(req) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     // Only GET requests to allowlisted endpoints bypass auth from LAN
     if (req.method !== 'GET') return false;
-    if (LAN_SAFE_ENDPOINTS.has(url.pathname)) return true;
-    // Dynamic segments for device endpoints (INTG-05)
-    if (url.pathname.startsWith('/api/devices/')) return true;
-    return false;
+    return LAN_SAFE_ENDPOINTS.has(url.pathname);
   }
 
   // --- Rate Limiting (in-memory, per IP) ---
@@ -428,9 +374,7 @@ export function createApiRoutes(ctx) {
 
   function integrationState() {
     const cfg = getCfg();
-
-    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
-    const base = {
+    return {
       timestamp: Date.now(),
       dvControlValue: ctx.controlValue(),
       forcedOff: state.ctrl.forcedOff,
@@ -445,45 +389,6 @@ export function createApiRoutes(ctx) {
       costs: costSummary(),
       userEnergyPricing: userEnergyPricingSummary()
     };
-
-    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
-    const forecastResp = ctx.forecastService?.buildForecastResponse?.();
-    if (forecastResp) {
-      // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
-      const pvSlots = forecastResp.pv?.slots || [];
-      const pvDurationH = forecastResp.pv?.resolution === '15min' ? 0.25 : 1;
-      const pvTodayKwh = pvSlots.reduce((sum, s) => sum + ((s.powerW || 0) * pvDurationH) / 1000, 0);
-
-      const loadSlots = forecastResp.load?.slots || [];
-      const loadDurationH = forecastResp.load?.resolution === '1h' ? 1 : 0.25;
-      const loadTodayKwh = loadSlots.reduce((sum, s) => sum + ((s.powerW || 0) * loadDurationH) / 1000, 0);
-
-      base.dvhub_forecast = {
-        pvTodayKwh: Math.round(pvTodayKwh * 100) / 100,
-        loadTodayKwh: Math.round(loadTodayKwh * 100) / 100,
-        pvModel: forecastResp.meta?.pvModel || null,
-        generatedAt: forecastResp.meta?.generatedAt || null
-      };
-    }
-
-    const optStatus = ctx.optimizerService?.getStatus?.();
-    if (optStatus) {
-      // Uses ACTUAL field names: source (NOT primarySource), rulesCount (NOT schedule.rules.length)
-      base.dvhub_optimizer = {
-        enabled: optStatus.enabled ?? false,
-        source: optStatus.source || null,
-        lastRunAt: optStatus.lastRunAt || null,
-        rulesCount: optStatus.rulesCount ?? 0,
-        error: optStatus.error || null
-      };
-    }
-
-    const teslaState = ctx.teslamateService?.getState?.();
-    if (teslaState && Object.values(teslaState).some(v => v != null)) {
-      base.dvhub_tesla = teslaState;
-    }
-
-    return base;
   }
 
   // -- EOS (Akkudoktor) Integration --
@@ -603,7 +508,7 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Config helpers ───────────────────────────────────────────────────
-  const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'mqtt.username', 'mqtt.password', 'notifications.providers.telegram.botToken', 'notifications.providers.telegram.chatId', 'notifications.providers.pushover.appToken', 'notifications.providers.pushover.userKey'];
+  const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
 
   function redactConfig(config) {
     const copy = JSON.parse(JSON.stringify(config));
@@ -691,10 +596,8 @@ export function createApiRoutes(ctx) {
     let cacheControl;
     if (ext === '.html') {
       cacheControl = reqPath.includes('setup') ? 'no-store' : 'no-cache';
-    } else if (reqPath === '/sw.js') {
-      cacheControl = 'no-store';
     } else if (ext === '.js' || ext === '.css') {
-      cacheControl = 'no-cache';
+      cacheControl = 'max-age=3600';
     }
     res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
     fs.createReadStream(file).pipe(res);
@@ -751,130 +654,6 @@ export function createApiRoutes(ctx) {
       return text(res, 200, lines.join('\n'));
     }
 
-    // Optimizer status endpoint
-    if (url.pathname === '/api/optimizer/status' && req.method === 'GET') {
-      const status = ctx.optimizerService?.getStatus() || {
-        enabled: false,
-        error: 'Optimizer service not initialized'
-      };
-      return json(res, 200, status);
-    }
-
-    // --- Family Dashboard API (DASH-02, DASH-03) ---
-    // Aggregated status payload polled every 5s by the family dashboard.
-    // LAN-allowlisted read path: tablet on the local network can reach it
-    // without a Bearer token. See LAN_SAFE_ENDPOINTS above.
-    if (url.pathname === '/api/family/status' && req.method === 'GET') {
-      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
-      try {
-        const payload = ctx.familyService.buildFamilyStatus();
-        return json(res, 200, { ok: true, ...payload });
-      } catch (e) {
-        pushLog('family_api_error', { error: e.message });
-        return json(res, 500, { ok: false, error: 'family status failed' });
-      }
-    }
-
-    // Presence state read — screensaver wake polling (D-19). LAN-safe GET.
-    if (url.pathname === '/api/family/presence' && req.method === 'GET') {
-      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
-      return json(res, 200, { ok: true, ...ctx.familyService.getPresence() });
-    }
-
-    // Presence webhook (D-08, D-19). POSTs always require auth token —
-    // isLanSafeRequest rejects non-GET requests by design. Loxone/HA/MQTT
-    // integrations configure the Bearer token in Phase 04.
-    if (url.pathname === '/api/family/presence' && req.method === 'POST') {
-      if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
-      let body;
-      try {
-        body = await parseBody(req);
-      } catch (e) {
-        return json(res, 400, { ok: false, error: 'invalid json' });
-      }
-      const detected = body?.detected === true;
-      const source = typeof body?.source === 'string' ? body.source : 'unknown';
-      ctx.familyService.setPresence({ detected, source });
-      return json(res, 200, { ok: true });
-    }
-
-    // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
-    // Served via servePage so the filename 'family.html' stays inside publicDir.
-    if (url.pathname === '/family' && req.method === 'GET') {
-      return servePage(res, 'family.html');
-    }
-
-    // --- Device API (D-15, INTG-05) ---
-    // GET /api/devices — device list
-    if (url.pathname === '/api/devices' && req.method === 'GET') {
-      const devices = ctx.deviceService?.getDevices() || [];
-      return json(res, 200, devices);
-    }
-
-    // GET /api/devices/:id — single device with history from PostgreSQL
-    if (url.pathname.startsWith('/api/devices/') && req.method === 'GET') {
-      const deviceId = decodeURIComponent(url.pathname.split('/api/devices/')[1]);
-      if (!deviceId) return json(res, 400, { error: 'Missing device ID' });
-      const devices = ctx.deviceService?.getDevices() || [];
-      const device = devices.find(d => d.id === deviceId);
-      if (!device) return json(res, 404, { error: 'Device not found' });
-      let history = [];
-      if (ctx.db) {
-        try {
-          const result = await ctx.db.query(
-            'SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT 288',
-            [deviceId]
-          );
-          history = result.rows;
-        } catch (err) {
-          pushLog('device_history_error', { device: deviceId, error: err.message });
-        }
-      }
-      return json(res, 200, { ...device, history });
-    }
-
-    // GET /api/integrations/status — integration status overview (D-08)
-    if (url.pathname === '/api/integrations/status' && req.method === 'GET') {
-      const mqttCfg = getCfg().mqtt || {};
-      const payload = {
-        timestamp: Date.now(),
-        mqtt: {
-          connected: ctx.mqttHub?.connected ?? false,
-          broker: mqttCfg.brokerUrl || 'embedded',
-          embedded: !mqttCfg.brokerUrl,
-          topicCount: ctx.mqttPublisher?.topicCount ?? 0
-        },
-        tesla: {
-          enabled: getCfg().integrations?.tesla?.enabled ?? false,
-          state: ctx.teslamateService?.getState() || null,
-          lastUpdate: ctx.teslamateService?.lastUpdateAt || null
-        },
-        homeAssistant: {
-          haDiscovery: mqttCfg.haDiscovery?.enabled ?? false,
-          topicsPublished: ctx.mqttPublisher?.topicCount ?? 0
-        },
-        loxone: {
-          configured: !!getCfg().loxone
-        },
-        devices: {
-          total: ctx.deviceService?.getDevices()?.length ?? 0,
-          online: ctx.deviceService?.getDevices()?.filter(d => d.online)?.length ?? 0,
-          list: ctx.deviceService?.getDevices() || []
-        },
-        notifications: {
-          enabled: getCfg().notifications?.enabled ?? false,
-          providers: Object.entries(getCfg().notifications?.providers || {})
-            .filter(([, v]) => v.enabled).map(([k]) => k)
-        }
-      };
-      return json(res, 200, payload);
-    }
-
-    // Integrations page HTML route
-    if (url.pathname === '/integrations' && req.method === 'GET') {
-      return servePage(res, 'integrations.html');
-    }
-
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
 
@@ -915,15 +694,28 @@ export function createApiRoutes(ctx) {
       }
     }
 
-    // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---
+    // --- VRM Forecast API ---
     if (url.pathname === '/api/forecast' && req.method === 'GET') {
-      if (!ctx.forecastService) return json(res, 503, { ok: false, error: 'forecast service not available' });
+      if (!ctx.telemetryStore?.listForecasts) return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      const now = new Date();
+      const startParam = url.searchParams.get('start');
+      const endParam = url.searchParams.get('end');
+      const start = startParam || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const end = endParam || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3).toISOString();
+      const forecastType = url.searchParams.get('type') || null;
       try {
-        const payload = ctx.forecastService.buildForecastResponse();
-        return json(res, 200, { ok: true, ...payload });
+        const rows = await ctx.telemetryStore.listForecasts({ start, end, forecastType });
+        return json(res, 200, {
+          ok: true,
+          start,
+          end,
+          solar: rows.filter(r => r.type === 'solar_yield').map(r => ({ ts: r.ts, w: r.valueW })),
+          consumption: rows.filter(r => r.type === 'consumption').map(r => ({ ts: r.ts, w: r.valueW })),
+          lastFetchAt: state.forecast?.lastFetchAt || null,
+          total: rows.length
+        });
       } catch (e) {
-        pushLog('forecast_api_error', { error: e.message });
-        return json(res, 500, { ok: false, error: 'forecast generation failed' });
+        return json(res, 500, { ok: false, error: e.message });
       }
     }
 
@@ -1072,94 +864,6 @@ export function createApiRoutes(ctx) {
       });
     }
 
-    // --- System Updates (OS packages) ---
-    if (url.pathname === '/api/admin/system/updates/check' && req.method === 'GET') {
-      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
-      try {
-        await execFileAsync('sudo', ['apt-get', 'update', '-qq'], { timeout: 30000 });
-        const { stdout } = await execFileAsync('sudo', ['apt', 'list', '--upgradable'], { timeout: 15000 });
-        const lines = stdout.split('\n').filter(l => l.includes('/'));
-        const packages = lines.map(l => {
-          const match = l.match(/^([^\s/]+)\/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]/);
-          return match ? { name: match[1], newVersion: match[2], currentVersion: match[3] } : null;
-        }).filter(Boolean);
-        const securityCount = lines.filter(l => l.includes('-security')).length;
-        return json(res, 200, {
-          ok: true,
-          totalCount: packages.length,
-          securityCount,
-          packages: packages.slice(0, 50),
-          checkedAt: new Date().toISOString()
-        });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/admin/system/updates/apply' && req.method === 'POST') {
-      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
-      try {
-        // Wait for any running apt/dpkg lock (max 60s)
-        for (let i = 0; i < 12; i++) {
-          try {
-            await execFileAsync('sudo', ['fuser', '/var/lib/dpkg/lock-frontend'], { timeout: 3000 });
-            await new Promise(r => setTimeout(r, 5000)); // lock held, wait 5s
-          } catch { break; } // fuser exits non-zero = no lock
-        }
-        const result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
-        // Re-apply setcap in case node was upgraded
-        const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
-        await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
-
-        const outputLines = (result.stdout || '').split('\n');
-        const upgraded = outputLines.filter(l => /^Setting up/.test(l)).map(l => l.replace('Setting up ', '').replace(/ \(.*/, ''));
-        pushLog('system_updates_applied', { count: upgraded.length, securityOnly, packages: upgraded.slice(0, 20) });
-        return json(res, 200, {
-          ok: true,
-          upgraded: upgraded.length,
-          packages: upgraded.slice(0, 50),
-          message: `${upgraded.length} Pakete aktualisiert`
-        });
-      } catch (e) {
-        pushLog('system_updates_error', { error: e.message });
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/admin/system/info' && req.method === 'GET') {
-      try {
-        const uptimeOut = (await execFileAsync('uptime', ['-p'], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
-        const hostnameOut = (await execFileAsync('hostname', [], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
-        const memOut = (await execFileAsync('free', ['-m'], { timeout: 5000 }).catch(() => ({ stdout: '' }))).stdout;
-        const memMatch = memOut.match(/Mem:\s+(\d+)\s+(\d+)/);
-        const diskOut = (await execFileAsync('df', ['-h', '/'], { timeout: 5000 }).catch(() => ({ stdout: '' }))).stdout;
-        const diskMatch = diskOut.match(/\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+%)/);
-        const kernelOut = (await execFileAsync('uname', ['-r'], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
-        const nodeVersion = process.version;
-        return json(res, 200, {
-          ok: true,
-          hostname: hostnameOut,
-          uptime: uptimeOut,
-          kernel: kernelOut,
-          nodeVersion,
-          memory: memMatch ? { totalMb: +memMatch[1], usedMb: +memMatch[2] } : null,
-          disk: diskMatch ? { size: diskMatch[1], used: diskMatch[2], available: diskMatch[3], usePct: diskMatch[4] } : null
-        });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/admin/system/reboot' && req.method === 'POST') {
-      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
-      pushLog('system_reboot', {});
-      json(res, 200, { ok: true, message: 'System wird neu gestartet...' });
-      setTimeout(() => {
-        execFileAsync('sudo', ['reboot'], { timeout: 5000 }).catch(() => {});
-      }, 1000);
-      return;
-    }
-
     // --- Software Update Check ---
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
@@ -1185,17 +889,11 @@ export function createApiRoutes(ctx) {
             try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
           }
           const updateAvailable = latestTag != null && latestTag !== currentTag;
-          let availableVersions = [];
-          try {
-            const allTags = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-            availableVersions = allTags ? allTags.split('\n').filter(Boolean).slice(0, 10) : [];
-          } catch { /* ignore */ }
           return json(res, 200, {
             ok: true, channel,
             current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
             latest: { tag: latestTag, revision: null },
             updateAvailable,
-            availableVersions,
             changelog: changelog ? changelog.split('\n').filter(Boolean) : []
           });
         } else {
@@ -1224,8 +922,6 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
-        const body = await parseBody(req).catch(() => ({}));
-        const targetVersion = body?.version || null; // optional: install specific version
         const repoRoot = ctx.getRepoRoot();
         const appDir = ctx.getAppDir();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
@@ -1238,10 +934,10 @@ export function createApiRoutes(ctx) {
           // --- git fetch + checkout (inside inner try for rollback coverage) ---
           if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-            const selectedTag = targetVersion || (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
-            if (!selectedTag) throw new Error('No release tags found');
-            const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
-            gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
+            const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            if (!latestTag) throw new Error('No release tags found');
+            const checkout = await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = `Checked out ${latestTag}: ${checkout.stderr.trim()}`;
           } else {
             await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
@@ -1252,18 +948,6 @@ export function createApiRoutes(ctx) {
           // --- npm install + syntax check ---
           const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
           await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
-
-          // --- post-update.sh (system-level migrations: sudoers, setcap, packages, tls) ---
-          const postUpdateScript = path.join(repoRoot, 'post-update.sh');
-          try {
-            const fs = await import('node:fs');
-            fs.default.accessSync(postUpdateScript, fs.default.constants.X_OK);
-            const postResult = await execFileAsync('sudo', ['bash', postUpdateScript], { cwd: repoRoot, timeout: 120000 });
-            pushLog('post_update_applied', { output: (postResult.stdout || '').trim().split('\n').slice(-5).join('\n') });
-          } catch (postErr) {
-            pushLog('post_update_warning', { error: postErr.message });
-            // Don't fail the update if post-update fails — config migrations still run on restart
-          }
           pushLog('update_applied', {
             channel,
             gitOutput: gitOutput.split('\n').slice(0, 5).join('\n'),
@@ -1567,101 +1251,6 @@ export function createApiRoutes(ctx) {
       state.schedule.manualOverride[target] = { value, at: Date.now() };
       const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
       return json(res, result.ok ? 200 : 500, result);
-    }
-
-    // --- VPN Endpoints ---
-    if (url.pathname === '/api/vpn/status' && req.method === 'GET') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-      return json(res, 200, ctx.vpnManager.getStatus());
-    }
-
-    if (url.pathname === '/api/vpn/config' && req.method === 'GET') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-      const details = await ctx.vpnManager.getConfigDetails();
-      return json(res, 200, details);
-    }
-
-    if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-      try {
-        await ctx.vpnManager.start();
-        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/vpn/stop' && req.method === 'POST') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-      try {
-        await ctx.vpnManager.stop();
-        return json(res, 200, { ok: true });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/vpn/restart' && req.method === 'POST') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-      try {
-        await ctx.vpnManager.restart();
-        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
-      }
-    }
-
-    if (url.pathname === '/api/vpn/history' && req.method === 'GET') {
-      const vpnEvents = state.log
-        .filter(e => e.event && e.event.startsWith('vpn_'))
-        .slice(-50);
-      return json(res, 200, vpnEvents);
-    }
-
-    if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
-      if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
-
-      const contentType = req.headers['content-type'] || '';
-
-      // Support both multipart and JSON upload
-      if (contentType.includes('multipart/form-data')) {
-        const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
-        if (!boundaryMatch) return json(res, 400, { ok: false, error: 'missing boundary' });
-
-        const rawBody = await readRawBody(req, 2 * 1024 * 1024); // 2MB limit
-        const parts = parseMultipartBody(rawBody, boundaryMatch[1]);
-
-        const configPart = parts.find(p =>
-          p.name === 'ovpn' || p.name === 'config' ||
-          (p.filename && (p.filename.endsWith('.ovpn') || p.filename.endsWith('.conf')))
-        );
-        if (!configPart) return json(res, 400, { ok: false, error: 'missing config file part (.ovpn or .conf)' });
-
-        const certFiles = {};
-        for (const p of parts) {
-          if (p.name === 'ca' || (p.filename && p.filename === 'ca.crt')) certFiles.ca = p.data;
-          if (p.name === 'cert' || (p.filename && p.filename === 'client.crt')) certFiles.cert = p.data;
-          if (p.name === 'key' || (p.filename && p.filename === 'client.key')) certFiles.key = p.data;
-          if (p.name === 'ta' || (p.filename && p.filename === 'ta.key')) certFiles.ta = p.data;
-          if (p.name === 'secrets' || (p.filename && p.filename === 'ipsec.secrets')) certFiles.secrets = p.data;
-        }
-
-        const result = await ctx.vpnManager.importConfig(configPart.data, certFiles);
-        return json(res, result.ok ? 200 : 400, result);
-      }
-
-      // JSON body: { ovpn/config: "...", ca: "...", cert: "...", key: "...", secrets: "..." }
-      const body = await parseBody(req);
-      const configContent = body.ovpn || body.config;
-      if (!configContent) return json(res, 400, { ok: false, error: 'missing ovpn/config field' });
-      const result = await ctx.vpnManager.importConfig(configContent, {
-        ca: body.ca || null,
-        cert: body.cert || null,
-        key: body.key || null,
-        ta: body.ta || null,
-        secrets: body.secrets || null
-      });
-      return json(res, result.ok ? 200 : 400, result);
     }
 
     // Unmatched route -- return false so orchestrator can fall through to static files

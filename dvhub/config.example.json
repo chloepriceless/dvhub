@@ -1,7 +1,6 @@
 {
   "manufacturer": "victron",
-  "httpPort": 80,
-  "httpsPort": 443,
+  "httpPort": 8080,
   "modbusListenHost": "0.0.0.0",
   "modbusListenPort": 1502,
   "offLeaseMs": 480000,
@@ -112,17 +111,5 @@
     "enabled": true,
     "bzn": "DE-LU",
     "timezone": "Europe/Berlin"
-  },
-  "vpn": {
-    "enabled": false,
-    "protocol": "openvpn",
-    "autoConnect": true,
-    "profileName": "direktvermarkter",
-    "watchdog": {
-      "enabled": true,
-      "intervalMs": 10000,
-      "failThreshold": 3,
-      "maxBackoffMs": 120000
-    }
   }
 }

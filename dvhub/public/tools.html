@@ -2,8 +2,8 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="refresh" content="0;url=/settings.html#system" />
-  <title>DVhub — Weiterleitung</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVhub Wartung</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -28,8 +28,6 @@
       </label>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a href="/">Leitstand</a>
-        <a href="/family">Familie</a>
-        <a href="/integrations">Integrationen</a>
         <a href="/history.html">Historie</a>
         <a href="/explorer.html">Explorer</a>
         <a href="/settings.html">Einrichtung</a>
@@ -93,24 +91,6 @@
             <button id="applyUpdateBtn" class="btn btn-primary btn-small" type="button">Update installieren &amp; neu starten</button>
           </div>
           <div id="updateMeta" class="meta" style="margin-top:4px;">-</div>
-        </div>
-
-        <!-- System Updates -->
-        <div class="sub-card">
-          <div class="panel-head">
-            <div>
-              <p class="card-kicker">System</p>
-              <h2 class="section-title">Betriebssystem</h2>
-            </div>
-            <button id="checkSystemUpdatesBtn" class="btn btn-ghost btn-small" type="button">Prüfen</button>
-          </div>
-          <div id="systemInfoBanner" class="status-banner" style="margin-top:8px;">Systeminfo wird geladen...</div>
-          <div id="systemUpdatesBanner" class="status-banner" style="margin-top:6px;display:none;"></div>
-          <div id="systemUpdatesList" style="display:none;margin-top:6px;max-height:200px;overflow-y:auto;font-size:0.72rem;"></div>
-          <div id="systemUpdatesActions" style="display:none;margin-top:8px;display:flex;gap:6px;">
-            <button id="applySystemUpdatesBtn" class="btn btn-primary btn-small" type="button">Alle Updates installieren</button>
-          </div>
-          <div id="systemUpdatesMeta" class="meta" style="margin-top:4px;">-</div>
         </div>
 
         <!-- Config Import / Export -->
@@ -281,45 +261,6 @@
               </tr>
             </thead>
             <tbody id="dvLogRows"></tbody>
-          </table>
-        </div>
-
-        <!-- VPN-Diagnose -->
-        <div class="sub-card">
-          <div class="panel-head">
-            <div>
-              <p class="card-kicker" style="color:var(--node-vpn,#7F77DD);">VPN</p>
-              <h2 class="section-title">VPN-Tunnel Diagnose</h2>
-            </div>
-            <div style="display:flex;gap:6px;">
-              <button id="vpnToolStart" class="btn btn-ghost btn-small" type="button">Start</button>
-              <button id="vpnToolStop" class="btn btn-ghost btn-small" type="button">Stop</button>
-              <button id="vpnToolRestart" class="btn btn-ghost btn-small" type="button">Restart</button>
-            </div>
-          </div>
-          <p class="meta" style="margin-top:6px;">VPN-Status, Event-Log und manuelle Steuerung des Tunnels zum Direktvermarkter.</p>
-          <div id="vpnToolStatus" class="status-banner" style="margin-top:8px;">Status wird geladen...</div>
-          <div class="controls" style="margin-top:10px;">
-            <button id="loadVpnLog" class="btn btn-primary btn-small" type="button">Log laden</button>
-            <button id="refreshVpnLog" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
-            <label style="font-size:0.72rem;color:var(--flow-text-muted);">Filter:
-              <select id="vpnLogFilter" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:3px 6px;border-radius:6px;font-size:0.72rem;">
-                <option value="all">Alle VPN-Events</option>
-                <option value="connected">Verbindungen</option>
-                <option value="reconnect">Reconnects</option>
-                <option value="error">Fehler</option>
-              </select>
-            </label>
-          </div>
-          <table class="data-table" style="margin-top:8px;width:100%;font-size:0.72rem;">
-            <thead>
-              <tr>
-                <th>Zeitpunkt</th>
-                <th>Event</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody id="vpnLogRows"></tbody>
           </table>
         </div>
 

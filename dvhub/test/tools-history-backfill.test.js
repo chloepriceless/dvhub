@@ -85,7 +85,7 @@ test('tools result text distinguishes gap and full backfills', () => {
     windowsVisited: 0,
     importedWindows: 0,
     importedRows: 0
-  }), /Keine offenen VRM-Lücken/);
+  }), /Keine offenen VRM-Luecken/);
 
   assert.match(formatHistoryImportResult({
     ok: true,

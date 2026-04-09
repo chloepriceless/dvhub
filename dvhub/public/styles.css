@@ -24,7 +24,6 @@
   --node-house: #58a6ff;
   --node-dv: #bc8cff;
   --node-market: #f0883e;
-  --node-vpn: #7F77DD;
 
   /* Status */
   --ok: #3fb950;
@@ -112,8 +111,6 @@ button {
   display: grid;
   grid-template-rows: 44px 1fr auto;
   min-height: 100vh;
-  max-width: 1920px;
-  margin: 0 auto;
 }
 
 /* --- Topbar --- */
@@ -3506,9 +3503,8 @@ button {
 
 .page-content {
   padding: 16px 24px;
-  max-width: min(1400px, 100%);
+  max-width: 100%;
   margin: 0 auto;
-  box-sizing: border-box;
 }
 
 
@@ -3730,8 +3726,6 @@ button {
 }
 .settings-content {
   padding: 0 16px 16px;
-  max-width: min(1400px, 100%);
-  box-sizing: border-box;
 }
 .system-tab-content .page-grid {
   display: grid;
@@ -3774,8 +3768,7 @@ button {
   gap: 12px;
 }
 @media (min-width: 700px)  { .config-grid { grid-template-columns: 1fr 1fr; } }
-.config-grid > .config-group:only-child,
-.config-grid > .config-group--full { grid-column: 1 / -1; }
+@media (min-width: 1100px) { .config-grid { grid-template-columns: 1fr 1fr 1fr; } }
 
 /* Group card with accent left-border */
 .config-group {
@@ -3784,10 +3777,6 @@ button {
   border-radius: 10px;
   border-left: 3px solid rgba(123,151,178,0.18);
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-  box-sizing: border-box;
-  min-width: 0;
-  overflow: hidden;
-  overflow-wrap: break-word;
 }
 .config-group[data-accent="green"]  { border-left-color: var(--flow-green, #4CE36C); }
 .config-group[data-accent="yellow"] { border-left-color: var(--flow-yellow, #FFD32E); }
@@ -3799,7 +3788,7 @@ button {
 /* 2-column row grid inside cards */
 .config-row-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 1fr 1fr;
 }
 @media (max-width: 900px) { .config-row-grid { grid-template-columns: 1fr; } }
 
@@ -3821,12 +3810,10 @@ button {
   padding: 11px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-size: 14px;
-  min-width: 0;
-  gap: 8px;
 }
 .config-row:last-child { border-bottom: none; }
 .config-row-grid .config-row:nth-child(odd) { border-right: 1px solid rgba(255,255,255,0.04); }
-.config-row-label { color: rgba(232,234,240,0.55); white-space: normal; word-break: break-word; min-width: 0; flex-shrink: 1; }
+.config-row-label { color: rgba(232,234,240,0.55); white-space: nowrap; }
 .config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
 .config-help-icon {
   display: inline-block;
@@ -3858,7 +3845,7 @@ button {
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   pointer-events: none;
 }
-.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; }
 
 /* Config inputs */
 .config-input {
@@ -3881,8 +3868,6 @@ button {
   padding: 7px 12px;
   color: var(--flow-text, #e8eaf0);
   font-size: 13px;
-  min-width: 0;
-  max-width: 100%;
 }
 .config-checkbox { accent-color: var(--flow-green, #4CE36C); width: 18px; height: 18px; }
 
@@ -3961,134 +3946,3 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 .settings-group[open] .settings-group-chevron {
   transform: rotate(90deg);
 }
-
-/* ==========================================================================
-   Phase 04: Forecast & Optimizer Charts (INTG-01)
-   ========================================================================== */
-.chart-section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 0;
-}
-.overlay-toggle-label {
-  font-size: 0.65rem;
-  color: var(--flow-text-muted, #5a6a8a);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-.savings-card .savings-value {
-  font-size: 1.8rem;
-  font-family: 'Space Grotesk', sans-serif;
-  font-weight: 700;
-}
-.savings-card .savings-value.positive { color: var(--ok, #3fb950); }
-.savings-card .savings-value.negative { color: var(--danger, #ff7b72); }
-.savings-breakdown .metric-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  padding: 2px 0;
-}
-.chart-skeleton {
-  background: rgba(80,100,160,0.1);
-  border-radius: 6px;
-  height: 200px;
-  animation: skeleton-pulse 2s ease-in-out infinite;
-}
-@keyframes skeleton-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
-/* Integration badges (Phase 04) */
-.intg-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.65rem;
-  font-family: 'Inter', sans-serif;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: rgba(63,185,80,0.12);
-}
-.intg-badge:has(.dot-danger) {
-  background: rgba(255,123,114,0.12);
-}
-@media (max-width: 1080px) {
-  .chart-section-head { flex-wrap: wrap; }
-}
-@media (max-width: 768px) {
-  .intg-badge { display: none !important; }
-}
-
-/* Forecast & Optimizer section — outside main-body grid to avoid chart-area overlap */
-.forecast-optimizer-section {
-  padding: 0 8px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.forecast-optimizer-section .chart-span-card canvas {
-  width: 100% !important;
-  height: 200px !important;
-}
-.forecast-optimizer-section .chart-skeleton {
-  height: 200px;
-}
-
-/* Integrations page (Phase 04-07) */
-.intg-page {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 24px;
-}
-@media (max-width: 600px) {
-  .intg-page { padding: 12px; }
-}
-.intg-subtitle {
-  color: var(--flow-text-muted, #5a6a8a);
-  font-size: 0.85rem;
-  margin: 4px 0 16px 0;
-}
-.intg-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: var(--flow-surface, rgba(16,22,40,0.9));
-  border-radius: 6px;
-  margin-bottom: 4px;
-  cursor: pointer;
-  min-height: 44px; /* touch target per UI-SPEC accessibility */
-}
-.intg-row:hover { background: rgba(16,22,40,1); }
-.intg-row:focus-visible { outline: 2px solid var(--chart-positive, #6366F1); outline-offset: 2px; }
-.intg-row-icon { font-size: 1.1rem; }
-.intg-row-label { flex: 1; font-weight: 600; font-size: 0.85rem; }
-.intg-row-status {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.65rem;
-  font-weight: 600;
-}
-.intg-detail {
-  padding: 8px 16px 16px 40px;
-  font-size: 0.85rem;
-  color: var(--flow-text-muted, #5a6a8a);
-}
-.intg-detail .metric-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 0;
-}
-.intg-empty {
-  text-align: center;
-  padding: 48px 16px;
-  color: var(--flow-text-muted, #5a6a8a);
-}
-.intg-empty h3 { margin-bottom: 8px; }

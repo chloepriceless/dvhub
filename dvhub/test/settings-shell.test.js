@@ -130,7 +130,7 @@ test('real config workspace stays section-focused and does not reopen unrelated 
   const definition = getConfigDefinition();
   const workspace = buildDestinationWorkspace(definition, 'connection');
 
-  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron', 'vpn']);
+  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron']);
   assert.equal(workspace.sections[0].groups[0].openByDefault, true);
 });
 

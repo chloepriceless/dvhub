@@ -1002,15 +1002,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             color: '#9ca3af',
             font: { size: 10 },
             maxRotation: 0,
-            autoSkip: false,
-            callback: function(value) {
-              const d = data[value];
-              if (!d) return null;
+            autoSkip: true,
+            maxTicksLimit: 24,
+            callback: function(value, index) {
+              const d = data[index];
+              if (!d) return '';
               const date = new Date(d.ts);
-              if (date.getMinutes() !== 0) return null;
-              const h = date.getHours();
-              if (data.length > 100 && h % 2 !== 0) return null;
-              return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+              const m = date.getMinutes();
+              if (m === 0) return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+              return '';
             }
           },
           grid: { color: '#e5e7eb20', lineWidth: 1 }
@@ -1328,24 +1328,6 @@ function renderDashboardStatus(status) {
   setText('dvValue', String(status.dvControlValue));
   setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
   setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
-
-  // VPN Rail-Card
-  renderVpnCard(status.vpn);
-
-  // VPN status in DV card
-  const dvVpnRow = document.getElementById('dvVpnRow');
-  if (dvVpnRow) {
-    const vpn = status.vpn;
-    if (vpn && vpn.enabled) {
-      dvVpnRow.style.display = '';
-      const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-      const text = labels[vpn.status] || vpn.status || '-';
-      const extra = vpn.tunIp ? ` (${vpn.tunIp})` : '';
-      setText('dvVpnStatus', text + extra, vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : ''));
-    } else {
-      dvVpnRow.style.display = 'none';
-    }
-  }
 
   const dvIndicators = resolveDvControlIndicators(status);
   setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
@@ -2128,50 +2110,8 @@ function renderAutomationStatus(scheduleData) {
   }
 }
 
-function renderVpnCard(vpn) {
-  const card = document.getElementById('vpnCard');
-  if (!card) return;
-  if (!vpn || !vpn.enabled) { card.style.display = 'none'; return; }
-  card.style.display = '';
-
-  const statusLabels = {
-    connected: 'Verbunden',
-    connecting: 'Verbinde...',
-    disconnected: 'Getrennt',
-    error: 'Fehler'
-  };
-  const statusTone = vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : '');
-  setText('vpnStatus', statusLabels[vpn.status] || vpn.status || '-', statusTone);
-  setText('vpnTunIp', vpn.tunIp || '-');
-
-  if (vpn.uptimeSeconds != null && vpn.uptimeSeconds > 0) {
-    const h = Math.floor(vpn.uptimeSeconds / 3600);
-    const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
-    setText('vpnUptime', h > 0 ? `${h}h ${m}m` : `${m}m`);
-  } else {
-    setText('vpnUptime', '-');
-  }
-
-  setText('vpnReconnects', String(vpn.reconnectAttempts || 0));
-
-  const certWarn = document.getElementById('vpnCertWarn');
-  if (certWarn) {
-    if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-      certWarn.style.display = '';
-      setText('vpnCertDays', `${vpn.certDaysRemaining} Tage`);
-    } else {
-      certWarn.style.display = 'none';
-    }
-  }
-}
-
 function initDashboard() {
   initFlowDiagram();
-  document.getElementById('vpnReconnectBtn')?.addEventListener('click', async () => {
-    try {
-      await apiFetch('/api/vpn/restart', { method: 'POST' });
-    } catch { /* ignore */ }
-  });
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);

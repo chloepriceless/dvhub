@@ -198,8 +198,7 @@ test('plant setup step only exposes manufacturer selection and host for the acti
 
   assert.deepEqual(Array.from(fieldPaths), [
     'manufacturer',
-    'victron.host',
-    'pvCoupling'
+    'victron.host'
   ]);
 });
 
@@ -468,9 +467,9 @@ test('save outcome highlights warnings and restart-sensitive manufacturer change
   ]);
   assert.match(outcome.restartItems.join(' '), /Herstellerprofil/i);
   assert.match(outcome.restartItems.join(' '), /DV Modbus Proxy/i);
-  assert.equal(outcome.redirectUrl, '/');
-  assert.match(outcome.banner, /Weiterleitung zum Leitstand/i);
-  assert.match(outcome.nextSteps.join(' '), /Leitstand/i);
+  assert.equal(outcome.redirectUrl, '/settings.html?setup=done');
+  assert.match(outcome.banner, /Weiterleitung zur Einrichtung/i);
+  assert.match(outcome.nextSteps.join(' '), /Einrichtung/i);
 });
 
 test('import outcome uses import-specific completion copy', () => {
@@ -482,6 +481,6 @@ test('import outcome uses import-specific completion copy', () => {
 
   assert.equal(outcome.kind, 'success');
   assert.match(outcome.title, /Config importiert/i);
-  assert.match(outcome.banner, /Weiterleitung zum Leitstand/i);
-  assert.match(outcome.nextSteps.join(' '), /Leitstand/i);
+  assert.match(outcome.banner, /Weiterleitung zur Einrichtung/i);
+  assert.match(outcome.nextSteps.join(' '), /Einrichtung/i);
 });

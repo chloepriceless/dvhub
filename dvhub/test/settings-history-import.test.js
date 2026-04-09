@@ -31,19 +31,19 @@ const {
 } = loadHistoryHelpers();
 
 test('history import panel is only rendered for the telemetry destination', () => {
-  assert.equal(shouldRenderHistoryImportPanel('services'), true);
+  assert.equal(shouldRenderHistoryImportPanel('telemetry'), true);
   assert.equal(shouldRenderHistoryImportPanel('connection'), false);
 });
 
 test('history import action stays disabled until vrm status is ready and dates are valid', () => {
   const readyState = buildHistoryImportActionState({
-    destinationId: 'services',
+    destinationId: 'telemetry',
     status: { enabled: true, ready: true, provider: 'vrm' },
     form: { start: '2026-03-01T00:00', end: '2026-03-02T00:00' },
     busy: false
   });
   const blockedState = buildHistoryImportActionState({
-    destinationId: 'services',
+    destinationId: 'telemetry',
     status: { enabled: true, ready: false, provider: 'vrm' },
     form: { start: '2026-03-01T00:00', end: '2026-03-02T00:00' },
     busy: false
@@ -72,12 +72,12 @@ test('history import request converts datetime-local fields into API payload', (
 
 test('history backfill action is date-free and only gated by vrm readiness', () => {
   const readyState = buildHistoryBackfillActionState({
-    destinationId: 'services',
+    destinationId: 'telemetry',
     status: { enabled: true, ready: true, provider: 'vrm' },
     busy: false
   });
   const blockedState = buildHistoryBackfillActionState({
-    destinationId: 'services',
+    destinationId: 'telemetry',
     status: { enabled: true, ready: false, provider: 'vrm' },
     busy: false
   });

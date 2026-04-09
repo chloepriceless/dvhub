@@ -21,8 +21,6 @@ let pvPlantsDraft = [];
 let pvPlantsValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
-let forecastStringsDraft = [];
-let forecastTierCache = null;
 
 const GROUP_ACCENTS = {
   connection: 'green', transport: 'green', victron: 'green',
@@ -32,10 +30,7 @@ const GROUP_ACCENTS = {
   telemetry: 'cyan', vrm: 'cyan',
   webserver: 'purple', http: 'purple', api: 'purple',
   mqtt: 'orange',
-  epex: 'green', pricing: 'yellow', pvPlants: 'blue',
-  forecast: 'cyan', forecastGeneral: 'cyan', forecastLocation: 'blue',
-  forecastPv: 'green', forecastSolcast: 'yellow', forecastWeather: 'blue',
-  forecastLoad: 'orange', forecastRetention: 'purple'
+  epex: 'green', pricing: 'yellow', pvPlants: 'blue'
 };
 
 function getGroupAccent(section) {
@@ -143,12 +138,6 @@ function createConfigInput(field, value, inherited) {
   input.id = fieldId(field.path);
   input.dataset.path = field.path;
   input.dataset.type = field.type;
-  if (field.readOnly) {
-    input.readOnly = true;
-    input.disabled = true;
-    input.style.opacity = '0.6';
-    input.title = field.help || 'Dieses Feld wird automatisch uebernommen';
-  }
   return input;
 }
 
@@ -598,29 +587,6 @@ function setBanner(message, kind = 'info') {
   el.className = `config-banner ${kind}`;
 }
 
-function showSettingsRestartButton() {
-  const el = document.getElementById('settingsBanner');
-  if (!el) return;
-  if (el.querySelector('#settingsRestartBtn')) return;
-  const btn = document.createElement('button');
-  btn.id = 'settingsRestartBtn';
-  btn.className = 'btn btn-danger btn-small';
-  btn.style.cssText = 'margin-left:12px;vertical-align:middle;';
-  btn.textContent = 'Jetzt neu starten';
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    btn.textContent = 'Wird neu gestartet...';
-    try {
-      await restartService();
-    } catch (e) {
-      setBanner('Restart fehlgeschlagen: ' + e.message, 'error');
-      btn.disabled = false;
-      btn.textContent = 'Jetzt neu starten';
-    }
-  });
-  el.appendChild(btn);
-}
-
 function buildMetaText(meta) {
   const parts = [
     `Datei: ${meta.path || '-'}`,
@@ -649,14 +615,6 @@ function renderFieldValueFromConfigs(field, {
   const effectiveValue = getPath(effectiveConfig, field.path);
   const optionalOverride = field.empty === 'delete';
 
-  // inheritFrom: auto-populate from another config path if current value is empty/zero
-  if (field.inheritFrom && (!draftDefined || draftValue === 0 || draftValue === null || draftValue === undefined || draftValue === '')) {
-    const inheritedVal = getPath(effectiveConfig, field.inheritFrom) || getPath(draftConfig, field.inheritFrom);
-    if (inheritedVal !== undefined && inheritedVal !== null && inheritedVal !== 0) {
-      return { value: inheritedVal, inherited: null };
-    }
-  }
-
   if (optionalOverride && !draftDefined) {
     return { value: '', inherited: effectiveValue };
   }
@@ -680,17 +638,7 @@ function isFieldVisible(field) {
 
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
-    // Support 'equals' (show when value matches) and 'notEquals' (show when value differs)
-    if ('equals' in field.visibleWhenPath) {
-      if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
-    }
-    if ('notEquals' in field.visibleWhenPath) {
-      if (valuesEqual(currentValue, field.visibleWhenPath.notEquals)) return false;
-    }
-    // Support 'oneOf' (show when value is in the array)
-    if (Array.isArray(field.visibleWhenPath.oneOf)) {
-      if (!field.visibleWhenPath.oneOf.some(v => valuesEqual(currentValue, v))) return false;
-    }
+    if (!valuesEqual(currentValue, field.visibleWhenPath.equals)) return false;
   }
 
   if (Array.isArray(field.visibleWhenTransport) && field.visibleWhenTransport.length) {
@@ -980,207 +928,6 @@ function createSummaryCard(title, text) {
   return card;
 }
 
-// --- Forecast section helpers ---
-
-/**
- * Render RAM tier info card for the forecast section header.
- * Reads tier info from cached /api/status or state.forecast.
- */
-function renderForecastTierInfo() {
-  const tierDiv = document.createElement('div');
-  tierDiv.className = 'config-row-grid';
-  tierDiv.style.cssText = 'margin:4px 0 8px;';
-
-  const tierLabel = forecastTierCache
-    ? `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`
-    : 'Wird ermittelt...';
-
-  const row = document.createElement('div');
-  row.className = 'config-row';
-  const label = document.createElement('span');
-  label.className = 'config-row-label';
-  label.textContent = 'Erkannte RAM-Stufe';
-  row.appendChild(label);
-  const val = document.createElement('strong');
-  val.className = 'config-row-value';
-  val.id = 'forecastTierValue';
-  val.textContent = tierLabel;
-  row.appendChild(val);
-  tierDiv.appendChild(row);
-
-  // Fetch tier info if not cached
-  if (!forecastTierCache && typeof apiFetch === 'function') {
-    apiFetch(buildApiUrl('/api/status')).then(r => r.json()).then(data => {
-      if (data?.forecast?.tier) {
-        forecastTierCache = { tier: data.forecast.tier, totalMB: data.forecast.totalMB || '?' };
-        const el = document.getElementById('forecastTierValue');
-        if (el) el.textContent = `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`;
-      }
-    }).catch(() => { /* silent */ });
-  }
-
-  return tierDiv;
-}
-
-/**
- * Render multi-string editor for PV detailed configuration mode (D-11).
- * Dynamic list of { label, kwp, tiltDeg, azimuthDeg } entries.
- */
-function renderForecastStringEditor() {
-  // Initialize draft from config if empty
-  if (!forecastStringsDraft.length) {
-    const cfgStrings = getVisibilityValue('forecast.pv.strings');
-    if (Array.isArray(cfgStrings) && cfgStrings.length > 0) {
-      forecastStringsDraft = cfgStrings.map(s => ({ ...s }));
-    } else {
-      forecastStringsDraft = [{ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 }];
-    }
-  }
-
-  const section = document.createElement('div');
-  section.className = 'config-group';
-  section.dataset.accent = 'green';
-
-  const kicker = document.createElement('div');
-  kicker.className = 'config-group-kicker';
-  kicker.style.color = 'var(--flow-green)';
-  kicker.textContent = 'PV-Strings (Detailliert)';
-  section.appendChild(kicker);
-
-  const desc = document.createElement('p');
-  desc.style.cssText = 'padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;';
-  desc.textContent = 'Jede Dachflaeche mit eigener Ausrichtung als separaten String anlegen. Beispiel: Sued-Dach 15 kWp + Ost-Garage 5 kWp.';
-  section.appendChild(desc);
-
-  // Column headers
-  const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;padding:4px 14px;font-size:11px;color:rgba(232,234,240,0.4);';
-  headerRow.innerHTML = '<span>Bezeichnung</span><span style="text-align:right">kWp</span><span style="text-align:right">Neigung°</span><span style="text-align:right">Richtung°</span><span></span>';
-  section.appendChild(headerRow);
-
-  const list = document.createElement('div');
-  list.id = 'forecastStringsList';
-  list.style.cssText = 'padding:4px 14px;';
-
-  for (let i = 0; i < forecastStringsDraft.length; i++) {
-    list.appendChild(renderStringRow(i));
-  }
-  section.appendChild(list);
-
-  const addRow = document.createElement('div');
-  addRow.style.cssText = 'padding:8px 14px;';
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'btn btn-ghost btn-small';
-  addBtn.textContent = '+ String hinzufuegen';
-  addBtn.addEventListener('click', () => {
-    forecastStringsDraft.push({
-      label: `String ${forecastStringsDraft.length + 1}`,
-      kwp: 5,
-      tiltDeg: 35,
-      azimuthDeg: 180
-    });
-    syncForecastStringsToDraft();
-    renderSettingsShell();
-    updateSaveBar();
-  });
-  addRow.appendChild(addBtn);
-  section.appendChild(addRow);
-
-  return section;
-}
-
-function renderStringRow(index) {
-  const s = forecastStringsDraft[index];
-  const row = document.createElement('div');
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;align-items:center;margin-bottom:6px;';
-
-  const labelInput = document.createElement('input');
-  labelInput.type = 'text';
-  labelInput.className = 'config-input';
-  labelInput.placeholder = 'z.B. Sued-Dach, Ost-Garage';
-  labelInput.title = 'Name dieser Dachflaeche (frei waehlbar)';
-  labelInput.value = s.label || '';
-  labelInput.addEventListener('input', () => {
-    forecastStringsDraft[index].label = labelInput.value;
-    syncForecastStringsToDraft();
-    updateSaveBar();
-  });
-  row.appendChild(labelInput);
-
-  const kwpInput = document.createElement('input');
-  kwpInput.type = 'number';
-  kwpInput.className = 'config-input';
-  kwpInput.placeholder = 'kWp';
-  kwpInput.min = '0.1';
-  kwpInput.step = '0.1';
-  kwpInput.value = s.kwp ?? '';
-  kwpInput.style.textAlign = 'right';
-  kwpInput.title = 'Installierte Leistung dieser Dachflaeche in kWp';
-  kwpInput.addEventListener('input', () => {
-    forecastStringsDraft[index].kwp = parseFloat(kwpInput.value) || 0;
-    syncForecastStringsToDraft();
-    updateSaveBar();
-  });
-  row.appendChild(kwpInput);
-
-  const tiltInput = document.createElement('input');
-  tiltInput.type = 'number';
-  tiltInput.className = 'config-input';
-  tiltInput.placeholder = 'Neigung°';
-  tiltInput.min = '0';
-  tiltInput.max = '90';
-  tiltInput.value = s.tiltDeg ?? '';
-  tiltInput.style.textAlign = 'right';
-  tiltInput.title = 'Dachneigung in Grad (0=flach, 35=typisch, 90=senkrecht)';
-  tiltInput.addEventListener('input', () => {
-    forecastStringsDraft[index].tiltDeg = parseInt(tiltInput.value, 10) || 0;
-    syncForecastStringsToDraft();
-    updateSaveBar();
-  });
-  row.appendChild(tiltInput);
-
-  const azInput = document.createElement('input');
-  azInput.type = 'number';
-  azInput.className = 'config-input';
-  azInput.placeholder = 'Richtung°';
-  azInput.min = '0';
-  azInput.max = '360';
-  azInput.value = s.azimuthDeg ?? '';
-  azInput.style.textAlign = 'right';
-  azInput.title = 'Himmelsrichtung (0=Nord, 90=Ost, 180=Sued, 270=West)';
-  azInput.addEventListener('input', () => {
-    forecastStringsDraft[index].azimuthDeg = parseInt(azInput.value, 10) || 0;
-    syncForecastStringsToDraft();
-    updateSaveBar();
-  });
-  row.appendChild(azInput);
-
-  const removeBtn = document.createElement('button');
-  removeBtn.type = 'button';
-  removeBtn.className = 'btn btn-ghost btn-small';
-  removeBtn.style.color = 'var(--err)';
-  removeBtn.textContent = 'X';
-  removeBtn.addEventListener('click', () => {
-    forecastStringsDraft.splice(index, 1);
-    if (!forecastStringsDraft.length) {
-      forecastStringsDraft.push({ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 });
-    }
-    syncForecastStringsToDraft();
-    renderSettingsShell();
-    updateSaveBar();
-  });
-  row.appendChild(removeBtn);
-
-  return row;
-}
-
-function syncForecastStringsToDraft() {
-  if (!currentDraftConfig.forecast) currentDraftConfig.forecast = {};
-  if (!currentDraftConfig.forecast.pv) currentDraftConfig.forecast.pv = {};
-  currentDraftConfig.forecast.pv.strings = forecastStringsDraft.map(s => ({ ...s }));
-}
-
 // getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
 
 // Fields hidden from UI (managed automatically, user should not edit)
@@ -1261,12 +1008,6 @@ function renderDestinationGrid(destinationId) {
       rowContainer.appendChild(mapRow);
     }
 
-    // Forecast section: prepend RAM tier info card
-    if (section.id === 'forecast') {
-      const tierInfo = renderForecastTierInfo();
-      if (tierInfo) group.insertBefore(tierInfo, group.firstChild.nextSibling);
-    }
-
     mount.appendChild(group);
 
     if (section.id === 'pricing') {
@@ -1274,27 +1015,10 @@ function renderDestinationGrid(destinationId) {
       mount.appendChild(renderPvPlantsEditor());
       mount.appendChild(renderPricingPeriodsEditor());
     }
-
-    // Forecast section: append multi-string editor when in detailed mode
-    if (section.id === 'forecast') {
-      const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
-      if (configLevel === 'detailed') {
-        mount.appendChild(renderForecastStringEditor());
-      }
-    }
   }
 
   if (shouldRenderHistoryImportPanel(destinationId)) {
     mount.appendChild(renderHistoryImportPanel(destinationId));
-  }
-
-  if (destinationId === 'connection') {
-    mount.appendChild(renderVpnUploadPanel());
-  }
-
-  // If only one card in the grid, span full width
-  if (mount.children.length === 1) {
-    mount.children[0].style.gridColumn = '1 / -1';
   }
 }
 
@@ -1307,8 +1031,7 @@ function buildHistoryImportSummary(status) {
 
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
-  panel.className = 'config-group config-group--full';
-  panel.style.gridColumn = '1 / -1';
+  panel.className = 'config-group';
   panel.dataset.accent = 'yellow';
 
   const actionState = buildHistoryImportActionState({
@@ -1399,8 +1122,7 @@ function updatePvPlantField(plantId, path, value) {
 
 function renderPvPlantsEditor() {
   const section = document.createElement('section');
-  section.className = 'config-group config-group--full';
-  section.style.gridColumn = '1 / -1';
+  section.className = 'config-group';
   section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
     ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
@@ -1489,8 +1211,7 @@ function renderEpexPriceSourceInfo() {
 
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
-  section.className = 'config-group config-group--full';
-  section.style.gridColumn = '1 / -1';
+  section.className = 'config-group';
   section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
     ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
@@ -1632,7 +1353,6 @@ function syncRenderedFieldsToDraft() {
     const input = document.getElementById(fieldId(field.path));
     if (!input) continue;
     const parsed = parseFieldInput(field);
-    if (parsed === undefined) continue; // json-type fields return undefined — skip
     if (parsed && parsed.action === 'delete') deletePath(next, field.path);
     else setPath(next, field.path, parsed);
   }
@@ -1668,9 +1388,6 @@ function countChangedFields() {
 }
 
 function parseFieldInput(field) {
-  // JSON fields (e.g. forecast.pv.strings) are managed by custom handlers, not form inputs
-  if (field.type === 'json') return undefined;
-
   const input = document.getElementById(fieldId(field.path));
   if (!input) return undefined;
 
@@ -1693,7 +1410,6 @@ function parseFieldInput(field) {
 
 function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
-  syncForecastStringsToDraft(); // MUST run after syncRenderedFieldsToDraft to override string-coerced value
   const next = clone(currentDraftConfig || {});
   next.userEnergyPricing = next.userEnergyPricing || {};
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
@@ -1718,8 +1434,6 @@ function applyConfigPayload(payload) {
   }));
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
-  forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
-  forecastTierCache = null;
   settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
@@ -1825,12 +1539,10 @@ async function saveConfig(config, source = 'settings') {
     meta: payload.meta
   });
 
-  if (payload.restartRequired) {
-    setBanner(`Konfiguration gespeichert. Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`, 'warn');
-    showSettingsRestartButton();
-  } else {
-    setBanner('Konfiguration gespeichert.', 'success');
-  }
+  const restartNote = payload.restartRequired
+    ? ` Neustart empfohlen für: ${payload.restartRequiredPaths.join(', ')}`
+    : '';
+  setBanner(`Konfiguration gespeichert.${restartNote}`, payload.restartRequired ? 'warn' : 'success');
   await loadHistoryImportStatus();
   renderSettingsShell();
   return true;
@@ -1952,90 +1664,6 @@ function exportConfig() {
   window.location.href = buildApiUrl('/api/config/export');
 }
 
-// ── System Updates (OS packages) ──
-
-async function loadSystemInfo() {
-  const banner = document.getElementById('systemInfoBanner');
-  if (!banner) return;
-  try {
-    const r = await apiFetch('/api/admin/system/info');
-    const info = await r.json();
-    if (!info.ok) { banner.textContent = 'Systeminfo nicht verfügbar'; return; }
-    let html = `<strong>${escapeHtml(info.hostname)}</strong>`;
-    html += ` | Kernel: ${escapeHtml(info.kernel)}`;
-    html += ` | Node: ${escapeHtml(info.nodeVersion)}`;
-    html += ` | Uptime: ${escapeHtml(info.uptime)}`;
-    if (info.memory) html += ` | RAM: ${info.memory.usedMb}/${info.memory.totalMb} MB`;
-    if (info.disk) html += ` | Disk: ${escapeHtml(info.disk.used)}/${escapeHtml(info.disk.size)} (${escapeHtml(info.disk.usePct)})`;
-    banner.innerHTML = html;
-  } catch {
-    banner.textContent = 'Systeminfo konnte nicht geladen werden.';
-  }
-}
-
-async function checkSystemUpdates() {
-  const banner = document.getElementById('systemUpdatesBanner');
-  const list = document.getElementById('systemUpdatesList');
-  const actions = document.getElementById('systemUpdatesActions');
-  const meta = document.getElementById('systemUpdatesMeta');
-  if (!banner) return;
-  banner.style.display = '';
-  banner.textContent = 'Prüfe auf System-Updates...';
-  if (list) list.style.display = 'none';
-  if (actions) actions.style.display = 'none';
-  try {
-    const r = await apiFetch('/api/admin/system/updates/check');
-    const data = await r.json();
-    if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
-    if (data.totalCount === 0) {
-      banner.innerHTML = '<span style="color:var(--ok);">System ist aktuell — keine Updates verfügbar.</span>';
-      if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
-      return;
-    }
-    const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheits-Updates)` : '';
-    banner.innerHTML = `<strong style="color:var(--c-amber-600);">${data.totalCount} Updates verfügbar${secNote}</strong>`;
-    if (list && data.packages.length > 0) {
-      list.style.display = '';
-      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;">';
-      html += '<tr style="opacity:0.6;"><td style="padding:2px 6px;">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
-      for (const p of data.packages) {
-        html += `<tr><td style="padding:2px 6px;font-family:monospace;">${escapeHtml(p.name)}</td><td style="opacity:0.6;">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
-      }
-      html += '</table>';
-      list.innerHTML = html;
-    }
-    if (actions) actions.style.display = '';
-    if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
-  } catch (e) {
-    banner.textContent = 'Fehler beim Prüfen: ' + e.message;
-  }
-}
-
-async function applySystemUpdates() {
-  const banner = document.getElementById('systemUpdatesBanner');
-  const actions = document.getElementById('systemUpdatesActions');
-  const btn = document.getElementById('applySystemUpdatesBtn');
-  if (!banner) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'Updates werden installiert...'; }
-  banner.innerHTML = '<span style="color:var(--c-amber-600);">Updates werden installiert — das kann einige Minuten dauern...</span>';
-  try {
-    const r = await apiFetch('/api/admin/system/updates/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
-    const data = await r.json();
-    if (data.ok) {
-      banner.innerHTML = `<span style="color:var(--ok);">${data.upgraded} Pakete aktualisiert.</span>`;
-      if (actions) actions.style.display = 'none';
-      const list = document.getElementById('systemUpdatesList');
-      if (list) list.style.display = 'none';
-    } else {
-      banner.innerHTML = `<span style="color:var(--err);">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
-    }
-  } catch (e) {
-    banner.innerHTML = `<span style="color:var(--err);">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Alle Updates installieren'; }
-  }
-}
-
 async function restartService() {
   const res = await apiFetch('/api/admin/service/restart', { method: 'POST' });
   const payload = await res.json();
@@ -2047,189 +1675,6 @@ async function restartService() {
   window.setTimeout(() => {
     window.location.reload();
   }, 8000);
-}
-
-function renderVpnUploadPanel() {
-  const panel = document.createElement('section');
-  panel.className = 'config-group';
-  panel.dataset.accent = 'purple';
-
-  const kicker = document.createElement('div');
-  kicker.className = 'config-group-kicker';
-  kicker.textContent = 'VPN-Profil hochladen';
-  kicker.style.color = 'var(--node-vpn, #7F77DD)';
-  panel.appendChild(kicker);
-
-  const desc = document.createElement('p');
-  desc.style.cssText = 'font-size:0.78rem;opacity:0.7;padding:0 14px 8px;margin:0;';
-  desc.textContent = '.ovpn- oder WireGuard .conf-Datei hochladen. Bei OpenVPN optional separate Zertifikate. Private Keys werden sicher gespeichert und nie per API zurückgegeben.';
-  panel.appendChild(desc);
-
-  const form = document.createElement('div');
-  form.style.cssText = 'padding:0 14px 14px;';
-  form.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <label style="font-size:0.78rem;font-weight:600;">VPN-Konfiguration (.ovpn / .conf)</label>
-      <input type="file" id="vpnOvpnFile" accept=".ovpn,.conf" style="font-size:0.78rem;">
-      <label style="font-size:0.78rem;font-weight:600;margin-top:4px;">Optionale Dateien</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div><span style="font-size:0.7rem;opacity:0.6;">ca.crt</span><input type="file" id="vpnCaFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">client.crt</span><input type="file" id="vpnCertFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">client.key</span><input type="file" id="vpnKeyFile" accept=".key,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">ta.key / ipsec.secrets</span><input type="file" id="vpnTaFile" accept=".key,.pem,.secrets" style="font-size:0.7rem;width:100%;"></div>
-      </div>
-      <button id="vpnUploadBtn" type="button" class="btn btn-small" style="margin-top:6px;background:var(--node-vpn,#7F77DD);color:#fff;align-self:flex-start;">
-        Hochladen
-      </button>
-      <div id="vpnUploadResult" style="font-size:0.75rem;min-height:1.2em;"></div>
-    </div>
-  `;
-  panel.appendChild(form);
-
-  // VPN status summary
-  const statusDiv = document.createElement('div');
-  statusDiv.id = 'vpnSettingsStatus';
-  statusDiv.style.cssText = 'padding:0 14px 14px;font-size:0.78rem;';
-  panel.appendChild(statusDiv);
-
-  // VPN action buttons
-  const actionsDiv = document.createElement('div');
-  actionsDiv.style.cssText = 'padding:0 14px 10px;display:flex;gap:8px;align-items:center;';
-  actionsDiv.innerHTML = `
-    <button id="vpnSettingsStart" class="btn btn-small" style="background:var(--node-vpn,#7F77DD);color:#fff;">Verbinden</button>
-    <button id="vpnSettingsStop" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Trennen</button>
-    <button id="vpnSettingsRestart" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Reconnect</button>
-    <span id="vpnSettingsActionResult" style="font-size:0.72rem;margin-left:6px;"></span>
-  `;
-  panel.appendChild(actionsDiv);
-
-  async function vpnSettingsAction(action, btn) {
-    const resultEl = document.getElementById('vpnSettingsActionResult');
-    btn.disabled = true;
-    if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = ''; }
-    try {
-      const r = await apiFetch('/api/vpn/' + action, { method: 'POST' });
-      const out = await r.json();
-      if (resultEl) {
-        resultEl.textContent = out.ok ? (action === 'stop' ? 'Getrennt' : 'OK') : (out.error || 'Fehler');
-        resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
-      }
-      refreshVpnSettingsStatus();
-    } catch (e) {
-      if (resultEl) { resultEl.textContent = e.message; resultEl.style.color = 'var(--err)'; }
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  setTimeout(() => {
-    document.getElementById('vpnSettingsStart')?.addEventListener('click', function() { vpnSettingsAction('start', this); });
-    document.getElementById('vpnSettingsStop')?.addEventListener('click', function() { vpnSettingsAction('stop', this); });
-    document.getElementById('vpnSettingsRestart')?.addEventListener('click', function() { vpnSettingsAction('restart', this); });
-  }, 0);
-
-  // fetch VPN status
-  function refreshVpnSettingsStatus() {
-    apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
-      const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-      const colors = { connected: 'var(--ok,#22c55e)', error: 'var(--err,#ef4444)', connecting: 'var(--c-amber-600,#d97706)', disconnected: 'var(--flow-text-muted,#9ca3af)' };
-      let html = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${colors[vpn.status] || '#888'};margin-right:6px;"></span>`;
-      html += `<strong style="color:${colors[vpn.status] || '#888'};">${labels[vpn.status] || vpn.status || 'unbekannt'}</strong>`;
-      if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
-      if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
-      if (vpn.uptimeSeconds > 0) {
-        const h = Math.floor(vpn.uptimeSeconds / 3600);
-        const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
-        html += ` | Uptime: ${h > 0 ? h + 'h ' : ''}${m}m`;
-      }
-      if (vpn.reconnectAttempts > 0) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
-      if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-        html += ` | <span style="color:var(--c-amber-600);">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
-      }
-      if (vpn.lastError) html += ` | <span style="color:var(--err);">${escapeHtml(vpn.lastError)}</span>`;
-      statusDiv.innerHTML = html;
-    }).catch(() => {
-      statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
-    });
-  }
-  refreshVpnSettingsStatus();
-
-  // fetch VPN config details
-  const configDiv = document.createElement('div');
-  configDiv.style.cssText = 'padding:0 14px 14px;font-size:0.75rem;';
-  panel.appendChild(configDiv);
-
-  apiFetch('/api/vpn/config').then(r => r.json()).then(cfg => {
-    if (!cfg || !cfg.configExists) {
-      configDiv.innerHTML = '<span style="opacity:0.5;">Kein VPN-Profil importiert.</span>';
-      return;
-    }
-    if (!cfg.fields || !cfg.fields.length) return;
-
-    let html = '<div style="margin-top:6px;border:1px solid var(--flow-border,#333);border-radius:8px;overflow:hidden;">';
-    html += '<div style="padding:6px 10px;font-weight:600;font-size:0.72rem;background:var(--flow-surface,#1a1a2e);color:var(--node-vpn,#7F77DD);">Importierte VPN-Konfiguration</div>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;">';
-    cfg.fields.forEach((f, i) => {
-      const bg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)';
-      const labelStyle = f.forced ? 'opacity:0.6;' : '';
-      const valStyle = f.warn ? 'color:var(--c-amber-600);font-weight:600;' : f.forced ? 'opacity:0.6;' : '';
-      const badge = f.forced ? ' <span style="font-size:0.6rem;opacity:0.5;background:var(--node-vpn,#7F77DD);color:#fff;padding:1px 4px;border-radius:3px;">forced</span>' : '';
-      html += `<tr style="background:${bg};"><td style="padding:3px 10px;white-space:nowrap;${labelStyle}">${escapeHtml(f.key)}${badge}</td><td style="padding:3px 10px;font-family:monospace;${valStyle}">${escapeHtml(f.value)}</td></tr>`;
-    });
-    html += '</table></div>';
-    configDiv.innerHTML = html;
-  }).catch(() => {});
-
-  // upload handler (deferred to avoid event timing issues)
-  setTimeout(() => {
-    document.getElementById('vpnUploadBtn')?.addEventListener('click', handleVpnUpload);
-  }, 0);
-
-  return panel;
-}
-
-async function handleVpnUpload() {
-  const resultEl = document.getElementById('vpnUploadResult');
-  const ovpnInput = document.getElementById('vpnOvpnFile');
-  if (!ovpnInput?.files?.length) {
-    if (resultEl) resultEl.textContent = 'Bitte .ovpn- oder .conf-Datei auswaehlen.';
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append('config', ovpnInput.files[0]);
-
-  const caInput = document.getElementById('vpnCaFile');
-  if (caInput?.files?.length) formData.append('ca', caInput.files[0]);
-  const certInput = document.getElementById('vpnCertFile');
-  if (certInput?.files?.length) formData.append('cert', certInput.files[0]);
-  const keyInput = document.getElementById('vpnKeyFile');
-  if (keyInput?.files?.length) formData.append('key', keyInput.files[0]);
-  const taInput = document.getElementById('vpnTaFile');
-  if (taInput?.files?.length) {
-    const file = taInput.files[0];
-    // Route to correct field based on filename
-    if (file.name === 'ipsec.secrets' || file.name.endsWith('.secrets')) {
-      formData.append('secrets', file);
-    } else {
-      formData.append('ta', file);
-    }
-  }
-
-  if (resultEl) resultEl.textContent = 'Hochladen...';
-
-  try {
-    const r = await apiFetch('/api/vpn/config/upload', { method: 'POST', body: formData });
-    const out = await r.json();
-    if (resultEl) {
-      resultEl.textContent = out.ok
-        ? `Profil "${out.profile}" importiert.`
-        : `Fehler: ${(out.errors || [out.error]).join(', ')}`;
-      resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
-    }
-  } catch (e) {
-    if (resultEl) { resultEl.textContent = `Upload fehlgeschlagen: ${e.message}`; resultEl.style.color = 'var(--err)'; }
-  }
 }
 
 function initSettingsPage() {
@@ -2274,7 +1719,6 @@ function initSettingsPage() {
     }));
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];
-    forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
     renderSettingsShell();
     updateSaveBar();
     setBanner('Änderungen verworfen.', 'info');
@@ -2295,23 +1739,6 @@ function initSettingsPage() {
   document.getElementById('restartServiceBtn')?.addEventListener('click', () => restartService().catch((error) => {
     setHealthBanner(`Restart fehlgeschlagen: ${error.message}`, 'error');
   }));
-
-  // System Updates (OS packages)
-  document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', checkSystemUpdates);
-  document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', applySystemUpdates);
-  document.getElementById('rebootSystemBtn')?.addEventListener('click', async () => {
-    if (!confirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.')) return;
-    const resultEl = document.getElementById('rebootResult');
-    if (resultEl) { resultEl.textContent = 'Neustart...'; resultEl.style.color = 'var(--c-amber-600)'; }
-    try {
-      await apiFetch('/api/admin/system/reboot', { method: 'POST' });
-      if (resultEl) { resultEl.textContent = 'System startet neu — Seite wird in 30s neu geladen...'; }
-      setTimeout(() => window.location.reload(), 30000);
-    } catch (e) {
-      if (resultEl) { resultEl.textContent = 'Fehler: ' + e.message; resultEl.style.color = 'var(--err)'; }
-    }
-  });
-  loadSystemInfo();
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();
@@ -2358,16 +1785,13 @@ function initSettingsPage() {
       if (panel) panel.hidden = false;
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
-      // Auto-load health + check for updates when switching to System tab
-      if (target === 'system') {
-        loadHealth().catch(() => {});
-        if (typeof checkForUpdate === 'function') {
-          const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
-          const cooldownMs = 10 * 60 * 1000;
-          if (Date.now() - lastCheck > cooldownMs) {
-            sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-            checkForUpdate().catch(() => {});
-          }
+      // Auto-check for updates when switching to System tab
+      if (target === 'system' && typeof checkForUpdate === 'function') {
+        const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+        const cooldownMs = 10 * 60 * 1000;
+        if (Date.now() - lastCheck > cooldownMs) {
+          sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
+          checkForUpdate().catch(() => {});
         }
       }
     });

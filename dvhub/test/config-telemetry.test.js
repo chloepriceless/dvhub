@@ -7,16 +7,15 @@ test('default config enables internal telemetry persistence with rollups', () =>
   const defaults = createDefaultConfig();
 
   assert.equal(defaults.telemetry.enabled, true);
-  assert.equal(defaults.telemetry.database.host, '/var/run/postgresql');
-  assert.equal(defaults.telemetry.database.port, 5432);
-  assert.equal(defaults.telemetry.database.name, 'dvhub');
+  assert.equal(defaults.telemetry.dbPath, '');
   assert.equal(defaults.telemetry.rawRetentionDays, 45);
+  assert.deepEqual(Array.from(defaults.telemetry.rollupIntervals), [300, 900, 3600]);
   assert.equal(defaults.telemetry.historyImport.enabled, false);
   assert.equal(defaults.telemetry.historyImport.provider, 'vrm');
   assert.equal(defaults.telemetry.historyImport.vrmPortalId, '');
   assert.equal(defaults.telemetry.historyImport.vrmToken, '');
   assert.equal(defaults.userEnergyPricing.mode, 'fixed');
-  assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, 30);
+  assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, null);
   assert.equal(defaults.userEnergyPricing.marketValueMode, 'annual');
   assert.deepEqual(defaults.userEnergyPricing.periods, []);
   assert.deepEqual(defaults.userEnergyPricing.pvPlants, []);
@@ -24,8 +23,8 @@ test('default config enables internal telemetry persistence with rollups', () =>
   assert.equal(defaults.userEnergyPricing.usesParagraph14aModule3, false);
   assert.equal(defaults.userEnergyPricing.module3Windows.window1.enabled, false);
   assert.equal(defaults.userEnergyPricing.module3Windows.window1.priceCtKwh, null);
-  assert.equal(defaults.userEnergyPricing.costs.pvCtKwh, 5);
-  assert.equal(defaults.userEnergyPricing.costs.batteryBaseCtKwh, 4);
+  assert.equal(defaults.userEnergyPricing.costs.pvCtKwh, null);
+  assert.equal(defaults.userEnergyPricing.costs.batteryBaseCtKwh, null);
   assert.equal(defaults.userEnergyPricing.costs.batteryLossMarkupPct, 20);
   assert.equal(defaults.dvControl.enabled, true);
   assert.equal(defaults.dvControl.negativePriceProtection.enabled, true);
@@ -112,7 +111,7 @@ test('normalizeConfigInput resets out-of-range runtime intervals to defaults', (
     }
   });
 
-  assert.equal(normalized.persistedConfig.meterPollMs, 2000);
+  assert.equal(normalized.persistedConfig.meterPollMs, 5000);
   assert.equal(normalized.persistedConfig.keepalivePulseSec, 60);
   assert.equal(normalized.persistedConfig.schedule.evaluateMs, 15000);
   assert.match(normalized.warnings.join('\n'), /out of range/i);
@@ -125,7 +124,7 @@ test('config definition exposes telemetry section and fields', () => {
 
   assert.ok(sectionIds.includes('telemetry'));
   assert.ok(fieldPaths.includes('telemetry.enabled'));
-  assert.ok(fieldPaths.includes('telemetry.database.host'));
+  assert.ok(fieldPaths.includes('telemetry.dbPath'));
   assert.ok(fieldPaths.includes('telemetry.rawRetentionDays'));
   assert.ok(fieldPaths.includes('telemetry.historyImport.enabled'));
   assert.ok(fieldPaths.includes('telemetry.historyImport.provider'));
