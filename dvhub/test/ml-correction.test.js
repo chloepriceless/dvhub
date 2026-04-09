@@ -1,0 +1,254 @@
+// ml-correction.test.js -- Tests for ML correction, training, and health modules.
+// Verifies: bypass when no model, bypass when disabled, correct prediction mapping,
+// error handling, training rollback, health status aggregation.
+
+import { describe, it, mock, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMlCorrection } from '../services/ml/ml-correction.js';
+import { createMlTraining } from '../services/ml/ml-training.js';
+import { createMlHealth } from '../services/ml/ml-health.js';
+
+describe('createMlCorrection', () => {
+  let mockBridge, mockGetCfg, mockPushLog, correction;
+
+  beforeEach(() => {
+    mockBridge = { call: mock.fn() };
+    mockPushLog = mock.fn();
+    mockGetCfg = () => ({
+      ml: { mlEnabled: true, mlModelDir: '/tmp/ml-models' }
+    });
+    correction = createMlCorrection({
+      pythonBridge: mockBridge,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog
+    });
+  });
+
+  it('test 1: bypass when no model is set', async () => {
+    const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, {});
+    assert.equal(result.applied, false);
+    assert.deepStrictEqual(result.corrected, pvSlots);
+    assert.equal(result.model, null);
+  });
+
+  it('test 2: bypass when mlEnabled is false', async () => {
+    mockGetCfg = () => ({ ml: { mlEnabled: false, mlModelDir: '/tmp/ml-models' } });
+    correction = createMlCorrection({
+      pythonBridge: mockBridge,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog
+    });
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, {});
+    assert.equal(result.applied, false);
+    assert.deepStrictEqual(result.corrected, pvSlots);
+  });
+
+  it('test 3: correct returns mapped slots on successful prediction', async () => {
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    mockBridge.call.mock.mockImplementation(async () => ({
+      ok: true,
+      applied: true,
+      model: 'linear_v1',
+      corrected: [
+        { start: '2026-04-09T12:00:00Z', powerW: 1100, rawPowerW: 1000 }
+      ]
+    }));
+
+    const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, { weather: {} });
+    assert.equal(result.applied, true);
+    assert.equal(result.model, 'linear_v1');
+    assert.equal(result.corrected[0].powerW, 1100);
+  });
+
+  it('test 4: handles Python error gracefully (returns bypass)', async () => {
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    mockBridge.call.mock.mockImplementation(async () => {
+      throw new Error('Python process crashed');
+    });
+
+    const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, {});
+    assert.equal(result.applied, false);
+    assert.deepStrictEqual(result.corrected, pvSlots);
+    assert.equal(result.model, null);
+    // Verify error was logged
+    assert.ok(mockPushLog.mock.calls.length > 0);
+    assert.equal(mockPushLog.mock.calls[0].arguments[0], 'ml_predict_error');
+  });
+
+  it('test 5: handles bridge returning applied:false (no_model on disk)', async () => {
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    mockBridge.call.mock.mockImplementation(async () => ({
+      ok: true,
+      applied: false,
+      reason: 'no_model'
+    }));
+
+    const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, {});
+    assert.equal(result.applied, false);
+    assert.deepStrictEqual(result.corrected, pvSlots);
+  });
+
+  it('test 6: getModelInfo returns null when no model set', () => {
+    assert.equal(correction.getModelInfo(), null);
+  });
+
+  it('test 7: setModel updates model info', () => {
+    correction.setModel({ model_type: 'lgbm', version: 3, mae: 42 });
+    const info = correction.getModelInfo();
+    assert.equal(info.model_type, 'lgbm');
+    assert.equal(info.version, 3);
+    assert.equal(info.mae, 42);
+  });
+});
+
+describe('createMlTraining', () => {
+  let mockBridge, mockStore, mockGetCfg, mockPushLog, mockCorrection, training;
+
+  beforeEach(() => {
+    mockBridge = { call: mock.fn() };
+    mockStore = { query: mock.fn() };
+    mockPushLog = mock.fn();
+    mockGetCfg = () => ({
+      ml: {
+        mlEnabled: true,
+        mlModelDir: '/tmp/ml-models',
+        mlMinDataDays: 7,
+        mlSlidingWindowMonths: 6,
+        mlRollbackThreshold: 1.1
+      },
+      forecast: { pv: { tilt: 30, azimuth: 180, kwp: 10 } }
+    });
+    mockCorrection = { setModel: mock.fn(), getModelInfo: () => null };
+    training = createMlTraining({
+      pythonBridge: mockBridge,
+      store: mockStore,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog,
+      mlCorrection: mockCorrection
+    });
+  });
+
+  it('test 8: triggerTraining skips when insufficient data', async () => {
+    // Mock store returns insufficient data (only 3 days)
+    mockStore.query.mock.mockImplementation(async () => ({
+      rows: [{ data_days: 3 }]
+    }));
+
+    await training.triggerTraining();
+    // Should log skip
+    const skipLog = mockPushLog.mock.calls.find(
+      c => c.arguments[0] === 'ml_training_skip'
+    );
+    assert.ok(skipLog, 'Should log ml_training_skip');
+    // Should NOT call python bridge
+    assert.equal(mockBridge.call.mock.calls.length, 0);
+  });
+
+  it('test 9: triggerTraining handles rollback response', async () => {
+    // Mock store returns sufficient data
+    mockStore.query.mock.mockImplementation(async () => ({
+      rows: [{ data_days: 30, training_data: '[]' }]
+    }));
+
+    mockBridge.call.mock.mockImplementation(async () => ({
+      ok: false,
+      reason: 'rollback',
+      new_mae: 100,
+      previous_mae: 80
+    }));
+
+    await training.triggerTraining();
+    // Should log rollback
+    const rollbackLog = mockPushLog.mock.calls.find(
+      c => c.arguments[0] === 'ml_training_rollback'
+    );
+    assert.ok(rollbackLog, 'Should log ml_training_rollback');
+    // Model should NOT be updated
+    assert.equal(mockCorrection.setModel.mock.calls.length, 0);
+  });
+
+  it('test 10: getTrainingLog returns array', () => {
+    const log = training.getTrainingLog();
+    assert.ok(Array.isArray(log));
+    assert.equal(log.length, 0);
+  });
+});
+
+describe('createMlHealth', () => {
+  let health;
+
+  beforeEach(() => {
+    const mockCorrection = {
+      getModelInfo: () => ({ model_type: 'lgbm', version: 2, mae: 45 })
+    };
+    const mockTraining = {
+      getTrainingLog: () => [
+        { ts: Date.now(), model_type: 'lgbm', version: 2, mae: 45, status: 'ok' }
+      ]
+    };
+    const mockGetCfg = () => ({
+      ml: {
+        mlEnabled: true,
+        mlTrainingHour: 21,
+        mlTrainingMinute: 30,
+        sfEnabled: true,
+        sfUseMstl: false
+      }
+    });
+
+    health = createMlHealth({
+      mlCorrection: mockCorrection,
+      mlTraining: mockTraining,
+      getCfg: mockGetCfg,
+      tier: 2
+    });
+  });
+
+  it('test 11: getStatus returns complete status object', () => {
+    const status = health.getStatus();
+    assert.equal(status.tier, 2);
+    assert.equal(status.mlEnabled, true);
+    assert.equal(status.modelType, 'lgbm');
+    assert.equal(status.modelVersion, 2);
+    assert.equal(status.mae, 45);
+    assert.ok(status.nextTraining);
+    assert.ok(Array.isArray(status.trainingLog));
+    assert.equal(status.trainingLog.length, 1);
+    assert.equal(status.sfEnabled, true);
+    assert.ok(Array.isArray(status.tierFeatures));
+  });
+
+  it('test 12: getStatus with no model returns nulls', () => {
+    const healthNoModel = createMlHealth({
+      mlCorrection: { getModelInfo: () => null },
+      mlTraining: { getTrainingLog: () => [] },
+      getCfg: () => ({
+        ml: {
+          mlEnabled: false,
+          mlTrainingHour: 21,
+          mlTrainingMinute: 30,
+          sfEnabled: false,
+          sfUseMstl: false
+        }
+      }),
+      tier: 1
+    });
+
+    const status = healthNoModel.getStatus();
+    assert.equal(status.tier, 1);
+    assert.equal(status.mlEnabled, false);
+    assert.equal(status.modelType, null);
+    assert.equal(status.modelVersion, 0);
+    assert.equal(status.mae, null);
+  });
+});
