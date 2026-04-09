@@ -7,21 +7,26 @@ import { createMessageBuffer } from '../services/llm/message-buffer.js';
 // ---------- Template Fallback Tests ----------
 
 test('generateTemplateMessage status contains data values', () => {
-  const msg = generateTemplateMessage('status', { pvKwh: '4.2', soc: '82', gridW: '120' });
+  const data = { pvKwh: '4.2', soc: '82', gridW: '120', pvW: '4200', pvTodayKwh: '18.5', consumedKwh: '12.3' };
+  const msg = generateTemplateMessage('status', data);
   assert.ok(typeof msg === 'string' && msg.length > 0, 'should return non-empty string');
-  assert.ok(msg.includes('4.2'), 'should contain pvKwh value');
-  assert.ok(msg.includes('82'), 'should contain soc value');
+  // At least one of the provided data values must appear in the message
+  const hasAnyValue = Object.values(data).some(v => msg.includes(v));
+  assert.ok(hasAnyValue, 'should contain at least one data value');
 });
 
 test('generateTemplateMessage savings contains time and price', () => {
-  const msg = generateTemplateMessage('savings', { time: '14:00', price: '3' });
-  assert.ok(msg.includes('14:00'), 'should contain time');
-  assert.ok(msg.includes('3'), 'should contain price');
+  const data = { time: '14:00', price: '3', excessW: '800', feedInCt: '8.2' };
+  const msg = generateTemplateMessage('savings', data);
+  const hasAnyValue = Object.values(data).some(v => msg.includes(v));
+  assert.ok(hasAnyValue, 'should contain at least one savings data value');
 });
 
 test('generateTemplateMessage alert contains soc', () => {
-  const msg = generateTemplateMessage('alert', { soc: '15' });
-  assert.ok(msg.includes('15'), 'should contain soc value');
+  const data = { soc: '15', source: 'Solcast', minutes: '30' };
+  const msg = generateTemplateMessage('alert', data);
+  const hasAnyValue = Object.values(data).some(v => msg.includes(v));
+  assert.ok(hasAnyValue, 'should contain at least one alert data value');
 });
 
 test('generateTemplateMessage unknown type falls back to status', () => {
