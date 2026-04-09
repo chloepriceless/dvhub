@@ -1,5 +1,7 @@
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -51,11 +53,33 @@ import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
+import { createVpnManager } from './vpn-manager.js';
+import { createForecastService } from './services/forecast/index.js';
+import { createOptimizerService } from './services/optimizer/index.js';
+import { createFamilyService } from './services/family/index.js';
+import { createMqttHub } from './services/mqtt/index.js';
+import { createMqttPublisher } from './services/mqtt/publisher.js';
+import { publishHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
+import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
+import { createDeviceService } from './services/devices/index.js';
+import { createNotificationService } from './services/notifications/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const CONFIG_PATH = process.env.DV_APP_CONFIG || path.join(__dirname, 'config.json');
 const execFileAsync = promisify(execFile);
+import { runMigrations, checkSystemRequirements } from './migration-runner.js';
+
+// Run config migrations before loading config
+const migrationResult = await runMigrations(CONFIG_PATH);
+if (migrationResult.applied.length > 0) {
+  console.log(`Config migrated: v${migrationResult.fromVersion} → v${migrationResult.toVersion}`);
+}
+const systemWarnings = checkSystemRequirements();
+if (systemWarnings.length > 0) {
+  for (const w of systemWarnings) console.warn(`System: ${w.message}`);
+}
+
 const CONFIG_DEFINITION = getConfigDefinition();
 let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
@@ -84,6 +108,7 @@ const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
 const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE === 'monolith';
 
 const state = {
+  systemWarnings,
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
   ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false, _dcExportPriceBlockLogged: false },
   keepalive: {
@@ -276,6 +301,8 @@ function persistConfig() {
 // Init order = dependency order: utils (pure imports), pricing (pure imports),
 // then epex -> poller -> scheduler -> modbus-server -> routes.
 
+let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
+
 async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
@@ -291,6 +318,7 @@ async function createTelemetryStoreIfEnabled() {
     state.telemetry.dbPath = `postgresql://${dbConfig.host || 'localhost'}:${dbConfig.port || 5432}/${dbConfig.name || 'dvhub'}`;
     state.telemetry.ok = true;
     state.telemetry.lastError = null;
+    dbPool = pool; // save reference for ctx.db
     return store;
   } catch (error) {
     state.telemetry.enabled = true;
@@ -334,7 +362,8 @@ function buildCurrentRuntimeSnapshot() {
     victron: state.victron,
     schedule: state.schedule,
     telemetry: state.telemetry,
-    historyImport: historyImportManager ? historyImportManager.getStatus() : null
+    historyImport: historyImportManager ? historyImportManager.getStatus() : null,
+    vpn: state.vpn
   });
 }
 
@@ -356,7 +385,17 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     telemetry: {
       ...runtimeSnapshot.telemetry,
       historyImport: runtimeSnapshot.historyImport
-    }
+    },
+    forecast: state.forecast ? {
+      tier: state.forecast.tier,
+      totalMB: state.forecast.totalMB,
+      workerReady: state.forecast.workerReady,
+      pvModel: state.forecast.pv?.model || null,
+      pvLastFetchAt: state.forecast.pv?.lastFetchAt || null,
+      loadLastFetchAt: state.forecast.load?.lastFetchAt || null,
+      weatherLastFetchAt: state.forecast.weather?.lastFetchAt || null,
+      weatherError: state.forecast.weather?.error || null
+    } : null
   };
 }
 
@@ -552,10 +591,13 @@ const ctx = {
   persistConfig,
   setForcedOff,
   clearForcedOff,
-  expireLeaseIfNeeded
+  expireLeaseIfNeeded,
+  get db() { return dbPool; }, // lazy getter — dbPool set during createTelemetryStoreIfEnabled()
 };
 
 const modbus = createModbusServer(ctx);
+const vpnManager = createVpnManager(ctx);
+ctx.vpnManager = vpnManager;
 const epex = createEpexFetcher(ctx);
 ctx.epexNowNext = epex.epexNowNext;
 ctx.energyPath = ENERGY_PATH;
@@ -567,6 +609,28 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
+const forecast = createForecastService(ctx);
+ctx.forecastService = forecast;
+const optimizer = createOptimizerService(ctx);
+ctx.optimizerService = optimizer;
+// buildFallbackStatusPayload is assigned later (line ~622) -- family service uses
+// it lazily via ctx at call time, so wiring order here is safe.
+const familyService = createFamilyService(ctx);
+ctx.familyService = familyService;
+
+// Phase 04: Integrations (v0.8)
+// Created unconditionally so routes-api.js can access them via ctx.
+// Started conditionally in IS_RUNTIME_PROCESS block below.
+const mqttHub = createMqttHub(ctx);
+ctx.mqttHub = mqttHub;
+const mqttPublisher = createMqttPublisher(mqttHub, ctx);
+ctx.mqttPublisher = mqttPublisher;
+const teslamateService = createTeslamateSubscriber(mqttHub, ctx);
+ctx.teslamateService = teslamateService;
+const deviceService = createDeviceService(ctx, mqttHub);
+ctx.deviceService = deviceService;
+const notificationService = createNotificationService(ctx);
+ctx.notificationService = notificationService;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
@@ -603,7 +667,7 @@ const routes = createApiRoutes(ctx);
 // are set by the factory (ctx mutation pattern).
 
 // REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues)
-const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password'];
+const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'forecast.solcast.apiKey'];
 
 function restoreRedactedValues(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
@@ -757,15 +821,20 @@ const web = http.createServer(async (req, res) => {
   }
 });
 
-(async () => {
+const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
+  // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
     liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron });
     liveTelemetryBuffer?.flush();
     publishRuntimeSnapshot();
+    // Phase 04: Fire-and-forget notification evaluation on each poll cycle
+    notificationService.evaluate(state, Date.now()).catch(err =>
+      pushLog('notification_eval_error', { error: err.message })
+    );
   };
   energyChartsMarketValueService = createEnergyChartsMarketValueService({
     marketValueStore: telemetryStore
@@ -812,11 +881,45 @@ if (IS_WEB_PROCESS) {
   web.listen(cfg.httpPort, () => {
     console.log(`Web server listening on :${cfg.httpPort}`);
   });
+
+  // HTTPS with self-signed cert (optional)
+  const httpsPort = cfg.httpsPort || null;
+  const configDir = path.dirname(CONFIG_PATH);
+  const tlsCert = cfg.tlsCertPath || path.join(configDir, 'tls', 'cert.pem');
+  const tlsKey = cfg.tlsKeyPath || path.join(configDir, 'tls', 'key.pem');
+  if (httpsPort) {
+    try {
+      const certData = fs.readFileSync(tlsCert);
+      const keyData = fs.readFileSync(tlsKey);
+      const webTls = https.createServer({ cert: certData, key: keyData }, web.listeners('request')[0]);
+      webTls.listen(httpsPort, () => {
+        console.log(`HTTPS server listening on :${httpsPort}`);
+      });
+      webTls.on('error', (err) => {
+        console.error(`HTTPS server error: ${err.message}`);
+      });
+    } catch (e) {
+      console.warn(`HTTPS disabled: ${e.message}`);
+    }
+  }
 }
 
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
   modbus.start();
+  // Phase 04: Start integration services (runtime-only — MQTT connections, device polling, notifications)
+  mqttHub.start().then(() => {
+    mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
+    teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
+    publishHaDiscoveryTopics(mqttHub, ctx.getCfg).catch(err => console.error('HA Discovery error:', err.message));
+  }).catch(err => console.error('MQTT Hub start error:', err.message));
+  deviceService.start().catch(err => console.error('Device service start error:', err.message));
+  notificationService.start().catch(err => console.error('Notification service start error:', err.message));
+  if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
+    vpnManager.start().catch(err => {
+      pushLog('vpn_start_error', { error: err.message });
+    });
+  }
   setInterval(expireLeaseIfNeeded, 1000);
   setInterval(() => {
     liveTelemetryBuffer?.flush();
@@ -857,6 +960,12 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   epex.start();
+  // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
+  telemetryReady.then(() => {
+    forecast.start().catch(err => console.error('Forecast service start error:', err.message));
+  });
+  optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
+  familyService.start().catch(err => console.error('Family service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
@@ -886,11 +995,21 @@ async function gracefulShutdown(signal) {
   scheduler.stop();
   liveTelemetryBuffer?.flush({ force: true });
   epex.stop();
+  await forecast.close();
+  await optimizer.close();
+  await familyService.close();
+  // Phase 04: Shutdown integration services (reverse init order, Hub last)
+  await notificationService.close().catch(() => {});
+  await deviceService.close().catch(() => {});
+  await teslamateService.close().catch(() => {});
+  await mqttPublisher.close().catch(() => {});
+  await mqttHub.close().catch(() => {});
   if (runtimeWorker) runtimeWorker.kill();
   // Close Modbus TCP connections gracefully (FIN, not RST)
   await Promise.all([transport.destroy(), scanTransport.destroy()]);
   if (telemetryStore) telemetryStore.close();
   modbus.close();
+  await vpnManager.close();
   if (IS_WEB_PROCESS) web.close();
   // Short delay to let TCP FIN packets flush before exiting
   setTimeout(() => process.exit(0), 500).unref();

@@ -185,9 +185,8 @@ export function createMarketAutomationBuilder(ctx) {
     const currentSocPct = state.victron?.soc;
     let availableEnergyKwh = null;
 
-    // Current PV feed-in: if PV is active it covers part of the grid export target,
-    // so the battery drain per slot is reduced → same battery budget supports more slots.
-    const pvFeedInW = Math.max(0, Number(state.victron?.pvTotalW ?? state.victron?.pvPowerW ?? 0));
+    // Raw PV reading — adjusted below after sunset time is known
+    const rawPvW = Math.max(0, Number(state.victron?.pvTotalW ?? state.victron?.pvPowerW ?? 0));
 
     // Dynamic SOC floor: sunrise/sunset-aware energy budgeting.
     // Each slot gets a time-dependent energy budget — morning slots near sunrise
@@ -286,6 +285,11 @@ export function createMarketAutomationBuilder(ctx) {
 
     // Hard energy gate: if battery capacity is known and no energy available, skip planning
     if (availableEnergyKwh != null && availableEnergyKwh <= 0) return [];
+
+    // PV feed-in for planning: only count PV if we're well before sunset.
+    // After sunset (or within 1h), PV=0 — prevents inflating evening slot budgets
+    // with daytime PV that won't exist when the slots actually execute.
+    const pvFeedInW = (sunsetMsForPlanning && now < sunsetMsForPlanning - 3600000) ? rawPvW : 0;
 
     // PV-adjusted energy for chain planning: if PV is feeding in, the battery drain per slot
     // is (maxDischargeW - pvFeedInW), so the same battery energy supports more discharge slots.

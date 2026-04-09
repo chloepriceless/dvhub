@@ -30,11 +30,25 @@
       </label>
       <nav class="topbar-nav" aria-label="Hauptnavigation">
         <a class="is-active" href="/">Leitstand</a>
+        <a href="/family">Familie</a>
+        <a href="/integrations">Integrationen</a>
         <a href="/history.html">Historie</a>
         <a href="/explorer.html">Explorer</a>
         <a href="/settings.html">Einstellungen</a>
       </nav>
       <div class="topbar-right">
+        <span class="intg-badge" id="badge-mqtt" data-system="mqtt" title="MQTT" hidden>
+          <span class="dot dot-ok"></span> MQTT
+        </span>
+        <span class="intg-badge" id="badge-tesla" data-system="tesla" title="TeslaMate" hidden>
+          <span class="dot dot-ok"></span> Tesla
+        </span>
+        <span class="intg-badge" id="badge-ha" data-system="ha" title="Home Assistant" hidden>
+          <span class="dot dot-ok"></span> HA
+        </span>
+        <span class="intg-badge" id="badge-loxone" data-system="loxone" title="Loxone" hidden>
+          <span class="dot dot-ok"></span> Loxone
+        </span>
         <span id="connStatus" class="dot dot-ok" title="Verbindungsstatus"></span>
         <span id="nowTime" style="font-size:0.65rem;color:var(--flow-text-muted);font-family:var(--font-mono);">--:--</span>
       </div>
@@ -82,6 +96,21 @@
           <div class="metric-row"><span>Control Value</span><strong id="dvValue">-</strong></div>
           <div class="metric-row"><span>Lease bis</span><strong id="offUntil">-</strong></div>
           <div class="metric-row"><span>Letzte Modbus-Abfrage</span><strong id="kaModbus">-</strong></div>
+          <div id="dvVpnRow" class="metric-row" style="display:none;"><span style="color:var(--node-vpn);">VPN-Tunnel</span><strong id="dvVpnStatus" style="color:var(--node-vpn);">-</strong></div>
+        </div>
+
+        <div class="rail-card" data-accent="vpn" id="vpnCard" style="display:none;">
+          <p class="card-kicker" style="color:var(--node-vpn);">VPN-Tunnel</p>
+          <div id="vpnStatus" class="card-value" style="color:var(--node-vpn);">-</div>
+          <div class="metric-row"><span>Tunnel-IP</span><strong id="vpnTunIp">-</strong></div>
+          <div class="metric-row"><span>Uptime</span><strong id="vpnUptime">-</strong></div>
+          <div class="metric-row"><span>Reconnects</span><strong id="vpnReconnects">0</strong></div>
+          <div id="vpnCertWarn" class="metric-row" style="display:none;color:var(--c-amber-600);">
+            <span>Zertifikat</span><strong id="vpnCertDays">-</strong>
+          </div>
+          <div style="margin-top:8px;">
+            <button id="vpnReconnectBtn" class="btn-xs" style="background:var(--node-vpn);color:#fff;">Reconnect</button>
+          </div>
         </div>
 
       </aside>
@@ -305,7 +334,39 @@
           </div>
         </div>
       </div>
+
     </div><!-- /.main-body -->
+
+    <!-- Forecast & Optimizer Section (Phase 04, INTG-01) — OUTSIDE grid to avoid chart-area overlap -->
+    <div class="forecast-optimizer-section">
+      <div class="chart-section-head">
+        <h3 class="section-title">Forecast &amp; Optimizer</h3>
+        <label class="overlay-toggle-label">
+          <input type="checkbox" id="overlay-toggle"> Overlay: PV / Last
+        </label>
+      </div>
+
+      <div class="chart-span-card" id="pv-forecast-card">
+        <span class="card-kicker">PV-PROGNOSE VS. IST</span>
+        <div class="chart-skeleton" id="pv-forecast-skeleton"></div>
+        <canvas id="pv-forecast-chart" role="img" aria-label="PV-Prognose vs. Ist" style="display:none"></canvas>
+      </div>
+
+      <div class="chart-sub-row">
+        <div class="chart-span-card" id="gantt-card">
+          <span class="card-kicker">OPTIMIZER-SCHEDULE</span>
+          <div class="chart-skeleton" id="gantt-skeleton"></div>
+          <canvas id="gantt-chart" role="img" aria-label="Optimizer-Schedule Timeline" style="display:none"></canvas>
+        </div>
+        <div class="savings-card chart-span-card" id="savings-card">
+          <span class="card-kicker">ERSPARNIS HEUTE</span>
+          <div class="savings-value card-value" id="savings-total">--</div>
+          <div class="savings-breakdown" id="savings-breakdown">
+            <!-- metric-rows populated by leitstand-charts.js -->
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Bottom: Log only -->
     <div class="bottom-panel">
@@ -325,5 +386,6 @@
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
   <script src="/app.js"></script>
+  <script src="/leitstand-charts.js?v=3"></script>
 </body>
 </html>
