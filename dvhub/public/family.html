@@ -234,6 +234,17 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 
   <div class="devices-tray" id="devices-tray"></div>
 
+  <!-- D-15 Message widget (Phase 05 — ML/LLM messages) -->
+  <div class="msg-tray" id="msgTray">
+    <div class="msg-card" id="msgLatest">
+      <div class="msg-icon" id="msgIcon">&#128225;</div>
+      <div class="msg-body">
+        <div class="msg-text" id="msgText" style="color:rgba(255,255,255,0.4)">Keine aktuellen Nachrichten</div>
+        <div class="msg-meta" id="msgMeta"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- D-10 Forecast/Preis/Optimizer widgets (right side) -->
   <div class="widgets" id="widgets">
     <div class="widget widget-forecast" data-panel="forecast">
@@ -265,6 +276,22 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   </div>
 </div>
 <div class="overlay" id="overlay"><div class="overlay-bg" data-action="close-panel"></div><div class="panel" id="panel"><div class="panel-handle"></div><div class="panel-head"><div><div class="panel-icon" id="p-icon"></div><div class="panel-title" id="p-title"></div><div class="panel-subtitle" id="p-sub"></div></div><button class="panel-close" data-action="close-panel">&times;</button></div><div class="panel-summary" id="p-summary"></div><div class="panel-stats" id="p-stats"></div><div class="panel-chart"><div class="chart-label">Verlauf heute</div><canvas id="p-chart"></canvas></div><div class="panel-details" id="p-details"></div><div class="api-hint" id="p-api" style="display:none"></div></div></div>
+
+<!-- D-18 Message history overlay (Phase 05) -->
+<div class="overlay" id="msgOverlay" style="display:none;">
+  <div class="overlay-bg" id="msgOverlayBg"></div>
+  <div class="panel">
+    <div class="panel-handle"></div>
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Nachrichten</div>
+        <div class="panel-subtitle">Letzte 24 Stunden</div>
+      </div>
+      <button class="panel-close" id="msgOverlayClose">&times;</button>
+    </div>
+    <div class="panel-details" id="msgHistory"></div>
+  </div>
+</div>
 
 <script src="/common.js"></script>
 <script src="/chart.min.js"></script>

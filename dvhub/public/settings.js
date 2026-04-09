@@ -2358,6 +2358,10 @@ function initSettingsPage() {
       if (panel) panel.hidden = false;
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
+      // Auto-load ML status when switching to ML tab
+      if (target === 'ml') {
+        initMlTab();
+      }
       // Auto-load health + check for updates when switching to System tab
       if (target === 'system') {
         loadHealth().catch(() => {});
@@ -2398,3 +2402,237 @@ window.DVhubSettings = {
   activate: activateSettingsDestination,
   onTabSwitch: function(tabId) { syncRenderedFieldsToDraft(); }
 };
+
+/* =========================================================================
+   Phase 05 — ML & AI Tab (D-27)
+   ========================================================================= */
+var mlMaeSparklineChart = null;
+var mlTabInitialized = false;
+
+function initMlTab() {
+  // Also handle direct URL hash navigation
+  if (location.hash === '#ml') {
+    var tab = document.querySelector('.settings-tab[data-tab="ml"]');
+    if (tab && !tab.classList.contains('is-active')) {
+      tab.click();
+      return; // click triggers initMlTab again via the tab handler
+    }
+  }
+
+  if (!apiFetch) return;
+
+  apiFetch('/api/ml/status').then(function (res) {
+    if (!res.ok) throw new Error('ML status unavailable');
+    return res.json();
+  }).then(function (status) {
+    renderMlStatus(status);
+  }).catch(function () {
+    var banner = document.getElementById('mlModelType');
+    if (banner) banner.textContent = '--';
+  });
+
+  apiFetch('/api/ml/accuracy').then(function (res) {
+    if (!res.ok) throw new Error('ML accuracy unavailable');
+    return res.json();
+  }).then(function (data) {
+    renderMaeSparkline(Array.isArray(data) ? data : []);
+  }).catch(function () {
+    // Sparkline stays empty
+  });
+}
+
+function formatMlDate(ts) {
+  if (!ts) return '--';
+  try {
+    var d = new Date(ts);
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return '--';
+  }
+}
+
+function renderMlStatus(status) {
+  if (!status) return;
+
+  // Model Status card
+  var modelTypeEl = document.getElementById('mlModelType');
+  if (modelTypeEl) modelTypeEl.textContent = status.modelType || '--';
+
+  var modelVersionEl = document.getElementById('mlModelVersion');
+  if (modelVersionEl) modelVersionEl.textContent = 'v' + (status.modelVersion || 0);
+
+  var lastTrainEl = document.getElementById('mlLastTrain');
+  if (lastTrainEl) lastTrainEl.textContent = status.lastTraining ? formatMlDate(status.lastTraining) : '--';
+
+  var nextTrainEl = document.getElementById('mlNextTrain');
+  if (nextTrainEl) nextTrainEl.textContent = status.nextTraining ? formatMlDate(status.nextTraining) : '--';
+
+  // MAE values
+  var mae7dEl = document.getElementById('mlMae7d');
+  if (mae7dEl) mae7dEl.textContent = (status.mae != null) ? String(status.mae) : '--';
+
+  var mae30dEl = document.getElementById('mlMae30d');
+  if (mae30dEl) mae30dEl.textContent = (status.mae30d != null) ? String(status.mae30d) : (status.mae != null ? String(status.mae) : '--');
+
+  // Tier Features
+  renderTierFeatures(status);
+
+  // Training Log
+  renderTrainingLog(status);
+
+  // LLM group (Tier 3 only)
+  var llmGroup = document.getElementById('mlLlmGroup');
+  if (llmGroup) {
+    if (status.tier >= 3) {
+      llmGroup.hidden = false;
+      var llmStatusEl = document.getElementById('llmStatus');
+      if (llmStatusEl) llmStatusEl.textContent = status.llmStatus || '--';
+
+      var llmMsgCountEl = document.getElementById('llmMsgCount');
+      if (llmMsgCountEl) llmMsgCountEl.textContent = (status.llmMsgCount != null) ? String(status.llmMsgCount) : '--';
+
+      var llmInferenceMsEl = document.getElementById('llmInferenceMs');
+      if (llmInferenceMsEl) llmInferenceMsEl.textContent = (status.llmInferenceMs != null) ? (status.llmInferenceMs + ' ms') : '--';
+    } else {
+      llmGroup.hidden = true;
+    }
+  }
+}
+
+function renderTierFeatures(status) {
+  var container = document.getElementById('mlTierFeatures');
+  if (!container) return;
+
+  var tier = status.tier || 1;
+  var tierFeatures = status.tierFeatures || [];
+
+  // Default feature list if API doesn't provide one
+  if (tierFeatures.length === 0) {
+    tierFeatures = [
+      { name: 'PV-Forecast (SQL Rollup)', minTier: 1, status: tier >= 1 ? 'aktiv' : 'inaktiv' },
+      { name: 'PV-Forecast (StatsForecast)', minTier: 2, status: tier >= 2 ? 'aktiv' : 'inaktiv' },
+      { name: 'ML-Korrektur (Linear)', minTier: 2, status: tier >= 2 ? 'aktiv (30+ Tage)' : 'inaktiv' },
+      { name: 'ML-Korrektur (LightGBM)', minTier: 2, status: tier >= 2 ? 'aktiv (90+ Tage)' : 'inaktiv' },
+      { name: 'Persistenter Python-Prozess', minTier: 3, status: tier >= 3 ? 'aktiv' : 'inaktiv' },
+      { name: 'TinyLlama Nachrichten', minTier: 3, status: tier >= 3 ? 'aktiv' : 'inaktiv' }
+    ];
+  }
+
+  container.innerHTML = tierFeatures.map(function (f) {
+    var featureName = escapeHtml(f.name || '');
+    var featureStatus = escapeHtml(f.status || 'inaktiv');
+    var minTier = f.minTier || 1;
+    var color, textDeco;
+
+    if (tier >= minTier && f.status && f.status.indexOf('aktiv') === 0) {
+      color = 'var(--ok)';
+      textDeco = 'none';
+    } else if (tier < minTier) {
+      color = 'var(--flow-text-dim)';
+      textDeco = 'line-through';
+      featureStatus = 'nicht verfuegbar (Tier ' + minTier + '+)';
+    } else {
+      color = 'var(--flow-text-muted)';
+      textDeco = 'none';
+    }
+
+    return '<div class="detail-row">' +
+      '<span class="detail-key">' + featureName + '</span>' +
+      '<span class="detail-val" style="color:' + color + ';text-decoration:' + textDeco + ';">' + escapeHtml(featureStatus) + '</span>' +
+      '</div>';
+  }).join('');
+}
+
+function renderTrainingLog(status) {
+  var container = document.getElementById('mlTrainingLog');
+  if (!container) return;
+
+  var log = status.trainingLog || [];
+  if (log.length === 0) {
+    container.innerHTML = '<div class="detail-row"><span class="detail-key" style="color:rgba(232,234,240,0.3);">Noch keine Trainingslaeufe</span></div>';
+    return;
+  }
+
+  // Show last 5 entries
+  var entries = log.slice(-5).reverse();
+  container.innerHTML = entries.map(function (entry) {
+    var ts = formatMlDate(entry.ts || entry.date);
+    var model = escapeHtml(entry.model || entry.modelType || '--');
+    var version = entry.version || entry.modelVersion || '?';
+    var mae = entry.mae != null ? entry.mae + 'W' : '--';
+    var result = entry.status || entry.result || 'OK';
+    var color;
+
+    if (result === 'OK' || result === 'ok' || result === 'success') {
+      color = 'var(--ok)';
+    } else if (result === 'Rollback' || result === 'rollback') {
+      color = 'var(--warn)';
+    } else {
+      color = 'var(--danger)';
+      result = 'Fehler';
+    }
+
+    return '<div class="detail-row">' +
+      '<span class="detail-key" style="font-family:\'JetBrains Mono\',monospace;font-size:10px;">' + escapeHtml(ts) + '</span>' +
+      '<span class="detail-val">' + model + ' v' + escapeHtml(String(version)) + ' &middot; MAE ' + escapeHtml(mae) +
+      ' <span style="color:' + color + ';font-weight:600;">' + escapeHtml(result) + '</span></span>' +
+      '</div>';
+  }).join('');
+}
+
+function renderMaeSparkline(data) {
+  var canvas = document.getElementById('mlMaeSparkline');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  var maeValues = data.map(function (d) { return d.mae || 0; });
+  var labels = data.map(function (d) { return d.date || ''; });
+
+  var config = {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: maeValues,
+        borderColor: '#5a6a8a',
+        backgroundColor: 'rgba(90, 106, 138, 0.08)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        tension: 0.3,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(11, 15, 26, 0.95)',
+          titleColor: '#e8eaf0',
+          bodyColor: '#c8cdd8',
+          borderColor: 'rgba(99, 102, 241, 0.3)',
+          borderWidth: 1,
+          padding: 6,
+          cornerRadius: 4,
+          bodyFont: { family: 'JetBrains Mono', size: 10 },
+          callbacks: {
+            label: function (ctx) { return 'MAE: ' + ctx.parsed.y.toFixed(1) + ' W'; }
+          }
+        }
+      },
+      scales: {
+        x: { display: false },
+        y: { display: false }
+      }
+    }
+  };
+
+  if (mlMaeSparklineChart) {
+    mlMaeSparklineChart.data = config.data;
+    mlMaeSparklineChart.update('none');
+  } else {
+    mlMaeSparklineChart = new Chart(canvas, config);
+  }
+}
