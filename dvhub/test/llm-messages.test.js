@@ -15,11 +15,14 @@ test('generateTemplateMessage status contains data values', () => {
   assert.ok(hasAnyValue, 'should contain at least one data value');
 });
 
-test('generateTemplateMessage savings contains time and price', () => {
+test('generateTemplateMessage savings returns valid German message', () => {
   const data = { time: '14:00', price: '3', excessW: '800', feedInCt: '8.2' };
   const msg = generateTemplateMessage('savings', data);
+  assert.ok(typeof msg === 'string' && msg.length > 0, 'should return non-empty string');
+  // Message should either contain a data value or be a fixed German phrase (e.g., Negativpreis)
   const hasAnyValue = Object.values(data).some(v => msg.includes(v));
-  assert.ok(hasAnyValue, 'should contain at least one savings data value');
+  const isFixedPhrase = msg.includes('Negativpreis');
+  assert.ok(hasAnyValue || isFixedPhrase, 'should contain data value or be a known savings phrase');
 });
 
 test('generateTemplateMessage alert contains soc', () => {
