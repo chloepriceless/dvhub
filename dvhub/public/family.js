@@ -1051,9 +1051,158 @@
     bootstrapScreensaver();
   }
 
+  /* =====================================================================
+     Phase 05 — Message Widget (D-15, D-16, D-18)
+     ===================================================================== */
+  var currentMessages = [];
+  var msgRotateIdx = 0;
+  var msgRotateTimer = null;
+  var MSG_ROTATE_MS = 15000;
+  var MSG_POLL_MS = 30000;
+
+  function escapeMsg(text) {
+    var common = window.DVhubCommon;
+    if (common && typeof common.escapeHtml === 'function') return common.escapeHtml(text);
+    return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function formatMsgTime(ts) {
+    if (!ts) return '';
+    try {
+      return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(new Date(ts));
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function renderLatestMessage(messages) {
+    currentMessages = messages || [];
+    var iconEl = document.getElementById('msgIcon');
+    var textEl = document.getElementById('msgText');
+    var metaEl = document.getElementById('msgMeta');
+    if (!textEl) return;
+
+    if (currentMessages.length === 0) {
+      if (iconEl) iconEl.textContent = '\u{1F4E1}';
+      textEl.textContent = 'Keine aktuellen Nachrichten';
+      textEl.style.color = 'rgba(255,255,255,0.4)';
+      if (metaEl) metaEl.innerHTML = '';
+      return;
+    }
+
+    msgRotateIdx = 0;
+    showMessage(currentMessages[0]);
+  }
+
+  function showMessage(msg) {
+    var iconEl = document.getElementById('msgIcon');
+    var textEl = document.getElementById('msgText');
+    var metaEl = document.getElementById('msgMeta');
+    if (!textEl || !msg) return;
+
+    if (iconEl) iconEl.textContent = msg.emoji || '\u26A1';
+    textEl.textContent = msg.text || '';
+    textEl.style.color = 'rgba(255,255,255,0.85)';
+
+    if (metaEl) {
+      var timeStr = formatMsgTime(msg.ts);
+      var sourceBadge = msg.source === 'llm'
+        ? '<span class="msg-source llm">LLM</span>'
+        : '<span class="msg-source template">TPL</span>';
+      metaEl.innerHTML = escapeMsg(timeStr) + ' ' + sourceBadge;
+    }
+  }
+
+  function rotateMessage() {
+    if (currentMessages.length <= 1) return;
+    msgRotateIdx = (msgRotateIdx + 1) % currentMessages.length;
+    var card = document.getElementById('msgLatest');
+    if (!card) { showMessage(currentMessages[msgRotateIdx]); return; }
+
+    card.style.transition = 'opacity 0.2s';
+    card.style.opacity = '0';
+    setTimeout(function () {
+      showMessage(currentMessages[msgRotateIdx]);
+      card.style.opacity = '1';
+    }, 200);
+  }
+
+  function openMsgOverlay() {
+    var overlay = document.getElementById('msgOverlay');
+    var historyEl = document.getElementById('msgHistory');
+    if (!overlay || !historyEl) return;
+
+    historyEl.innerHTML = '<div class="detail-row" style="justify-content:center;color:rgba(255,255,255,0.3);">Lade...</div>';
+    overlay.style.display = 'flex';
+
+    apiFetchCompat('/api/messages/history').then(function (res) {
+      if (!res || !res.ok) throw new Error('fetch failed');
+      return res.json();
+    }).then(function (data) {
+      var msgs = data && data.messages ? data.messages : [];
+      if (msgs.length === 0) {
+        historyEl.innerHTML =
+          '<div style="text-align:center;padding:32px 16px;">' +
+          '<div style="font-size:18px;font-weight:700;margin-bottom:8px;">Keine Nachrichten</div>' +
+          '<div style="font-size:13px;color:rgba(255,255,255,0.4);">Nachrichten erscheinen automatisch -- stuendliche Updates und Ereignisse.</div>' +
+          '</div>';
+        return;
+      }
+      historyEl.innerHTML = msgs.map(function (msg) {
+        var badge = msg.source === 'llm' ? 'LLM' : 'TPL';
+        var badgeClass = msg.source === 'llm' ? 'llm' : 'template';
+        return '<div class="detail-row">' +
+          '<span class="detail-key">' + escapeMsg(msg.emoji || '') + ' ' + escapeMsg(formatMsgTime(msg.ts)) + '</span>' +
+          '<span class="detail-val">' + escapeMsg(msg.text || '') + ' <span class="msg-source ' + badgeClass + '">' + badge + '</span></span>' +
+          '</div>';
+      }).join('');
+    }).catch(function () {
+      historyEl.innerHTML = '<div class="detail-row" style="color:rgba(255,123,114,0.7);">Nachrichten konnten nicht geladen werden.</div>';
+    });
+  }
+
+  function closeMsgOverlay() {
+    var overlay = document.getElementById('msgOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function initMessageWidget() {
+    // Initial fetch
+    apiFetchCompat('/api/messages').then(function (res) {
+      if (!res || !res.ok) return;
+      return res.json();
+    }).then(function (data) {
+      if (data && data.messages) renderLatestMessage(data.messages);
+    }).catch(function () { /* silent */ });
+
+    // Poll every 30s
+    setInterval(function () {
+      apiFetchCompat('/api/messages').then(function (res) {
+        if (!res || !res.ok) return;
+        return res.json();
+      }).then(function (data) {
+        if (data && data.messages) renderLatestMessage(data.messages);
+      }).catch(function () { /* silent */ });
+    }, MSG_POLL_MS);
+
+    // Auto-rotate messages
+    msgRotateTimer = setInterval(rotateMessage, MSG_ROTATE_MS);
+
+    // Click handler for opening overlay
+    var card = document.getElementById('msgLatest');
+    if (card) card.addEventListener('click', openMsgOverlay);
+
+    // Close overlay handlers
+    var closeBtn = document.getElementById('msgOverlayClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeMsgOverlay);
+    var overlayBg = document.getElementById('msgOverlayBg');
+    if (overlayBg) overlayBg.addEventListener('click', closeMsgOverlay);
+  }
+
   /* ===================== BOOTSTRAP ===================== */
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
+  initMessageWidget();
   // Periodic clock fallback in case /api/family/status is unreachable at boot —
   // the greeting.time field from the backend takes over once the first poll succeeds.
   (function bootstrapClock() {

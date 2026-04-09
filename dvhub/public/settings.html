@@ -51,6 +51,7 @@
           <button class="settings-tab" data-tab="control">Steuerung</button>
           <button class="settings-tab" data-tab="services">Preise</button>
           <button class="settings-tab" data-tab="system">System</button>
+          <button class="settings-tab" data-tab="ml">ML &amp; AI</button>
         </div>
       </div>
 
@@ -314,6 +315,82 @@
 
           </div><!-- /.config-grid -->
         </div><!-- /#tab-system -->
+
+        <div id="tab-ml" class="settings-tab-panel" hidden>
+          <div class="config-grid">
+
+            <!-- Modell-Status -->
+            <div class="config-group" data-accent="purple">
+              <div class="config-group-kicker" style="color:var(--flow-purple);">Modell-Status</div>
+              <div class="panel-stats">
+                <div class="stat-card">
+                  <div class="stat-label">Aktives Modell</div>
+                  <div class="stat-val" id="mlModelType">--</div>
+                  <div class="stat-delta" id="mlModelVersion">v0</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Letztes Training</div>
+                  <div class="stat-val" id="mlLastTrain">--</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Naechstes Training</div>
+                  <div class="stat-val" id="mlNextTrain">--</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Genauigkeits-Trend -->
+            <div class="config-group" data-accent="yellow">
+              <div class="config-group-kicker" style="color:var(--flow-yellow);">Genauigkeits-Trend</div>
+              <div class="stat-card" style="padding:16px;">
+                <div class="stat-label">MAE (Letzte 30 Tage)</div>
+                <div style="position:relative;height:80px;">
+                  <canvas id="mlMaeSparkline"></canvas>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:8px;">
+                  <span class="stat-label">7-Tage: <span id="mlMae7d" style="color:var(--flow-text);">--</span> W</span>
+                  <span class="stat-label">30-Tage: <span id="mlMae30d" style="color:var(--flow-text);">--</span> W</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tier-Features -->
+            <div class="config-group" data-accent="blue">
+              <div class="config-group-kicker" style="color:var(--flow-blue);">Tier-Features</div>
+              <div class="panel-details" id="mlTierFeatures">
+                <!-- Rendered by settings.js -->
+              </div>
+            </div>
+
+            <!-- Training-Log -->
+            <div class="config-group" data-accent="green">
+              <div class="config-group-kicker" style="color:var(--flow-green);">Training-Log</div>
+              <div class="panel-details" id="mlTrainingLog">
+                <!-- Last 5 training runs rendered by settings.js -->
+              </div>
+            </div>
+
+            <!-- LLM Status (Tier 3 only) -->
+            <div class="config-group" data-accent="cyan" id="mlLlmGroup" hidden>
+              <div class="config-group-kicker" style="color:var(--flow-cyan);">LLM (TinyLlama)</div>
+              <div class="panel-stats">
+                <div class="stat-card">
+                  <div class="stat-label">Status</div>
+                  <div class="stat-val" id="llmStatus">--</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Nachrichten heute</div>
+                  <div class="stat-val" id="llmMsgCount">--</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Avg. Inferenz</div>
+                  <div class="stat-val" id="llmInferenceMs">--</div>
+                </div>
+              </div>
+            </div>
+
+          </div><!-- /.config-grid -->
+        </div><!-- /#tab-ml -->
       </div>
 
       <!-- Sticky save bar -->
@@ -327,6 +404,7 @@
     </main>
   </div>
 
+  <script src="/chart.min.js"></script>
   <script src="/common.js"></script>
   <script src="/settings.js"></script>
   <script src="/tools.js"></script>
