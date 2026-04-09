@@ -1,7 +1,14 @@
-// load-forecast.js -- SQL-based load prediction from existing telemetry rollups.
-// Queries same-weekday historical data from energy_slots_15m,
-// produces 72 x 1h slots (per D-02, D-03). Falls back to constant power on cold-start.
-// Factory: createLoadForecast(ctx, { store }) -> { start, close, runForecast }
+// load-forecast.js -- Load prediction from telemetry rollups.
+// Primary: StatsForecast delegation on Tier 2+ (via Python bridge, D-09, D-10).
+// Fallback: SQL same-weekday rollups from energy_slots_15m.
+// Produces 72 x 1h slots (per D-02, D-03). Falls back to constant power on cold-start.
+// Factory: createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) -> { start, close, runForecast }
+
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPTS_DIR = path.resolve(__dirname, '../python-bridge/scripts');
 
 /**
  * Build the SQL query for same-weekday load forecast from energy_slots_15m.
@@ -83,25 +90,127 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
 }
 
 /**
+ * Query load history for StatsForecast input.
+ * @param {object} store - Forecast store with query method
+ * @param {number} months - Lookback window in months
+ * @returns {Promise<Array<{ts_utc: string, power_w: number}>>}
+ */
+async function queryLoadHistory(store, months) {
+  const result = await store.query(`
+    SELECT
+      slot_start_utc AS ts_utc,
+      value_num AS power_w
+    FROM energy_slots_15m
+    WHERE series_key = 'load_power_w'
+      AND source_kind = 'live'
+      AND slot_start_utc >= NOW() - ($1 || ' months')::INTERVAL
+    ORDER BY slot_start_utc ASC
+  `, [months]);
+  return result.rows;
+}
+
+/**
+ * Format StatsForecast output to match SQL rollup slot contract.
+ * @param {Array<{ts_utc: string, power_w: number, confidence: number}>} sfRows
+ * @returns {Array<{ts_utc: string, power_w: number, confidence: number}>}
+ */
+function formatStatsForecastSlots(sfRows) {
+  return sfRows.map(row => ({
+    ts_utc: row.ts_utc,
+    power_w: typeof row.power_w === 'number' ? Math.round(row.power_w * 100) / 100 : 0,
+    confidence: typeof row.confidence === 'number' ? row.confidence : 0.7
+  }));
+}
+
+/**
  * Create load forecast service.
  * Queries same-weekday data from energy_slots_15m, produces 72 x 1h slots.
- * @param {object} ctx - DI context { state, getCfg, pushLog, db }
- * @param {{ store: object }} options - forecast store with insertLoadForecast
+ * On Tier 2+: delegates to StatsForecast via Python bridge (D-09, D-10).
+ * On error or Tier 1: falls back to SQL rollup.
+ * @param {object} ctx - DI context { state, getCfg, pushLog, db, forecastService }
+ * @param {{ store: object, vrmForecast: object, pythonBridge?: object }} options
  * @returns {{ start: Function, close: Function, runForecast: Function }}
  */
-export function createLoadForecast(ctx, { store, vrmForecast }) {
+export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   const { state, getCfg, pushLog } = ctx;
   // ctx.db is a getter — always reads the current value (set after telemetry store init)
   const getDb = () => ctx.db;
   let intervalHandle = null;
 
   /**
-   * Execute the load forecast: query historical data, compute slots, persist.
+   * Try StatsForecast delegation on Tier 2+.
+   * @returns {Promise<{slots: Array, source: string, confidence: number}|null>} SF result or null
+   */
+  async function tryStatsForecast() {
+    const cfg = getCfg();
+    const tier = ctx.forecastService?.tier ?? 1;
+
+    if (tier < 2 || !cfg.ml?.sfEnabled || !pythonBridge) {
+      return null;
+    }
+
+    try {
+      const history = await queryLoadHistory(store, cfg.ml?.mlSlidingWindowMonths ?? 1);
+      const scriptPath = path.join(SCRIPTS_DIR, 'load_forecast_sf.py');
+      const sfResult = await pythonBridge.call(scriptPath, {
+        history,
+        horizon: 72,
+        use_mstl: tier >= 3 && (cfg.ml?.sfUseMstl ?? false),
+        tier
+      }, 120000); // 2 min timeout
+
+      if (Array.isArray(sfResult)) {
+        return {
+          slots: formatStatsForecastSlots(sfResult),
+          source: 'statsforecast',
+          confidence: 0.7
+        };
+      }
+    } catch (e) {
+      pushLog('sf_load_forecast_error', { error: e.message });
+      // Fall through to SQL rollup
+    }
+
+    return null;
+  }
+
+  /**
+   * Execute the load forecast: try StatsForecast, fall back to SQL rollup.
    */
   async function runForecast() {
     const cfg = getCfg();
     const defaultPowerW = cfg?.forecast?.load?.defaultPowerW ?? 800;
 
+    // Try StatsForecast delegation first (Tier 2+)
+    const sfResult = await tryStatsForecast();
+    if (sfResult) {
+      const { slots, source, confidence } = sfResult;
+
+      // Persist via store
+      for (const slot of slots) {
+        await store.insertLoadForecast({
+          model: source,
+          ts_utc: slot.ts_utc,
+          power_w: slot.power_w,
+          confidence: slot.confidence
+        });
+      }
+
+      // Update state
+      state.forecast.load.data = slots;
+      state.forecast.load.lastFetchAt = new Date().toISOString();
+      state.forecast.load.confidence = confidence;
+      ctx.bumpForecastVersion?.();
+
+      pushLog('load_forecast_updated', {
+        slots: slots.length,
+        confidence,
+        source
+      });
+      return;
+    }
+
+    // SQL rollup fallback
     try {
       const sql = buildLoadForecastQuery();
       const result = await getDb().query(sql, [new Date().toISOString()]);

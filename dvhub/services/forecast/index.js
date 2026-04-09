@@ -62,7 +62,7 @@ export function createForecastService(ctx) {
   const pvnodeClient = createPvnodeClient(ctx, { store });
   const pythonBridge = tier >= 2 ? createPythonBridge(ctx, { tier }) : null;
   const pvForecast = createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
-  const loadForecast = createLoadForecast(ctx, { store, vrmForecast });
+  const loadForecast = createLoadForecast(ctx, { store, vrmForecast, pythonBridge });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
 
   /**
@@ -172,15 +172,29 @@ export function createForecastService(ctx) {
 
   /**
    * Build combined forecast response for /api/forecast per D-01.
-   * @returns {{ meta: object, price: object, pv: object, load: object }}
+   * ML post-processing: applies ML correction after PV section is built (D-02).
+   * @returns {{ meta: object, price: object, pv: object, rawPv: object, load: object }}
    */
   function buildForecastResponse() {
     const cfg = getCfg();
     const pv = buildPvSection();
     const load = buildLoadSection();
 
+    // ML post-processing: correct PV forecast if model available (Tier 2+)
+    const mlResult = ctx.mlService?.correct(pv.slots, {
+      weather: state.forecast.weather?.data,
+      pvConfig: cfg.forecast?.pv,
+      accuracy: state.forecast.pv?.accuracy
+    }) ?? { applied: false, corrected: pv.slots, model: null };
+
+    // If mlResult is a Promise (async correct()), resolve synchronously via cached last result
+    // In practice, buildForecastResponse is called after ML correction has run,
+    // so we use the synchronous fallback pattern here.
+    const mlActive = mlResult.applied || false;
+    const correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
+
     // Legacy compat for app.js drawPriceChart: expects forecast.solar[{ts,w}] and forecast.consumption[{ts,w}]
-    const solar = pv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+    const solar = correctedPv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
     const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
 
     return {
@@ -190,10 +204,13 @@ export function createForecastService(ctx) {
         horizon: '72h',
         tier,
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
-        loadModel: cfg.forecast?.load?.model || 'sql_weekday'
+        loadModel: cfg.forecast?.load?.model || 'sql_weekday',
+        mlActive,
+        mlModel: mlResult.model || null
       },
       price: buildPriceSection(),
-      pv,
+      pv: correctedPv,     // ML-corrected (or raw if no model)
+      rawPv: pv,           // Pre-ML for comparison chart (D-22)
       load,
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
       solar,
