@@ -13,6 +13,7 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
 DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
+WITH_ML=0
 
 function parse_branch_from_installer_url() {
   local url="${1:-}"
@@ -192,6 +193,79 @@ function remove_legacy_app_dir() {
   fi
 }
 
+# --- ML Dependencies (Tier 2+) ---
+VENV_DIR="/opt/dvhub/forecast-venv"
+
+install_ml_deps() {
+  local RAM_MB
+  RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+
+  if [ "$RAM_MB" -ge 2000 ]; then
+    echo "  ML: Tier 2+ erkannt (${RAM_MB}MB RAM) — installiere ML-Pakete..."
+
+    # Ensure Python3 and venv
+    if ! command -v python3 &>/dev/null; then
+      apt-get install -y python3 python3-venv 2>/dev/null || true
+    fi
+
+    # Create venv if missing
+    if [ ! -d "$VENV_DIR" ]; then
+      python3 -m venv "$VENV_DIR"
+    fi
+
+    "$VENV_DIR/bin/pip" install --quiet \
+      'scikit-learn>=1.5,<2.0' \
+      'lightgbm>=4.5,<5.0' \
+      'statsforecast>=2.0,<3.0' \
+      'joblib>=1.3,<2.0' 2>&1 | tail -5
+    echo "  ML: Pakete installiert."
+
+    # Create model directory
+    mkdir -p /opt/dvhub/ml-models
+    chown "$(whoami)" /opt/dvhub/ml-models 2>/dev/null || true
+    echo "  ML: Modell-Verzeichnis /opt/dvhub/ml-models erstellt."
+  else
+    echo "  ML: Uebersprungen (RAM ${RAM_MB}MB < 2GB, Tier 1)"
+  fi
+
+  # --- Ollama + TinyLlama (Tier 3 only, 8GB+) ---
+  if [ "$RAM_MB" -ge 7500 ]; then
+    echo "  LLM: Tier 3 erkannt (${RAM_MB}MB RAM) — installiere Ollama + TinyLlama..."
+    if ! command -v ollama &>/dev/null; then
+      curl -fsSL https://ollama.com/install.sh | sh
+      echo "  LLM: Ollama installiert."
+    else
+      echo "  LLM: Ollama bereits installiert."
+    fi
+
+    # Pull TinyLlama model (if not already present)
+    if ollama list 2>/dev/null | grep -q "tinyllama"; then
+      echo "  LLM: TinyLlama Modell bereits vorhanden."
+    else
+      echo "  LLM: Lade TinyLlama Modell herunter (~637MB)..."
+      ollama pull tinyllama
+      echo "  LLM: TinyLlama Modell geladen."
+    fi
+
+    # Ensure Ollama service is enabled
+    systemctl enable ollama 2>/dev/null || true
+    systemctl start ollama 2>/dev/null || true
+    echo "  LLM: Ollama Service aktiviert."
+
+    # Ensure Ollama only listens on localhost (security T-05-07)
+    if [ -f /etc/systemd/system/ollama.service ]; then
+      if ! grep -q "OLLAMA_HOST=127.0.0.1" /etc/systemd/system/ollama.service; then
+        sed -i '/\[Service\]/a Environment="OLLAMA_HOST=127.0.0.1"' /etc/systemd/system/ollama.service
+        systemctl daemon-reload
+        systemctl restart ollama 2>/dev/null || true
+        echo "  LLM: Ollama auf 127.0.0.1 beschraenkt (Sicherheit)."
+      fi
+    fi
+  else
+    echo "  LLM: Uebersprungen (RAM ${RAM_MB}MB < 8GB, nicht Tier 3)"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -220,8 +294,8 @@ while [[ $# -gt 0 ]]; do
       UPDATE_CHANNEL="$2"
       shift 2
       ;;
-    --with-eos)
-      EOS_INSTALL=1
+    --with-ml)
+      WITH_ML=1
       shift
       ;;
     *)
@@ -263,7 +337,7 @@ assert_supported_layout
 
 echo "[1/7] Pakete installieren"
 apt-get update
-apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan
+apt-get install -y curl ca-certificates git sudo postgresql
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
@@ -322,117 +396,16 @@ echo "[5/7] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
 npm install --omit=dev
 
-# Allow node to bind privileged ports (e.g. 502 for Modbus with VPN)
-NODE_BIN="$(command -v node)"
-if [[ -n "$NODE_BIN" ]]; then
-  setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
-fi
-
-# --- Python venv for PV forecast (optional, Tier 2+) ---
-echo "Setting up Python forecast environment..."
-VENV_DIR="/opt/dvhub/forecast-venv"
-REQUIREMENTS="$APP_DIR/python/requirements.txt"
-
-if command -v python3 &>/dev/null; then
-  PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-  echo "Found Python $PYTHON_VERSION"
-
-  # Ensure python3-venv is available
-  if ! python3 -m venv --help &>/dev/null 2>&1; then
-    echo "Installing python3-venv..."
-    sudo apt-get install -y python3-venv 2>/dev/null || true
-  fi
-
-  if [ -f "$REQUIREMENTS" ]; then
-    echo "Creating forecast venv at $VENV_DIR..."
-    sudo mkdir -p "$(dirname "$VENV_DIR")"
-    sudo python3 -m venv "$VENV_DIR"
-    sudo "$VENV_DIR/bin/pip" install --upgrade pip
-    sudo "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
-    echo "Forecast venv created successfully."
-  else
-    echo "No requirements.txt found, skipping Python forecast setup."
-  fi
-else
-  echo "Python3 not found. PV forecast will use Solcast API only (Tier 1 mode)."
-fi
-
-# --- EOS (Akkudoktor) Installation (Tier 2+ only, optional) ---
-install_eos() {
-  local RAM_MB
-  RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-  if [ "$RAM_MB" -lt 3000 ]; then
-    echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier 1)"
-    return 0
-  fi
-
-  echo "  EOS: Pruefe Installation..."
-
-  # Check if Docker is available
-  if command -v docker &>/dev/null; then
-    echo "  EOS: Docker gefunden, verwende Docker Image"
-    local EOS_VERSION="v0.3.0"
-    local EOS_IMAGE="akkudoktor/eos:${EOS_VERSION}"
-
-    # Pull image if not present (idempotent)
-    if ! docker image inspect "$EOS_IMAGE" &>/dev/null; then
-      echo "  EOS: Lade Docker Image ${EOS_IMAGE}..."
-      docker pull "$EOS_IMAGE" || { echo "  EOS: Docker Pull fehlgeschlagen"; return 1; }
-    fi
-
-    # Create systemd service for EOS Docker container
-    # SECURITY: Bind to 127.0.0.1 ONLY (not 0.0.0.0) -- EOS is co-hosted, no external access
-    cat > /etc/systemd/system/dvhub-eos.service << 'EOSUNIT'
-[Unit]
-Description=DVhub EOS Optimizer (Akkudoktor)
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=10
-ExecStartPre=-/usr/bin/docker rm -f dvhub-eos
-ExecStart=/usr/bin/docker run --name dvhub-eos --rm -p 127.0.0.1:8503:8503 akkudoktor/eos:v0.3.0
-ExecStop=/usr/bin/docker stop dvhub-eos
-
-[Install]
-WantedBy=multi-user.target
-EOSUNIT
-
-    systemctl daemon-reload
-    echo "  EOS: systemd Service dvhub-eos.service erstellt"
-    echo "  EOS: Starte mit: systemctl enable --now dvhub-eos"
-
-  else
-    echo "  EOS: Docker nicht gefunden. Installiere Docker oder verwende pip:"
-    echo "  EOS:   pip install akkudoktor-eos==0.3.0"
-    echo "  EOS:   Dann manuell als systemd Service einrichten."
-  fi
-}
-
-if [ "${EOS_INSTALL:-0}" = "1" ]; then
-  install_eos
-else
-  echo "  EOS: Uebersprungen (--with-eos Flag nicht gesetzt)"
+# ML dependencies (only when --with-ml flag is passed)
+if [[ "$WITH_ML" -eq 1 ]]; then
+  echo "  ML: --with-ml Flag erkannt, installiere ML-Abhaengigkeiten..."
+  install_ml_deps
 fi
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/hersteller"
-mkdir -p "$CONFIG_DIR/vpn/profiles"
-mkdir -p "$CONFIG_DIR/tls"
 mkdir -p "$DATA_DIR"
-
-# Generate self-signed TLS certificate if not present
-if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
-  echo "   Generiere Self-Signed TLS Zertifikat..."
-  openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout "$CONFIG_DIR/tls/key.pem" \
-    -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 3650 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
-  chmod 600 "$CONFIG_DIR/tls/key.pem"
-fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
   cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
 fi
@@ -456,8 +429,6 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
-chmod 700 "$CONFIG_DIR/vpn"
-chmod 700 "$CONFIG_DIR/vpn/profiles"
 
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then
@@ -482,41 +453,12 @@ fi
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
-OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
-WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
-WG_PATH="$(command -v wg || echo /usr/bin/wg)"
-IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
-LN_PATH="$(command -v ln || echo /usr/bin/ln)"
-RM_PATH="$(command -v rm || echo /usr/bin/rm)"
-IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
-KILL_PATH="$(which kill 2>/dev/null || echo /usr/bin/kill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
 cat >"${SUDOERS_FILE}" <<SUDOERS
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.service *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_PATH} show *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} reload
-${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-*
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -0 *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -15 *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 
@@ -531,7 +473,7 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/node ${APP_DIR}/server.js
+ExecStart=/usr/bin/node --experimental-sqlite ${APP_DIR}/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=${CONFIG_PATH}
 Environment=DV_ENABLE_SERVICE_ACTIONS=1
