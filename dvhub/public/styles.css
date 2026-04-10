@@ -965,8 +965,10 @@ button {
 }
 
 /* --- Tooltip --- */
+/* position: fixed so window-relative coordinates from getBoundingClientRect()
+   align with the viewport regardless of nearest positioned ancestor (bug1). */
 #tooltip {
-  position: absolute;
+  position: fixed;
   background: rgba(16, 22, 40, 0.95);
   border: 1px solid var(--flow-border);
   border-radius: 6px;
@@ -977,7 +979,7 @@ button {
   z-index: 1000;
   display: none;
   backdrop-filter: blur(4px);
-  max-width: 200px;
+  max-width: 260px;
 }
 
 /* --- Grid detail expandable --- */

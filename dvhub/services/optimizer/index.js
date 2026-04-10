@@ -181,8 +181,8 @@ export function createOptimizerService(ctx) {
     const thisGeneration = ++runGeneration;
 
     try {
-      // 1. Get forecast via forecastService
-      const forecastResponse = ctx.forecastService.buildForecastResponse();
+      // 1. Get forecast via forecastService (async since Phase 05 ML correction)
+      const forecastResponse = await ctx.forecastService.buildForecastResponse();
 
       // 2. Normalize forecast (ISO -> epoch-ms)
       const normalized = normalizeForecast(forecastResponse);
@@ -308,7 +308,7 @@ export function createOptimizerService(ctx) {
       if (cfg.optimizer.eosProxy?.enabled && tier >= 2) {
         try {
           // Send enriched forecast with fully-loaded prices to EOS
-          const forecastResp = ctx.forecastService.buildForecastResponse();
+          const forecastResp = await ctx.forecastService.buildForecastResponse();
           const enrichedForecast = {
             ...forecastResp,
             price: { ...forecastResp.price, slots: enrichedPriceSlots }
@@ -402,6 +402,98 @@ export function createOptimizerService(ctx) {
         const feedInWh = gridPowerW < 0 ? Math.abs(gridPowerW) * dtH : 0;
         const gridWithdrawalWh = gridPowerW > 0 ? gridPowerW * dtH : 0;
         mispelTracker.update(feedInWh, gridWithdrawalWh);
+      }
+
+      // 14c. Persist optimizer run to DB (Phase 05 follow-up — exposes curves
+      //      for leitstand chart via /api/optimizer/runs/latest).
+      //      Don't block main run on persistence errors.
+      const store = ctx.telemetryStore;
+      if (store && typeof store.writeOptimizerRun === 'function') {
+        try {
+          // Build a dense hourly "battery_power_w" series from the sparse schedule
+          // slots. This gives the chart a continuous line from now → now+48h.
+          const HORIZON_H = 48;
+          const nowMs = Date.now();
+          const hourStart = Math.floor(nowMs / 3_600_000) * 3_600_000;
+          const series = [];
+
+          for (let h = 0; h < HORIZON_H; h++) {
+            const slotStart = hourStart + h * 3_600_000;
+            const slotEnd = slotStart + 3_600_000;
+
+            // Find schedule slot overlapping this hour
+            const active = winningSchedule.find(s =>
+              s.ts < slotEnd && (s.endTs || (s.ts + 3_600_000)) > slotStart
+            );
+            const batteryW = active ? Number(active.powerW) || 0 : 0;
+            series.push({
+              seriesKey: 'battery_power_w',
+              scope: 'plan',
+              ts: new Date(slotStart).toISOString(),
+              resolutionSeconds: 3600,
+              value: batteryW,
+              unit: 'W'
+            });
+
+            // Price input (match slot)
+            const priceSlot = effectivePriceSlots.find(p =>
+              (p.ts ?? 0) < slotEnd && ((p.endTs ?? ((p.ts ?? 0) + 3_600_000)) > slotStart)
+            );
+            if (priceSlot && priceSlot.importCtKwh != null) {
+              series.push({
+                seriesKey: 'price_import_ct_kwh',
+                scope: 'input',
+                ts: new Date(slotStart).toISOString(),
+                resolutionSeconds: 3600,
+                value: Number(priceSlot.importCtKwh),
+                unit: 'ct/kWh'
+              });
+            }
+
+            // PV forecast input
+            const pvSlot = pvSlots.find(p =>
+              (p.ts ?? 0) < slotEnd && ((p.endTs ?? ((p.ts ?? 0) + 3_600_000)) > slotStart)
+            );
+            if (pvSlot && pvSlot.powerW != null) {
+              series.push({
+                seriesKey: 'pv_power_w',
+                scope: 'input',
+                ts: new Date(slotStart).toISOString(),
+                resolutionSeconds: 3600,
+                value: Number(pvSlot.powerW),
+                unit: 'W'
+              });
+            }
+
+            // Load forecast input
+            const loadSlot = loadSlots.find(l =>
+              (l.ts ?? 0) < slotEnd && ((l.endTs ?? ((l.ts ?? 0) + 3_600_000)) > slotStart)
+            );
+            if (loadSlot && loadSlot.powerW != null) {
+              series.push({
+                seriesKey: 'load_power_w',
+                scope: 'input',
+                ts: new Date(slotStart).toISOString(),
+                resolutionSeconds: 3600,
+                value: Number(loadSlot.powerW),
+                unit: 'W'
+              });
+            }
+          }
+
+          await store.writeOptimizerRun({
+            optimizer: source,
+            runStartedAt: new Date(nowMs),
+            runFinishedAt: new Date(),
+            status: 'applied',
+            source: 'dvhub_optimizer',
+            inputJson: { confidence, tier, rulesCount: newRules.length },
+            resultJson: { slots: winningSchedule.slice(0, 50) },
+            series
+          });
+        } catch (persistErr) {
+          pushLog('optimizer_persist_error', { error: persistErr.message });
+        }
       }
 
       // 15. Log

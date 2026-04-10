@@ -369,6 +369,21 @@
         <div class="chart-legend" id="forecastCompLegend"></div>
       </div>
 
+      <!-- Optimizer-Plan Chart: shows optimizer's 48h battery plan vs PV/Load/Price -->
+      <div class="chart-span-card" id="optimizerPlanCard" style="display:none;">
+        <div class="chart-skeleton" id="optimizerPlanSkeleton">
+          <div class="skeleton-bar"></div>
+        </div>
+        <div class="chart-head">
+          <span class="chart-title">Optimizer-Plan (48h)</span>
+          <span class="chart-subtitle" id="optimizerPlanSubtitle">--</span>
+        </div>
+        <div style="position:relative;height:220px;">
+          <canvas id="optimizerPlanChart"></canvas>
+        </div>
+        <div class="chart-legend" id="optimizerPlanLegend"></div>
+      </div>
+
       <div class="chart-sub-row">
         <div class="chart-span-card" id="gantt-card">
           <span class="card-kicker">OPTIMIZER-SCHEDULE</span>

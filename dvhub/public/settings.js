@@ -2486,6 +2486,11 @@ function renderMlStatus(status) {
   if (llmGroup) {
     if (status.tier >= 3) {
       llmGroup.hidden = false;
+      var llmModelNameEl = document.getElementById('llmModelName');
+      if (llmModelNameEl) {
+        // Read from config if /api/ml/status doesn't include llmModel
+        llmModelNameEl.textContent = status.llmModel || (window.__dvhubConfig && window.__dvhubConfig.llm && window.__dvhubConfig.llm.llmModel) || 'LLM';
+      }
       var llmStatusEl = document.getElementById('llmStatus');
       if (llmStatusEl) llmStatusEl.textContent = status.llmStatus || '--';
 
@@ -2500,6 +2505,18 @@ function renderMlStatus(status) {
   }
 }
 
+// Translate backend feature keys to German UI labels
+var TIER_FEATURE_LABELS = {
+  sql_load_forecast: 'SQL Lastvorhersage',
+  pvlib_batch: 'pvlib (Batch)',
+  statsforecast: 'StatsForecast',
+  ml_correction: 'ML-Korrektur (PV)',
+  ml_training: 'ML-Training (taeglich)',
+  statsforecast_mstl: 'StatsForecast MSTL',
+  persistent_python: 'Persistenter Python-Prozess',
+  edge_llm: 'Edge-LLM Nachrichten'
+};
+
 function renderTierFeatures(status) {
   var container = document.getElementById('mlTierFeatures');
   if (!container) return;
@@ -2507,39 +2524,42 @@ function renderTierFeatures(status) {
   var tier = status.tier || 1;
   var tierFeatures = status.tierFeatures || [];
 
-  // Default feature list if API doesn't provide one
   if (tierFeatures.length === 0) {
-    tierFeatures = [
-      { name: 'PV-Forecast (SQL Rollup)', minTier: 1, status: tier >= 1 ? 'aktiv' : 'inaktiv' },
-      { name: 'PV-Forecast (StatsForecast)', minTier: 2, status: tier >= 2 ? 'aktiv' : 'inaktiv' },
-      { name: 'ML-Korrektur (Linear)', minTier: 2, status: tier >= 2 ? 'aktiv (30+ Tage)' : 'inaktiv' },
-      { name: 'ML-Korrektur (LightGBM)', minTier: 2, status: tier >= 2 ? 'aktiv (90+ Tage)' : 'inaktiv' },
-      { name: 'Persistenter Python-Prozess', minTier: 3, status: tier >= 3 ? 'aktiv' : 'inaktiv' },
-      { name: 'TinyLlama Nachrichten', minTier: 3, status: tier >= 3 ? 'aktiv' : 'inaktiv' }
-    ];
+    container.innerHTML = '<div class="detail-row"><span class="detail-key" style="color:rgba(232,234,240,0.3);">Keine Tier-Informationen verfuegbar</span></div>';
+    return;
   }
 
   container.innerHTML = tierFeatures.map(function (f) {
-    var featureName = escapeHtml(f.name || '');
-    var featureStatus = escapeHtml(f.status || 'inaktiv');
-    var minTier = f.minTier || 1;
-    var color, textDeco;
+    // Normalize backend shape { feature, status, requiredTier }
+    var key = f.feature || f.name || '';
+    var featureLabel = TIER_FEATURE_LABELS[key] || key || 'Unbekannt';
+    var rawStatus = f.status || 'inactive';
+    var minTier = f.requiredTier != null ? f.requiredTier : (f.minTier || 1);
 
-    if (tier >= minTier && f.status && f.status.indexOf('aktiv') === 0) {
+    var label, color, textDeco = 'none';
+    if (rawStatus === 'active') {
+      label = 'aktiv';
       color = 'var(--ok)';
-      textDeco = 'none';
-    } else if (tier < minTier) {
-      color = 'var(--flow-text-dim)';
-      textDeco = 'line-through';
-      featureStatus = 'nicht verfuegbar (Tier ' + minTier + '+)';
+    } else if (rawStatus === 'inactive') {
+      if (tier < minTier) {
+        label = 'nicht verfuegbar (Tier ' + minTier + '+)';
+        color = 'var(--flow-text-dim)';
+        textDeco = 'line-through';
+      } else {
+        label = 'inaktiv';
+        color = 'var(--flow-text-muted)';
+      }
+    } else if (rawStatus === 'collecting') {
+      label = 'sammelt Daten';
+      color = 'var(--warn)';
     } else {
+      label = rawStatus;
       color = 'var(--flow-text-muted)';
-      textDeco = 'none';
     }
 
     return '<div class="detail-row">' +
-      '<span class="detail-key">' + featureName + '</span>' +
-      '<span class="detail-val" style="color:' + color + ';text-decoration:' + textDeco + ';">' + escapeHtml(featureStatus) + '</span>' +
+      '<span class="detail-key">' + escapeHtml(featureLabel) + '</span>' +
+      '<span class="detail-val" style="color:' + color + ';text-decoration:' + textDeco + ';">' + escapeHtml(label) + '</span>' +
       '</div>';
   }).join('');
 }

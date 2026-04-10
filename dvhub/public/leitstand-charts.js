@@ -422,13 +422,14 @@
   // ---------------------------------------------------------------------------
   var forecastCompChart = null;
 
+  // Forecast-Vergleich: only show what /api/forecast actually exposes today.
+  // Individual source curves (pvlib/solcast/vrm) aren't broken out by the API —
+  // they're merged internally in pv-forecast.js before the response.
+  // To re-add them, extend buildForecastResponse() to expose per-source slot arrays.
   var COMPARISON_DATASETS = [
-    { key: 'actual',  label: 'Ist-Werte',      color: '#e8eaf0', dash: [],     width: 2   },
-    { key: 'ml',      label: 'ML-korrigiert',   color: '#A78BFA', dash: [],     width: 2.5 },
-    { key: 'pvlib',   label: 'pvlib',           color: '#e3b341', dash: [6, 3], width: 1.5 },
-    { key: 'solcast', label: 'Solcast',         color: '#58a6ff', dash: [6, 3], width: 1.5 },
-    { key: 'vrm',     label: 'VRM',             color: '#bc8cff', dash: [4, 4], width: 1.5 },
-    { key: 'merged',  label: 'Merged pre-ML',   color: '#22D3EE', dash: [2, 4], width: 1.5 }
+    { key: 'actual', label: 'Ist (gemessen)',  color: '#e8eaf0', dash: [],     width: 2   },
+    { key: 'ml',     label: 'ML-korrigiert',    color: '#A78BFA', dash: [],     width: 2.5 },
+    { key: 'merged', label: 'Basis-Prognose',   color: '#22D3EE', dash: [4, 3], width: 1.8 }
   ];
 
   function initForecastComparisonChart() {
@@ -554,24 +555,19 @@
       return h + ':' + m;
     });
 
-    // Build data arrays: [actual, ml, pvlib, solcast, vrm, merged]
+    // Build data arrays: [actual, ml, merged]
     var mlData = pvSlots.map(function (s) { return s.powerW || 0; });
     var mergedData = rawPvSlots.map(function (s) { return s.powerW || 0; });
-
-    // Individual source data (may not be present in all API responses)
-    var sources = forecastData && forecastData.sources ? forecastData.sources : {};
-    var pvlibData = sources.pvlib ? sources.pvlib.map(function (s) { return s.powerW || 0; }) : [];
-    var solcastData = sources.solcast ? sources.solcast.map(function (s) { return s.powerW || 0; }) : [];
-    var vrmData = sources.vrm ? sources.vrm.map(function (s) { return s.powerW || 0; }) : [];
-    var actualData = sources.actual ? sources.actual.map(function (s) { return s.powerW || 0; }) : [];
+    // "Actual" measured PV from optional historical samples attached by the
+    // API under forecastData.actual (not yet wired; empty for now).
+    var actualData = Array.isArray(forecastData && forecastData.actual)
+      ? forecastData.actual.map(function (s) { return s.powerW || 0; })
+      : [];
 
     forecastCompChart.data.labels = labels;
-    forecastCompChart.data.datasets[0].data = actualData;  // Ist-Werte
+    forecastCompChart.data.datasets[0].data = actualData;  // Ist (gemessen) — empty until wired
     forecastCompChart.data.datasets[1].data = mlData;       // ML-korrigiert
-    forecastCompChart.data.datasets[2].data = pvlibData;    // pvlib
-    forecastCompChart.data.datasets[3].data = solcastData;  // Solcast
-    forecastCompChart.data.datasets[4].data = vrmData;      // VRM
-    forecastCompChart.data.datasets[5].data = mergedData;   // Merged pre-ML
+    forecastCompChart.data.datasets[2].data = mergedData;   // Basis-Prognose
     forecastCompChart.update('none');
 
     // Show card, hide skeleton
@@ -641,6 +637,179 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Optimizer-Plan chart (Phase 05 follow-up) — shows latest optimizer run
+  // as 48h curves: battery plan (charge/discharge), PV forecast, load forecast,
+  // and price curve on a secondary axis.
+  // ---------------------------------------------------------------------------
+  var optimizerPlanChart = null;
+
+  async function fetchOptimizerPlan() {
+    try {
+      var res = await apiFetch('/api/optimizer/runs/latest');
+      if (!res.ok) return null;
+      var data = await res.json();
+      return data && data.ok ? data.run : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderOptimizerPlanChart(run) {
+    var card = document.getElementById('optimizerPlanCard');
+    var canvas = document.getElementById('optimizerPlanChart');
+    var skeleton = document.getElementById('optimizerPlanSkeleton');
+    var subtitle = document.getElementById('optimizerPlanSubtitle');
+    if (!canvas || !card || typeof Chart === 'undefined') return;
+
+    if (!run || !run.seriesByKey) {
+      card.style.display = 'none';
+      return;
+    }
+
+    card.style.display = '';
+    if (skeleton) skeleton.style.display = 'none';
+
+    var batterySeries = run.seriesByKey.battery_power_w || [];
+    var pvSeries = run.seriesByKey.pv_power_w || [];
+    var loadSeries = run.seriesByKey.load_power_w || [];
+    var priceSeries = run.seriesByKey.price_import_ct_kwh || [];
+
+    if (batterySeries.length === 0) {
+      card.style.display = 'none';
+      return;
+    }
+
+    var labels = batterySeries.map(function (s) {
+      var d = new Date(s.ts);
+      return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+    });
+
+    function alignToBattery(series) {
+      var map = {};
+      for (var i = 0; i < series.length; i++) map[series[i].ts] = series[i].value;
+      return batterySeries.map(function (b) { return map[b.ts] != null ? map[b.ts] : null; });
+    }
+
+    var batteryKw = batterySeries.map(function (s) { return (s.value || 0) / 1000; });
+    var pvKw = alignToBattery(pvSeries).map(function (v) { return v != null ? v / 1000 : null; });
+    var loadKw = alignToBattery(loadSeries).map(function (v) { return v != null ? v / 1000 : null; });
+    var priceCt = alignToBattery(priceSeries);
+
+    var datasets = [
+      {
+        label: 'Batterie-Plan (+lade/-entlade)',
+        data: batteryKw,
+        borderColor: '#A78BFA',
+        backgroundColor: 'rgba(167, 139, 250, 0.15)',
+        borderWidth: 2.5,
+        pointRadius: 0,
+        tension: 0.1,
+        fill: true,
+        yAxisID: 'y'
+      },
+      {
+        label: 'PV-Prognose',
+        data: pvKw,
+        borderColor: '#e3b341',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        tension: 0.3,
+        yAxisID: 'y'
+      },
+      {
+        label: 'Last-Prognose',
+        data: loadKw,
+        borderColor: '#58a6ff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        tension: 0.3,
+        yAxisID: 'y'
+      },
+      {
+        label: 'Preis (ct/kWh)',
+        data: priceCt,
+        borderColor: '#3fb950',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.1,
+        yAxisID: 'y1'
+      }
+    ];
+
+    var config = {
+      type: 'line',
+      data: { labels: labels, datasets: datasets },
+      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+    };
+    // Dual-axis setup: y = kW (battery/PV/load), y1 = ct/kWh (price)
+    config.options.scales = {
+      x: {
+        grid: { color: 'rgba(90, 106, 138, 0.15)' },
+        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 12, maxRotation: 45 }
+      },
+      y: {
+        position: 'left',
+        grid: { color: 'rgba(90, 106, 138, 0.15)' },
+        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'kW', color: '#5a6a8a', font: { size: 10 } }
+      },
+      y1: {
+        position: 'right',
+        grid: { drawOnChartArea: false },
+        ticks: { color: '#3fb950', font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'ct/kWh', color: '#3fb950', font: { size: 10 } }
+      }
+    };
+    config.options.plugins.tooltip.callbacks = {
+      label: function (ctx) {
+        var unit = ctx.dataset.yAxisID === 'y1' ? ' ct/kWh' : ' kW';
+        return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(2) : '--') + unit;
+      }
+    };
+
+    if (optimizerPlanChart) {
+      optimizerPlanChart.data = config.data;
+      optimizerPlanChart.options = config.options;
+      optimizerPlanChart.update('none');
+    } else {
+      optimizerPlanChart = new Chart(canvas, config);
+    }
+
+    // Subtitle: optimizer source + runtime
+    if (subtitle) {
+      var ts = new Date(run.runStartedAt);
+      var tsLabel = ts.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      subtitle.textContent = (run.optimizer || '--') + ' @ ' + tsLabel;
+    }
+
+    // Custom legend with click-to-toggle
+    var legendEl = document.getElementById('optimizerPlanLegend');
+    if (legendEl) {
+      legendEl.innerHTML = '';
+      datasets.forEach(function (ds, idx) {
+        var item = document.createElement('span');
+        item.className = 'chart-legend-item';
+        item.style.cursor = 'pointer';
+        item.style.marginRight = '10px';
+        item.style.fontSize = '0.75rem';
+        item.innerHTML = '<span style="display:inline-block;width:10px;height:2px;background:' + ds.borderColor + ';margin-right:4px;vertical-align:middle;"></span>' + ds.label;
+        item.addEventListener('click', function () {
+          var meta = optimizerPlanChart.getDatasetMeta(idx);
+          meta.hidden = meta.hidden === null ? !optimizerPlanChart.data.datasets[idx].hidden : !meta.hidden;
+          item.style.opacity = meta.hidden ? '0.4' : '1';
+          optimizerPlanChart.update();
+        });
+        legendEl.appendChild(item);
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Refresh orchestrator
   // ---------------------------------------------------------------------------
   async function refreshAllCharts() {
@@ -648,13 +817,15 @@
       fetchForecastData(),
       fetchOptimizerData(),
       fetchCostData(),
-      fetchMlStatus()
+      fetchMlStatus(),
+      fetchOptimizerPlan()
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
     var optimizerData = results[1].status === 'fulfilled' ? results[1].value : null;
     var costData = results[2].status === 'fulfilled' ? results[2].value : null;
     var mlStatus = results[3].status === 'fulfilled' ? results[3].value : null;
+    var optimizerPlan = results[4].status === 'fulfilled' ? results[4].value : null;
 
     renderPvForecastChart(forecastData);
     renderGanttChart(optimizerData);
@@ -664,6 +835,9 @@
     // ML additions
     updateMlBadge(mlStatus);
     if (forecastData) updateForecastComparisonChart(forecastData);
+
+    // Optimizer-Plan chart (Phase 05 follow-up)
+    renderOptimizerPlanChart(optimizerPlan);
   }
 
   // ---------------------------------------------------------------------------

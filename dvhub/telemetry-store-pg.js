@@ -697,6 +697,50 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     };
   }
 
+  // Fetch the most recent optimizer run with its series data.
+  async function getLatestOptimizerRun({ optimizer = null } = {}) {
+    let runSql = `
+      SELECT id, optimizer, run_started_at, run_finished_at, status, source, input_json, result_json
+      FROM optimizer_runs
+    `;
+    const params = [];
+    if (optimizer) {
+      runSql += ` WHERE optimizer = $1`;
+      params.push(optimizer);
+    }
+    runSql += ` ORDER BY run_started_at DESC LIMIT 1`;
+
+    const runResult = await pool.query(runSql, params);
+    if (runResult.rows.length === 0) return null;
+
+    const run = runResult.rows[0];
+    const seriesResult = await pool.query(`
+      SELECT series_key, scope, ts_utc, resolution_seconds, value_num, unit
+      FROM optimizer_run_series
+      WHERE optimizer_run_id = $1
+      ORDER BY ts_utc ASC, series_key ASC
+    `, [run.id]);
+
+    return {
+      id: Number(run.id),
+      optimizer: run.optimizer,
+      runStartedAt: run.run_started_at instanceof Date ? run.run_started_at.toISOString() : run.run_started_at,
+      runFinishedAt: run.run_finished_at instanceof Date ? run.run_finished_at.toISOString() : run.run_finished_at,
+      status: run.status,
+      source: run.source,
+      inputJson: run.input_json,
+      resultJson: run.result_json,
+      series: seriesResult.rows.map(row => ({
+        seriesKey: row.series_key,
+        scope: row.scope,
+        ts: row.ts_utc instanceof Date ? row.ts_utc.toISOString() : row.ts_utc,
+        resolutionSeconds: row.resolution_seconds,
+        value: row.value_num == null ? null : Number(row.value_num),
+        unit: row.unit
+      }))
+    };
+  }
+
   // Query arbitrary telemetry series (e.g. battery_soc_pct)
   async function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
     const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
@@ -768,6 +812,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     writeControlEvent,
     writeScheduleSnapshot,
     writeOptimizerRun,
+    getLatestOptimizerRun,
     writeImportJob,
     buildRollups,
     cleanupRawSamples,

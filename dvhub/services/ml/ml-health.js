@@ -105,7 +105,11 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier }) {
       trainingLog: log,
       sfEnabled: ml.sfEnabled || false,
       sfUseMstl: tier >= 3 && (ml.sfUseMstl || false),
-      tierFeatures: buildTierFeatures(tier, cfg)
+      tierFeatures: buildTierFeatures(tier, cfg),
+      // LLM surface for settings display
+      llmModel: cfg.llm?.llmModel || null,
+      llmEnabled: cfg.llm?.llmEnabled || false,
+      llmStatus: (tier >= 3 && cfg.llm?.llmEnabled) ? 'aktiv' : 'inaktiv'
     };
   }
 

@@ -196,10 +196,20 @@ export function createForecastService(ctx) {
     }
 
     const mlActive = mlResult.applied || false;
-    const correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
 
-    // Legacy compat for app.js drawPriceChart: expects forecast.solar[{ts,w}] and forecast.consumption[{ts,w}]
-    const solar = correctedPv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+    // Sanity check: if ML correction collapses the forecast (feature pipeline mismatch
+    // can cause the model to output ~0 for everything), reject the correction and
+    // fall back to raw PV. Compare peaks: if ML peak is < 20% of raw peak AND raw peak
+    // was significant (>500W), treat the correction as broken.
+    const rawPeak = pv.slots.reduce((max, s) => Math.max(max, s.powerW || 0), 0);
+    const mlPeak = mlActive ? mlResult.corrected.reduce((max, s) => Math.max(max, s.powerW || 0), 0) : 0;
+    const mlCollapsed = mlActive && rawPeak > 500 && mlPeak < rawPeak * 0.2;
+    const correctedPv = (mlActive && !mlCollapsed) ? { ...pv, slots: mlResult.corrected } : pv;
+    const mlActiveFinal = mlActive && !mlCollapsed;
+
+    // Legacy compat for app.js drawPriceChart: always use raw PV for the Börsenchart
+    // overlay so the curve stays visually correct even if ML correction collapses.
+    const solar = pv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
     const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
 
     return {
@@ -210,8 +220,9 @@ export function createForecastService(ctx) {
         tier,
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
         loadModel: cfg.forecast?.load?.model || 'sql_weekday',
-        mlActive,
-        mlModel: mlResult.model || null
+        mlActive: mlActiveFinal,
+        mlModel: mlActiveFinal ? (mlResult.model || null) : null,
+        mlCollapsed: mlCollapsed ? { rawPeak, mlPeak } : false
       },
       price: buildPriceSection(),
       pv: correctedPv,     // ML-corrected (or raw if no model)

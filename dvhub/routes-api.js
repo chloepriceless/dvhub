@@ -762,6 +762,43 @@ export function createApiRoutes(ctx) {
       return json(res, 200, status);
     }
 
+    // Latest optimizer run — curves for leitstand chart (Phase 05 follow-up).
+    // Returns the most recent run + its time-series (battery plan, price input,
+    // PV/load forecast). Optional ?optimizer=internal|eos|emhass filter.
+    if (url.pathname === '/api/optimizer/runs/latest' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.getLatestOptimizerRun) {
+        return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      }
+      try {
+        const optimizer = url.searchParams.get('optimizer') || null;
+        const run = await ctx.telemetryStore.getLatestOptimizerRun({ optimizer });
+        if (!run) return json(res, 200, { ok: true, run: null });
+
+        // Group series by key for easy chart consumption
+        const byKey = {};
+        for (const s of run.series) {
+          if (!byKey[s.seriesKey]) byKey[s.seriesKey] = [];
+          byKey[s.seriesKey].push({ ts: s.ts, value: s.value, scope: s.scope, unit: s.unit });
+        }
+        return json(res, 200, {
+          ok: true,
+          run: {
+            id: run.id,
+            optimizer: run.optimizer,
+            runStartedAt: run.runStartedAt,
+            runFinishedAt: run.runFinishedAt,
+            status: run.status,
+            source: run.source,
+            inputJson: run.inputJson,
+            seriesByKey: byKey
+          }
+        });
+      } catch (e) {
+        pushLog('optimizer_runs_api_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
     // --- Family Dashboard API (DASH-02, DASH-03) ---
     // Aggregated status payload polled every 5s by the family dashboard.
     // LAN-allowlisted read path: tablet on the local network can reach it
