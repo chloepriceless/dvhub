@@ -674,8 +674,21 @@ const routes = createApiRoutes(ctx);
 // After createApiRoutes returns, ctx.costSummary and ctx.userEnergyPricingSummary
 // are set by the factory (ctx mutation pattern).
 
-// REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues)
-const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'forecast.solcast.apiKey'];
+// REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues).
+// MUST match routes-api.js REDACTED_PATHS exactly — mismatched lists cause the UI to save
+// literal "***" into fields that routes-api.js redacted but server.js didn't restore.
+const REDACTED_PATHS = [
+  'apiToken',
+  'telemetry.historyImport.vrmToken',
+  'telemetry.database.password',
+  'forecast.solcast.apiKey',
+  'mqtt.username',
+  'mqtt.password',
+  'notifications.providers.telegram.botToken',
+  'notifications.providers.telegram.chatId',
+  'notifications.providers.pushover.appToken',
+  'notifications.providers.pushover.userKey'
+];
 
 function restoreRedactedValues(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));

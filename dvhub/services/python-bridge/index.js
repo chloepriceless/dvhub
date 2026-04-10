@@ -55,29 +55,87 @@ export function createPythonBridge(ctx, { tier }) {
       return null;
     }
 
-    const stdin = JSON.stringify(inputData);
+    const stdinStr = JSON.stringify(inputData);
     // ML training with 90+ days of data can take several minutes — use longer timeout for train scripts
     const isTraining = path.basename(scriptPath) === 'ml_train.py';
     const timeoutMs = isTraining ? 600_000 : 60_000;
 
-    try {
-      const { stdout } = await execFileAsync(VENV_PYTHON, [scriptPath], {
-        timeout: timeoutMs,
-        maxBuffer: 50 * 1024 * 1024,
-        encoding: 'utf8',
-        input: stdin
+    // Use spawn with explicit pipes — execFile with `input` option was returning
+    // non-zero exit codes silently on Debian 13 / Node 22 with no captured stderr.
+    return await new Promise((resolve) => {
+      let resolved = false;
+      const finish = (result) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+
+      let proc;
+      try {
+        proc = spawn(VENV_PYTHON, [scriptPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (spawnErr) {
+        pushLog('python_error', { script: path.basename(scriptPath), error: spawnErr.message });
+        return finish(null);
+      }
+
+      const timer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+        pushLog('python_timeout', { script: path.basename(scriptPath), timeoutMs });
+        finish(null);
+      }, timeoutMs);
+
+      let stdout = '';
+      let stderr = '';
+      let stdoutBytes = 0;
+      const maxBytes = 50 * 1024 * 1024;
+      proc.stdout.setEncoding('utf8');
+      proc.stderr.setEncoding('utf8');
+      proc.stdout.on('data', (chunk) => {
+        stdoutBytes += Buffer.byteLength(chunk);
+        if (stdoutBytes > maxBytes) {
+          try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+          pushLog('python_oversize', { script: path.basename(scriptPath), bytes: stdoutBytes });
+          return finish(null);
+        }
+        stdout += chunk;
+      });
+      proc.stderr.on('data', (chunk) => { stderr += chunk; });
+
+      proc.on('error', (err) => {
+        pushLog('python_error', { script: path.basename(scriptPath), error: err.message, stderr: stderr.slice(0, 2000) });
+        finish(null);
       });
 
-      return JSON.parse(stdout);
-    } catch (error) {
-      pushLog('python_error', {
-        script: path.basename(scriptPath),
-        error: error.message,
-        stderr: error.stderr ? String(error.stderr).slice(0, 2000) : null,
-        stdout: error.stdout ? String(error.stdout).slice(0, 2000) : null
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          pushLog('python_error', {
+            script: path.basename(scriptPath),
+            error: `exit code ${code}`,
+            stderr: stderr.slice(0, 2000),
+            stdout: stdout.slice(0, 2000)
+          });
+          return finish(null);
+        }
+        try {
+          finish(JSON.parse(stdout));
+        } catch (parseErr) {
+          pushLog('python_error', {
+            script: path.basename(scriptPath),
+            error: `JSON parse failed: ${parseErr.message}`,
+            stdout: stdout.slice(0, 2000),
+            stderr: stderr.slice(0, 2000)
+          });
+          finish(null);
+        }
       });
-      return null;
-    }
+
+      proc.stdin.on('error', (err) => {
+        pushLog('python_error', { script: path.basename(scriptPath), error: `stdin: ${err.message}` });
+      });
+      proc.stdin.write(stdinStr);
+      proc.stdin.end();
+    });
   }
 
   /**

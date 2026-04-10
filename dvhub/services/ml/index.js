@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createMlCorrection } from './ml-correction.js';
 import { createMlTraining } from './ml-training.js';
 import { createMlHealth } from './ml-health.js';
-import { createPersistentBridge } from '../python-bridge/index.js';
+import { createPersistentBridge, createPythonBridge } from '../python-bridge/index.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,8 +52,10 @@ export function createMlService(ctx) {
     };
   }
 
-  // Tier 2+: Full ML service
-  const pythonBridge = ctx.pythonBridge;
+  // Tier 2+: Full ML service.
+  // Create our own batch python-bridge (forecast service does not expose its bridge on ctx).
+  // Tier 3 will also start a persistent bridge below; that's still a separate concern.
+  const pythonBridge = ctx.pythonBridge ?? createPythonBridge(ctx, { tier });
   let persistentBridge = null;
 
   const mlCorrection = createMlCorrection({
