@@ -297,28 +297,60 @@
     var toggle = document.getElementById('overlay-toggle');
     if (!toggle) return;
 
-    toggle.addEventListener('change', function () {
-      // Find the existing price chart instance via Chart.getChart
-      var priceChart = Chart.getChart('priceChartCanvas');
-      if (!priceChart) return;
+    function isForecastLabel(label) {
+      if (!label) return false;
+      var l = label.toLowerCase();
+      return (
+        l.indexOf('solar') !== -1 ||
+        l.indexOf('forecast') !== -1 ||
+        l.indexOf('prognose') !== -1 ||
+        l.indexOf('pv') !== -1 ||
+        l.indexOf('consumption') !== -1 ||
+        l.indexOf('load') !== -1 ||
+        l.indexOf('last') !== -1
+      );
+    }
 
+    toggle.addEventListener('change', function () {
       var hidden = !toggle.checked;
-      priceChart.data.datasets.forEach(function (ds) {
-        // Toggle forecast-related datasets (solar/PV and consumption/load lines)
-        if (ds.label && (
-          ds.label.toLowerCase().indexOf('solar') !== -1 ||
-          ds.label.toLowerCase().indexOf('forecast') !== -1 ||
-          ds.label.toLowerCase().indexOf('prognose') !== -1 ||
-          ds.label.toLowerCase().indexOf('pv') !== -1 ||
-          ds.label.toLowerCase().indexOf('consumption') !== -1 ||
-          ds.label.toLowerCase().indexOf('load') !== -1 ||
-          ds.label.toLowerCase().indexOf('last') !== -1
-        )) {
-          ds.hidden = hidden;
+
+      // 1) EPEX/Börsenchart overlay (pricing chart — D-06 type 3 original target)
+      var priceChart = Chart.getChart('priceChartCanvas');
+      if (priceChart) {
+        priceChart.data.datasets.forEach(function (ds) {
+          if (isForecastLabel(ds.label)) ds.hidden = hidden;
+        });
+        priceChart.update('none');
+      }
+
+      // 2) PV-Prognose-vs-Ist chart — toggle between PV-only and PV+Load view
+      //    This is the chart the checkbox physically sits next to; users expect
+      //    clicking it to affect THIS chart in addition to the EPEX overlay.
+      var pvChart = Chart.getChart('pv-forecast-chart');
+      if (pvChart) {
+        pvChart.data.datasets.forEach(function (ds) {
+          if (ds.label && ds.label.toLowerCase().indexOf('last') !== -1) {
+            // Toggle flag is "Overlay: PV / Last" — when ON, show Last overlay
+            ds.hidden = hidden;
+          }
+        });
+        pvChart.update('none');
+      }
+    });
+
+    // Initial sync: default checkbox state is unchecked → hide "Last" dataset
+    // on pv-forecast-chart so it starts as PV-only (matches the kicker label
+    // "PV-PROGNOSE VS. IST" — load is an opt-in overlay).
+    setTimeout(function () {
+      var pvChart = Chart.getChart('pv-forecast-chart');
+      if (!pvChart) return;
+      pvChart.data.datasets.forEach(function (ds) {
+        if (ds.label && ds.label.toLowerCase().indexOf('last') !== -1) {
+          ds.hidden = !toggle.checked;
         }
       });
-      priceChart.update('none');
-    });
+      pvChart.update('none');
+    }, 500);
   }
 
   // ---------------------------------------------------------------------------
