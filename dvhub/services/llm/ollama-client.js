@@ -12,7 +12,7 @@ import http from 'node:http';
  * @param {{ baseUrl?: string, timeoutMs?: number }} options
  * @returns {{ generate: Function, checkHealth: Function, isAvailable: Function }}
  */
-export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 15000 } = {}) {
+export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 30000 } = {}) {
   let available = null; // null = unknown, true/false after health check
 
   /**
@@ -107,8 +107,9 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
    * @returns {Promise<boolean>}
    */
   async function checkHealth() {
-    const result = await httpRequest('GET', '/', null, 5000);
-    available = result != null;
+    // Use /api/tags which returns JSON {models: [...]}; the root / returns plain text.
+    const result = await httpRequest('GET', '/api/tags', null, 5000);
+    available = result != null && typeof result === 'object';
     return available;
   }
 

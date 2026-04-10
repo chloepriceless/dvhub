@@ -919,7 +919,11 @@ if (IS_RUNTIME_PROCESS) {
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
     teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
-    publishHaDiscoveryTopics(mqttHub, ctx.getCfg).catch(err => console.error('HA Discovery error:', err.message));
+    try {
+      publishHaDiscoveryTopics(mqttHub, ctx.getCfg);
+    } catch (err) {
+      console.error('HA Discovery error:', err.message);
+    }
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));

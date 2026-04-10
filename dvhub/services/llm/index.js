@@ -16,7 +16,8 @@ import { createMessageBuffer } from './message-buffer.js';
  */
 export function createLlmService(ctx) {
   const { getCfg, state, pushLog } = ctx;
-  const tier = ctx.tier ?? 1;
+  // Tier comes from forecast service (wired first in server.js); fall back to ctx.tier for standalone tests
+  const tier = ctx.forecastService?.tier ?? ctx.tier ?? 1;
 
   // Create Ollama client (T-05-07: hardcoded to localhost)
   const ollamaClient = createOllamaClient();
@@ -107,8 +108,9 @@ export function createLlmService(ctx) {
 
   /**
    * Graceful shutdown. Clear timers and log.
+   * Async so callers can use `.catch()` uniformly with other services.
    */
-  function close() {
+  async function close() {
     if (statusTimer) {
       clearInterval(statusTimer);
       statusTimer = null;

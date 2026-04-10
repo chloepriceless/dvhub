@@ -30,21 +30,36 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
 
   /**
    * Query training data from PostgreSQL.
-   * Joins forecast vs actual values with weather features.
+   * Direct weather→actual-PV training: learns to predict PV output
+   * from weather features + time + plant config. Bypasses forecast-correction
+   * approach because historical pv_forecasts may be empty on fresh installs.
    * @returns {Promise<{training_data: Array, data_days: number}>}
    */
   async function queryTrainingData() {
     const cfg = getCfg();
-    const months = cfg.ml?.mlSlidingWindowMonths ?? 6;
+    const months = cfg.ml?.mlSlidingWindowMonths ?? 12;
+    const pv = cfg.forecast?.pv || {};
+
+    // Plant config: use dominant (highest-kWp) string's tilt/azimuth.
+    // Model sees constant features per training run — LightGBM handles OK.
+    const strings = Array.isArray(pv.strings) ? pv.strings : [];
+    const totalKwp = Number(pv.totalKwp) || strings.reduce((s, x) => s + (Number(x.kwp) || 0), 0) || 10;
+    let tiltDeg = Number(pv.tiltDeg) || 35;
+    let azimuthDeg = Number(pv.azimuthDeg) || 180;
+    if (strings.length > 0) {
+      const dominant = strings.reduce((m, s) => (Number(s.kwp) || 0) > (Number(m.kwp) || 0) ? s : m, strings[0]);
+      tiltDeg = Number(dominant.tiltDeg ?? dominant.tilt) || tiltDeg;
+      azimuthDeg = Number(dominant.azimuthDeg ?? dominant.azimuth) || azimuthDeg;
+    }
 
     try {
-      // Count distinct days with data
+      // Count distinct days with actual PV data
       const countResult = await store.query(`
         SELECT COUNT(DISTINCT DATE(slot_start_utc)) AS data_days
         FROM energy_slots_15m
-        WHERE series_key = 'solar_power_w'
-          AND source_kind = 'live'
-          AND slot_start_utc >= NOW() - ($1 || ' months')::INTERVAL
+        WHERE series_key = 'pv_total_w'
+          AND source_kind IN ('vrm_import', 'local_live')
+          AND slot_start_utc >= NOW() - (($1)::int || ' months')::INTERVAL
       `, [months]);
 
       const data_days = Number(countResult.rows[0]?.data_days ?? 0);
@@ -53,29 +68,35 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
         return { training_data: [], data_days };
       }
 
-      // Query hourly training data: forecast vs actual with weather features
+      // Query hourly training data: weather features + actual PV (aggregated to hourly)
+      // Joins weather_forecasts (historical via backfill) with energy_slots_15m averaged by hour.
       const dataResult = await store.query(`
         SELECT
-          f.ts_utc,
-          f.power_w AS forecast_power_w,
-          a.value_num AS actual_power_w,
-          w.visibility,
-          w.cloud_cover,
-          w.humidity,
-          w.temperature AS temp,
-          EXTRACT(HOUR FROM f.ts_utc AT TIME ZONE 'Europe/Berlin') AS hour_of_day,
-          EXTRACT(DOW FROM f.ts_utc) AS day_of_week,
-          EXTRACT(MONTH FROM f.ts_utc) AS month
-        FROM forecast_data f
-        LEFT JOIN energy_slots_15m a
-          ON a.slot_start_utc = f.ts_utc
-          AND a.series_key = 'solar_power_w'
-          AND a.source_kind = 'live'
-        LEFT JOIN weather_data w
-          ON w.ts_utc = f.ts_utc
-        WHERE f.ts_utc >= NOW() - ($1 || ' months')::INTERVAL
-        ORDER BY f.ts_utc
-      `, [months]);
+          w.ts_utc,
+          w.visibility_m,
+          w.cloud_cover_pct,
+          w.humidity_pct,
+          w.temperature_c AS temp_c,
+          EXTRACT(HOUR FROM w.ts_utc AT TIME ZONE 'UTC')::int AS hour,
+          EXTRACT(MONTH FROM w.ts_utc)::int AS month,
+          EXTRACT(DOW FROM w.ts_utc)::int AS weekday,
+          $2::float AS tilt_deg,
+          $3::float AS azimuth_deg,
+          $4::float AS kwp,
+          0::float AS mae_7d_solcast,
+          0::float AS mae_7d_pvlib,
+          0::float AS mae_7d_merged,
+          AVG(e.value_num) AS theoretical_power_w
+        FROM weather_forecasts w
+        LEFT JOIN energy_slots_15m e
+          ON date_trunc('hour', e.slot_start_utc) = date_trunc('hour', w.ts_utc)
+          AND e.series_key = 'pv_total_w'
+          AND e.source_kind IN ('vrm_import', 'local_live')
+        WHERE w.ts_utc >= NOW() - (($1)::int || ' months')::INTERVAL
+        GROUP BY w.id, w.ts_utc, w.visibility_m, w.cloud_cover_pct, w.humidity_pct, w.temperature_c
+        HAVING AVG(e.value_num) IS NOT NULL
+        ORDER BY w.ts_utc
+      `, [months, tiltDeg, azimuthDeg, totalKwp]);
 
       return { training_data: dataResult.rows, data_days };
     } catch (err) {

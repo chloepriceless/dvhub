@@ -428,7 +428,7 @@ export function createApiRoutes(ctx) {
     };
   }
 
-  function integrationState() {
+  async function integrationState() {
     const cfg = getCfg();
 
     // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
@@ -449,7 +449,7 @@ export function createApiRoutes(ctx) {
     };
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
-    const forecastResp = ctx.forecastService?.buildForecastResponse?.();
+    const forecastResp = await ctx.forecastService?.buildForecastResponse?.();
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
@@ -745,10 +745,10 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary());
 
-    if (url.pathname === '/api/integration/home-assistant' && req.method === 'GET') return json(res, 200, integrationState());
+    if (url.pathname === '/api/integration/home-assistant' && req.method === 'GET') return json(res, 200, await integrationState());
 
     if (url.pathname === '/api/integration/loxone' && req.method === 'GET') {
-      const s = integrationState();
+      const s = await integrationState();
       const lines = Object.entries(s).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
       return text(res, 200, lines.join('\n'));
     }
@@ -921,7 +921,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/forecast' && req.method === 'GET') {
       if (!ctx.forecastService) return json(res, 503, { ok: false, error: 'forecast service not available' });
       try {
-        const payload = ctx.forecastService.buildForecastResponse();
+        const payload = await ctx.forecastService.buildForecastResponse();
         return json(res, 200, { ok: true, ...payload });
       } catch (e) {
         pushLog('forecast_api_error', { error: e.message });
@@ -1707,6 +1707,36 @@ export function createApiRoutes(ctx) {
       try {
         const messages = ctx.llmService?.getMessages() || [];
         return json(res, 200, { messages });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
+    // POST /api/messages/generate — manually trigger LLM message generation (auth required)
+    // Optional body: { type?: 'status'|'savings'|'alert'|..., data?: object }
+    if (url.pathname === '/api/messages/generate' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.llmService) return json(res, 503, { error: 'LLM service not available' });
+      try {
+        // Parse optional body
+        let body = {};
+        try {
+          const raw = await readRawBody(req, 4096);
+          if (raw) body = JSON.parse(raw);
+        } catch { /* ignore body parse errors */ }
+
+        // Default: build status message from current state
+        const type = body.type || 'status';
+        const v = state?.victron || {};
+        const defaultData = {
+          pvW: v.pvTotalW ?? null,
+          soc: v.soc ?? null,
+          gridW: state?.meter?.grid_total_w ?? null
+        };
+        const data = { ...defaultData, ...(body.data || {}) };
+
+        const msg = await ctx.llmService.generateMessage(type, data);
+        return json(res, 200, { ok: true, message: msg });
       } catch (e) {
         return json(res, 500, { error: e.message });
       }

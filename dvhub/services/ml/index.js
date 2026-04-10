@@ -88,12 +88,28 @@ export function createMlService(ctx) {
     let modelLoaded = false;
 
     try {
-      const metaPath = path.join(modelDir, 'meta.json');
-      if (fs.existsSync(metaPath)) {
-        const metaRaw = fs.readFileSync(metaPath, 'utf8');
-        const meta = JSON.parse(metaRaw);
-        if (meta.model_type && meta.version != null) {
-          mlCorrection.setModel(meta);
+      // Training saves to {modelDir}/pv_correction_{model_type}_v{version}/meta.json.
+      // Scan subdirectories and pick the most recent (highest version) trained model.
+      if (fs.existsSync(modelDir)) {
+        const entries = fs.readdirSync(modelDir, { withFileTypes: true })
+          .filter(e => e.isDirectory() && e.name.startsWith('pv_correction_'));
+        let best = null;
+        for (const entry of entries) {
+          const metaPath = path.join(modelDir, entry.name, 'meta.json');
+          if (!fs.existsSync(metaPath)) continue;
+          try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            if (meta.model_type && meta.version != null) {
+              if (!best || meta.version > best.version) {
+                best = meta;
+              }
+            }
+          } catch {
+            // skip malformed meta.json
+          }
+        }
+        if (best) {
+          mlCorrection.setModel(best);
           modelLoaded = true;
         }
       }

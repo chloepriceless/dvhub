@@ -175,21 +175,26 @@ export function createForecastService(ctx) {
    * ML post-processing: applies ML correction after PV section is built (D-02).
    * @returns {{ meta: object, price: object, pv: object, rawPv: object, load: object }}
    */
-  function buildForecastResponse() {
+  async function buildForecastResponse() {
     const cfg = getCfg();
     const pv = buildPvSection();
     const load = buildLoadSection();
 
-    // ML post-processing: correct PV forecast if model available (Tier 2+)
-    const mlResult = ctx.mlService?.correct(pv.slots, {
-      weather: state.forecast.weather?.data,
-      pvConfig: cfg.forecast?.pv,
-      accuracy: state.forecast.pv?.accuracy
-    }) ?? { applied: false, corrected: pv.slots, model: null };
+    // ML post-processing: correct PV forecast if model available (Tier 2+).
+    // correct() is async (spawns Python), so await it.
+    let mlResult = { applied: false, corrected: pv.slots, model: null };
+    if (ctx.mlService?.correct) {
+      try {
+        mlResult = (await ctx.mlService.correct(pv.slots, {
+          weather: state.forecast.weather?.data,
+          pvConfig: cfg.forecast?.pv,
+          accuracy: state.forecast.pv?.accuracy
+        })) ?? mlResult;
+      } catch {
+        // Swallow — bypass ML correction on error, keep raw pv
+      }
+    }
 
-    // If mlResult is a Promise (async correct()), resolve synchronously via cached last result
-    // In practice, buildForecastResponse is called after ML correction has run,
-    // so we use the synchronous fallback pattern here.
     const mlActive = mlResult.applied || false;
     const correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
 

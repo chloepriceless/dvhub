@@ -56,11 +56,14 @@ export function createPythonBridge(ctx, { tier }) {
     }
 
     const stdin = JSON.stringify(inputData);
+    // ML training with 90+ days of data can take several minutes — use longer timeout for train scripts
+    const isTraining = path.basename(scriptPath) === 'ml_train.py';
+    const timeoutMs = isTraining ? 600_000 : 60_000;
 
     try {
       const { stdout } = await execFileAsync(VENV_PYTHON, [scriptPath], {
-        timeout: 60_000,
-        maxBuffer: 10 * 1024 * 1024,
+        timeout: timeoutMs,
+        maxBuffer: 50 * 1024 * 1024,
         encoding: 'utf8',
         input: stdin
       });
@@ -69,7 +72,9 @@ export function createPythonBridge(ctx, { tier }) {
     } catch (error) {
       pushLog('python_error', {
         script: path.basename(scriptPath),
-        error: error.message
+        error: error.message,
+        stderr: error.stderr ? String(error.stderr).slice(0, 2000) : null,
+        stdout: error.stdout ? String(error.stdout).slice(0, 2000) : null
       });
       return null;
     }
