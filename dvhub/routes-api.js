@@ -1670,16 +1670,20 @@ export function createApiRoutes(ctx) {
 
     // GET /api/ml/status — ML model status (auth required, contains config data)
     if (url.pathname === '/api/ml/status' && req.method === 'GET') {
-      if (!isAuthenticated(req)) return json(res, 401, { error: 'Unauthorized' });
-      const status = ctx.mlService?.getStatus() || { tier: 1, mlEnabled: false };
-      return json(res, 200, status);
+      if (!checkAuth(req, res)) return;
+      try {
+        const status = ctx.mlService?.getStatus() || { tier: 1, mlEnabled: false };
+        return json(res, 200, status);
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
     }
 
     // GET /api/ml/accuracy — ML accuracy trend (auth required)
     if (url.pathname === '/api/ml/accuracy' && req.method === 'GET') {
-      if (!isAuthenticated(req)) return json(res, 401, { error: 'Unauthorized' });
+      if (!checkAuth(req, res)) return;
       try {
-        const trend = await ctx.mlService?.getAccuracyTrend(30) || [];
+        const trend = (await ctx.mlService?.getAccuracyTrend(30)) || [];
         return json(res, 200, trend);
       } catch (e) {
         return json(res, 500, { error: e.message });
@@ -1688,16 +1692,24 @@ export function createApiRoutes(ctx) {
 
     // GET /api/messages — latest LLM messages (LAN-safe for family tablet)
     if (url.pathname === '/api/messages' && req.method === 'GET') {
-      if (!isLanSafeRequest(req)) return json(res, 401, { error: 'Unauthorized' });
-      const messages = ctx.llmService?.getMessages()?.slice(0, 5) || [];
-      return json(res, 200, { messages });
+      if (!checkAuth(req, res)) return;
+      try {
+        const messages = ctx.llmService?.getMessages()?.slice(0, 5) || [];
+        return json(res, 200, { messages });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
     }
 
     // GET /api/messages/history — full 24h message history (LAN-safe)
     if (url.pathname === '/api/messages/history' && req.method === 'GET') {
-      if (!isLanSafeRequest(req)) return json(res, 401, { error: 'Unauthorized' });
-      const messages = ctx.llmService?.getMessages() || [];
-      return json(res, 200, { messages });
+      if (!checkAuth(req, res)) return;
+      try {
+        const messages = ctx.llmService?.getMessages() || [];
+        return json(res, 200, { messages });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
     }
 
     // Unmatched route -- return false so orchestrator can fall through to static files
