@@ -12,7 +12,7 @@ import http from 'node:http';
  * @param {{ baseUrl?: string, timeoutMs?: number }} options
  * @returns {{ generate: Function, checkHealth: Function, isAvailable: Function }}
  */
-export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 30000 } = {}) {
+export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 90000 } = {}) {
   let available = null; // null = unknown, true/false after health check
 
   /**

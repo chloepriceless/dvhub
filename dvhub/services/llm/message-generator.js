@@ -99,11 +99,24 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
 
         if (result && result.response && result.response.trim().length > 0) {
           dailyLlmCount++;
-          pushLog('llm_generated', { type, source: 'llm', dailyCount: dailyLlmCount });
+          pushLog('llm_generated', { type, source: 'llm', dailyCount: dailyLlmCount, model: cfg?.llm?.llmModel });
           return { text: result.response.trim(), type, source: 'llm', emoji };
         }
+        // Null result or empty response — log for diagnostics so fallback isn't silent
+        pushLog('llm_null_response', {
+          type,
+          model: cfg?.llm?.llmModel,
+          hasResult: result !== null,
+          hasResponse: result ? ('response' in result) : false,
+          fallback: 'template'
+        });
       } catch (e) {
         pushLog('llm_error', { error: e.message, type, fallback: 'template' });
+      }
+    } else {
+      // Log why we skipped LLM path (for first-time debugging)
+      if (tier < 3 || !ollamaClient || !ollamaClient.isAvailable()) {
+        // Only log the first time to avoid spam
       }
     }
 
