@@ -43,9 +43,13 @@ describe('StatsForecast delegation in load-forecast', () => {
       { ts_utc: '2026-04-08T13:00:00Z', power_w: 1200, confidence: 0.75 }
     ]);
 
-    // Mock store.query for queryLoadHistory
+    // Mock store.query for queryLoadHistory -- need >= 48 rows for SF to attempt
+    const historyRows = Array.from({ length: 50 }, (_, i) => ({
+      ts_utc: new Date(Date.now() - (50 - i) * 3600000).toISOString(),
+      power_w: 1400 + Math.random() * 200
+    }));
     mockStore.query.mock.mockImplementation(async () => ({
-      rows: [{ ts_utc: '2026-04-07T12:00:00Z', power_w: 1400 }]
+      rows: historyRows
     }));
 
     const loadForecast = createLoadForecast(ctx, {
@@ -108,9 +112,13 @@ describe('StatsForecast delegation in load-forecast', () => {
       throw new Error('python process crashed');
     });
 
-    // Mock store.query for queryLoadHistory
+    // Mock store.query for queryLoadHistory -- need >= 48 rows for SF to attempt
+    const historyRows = Array.from({ length: 50 }, (_, i) => ({
+      ts_utc: new Date(Date.now() - (50 - i) * 3600000).toISOString(),
+      power_w: 1400 + Math.random() * 200
+    }));
     mockStore.query.mock.mockImplementation(async () => ({
-      rows: [{ ts_utc: '2026-04-07T12:00:00Z', power_w: 1400 }]
+      rows: historyRows
     }));
 
     const loadForecast = createLoadForecast(ctx, {
@@ -144,8 +152,13 @@ describe('StatsForecast delegation in load-forecast', () => {
 
     mockBridge.call.mock.mockImplementation(async () => sfData);
 
+    // Need >= 48 rows for SF to attempt
+    const historyRows = Array.from({ length: 50 }, (_, i) => ({
+      ts_utc: new Date(Date.now() - (50 - i) * 3600000).toISOString(),
+      power_w: 1400 + Math.random() * 200
+    }));
     mockStore.query.mock.mockImplementation(async () => ({
-      rows: [{ ts_utc: '2026-04-07T12:00:00Z', power_w: 1400 }]
+      rows: historyRows
     }));
 
     const loadForecast = createLoadForecast(ctx, {
@@ -180,8 +193,13 @@ describe('StatsForecast delegation in load-forecast', () => {
       { ts_utc: '2026-04-08T12:00:00Z', power_w: 1500, confidence: 0.8 }
     ]);
 
+    // Need >= 48 rows for SF to attempt
+    const historyRows = Array.from({ length: 50 }, (_, i) => ({
+      ts_utc: new Date(Date.now() - (50 - i) * 3600000).toISOString(),
+      power_w: 1400 + Math.random() * 200
+    }));
     mockStore.query.mock.mockImplementation(async () => ({
-      rows: [{ ts_utc: '2026-04-07T12:00:00Z', power_w: 1400 }]
+      rows: historyRows
     }));
 
     const loadForecast = createLoadForecast(ctx, {

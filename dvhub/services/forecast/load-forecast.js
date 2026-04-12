@@ -151,6 +151,18 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
 
     try {
       const history = await queryLoadHistory(store, cfg.ml?.mlSlidingWindowMonths ?? 1);
+
+      // Check if enough history exists for StatsForecast (#19)
+      if (!history || history.length < 48) {
+        pushLog('sf_load_forecast_skip', {
+          reason: 'insufficient_history',
+          rows: history?.length ?? 0,
+          minimum: 48,
+          hint: 'load_power_w series in energy_slots_15m needs >= 48 rows (2 days of 15min data)'
+        });
+        return null; // Fall through to SQL rollup
+      }
+
       const scriptPath = path.join(SCRIPTS_DIR, 'load_forecast_sf.py');
       const sfResult = await pythonBridge.call(scriptPath, {
         history,
@@ -159,7 +171,32 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
         tier
       }, 120000); // 2 min timeout
 
+      // Handle Python-side error responses (#19)
+      if (sfResult && !Array.isArray(sfResult) && sfResult.ok === false) {
+        pushLog('sf_load_forecast_error', {
+          error: sfResult.error || 'Python script returned error object',
+          historyRows: history.length
+        });
+        return null; // Fall through to SQL rollup
+      }
+
       if (Array.isArray(sfResult)) {
+        // Validate result is non-flat (#19): if all values are identical, log warning
+        const uniqueValues = new Set(sfResult.map(r => Math.round(r.power_w)));
+        if (uniqueValues.size === 1 && sfResult.length > 1) {
+          pushLog('sf_load_forecast_warning', {
+            reason: 'flat_prediction',
+            constantW: sfResult[0]?.power_w,
+            hint: 'StatsForecast produced identical values for all slots -- check input data quality'
+          });
+          // Still return the result but with lower confidence
+          return {
+            slots: formatStatsForecastSlots(sfResult),
+            source: 'statsforecast',
+            confidence: 0.4 // Low confidence for flat predictions
+          };
+        }
+
         return {
           slots: formatStatsForecastSlots(sfResult),
           source: 'statsforecast',

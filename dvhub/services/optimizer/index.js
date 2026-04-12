@@ -217,7 +217,12 @@ export function createOptimizerService(ctx) {
       }
 
       // 2b. Enrich price slots with fully-loaded costs (OPTI-06)
-      const enrichedPriceSlots = enrichPriceSlotsWithCosts(normalized.price.slots, cfg);
+      // Wire applicableValueOverrideCtKwh from user config to cost model (#18)
+      const applicableValueCtKwh = cfg.userEnergyPricing?.applicableValueOverrideCtKwh ?? undefined;
+      const enrichedPriceSlots = enrichPriceSlotsWithCosts(
+        normalized.price.slots, cfg,
+        applicableValueCtKwh != null ? { applicableValueCtKwh } : {}
+      );
 
       // 3. Per-slot confidence average (NOT state.forecast.pv.confidence -- issue #7)
       const confidence = averageSlotConfidence([...pvSlots, ...enrichedPriceSlots]);
