@@ -1927,6 +1927,9 @@ export function createDefaultConfig() {
       llmStatusIntervalMin: 60,
       llmTemperature: 0.7,
       llmMaxTokens: 200
+    },
+    optimizer: {
+      eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 }
     }
   };
 }

@@ -420,58 +420,69 @@ install_ml_deps() {
 # Install ML dependencies after Python venv is ready
 install_ml_deps
 
-# --- EOS (Akkudoktor) Installation (Tier 2+ only, optional) ---
+# --- EOS (Akkudoktor) Installation (Tier 3 only, --with-eos flag) ---
 install_eos() {
   local RAM_MB
   RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
   if [ "$RAM_MB" -lt 3000 ]; then
-    echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier 1)"
+    echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier < 3)"
     return 0
   fi
 
-  echo "  EOS: Pruefe Installation..."
+  local EOS_DIR="/opt/dvhub/eos-src"
+  local EOS_VENV="/opt/dvhub/eos-venv"
+  local EOS_VERSION="v0.3.0"
 
-  # Check if Docker is available
-  if command -v docker &>/dev/null; then
-    echo "  EOS: Docker gefunden, verwende Docker Image"
-    local EOS_VERSION="v0.3.0"
-    local EOS_IMAGE="akkudoktor/eos:${EOS_VERSION}"
+  echo "  EOS: Installiere Akkudoktor-EOS ${EOS_VERSION} (bare-metal venv)..."
 
-    # Pull image if not present (idempotent)
-    if ! docker image inspect "$EOS_IMAGE" &>/dev/null; then
-      echo "  EOS: Lade Docker Image ${EOS_IMAGE}..."
-      docker pull "$EOS_IMAGE" || { echo "  EOS: Docker Pull fehlgeschlagen"; return 1; }
-    fi
+  # Idempotent clone / fetch
+  if [ ! -d "$EOS_DIR/.git" ]; then
+    sudo rm -rf "$EOS_DIR"
+    sudo git clone --branch "$EOS_VERSION" --depth 1 \
+      https://github.com/Akkudoktor-EOS/EOS.git "$EOS_DIR" \
+      || { echo "  EOS: git clone fehlgeschlagen"; return 1; }
+  else
+    sudo git -C "$EOS_DIR" fetch --tags --depth 1 origin "$EOS_VERSION"
+    sudo git -C "$EOS_DIR" checkout "$EOS_VERSION"
+  fi
 
-    # Create systemd service for EOS Docker container
-    # SECURITY: Bind to 127.0.0.1 ONLY (not 0.0.0.0) -- EOS is co-hosted, no external access
-    cat > /etc/systemd/system/dvhub-eos.service << 'EOSUNIT'
+  # Python venv (Python 3.11+ required by EOS v0.3.0)
+  if [ ! -d "$EOS_VENV" ]; then
+    sudo python3 -m venv "$EOS_VENV"
+  fi
+  sudo "$EOS_VENV/bin/pip" install --upgrade pip
+  sudo "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
+  sudo "$EOS_VENV/bin/pip" install -e "$EOS_DIR"
+
+  # Ownership: systemd user `dvhub` must execute the venv
+  sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
+
+  # systemd unit — bind 127.0.0.1:8503 only (no external access)
+  cat <<UNIT | sudo tee /etc/systemd/system/eos.service >/dev/null
 [Unit]
-Description=DVhub EOS Optimizer (Akkudoktor)
-After=docker.service
-Requires=docker.service
+Description=Akkudoktor EOS (Energy Optimization System)
+After=network.target
 
 [Service]
 Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$EOS_DIR
+ExecStart=$EOS_VENV/bin/python -m akkudoktoreos.server.eos
+Environment=EOS_SERVER__HOST=127.0.0.1
+Environment=EOS_SERVER__PORT=8503
 Restart=on-failure
-RestartSec=10
-ExecStartPre=-/usr/bin/docker rm -f dvhub-eos
-ExecStart=/usr/bin/docker run --name dvhub-eos --rm -p 127.0.0.1:8503:8503 akkudoktor/eos:v0.3.0
-ExecStop=/usr/bin/docker stop dvhub-eos
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOSUNIT
+UNIT
 
-    systemctl daemon-reload
-    echo "  EOS: systemd Service dvhub-eos.service erstellt"
-    echo "  EOS: Starte mit: systemctl enable --now dvhub-eos"
-
-  else
-    echo "  EOS: Docker nicht gefunden. Installiere Docker oder verwende pip:"
-    echo "  EOS:   pip install akkudoktor-eos==0.3.0"
-    echo "  EOS:   Dann manuell als systemd Service einrichten."
-  fi
+  sudo systemctl daemon-reload
+  sudo systemctl enable eos.service
+  sudo systemctl restart eos.service
+  echo "  EOS: systemd eos.service gestartet (127.0.0.1:8503)"
 }
 
 if [ "${EOS_INSTALL:-0}" = "1" ]; then
