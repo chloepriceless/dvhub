@@ -1769,6 +1769,21 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // GET /api/llm/models -- Ollama model list for settings UI dropdown (LLM-01)
+    // T-06-07: Gated by checkAuth. T-06-08: 10s timeout, empty array on error.
+    if (url.pathname === '/api/llm/models' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.llmService?.listModels) {
+        return json(res, 503, { ok: false, error: 'LLM service not available' });
+      }
+      try {
+        const models = await ctx.llmService.listModels();
+        return json(res, 200, { ok: true, models });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
     // Unmatched route -- return false so orchestrator can fall through to static files
     return false;
   }

@@ -114,6 +114,24 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
   }
 
   /**
+   * List available Ollama models via GET /api/tags.
+   * T-06-08: 10s timeout, returns empty array on error (graceful degradation).
+   *
+   * @returns {Promise<Array<{ name: string, size: number, modified_at: string, family: string|null, parameter_size: string|null }>>}
+   */
+  async function list() {
+    const result = await httpRequest('GET', '/api/tags', null, 10000);
+    if (!result || !Array.isArray(result.models)) return [];
+    return result.models.map(m => ({
+      name: m.name,
+      size: m.size,
+      modified_at: m.modified_at,
+      family: m.details?.family || null,
+      parameter_size: m.details?.parameter_size || null
+    }));
+  }
+
+  /**
    * Get cached availability status.
    * null = unknown (no health check run yet), true/false after checkHealth().
    *
@@ -123,5 +141,5 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
     return available;
   }
 
-  return { generate, checkHealth, isAvailable };
+  return { generate, checkHealth, isAvailable, list };
 }

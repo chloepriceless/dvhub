@@ -166,5 +166,5 @@ export function createLlmService(ctx) {
     return buffer.getCount();
   }
 
-  return { start, close, generateMessage, getMessages, getLatest, getMessageCount };
+  return { start, close, generateMessage, getMessages, getLatest, getMessageCount, listModels: () => ollamaClient.list() };
 }
