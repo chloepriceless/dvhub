@@ -28,6 +28,7 @@ import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-prot
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
+import { REDACTED_PATHS, restoreRedacted } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
   createMarketAutomationBuilder
@@ -661,7 +662,7 @@ ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
 ctx.saveAndApplyConfig = (incomingConfig) => {
-  return saveAndApplyConfig(restoreRedactedValues(incomingConfig, rawCfg));
+  return saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
 };
 ctx.scheduleServiceRestart = () => scheduleServiceRestart();
 ctx.runServiceCommand = (args) => runServiceCommand(args);
@@ -674,40 +675,7 @@ const routes = createApiRoutes(ctx);
 // After createApiRoutes returns, ctx.costSummary and ctx.userEnergyPricingSummary
 // are set by the factory (ctx mutation pattern).
 
-// REDACTED_PATHS shared between routes-api.js (redactConfig) and server.js (restoreRedactedValues).
-// MUST match routes-api.js REDACTED_PATHS exactly — mismatched lists cause the UI to save
-// literal "***" into fields that routes-api.js redacted but server.js didn't restore.
-const REDACTED_PATHS = [
-  'apiToken',
-  'telemetry.historyImport.vrmToken',
-  'telemetry.database.password',
-  'forecast.solcast.apiKey',
-  'mqtt.username',
-  'mqtt.password',
-  'notifications.providers.telegram.botToken',
-  'notifications.providers.telegram.chatId',
-  'notifications.providers.pushover.appToken',
-  'notifications.providers.pushover.userKey'
-];
-
-function restoreRedactedValues(incoming, current) {
-  const copy = JSON.parse(JSON.stringify(incoming));
-  for (const dotPath of REDACTED_PATHS) {
-    const parts = dotPath.split('.');
-    let target = copy;
-    let source = current;
-    for (let i = 0; i < parts.length - 1; i++) {
-      target = target?.[parts[i]];
-      source = source?.[parts[i]];
-      if (!target || !source) break;
-    }
-    const key = parts[parts.length - 1];
-    if (target && source && target[key] === '***' && key in source) {
-      target[key] = source[key];
-    }
-  }
-  return copy;
-}
+// SEC-01: REDACTED_PATHS + restoreRedacted imported from config-redaction.js (shared module)
 
 export async function buildSystemDiscoveryPayload({
   query = {},

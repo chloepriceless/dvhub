@@ -12,6 +12,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImpor
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
+import { REDACTED_PATHS, redactConfig } from './config-redaction.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -605,18 +606,7 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Config helpers ───────────────────────────────────────────────────
-  const REDACTED_PATHS = ['apiToken', 'telemetry.historyImport.vrmToken', 'telemetry.database.password', 'mqtt.username', 'mqtt.password', 'notifications.providers.telegram.botToken', 'notifications.providers.telegram.chatId', 'notifications.providers.pushover.appToken', 'notifications.providers.pushover.userKey'];
-
-  function redactConfig(config) {
-    const copy = JSON.parse(JSON.stringify(config));
-    for (const dotPath of REDACTED_PATHS) {
-      const parts = dotPath.split('.');
-      let obj = copy;
-      for (let i = 0; i < parts.length - 1; i++) { obj = obj?.[parts[i]]; if (!obj) break; }
-      if (obj && parts[parts.length - 1] in obj) obj[parts[parts.length - 1]] = '***';
-    }
-    return copy;
-  }
+  // SEC-01: REDACTED_PATHS + redactConfig imported from config-redaction.js (shared module)
 
   function configMetaPayload() {
     const loadedConfig = ctx.getLoadedConfig();
