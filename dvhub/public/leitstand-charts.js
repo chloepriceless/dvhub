@@ -427,7 +427,7 @@
   // they're merged internally in pv-forecast.js before the response.
   // To re-add them, extend buildForecastResponse() to expose per-source slot arrays.
   var COMPARISON_DATASETS = [
-    { key: 'actual', label: 'Ist (gemessen)',  color: '#e8eaf0', dash: [],     width: 2   },
+    { key: 'actual', label: 'Ist (gemessen)',  color: 'rgba(46, 204, 113, 1)', dash: [],     width: 2   },
     { key: 'ml',     label: 'ML-korrigiert',    color: '#A78BFA', dash: [],     width: 2.5 },
     { key: 'merged', label: 'Basis-Prognose',   color: '#22D3EE', dash: [4, 3], width: 1.8 }
   ];
@@ -450,27 +450,63 @@
       };
     });
 
+    var nowMs = Date.now();
     var config = {
       type: 'line',
-      data: { labels: [], datasets: datasets },
+      data: { datasets: datasets },
       options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
     };
-    config.options.scales.x.ticks = {
-      maxTicksLimit: 12,
-      maxRotation: 0,
-      color: '#5a6a8a',
-      font: { family: 'JetBrains Mono', size: 10 }
+    // Linear X axis with ms timestamps (no date adapter needed) — 12h back + 24h ahead
+    config.options.scales.x = {
+      type: 'linear',
+      min: nowMs - 12 * 3600000,
+      max: nowMs + 24 * 3600000,
+      grid: { color: 'rgba(90, 106, 138, 0.15)' },
+      ticks: {
+        maxTicksLimit: 12,
+        maxRotation: 0,
+        color: '#5a6a8a',
+        font: { family: 'JetBrains Mono', size: 10 },
+        callback: function (val) {
+          return new Date(val).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        }
+      }
     };
     config.options.scales.y.title = {
       display: true,
-      text: 'Leistung (W)',
+      text: 'Leistung (kW)',
       color: '#5a6a8a',
       font: { size: 10 }
     };
     config.options.scales.y.beginAtZero = true;
     config.options.plugins.tooltip.callbacks = {
       label: function (ctx) {
-        return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(0) + ' W';
+        return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + ' kW';
+      },
+      title: function (items) {
+        if (!items.length) return '';
+        return new Date(items[0].parsed.x).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      }
+    };
+    // Now-marker vertical dashed line (D-B2)
+    config.options.plugins.annotation = {
+      annotations: {
+        nowLine: {
+          type: 'line',
+          xMin: nowMs,
+          xMax: nowMs,
+          borderColor: 'rgba(255, 165, 0, 0.8)',
+          borderWidth: 2,
+          borderDash: [6, 3],
+          label: {
+            display: true,
+            content: 'jetzt',
+            position: 'start',
+            backgroundColor: 'rgba(255, 165, 0, 0.7)',
+            color: '#fff',
+            font: { size: 11 }
+          }
+        }
       }
     };
 
@@ -546,33 +582,103 @@
       return;
     }
 
-    // Use whichever slot array is longer for labels
-    var refSlots = pvSlots.length >= rawPvSlots.length ? pvSlots : rawPvSlots;
-    var labels = refSlots.map(function (s) {
-      var d = new Date(s.start);
-      var h = d.getHours().toString().padStart(2, '0');
-      var m = d.getMinutes().toString().padStart(2, '0');
-      return h + ':' + m;
+    // Build time-based {x, y} data arrays (W -> kW, x = ms timestamp): [actual, ml, merged]
+    var mlData = pvSlots.map(function (s) {
+      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
     });
-
-    // Build data arrays: [actual, ml, merged]
-    var mlData = pvSlots.map(function (s) { return s.powerW || 0; });
-    var mergedData = rawPvSlots.map(function (s) { return s.powerW || 0; });
-    // "Actual" measured PV from optional historical samples attached by the
-    // API under forecastData.actual (not yet wired; empty for now).
+    var mergedData = rawPvSlots.map(function (s) {
+      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
+    });
+    // "Actual" measured PV from /api/forecast response.actual[] (Plan 01 wiring)
     var actualData = Array.isArray(forecastData && forecastData.actual)
-      ? forecastData.actual.map(function (s) { return s.powerW || 0; })
+      ? forecastData.actual.map(function (s) {
+          return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
+        })
       : [];
 
-    forecastCompChart.data.labels = labels;
-    forecastCompChart.data.datasets[0].data = actualData;  // Ist (gemessen) — empty until wired
+    forecastCompChart.data.datasets[0].data = actualData;  // Ist (gemessen) — solid green line
     forecastCompChart.data.datasets[1].data = mlData;       // ML-korrigiert
     forecastCompChart.data.datasets[2].data = mergedData;   // Basis-Prognose
+
+    // Update now-marker and X-axis range to current time
+    var nowMs = Date.now();
+    var xScale = forecastCompChart.options.scales.x;
+    xScale.min = nowMs - 12 * 3600000;
+    xScale.max = nowMs + 24 * 3600000;
+    var ann = forecastCompChart.options.plugins.annotation;
+    if (ann && ann.annotations && ann.annotations.nowLine) {
+      ann.annotations.nowLine.xMin = nowMs;
+      ann.annotations.nowLine.xMax = nowMs;
+    }
+
     forecastCompChart.update('none');
 
     // Show card, hide skeleton
     if (card) card.style.display = '';
     if (skeleton) skeleton.style.display = 'none';
+
+    // Update per-day forecast summary cards (#17)
+    updateForecastSummaryCards(forecastData);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 6b. Forecast Summary Cards per day (#17: Heute/Morgen/Uebermorgen)
+  // ---------------------------------------------------------------------------
+  function updateForecastSummaryCards(forecastData) {
+    var container = document.getElementById('forecastDaySummary');
+    if (!container) return;
+
+    var pvSlots = forecastData && forecastData.pv && forecastData.pv.slots ? forecastData.pv.slots : [];
+    if (pvSlots.length === 0) {
+      container.textContent = '';
+      return;
+    }
+
+    // Group PV slots by day and sum energy (kWh)
+    var dayBuckets = {};
+    pvSlots.forEach(function (s) {
+      var d = new Date(s.start);
+      var dayKey = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (!dayBuckets[dayKey]) dayBuckets[dayKey] = 0;
+      // Each slot covers its resolution (typically 15min = 0.25h or 1h = 1h)
+      var durationH = s.end && s.start ? (new Date(s.end) - new Date(s.start)) / 3600000 : 0.25;
+      dayBuckets[dayKey] += ((s.powerW || 0) / 1000) * durationH; // kWh
+    });
+
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var tomorrow = new Date(today.getTime() + 86400000);
+    var dayAfter = new Date(today.getTime() + 2 * 86400000);
+
+    function fmtDate(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    var labels = [
+      { key: fmtDate(today), name: 'Heute' },
+      { key: fmtDate(tomorrow), name: 'Morgen' },
+      { key: fmtDate(dayAfter), name: 'Ueberm.' }
+    ];
+
+    // After sunset (hour >= 18 or today PV is 0), show Morgen first
+    var currentHour = now.getHours();
+    var todayKwh = dayBuckets[labels[0].key] || 0;
+    if (currentHour >= 18 || todayKwh === 0) {
+      // Swap Heute and Morgen order — Morgen first
+      var tmp = labels[0];
+      labels[0] = labels[1];
+      labels[1] = tmp;
+    }
+
+    var parts = [];
+    labels.forEach(function (l) {
+      var kwh = dayBuckets[l.key];
+      if (kwh != null && kwh > 0) {
+        parts.push(l.name + ': ' + kwh.toFixed(1) + ' kWh');
+      }
+    });
+
+    container.textContent = parts.length > 0 ? parts.join(' | ') : '';
   }
 
   // ---------------------------------------------------------------------------
