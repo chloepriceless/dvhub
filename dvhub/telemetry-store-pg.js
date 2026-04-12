@@ -967,6 +967,32 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         source: r.source
       }));
     },
+    /**
+     * List measured PV actual values from energy_slots_15m for a time range.
+     * Used by forecast/index.js to inject actual[] into /api/forecast response (D-B1).
+     * Returns [{start: ISO, powerW: number}] with kWh->W conversion (* 4000).
+     * Deduplicates by slot (prefers local_live over vrm_import via ORDER BY source_kind ASC).
+     */
+    async listPvActualSlots({ start, end } = {}) {
+      const result = await pool.query(`
+        SELECT slot_start_utc, value_num, source_kind
+        FROM energy_slots_15m
+        WHERE series_key = 'pv_total_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+        ORDER BY slot_start_utc ASC, source_kind ASC
+      `, [isoTimestamp(start), isoTimestamp(end)]);
+      // Deduplicate by slot timestamp (prefer local_live first due to ASC ordering)
+      const byTs = new Map();
+      for (const row of result.rows) {
+        const ts = new Date(row.slot_start_utc).toISOString();
+        if (!byTs.has(ts)) {
+          // Unit conversion: kWh/15min * 4000 = average Watts (kWh / 0.25h * 1000)
+          byTs.set(ts, { start: ts, powerW: Number(row.value_num) * 4000 });
+        }
+      }
+      return [...byTs.values()];
+    },
     async close() {
       await pool.end();
     }

@@ -182,13 +182,12 @@ export function createForecastService(ctx) {
 
     // ML post-processing: correct PV forecast if model available (Tier 2+).
     // correct() is async (spawns Python), so await it.
+    // D-A1/A3: correct() now builds features internally and uses forecastVersion cache.
     let mlResult = { applied: false, corrected: pv.slots, model: null };
     if (ctx.mlService?.correct) {
       try {
         mlResult = (await ctx.mlService.correct(pv.slots, {
-          weather: state.forecast.weather?.data,
-          pvConfig: cfg.forecast?.pv,
-          accuracy: state.forecast.pv?.accuracy
+          forecastVersion
         })) ?? mlResult;
       } catch {
         // Swallow — bypass ML correction on error, keep raw pv
@@ -196,21 +195,23 @@ export function createForecastService(ctx) {
     }
 
     const mlActive = mlResult.applied || false;
+    const correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
 
-    // Sanity check: if ML correction collapses the forecast (feature pipeline mismatch
-    // can cause the model to output ~0 for everything), reject the correction and
-    // fall back to raw PV. Compare peaks: if ML peak is < 20% of raw peak AND raw peak
-    // was significant (>500W), treat the correction as broken.
-    const rawPeak = pv.slots.reduce((max, s) => Math.max(max, s.powerW || 0), 0);
-    const mlPeak = mlActive ? mlResult.corrected.reduce((max, s) => Math.max(max, s.powerW || 0), 0) : 0;
-    const mlCollapsed = mlActive && rawPeak > 500 && mlPeak < rawPeak * 0.2;
-    const correctedPv = (mlActive && !mlCollapsed) ? { ...pv, slots: mlResult.corrected } : pv;
-    const mlActiveFinal = mlActive && !mlCollapsed;
-
-    // Legacy compat for app.js drawPriceChart: always use raw PV for the Börsenchart
-    // overlay so the curve stays visually correct even if ML correction collapses.
-    const solar = pv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+    // H-12 restored: use ML-corrected PV for Börsenchart solar overlay (not raw PV)
+    const solar = correctedPv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
     const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+
+    // D-B1: fetch last 12h of measured PV from energy_slots_15m via telemetryStore
+    let actual = [];
+    if (ctx.telemetryStore?.listPvActualSlots) {
+      try {
+        const end = new Date();
+        const start = new Date(end.getTime() - 12 * 3600 * 1000);
+        actual = await ctx.telemetryStore.listPvActualSlots({ start, end });
+      } catch (e) {
+        pushLog('forecast_actual_query_error', { error: e.message });
+      }
+    }
 
     return {
       ok: true,
@@ -220,14 +221,14 @@ export function createForecastService(ctx) {
         tier,
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
         loadModel: cfg.forecast?.load?.model || 'sql_weekday',
-        mlActive: mlActiveFinal,
-        mlModel: mlActiveFinal ? (mlResult.model || null) : null,
-        mlCollapsed: mlCollapsed ? { rawPeak, mlPeak } : false
+        mlActive,
+        mlModel: mlActive ? (mlResult.model || null) : null
       },
       price: buildPriceSection(),
       pv: correctedPv,     // ML-corrected (or raw if no model)
       rawPv: pv,           // Pre-ML for comparison chart (D-22)
       load,
+      actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts)
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
       solar,
       consumption
