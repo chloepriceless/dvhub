@@ -79,13 +79,16 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   }
 
   // Step 1: Build LP string (CPLEX format for HiGHS)
-  // Variables: charge_t, discharge_t (continuous, bounded)
+  // Variables: charge_t, discharge_t, discharge_self_t, discharge_export_t (continuous, bounded)
   //            soc_t (continuous, bounded)
-  // Objective: Minimize SUM_t [ charge_t * importPrice_t * dt - discharge_t * feedInPrice_t * dt ]
-  // Import price = cost of buying from grid (for charging decisions)
-  // FeedIn price = revenue from selling to grid (for discharge decisions)
-  // Using separate prices ensures the solver maximizes sell revenue at the
-  // highest feed-in price, not just at times when import would be expensive.
+  // Objective: Minimize SUM_t [ charge_t * importPrice_t * dt
+  //                             - discharge_self_t * importPrice_t * dt   (avoided import)
+  //                             - discharge_export_t * feedInPrice_t * dt (feed-in revenue) ]
+  // Discharge split: discharge_self_t + discharge_export_t = discharge_t
+  //                  discharge_self_t <= load_t (cannot self-consume more than load)
+  // Self-consumption avoids import at importCtKwh (~26.9 ct/kWh), while export earns
+  // feedInCtKwh (~7-10 ct/kWh). This makes the optimizer prefer discharging during
+  // high-load periods where savings per kWh are ~20 ct higher.
 
   const objTerms = [];
   for (let t = 0; t < N; t++) {
@@ -93,12 +96,15 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
     const feedInPrice = priceSlots[t].feedInCtKwh ?? priceSlots[t].ctKwh;
 
     // charge_t: +importPrice * dt (cost of buying from grid to charge)
-    // discharge_t: -feedInPrice * dt (revenue from selling to grid)
     const chargeCoeff = Math.round(importPrice * dt * 10000) / 10000;
-    const dischargeCoeff = Math.round(-feedInPrice * dt * 10000) / 10000;
+    // discharge_self_t: -importPrice * dt (avoided import cost from self-consumption)
+    const dischargeSelfCoeff = Math.round(-importPrice * dt * 10000) / 10000;
+    // discharge_export_t: -feedInPrice * dt (revenue from grid export)
+    const dischargeExportCoeff = Math.round(-feedInPrice * dt * 10000) / 10000;
 
     if (chargeCoeff !== 0) objTerms.push(`${chargeCoeff >= 0 ? '+' : ''}${chargeCoeff} charge_${t}`);
-    if (dischargeCoeff !== 0) objTerms.push(`${dischargeCoeff >= 0 ? '+' : ''}${dischargeCoeff} discharge_${t}`);
+    if (dischargeSelfCoeff !== 0) objTerms.push(`${dischargeSelfCoeff >= 0 ? '+' : ''}${dischargeSelfCoeff} discharge_self_${t}`);
+    if (dischargeExportCoeff !== 0) objTerms.push(`${dischargeExportCoeff >= 0 ? '+' : ''}${dischargeExportCoeff} discharge_export_${t}`);
   }
 
   let lp = `Minimize\n obj: ${objTerms.join(' ')}\n`;
@@ -116,6 +122,14 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   // SOC dynamics for t >= 1
   for (let t = 1; t < N; t++) {
     lp += ` soc_dyn_${t}: soc_${t} - soc_${t - 1} - ${effCharge} charge_${t} + ${effDischarge} discharge_${t} = 0\n`;
+  }
+
+  // Discharge split constraints: discharge_self_t + discharge_export_t = discharge_t
+  // discharge_self_t <= load_t (cannot self-consume more than household load)
+  for (let t = 0; t < N; t++) {
+    const load = getLoad(t);
+    lp += ` split_${t}: discharge_self_${t} + discharge_export_${t} - discharge_${t} = 0\n`;
+    lp += ` self_cap_${t}: discharge_self_${t} <= ${Math.round(Math.max(0, load))}\n`;
   }
 
   // Grid permission constraints
@@ -141,6 +155,8 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   for (let t = 0; t < N; t++) {
     lp += ` 0 <= charge_${t} <= ${maxChargeW}\n`;
     lp += ` 0 <= discharge_${t} <= ${confidenceGate.maxDischargeW}\n`;
+    lp += ` 0 <= discharge_self_${t} <= ${confidenceGate.maxDischargeW}\n`;
+    lp += ` 0 <= discharge_export_${t} <= ${confidenceGate.maxDischargeW}\n`;
     lp += ` ${minSocWh} <= soc_${t} <= ${maxSocWh}\n`;
   }
 
@@ -169,8 +185,11 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   for (let t = 0; t < N; t++) {
     const chargeW = columns[`charge_${t}`]?.Primal || 0;
     const dischargeW = columns[`discharge_${t}`]?.Primal || 0;
+    const dischargeSelfW = columns[`discharge_self_${t}`]?.Primal || 0;
+    const dischargeExportW = columns[`discharge_export_${t}`]?.Primal || 0;
 
     // Net power: positive = charge, negative = discharge
+    // discharge_t = discharge_self_t + discharge_export_t (for backward compat)
     let powerW = 0;
     if (chargeW > 1) powerW = Math.round(chargeW);
     if (dischargeW > 1) powerW = -Math.round(dischargeW);
@@ -182,6 +201,8 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
       ts: priceSlots[t].ts,
       endTs: priceSlots[t].endTs,
       powerW,
+      dischargeSelfW: Math.round(dischargeSelfW),
+      dischargeExportW: Math.round(dischargeExportW),
       confidence: priceSlots[t].confidence
     });
   }

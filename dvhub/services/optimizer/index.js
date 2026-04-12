@@ -129,6 +129,28 @@ export function applyDvForecastLogic(normalized, state, getCfg) {
 }
 
 /**
+ * Compute the optimizer polling interval based on time of day.
+ * During morning hours (05:00-10:00 local time), PV production ramps up
+ * and the optimizer benefits from more frequent re-runs to exploit
+ * morning price peaks and react to faster-than-expected battery charging.
+ *
+ * @param {object} cfg - Config object with optimizer section
+ * @param {number} [hourOverride] - Optional hour override for testing (0-23)
+ * @returns {number} Polling interval in milliseconds
+ */
+export function getOptInterval(cfg, hourOverride) {
+  const normalInterval = cfg.optimizer?.intervalMs ?? 900_000;       // 15 min default
+  const morningInterval = cfg.optimizer?.morningReoptIntervalMs ?? 300_000; // 5 min default
+  const hour = hourOverride !== undefined ? hourOverride : new Date().getHours();
+
+  // Morning reopt window: 05:00-09:59 local time
+  if (hour >= 5 && hour < 10) {
+    return morningInterval;
+  }
+  return normalInterval;
+}
+
+/**
  * Create the optimizer service. Factory pattern per D-01.
  * Hot-reload safe: start() always starts timers, runOptimization() gates on enabled.
  *
@@ -526,10 +548,20 @@ export function createOptimizerService(ctx) {
       }
     }, 60_000);
 
-    // Fallback: re-optimize every 30min regardless (D-02)
-    fallbackTimer = setInterval(() => {
-      runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
-    }, 30 * 60 * 1000);
+    // Fallback: sunrise-aware reopt -- uses shorter interval during 05:00-10:00 (#16b)
+    // Uses recursive setTimeout instead of setInterval so interval adapts each tick.
+    function scheduleFallback() {
+      const interval = getOptInterval(getCfg());
+      fallbackTimer = setTimeout(async () => {
+        try {
+          await runOptimization();
+        } catch (err) {
+          pushLog('optimizer_error', { error: err.message });
+        }
+        scheduleFallback(); // Reschedule with potentially different interval
+      }, interval);
+    }
+    scheduleFallback();
   }
 
   // --- Lifecycle ---
@@ -553,7 +585,7 @@ export function createOptimizerService(ctx) {
    */
   async function close() {
     if (pollTimer) clearInterval(pollTimer);
-    if (fallbackTimer) clearInterval(fallbackTimer);
+    if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
     pollTimer = null;
     fallbackTimer = null;
   }
