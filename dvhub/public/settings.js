@@ -1699,6 +1699,12 @@ function collectConfigFromForm() {
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
   next.userEnergyPricing.pvPlants = serializePvPlants(pvPlantsDraft);
+  // LLM-01: Persist selected LLM model from dropdown
+  var llmModelSelect = document.getElementById('llmModelSelect');
+  if (llmModelSelect && llmModelSelect.value) {
+    next.llm = next.llm || {};
+    next.llm.llmModel = llmModelSelect.value;
+  }
   return next;
 }
 
@@ -1720,6 +1726,7 @@ function applyConfigPayload(payload) {
   pvPlantsValidation = [];
   forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
   forecastTierCache = null;
+  _llmModelsLoaded = false; // LLM-01: allow model dropdown to repopulate after config reload
   settingsShellState = createSettingsShellState(definition);
   setStoredApiToken(currentEffectiveConfig.apiToken || '');
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
@@ -2486,11 +2493,9 @@ function renderMlStatus(status) {
   if (llmGroup) {
     if (status.tier >= 3) {
       llmGroup.hidden = false;
-      var llmModelNameEl = document.getElementById('llmModelName');
-      if (llmModelNameEl) {
-        // Read from config if /api/ml/status doesn't include llmModel
-        llmModelNameEl.textContent = status.llmModel || (window.__dvhubConfig && window.__dvhubConfig.llm && window.__dvhubConfig.llm.llmModel) || 'LLM';
-      }
+      // Populate model dropdown (LLM-01)
+      loadLlmModelDropdown();
+
       var llmStatusEl = document.getElementById('llmStatus');
       if (llmStatusEl) llmStatusEl.textContent = status.llmStatus || '--';
 
@@ -2502,6 +2507,47 @@ function renderMlStatus(status) {
     } else {
       llmGroup.hidden = true;
     }
+  }
+}
+
+// LLM-01: Fetch available Ollama models and populate the model dropdown
+var _llmModelsLoaded = false;
+async function loadLlmModelDropdown() {
+  var select = document.getElementById('llmModelSelect');
+  if (!select || _llmModelsLoaded) return;
+  _llmModelsLoaded = true;
+  var currentModel = (currentDraftConfig && currentDraftConfig.llm && currentDraftConfig.llm.llmModel) || 'tinyllama';
+  try {
+    var res = await apiFetch('/api/llm/models');
+    var payload = await res.json();
+    if (!res.ok || !payload.ok || !Array.isArray(payload.models)) {
+      select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (Ollama nicht erreichbar)</option>';
+      return;
+    }
+    select.innerHTML = '';
+    if (payload.models.length === 0) {
+      select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (keine Modelle gefunden)</option>';
+      return;
+    }
+    var found = false;
+    for (var i = 0; i < payload.models.length; i++) {
+      var m = payload.models[i];
+      var opt = document.createElement('option');
+      opt.value = m.name;
+      opt.textContent = m.name + (m.parameter_size ? ' -- ' + m.parameter_size : '');
+      if (m.name === currentModel) { opt.selected = true; found = true; }
+      select.appendChild(opt);
+    }
+    // If current model is not in the list, add it as first option
+    if (!found) {
+      var fallback = document.createElement('option');
+      fallback.value = currentModel;
+      fallback.textContent = currentModel + ' (nicht installiert)';
+      fallback.selected = true;
+      select.insertBefore(fallback, select.firstChild);
+    }
+  } catch (e) {
+    select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (Fehler)</option>';
   }
 }
 

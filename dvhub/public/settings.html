@@ -372,7 +372,13 @@
 
             <!-- LLM Status (Tier 3 only) -->
             <div class="config-group" data-accent="cyan" id="mlLlmGroup" hidden>
-              <div class="config-group-kicker" style="color:var(--flow-cyan);">LLM (<span id="llmModelName">--</span>)</div>
+              <div class="config-group-kicker" style="color:var(--flow-cyan);">LLM Modell</div>
+              <div class="config-row">
+                <label for="llmModelSelect" class="config-label">Aktives Modell</label>
+                <select id="llmModelSelect" class="form-control" style="max-width:320px;">
+                  <option value="">-- Modelle laden... --</option>
+                </select>
+              </div>
               <div class="panel-stats">
                 <div class="stat-card">
                   <div class="stat-label">Status</div>
