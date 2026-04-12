@@ -1,0 +1,529 @@
+// test/smoke-phase05.test.js -- Phase 05 HTTP smoke tests (QUAL-06).
+// Covers all major Phase 05 API endpoints + H-01/H-14/H-17 regressions.
+// Uses createApiRoutes(ctx) + mockCtx + mockRes pattern (no HTTP server).
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createApiRoutes } from '../routes-api.js';
+import { computeSlotCosts, enrichPriceSlotsWithCosts } from '../services/optimizer/cost-model.js';
+
+// ── Mock helpers ────────────────────────────────────────────────────
+
+function mockRes() {
+  const captured = { status: 0, headers: {}, body: '' };
+  return {
+    writeHead(code, headers) { captured.status = code; Object.assign(captured.headers, headers); },
+    end(payload) { captured.body = payload; },
+    _captured: captured
+  };
+}
+
+function makeReq(method, urlPath, body) {
+  const req = {
+    method,
+    url: urlPath,
+    headers: { host: 'localhost' },
+    socket: { remoteAddress: '127.0.0.1' },
+    // Implement on/destroy for readRawBody calls (POST endpoints)
+    _body: body ? JSON.stringify(body) : '',
+    _listeners: {},
+    on(event, cb) {
+      if (event === 'data' && req._body) {
+        setTimeout(() => cb(Buffer.from(req._body)), 0);
+        // Also fire 'end' after data
+        setTimeout(() => {
+          const endCb = req._listeners['end'];
+          if (endCb) endCb();
+        }, 1);
+      } else if (event === 'end' && !req._body) {
+        setTimeout(() => cb(), 0);
+      } else {
+        req._listeners[event] = cb;
+      }
+      return req;
+    },
+    destroy() {}
+  };
+  return req;
+}
+
+function mockCtx(overrides = {}) {
+  const base = {
+    state: {
+      meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0 },
+      victron: { soc: 50, batteryPowerW: 0, pvTotalW: 3000, gridImportW: 0, gridExportW: 0, updatedAt: 0 },
+      epex: { ok: false, data: [] },
+      energy: { day: null, importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0 },
+      telemetry: { enabled: false, dbPath: null, ok: false },
+      keepalive: { modbusLastQuery: null, appPulse: { periodSec: 30 } },
+      scan: { running: false, updatedAt: 0, params: null, rows: [], error: null },
+      schedule: { rules: [], config: {}, active: {}, lastWrite: {}, manualOverride: {}, lastEvalAt: 0, smallMarketAutomation: {} },
+      ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), dvControl: null },
+      dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
+      log: [],
+      forecast: null
+    },
+    getCfg: () => ({
+      epex: { enabled: false, timezone: 'Europe/Berlin' },
+      optimizer: { enabled: false, batteryCapacityWh: 10000 },
+      family: {
+        screensaver: { enabled: true, defaultTimeoutSec: 120, windows: [], dimOpacity: 0.3 },
+        presence: { pollIntervalMs: 2000, webhookEnabled: true }
+      },
+      apiToken: '',
+      gridPositiveMeans: 'grid_import',
+      keepalivePulseSec: 30,
+      schedule: { timezone: 'Europe/Berlin' },
+      telemetry: { enabled: false }
+    }),
+    pushLog: () => {},
+    persistConfig: () => {},
+    setForcedOff: () => {},
+    clearForcedOff: () => {},
+    expireLeaseIfNeeded: () => {},
+    transport: { type: 'modbus' },
+    telemetrySafeWrite: () => {},
+    controlValue: () => 'off',
+    needsSetup: () => false,
+    getConfigPath: () => '/tmp/config.json',
+    getRawCfg: () => ({ apiToken: 'secret-token', mqtt: { password: 'mqtt-pass' } }),
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }),
+    getConfigDefinition: () => [],
+    getAppVersion: () => ({ versionLabel: '1.0.0-test' }),
+    getTransportType: () => 'modbus',
+    getAppDir: () => '/tmp',
+    getRepoRoot: () => '/tmp',
+    scanTransport: {},
+    fetchEpexDay: async () => {},
+    fetchVrmForecast: async () => {},
+    getCachedRuntimeStatusPayload: () => null,
+    buildRuntimeRouteMeta: () => ({ ready: true, busy: false, queueDepth: 0 }),
+    buildFallbackStatusPayload: () => ({
+      victron: { pvTotalW: 0, batteryPowerW: 0, soc: 50 },
+      meter: { grid_total_w: 0 },
+      epex: { ok: false, data: [] },
+      costs: { netEur: 0, costEur: 0, revenueEur: 0 }
+    }),
+    buildSystemDiscoveryPayload: async () => ({ ok: true }),
+    saveAndApplyConfig: (cfg) => ({ ok: true, changedPaths: [], restartRequired: false, restartRequiredPaths: [] }),
+    scheduleServiceRestart: () => {},
+    runServiceCommand: async () => ({ ok: true }),
+    getServiceActionsEnabled: () => false,
+    getServiceName: () => 'dvhub',
+    getServiceUseSudo: () => false,
+    assertValidRuntimeCommand: () => {},
+    epexNowNext: () => null,
+    applyControlTarget: async () => ({ ok: true }),
+
+    // ── Phase 05 services ──────────────────────────────────────────
+    forecastService: {
+      buildForecastResponse: async () => ({
+        meta: { mlActive: true, horizon: 48, forecastVersion: 1 },
+        price: [],
+        pv: [{ start: '2026-04-11T06:00:00Z', powerW: 5000 }],
+        rawPv: [{ start: '2026-04-11T06:00:00Z', powerW: 4800 }],
+        load: [{ start: '2026-04-11T06:00:00Z', powerW: 800 }],
+        actual: [{ start: '2026-04-11T05:00:00Z', powerW: 4500 }],
+        solar: [],
+        consumption: []
+      }),
+      store: {}
+    },
+    mlService: {
+      getStatus: () => ({ modelLoaded: true, modelType: 'lightgbm', version: 1, mae: 0.56, tier: 2, mlEnabled: true }),
+      getAccuracyTrend: async () => [{ date: '2026-04-11', mae: 0.56, samples: 100 }]
+    },
+    llmService: {
+      listModels: async () => [
+        { name: 'llama3.2:3b', size: 2000000000, parameter_size: '3B' },
+        { name: 'tinyllama', size: 637000000, parameter_size: '1.1B' }
+      ],
+      generateMessage: async (type, data) => ({ text: 'Guten Morgen! Heute wird es sonnig.', type }),
+      getMessages: () => [{ text: 'Test message', ts: Date.now() }]
+    },
+    optimizerService: {
+      getStatus: () => ({ enabled: true, lastRun: Date.now() }),
+      getLatestRun: () => ({
+        id: 1, optimizer: 'internal', created_at: new Date().toISOString(),
+        seriesByKey: {
+          battery_power_w: [{ ts: '2026-04-11T06:00Z', value: 500 }],
+          pv_power_w: [{ ts: '2026-04-11T06:00Z', value: 3000 }],
+          load_power_w: [{ ts: '2026-04-11T06:00Z', value: 800 }],
+          price_import_ct_kwh: [{ ts: '2026-04-11T06:00Z', value: 26.9 }]
+        }
+      })
+    },
+    familyService: {
+      buildFamilyStatus: () => ({
+        now: Date.now(),
+        energy: { solarKw: 1.2, homeKw: 0.8, gridKw: -0.4, feedingToGrid: true, surplus: true, batteryKw: 0, evKw: 0 },
+        battery: { socPct: 50, powerKw: 0, mode: 'idle' },
+        greeting: { hello: 'Guten Tag' }
+      }),
+      getPresence: () => ({ detected: false, source: null, updatedAt: 0 }),
+      setPresence: () => {}
+    },
+    telemetryStore: {
+      getLatestOptimizerRun: async ({ optimizer } = {}) => ({
+        id: 1,
+        optimizer: optimizer || 'internal',
+        runStartedAt: '2026-04-11T06:00:00Z',
+        runFinishedAt: '2026-04-11T06:00:05Z',
+        status: 'ok',
+        source: 'schedule',
+        inputJson: null,
+        series: [
+          { seriesKey: 'battery_power_w', ts: '2026-04-11T06:00Z', value: 500, scope: 'plan', unit: 'W' },
+          { seriesKey: 'pv_power_w', ts: '2026-04-11T06:00Z', value: 3000, scope: 'input', unit: 'W' },
+          { seriesKey: 'load_power_w', ts: '2026-04-11T06:00Z', value: 800, scope: 'input', unit: 'W' },
+          { seriesKey: 'price_import_ct_kwh', ts: '2026-04-11T06:00Z', value: 26.9, scope: 'input', unit: 'ct/kWh' }
+        ]
+      }),
+      writeOptimizerRun: () => {}
+    },
+    historyApi: null,
+    historyImportManager: null
+  };
+  return { ...base, ...overrides };
+}
+
+// ── 1. GET /api/ml/status ─────────────────────────────────────────
+
+describe('Phase 05 Smoke Tests', () => {
+
+  it('GET /api/ml/status -- returns model status with modelLoaded', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/ml/status');
+    await routes.handleRequest(makeReq('GET', '/api/ml/status'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.modelLoaded, true);
+    assert.equal(body.modelType, 'lightgbm');
+  });
+
+  // ── 2. GET /api/forecast -- forecast with ML active and actual[] ──
+
+  it('GET /api/forecast -- returns forecast with mlActive and actual[]', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/forecast');
+    await routes.handleRequest(makeReq('GET', '/api/forecast'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.equal(body.meta.mlActive, true);
+    assert.ok(Array.isArray(body.actual), 'actual must be an array');
+    assert.ok(body.actual.length > 0, 'actual must have entries');
+  });
+
+  // ── 3. GET /api/forecast -- no mlCollapsed field (H-01 regression) ──
+
+  it('GET /api/forecast -- response does NOT contain mlCollapsed (H-01)', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/forecast');
+    await routes.handleRequest(makeReq('GET', '/api/forecast'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.mlCollapsed, undefined, 'mlCollapsed must not be in response (H-01 removed)');
+    assert.ok(!('mlCollapsed' in body), 'mlCollapsed key must not exist');
+  });
+
+  // ── 4. GET /api/optimizer/runs/latest -- returns run with series ──
+
+  it('GET /api/optimizer/runs/latest -- returns run with all 4 series keys', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/optimizer/runs/latest');
+    await routes.handleRequest(makeReq('GET', '/api/optimizer/runs/latest'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(body.run, 'run must be present');
+    const keys = body.run.seriesByKey;
+    assert.ok(Array.isArray(keys.pv_power_w), 'pv_power_w must be non-empty array');
+    assert.ok(keys.pv_power_w.length > 0);
+    assert.ok(Array.isArray(keys.load_power_w), 'load_power_w must be non-empty array');
+    assert.ok(keys.load_power_w.length > 0);
+    assert.ok(Array.isArray(keys.battery_power_w), 'battery_power_w must be present');
+    assert.ok(Array.isArray(keys.price_import_ct_kwh), 'price_import_ct_kwh must be present');
+  });
+
+  // ── 5. POST /api/messages/generate -- returns non-empty text ──
+
+  it('POST /api/messages/generate -- returns non-empty text', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/messages/generate');
+    await routes.handleRequest(makeReq('POST', '/api/messages/generate', { type: 'status' }), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(body.message, 'message must be present');
+    assert.ok(body.message.text.length > 0, 'message text must be non-empty');
+  });
+
+  // ── 6. GET /api/ml/accuracy -- returns accuracy data ──
+
+  it('GET /api/ml/accuracy -- returns accuracy trend', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/ml/accuracy');
+    await routes.handleRequest(makeReq('GET', '/api/ml/accuracy'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.ok(Array.isArray(body), 'accuracy response must be an array');
+    assert.ok(body.length > 0, 'accuracy trend must have entries');
+  });
+
+  // ── 7. GET /api/llm/models -- returns Ollama model list ──
+
+  it('GET /api/llm/models -- returns model list with name property', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/llm/models');
+    await routes.handleRequest(makeReq('GET', '/api/llm/models'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(Array.isArray(body.models), 'models must be an array');
+    assert.ok(body.models.length > 0, 'models must not be empty');
+    assert.ok(body.models[0].name, 'first model must have a name');
+  });
+
+  // ── 8. POST /api/integration/eos/apply -- accepts setpoints ──
+
+  it('POST /api/integration/eos/apply -- applies setpoints successfully', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/integration/eos/apply');
+    await routes.handleRequest(
+      makeReq('POST', '/api/integration/eos/apply', { gridSetpointW: 500 }),
+      res, url
+    );
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(Array.isArray(body.results), 'results must be an array');
+  });
+
+  // ── 9. GET /api/family/status -- returns family data ──
+
+  it('GET /api/family/status -- returns ok and energy data', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/family/status');
+    await routes.handleRequest(makeReq('GET', '/api/family/status'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(body.energy, 'energy must be present');
+    assert.ok(body.greeting, 'greeting must be present');
+  });
+
+  // ── 10. GET /api/config -- returns masked values (settings roundtrip part 1) ──
+
+  it('GET /api/config -- returns config with masked secrets', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/config');
+    await routes.handleRequest(makeReq('GET', '/api/config'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+    assert.ok(body.config, 'config must be present');
+    // REDACTED_PATHS must be masked to '***'
+    assert.equal(body.config.apiToken, '***', 'apiToken must be redacted');
+    assert.equal(body.config.mqtt.password, '***', 'mqtt.password must be redacted');
+  });
+
+  // ── 11. POST /api/config -- settings roundtrip preserves masked originals ──
+
+  it('POST /api/config with *** preserves original values', async () => {
+    let savedConfig = null;
+    const ctx = mockCtx({
+      saveAndApplyConfig: (cfg) => {
+        savedConfig = cfg;
+        return { ok: true, changedPaths: [], restartRequired: false, restartRequiredPaths: [] };
+      }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/config');
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { apiToken: '***', mqtt: { password: '***' } } }),
+      res, url
+    );
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, true);
+  });
+
+  // ── 12. GET /api/messages -- LLM messages endpoint ──
+
+  it('GET /api/messages -- returns messages array', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/messages');
+    await routes.handleRequest(makeReq('GET', '/api/messages'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.ok(Array.isArray(body.messages), 'messages must be an array');
+    assert.ok(body.messages.length > 0, 'messages must not be empty');
+  });
+
+  // ── 13. GET /api/optimizer/status -- optimizer status endpoint ──
+
+  it('GET /api/optimizer/status -- returns optimizer status', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const url = new URL('http://localhost/api/optimizer/status');
+    await routes.handleRequest(makeReq('GET', '/api/optimizer/status'), res, url);
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.enabled, true);
+  });
+});
+
+// ── H-14 Regression: optimizer kill-switch purges forecast_optimizer rules ──
+
+describe('H-14 Regression: Optimizer Kill-Switch', () => {
+  it('schedule-eval effectiveTargetValue skips optimizer rules when disabled', async () => {
+    // Import schedule-eval to test directly
+    const { createScheduleEvaluator } = await import('../schedule-eval.js');
+
+    const rules = [
+      { id: 'opt-1', source: 'forecast_optimizer', target: 'gridSetpointW', value: 1000,
+        start: 0, end: 1440 },
+      { id: 'user-1', source: 'user', target: 'gridSetpointW', value: 500,
+        start: 0, end: 1440 }
+    ];
+
+    const logs = [];
+    const schedState = {
+      meter: { ok: false, updatedAt: 0 },
+      victron: { soc: 50, batteryPowerW: 0 },
+      epex: { ok: false, data: [] },
+      energy: { day: null, importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0 },
+      telemetry: { enabled: false },
+      keepalive: { modbusLastQuery: null },
+      scan: { running: false },
+      schedule: {
+        rules: [...rules],
+        config: {},
+        active: {},
+        lastWrite: {},
+        manualOverride: {},
+        lastEvalAt: 0,
+        smallMarketAutomation: {}
+      },
+      ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), dvControl: null },
+      dvRegs: {},
+      log: [],
+      forecast: null
+    };
+
+    const schedCtx = {
+      state: schedState,
+      getCfg: () => ({
+        optimizer: { enabled: false, allowGridCharge: false, allowGridDischarge: false },
+        schedule: { timezone: 'Europe/Berlin', manualOverrideTtlMs: 300000 }
+      }),
+      transport: { type: 'modbus' },
+      pushLog: (t, d) => logs.push({ t, d }),
+      telemetrySafeWrite: () => {},
+      persistConfig: () => {},
+      regenerateSmallMarketAutomationRules: async () => {},
+      telemetryStore: null,
+      epexNowNext: () => null,
+      onEvalComplete: () => {}
+    };
+
+    const evaluator = createScheduleEvaluator(schedCtx);
+    await evaluator.evaluateSchedule();
+
+    // After evaluateSchedule with optimizer.enabled=false, forecast_optimizer rules should be purged
+    const remaining = schedState.schedule.rules;
+    const optimizerRules = remaining.filter(r => r.source === 'forecast_optimizer');
+    assert.equal(optimizerRules.length, 0, 'all forecast_optimizer rules must be purged when optimizer disabled');
+    const userRules = remaining.filter(r => r.source === 'user');
+    assert.equal(userRules.length, 1, 'user rules must be preserved');
+
+    // Verify purge was logged
+    const purgeLog = logs.find(l => l.t === 'optimizer_rules_purged');
+    assert.ok(purgeLog, 'optimizer_rules_purged must be logged');
+    assert.equal(purgeLog.d.reason, 'optimizer_disabled');
+
+    evaluator.stop();
+  });
+});
+
+// ── H-17 Regression: feedInMode respected regardless of tariff type ──
+
+describe('H-17 Regression: feedInMode with fixed tariff', () => {
+  it('fixed tariff with feedInMode=spot uses spot-based feed-in pricing', () => {
+    const spotCtKwh = 5.0;
+    const tariff = {
+      type: 'fixed',
+      fixedCtKwh: 30.0,
+      feedInMode: 'spot',
+      feedInSpotFactor: 0.9,
+      feedInCtKwh: 7.78
+    };
+    const paragraph14a = { enabled: false };
+
+    const result = computeSlotCosts(spotCtKwh, tariff, paragraph14a);
+
+    // H-17 fix: feedInMode=spot must use spot pricing even with fixed tariff
+    assert.equal(result.importCtKwh, 30.0, 'import must use fixed rate');
+    // feed-in must be spot * factor, NOT the fixed 7.78
+    const expectedFeedIn = spotCtKwh * 0.9;
+    assert.equal(result.feedInCtKwh, expectedFeedIn,
+      `feedIn must be ${expectedFeedIn} (spot*factor), not 7.78`);
+  });
+
+  it('fixed tariff with feedInMode=fixed uses feedInCtKwh', () => {
+    const spotCtKwh = 5.0;
+    const tariff = {
+      type: 'fixed',
+      fixedCtKwh: 30.0,
+      feedInMode: 'fixed',
+      feedInCtKwh: 7.78
+    };
+    const paragraph14a = { enabled: false };
+
+    const result = computeSlotCosts(spotCtKwh, tariff, paragraph14a);
+    assert.equal(result.feedInCtKwh, 7.78, 'feedIn must use fixed rate');
+  });
+
+  it('enrichPriceSlotsWithCosts uses feedInMode from optimizer.tariff config', () => {
+    const cfg = {
+      userEnergyPricing: { mode: 'fixed', fixedGrossImportCtKwh: 30 },
+      optimizer: {
+        tariff: {
+          feedInMode: 'spot',
+          feedInSpotFactor: 0.85,
+          feedInCtKwh: 7.78
+        }
+      }
+    };
+    const slots = [{ ts: Date.now(), ctKwh: 5.0 }];
+    const enriched = enrichPriceSlotsWithCosts(slots, cfg);
+    // With feedInMode=spot and spotCtKwh=5.0, feedIn = 5.0 * 0.85 = 4.25
+    assert.equal(enriched[0].feedInCtKwh, 5.0 * 0.85,
+      'feedInCtKwh must use spot*factor from optimizer.tariff config');
+  });
+});
