@@ -6,7 +6,7 @@
 
 import { detectRamTier } from '../forecast/ram-tier.js';
 import { applyConfidenceGating } from './confidence-gate.js';
-import { normalizeForecast, averageSlotConfidence } from './forecast-normalizer.js';
+import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules } from './schedule-builder.js';
@@ -417,6 +417,11 @@ export function createOptimizerService(ctx) {
           const hourStart = Math.floor(nowMs / 3_600_000) * 3_600_000;
           const series = [];
 
+          // D-B3: aggregate 15-min slots to 1h BEFORE the loop (fixes .find() dropping slots)
+          const pvSlots1h = aggregateTo1h(pvSlots, 'powerW');
+          const loadSlots1h = aggregateTo1h(loadSlots, 'powerW');
+          const priceSlots1h = aggregateTo1h(effectivePriceSlots, 'importCtKwh');
+
           for (let h = 0; h < HORIZON_H; h++) {
             const slotStart = hourStart + h * 3_600_000;
             const slotEnd = slotStart + 3_600_000;
@@ -435,10 +440,8 @@ export function createOptimizerService(ctx) {
               unit: 'W'
             });
 
-            // Price input (match slot)
-            const priceSlot = effectivePriceSlots.find(p =>
-              (p.ts ?? 0) < slotEnd && ((p.endTs ?? ((p.ts ?? 0) + 3_600_000)) > slotStart)
-            );
+            // Price input (match 1h-aggregated slot)
+            const priceSlot = priceSlots1h.find(p => p.ts === slotStart);
             if (priceSlot && priceSlot.importCtKwh != null) {
               series.push({
                 seriesKey: 'price_import_ct_kwh',
@@ -450,10 +453,8 @@ export function createOptimizerService(ctx) {
               });
             }
 
-            // PV forecast input
-            const pvSlot = pvSlots.find(p =>
-              (p.ts ?? 0) < slotEnd && ((p.endTs ?? ((p.ts ?? 0) + 3_600_000)) > slotStart)
-            );
+            // PV forecast input (1h-aggregated)
+            const pvSlot = pvSlots1h.find(p => p.ts === slotStart);
             if (pvSlot && pvSlot.powerW != null) {
               series.push({
                 seriesKey: 'pv_power_w',
@@ -465,10 +466,8 @@ export function createOptimizerService(ctx) {
               });
             }
 
-            // Load forecast input
-            const loadSlot = loadSlots.find(l =>
-              (l.ts ?? 0) < slotEnd && ((l.endTs ?? ((l.ts ?? 0) + 3_600_000)) > slotStart)
-            );
+            // Load forecast input (1h-aggregated)
+            const loadSlot = loadSlots1h.find(l => l.ts === slotStart);
             if (loadSlot && loadSlot.powerW != null) {
               series.push({
                 seriesKey: 'load_power_w',
