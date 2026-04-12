@@ -1,10 +1,7 @@
 // services/optimizer/milp-battery-optimizer.js -- Tier 2+ MILP battery optimizer (D-03).
-// Produces globally optimal 48h battery schedule using HiGHS solver with 1h resolution.
-// Aggregates 15min price/PV to 1h via aggregateTo1h, load slots pass through as-is.
-// Results expanded back to 15min slots for schedule-builder compatibility.
+// Produces globally optimal 48h battery schedule using HiGHS solver with native 15min resolution.
+// Preserves individual 15min price peaks for optimal slot selection.
 // Uses importCtKwh from cost-model enrichment (falls back to ctKwh for backward compat).
-
-import { aggregateTo1h } from './forecast-normalizer.js';
 
 const QUARTER_MS = 15 * 60 * 1000;
 
@@ -29,16 +26,16 @@ async function getHiGHS() {
 /**
  * Build optimal battery schedule using MILP (Mixed Integer Linear Programming).
  *
- * Formulates a linear program with 1h resolution:
- * - Decision variables: charge_t, discharge_t per time slot
+ * Formulates a linear program with native 15min resolution:
+ * - Decision variables: charge_t, discharge_t per 15min slot
  * - State variable: soc_t tracking battery energy
  * - Objective: Minimize total grid cost over the horizon
- * - Constraints: SOC dynamics, SOC bounds, power limits
+ * - Constraints: SOC dynamics, SOC bounds, power limits, grid permissions
  *
  * @param {object} params
  * @param {Array<{ts: number, endTs: number, ctKwh: number, confidence: number}>} params.priceSlots - 15min price slots
  * @param {Array<{ts: number, endTs: number, powerW: number, confidence: number}>} params.pvSlots - 15min PV slots
- * @param {Array<{ts: number, endTs: number, powerW: number, confidence: number}>} params.loadSlots - 1h load slots
+ * @param {Array<{ts: number, endTs: number, powerW: number, confidence: number}>} params.loadSlots - 1h load slots (interpolated to 15min)
  * @param {object} params.batteryModel - Battery parameters
  * @param {object} params.confidenceGate - Confidence-adjusted parameters
  * @returns {Promise<Array<{ts: number, endTs: number, powerW: number, confidence: number}>|null>}
@@ -50,52 +47,55 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
 
   if (!priceSlots || priceSlots.length === 0) return [];
 
-  // Step 1: Aggregate 15min slots to 1h for MILP resolution
-  const priceHourly = aggregateTo1h(priceSlots, 'ctKwh');
-  const pvHourly = aggregateTo1h(pvSlots, 'powerW');
-  // Load: already 1h, pass through
-  const loadHourly = loadSlots;
-
-  const N = Math.min(priceHourly.length, 48); // Max 48h horizon
+  // Native 15min resolution — no aggregation, preserves individual price peaks
+  const N = Math.min(priceSlots.length, 192); // Max 48h × 4 = 192 quarter-hour slots
   if (N === 0) return [];
 
   // Battery parameters
   const { capacityWh, maxSocPct, maxChargeW, maxDischargeW, currentSocPct } = batteryModel;
   const minSocPct = confidenceGate.minSocPct;
   const eff = Math.sqrt(0.92); // sqrt of round-trip efficiency
-  const dt = 1; // 1 hour per slot
+  const dt = 0.25; // 0.25 hours per 15min slot
 
   const minSocWh = (minSocPct / 100) * capacityWh;
   const maxSocWh = (maxSocPct / 100) * capacityWh;
   const currentSocWh = (currentSocPct / 100) * capacityWh;
 
-  // Helper: get hourly value with fallback
-  function getLoad(t) {
-    const slot = loadHourly.find(s => s.ts === priceHourly[t]?.ts);
-    return slot ? slot.powerW : 0;
-  }
+  // Helper: find matching PV slot by timestamp overlap
   function getPv(t) {
-    const slot = pvHourly.find(s => s.ts === priceHourly[t]?.ts);
+    const ts = priceSlots[t]?.ts;
+    if (ts == null) return 0;
+    const slot = pvSlots.find(s => s.ts <= ts && s.endTs > ts);
     return slot ? slot.powerW : 0;
   }
 
-  // Step 2: Build LP string (CPLEX format for HiGHS)
+  // Helper: find matching load for a 15min price slot.
+  // Load slots are 1h — all 15min slots within the same hour share the load value.
+  function getLoad(t) {
+    const ts = priceSlots[t]?.ts;
+    if (ts == null) return 0;
+    const slot = loadSlots.find(s => s.ts <= ts && (s.endTs || (s.ts + 3_600_000)) > ts);
+    return slot ? slot.powerW : 0;
+  }
+
+  // Step 1: Build LP string (CPLEX format for HiGHS)
   // Variables: charge_t, discharge_t (continuous, bounded)
   //            soc_t (continuous, bounded)
-  // Objective: Minimize SUM_t [ (load_t - pv_t + charge_t - discharge_t) * price_t * dt ]
+  // Objective: Minimize SUM_t [ charge_t * importPrice_t * dt - discharge_t * feedInPrice_t * dt ]
+  // Import price = cost of buying from grid (for charging decisions)
+  // FeedIn price = revenue from selling to grid (for discharge decisions)
+  // Using separate prices ensures the solver maximizes sell revenue at the
+  // highest feed-in price, not just at times when import would be expensive.
 
-  // Build objective (using importCtKwh from cost-model enrichment, fallback to ctKwh)
   const objTerms = [];
   for (let t = 0; t < N; t++) {
-    const price = priceHourly[t].importCtKwh ?? priceHourly[t].ctKwh;
-    const load = getLoad(t);
-    const pv = getPv(t);
-    const netLoadCost = (load - pv) * price * dt; // Constant term (ignored by solver)
+    const importPrice = priceSlots[t].importCtKwh ?? priceSlots[t].ctKwh;
+    const feedInPrice = priceSlots[t].feedInCtKwh ?? priceSlots[t].ctKwh;
 
-    // charge_t contributes +price * dt to cost (buying more from grid)
-    // discharge_t contributes -price * dt to cost (selling/offsetting grid)
-    const chargeCoeff = Math.round(price * dt * 1000) / 1000;
-    const dischargeCoeff = Math.round(-price * dt * 1000) / 1000;
+    // charge_t: +importPrice * dt (cost of buying from grid to charge)
+    // discharge_t: -feedInPrice * dt (revenue from selling to grid)
+    const chargeCoeff = Math.round(importPrice * dt * 10000) / 10000;
+    const dischargeCoeff = Math.round(-feedInPrice * dt * 10000) / 10000;
 
     if (chargeCoeff !== 0) objTerms.push(`${chargeCoeff >= 0 ? '+' : ''}${chargeCoeff} charge_${t}`);
     if (dischargeCoeff !== 0) objTerms.push(`${dischargeCoeff >= 0 ? '+' : ''}${dischargeCoeff} discharge_${t}`);
@@ -104,14 +104,9 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   let lp = `Minimize\n obj: ${objTerms.join(' ')}\n`;
   lp += 'Subject To\n';
 
-  // SOC dynamics constraints:
+  // SOC dynamics constraints (15min resolution):
   // soc_0 = currentSocWh + charge_0 * dt * eff - discharge_0 * dt / eff
   // soc_t = soc_{t-1} + charge_t * dt * eff - discharge_t * dt / eff
-  //
-  // Rearranged as linear constraints:
-  // soc_0 - eff*dt * charge_0 + (dt/eff) * discharge_0 = currentSocWh
-  // soc_t - soc_{t-1} - eff*dt * charge_t + (dt/eff) * discharge_t = 0
-
   const effCharge = Math.round(eff * dt * 10000) / 10000;
   const effDischarge = Math.round(dt / eff * 10000) / 10000;
 
@@ -123,8 +118,7 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
     lp += ` soc_dyn_${t}: soc_${t} - soc_${t - 1} - ${effCharge} charge_${t} + ${effDischarge} discharge_${t} = 0\n`;
   }
 
-  // Grid constraint: if no grid charge allowed, charge can only come from PV surplus
-  // If no grid discharge allowed, discharge is capped at load (self-consume only)
+  // Grid permission constraints
   if (!allowGridCharge) {
     for (let t = 0; t < N; t++) {
       const pv = getPv(t);
@@ -152,10 +146,10 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
 
   lp += 'End\n';
 
-  // Step 3: Solve with HiGHS (10s time limit per research pitfall 5)
+  // Step 2: Solve with HiGHS (15s time limit — 4x more variables than 1h version)
   let solution;
   try {
-    solution = solver.solve(lp, { time_limit: 10 });
+    solution = solver.solve(lp, { time_limit: 15 });
   } catch (e) {
     console.error('MILP solve error:', e.message);
     return [];
@@ -168,9 +162,9 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
     return [];
   }
 
-  // Step 4: Extract results from solution columns
+  // Step 3: Extract results — already native 15min, no expansion needed
   const columns = solution.Columns || {};
-  const hourlyResults = [];
+  const result = [];
 
   for (let t = 0; t < N; t++) {
     const chargeW = columns[`charge_${t}`]?.Primal || 0;
@@ -184,26 +178,12 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
     // Skip near-zero slots
     if (Math.abs(powerW) < 1) continue;
 
-    hourlyResults.push({
-      ts: priceHourly[t].ts,
-      endTs: priceHourly[t].endTs,
+    result.push({
+      ts: priceSlots[t].ts,
+      endTs: priceSlots[t].endTs,
       powerW,
-      confidence: priceHourly[t].confidence
+      confidence: priceSlots[t].confidence
     });
-  }
-
-  // Step 5: Expand 1h results to 15min slots
-  const result = [];
-  for (const hourSlot of hourlyResults) {
-    for (let q = 0; q < 4; q++) {
-      const quarterTs = hourSlot.ts + q * QUARTER_MS;
-      result.push({
-        ts: quarterTs,
-        endTs: quarterTs + QUARTER_MS,
-        powerW: hourSlot.powerW,
-        confidence: hourSlot.confidence
-      });
-    }
   }
 
   return result;

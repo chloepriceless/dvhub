@@ -75,11 +75,30 @@ export function createScheduleEvaluator(ctx) {
 
   function effectiveTargetValue(target) {
     const cfg = getCfg();
+    const optimizerEnabled = cfg.optimizer?.enabled ?? false;
+    const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
+    const allowGridDischarge = cfg.optimizer?.allowGridDischarge ?? false;
     const now = Date.now();
     const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
     const hit = state.schedule.rules.find((r) => {
       if (r.target !== target || !scheduleMatch(r, mod)) return false;
+
+      // ── Optimizer rule enforcement (EEG-relevant) ───────────────────
+      // Skip ALL optimizer rules when optimizer is disabled.
+      // When optimizer IS enabled, enforce grid-permission flags:
+      //   - Positive gridSetpointW (>0) = grid import (Netzladen) → needs allowGridCharge
+      //   - Negative gridSetpointW (<0) = grid export (Netzentladung) → needs allowGridDischarge
+      // User rules and SMA (Börsenautomatik) are never blocked by these flags.
+      if (r.source === 'forecast_optimizer') {
+        if (!optimizerEnabled) return false;
+        if (r.target === 'gridSetpointW') {
+          const val = Number(r.value);
+          if (val > 0 && !allowGridCharge) return false;   // Netzladen blocked
+          if (val < 0 && !allowGridDischarge) return false; // Netzentladung blocked
+        }
+      }
+
       // SMA rules carry absolute slot timestamps -- enforce them so a rule
       // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
       if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
@@ -257,6 +276,36 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const now = Date.now();
     const nowMin = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
+
+    // Purge optimizer rules that violate current config.
+    // - optimizer disabled: remove ALL optimizer rules
+    // - optimizer enabled but allowGridCharge=false: remove positive gridSetpointW rules (Netzladen)
+    // - optimizer enabled but allowGridDischarge=false: remove negative gridSetpointW rules (Netzentladung)
+    const optimizerEnabled = cfg.optimizer?.enabled ?? false;
+    const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
+    const allowGridDischarge = cfg.optimizer?.allowGridDischarge ?? false;
+    {
+      const before = state.schedule.rules.length;
+      state.schedule.rules = state.schedule.rules.filter(r => {
+        if (r.source !== 'forecast_optimizer') return true; // keep non-optimizer rules
+        if (!optimizerEnabled) return false; // optimizer off → purge all
+        if (r.target === 'gridSetpointW') {
+          const val = Number(r.value);
+          if (val > 0 && !allowGridCharge) return false;   // Netzladen verboten
+          if (val < 0 && !allowGridDischarge) return false; // Netzentladung verboten
+        }
+        return true;
+      });
+      const removed = before - state.schedule.rules.length;
+      if (removed > 0) {
+        const reason = !optimizerEnabled ? 'optimizer_disabled'
+          : !allowGridCharge && !allowGridDischarge ? 'grid_charge_and_discharge_blocked'
+          : !allowGridCharge ? 'grid_charge_blocked' : 'grid_discharge_blocked';
+        pushLog('optimizer_rules_purged', { removed, reason });
+        persistConfig();
+      }
+    }
+
     await ctx.regenerateSmallMarketAutomationRules({ now });
     state.schedule.lastEvalAt = now;
 

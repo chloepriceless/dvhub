@@ -772,6 +772,113 @@ function buildFieldDefinitions() {
       type: 'number',
       help: '1 = DC-Einspeisung erlaubt (Standard), 0 = DC-Einspeisung gesperrt. Über Zeitplan-Regeln mit target "feedExcessDcPv" steuerbar.'
     },
+    // ── Optimizer (Batterie-Optimierung) ──────────────────────────���────
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Automatische Batterie-Lade-/Entladeplanung basierend auf Preisprognosen. Achtung: Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG).',
+      path: 'optimizer.enabled',
+      label: 'Optimierung aktiv',
+      type: 'boolean',
+      help: 'Master-Schalter: Aktiviert die automatische Batterie-Optimierung. Bei Deaktivierung werden alle bestehenden Optimizer-Regeln sofort entfernt.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Automatische Batterie-Lade-/Entladeplanung basierend auf Preisprognosen.',
+      path: 'optimizer.allowGridCharge',
+      label: '\u26a0\ufe0f Netzladen erlaubt (Netz \u2192 Akku)',
+      type: 'boolean',
+      help: 'Erlaubt dem Optimizer, den Akku aus dem Stromnetz zu laden. ACHTUNG: Ohne aktive MiSpeL-Registrierung (Pauschaloption/Abgrenzung) ist Netzladen EEG-rechtlich problematisch \u2014 Vermischung Gr\u00fcnstrom/Graustrom, Risiko F\u00f6rderungsverlust.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Automatische Batterie-Lade-/Entladeplanung basierend auf Preisprognosen.',
+      path: 'optimizer.allowGridDischarge',
+      label: '\u26a0\ufe0f Netzentladung erlaubt (Akku \u2192 Netz)',
+      type: 'boolean',
+      help: 'Erlaubt dem Optimizer, den Akku ins Stromnetz zu entladen (Verkauf). ACHTUNG: Steuerliche und regulatorische Implikationen (\u00a714a EnWG, Umlagen, ggf. Direktvermarktungs-Pflichten). Nur aktivieren wenn rechtlich abgesichert.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Einspeiseverg\u00fctung: Bestimmt wie der Optimizer den Verkaufserl\u00f6s bewertet.',
+      path: 'optimizer.tariff.feedInMode',
+      label: 'Einspeise-Modus',
+      type: 'select',
+      options: [
+        { value: 'spot', label: 'Spot (Direktvermarktung) \u2014 B\u00f6rsenpreis pro Slot' },
+        { value: 'fixed', label: 'Fest (EEG) \u2014 feste Einspeisverg\u00fctung' }
+      ],
+      help: 'Spot: Optimizer bewertet Entladung zum aktuellen B\u00f6rsenpreis (EPEX Spot). F\u00fcr Direktvermarktung. Fest: Feste Einspeisverg\u00fctung (Standard 7.78 ct/kWh). F\u00fcr EEG-Volleinspeiser ohne Direktvermarktung.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.batteryCapacityWh',
+      label: 'Akkukapazit\u00e4t (Wh)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Nutzbare Kapazit\u00e4t des Batteriespeichers in Wattstunden.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.maxChargeW',
+      label: 'Max. Ladeleistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Ladeleistung des Batteriespeichers in Watt.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.maxDischargeW',
+      label: 'Max. Entladeleistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Entladeleistung des Batteriespeichers in Watt. Begrenzt den negativen Grid-Setpoint den der Optimizer erzeugen darf.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.minSocPct',
+      label: 'Min. SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+      help: 'Minimaler Ladestand \u2014 der Optimizer entl\u00e4dt nie unter diesen Wert.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.maxSocPct',
+      label: 'Max. SOC (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+      help: 'Maximaler Ladestand \u2014 der Optimizer l\u00e4dt nie \u00fcber diesen Wert.'
+    },
     {
       section: 'schedule',
       group: 'smallMarketAutomation',
@@ -1092,8 +1199,21 @@ function buildFieldDefinitions() {
     {
       section: 'pricing',
       group: 'marketPremium',
-      groupLabel: 'PV-Anlagen für Marktprämie',
-      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      groupLabel: 'PV-Anlagen f\u00fcr Marktpr\u00e4mie',
+      groupDescription: 'Gewichteter anzulegender Wert f\u00fcr die Marktpr\u00e4mienberechnung.',
+      path: 'userEnergyPricing.applicableValueOverrideCtKwh',
+      label: 'Anzulegender Wert (ct/kWh) \u2014 manuell',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Gewichteter anzulegender Wert in ct/kWh. Wird automatisch aus BNetzA-Daten + PV-Anlagen berechnet. Hier manuell \u00fcberschreiben wenn BNetzA-Daten fehlen oder falsch sind. Berechnung f\u00fcr 29.7 kWp (IBN 01/2026): (10\u00d77.78 + 19.7\u00d76.73) / 29.7 = 7.08 ct/kWh. Leer = automatisch.'
+    },
+    {
+      section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen f\u00fcr Marktpr\u00e4mie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung f\u00fcr den gewichteten anzulegenden Wert.',
       path: 'userEnergyPricing.pvPlants',
       label: 'PV-Anlagen',
       type: 'array',

@@ -31,11 +31,21 @@
  * @returns {{ importCtKwh: number, feedInCtKwh: number, components: object }}
  */
 export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
-  // --- Fixed tariff: return flat rate, skip surcharge calculation ---
+  // --- Feed-in price (applies to ALL tariff types) ---
+  let feedInCtKwh;
+  if (spotCtKwh < 0) {
+    feedInCtKwh = 0; // Negative spot price → no feed-in compensation
+  } else if (tariff.feedInMode === 'spot') {
+    feedInCtKwh = spotCtKwh * (tariff.feedInSpotFactor ?? 1.0);
+  } else {
+    feedInCtKwh = tariff.feedInCtKwh ?? 7.78;
+  }
+
+  // --- Fixed tariff: return flat import rate, but feed-in follows feedInMode ---
   if (tariff.type === 'fixed') {
     return {
       importCtKwh: tariff.fixedCtKwh,
-      feedInCtKwh: tariff.feedInCtKwh,
+      feedInCtKwh,
       components: { type: 'fixed' }
     };
   }
@@ -64,17 +74,7 @@ export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
   // Brutto: netto * (1 + VAT), rounded to 3 decimal places
   const importCtKwh = Math.round(nettoBase * (1 + vatPct / 100) * 1000) / 1000;
 
-  // --- Feed-in price ---
-  let feedInCtKwh;
-  if (spotCtKwh < 0) {
-    // D-30: Negative spot price -> no feed-in compensation
-    feedInCtKwh = 0;
-  } else if (tariff.feedInMode === 'spot') {
-    feedInCtKwh = spotCtKwh * (tariff.feedInSpotFactor ?? 1.0);
-  } else {
-    // 'fixed' mode (default)
-    feedInCtKwh = tariff.feedInCtKwh ?? 7.78;
-  }
+  // feedInCtKwh already computed above (shared by all tariff types)
 
   return {
     importCtKwh,
@@ -127,10 +127,13 @@ export function enrichPriceSlotsWithCosts(priceSlots, cfg, options = {}) {
     vatPct: dc.vatPct ?? 19,
     fixedCtKwh: uep.fixedGrossImportCtKwh ?? 30,
     minCtKwh: 20,
-    // Feed-in: from anzulegender Wert (pvPlants) or fallback
-    feedInMode: uep.marketValueMode === 'monthly' ? 'spot' : 'fixed',
-    feedInCtKwh: options.applicableValueCtKwh ?? 7.78,
-    feedInSpotFactor: 1.0
+    // Feed-in: explicit optimizer.tariff.feedInMode takes precedence,
+    // then infer from marketValueMode (monthly/annual both mean DV = spot),
+    // fallback to 'fixed' only if no DV indicators present.
+    feedInMode: cfg.optimizer?.tariff?.feedInMode
+      ?? (uep.dvCostMonthlyEur > 0 || uep.marketValueMode ? 'spot' : 'fixed'),
+    feedInCtKwh: options.applicableValueCtKwh ?? cfg.optimizer?.tariff?.feedInCtKwh ?? 7.78,
+    feedInSpotFactor: cfg.optimizer?.tariff?.feedInSpotFactor ?? 1.0
   };
 
   // §14a from existing userEnergyPricing (not duplicate optimizer fields)

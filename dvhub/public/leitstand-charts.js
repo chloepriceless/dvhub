@@ -33,6 +33,31 @@
         cornerRadius: 6,
         titleFont: { family: 'Inter', size: 11 },
         bodyFont: { family: 'JetBrains Mono', size: 10 }
+      },
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x',
+          modifierKey: null
+        },
+        zoom: {
+          wheel: { enabled: true, modifierKey: null },
+          pinch: { enabled: true },
+          mode: 'x',
+          onZoomComplete: function (ctx) {
+            // Show reset hint on first zoom
+            var card = ctx.chart.canvas.closest('.chart-span-card, .metric-card');
+            if (card && !card.querySelector('.zoom-reset-hint')) {
+              var hint = document.createElement('div');
+              hint.className = 'zoom-reset-hint';
+              hint.textContent = 'Doppelklick = Reset';
+              hint.style.cssText = 'position:absolute;top:4px;right:8px;font-size:9px;color:#5a6a8a;opacity:0.7;pointer-events:none;';
+              card.style.position = 'relative';
+              card.appendChild(hint);
+              setTimeout(function () { hint.remove(); }, 3000);
+            }
+          }
+        }
       }
     },
     scales: {
@@ -46,6 +71,16 @@
       }
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Zoom reset: double-click on canvas resets zoom/pan to original view
+  // ---------------------------------------------------------------------------
+  function enableZoomReset(chart) {
+    if (!chart || !chart.canvas) return;
+    if (chart.canvas._zoomResetBound) return; // don't double-bind
+    chart.canvas.addEventListener('dblclick', function () { chart.resetZoom(); });
+    chart.canvas._zoomResetBound = true;
+  }
 
   // ---------------------------------------------------------------------------
   // Chart instances (module scope — reuse on refresh, never recreate)
@@ -86,6 +121,16 @@
   async function fetchCostData() {
     try {
       const res = await apiFetch('/api/costs');
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function fetchStatusData() {
+    try {
+      const res = await apiFetch('/api/status');
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -175,6 +220,7 @@
       pvForecastChart.update('none');
     } else {
       pvForecastChart = new Chart(canvas, config);
+      enableZoomReset(pvForecastChart);
     }
   }
 
@@ -475,6 +521,7 @@
     };
 
     forecastCompChart = new Chart(canvas, config);
+    enableZoomReset(forecastCompChart);
     buildComparisonLegend();
   }
 
@@ -778,6 +825,7 @@
       optimizerPlanChart.update('none');
     } else {
       optimizerPlanChart = new Chart(canvas, config);
+      enableZoomReset(optimizerPlanChart);
     }
 
     // Subtitle: optimizer source + runtime
@@ -812,13 +860,96 @@
   // ---------------------------------------------------------------------------
   // Refresh orchestrator
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Forecast Summary Cards (PV-Tagesprognose, Verbrauch, Überschuss)
+  // ---------------------------------------------------------------------------
+  function updateForecastSummary(forecastData, statusData) {
+    var pvEl = document.getElementById('pv-daily-kwh');
+    var detailEl = document.getElementById('pv-daily-detail');
+    var loadEl = document.getElementById('load-daily-kwh');
+    var loadDetailEl = document.getElementById('load-daily-detail');
+    var surplusEl = document.getElementById('surplus-daily-kwh');
+    var surplusDetailEl = document.getElementById('surplus-daily-detail');
+    if (!pvEl || !loadEl || !surplusEl) return;
+
+    if (!forecastData) {
+      pvEl.textContent = '--';
+      loadEl.textContent = '--';
+      surplusEl.textContent = '--';
+      if (detailEl) detailEl.textContent = '';
+      return;
+    }
+
+    var pvSlots = forecastData.pv?.slots || [];
+    var rawSlots = forecastData.rawPv?.slots || [];
+    var loadSlots = forecastData.load?.slots || [];
+    var pvRes = forecastData.pv?.resolution || '1h';
+    var loadRes = forecastData.load?.resolution || '1h';
+    var pvH = pvRes === '15min' ? 0.25 : 1;
+    var loadH = loadRes === '15min' ? 0.25 : 1;
+
+    var pvKwh = 0; pvSlots.forEach(function (s) { pvKwh += (s.powerW || 0) / 1000 * pvH; });
+    var rawKwh = 0; rawSlots.forEach(function (s) { rawKwh += (s.powerW || 0) / 1000 * pvH; });
+    var loadKwh = 0; loadSlots.forEach(function (s) { loadKwh += (s.powerW || 0) / 1000 * loadH; });
+
+    // Battery state from /api/status
+    var soc = statusData?.victron?.soc;
+    var battCapWh = statusData?.config?.optimizer?.batteryCapacityWh || 43000;
+    var minSoc = statusData?.config?.optimizer?.minSocPct || 10;
+    var battKwh = soc != null ? (soc / 100) * battCapWh / 1000 : null;
+    var usableKwh = soc != null ? Math.max(0, ((soc - minSoc) / 100) * battCapWh / 1000) : null;
+
+    // Surplus includes usable battery energy
+    var surplus = pvKwh - loadKwh;
+    var totalAvailable = surplus + (usableKwh || 0);
+
+    pvEl.textContent = pvKwh.toFixed(1) + ' kWh';
+    loadEl.textContent = loadKwh.toFixed(1) + ' kWh';
+
+    // Surplus: green if positive, red if negative
+    var sign = surplus >= 0 ? '+' : '';
+    surplusEl.textContent = sign + surplus.toFixed(1) + ' kWh';
+    surplusEl.style.color = surplus >= 0 ? '#3fb950' : '#ff7b72';
+
+    // Detail lines
+    if (detailEl) {
+      if (Math.abs(pvKwh - rawKwh) > 0.5) {
+        detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">ML: ' + pvKwh.toFixed(1) + ' · Basis: ' + rawKwh.toFixed(1) + ' kWh</span>';
+      } else {
+        detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + pvSlots.length + ' Slots (' + pvRes + ')</span>';
+      }
+    }
+
+    // Load detail: warn if flat baseload
+    if (loadDetailEl) {
+      var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
+      if (allSame) {
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
+      } else {
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + loadSlots.length + ' Slots (' + loadRes + ')</span>';
+      }
+    }
+
+    // Surplus detail: battery + total
+    if (surplusDetailEl) {
+      var parts = [];
+      if (battKwh != null) parts.push('\ud83d\udd0b ' + soc + '% = ' + battKwh.toFixed(1) + ' kWh (' + usableKwh.toFixed(1) + ' nutzbar)');
+      if (usableKwh != null) {
+        var totalSign = totalAvailable >= 0 ? '+' : '';
+        parts.push('Verf\u00fcgbar: ' + totalSign + totalAvailable.toFixed(1) + ' kWh');
+      }
+      surplusDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + parts.join(' · ') + '</span>';
+    }
+  }
+
   async function refreshAllCharts() {
     var results = await Promise.allSettled([
       fetchForecastData(),
       fetchOptimizerData(),
       fetchCostData(),
       fetchMlStatus(),
-      fetchOptimizerPlan()
+      fetchOptimizerPlan(),
+      fetchStatusData()
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -826,7 +957,9 @@
     var costData = results[2].status === 'fulfilled' ? results[2].value : null;
     var mlStatus = results[3].status === 'fulfilled' ? results[3].value : null;
     var optimizerPlan = results[4].status === 'fulfilled' ? results[4].value : null;
+    var statusData = results[5].status === 'fulfilled' ? results[5].value : null;
 
+    updateForecastSummary(forecastData, statusData);
     renderPvForecastChart(forecastData);
     renderGanttChart(optimizerData);
     renderSavingsCard(costData);
