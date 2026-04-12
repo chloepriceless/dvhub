@@ -61,7 +61,9 @@ export function createMlService(ctx) {
   const mlCorrection = createMlCorrection({
     pythonBridge,
     getCfg,
-    pushLog
+    pushLog,
+    store: ctx.forecastService?.store,
+    state: ctx.state
   });
 
   const mlTraining = createMlTraining({
