@@ -211,6 +211,20 @@ button {
   gap: 8px;
 }
 
+/* Forecast summary row: 3 equal columns */
+#forecast-summary-row {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+#forecast-summary-row .card-value {
+  font-size: 1.4rem;
+}
+#forecast-summary-row .forecast-summary-detail {
+  font-size: 10px;
+  color: var(--flow-text-muted, #5a6a8a);
+  margin-top: 4px;
+  word-break: break-word;
+}
+
 /* --- Rails (left/right sidebars) --- */
 .rail {
   display: flex;
@@ -1930,6 +1944,12 @@ button {
   background: color-mix(in srgb, var(--schedule-automation-yellow) 22%, transparent);
   color: var(--schedule-automation-yellow);
   border: 1px solid color-mix(in srgb, var(--schedule-automation-yellow) 40%, transparent);
+}
+
+.sched-badge-optimizer {
+  background: rgba(99, 102, 241, 0.18);
+  color: #818CF8;
+  border-color: rgba(99, 102, 241, 0.4);
 }
 
 .sched-row-automation input:disabled {
@@ -4178,4 +4198,60 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   #forecastCompLegend { flex-wrap: wrap; }
   .msg-tray { bottom: 88px; }
   .msg-card { max-width: 100%; }
+
+  /* Forecast summary cards: stack vertically on mobile */
+  #forecast-summary-row {
+    grid-template-columns: 1fr;
+  }
+  #forecast-summary-row .card-value {
+    font-size: 1.2rem;
+  }
+
+  /* Settings: prevent overflow on mobile */
+  .config-group {
+    max-width: 100vw;
+    overflow-x: hidden;
+    box-sizing: border-box;
+  }
+  .config-row-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .config-row {
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .config-input,
+  .config-input[type="number"],
+  .config-input[type="text"],
+  select.config-input {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Per-day forecast summary in chart */
+  #forecastDaySummary {
+    font-size: 9px;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Tighter spacing on small phones */
+  #forecast-summary-row .chart-span-card {
+    padding: 8px 10px;
+  }
+  #forecast-summary-row .card-value {
+    font-size: 1rem;
+  }
+  #forecast-summary-row .card-kicker {
+    font-size: 0.55rem;
+  }
+
+  /* Settings inputs: full width */
+  .settings-page .config-group {
+    padding: 8px;
+  }
+  .config-row label {
+    font-size: 0.75rem;
+  }
 }

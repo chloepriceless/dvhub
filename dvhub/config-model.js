@@ -93,6 +93,12 @@ const SECTIONS = [
     destination: 'services'
   },
   {
+    id: 'forecast',
+    label: 'Vorhersage & PV',
+    description: 'PV-Anlage, Standort, Solcast/pvnode API-Keys und Wetter-Provider.',
+    destination: 'services'
+  },
+  {
     id: 'ml',
     label: 'ML & Forecast-Korrektur',
     description: 'ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
@@ -1506,6 +1512,168 @@ function buildFieldDefinitions() {
       step: 0.01,
       min: 0,
       help: 'Pauschaler Effizienzaufschlag auf den Akku-Basispreis.'
+    },
+    // ── Forecast & PV ─────────────────────────────────────────────
+    {
+      section: 'forecast',
+      group: 'location',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten f\u00fcr Wetter- und PV-Vorhersage.',
+      path: 'forecast.location.latitude',
+      label: 'Breitengrad',
+      type: 'number',
+      step: 0.000001,
+      help: 'Dezimal-Breitengrad (z.B. 48.125611).'
+    },
+    {
+      section: 'forecast',
+      group: 'location',
+      groupLabel: 'Standort',
+      groupDescription: 'Koordinaten f\u00fcr Wetter- und PV-Vorhersage.',
+      path: 'forecast.location.longitude',
+      label: 'L\u00e4ngengrad',
+      type: 'number',
+      step: 0.000001,
+      help: 'Dezimal-L\u00e4ngengrad (z.B. 9.432794).'
+    },
+    {
+      section: 'forecast',
+      group: 'pv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'PV-Konfiguration f\u00fcr die Ertragsprognose.',
+      path: 'forecast.pv.totalKwp',
+      label: 'Gesamt kWp',
+      type: 'number',
+      step: 0.1,
+      min: 0,
+      help: 'Gesamte installierte PV-Leistung in kWp.'
+    },
+    {
+      section: 'forecast',
+      group: 'pv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'PV-Konfiguration f\u00fcr die Ertragsprognose.',
+      path: 'forecast.pv.model',
+      label: 'PV-Modell',
+      type: 'select',
+      options: [
+        { value: 'auto', label: 'Auto (bester verf\u00fcgbarer Dienst)' },
+        { value: 'pvlib', label: 'pvlib (lokal, Open-Meteo Wetter)' },
+        { value: 'solcast', label: 'Solcast (Cloud API)' },
+        { value: 'pvnode', label: 'pvnode (Cloud API)' }
+      ],
+      help: 'Welcher Dienst die PV-Prognose berechnet. Auto w\u00e4hlt den besten verf\u00fcgbaren.'
+    },
+    {
+      section: 'forecast',
+      group: 'pv',
+      groupLabel: 'PV-Anlage',
+      groupDescription: 'PV-Konfiguration f\u00fcr die Ertragsprognose.',
+      path: 'forecast.pv.strings',
+      label: 'PV-Strings',
+      type: 'array',
+      help: 'Liste der PV-Strings mit kWp, Neigung und Ausrichtung. Wird von der PV-String-Konfiguration genutzt.'
+    },
+    {
+      section: 'forecast',
+      group: 'solcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast Cloud-API f\u00fcr hochpr\u00e4zise PV-Prognosen.',
+      path: 'forecast.solcast.enabled',
+      label: 'Solcast aktiv',
+      type: 'boolean',
+      help: 'Aktiviert den Solcast-Dienst f\u00fcr PV-Vorhersagen. Erfordert API-Key und Site-ID.'
+    },
+    {
+      section: 'forecast',
+      group: 'solcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast Cloud-API f\u00fcr hochpr\u00e4zise PV-Prognosen.',
+      path: 'forecast.solcast.apiKey',
+      label: 'Solcast API-Key',
+      type: 'password',
+      help: 'API-Key von solcast.com (kostenlos f\u00fcr Residential bis 10 API-Calls/Tag).'
+    },
+    {
+      section: 'forecast',
+      group: 'solcast',
+      groupLabel: 'Solcast',
+      groupDescription: 'Solcast Cloud-API f\u00fcr hochpr\u00e4zise PV-Prognosen.',
+      path: 'forecast.solcast.siteId',
+      label: 'Solcast Site-ID',
+      type: 'text',
+      help: 'Resource-ID der Solcast-Site (z.B. "1234-5678-abcd").'
+    },
+    {
+      section: 'forecast',
+      group: 'pvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
+      path: 'forecast.pvnode.apiKey',
+      label: 'pvnode API-Key',
+      type: 'password',
+      help: 'API-Key von pvnode.de.'
+    },
+    {
+      section: 'forecast',
+      group: 'pvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
+      path: 'forecast.pvnode.nowcastEnabled',
+      label: 'Nowcast aktiv (kostenpflichtig)',
+      type: 'boolean',
+      help: 'Aktiviert pvnode Nowcast f\u00fcr kurzfristige Echtzeit-PV-Prognosen (15min-Horizont). Erfordert kostenpflichtigen pvnode-Plan. Testmodus verf\u00fcgbar.'
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.provider',
+      label: 'Wetter-Provider',
+      type: 'select',
+      options: [
+        { value: 'open_meteo', label: 'Open-Meteo (kostenlos, global)' }
+      ],
+      help: 'Quelle f\u00fcr Wetterdaten (Temperatur, Bew\u00f6lkung, Sichtweite).'
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.fetchIntervalMs',
+      label: 'Abruf-Intervall (ms)',
+      type: 'number',
+      step: 60000,
+      min: 300000,
+      help: 'Wie oft Wetterdaten abgerufen werden (Standard: 3600000 = 1h).'
+    },
+    {
+      section: 'forecast',
+      group: 'load',
+      groupLabel: 'Last-Vorhersage',
+      groupDescription: 'Konfiguration der Verbrauchsprognose.',
+      path: 'forecast.load.model',
+      label: 'Last-Modell',
+      type: 'select',
+      options: [
+        { value: 'sql_weekday', label: 'SQL Wochentag-Rollup (Standard)' },
+        { value: 'statsforecast', label: 'StatsForecast (ML, Tier 2+)' }
+      ],
+      help: 'Methode zur Lastvorhersage. StatsForecast ben\u00f6tigt Python-Bridge und Tier 2+.'
+    },
+    {
+      section: 'forecast',
+      group: 'load',
+      groupLabel: 'Last-Vorhersage',
+      groupDescription: 'Konfiguration der Verbrauchsprognose.',
+      path: 'forecast.load.defaultPowerW',
+      label: 'Fallback-Leistung (W)',
+      type: 'number',
+      min: 0,
+      step: 50,
+      help: 'Wird genutzt wenn keine historischen Verbrauchsdaten vorhanden sind. Typisch: 600-1000W Baseload.'
     },
     {
       section: 'epex',

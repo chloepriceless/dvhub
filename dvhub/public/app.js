@@ -2,6 +2,9 @@ const { apiFetch } = window.DVhubCommon || {};
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
 const SMA_ID_PREFIX = 'sma-';
+const FORECAST_OPTIMIZER_SOURCE = 'forecast_optimizer';
+const FORECAST_OPTIMIZER_LABEL = 'Optimizer';
+const OPT_ID_PREFIX = 'opt-';
 function isSmallMarketAutomationRule(rule) {
   if (!rule || typeof rule !== 'object') return false;
   return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
@@ -1614,13 +1617,30 @@ function collectScheduleRulesFromRowState(rows) {
   return rules;
 }
 
+function formatSlotDate(slotTs) {
+  if (!slotTs) return '';
+  const d = new Date(Number(slotTs));
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const slotDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((slotDay - today) / 86400000);
+  if (diffDays === 0) return 'Heute';
+  if (diffDays === 1) return 'Morgen';
+  if (diffDays === 2) return '\u00dcberm.';
+  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+}
+
 function groupScheduleRulesForDashboard(rules) {
   if (!Array.isArray(rules)) return [];
 
   const timeSlots = new Map();
   for (const rule of rules) {
     if (!rule || typeof rule !== 'object') continue;
-    const key = `${rule.start}|${rule.end}`;
+    // Date-aware grouping: automation rules with slotTs include the date
+    // so same time on different days stays separate
+    const datePrefix = rule.slotTs ? new Date(Number(rule.slotTs)).toISOString().slice(0, 10) : '';
+    const key = `${datePrefix}|${rule.start}|${rule.end}`;
     if (!timeSlots.has(key)) {
       timeSlots.set(key, {
         start: rule.start,
@@ -1645,7 +1665,10 @@ function groupScheduleRulesForDashboard(rules) {
     if (!slot.source && rule.source) slot.source = rule.source;
     if (!slot.displayTone && rule.displayTone) slot.displayTone = rule.displayTone;
     if (slot.autoManaged !== true && rule.autoManaged === true) slot.autoManaged = true;
-    if (!slot.activeDate && rule.activeDate) slot.activeDate = rule.activeDate;
+    // Compute activeDate from slotTs (Heute/Morgen/Überm.) or use existing
+    if (!slot.activeDate) {
+      slot.activeDate = rule.activeDate || formatSlotDate(rule.slotTs) || '';
+    }
   }
 
   return Array.from(timeSlots.values());
@@ -1660,8 +1683,11 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
   }, nowTs);
   const isAutomationRule =
     tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
+    || tr.dataset.ruleSource === FORECAST_OPTIMIZER_SOURCE
     || tr.dataset.displayTone === 'yellow'
-    || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX);
+    || tr.dataset.displayTone === 'blue'
+    || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX)
+    || (tr.dataset.ruleId || '').startsWith(OPT_ID_PREFIX);
 
   tr.classList.toggle('sched-row-expired', expired);
   tr.classList.toggle('sched-row-automation', isAutomationRule);
@@ -1701,10 +1727,15 @@ function addScheduleRow(opts = {}) {
   tr.dataset.displayTone = displayTone || '';
   tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
   tr.dataset.activeDate = activeDate || '';
-  const isAutomation = source === SMALL_MARKET_AUTOMATION_SOURCE
+  const isSma = source === SMALL_MARKET_AUTOMATION_SOURCE
     || (typeof ruleId === 'string' && ruleId.startsWith(SMA_ID_PREFIX));
-  if (isAutomation) {
+  const isOptimizer = source === FORECAST_OPTIMIZER_SOURCE
+    || (typeof ruleId === 'string' && ruleId.startsWith(OPT_ID_PREFIX));
+  const isAutomation = isSma || isOptimizer;
+  if (isSma) {
     tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''} — automatisch verwaltet`;
+  } else if (isOptimizer) {
+    tr.title = `${FORECAST_OPTIMIZER_LABEL} — automatisch verwaltet`;
   }
 
   const disabled = isAutomation ? 'disabled' : '';
@@ -1716,7 +1747,10 @@ function addScheduleRow(opts = {}) {
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="5" ${disabled} /></label></td>
     <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="DC-PV einspeisen statt laden" /></td>
-    <td>${isAutomation ? '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto</span>' : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
+    <td>${isAutomation ? (isOptimizer
+      ? '<span class="sched-auto-badge sched-badge-optimizer" title="Vom Optimizer verwaltet">Optimizer' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>'
+      : '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>')
+      : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
   `;
   if (!isAutomation) {
     tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());

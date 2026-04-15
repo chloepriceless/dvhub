@@ -21,6 +21,14 @@
   const CHART_DEFAULTS = {
     responsive: true,
     maintainAspectRatio: false,
+    interaction: {
+      mode: 'index',
+      intersect: false
+    },
+    hover: {
+      mode: 'index',
+      intersect: false
+    },
     plugins: {
       legend: { display: false },
       tooltip: {
@@ -37,11 +45,10 @@
       zoom: {
         pan: {
           enabled: true,
-          mode: 'x',
-          modifierKey: null
+          mode: 'x'
         },
         zoom: {
-          wheel: { enabled: true, modifierKey: null },
+          wheel: { enabled: true, modifierKey: 'ctrl' },
           pinch: { enabled: true },
           mode: 'x',
           onZoomComplete: function (ctx) {
@@ -50,7 +57,7 @@
             if (card && !card.querySelector('.zoom-reset-hint')) {
               var hint = document.createElement('div');
               hint.className = 'zoom-reset-hint';
-              hint.textContent = 'Doppelklick = Reset';
+              hint.textContent = 'Ctrl+Scroll = Zoom, Doppelklick = Reset';
               hint.style.cssText = 'position:absolute;top:4px;right:8px;font-size:9px;color:#5a6a8a;opacity:0.7;pointer-events:none;';
               card.style.position = 'relative';
               card.appendChild(hint);
@@ -647,11 +654,18 @@
     forecastCompChart.data.datasets[1].data = mlData;       // ML-korrigiert
     forecastCompChart.data.datasets[2].data = mergedData;   // Basis-Prognose
 
-    // Update now-marker and X-axis range to current time
+    // Compute X-axis range: span from earliest data point to latest, padded 1h each side
     var nowMs = Date.now();
+    var allTimestamps = []
+      .concat(actualData.map(function (d) { return d.x; }))
+      .concat(mlData.map(function (d) { return d.x; }))
+      .concat(mergedData.map(function (d) { return d.x; }))
+      .filter(function (t) { return t > 0; });
+    var dataMin = allTimestamps.length ? Math.min.apply(null, allTimestamps) : nowMs - 12 * 3600000;
+    var dataMax = allTimestamps.length ? Math.max.apply(null, allTimestamps) : nowMs + 24 * 3600000;
     var xScale = forecastCompChart.options.scales.x;
-    xScale.min = nowMs - 12 * 3600000;
-    xScale.max = nowMs + 24 * 3600000;
+    xScale.min = dataMin - 3600000;
+    xScale.max = dataMax + 3600000;
     var ann = forecastCompChart.options.plugins.annotation;
     if (ann && ann.annotations && ann.annotations.nowLine) {
       ann.annotations.nowLine.xMin = nowMs;
@@ -681,14 +695,19 @@
       return;
     }
 
-    // Group PV slots by day and sum energy (kWh)
+    // Group PV slots by LOCAL day and sum energy (kWh)
     var dayBuckets = {};
+    var res = forecastData.pv && forecastData.pv.resolution === '1h' ? 1 : 0.25;
     pvSlots.forEach(function (s) {
       var d = new Date(s.start);
+      if (isNaN(d.getTime())) return;
       var dayKey = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
       if (!dayBuckets[dayKey]) dayBuckets[dayKey] = 0;
-      // Each slot covers its resolution (typically 15min = 0.25h or 1h = 1h)
-      var durationH = s.end && s.start ? (new Date(s.end) - new Date(s.start)) / 3600000 : 0.25;
+      var durationH = res;
+      if (s.end && s.start) {
+        var diff = (new Date(s.end) - new Date(s.start)) / 3600000;
+        if (Number.isFinite(diff) && diff > 0) durationH = diff;
+      }
       dayBuckets[dayKey] += ((s.powerW || 0) / 1000) * durationH; // kWh
     });
 
@@ -720,10 +739,19 @@
     var parts = [];
     labels.forEach(function (l) {
       var kwh = dayBuckets[l.key];
-      if (kwh != null && kwh > 0) {
+      if (kwh != null) {
         parts.push(l.name + ': ' + kwh.toFixed(1) + ' kWh');
       }
     });
+
+    // If no forecast data bucketed into named days, show raw bucket keys
+    if (parts.length === 0) {
+      Object.keys(dayBuckets).sort().forEach(function (k) {
+        var d = new Date(k + 'T12:00:00');
+        var label = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+        parts.push(label + ': ' + dayBuckets[k].toFixed(1) + ' kWh');
+      });
+    }
 
     container.textContent = parts.length > 0 ? parts.join(' | ') : '';
   }
