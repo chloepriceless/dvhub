@@ -61,6 +61,47 @@ const SCHEMA_SQL = `
     UNIQUE(forecast_type, model, evaluation_date)
   );
   CREATE INDEX IF NOT EXISTS idx_forecast_accuracy_date ON forecast_accuracy(evaluation_date);
+
+  -- Phase 07 FORE-11 / REVIEWS H1: forecast_snapshots with SEPARATE forecast_date + target_date
+  -- forecast_date = when the forecast was generated (provenance)
+  -- target_date   = which day the slot predicts (accuracy-join key)
+  -- Per D-B1 + Pitfall S-2 + REVIEWS.md H1 locked-semantics decision.
+  CREATE TABLE IF NOT EXISTS forecast_snapshots (
+    forecast_date DATE NOT NULL,
+    target_date DATE NOT NULL,
+    slot_utc TIMESTAMPTZ NOT NULL,
+    layer TEXT NOT NULL,
+    power_w DOUBLE PRECISION NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (target_date, slot_utc, layer)
+  );
+  CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_target_date ON forecast_snapshots(target_date);
+  CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_forecast_date ON forecast_snapshots(forecast_date);
+  CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_layer ON forecast_snapshots(layer);
+
+  -- Phase 07 FORE-10 D-A5 (re-scoped): client-side quota counter per RESEARCH empirical probe 2026-04-16
+  -- Note: billing-month reset semantics are UTC-estimated (first day of calendar month UTC).
+  -- Real pvnode billing may use provider-account timezone; for HEMS solo-dev this approximation is acceptable.
+  CREATE TABLE IF NOT EXISTS pvnode_quota (
+    month_utc DATE PRIMARY KEY,
+    calls_used INTEGER NOT NULL DEFAULT 0,
+    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Phase 07 D-B4 + REVIEWS H9: additive MAE columns -- TWO families:
+  --   mae_daily_* = raw per-day MAE (written by Plan 04 each evaluation)
+  --   mae_7d_*    = rolling 7-day MAE (computed from mae_daily_* via SQL window -- see Plan 04)
+  -- Keeping both avoids the anti-pattern of storing single-day MAE in a column named "7d".
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_pvnode DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_solcast DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_pvlib DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_merged DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_ml DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_pvnode DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_solcast DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_pvlib DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_merged DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_ml DOUBLE PRECISION;
 `;
 
 // --- Disk free check (Linux/macOS) ---
@@ -257,6 +298,91 @@ export function createForecastStore(ctx) {
     pool = null;
   }
 
+  // --- Phase 07 Wave-0 store helpers (REVIEWS H2: first-class deliverables) ---
+
+  /**
+   * Generic query wrapper for downstream idempotency checks (Plans 03, 04).
+   * REVIEWS H2.
+   * @param {string} sql
+   * @param {Array} params
+   */
+  async function query(sql, params = []) {
+    return pool.query(sql, params);
+  }
+
+  /**
+   * Accuracy row lookup for a specific evaluation date.
+   * Used by Plan 04 ensemble weights read.
+   * REVIEWS H2.
+   * @param {string} dateStr - ISO date string (YYYY-MM-DD)
+   * @returns {Promise<object|null>}
+   */
+  async function getForecastAccuracyRow(dateStr) {
+    const r = await pool.query(
+      `SELECT * FROM forecast_accuracy WHERE evaluation_date = $1 ORDER BY id DESC LIMIT 1`,
+      [dateStr]
+    );
+    return r.rows[0] || null;
+  }
+
+  /**
+   * Latest accuracy row for ml-correction feature-read (used by Plan 05).
+   * REVIEWS H2.
+   * @returns {Promise<object|null>}
+   */
+  async function getLatestAccuracyRow() {
+    const r = await pool.query(
+      `SELECT * FROM forecast_accuracy ORDER BY evaluation_date DESC, id DESC LIMIT 1`
+    );
+    return r.rows[0] || null;
+  }
+
+  /**
+   * UPSERT into forecast_snapshots with forecast_date + target_date (REVIEWS H1).
+   * forecast_date defaults to today UTC if caller omits; target_date defaults to slot's date.
+   * Backfill MUST pass forecast_date = today as "when generated" provenance.
+   * @param {{forecast_date?: string, target_date?: string, slot_utc: string, layer: string, power_w: number}} row
+   */
+  async function insertSnapshot(row) {
+    const forecastDate = row.forecast_date ?? new Date().toISOString().slice(0, 10);
+    const slotUtc = typeof row.slot_utc === 'string' ? row.slot_utc : new Date(row.slot_utc).toISOString();
+    const targetDate = row.target_date ?? slotUtc.slice(0, 10);
+    const sql = `
+      INSERT INTO forecast_snapshots (forecast_date, target_date, slot_utc, layer, power_w)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (target_date, slot_utc, layer) DO UPDATE SET
+        power_w = EXCLUDED.power_w,
+        forecast_date = EXCLUDED.forecast_date,
+        fetched_at = NOW()
+    `;
+    return pool.query(sql, [forecastDate, targetDate, slotUtc, row.layer, row.power_w]);
+  }
+
+  /**
+   * Increment pvnode monthly call counter (client-side quota tracking per D-A5 re-scope).
+   * @param {number} n - increment amount (default 1)
+   */
+  async function incrementPvnodeQuota(n = 1) {
+    const month = new Date().toISOString().slice(0, 7) + '-01';
+    await pool.query(`
+      INSERT INTO pvnode_quota (month_utc, calls_used, last_updated)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (month_utc) DO UPDATE SET
+        calls_used = pvnode_quota.calls_used + EXCLUDED.calls_used,
+        last_updated = NOW()
+    `, [month, n]);
+  }
+
+  /**
+   * Read pvnode monthly call counter for current UTC month.
+   * @returns {Promise<number>} calls used this month (0 if no row)
+   */
+  async function getPvnodeQuotaUsed() {
+    const month = new Date().toISOString().slice(0, 7) + '-01';
+    const r = await pool.query(`SELECT calls_used FROM pvnode_quota WHERE month_utc = $1`, [month]);
+    return r.rows[0]?.calls_used ?? 0;
+  }
+
   return {
     ensureSchema,
     insertWeather,
@@ -269,6 +395,13 @@ export function createForecastStore(ctx) {
     getAccuracyHistory,
     runSmartRetention,
     close,
+    // Phase 07 Wave-0 helpers (REVIEWS H1/H2)
+    query,
+    getForecastAccuracyRow,
+    getLatestAccuracyRow,
+    insertSnapshot,
+    incrementPvnodeQuota,
+    getPvnodeQuotaUsed,
     // Exposed for testing
     get SCHEMA_SQL() { return SCHEMA_SQL; }
   };

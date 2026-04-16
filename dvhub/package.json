@@ -30,9 +30,11 @@
   ],
   "dependencies": {
     "aedes": "^0.51.3",
+    "franc": "^6.2.0",
     "highs": "^1.8.0",
     "mqtt": "^5.10.0",
     "multicast-dns": "^7.2.5",
+    "p-retry": "^8.0.0",
     "pg": "^8.13.0"
   }
 }
