@@ -1,141 +1,335 @@
-// services/forecast/pvnode-client.js -- pvnode.io PV forecast client.
-// 15-minute resolution PV production forecasts.
-// Free plan: +1 day forecast. API key required (free registration).
-// API: https://pvnode.io
+// services/forecast/pvnode-client.js — pvnode.com PV forecast client (multi-plane).
+//
+// Phase 07 Wave 1 (Plan 07-02) refactor:
+//   - Endpoint migrated to api.pvnode.com/v1/forecast/ (GET+URLSearchParams). The pre-refactor
+//     client used the legacy *.io host with POST+JSON; both have been replaced.
+//   - Multi-plane support: for N pvPlants, issue ⌈N/2⌉ GETs using second_array_* query params.
+//   - Azimuth convention native to pvnode.com: 0=N, 180=S (the old "-180 offset" has been removed).
+//   - HTTP retry via p-retry (network + 502/503/504 only); AbortError on 401/403/429 halts retries.
+//   - Client-side monthly quota tracked via pvnodeQuota.increment() after each 2xx (REVIEWS L2).
+//   - On HTTP 429: pvnodeQuota.markExhausted() + cached data returned (no throw to caller).
+//   - odd-N chunk rule (REVIEWS H6 LOCKED): the LARGEST plant is isolated alone; the remaining
+//     smaller plants pair up in descending chunks of 2.
+//   - Two independent pvnode config query params (REVIEWS H7 LOCKED):
+//       skyObstructionConfig → sky_obstruction_config (horizon profile, direct-sun shading)
+//       shadingConfig        → shading_config (inter-row / tracker shading)
+//
+// API: https://api.pvnode.com  (15-minute resolution, Bearer-auth, quota NOT in headers)
+
+import pRetry, { AbortError } from 'p-retry';
+
+const PVNODE_BASE = 'https://api.pvnode.com/v1';
 
 /**
- * Create pvnode forecast client.
+ * Chunk a pvPlants[] array into groups of at most 2 (pvnode API limit: 2 planes per request).
  *
- * @param {object} ctx - DI context { getCfg, pushLog }
- * @param {object} deps - { store }
+ * For odd N, REVIEWS H6 LOCKED RULE: the LARGEST plant is isolated alone as the first group;
+ * the remaining smaller plants pair up in descending chunks of 2. Rationale: pairing smaller
+ * plants yields smaller absolute forecast error when summed, while the largest plant alone
+ * keeps its single-plane accuracy.
+ *
+ * @param {Array<{kwp:number,tiltDeg:number,azimuthDeg:number,skyObstructionConfig?:string,shadingConfig?:string}>} pvPlants
+ * @returns {Array<Array>} chunked groups (each group has length 1 or 2)
  */
-export function createPvnodeClient(ctx, { store }) {
-  const { getCfg, pushLog } = ctx;
+export function chunkPlants(pvPlants) {
+  if (!Array.isArray(pvPlants) || pvPlants.length === 0) return [];
+  const sorted = [...pvPlants].sort((a, b) => (b.kwp ?? 0) - (a.kwp ?? 0));
+  const groups = [];
+  // odd N: isolate largest plant alone (REVIEWS H6)
+  // Rationale: the largest plant alone means the remaining (smaller) plants pair up,
+  // and paired groups have smaller absolute forecast error than isolating the smallest.
+  let start = 0;
+  if (sorted.length % 2 === 1) {
+    groups.push([sorted[0]]);
+    start = 1;
+  }
+  for (let i = start; i < sorted.length; i += 2) {
+    groups.push(sorted.slice(i, i + 2));
+  }
+  return groups;
+}
 
-  let lastFetchAt = null;
-  let cachedData = null;
-  const MIN_INTERVAL_MS = 15 * 60 * 1000; // 15 min between fetches
+/**
+ * Build URLSearchParams for a single pvnode forecast request (1 or 2 planes).
+ *
+ * Global-per-request config params (REVIEWS H7 LOCKED — INDEPENDENT):
+ *   sky_obstruction_config — horizon profile for direct-sun shading
+ *   shading_config         — inter-row shading (tracker systems)
+ * Both are read from plants[0] (pvnode treats them as global-per-request; only one value
+ * per param per request).
+ *
+ * Azimuth convention: 0=N, 180=S natively — NO -180 offset (api.pvnode.com openapi.json).
+ *
+ * @param {{ lat:number, lon:number, plants:Array, forecastDays?:number, nowcast?:boolean, timezone?:string }} args
+ * @returns {URLSearchParams}
+ */
+export function buildQueryParams({ lat, lon, plants, forecastDays = 7, nowcast = true, timezone = 'utc' }) {
+  if (!Array.isArray(plants) || plants.length === 0) {
+    throw new Error('buildQueryParams: plants must be a non-empty array');
+  }
+  const q = new URLSearchParams();
+  q.set('latitude', String(lat));
+  q.set('longitude', String(lon));
+  q.set('forecast_days', String(forecastDays));
+  q.set('nowcast', String(nowcast));
+  q.set('timezone', timezone);
+  q.set('required_data', 'spec_watts,temp');
+  q.set('pv_only', 'true');
 
-  /**
-   * Resolve config parameters for pvnode.
-   */
-  function resolveParams() {
-    const cfg = getCfg();
-    const fc = cfg.forecast || {};
-    const pvnode = fc.pvnode || {};
+  const p0 = plants[0];
+  q.set('slope', String(p0.tiltDeg));
+  q.set('orientation', String(p0.azimuthDeg)); // 0=N, 180=S — NO -180 offset
+  q.set('pv_power_kw', String(p0.kwp));
 
-    if (!pvnode.apiKey) return null;
-
-    const lat = fc.location?.latitude
-      || cfg.schedule?.smallMarketAutomation?.location?.latitude;
-    const lon = fc.location?.longitude
-      || cfg.schedule?.smallMarketAutomation?.location?.longitude;
-
-    if (!lat || !lon) return null;
-
-    const pv = fc.pv || {};
-    let kwp = pv.totalKwp;
-    if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
-      kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
-    }
-    if (!kwp) return null;
-
-    const tiltDeg = pv.tiltDeg ?? 35;
-    const azimuthDeg = pv.azimuthDeg ?? 180;
-
-    return {
-      apiKey: pvnode.apiKey,
-      lat, lon, kwp,
-      tiltDeg,
-      azimuthDeg
-    };
+  if (plants[1]) {
+    const p1 = plants[1];
+    q.set('second_array_slope', String(p1.tiltDeg));
+    q.set('second_array_orientation', String(p1.azimuthDeg));
+    q.set('second_array_power_kw', String(p1.kwp));
   }
 
+  // REVIEWS H7: two INDEPENDENT global-per-request config params, from plants[0]
+  //   skyObstructionConfig → sky_obstruction_config (horizon profile)
+  //   shadingConfig        → shading_config (inter-row / tracker shading)
+  if (typeof plants[0].skyObstructionConfig === 'string' && plants[0].skyObstructionConfig.length > 0) {
+    q.set('sky_obstruction_config', plants[0].skyObstructionConfig);
+  }
+  if (typeof plants[0].shadingConfig === 'string' && plants[0].shadingConfig.length > 0) {
+    q.set('shading_config', plants[0].shadingConfig);
+  }
+
+  return q;
+}
+
+/**
+ * Floor a UTC timestamp string to the nearest 15-minute boundary (Pitfall M-2 protection
+ * when slot-summing across multiple groups with potentially mis-aligned timestamps).
+ *
+ * @param {string} tsUtc — ISO-8601 UTC timestamp
+ * @returns {string} ISO-8601 timestamp floored to XX:00, :15, :30, or :45
+ */
+function floorToQuarterIso(tsUtc) {
+  const d = new Date(tsUtc);
+  const minutes = d.getUTCMinutes();
+  d.setUTCMinutes(Math.floor(minutes / 15) * 15, 0, 0);
+  return d.toISOString();
+}
+
+/**
+ * Extract {ts_utc, power_w} rows from a pvnode /v1/forecast/ response body.
+ *
+ * The OpenAPI spec declares the response as an "inline unspecified" object. The 2026-04-16
+ * probe script (scripts/probe-pvnode-headers.js) has not yet been executed against a live
+ * key, so this helper mirrors the field-name-tolerant parsing of the pre-refactor client.
+ *
+ * Accepted shapes (in priority order):
+ *   1. { forecasts: [{ timestamp, power_w }, ...] }
+ *   2. { data:      [{ timestamp, power_w }, ...] }
+ *   3. [{ timestamp, power_w }, ...]  (bare array)
+ * Field synonyms per element: timestamp|time|ts, power_w|power|watts
+ *
+ * @param {any} data — parsed JSON body
+ * @returns {Array<{ts_utc:string, power_w:number}>}
+ */
+function extractPowerSeries(data) {
+  let arr;
+  if (Array.isArray(data)) {
+    arr = data;
+  } else if (Array.isArray(data?.forecasts)) {
+    arr = data.forecasts;
+  } else if (Array.isArray(data?.data)) {
+    arr = data.data;
+  } else {
+    return [];
+  }
+  const rows = [];
+  for (const entry of arr) {
+    if (!entry || typeof entry !== 'object') continue;
+    const ts = entry.timestamp ?? entry.time ?? entry.ts ?? entry.ts_utc;
+    const pw = entry.power_w ?? entry.power ?? entry.watts;
+    if (ts == null || pw == null) continue;
+    const power = Number(pw);
+    if (!Number.isFinite(power)) continue;
+    let isoTs;
+    try {
+      isoTs = new Date(ts).toISOString();
+    } catch {
+      continue;
+    }
+    rows.push({ ts_utc: isoTs, power_w: power });
+  }
+  return rows;
+}
+
+/**
+ * Execute one GET request against /v1/forecast/ for a single plane-group, with p-retry.
+ *
+ * Retry policy:
+ *   - network / 5xx (non-4xx) errors → retry up to 3 times, exponential backoff
+ *   - 401 / 403 / 429 → AbortError (halt retries; caller handles 429 specifically)
+ *
+ * @param {string} apiKey
+ * @param {URLSearchParams} params
+ * @param {{timeoutMs?:number}} [opts]
+ * @returns {Promise<{data:any, status:number}>}
+ */
+async function fetchGroup(apiKey, params, opts = {}) {
+  const url = `${PVNODE_BASE}/forecast/?${params.toString()}`;
+  return pRetry(
+    async () => {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 20000)
+      });
+      if (res.status === 429) throw new AbortError('pvnode_rate_limited');
+      if (res.status === 401 || res.status === 403) throw new AbortError(`pvnode_auth_${res.status}`);
+      if (!res.ok) throw new Error(`pvnode_http_${res.status}`);
+      return { data: await res.json(), status: res.status };
+    },
+    { retries: 3, factor: 2, minTimeout: 1000, maxTimeout: 10000 }
+  );
+}
+
+/**
+ * Create the pvnode forecast client factory.
+ *
+ * @param {object} ctx - DI context { getCfg, pushLog }
+ * @param {object} deps - { store, pvnodeQuota }
+ *   - store: forecast-store (needed for writePvForecasts persistence, fallback quota)
+ *   - pvnodeQuota: single quota authority (REVIEWS L2). If absent, fallback to store.incrementPvnodeQuota
+ *     during transitional wiring — full integration wires pvnodeQuota in Plan 07-03+.
+ */
+export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
+  const { getCfg, pushLog } = ctx;
+  const MIN_INTERVAL_MS = 15 * 60 * 1000; // 15 min between fetches
+  let lastFetchAt = 0;
+  let cachedData = null;
+
   /**
-   * Fetch PV forecast from pvnode API.
-   * Returns array of { ts_utc, power_w }.
+   * Fetch PV forecast — serially iterates plane-groups, sums power_w per 15-min slot.
+   * Returns cached data on throttle / quota exhaustion / 429 to keep the caller contract stable.
+   * @returns {Promise<Array<{ts_utc:string,power_w:number}>|null>}
    */
   async function fetchForecast() {
-    const params = resolveParams();
-    if (!params) {
-      pushLog('pvnode_skip', { reason: 'missing_params_or_apikey' });
+    const now = Date.now();
+    if (now - lastFetchAt < MIN_INTERVAL_MS) {
+      return cachedData;
+    }
+
+    const cfg = getCfg(); // QUAL-05: never cache at module scope
+    const apiKey = cfg.forecast?.pvnode?.apiKey;
+    if (!apiKey) {
+      pushLog('pvnode_skip', { reason: 'missing_apikey' });
       return null;
     }
 
-    // Rate limit
-    if (lastFetchAt && (Date.now() - lastFetchAt) < MIN_INTERVAL_MS) {
+    // REVIEWS L2: check quota-exhausted flag BEFORE any network call
+    if (pvnodeQuota && typeof pvnodeQuota.isExhausted === 'function' && pvnodeQuota.isExhausted()) {
+      pushLog('pvnode_skipped_quota_exhausted', {});
       return cachedData;
     }
 
-    const { apiKey, lat, lon, kwp, tiltDeg, azimuthDeg } = params;
+    // Resolve geo coordinates (forecast.location preferred, SMA fallback)
+    const fc = cfg.forecast || {};
+    const lat = fc.location?.latitude
+      ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
+    const lon = fc.location?.longitude
+      ?? cfg.schedule?.smallMarketAutomation?.location?.longitude;
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) {
+      pushLog('pvnode_skip', { reason: 'missing_location' });
+      return null;
+    }
 
-    // pvnode API: POST with system params
-    const url = 'https://api.pvnode.io/v1/forecast';
+    // Read plants from config-model-sanitized pvPlants[] (D-A2, REVIEWS H7 locked field names)
+    const rawPlants = Array.isArray(cfg.userEnergyPricing?.pvPlants)
+      ? cfg.userEnergyPricing.pvPlants
+      : [];
+    const plants = rawPlants
+      .filter(p => Number(p?.kwp) > 0
+        && Number.isFinite(Number(p?.tiltDeg))
+        && Number.isFinite(Number(p?.azimuthDeg)))
+      .map(p => ({
+        kwp: Number(p.kwp),
+        tiltDeg: Number(p.tiltDeg),
+        azimuthDeg: Number(p.azimuthDeg),
+        skyObstructionConfig: p.skyObstructionConfig, // REVIEWS H7
+        shadingConfig: p.shadingConfig                 // REVIEWS H7
+      }));
 
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          latitude: lat,
-          longitude: lon,
-          kwp,
-          tilt: tiltDeg,
-          azimuth: azimuthDeg - 180, // pvnode uses -180..180 convention like evcc
-          resolution: 15 // 15-minute intervals
-        }),
-        signal: AbortSignal.timeout(15000)
+    // Single-string fallback: legacy cfg.forecast.pv.totalKwp/tiltDeg/azimuthDeg (pre-D-A2 configs)
+    if (plants.length === 0 && Number(fc.pv?.totalKwp) > 0) {
+      plants.push({
+        kwp: Number(fc.pv.totalKwp),
+        tiltDeg: Number(fc.pv.tiltDeg ?? 35),
+        azimuthDeg: Number(fc.pv.azimuthDeg ?? 180)
       });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        pushLog('pvnode_error', { status: res.status, body: text.slice(0, 200) });
-        return cachedData;
-      }
-
-      const data = await res.json();
-      lastFetchAt = Date.now();
-
-      // Parse response — pvnode returns array of { timestamp, power_w } or similar
-      const forecasts = data?.forecasts || data?.data || [];
-      const slots = [];
-
-      for (const entry of forecasts) {
-        const ts = entry.timestamp || entry.time || entry.ts;
-        const power = entry.power_w || entry.power || entry.watts || 0;
-        if (!ts) continue;
-
-        slots.push({
-          ts_utc: new Date(ts).toISOString(),
-          power_w: Math.round(power * 10) / 10
-        });
-      }
-
-      // Persist to DB
-      if (store && slots.length > 0) {
-        const points = slots.map(s => ({
-          model: 'pvnode',
-          ts_utc: s.ts_utc,
-          power_w: s.power_w,
-          confidence: 0.75 // 15-min resolution, good accuracy
-        }));
-        await store.writePvForecasts(points).catch(e =>
-          pushLog('pvnode_store_error', { error: e.message })
-        );
-      }
-
-      cachedData = slots;
-      pushLog('pvnode_ok', { slots: slots.length, kwp });
-      return slots;
-
-    } catch (e) {
-      pushLog('pvnode_error', { error: e.message });
-      return cachedData;
     }
+
+    if (plants.length === 0) {
+      pushLog('pvnode_skip', { reason: 'no_plants_configured' });
+      return null;
+    }
+
+    const groups = chunkPlants(plants);
+    const results = [];
+    for (const group of groups) {
+      try {
+        const params = buildQueryParams({ lat: Number(lat), lon: Number(lon), plants: group });
+        const { data } = await fetchGroup(apiKey, params);
+        results.push(data);
+
+        // REVIEWS L2: route quota through pvnodeQuota (fallback to store if pvnodeQuota absent)
+        if (pvnodeQuota && typeof pvnodeQuota.increment === 'function') {
+          await pvnodeQuota.increment(1);
+        } else if (store && typeof store.incrementPvnodeQuota === 'function') {
+          await store.incrementPvnodeQuota(1);
+        }
+        pushLog('pvnode_ok', { planes: group.length });
+      } catch (err) {
+        pushLog('pvnode_error', { error: err?.message || String(err), planes: group.length });
+        if (err && err.name === 'AbortError') {
+          if (err.message === 'pvnode_rate_limited'
+              && pvnodeQuota && typeof pvnodeQuota.markExhausted === 'function') {
+            pvnodeQuota.markExhausted(3600);
+            pushLog('pvnode_throttled', { retryAfterSeconds: 3600 });
+          }
+          return cachedData;
+        }
+        // Non-abort error already retried by p-retry; give up on this group and continue
+      }
+    }
+
+    // Slot-wise sum across all groups (Pitfall M-2: floor to 15-min boundary to align groups)
+    const merged = new Map();
+    for (const data of results) {
+      const rows = extractPowerSeries(data);
+      for (const { ts_utc, power_w } of rows) {
+        const key = floorToQuarterIso(ts_utc);
+        merged.set(key, (merged.get(key) ?? 0) + power_w);
+      }
+    }
+
+    const points = [...merged.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ts_utc, power_w]) => ({ ts_utc, power_w: Math.round(power_w * 10) / 10 }));
+
+    // Persist to DB (non-blocking error recovery — log but don't fail)
+    if (store && typeof store.writePvForecasts === 'function' && points.length > 0) {
+      const storeRows = points.map(s => ({
+        model: 'pvnode',
+        ts_utc: s.ts_utc,
+        power_w: s.power_w,
+        confidence: 0.75 // 15-min resolution (kept from pre-refactor client)
+      }));
+      store.writePvForecasts(storeRows).catch(e =>
+        pushLog('pvnode_persist_error', { error: e?.message || String(e) })
+      );
+    }
+
+    lastFetchAt = Date.now();
+    cachedData = points;
+    return points;
   }
 
   return {
