@@ -1,0 +1,75 @@
+// services/forecast/ensemble.js — Phase 07 MLAI-09 / D-A4.
+//
+// Inverse-MAE weighted ensemble merge. Replaces simple averaging decision from Phase 01-03
+// (STATE.md: "mergePvForecasts uses simple averaging; sophisticated weighting deferred to
+// accuracy tracking"). With the accuracy tracker persisting mae_7d_* per provider (Wave-0
+// schema, Plan 07-04 activation), we can now weight providers by their rolling 7-day MAE:
+// the provider with the smallest error gets the largest weight.
+//
+// Single-source invariant (D-C3): the mae7d argument MUST be sourced from accuracy_tracker
+// to stay consistent with ml-correction's feature pipeline. Plan 07-04 will wire the DB read;
+// for now `computeWeights(mae7d)` is a pure function taking the dict directly.
+//
+// Pure functions — no DI context, no side effects. Matches pv-forecast.js `mergePvForecasts`
+// style (pure transform).
+
+/**
+ * Compute normalized inverse-MAE weights summing to 1.0.
+ *
+ * Providers with null, 0, negative, or non-finite MAE are excluded (treated as missing);
+ * the remaining weights renormalize. If all providers are invalid, returns {} — caller should
+ * fall back to uniform weights (uniform fallback is NOT applied here to keep this fn pure).
+ *
+ * @param {Record<string, number|null|undefined>} mae7d — e.g. { pvnode: 120, solcast: 200, pvlib: 180 }
+ * @returns {Record<string, number>} weights — e.g. { pvnode: 0.45, solcast: 0.27, pvlib: 0.28 }
+ */
+export function computeWeights(mae7d) {
+  if (!mae7d || typeof mae7d !== 'object') return {};
+  const entries = Object.entries(mae7d).filter(([, v]) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0;
+  });
+  if (entries.length === 0) return {};
+  const invSum = entries.reduce((s, [, v]) => s + 1 / Number(v), 0);
+  if (!Number.isFinite(invSum) || invSum <= 0) return {};
+  return Object.fromEntries(
+    entries.map(([k, v]) => [k, (1 / Number(v)) / invSum])
+  );
+}
+
+/**
+ * Merge per-slot forecasts from multiple providers using weights.
+ *
+ * Input shape: providersBySlot[providerName] is an array of { ts_utc: string, power_w: number }.
+ * Weights: weights[providerName] is the multiplier. Providers missing from weights OR with
+ * weight 0 are skipped entirely (per Plan 07-02 spec).
+ *
+ * Output: merged array sorted by ts_utc ascending, each slot power_w = sum over providers of
+ * power_w * weight (rounded to 1 decimal place, matching pvnode-client rounding).
+ *
+ * @param {Record<string, Array<{ts_utc:string, power_w:number}>>} providersBySlot
+ * @param {Record<string, number>} weights
+ * @returns {Array<{ts_utc:string, power_w:number}>}
+ */
+export function mergeForecasts(providersBySlot, weights) {
+  const slotMap = new Map();
+  if (!providersBySlot || typeof providersBySlot !== 'object') return [];
+  if (!weights || typeof weights !== 'object') return [];
+
+  for (const [provider, slots] of Object.entries(providersBySlot)) {
+    const w = Number(weights[provider]);
+    if (!Number.isFinite(w) || w === 0) continue;
+    if (!Array.isArray(slots)) continue;
+    for (const s of slots) {
+      if (!s || typeof s.ts_utc !== 'string') continue;
+      const p = Number(s.power_w);
+      if (!Number.isFinite(p)) continue;
+      const acc = slotMap.get(s.ts_utc) ?? 0;
+      slotMap.set(s.ts_utc, acc + p * w);
+    }
+  }
+
+  return [...slotMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([ts_utc, power_w]) => ({ ts_utc, power_w: Math.round(power_w * 10) / 10 }));
+}

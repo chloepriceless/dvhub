@@ -2446,6 +2446,23 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
   return accepted;
 }
 
+/**
+ * Sanitize pvPlants[] array from user config.
+ *
+ * Accepted fields (per plant):
+ * - kwp              — installed capacity in kWp (required, > 0)
+ * - commissionedAt   — ISO date YYYY-MM-DD (required)
+ * - tiltDeg          — roof/panel tilt 0..90 degrees (optional, Phase 07 D-A2)
+ * - azimuthDeg       — panel azimuth 0..360 (0=N, 180=S) — native pvnode convention (optional)
+ * - skyObstructionConfig — string (≤2000 chars); maps to pvnode `sky_obstruction_config`
+ *                          query param (horizon profile for direct-sun shading)
+ * - shadingConfig    — string (≤2000 chars); maps to pvnode `shading_config`
+ *                      query param (inter-row / tracker shading)
+ *
+ * skyObstructionConfig and shadingConfig are INDEPENDENT pvnode API params per REVIEWS H7.
+ * The legacy `skyObstruction` (no suffix) field name is NOT introduced.
+ * ASVS V5 length bound: 2000 chars per string field (prevents config-file DoS).
+ */
 function sanitizeUserEnergyPricingPvPlants(value, warnings) {
   if (!Array.isArray(value)) return [];
 
@@ -2467,9 +2484,52 @@ function sanitizeUserEnergyPricingPvPlants(value, warnings) {
         return null;
       }
 
+      // Phase 07 D-A2 + REVIEWS H7: optional pvPlants[] forecast fields
+      //   tiltDeg, azimuthDeg — geometry (native pvnode convention: azimuth 0=N, 180=S)
+      //   skyObstructionConfig → pvnode sky_obstruction_config (horizon profile)
+      //   shadingConfig        → pvnode shading_config (inter-row / tracker shading)
+      // These two string fields are separate pvnode API params; do NOT merge them.
+      let tiltDeg;
+      const tiltDegRaw = entry.tiltDeg;
+      if (tiltDegRaw != null && tiltDegRaw !== '') {
+        const v = Number(tiltDegRaw);
+        if (Number.isFinite(v) && v >= 0 && v <= 90) {
+          tiltDeg = v;
+        } else {
+          warnings.push(`userEnergyPricing.pvPlants.${index}: tiltDeg must be 0..90 degrees`);
+        }
+      }
+
+      let azimuthDeg;
+      const azimuthDegRaw = entry.azimuthDeg;
+      if (azimuthDegRaw != null && azimuthDegRaw !== '') {
+        const v = Number(azimuthDegRaw);
+        if (Number.isFinite(v) && v >= 0 && v <= 360) {
+          azimuthDeg = v;
+        } else {
+          warnings.push(`userEnergyPricing.pvPlants.${index}: azimuthDeg must be 0..360 (0=N, 180=S)`);
+        }
+      }
+
+      // REVIEWS H7: skyObstructionConfig maps to pvnode `sky_obstruction_config` (horizon profile)
+      let skyObstructionConfig;
+      if (typeof entry.skyObstructionConfig === 'string' && entry.skyObstructionConfig.length > 0) {
+        skyObstructionConfig = entry.skyObstructionConfig.slice(0, 2000); // ASVS V5 length bound
+      }
+
+      // REVIEWS H7: shadingConfig maps to pvnode `shading_config` (inter-row / tracker shading)
+      let shadingConfig;
+      if (typeof entry.shadingConfig === 'string' && entry.shadingConfig.length > 0) {
+        shadingConfig = entry.shadingConfig.slice(0, 2000); // ASVS V5 length bound
+      }
+
       return {
         kwp: roundCtKwh(kwp),
-        commissionedAt
+        commissionedAt,
+        ...(tiltDeg !== undefined && { tiltDeg }),
+        ...(azimuthDeg !== undefined && { azimuthDeg }),
+        ...(skyObstructionConfig !== undefined && { skyObstructionConfig }),
+        ...(shadingConfig !== undefined && { shadingConfig })
       };
     })
     .filter(Boolean);
