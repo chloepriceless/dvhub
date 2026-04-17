@@ -80,8 +80,11 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
         return { training_data: [], data_days };
       }
 
-      // Query hourly training data: weather features + actual PV (aggregated to hourly)
-      // Joins weather_forecasts (historical via backfill) with energy_slots_15m averaged by hour.
+      // Query hourly training data: weather features + actual PV (aggregated to hourly).
+      // Joins weather_forecasts with energy_slots_15m averaged by hour, plus real rolling
+      // MAE features from forecast_accuracy (Phase 07 MLAI-08 VERIFICATION gap fix):
+      // without this LEFT JOIN, mae_7d_* features were always 0 during training while
+      // inference (ml-correction.js) uses real values — defeats the retrain benefit.
       const dataResult = await store.query(`
         SELECT
           w.ts_utc,
@@ -95,15 +98,21 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
           $2::float AS tilt_deg,
           $3::float AS azimuth_deg,
           $4::float AS kwp,
-          0::float AS mae_7d_solcast,
-          0::float AS mae_7d_pvlib,
-          0::float AS mae_7d_merged,
+          MAX(COALESCE(fa.mae_7d_pvnode,  0))::float AS mae_7d_pvnode,
+          MAX(COALESCE(fa.mae_7d_solcast, 0))::float AS mae_7d_solcast,
+          MAX(COALESCE(fa.mae_7d_pvlib,   0))::float AS mae_7d_pvlib,
+          MAX(COALESCE(fa.mae_7d_merged,  0))::float AS mae_7d_merged,
+          MAX(COALESCE(fa.mae_7d_ml,      0))::float AS mae_7d_ml,
           AVG(e.value_num) AS theoretical_power_w
         FROM weather_forecasts w
         LEFT JOIN energy_slots_15m e
           ON date_trunc('hour', e.slot_start_utc) = date_trunc('hour', w.ts_utc)
           AND e.series_key = 'pv_total_w'
           AND e.source_kind IN ('vrm_import', 'local_live')
+        LEFT JOIN forecast_accuracy fa
+          ON fa.evaluation_date = DATE(w.ts_utc AT TIME ZONE 'UTC')
+          AND fa.forecast_type = 'pv'
+          AND fa.model = 'ensemble_daily'
         WHERE w.ts_utc >= NOW() - (($1)::int || ' months')::INTERVAL
         GROUP BY w.id, w.ts_utc, w.visibility_m, w.cloud_cover_pct, w.humidity_pct, w.temperature_c
         HAVING AVG(e.value_num) IS NOT NULL
