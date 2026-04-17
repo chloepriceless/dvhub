@@ -38,11 +38,17 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 
-# 13 feature columns per D-03:
+# Phase 07 MLAI-08: feature-schema version + held-out slice reserve.
+# v1 (pre-Phase-07) = 13 features, 3 constant-zero MAE columns.
+# v2 (Phase 07)     = 15 features, 5 real mae_7d_* from accuracy_tracker.
+FEATURE_SCHEMA_VERSION = 2   # Phase 07 MLAI-08: v1=3 constant-zero MAE; v2=5 real mae_7d_*
+HELD_OUT_DAYS = 3            # Pattern 5: reserve last days for promotion evaluation
+
+# 15 feature columns per D-C2 (Phase 07):
 # Weather: visibility_m, cloud_cover_pct, humidity_pct, temp_c
 # Temporal: hour, month, weekday
 # Plant: tilt_deg, azimuth_deg, kwp
-# Accuracy: mae_7d_solcast, mae_7d_pvlib, mae_7d_merged
+# Accuracy (5 real MAE): mae_7d_pvnode, mae_7d_solcast, mae_7d_pvlib, mae_7d_merged, mae_7d_ml
 FEATURE_COLS = [
     'visibility_m',
     'cloud_cover_pct',
@@ -54,9 +60,12 @@ FEATURE_COLS = [
     'tilt_deg',
     'azimuth_deg',
     'kwp',
+    # MAE block — v2 adds pvnode at start, ml at end (5 features total)
+    'mae_7d_pvnode',
     'mae_7d_solcast',
     'mae_7d_pvlib',
     'mae_7d_merged',
+    'mae_7d_ml',
 ]
 
 TARGET_COL = 'theoretical_power_w'
@@ -74,8 +83,9 @@ def validate_data(df):
         raise ValueError(f'Missing target column: {TARGET_COL}')
     if len(df) < 24:
         raise ValueError(f'Insufficient training data: {len(df)} rows (minimum 24)')
-    if len(FEATURE_COLS) != 13:
-        raise ValueError(f'Expected 13 feature columns, got {len(FEATURE_COLS)}')
+    # Phase 07 MLAI-08: FEATURE_COLS v2 = 15 features (was 13 in v1)
+    if len(FEATURE_COLS) != 15:
+        raise ValueError(f'Expected 15 feature columns (schema v2), got {len(FEATURE_COLS)}')
 
 
 def train_linear(X_train, y_train, X_val, y_val):
@@ -142,6 +152,7 @@ def save_model(model, scaler, model_type, version, mae, model_dir, n_samples, fe
     meta = {
         'model_type': model_type,
         'version': version,
+        'feature_schema_version': FEATURE_SCHEMA_VERSION,   # Phase 07 MLAI-08
         'mae': mae,
         'features': list(feature_cols),
         'n_samples': n_samples,
@@ -176,6 +187,27 @@ def train(params):
     if len(df) > max_rows:
         df = df.iloc[-max_rows:]
 
+    # Phase 07 MLAI-08 Pattern 5: reserve last HELD_OUT_DAYS of training window
+    # as a held-out slice for Node-side promoteIfBetter evaluation. The slice is
+    # dumped to held_out_slice.parquet (CSV fallback) so ml_load_heldout.py can
+    # consume it later.
+    held_out_df = pd.DataFrame()
+    if 'ts_utc' in df.columns:
+        # Timestamp-aware split — honours the real calendar cutoff.
+        df = df.sort_values('ts_utc')
+        ts_series = pd.to_datetime(df['ts_utc'], utc=True, errors='coerce')
+        if ts_series.notna().any():
+            cutoff = ts_series.max() - pd.Timedelta(days=HELD_OUT_DAYS)
+            mask_train = ts_series < cutoff
+            held_out_df = df[~mask_train].copy()
+            df = df[mask_train].copy()
+    else:
+        # Row-count fallback — approximate HELD_OUT_DAYS worth of hourly rows.
+        held_out_rows = min(HELD_OUT_DAYS * 24, max(0, len(df) - 24))
+        if held_out_rows > 0:
+            held_out_df = df.iloc[-held_out_rows:].copy()
+            df = df.iloc[:-held_out_rows].copy()
+
     X = df[FEATURE_COLS]
     y = df[TARGET_COL]
 
@@ -207,12 +239,34 @@ def train(params):
 
     model_path = save_model(model, scaler, model_type, version, mae, model_dir, n_samples, FEATURE_COLS)
 
+    # Phase 07 MLAI-08 REVIEWS H12: dump held-out slice alongside model for
+    # promoteIfBetter consumption via ml_load_heldout.py.
+    held_out_slice_path = None
+    if len(held_out_df) > 0:
+        # Project held-out to the same feature + target shape.
+        held_out_cols = [c for c in FEATURE_COLS if c in held_out_df.columns]
+        held_out_cols = held_out_cols + [TARGET_COL] if TARGET_COL in held_out_df.columns else held_out_cols
+        ts_cols = [c for c in ('ts_utc',) if c in held_out_df.columns]
+        held_out_out = held_out_df[ts_cols + held_out_cols].copy()
+        # Provide y_true alias for ml_eval.py (prefers y_true over target col name).
+        if TARGET_COL in held_out_out.columns:
+            held_out_out['y_true'] = held_out_out[TARGET_COL]
+        held_out_slice_path = os.path.join(model_path, 'held_out_slice.parquet')
+        try:
+            held_out_out.to_parquet(held_out_slice_path, index=False)
+        except Exception:
+            held_out_slice_path = held_out_slice_path.replace('.parquet', '.csv')
+            held_out_out.to_csv(held_out_slice_path, index=False)
+
     return {
         'ok': True,
         'model_type': model_type,
         'mae': mae,
         'version': version,
         'model_path': model_path,
+        'feature_schema_version': FEATURE_SCHEMA_VERSION,
+        'held_out_slice_path': held_out_slice_path,
+        'n_samples': n_samples,
     }
 
 

@@ -37,7 +37,11 @@ import numpy as np
 import pandas as pd
 import joblib
 
-# Must match ml_train.py
+# Phase 07 MLAI-08: runtime schema version — must match meta.feature_schema_version
+# written by ml_train.py save_model. Mismatch triggers fail-open in predict().
+RUNTIME_FEATURE_SCHEMA_VERSION = 2   # Phase 07: must match model's feature_schema_version
+
+# Must match ml_train.py FEATURE_COLS exactly (same names, same order — Pitfall ML-1)
 FEATURE_COLS = [
     'visibility_m',
     'cloud_cover_pct',
@@ -49,9 +53,12 @@ FEATURE_COLS = [
     'tilt_deg',
     'azimuth_deg',
     'kwp',
+    # MAE block — v2 adds pvnode at start, ml at end (5 features total)
+    'mae_7d_pvnode',
     'mae_7d_solcast',
     'mae_7d_pvlib',
     'mae_7d_merged',
+    'mae_7d_ml',
 ]
 
 
@@ -96,9 +103,12 @@ def build_feature_vector(slot, features):
         'tilt_deg': plant.get('tilt_deg'),
         'azimuth_deg': plant.get('azimuth_deg'),
         'kwp': plant.get('kwp'),
+        # Phase 07 MLAI-08: 5 mae_7d_* features (v2 schema)
+        'mae_7d_pvnode': accuracy.get('mae_7d_pvnode'),
         'mae_7d_solcast': accuracy.get('mae_7d_solcast'),
         'mae_7d_pvlib': accuracy.get('mae_7d_pvlib'),
         'mae_7d_merged': accuracy.get('mae_7d_merged'),
+        'mae_7d_ml': accuracy.get('mae_7d_ml'),
     }
 
 
@@ -110,12 +120,46 @@ def predict(params):
     model_type = params.get('model_type', 'linear')
     version = params.get('version', 1)
 
-    model_name = f'pv_correction_{model_type}_v{version}'
-    model_path = os.path.join(model_dir, model_name)
+    # Phase 07 MLAI-08 path handling: callers may pass an already-resolved
+    # model_path directly (e.g. ml-schema-guard tests, promoteIfBetter), which
+    # avoids the f-string template below. Fall back to the legacy template if
+    # no explicit model_path is provided.
+    model_path = params.get('model_path')
+    if not model_path:
+        model_name = f'pv_correction_{model_type}_v{version}'
+        model_path = os.path.join(model_dir, model_name)
 
     # Check if model exists
     if not os.path.isdir(model_path):
         return {'ok': True, 'applied': False, 'reason': 'no_model'}
+
+    # Phase 07 MLAI-08 Pitfall ML-1: fail-open schema-mismatch guard.
+    # Compare the model's meta.feature_schema_version against this runtime's
+    # RUNTIME_FEATURE_SCHEMA_VERSION. Any mismatch returns applied=false
+    # WITHOUT raising — serving continues via raw forecast upstream.
+    meta_path = os.path.join(model_path, 'meta.json')
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            model_schema = meta.get('feature_schema_version', 1)
+            if model_schema != RUNTIME_FEATURE_SCHEMA_VERSION:
+                return {
+                    'ok': True,
+                    'applied': False,
+                    'reason': 'schema_mismatch',
+                    'model_version': model_schema,
+                    'runtime_version': RUNTIME_FEATURE_SCHEMA_VERSION,
+                }
+        except Exception as meta_err:
+            # Corrupt meta.json -> treat as schema mismatch (fail-open)
+            return {
+                'ok': True,
+                'applied': False,
+                'reason': 'meta_read_error',
+                'error': str(meta_err),
+                'runtime_version': RUNTIME_FEATURE_SCHEMA_VERSION,
+            }
 
     if model_type == 'linear':
         model_file = os.path.join(model_path, 'model.joblib')
