@@ -54,6 +54,37 @@ def forecast_load(params):
     df['unique_id'] = 'load'
     df = df[['unique_id', 'ds', 'y']].sort_values('ds').reset_index(drop=True)
 
+    # Phase 07 FORE-12 Fix (Pitfall SF-1 root cause): 15min → 1h resample BEFORE StatsForecast(freq='h').
+    # AutoARIMA with freq='h' on 15-min indexed data degenerates to flat predictions.
+    # Source: RESEARCH Pattern 3, Pitfall SF-1 (canonical Nixtla electricity-load-forecasting flow).
+    df_hourly = (
+        df.set_index('ds')[['y']]
+        .resample('1h')
+        .mean()
+        .dropna()
+        .reset_index()
+    )
+    df_hourly['unique_id'] = 'load'
+    df_hourly = df_hourly[['unique_id', 'ds', 'y']]
+
+    # Guard: need ≥48 hourly samples (2 days) post-resample
+    if len(df_hourly) < 48:
+        return {
+            'ok': False,
+            'error': f'Insufficient hourly history after resample: {len(df_hourly)}'
+        }
+
+    # Phase 07 FORE-12: variance sanity check — flat input → flat output; surface it
+    if df_hourly['y'].std() < 1.0:
+        return {
+            'ok': False,
+            'error': 'Input data has near-zero variance (std<1W) — degenerate'
+        }
+
+    # Pitfall SF-3: MSTL requires ≥336 hourly samples (2× longest season = 2 × 168h)
+    if use_mstl and tier >= 3 and len(df_hourly) < 336:
+        use_mstl = False
+
     # Select model based on tier and use_mstl flag
     if use_mstl and tier >= 3:
         # Tier 3: MSTL with daily (24h) and weekly (168h) seasonality
@@ -67,7 +98,7 @@ def forecast_load(params):
         ]
 
     sf = StatsForecast(models=models, freq='h', n_jobs=1)
-    forecast_df = sf.forecast(df=df, h=horizon)
+    forecast_df = sf.forecast(df=df_hourly, h=horizon)
 
     # Extract forecast column name (varies by model)
     forecast_col = None
