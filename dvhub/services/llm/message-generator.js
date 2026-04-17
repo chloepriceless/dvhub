@@ -1,18 +1,77 @@
 // services/llm/message-generator.js -- LLM and template message generation (D-13, D-14, D-16).
 // Generates German energy messages via Ollama (Tier 3) or template fallback (Tier 1/2).
 // Respects daily message limit (T-05-08) and tier gating.
-// T-05-06: System prompt is hardcoded constant; sensor data in structured field only.
+// T-05-06: System prompt is hardcoded (now lives in prompt-templates.BASE_SYSTEM); sensor
+//   data enters only via structured "Aktuelle Daten:" user-message field (T-07-07-01).
+//
+// Phase 07 LLM-02 REVIEWS L:
+// - SYSTEM_PROMPT constant MOVED to prompt-templates.BASE_SYSTEM
+// - BUILDERS map keyed by MESSAGE_TYPES enum (computed `[MESSAGE_TYPES.X]: buildX`) so
+//   keys structurally cannot drift from production enum.
+// - Uses Ollama /api/chat (messages array) to properly pass few-shot examples as
+//   alternating user/assistant turns -- /api/generate cannot do that.
+// - pushLog includes promptVersion for T-07-07-08 version correlation.
+// - Rules-fallback (template-fallback.js) UNCHANGED -- D-E2 constraint.
 
 import { generateTemplateMessage, getMessageEmoji } from './template-fallback.js';
+import { MESSAGE_TYPES } from './message-types.js';
+import {
+  PROMPT_VERSION,
+  buildNegativePriceAlert,
+  buildSocWarning,
+  buildSocFull,
+  buildNormalStatus,
+  buildSavings,
+  buildForecastInconsistency,
+  buildPvRecord,
+  buildLoadForecastInfo,
+  buildChargingPlan,
+  buildSystemOk
+} from './prompt-templates.js';
 
-// Hardcoded German system prompt -- never user-configurable (T-05-06)
-const SYSTEM_PROMPT =
-  'Du bist der Energie-Assistent eines Haushalts mit Photovoltaik und Batteriespeicher. ' +
-  'Antworte in einem kurzen, freundlichen Satz auf Deutsch. ' +
-  'Keine Emojis, keine Aufzaehlungen — nur ein natuerlicher Satz.';
+// REVIEWS L: BUILDERS keyed by MESSAGE_TYPES enum -- keys cannot drift from production enum.
+// Computed `[MESSAGE_TYPES.X]: buildX` syntax makes the mapping grep-auditable.
+const BUILDERS = {
+  [MESSAGE_TYPES.NEGATIVE_PRICE_ALERT]:   buildNegativePriceAlert,
+  [MESSAGE_TYPES.SOC_WARNING]:            buildSocWarning,
+  [MESSAGE_TYPES.SOC_FULL]:               buildSocFull,
+  [MESSAGE_TYPES.NORMAL_STATUS]:          buildNormalStatus,
+  [MESSAGE_TYPES.SAVINGS]:                buildSavings,
+  [MESSAGE_TYPES.FORECAST_INCONSISTENCY]: buildForecastInconsistency,
+  [MESSAGE_TYPES.PV_RECORD]:              buildPvRecord,
+  [MESSAGE_TYPES.LOAD_FORECAST_INFO]:     buildLoadForecastInfo,
+  [MESSAGE_TYPES.CHARGING_PLAN]:          buildChargingPlan,
+  [MESSAGE_TYPES.SYSTEM_OK]:              buildSystemOk
+};
 
-// Maximum tokens for LLM output (T-05-06: truncate to prevent excessive output)
+// Max tokens for LLM output (bound by num_predict at the ollama-client.chat layer;
+// kept here as DEFAULT_MAX_TOKENS for Tier-1/2 callers that still rely on it via cfg).
 const DEFAULT_MAX_TOKENS = 200;
+
+/**
+ * Build Ollama /api/chat messages array from a prompt-template result.
+ * T-05-06: user data only in structured "Aktuelle Daten:" user-turn content.
+ *
+ * @param {string} type - Message type (MESSAGE_TYPES value)
+ * @param {object} data - Structured data for template interpolation
+ * @returns {{ messages: Array<{role:string,content:string}>, version: string }}
+ */
+function buildPromptMessages(type, data) {
+  const builder = BUILDERS[type];
+  if (!builder) {
+    throw new Error(
+      `No prompt template for type "${type}" -- expected one of: ${Object.values(MESSAGE_TYPES).join(', ')}`
+    );
+  }
+  const template = builder(data);
+  const messages = [{ role: 'system', content: template.system }];
+  for (const ex of template.examples) {
+    messages.push({ role: 'user', content: ex.user });
+    messages.push({ role: 'assistant', content: ex.assistant });
+  }
+  messages.push({ role: 'user', content: template.user });
+  return { messages, version: template.version };
+}
 
 /**
  * Create a message generator that uses Ollama (if available) or template fallback.
@@ -49,78 +108,89 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
   }
 
   /**
-   * Build the data prompt for Ollama from structured data.
-   * T-05-06: User data only appears in "Aktuelle Daten:" field.
-   *
-   * @param {string} type - Message type
-   * @param {object} data - Structured data
-   * @returns {string}
-   */
-  function buildDataPrompt(type, data) {
-    const parts = [];
-    if (data.pvW != null) parts.push(`PV ${data.pvW}W`);
-    if (data.soc != null) parts.push(`Batterie ${data.soc}%`);
-    if (data.gridW != null) parts.push(`Netzimport ${data.gridW}W`);
-    if (data.price != null) parts.push(`Strompreis ${data.price} ct/kWh`);
-    if (data.pvTodayKwh != null) parts.push(`PV heute ${data.pvTodayKwh} kWh`);
-    if (data.consumedKwh != null) parts.push(`Verbrauch ${data.consumedKwh} kWh`);
-    if (data.until != null) parts.push(`bis ${data.until}`);
-
-    const dataStr = parts.length > 0 ? parts.join(', ') : 'keine Daten';
-    return `Aktuelle Daten: ${dataStr}. Erstelle eine kurze ${type}-Nachricht.`;
-  }
-
-  /**
    * Generate a message for the given type and data.
-   * Uses Ollama if tier >= 3, available, and under daily limit.
-   * Otherwise falls back to template.
+   * Uses Ollama /api/chat if tier >= 3, client available, builder exists, and under daily limit.
+   * Falls back to rules-based template (template-fallback.js, UNCHANGED per D-E2).
    *
-   * @param {string} type - Message type (status, savings, alert, pv_record, negative_price)
+   * @param {string} type - Message type (MESSAGE_TYPES value, e.g. 'status', 'savings', 'negative_price', 'soc_full', ...)
    * @param {object} data - Data for message generation
-   * @returns {Promise<{ text: string, type: string, source: string, emoji: string }>}
+   * @returns {Promise<{ text: string, type: string, source: string, emoji: string, promptVersion?: string }>}
    */
   async function generate(type, data) {
     const emoji = getMessageEmoji(type);
+    const hasBuilder = typeof BUILDERS[type] === 'function';
 
-    // Try LLM if tier >= 3, client available, and under daily limit
-    if (tier >= 3 && ollamaClient && ollamaClient.isAvailable() && isLlmAllowed()) {
+    // Try LLM if tier >= 3, client available, builder exists, and under daily limit.
+    // Unknown types skip LLM entirely and fall through to rules (enum-pinning guard, REVIEWS L).
+    if (hasBuilder && tier >= 3 && ollamaClient && ollamaClient.isAvailable() && isLlmAllowed()) {
       try {
         const cfg = getCfg();
         const temperature = cfg?.llm?.llmTemperature ?? 0.7;
         const maxTokens = cfg?.llm?.llmMaxTokens ?? DEFAULT_MAX_TOKENS;
+        const model = cfg?.llm?.llmModel ?? 'llama3.2';
 
-        const result = await ollamaClient.generate({
-          model: cfg?.llm?.llmModel ?? 'tinyllama',
-          prompt: buildDataPrompt(type, data),
-          system: SYSTEM_PROMPT,
-          temperature,
-          num_predict: maxTokens
-        });
+        const { messages, version } = buildPromptMessages(type, data);
 
-        if (result && result.response && result.response.trim().length > 0) {
-          dailyLlmCount++;
-          pushLog('llm_generated', { type, source: 'llm', dailyCount: dailyLlmCount, model: cfg?.llm?.llmModel });
-          return { text: result.response.trim(), type, source: 'llm', emoji };
+        // Prefer /api/chat for few-shot messages array. Fall back to /api/generate path
+        // if the client predates Phase 07 (backward compat for any non-Phase-7 callers).
+        let text = '';
+        if (typeof ollamaClient.chat === 'function') {
+          const result = await ollamaClient.chat({
+            model,
+            messages,
+            temperature,
+            num_predict: maxTokens
+          });
+          const raw = result?.message?.content ?? result?.content ?? '';
+          text = typeof raw === 'string' ? raw.trim() : '';
+        } else {
+          // Legacy /api/generate path -- concatenate examples into a single prompt.
+          const flattened = messages
+            .filter(m => m.role !== 'system')
+            .map(m => (m.role === 'user' ? `Nutzer: ${m.content}` : `Assistent: ${m.content}`))
+            .join('\n');
+          const result = await ollamaClient.generate({
+            model,
+            prompt: flattened,
+            system: messages[0]?.content ?? '',
+            temperature,
+            num_predict: maxTokens
+          });
+          const raw = result?.response ?? '';
+          text = typeof raw === 'string' ? raw.trim() : '';
         }
-        // Null result or empty response — log for diagnostics so fallback isn't silent
+
+        if (text.length > 0) {
+          dailyLlmCount++;
+          pushLog('llm_generated', {
+            type,
+            source: 'llm',
+            dailyCount: dailyLlmCount,
+            model,
+            promptVersion: version,
+            length: text.length
+          });
+          return { text, type, source: 'llm', emoji, promptVersion: version };
+        }
+
+        // Empty response -- log for diagnostics so fallback isn't silent
         pushLog('llm_null_response', {
           type,
-          model: cfg?.llm?.llmModel,
-          hasResult: result !== null,
-          hasResponse: result ? ('response' in result) : false,
+          model,
+          promptVersion: version,
           fallback: 'template'
         });
       } catch (e) {
-        pushLog('llm_error', { error: e.message, type, fallback: 'template' });
-      }
-    } else {
-      // Log why we skipped LLM path (for first-time debugging)
-      if (tier < 3 || !ollamaClient || !ollamaClient.isAvailable()) {
-        // Only log the first time to avoid spam
+        pushLog('llm_error', {
+          error: e.message,
+          type,
+          promptVersion: PROMPT_VERSION,
+          fallback: 'template'
+        });
       }
     }
 
-    // Fallback to template
+    // Fallback to rules-based template (template-fallback.js, D-E2 unchanged)
     const text = generateTemplateMessage(type, data);
     return { text, type, source: 'template', emoji };
   }
@@ -132,13 +202,13 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
    * @returns {Promise<object>}
    */
   async function generateStatus(liveData) {
-    return generate('status', liveData);
+    return generate(MESSAGE_TYPES.NORMAL_STATUS, liveData);
   }
 
   /**
    * Generate an event-triggered message.
    *
-   * @param {string} eventType - Event type (alert, pv_record, negative_price, savings)
+   * @param {string} eventType - Event type (MESSAGE_TYPES value)
    * @param {object} eventData - Event-specific data
    * @returns {Promise<object>}
    */

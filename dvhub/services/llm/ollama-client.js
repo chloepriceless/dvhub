@@ -101,6 +101,37 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
   }
 
   /**
+   * Generate text via Ollama /api/chat with a messages array (system + few-shot pairs + user).
+   * Phase 07 LLM-02: replaces /api/generate for Phase-7 callers that pass few-shot examples.
+   * /api/generate cannot natively express alternating user/assistant turns for few-shot;
+   * /api/chat accepts messages: [{role, content}, ...] which is the correct shape.
+   * T-07-07-03 mitigation: num_predict hard-caps output length (default 120).
+   *
+   * @param {{ model: string, messages: Array<{role:string,content:string}>, temperature?: number, num_predict?: number, options?: object }} params
+   * @returns {Promise<{ message?: { content: string } }|null>}
+   */
+  async function chat({ model, messages, temperature, num_predict, options }) {
+    const body = {
+      model,
+      messages,
+      stream: false,
+      options: {
+        num_predict: num_predict ?? 120,   // Pitfall LLM-3 token budget (T-07-07-03)
+        ...(temperature != null ? { temperature } : {}),
+        ...(options || {})
+      }
+    };
+
+    const result = await httpRequest('POST', '/api/chat', body, timeoutMs);
+    if (result && result.message && typeof result.message.content === 'string') {
+      return result;
+    }
+    // Permit minimal-shape responses too (alternate server impls returning {content})
+    if (result && typeof result.content === 'string') return result;
+    return null;
+  }
+
+  /**
    * Check Ollama health. GET / — returns true if status 200.
    * Updates the cached availability flag.
    *
@@ -141,5 +172,5 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
     return available;
   }
 
-  return { generate, checkHealth, isAvailable, list };
+  return { generate, chat, checkHealth, isAvailable, list };
 }
