@@ -2,9 +2,20 @@
 // Gates pvlib to Tier 2+ (D-09). Tier 1 uses Solcast-only.
 // Supports 3 config levels: simple, standard, detailed (D-11).
 // Model can be 'solcast', 'pvlib', or 'both'.
+//
+// Phase 07 Plan 07-04 additions (REVIEWS H2 + L3 + D-C3):
+//   - mergePvForecastsWeighted() replaces the simple-average merge whenever mae_7d_* data
+//     is available via store.getForecastAccuracyRow(yesterday). Falls back to uniform
+//     weights (ensemble_uniform_fallback) when all mae_7d_* are null/missing.
+//   - After a successful merge + state update + bumpForecastVersion, the AUTHORITATIVE
+//     forecast-snapshot trigger fires via ctx.forecastSnapshots?.writeSnapshot with
+//     source='forecast_version_bump' (event-driven source-of-record per REVIEWS L3).
+//   - ensembleWeights are surfaced to the caller via state.forecast.pv.ensembleWeights so
+//     /api/forecast can expose them under meta.ensembleWeights for the dashboard overlay.
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeWeights, mergeForecasts } from './ensemble.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PV_FORECAST_SCRIPT = path.join(__dirname, '..', 'python-bridge', 'scripts', 'pv_forecast.py');
@@ -117,6 +128,74 @@ export function mergePvForecasts(solcastRows, pvlibRows) {
 }
 
 /**
+ * Normalize provider rows to the {ts_utc, power_w} shape expected by ensemble.mergeForecasts.
+ * Accepts legacy `ts` (solcast/pvlib) or native `ts_utc` (pvnode) fields.
+ * @param {Array<object>} rows
+ * @returns {Array<{ts_utc: string, power_w: number}>}
+ */
+function normalizeProviderRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const r of rows) {
+    const ts = r?.ts_utc ?? r?.ts ?? r?.start;
+    const p = Number(r?.power_w ?? r?.powerW);
+    if (!ts || !Number.isFinite(p)) continue;
+    out.push({ ts_utc: typeof ts === 'string' ? ts : new Date(ts).toISOString(), power_w: p });
+  }
+  return out;
+}
+
+/**
+ * Inverse-MAE weighted ensemble merge with uniform fallback.
+ * REVIEWS H2 + D-C3: reads mae_7d_* from store.getForecastAccuracyRow(yesterday).
+ * Returns { merged, weights } where weights is the final weight dict (inverse-MAE or uniform).
+ *
+ * @param {object} opts
+ * @param {{pvnode: Array, solcast: Array, pvlib: Array}} opts.providersBySlot
+ * @param {object} opts.store - forecast-store exposing getForecastAccuracyRow
+ * @param {Function} [opts.pushLog]
+ * @returns {Promise<{merged: Array<{ts_utc,power_w}>, weights: Record<string,number>}>}
+ */
+export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog }) {
+  let mae7d = {};
+  try {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    // REVIEWS H2: getForecastAccuracyRow is a first-class Plan 01 export
+    const row = await store?.getForecastAccuracyRow?.(yesterdayStr);
+    if (row) {
+      // REVIEWS H9: read mae_7d_* (rolling, computed via SQL AVG window in accuracy-tracker)
+      mae7d = {
+        pvnode: row.mae_7d_pvnode,
+        solcast: row.mae_7d_solcast,
+        pvlib: row.mae_7d_pvlib
+      };
+    }
+  } catch (err) {
+    if (typeof pushLog === 'function') pushLog('ensemble_mae_read_error', { error: err?.message ?? String(err) });
+  }
+
+  const weights = computeWeights(mae7d);
+  const hasValidWeights = Object.keys(weights).length > 0;
+
+  if (!hasValidWeights) {
+    // Uniform fallback (pre-14-day period OR MAE unavailable). Log once per cycle.
+    const present = Object.entries(providersBySlot)
+      .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
+      .map(([k]) => k);
+    const uniformWeight = present.length > 0 ? 1 / present.length : 0;
+    const uniform = Object.fromEntries(present.map(k => [k, uniformWeight]));
+    if (typeof pushLog === 'function') {
+      pushLog('ensemble_uniform_fallback', { providers: present });
+    }
+    return { merged: mergeForecasts(providersBySlot, uniform), weights: uniform };
+  }
+
+  return { merged: mergeForecasts(providersBySlot, weights), weights };
+}
+
+/**
  * Create PV forecast orchestrator.
  * Gates pvlib to Tier 2+ per D-09. Tier 1 uses Solcast-only.
  *
@@ -226,21 +305,57 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       }
     }
 
-    // --- Store results ---
-    if (model === 'both' && !isTier1 && solcastResult.length > 0 && pvlibResult.length > 0) {
-      // Merge both sources
-      const merged = mergePvForecasts(solcastResult, pvlibResult);
-      for (const row of merged) {
-        await store.insertPvForecast(row);
+    // --- Store results (REVIEWS H2 + D-C3: inverse-MAE ensemble merge when ≥2 providers) ---
+    // Normalize provider rows for ensemble merge and downstream snapshot writes.
+    const pvnodeSlots  = normalizeProviderRows(pvnodeResult);
+    const solcastSlots = normalizeProviderRows(solcastResult);
+    const pvlibSlots   = normalizeProviderRows(pvlibResult);
+
+    const presentProviders = [];
+    if (pvnodeSlots.length  > 0) presentProviders.push('pvnode');
+    if (solcastSlots.length > 0) presentProviders.push('solcast');
+    if (pvlibSlots.length   > 0) presentProviders.push('pvlib');
+
+    let ensembleWeights = null;
+    let mergedSlots = null;
+    let stateUpdated = false;
+
+    if (presentProviders.length >= 2) {
+      // Multiple providers → inverse-MAE ensemble merge (D-A4 + D-C3)
+      const providersBySlot = { pvnode: pvnodeSlots, solcast: solcastSlots, pvlib: pvlibSlots };
+      try {
+        const { merged, weights } = await mergePvForecastsWeighted({
+          providersBySlot, store, pushLog
+        });
+        mergedSlots = merged;
+        ensembleWeights = weights;
+      } catch (err) {
+        pushLog('ensemble_merge_error', { error: err?.message ?? String(err) });
       }
-      state.forecast.pv = {
-        lastFetchAt: new Date().toISOString(),
-        model: 'combined',
-        data: merged,
-        confidence: 0.5
-      };
-      ctx.bumpForecastVersion?.();
-    } else if (pvlibResult.length > 0) {
+
+      if (Array.isArray(mergedSlots) && mergedSlots.length > 0) {
+        // Persist merged rows under model='combined' for backward-compat with existing UI
+        for (const row of mergedSlots) {
+          await store.insertPvForecast({
+            model: 'combined',
+            ts_utc: row.ts_utc,
+            power_w: row.power_w,
+            confidence: 0.5
+          });
+        }
+        state.forecast.pv = {
+          lastFetchAt: new Date().toISOString(),
+          model: 'combined',
+          data: mergedSlots.map(r => ({ ts: r.ts_utc, ts_utc: r.ts_utc, power_w: r.power_w, confidence: 0.5 })),
+          confidence: 0.5,
+          ensembleWeights
+        };
+        stateUpdated = true;
+        ctx.bumpForecastVersion?.();
+      }
+    }
+
+    if (!stateUpdated && pvlibResult.length > 0) {
       // pvlib-only results
       for (const row of pvlibResult) {
         await store.insertPvForecast({
@@ -256,8 +371,9 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: pvlibResult,
         confidence: 0.4
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
-    } else if (solcastResult.length > 0) {
+    } else if (!stateUpdated && solcastResult.length > 0) {
       // Solcast-only results
       for (const row of solcastResult) {
         await store.insertPvForecast({
@@ -273,32 +389,36 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: solcastResult,
         confidence: 0.6
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
-    } else if (pvnodeResult.length > 0) {
+    } else if (!stateUpdated && pvnodeResult.length > 0) {
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'pvnode',
         data: pvnodeResult,
         confidence: 0.5
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
-    } else if (forecastSolarResult.length > 0) {
+    } else if (!stateUpdated && forecastSolarResult.length > 0) {
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'forecast_solar',
         data: forecastSolarResult,
         confidence: 0.35
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
-    } else if (openMeteoResult.length > 0) {
+    } else if (!stateUpdated && openMeteoResult.length > 0) {
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'open_meteo',
         data: openMeteoResult,
         confidence: 0.3
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
-    } else if (vrmResult.length > 0) {
+    } else if (!stateUpdated && vrmResult.length > 0) {
       // VRM as last fallback — always available if VRM token configured
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
@@ -306,6 +426,7 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         data: vrmResult,
         confidence: 0.25
       };
+      stateUpdated = true;
       ctx.bumpForecastVersion?.();
     }
 
@@ -317,8 +438,31 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       forecastSolarCount: forecastSolarResult.length,
       openMeteoCount: openMeteoResult.length,
       pvnodeCount: pvnodeResult.length,
-      vrmCount: vrmResult.length
+      vrmCount: vrmResult.length,
+      ensembleActive: ensembleWeights !== null,
+      ensembleWeights
     });
+
+    // REVIEWS L3: AUTHORITATIVE event-driven snapshot trigger.
+    // Fires once per forecast cycle after bumpForecastVersion; forecastSnapshots.writeSnapshot
+    // uses its in-memory `lastSnapshotForecastDate` guard to prevent duplicate same-day writes.
+    // ML-corrected rows are supplied by ml-correction in buildForecastResponse, so the snapshot
+    // recorded here is the raw (pre-ML) merge. Plan 05 ml-correction will add an ml layer when
+    // it lands; for Plan 04 we persist pvnode/solcast/pvlib/merged layers from this cycle.
+    if (stateUpdated && ctx.forecastSnapshots?.writeSnapshot) {
+      Promise.resolve(
+        ctx.forecastSnapshots.writeSnapshot({
+          pvnode: pvnodeSlots,
+          solcast: solcastSlots,
+          pvlib: pvlibSlots,
+          merged: Array.isArray(mergedSlots) && mergedSlots.length > 0
+            ? mergedSlots
+            : normalizeProviderRows(state.forecast.pv?.data),
+          ml: [],
+          source: 'forecast_version_bump'
+        })
+      ).catch(err => pushLog('snapshots_event_error', { error: err?.message ?? String(err) }));
+    }
   }
 
   /**

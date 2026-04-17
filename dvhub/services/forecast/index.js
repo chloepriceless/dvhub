@@ -222,7 +222,10 @@ export function createForecastService(ctx) {
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
         loadModel: cfg.forecast?.load?.model || 'sql_weekday',
         mlActive,
-        mlModel: mlActive ? (mlResult.model || null) : null
+        mlModel: mlActive ? (mlResult.model || null) : null,
+        // Phase 07 Plan 07-04: ensembleWeights from inverse-MAE merge (REVIEWS H2 + D-C3).
+        // Dashboard debug-overlay renders these per forecast cycle.
+        ensembleWeights: state.forecast.pv.ensembleWeights ?? null
       },
       price: buildPriceSection(),
       pv: correctedPv,     // ML-corrected (or raw if no model)
