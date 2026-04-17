@@ -1717,6 +1717,75 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // Phase 07 FORE-10 / D-A5 (re-scoped): pvnode client-side quota counter exposure.
+    // GET /api/forecast/pvnode/quota — read-only, auth-gated.
+    if (url.pathname === '/api/forecast/pvnode/quota' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      try {
+        const q = await ctx.pvnodeQuota?.getUsed();
+        return json(res, 200, q || { used: 0, limit: 1000, remaining: 1000, month_utc: null });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
+    // Phase 07 FORE-10 / D-A3: admin-triggered 6-month pvnode /v1/history backfill.
+    // POST /api/admin/backfill — dual gate (isLanSafeRequest + checkAuth) + V5 input
+    // validation (ISO YYYY-MM-DD, from <= to inclusive per REVIEWS H8) + 409 on concurrent
+    // run. Fire-and-forget; progress polled via /api/admin/backfill/status.
+    if (url.pathname === '/api/admin/backfill' && req.method === 'POST') {
+      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      try {
+        if (!ctx.pvnodeBackfill) {
+          return json(res, 503, { error: 'pvnode_backfill_service_unavailable' });
+        }
+        let body = {};
+        try {
+          const raw = await readRawBody(req, 4096);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          return json(res, 400, { error: 'invalid_json_body' });
+        }
+        const { from, to } = body || {};
+
+        // V5 input validation — strict ISO date YYYY-MM-DD
+        const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+        if (!isoDatePattern.test(from) || !isoDatePattern.test(to)) {
+          return json(res, 400, { error: 'from and to must be YYYY-MM-DD' });
+        }
+        // REVIEWS H8: chunk bounds are inclusive-inclusive, so from == to is a valid
+        // 1-day backfill. Only reject when from is strictly greater than to.
+        if (from > to) {
+          return json(res, 400, { error: 'from must be <= to' });
+        }
+
+        const currentStatus = ctx.pvnodeBackfill?.getStatus();
+        if (currentStatus?.state === 'running') {
+          return json(res, 409, { error: 'backfill_already_running', status: currentStatus });
+        }
+
+        // Fire-and-forget; status polled via GET /api/admin/backfill/status
+        ctx.pvnodeBackfill.run({ from, to })
+          .catch(err => pushLog?.('pvnode_backfill_error_uncaught', { error: err?.message || String(err) }));
+
+        return json(res, 202, { status: 'started', from, to });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
+    // Phase 07 FORE-10 / D-A3: backfill progress status.
+    // GET /api/admin/backfill/status — auth-gated (non-mutating).
+    if (url.pathname === '/api/admin/backfill/status' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      try {
+        const status = ctx.pvnodeBackfill?.getStatus() || { state: 'unavailable' };
+        return json(res, 200, status);
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
     // GET /api/messages — latest LLM messages (LAN-safe for family tablet)
     if (url.pathname === '/api/messages' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
