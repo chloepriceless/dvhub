@@ -1,8 +1,10 @@
 // ml-health.js -- ML health status aggregator.
 // Combines ML correction, training, and tier info into a single status object.
 // Per D-26, D-27: queryable health status for API endpoints and dashboard.
-// Factory: createMlHealth({ mlCorrection, mlTraining, getCfg, tier })
+// Factory: createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoadForecastState? })
 //   -> { getStatus, getAccuracyTrend }
+// Phase 07 FORE-12 D-D2: `getLoadForecastState` optional dep surfaces load_forecast
+// source/status on /api/ml/status for operator visibility.
 
 /**
  * Build tier feature table per D-27.
@@ -64,7 +66,7 @@ export function buildTierFeatures(tier, cfg) {
  * @param {object} deps - { mlCorrection, mlTraining, getCfg, tier }
  * @returns {{ getStatus: Function, getAccuracyTrend: Function }}
  */
-export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier }) {
+export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoadForecastState }) {
   /**
    * Get ML system status for API and dashboard.
    * @returns {object} Full ML status object
@@ -93,6 +95,24 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier }) {
       dataStatus = 'inactive';
     }
 
+    // Phase 07 FORE-12 D-D2: load-forecast degradation visibility.
+    // Surfaces source (statsforecast|sql_rollup|vrm_fallback|naive_constant|unknown)
+    // and status (ok|degraded|failed|unknown) for operator and dashboard.
+    let loadForecast = { source: 'unknown', status: 'unknown', consecutive_non_sf_runs: 0, last_updated_at: null };
+    try {
+      const lfState = typeof getLoadForecastState === 'function' ? getLoadForecastState() : null;
+      if (lfState) {
+        loadForecast = {
+          source: lfState.source ?? 'unknown',
+          status: lfState.status ?? 'unknown',
+          consecutive_non_sf_runs: lfState.consecutiveNonSfRuns ?? 0,
+          last_updated_at: lfState.lastUpdatedAt ?? null
+        };
+      }
+    } catch (err) {
+      loadForecast = { source: 'unknown', status: 'unknown', error: err.message };
+    }
+
     return {
       tier,
       mlEnabled: ml.mlEnabled || false,
@@ -109,7 +129,9 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier }) {
       // LLM surface for settings display
       llmModel: cfg.llm?.llmModel || null,
       llmEnabled: cfg.llm?.llmEnabled || false,
-      llmStatus: (tier >= 3 && cfg.llm?.llmEnabled) ? 'aktiv' : 'inaktiv'
+      llmStatus: (tier >= 3 && cfg.llm?.llmEnabled) ? 'aktiv' : 'inaktiv',
+      // Phase 07 FORE-12 D-D2 exposure
+      load_forecast: loadForecast
     };
   }
 

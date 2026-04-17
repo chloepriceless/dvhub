@@ -248,6 +248,10 @@ export function createForecastService(ctx) {
     store,
     pvnodeClient,
     buildForecastResponse,
+    // Phase 07 FORE-12 D-D2: load-forecast degradation visibility via /api/ml/status.
+    getLoadForecastState: () => loadForecast.getState?.() ?? {
+      source: 'unknown', status: 'unknown', consecutiveNonSfRuns: 0, lastUpdatedAt: null
+    },
     get forecastVersion() { return forecastVersion; }
   };
 }

@@ -45,7 +45,14 @@ export function createMlService(ctx) {
         trainingLog: [],
         sfEnabled: false,
         sfUseMstl: false,
-        tierFeatures: []
+        tierFeatures: [],
+        // Phase 07 FORE-12 D-D2: consistent shape across all tiers.
+        load_forecast: {
+          source: 'unknown',
+          status: 'unknown',
+          consecutive_non_sf_runs: 0,
+          last_updated_at: null
+        }
       }),
       getAccuracyTrend: () => [],
       getTrainingLog: () => [],
@@ -87,7 +94,9 @@ export function createMlService(ctx) {
     mlCorrection,
     mlTraining,
     getCfg,
-    tier
+    tier,
+    // Phase 07 FORE-12 D-D2: route load-forecast state into /api/ml/status.
+    getLoadForecastState: () => ctx.forecastService?.getLoadForecastState?.() ?? null
   });
 
   /**

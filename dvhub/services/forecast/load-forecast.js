@@ -2,13 +2,48 @@
 // Primary: StatsForecast delegation on Tier 2+ (via Python bridge, D-09, D-10).
 // Fallback: SQL same-weekday rollups from energy_slots_15m.
 // Produces 72 x 1h slots (per D-02, D-03). Falls back to constant power on cold-start.
-// Factory: createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) -> { start, close, runForecast }
+// Factory: createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) -> { start, close, runForecast, getState }
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, '../python-bridge/scripts');
+
+/**
+ * Pure state-transition helper for load-forecast fallback chain.
+ * Phase 07 FORE-12 REVIEWS L-cost: exported for direct unit testing.
+ *
+ * Semantics:
+ *   - source='statsforecast' → reset consecutiveNonSfRuns=0, status='ok'
+ *   - otherwise               → increment consecutiveNonSfRuns;
+ *                               status='ok' while <2, 'degraded' at 2-3, 'failed' at 4+
+ *
+ * @param {{source: string, status: string, consecutiveNonSfRuns: number, lastUpdatedAt: string|null}} currentState
+ * @param {'statsforecast'|'sql_rollup'|'vrm_fallback'|'naive_constant'|string} source
+ * @returns {{source: string, status: string, consecutiveNonSfRuns: number, lastUpdatedAt: string}}
+ */
+export function nextLoadForecastState(currentState, source) {
+  const next = {
+    ...currentState,
+    source,
+    lastUpdatedAt: new Date().toISOString()
+  };
+  if (source === 'statsforecast') {
+    next.consecutiveNonSfRuns = 0;
+    next.status = 'ok';
+  } else {
+    next.consecutiveNonSfRuns = (currentState.consecutiveNonSfRuns || 0) + 1;
+    if (next.consecutiveNonSfRuns >= 4) {
+      next.status = 'failed';
+    } else if (next.consecutiveNonSfRuns >= 2) {
+      next.status = 'degraded';
+    } else {
+      next.status = 'ok';
+    }
+  }
+  return next;
+}
 
 /**
  * Build the SQL query for same-weekday load forecast from energy_slots_15m.
@@ -137,6 +172,28 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   const getDb = () => ctx.db;
   let intervalHandle = null;
 
+  // Phase 07 FORE-12 D-D2: in-memory load-forecast state for /api/ml/status visibility.
+  // Sources: 'statsforecast' | 'sql_rollup' | 'vrm_fallback' | 'naive_constant' | 'unknown'
+  // Status: 'ok' | 'degraded' | 'failed'
+  // degraded = 2+ consecutive non-SF runs; failed = 4+ consecutive non-SF runs.
+  let loadForecastState = {
+    source: 'unknown',
+    status: 'ok',
+    consecutiveNonSfRuns: 0,
+    lastUpdatedAt: null
+  };
+
+  /** Mutate module-scope state via pure `nextLoadForecastState` + structured log. */
+  function setLoadForecastState(source) {
+    loadForecastState = nextLoadForecastState(loadForecastState, source);
+    pushLog('load_forecast_state', loadForecastState);
+  }
+
+  /** @returns {{source: string, status: string, consecutiveNonSfRuns: number, lastUpdatedAt: string|null}} */
+  function getState() {
+    return { ...loadForecastState };
+  }
+
   /**
    * Try StatsForecast delegation on Tier 2+.
    * @returns {Promise<{slots: Array, source: string, confidence: number}|null>} SF result or null
@@ -181,20 +238,16 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       }
 
       if (Array.isArray(sfResult)) {
-        // Validate result is non-flat (#19): if all values are identical, log warning
+        // Phase 07 FORE-12 Pitfall SF-2: flat-prediction is error-equivalent, NOT silent success.
+        // Return null → outer runForecast falls through to SQL rollup (caller increments fallback counter).
         const uniqueValues = new Set(sfResult.map(r => Math.round(r.power_w)));
         if (uniqueValues.size === 1 && sfResult.length > 1) {
-          pushLog('sf_load_forecast_warning', {
+          pushLog('sf_load_forecast_flat_detected', {
             reason: 'flat_prediction',
-            constantW: sfResult[0]?.power_w,
-            hint: 'StatsForecast produced identical values for all slots -- check input data quality'
+            uniqueValues: [...uniqueValues],
+            resultLength: sfResult.length
           });
-          // Still return the result but with lower confidence
-          return {
-            slots: formatStatsForecastSlots(sfResult),
-            source: 'statsforecast',
-            confidence: 0.4 // Low confidence for flat predictions
-          };
+          return null;
         }
 
         return {
@@ -239,6 +292,9 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       state.forecast.load.confidence = confidence;
       ctx.bumpForecastVersion?.();
 
+      // Phase 07 FORE-12 D-D2: SF success resets fallback counter.
+      setLoadForecastState('statsforecast');
+
       pushLog('load_forecast_updated', {
         slots: slots.length,
         confidence,
@@ -248,6 +304,8 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     }
 
     // SQL rollup fallback
+    let sqlSucceeded = false;
+    let sqlColdStart = false;
     try {
       const sql = buildLoadForecastQuery();
       const result = await getDb().query(sql, [new Date().toISOString()]);
@@ -258,6 +316,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
 
       // Determine confidence from slots (all slots share same confidence)
       const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
+      sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
 
       // Persist via store
       for (const slot of slots) {
@@ -274,11 +333,12 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       state.forecast.load.lastFetchAt = now.toISOString();
       state.forecast.load.confidence = confidence;
       ctx.bumpForecastVersion?.();
+      sqlSucceeded = true;
 
       pushLog('load_forecast_updated', {
         slots: slots.length,
         confidence,
-        coldStart: confidence === 0.3
+        coldStart: sqlColdStart
       });
     } catch (err) {
       pushLog('load_forecast_error', { error: err.message });
@@ -287,6 +347,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     // VRM consumption fallback — if SQL produced no meaningful data (all zeros = cold start), use VRM
     const loadData = state.forecast.load.data || [];
     const hasRealData = loadData.some(s => (s.power_w || s.powerW || 0) > 0);
+    let vrmApplied = false;
     if (!hasRealData && vrmForecast?.isAvailable()) {
       try {
         const vrmLoad = await vrmForecast.readLoadForecast();
@@ -297,10 +358,22 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
           state.forecast.load.confidence = 0.25;
           ctx.bumpForecastVersion?.();
           pushLog('load_forecast_vrm_fallback', { slots: slots.length });
+          vrmApplied = true;
         }
       } catch (err) {
         pushLog('load_forecast_vrm_error', { error: err.message });
       }
+    }
+
+    // Phase 07 FORE-12 D-D2: reflect which fallback path was taken.
+    // Priority: vrm_fallback (overrides earlier state) > sql_rollup (real data) > naive_constant (cold start / no data)
+    if (vrmApplied) {
+      setLoadForecastState('vrm_fallback');
+    } else if (sqlSucceeded && !sqlColdStart) {
+      setLoadForecastState('sql_rollup');
+    } else {
+      // Either SQL threw, or cold-start defaultPowerW was served.
+      setLoadForecastState('naive_constant');
     }
   }
 
@@ -327,5 +400,5 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     }
   }
 
-  return { start, close, runForecast };
+  return { start, close, runForecast, getState };
 }

@@ -1696,10 +1696,18 @@ export function createApiRoutes(ctx) {
     // ── Phase 05: ML & Edge-AI endpoints ──────────────────────────────
 
     // GET /api/ml/status — ML model status (auth required, contains config data)
+    // Phase 07 FORE-12 D-D2: response body includes `load_forecast: { source, status,
+    // consecutive_non_sf_runs, last_updated_at }` so operators can see when the
+    // StatsForecast pipeline degrades to SQL rollup / VRM / naive_constant.
+    // Source is populated by forecastService.getLoadForecastState() via ml-health.getStatus().
     if (url.pathname === '/api/ml/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       try {
-        const status = ctx.mlService?.getStatus() || { tier: 1, mlEnabled: false };
+        const status = ctx.mlService?.getStatus() || {
+          tier: 1,
+          mlEnabled: false,
+          load_forecast: { source: 'unknown', status: 'unknown', consecutive_non_sf_runs: 0, last_updated_at: null }
+        };
         return json(res, 200, status);
       } catch (e) {
         return json(res, 500, { error: e.message });
