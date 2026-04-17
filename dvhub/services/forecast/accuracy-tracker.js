@@ -1,6 +1,19 @@
 // accuracy-tracker.js -- Forecast accuracy tracking with MAE/RMSE computation and confidence scoring.
 // Compares forecast vs actual values from energy_slots_15m, derives confidence per D-05.
-// Factory: createAccuracyTracker(ctx, { store }) -> { start, close, evaluateAccuracy }
+// Factory: createAccuracyTracker(ctx, { store }) -> { start, close, evaluateAccuracy, evaluatePerProvider, evaluateAndWrite, computeRolling7dMae }
+//
+// Phase 07 Plan 07-04 extensions (REVIEWS H1 + H9 locked):
+//   - evaluatePerProvider(dateStr) computes RAW daily MAE per layer by querying
+//     forecast_snapshots WHERE target_date=$1 AND layer=$provider (REVIEWS H1).
+//     Returns { mae_daily_pvnode, mae_daily_solcast, mae_daily_pvlib, mae_daily_merged, mae_daily_ml }.
+//   - computeRolling7dMae(dateStr) runs a single SQL UPDATE using AVG(mae_daily_*)
+//     over an INCLUSIVE 7-day window [dateStr - INTERVAL '6 days', dateStr] (REVIEWS H9).
+//   - evaluateAndWrite(dateStr) orchestrates: evaluatePerProvider → UPSERT mae_daily_*
+//     → computeRolling7dMae → SQL-window UPDATE mae_7d_*.
+//   - filterOfflineGaps drops runs of 4+ consecutive (actual=0, forecast>100W) pairs
+//     (Pitfall A-1 extension: offline device should NOT inflate MAE for the day).
+//   - All queries UTC-only (Pitfall A-2). The existing 02:00 scheduler now calls
+//     evaluateAndWrite(yesterday).
 
 /**
  * Compute Mean Absolute Error.
@@ -68,6 +81,48 @@ export function matchForecastToActuals(forecast, actuals) {
     }
   }
   return matched;
+}
+
+/**
+ * Drop runs of 4+ consecutive pairs where actual === 0 AND forecast > 100W.
+ * Pitfall A-1 extension: such runs indicate the device was offline/unreachable; the forecast
+ * was correct in expecting non-zero output, but the missing actuals inflate the MAE.
+ * Natural-zero pairs (forecast also ~0 during dark hours) are preserved.
+ *
+ * @param {Array<{ts_utc:string, forecasted:number, actual:number}>} matched
+ * @returns {Array<{ts_utc:string, forecasted:number, actual:number}>}
+ */
+export function filterOfflineGaps(matched) {
+  if (!Array.isArray(matched) || matched.length === 0) return [];
+  const kept = [];
+  let runStart = -1; // index where the current offline-like run began
+
+  for (let i = 0; i < matched.length; i++) {
+    const m = matched[i];
+    const isOfflineLike = m.actual === 0 && m.forecasted > 100;
+    if (isOfflineLike) {
+      if (runStart < 0) runStart = i;
+      continue;
+    }
+    // non-offline entry: resolve the previous run (if any) before pushing this entry
+    if (runStart >= 0) {
+      const runLen = i - runStart;
+      if (runLen < 4) {
+        for (let j = runStart; j < i; j++) kept.push(matched[j]);
+      }
+      // else: 4+ consecutive offline-like — DROP the entire run
+      runStart = -1;
+    }
+    kept.push(m);
+  }
+  // tail run handling: if the array ends with an offline-like run, drop it only when >= 4 long
+  if (runStart >= 0) {
+    const runLen = matched.length - runStart;
+    if (runLen < 4) {
+      for (let j = runStart; j < matched.length; j++) kept.push(matched[j]);
+    }
+  }
+  return kept;
 }
 
 /**
@@ -193,6 +248,174 @@ export function createAccuracyTracker(ctx, { store }) {
     }
   }
 
+  // --- Phase 07 Plan 07-04: per-provider + rolling-7d accuracy pipeline ---
+
+  const PROVIDERS = ['pvnode', 'solcast', 'pvlib', 'merged', 'ml'];
+
+  /**
+   * Helper: yyyy-mm-dd → {start, end} UTC ISO strings covering that full day.
+   * Pitfall A-2: UTC only.
+   * @param {string} dateStr YYYY-MM-DD
+   */
+  function dayRange(dateStr) {
+    const start = new Date(`${dateStr}T00:00:00.000Z`);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+
+  /**
+   * REVIEWS H9: evaluatePerProvider returns RAW daily MAE per provider (writes to mae_daily_*).
+   * REVIEWS H1: queries forecast_snapshots by `target_date` (the day the slot predicts), not
+   * legacy `day` or forecast_date.
+   *
+   * @param {string} dateStr YYYY-MM-DD UTC
+   * @returns {Promise<Record<string, number|null>>} e.g. { mae_daily_pvnode: 123.4, ... }
+   */
+  async function evaluatePerProvider(dateStr) {
+    const result = {
+      mae_daily_pvnode: null,
+      mae_daily_solcast: null,
+      mae_daily_pvlib: null,
+      mae_daily_merged: null,
+      mae_daily_ml: null
+    };
+    if (!store?.query) return result;
+
+    const { start, end } = dayRange(dateStr);
+
+    // Pitfall A-2: UTC-only. Match the series used by Phase 06 ml-correction (pv_total_w).
+    let actuals = [];
+    try {
+      const actualsResult = await store.query(`
+        SELECT slot_start_utc AS ts_utc, value_num
+        FROM energy_slots_15m
+        WHERE series_key = 'pv_total_w'
+          AND source_kind IN ('local_live','vrm_import','live')
+          AND slot_start_utc >= $1
+          AND slot_start_utc < $2
+        ORDER BY slot_start_utc
+      `, [start, end]);
+      actuals = (actualsResult?.rows || []).map(r => ({ ts_utc: r.ts_utc, value_num: r.value_num }));
+    } catch (err) {
+      pushLog('accuracy_actuals_query_error', { dateStr, error: err?.message ?? String(err) });
+      return result;
+    }
+    if (actuals.length === 0) {
+      pushLog('accuracy_skip', { reason: 'no_actual_data', date: dateStr });
+      return result;
+    }
+
+    for (const provider of PROVIDERS) {
+      let forecast = [];
+      try {
+        // REVIEWS H1: target_date is the accuracy-join key
+        const fcResult = await store.query(`
+          SELECT slot_utc AS ts_utc, power_w
+          FROM forecast_snapshots
+          WHERE target_date = $1 AND layer = $2
+          ORDER BY slot_utc
+        `, [dateStr, provider]);
+        forecast = fcResult?.rows || [];
+      } catch (err) {
+        pushLog('accuracy_forecast_query_error', { dateStr, provider, error: err?.message ?? String(err) });
+        continue;
+      }
+      if (forecast.length === 0) continue;
+
+      let matched = matchForecastToActuals(forecast, actuals);
+      // Pitfall A-1: drop 4+ consecutive offline-like runs so device outages don't inflate MAE.
+      matched = filterOfflineGaps(matched);
+      if (matched.length === 0) continue;
+
+      // REVIEWS H9: this is RAW daily MAE → mae_daily_*, NOT mae_7d_*.
+      result[`mae_daily_${provider}`] = computeMAE(
+        matched.map(m => m.forecasted),
+        matched.map(m => m.actual)
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * REVIEWS H9: Separate pass computes mae_7d_* from mae_daily_* via SQL AVG window.
+   * Inclusive 7-day window [dateStr - INTERVAL '6 days', dateStr].
+   * The scheduler passes yesterday as dateStr so Pitfall A-3 (exclude today) is naturally respected.
+   *
+   * @param {string} dateStr YYYY-MM-DD UTC
+   */
+  async function computeRolling7dMae(dateStr) {
+    if (!store?.query) return;
+    try {
+      await store.query(`
+        UPDATE forecast_accuracy SET
+          mae_7d_pvnode  = sub.mae_7d_pvnode,
+          mae_7d_solcast = sub.mae_7d_solcast,
+          mae_7d_pvlib   = sub.mae_7d_pvlib,
+          mae_7d_merged  = sub.mae_7d_merged,
+          mae_7d_ml      = sub.mae_7d_ml
+        FROM (
+          SELECT
+            AVG(mae_daily_pvnode)  FILTER (WHERE mae_daily_pvnode  IS NOT NULL) AS mae_7d_pvnode,
+            AVG(mae_daily_solcast) FILTER (WHERE mae_daily_solcast IS NOT NULL) AS mae_7d_solcast,
+            AVG(mae_daily_pvlib)   FILTER (WHERE mae_daily_pvlib   IS NOT NULL) AS mae_7d_pvlib,
+            AVG(mae_daily_merged)  FILTER (WHERE mae_daily_merged  IS NOT NULL) AS mae_7d_merged,
+            AVG(mae_daily_ml)      FILTER (WHERE mae_daily_ml      IS NOT NULL) AS mae_7d_ml
+          FROM forecast_accuracy
+          WHERE evaluation_date BETWEEN $1::date - INTERVAL '6 days' AND $1::date
+        ) sub
+        WHERE evaluation_date = $1
+      `, [dateStr]);
+    } catch (err) {
+      pushLog('accuracy_rolling_7d_error', { dateStr, error: err?.message ?? String(err) });
+    }
+  }
+
+  /**
+   * Orchestrate evaluation for `dateStr` (REVIEWS H9 three-step):
+   *   1. evaluatePerProvider → raw per-day MAE per layer
+   *   2. UPSERT mae_daily_* into forecast_accuracy (keyed on evaluation_date)
+   *   3. computeRolling7dMae → UPDATE mae_7d_* via SQL AVG window
+   *
+   * Returns the raw daily MAE dict (for logging/testing).
+   * @param {string} dateStr YYYY-MM-DD UTC
+   */
+  async function evaluateAndWrite(dateStr) {
+    const daily = await evaluatePerProvider(dateStr);
+    if (!store?.query) return daily;
+
+    // UPSERT keyed on (forecast_type, model, evaluation_date) — we use forecast_type='pv'
+    // and model='ensemble_daily' as a stable key for these rolling aggregates. The
+    // per-provider mae_daily_* and mae_7d_* columns live additively alongside legacy rows.
+    try {
+      await store.query(`
+        INSERT INTO forecast_accuracy (
+          forecast_type, model, evaluation_date,
+          mae_daily_pvnode, mae_daily_solcast, mae_daily_pvlib, mae_daily_merged, mae_daily_ml
+        ) VALUES ('pv', 'ensemble_daily', $1, $2, $3, $4, $5, $6)
+        ON CONFLICT (forecast_type, model, evaluation_date) DO UPDATE SET
+          mae_daily_pvnode  = EXCLUDED.mae_daily_pvnode,
+          mae_daily_solcast = EXCLUDED.mae_daily_solcast,
+          mae_daily_pvlib   = EXCLUDED.mae_daily_pvlib,
+          mae_daily_merged  = EXCLUDED.mae_daily_merged,
+          mae_daily_ml      = EXCLUDED.mae_daily_ml
+      `, [
+        dateStr,
+        daily.mae_daily_pvnode, daily.mae_daily_solcast, daily.mae_daily_pvlib,
+        daily.mae_daily_merged, daily.mae_daily_ml
+      ]);
+    } catch (err) {
+      pushLog('accuracy_upsert_error', { dateStr, error: err?.message ?? String(err) });
+    }
+
+    // REVIEWS H9 final step: SQL-window rollup
+    await computeRolling7dMae(dateStr);
+
+    pushLog('accuracy_evaluated_per_provider', { dateStr, daily });
+    return daily;
+  }
+
   /**
    * Start accuracy tracker. Runs daily at 02:00 (after all yesterday's data is in).
    * Uses setTimeout for initial delay to 02:00, then setInterval for 24h period.
@@ -212,14 +435,23 @@ export function createAccuracyTracker(ctx, { store }) {
     }
     const delayMs = next0200.getTime() - now.getTime();
 
-    timeoutHandle = setTimeout(async () => {
+    async function runDailyEvaluation() {
+      // Legacy per-type evaluation (kept for backward-compat with downstream consumers).
       await evaluateAccuracy('pv');
       await evaluateAccuracy('load');
+      // Phase 07 Plan 07-04: per-provider daily MAE + rolling 7d via SQL window.
+      try {
+        const { dateStr } = getYesterdayRange();
+        await evaluateAndWrite(dateStr);
+      } catch (err) {
+        pushLog('accuracy_per_provider_error', { error: err?.message ?? String(err) });
+      }
+    }
+
+    timeoutHandle = setTimeout(async () => {
+      await runDailyEvaluation();
       // Then run every 24 hours
-      intervalHandle = setInterval(async () => {
-        await evaluateAccuracy('pv');
-        await evaluateAccuracy('load');
-      }, 24 * 60 * 60 * 1000);
+      intervalHandle = setInterval(runDailyEvaluation, 24 * 60 * 60 * 1000);
     }, delayMs);
 
     pushLog('accuracy_tracker_scheduled', { nextRunAt: next0200.toISOString() });
@@ -239,5 +471,13 @@ export function createAccuracyTracker(ctx, { store }) {
     }
   }
 
-  return { start, close, evaluateAccuracy };
+  return {
+    start,
+    close,
+    evaluateAccuracy,
+    // Phase 07 Plan 07-04 (REVIEWS H1 + H9): per-provider + rolling-7d pipeline
+    evaluatePerProvider,
+    computeRolling7dMae,
+    evaluateAndWrite
+  };
 }

@@ -238,5 +238,16 @@ export function createForecastService(ctx) {
     };
   }
 
-  return { start, close, tier, store, buildForecastResponse, get forecastVersion() { return forecastVersion; } };
+  // Phase 07 Plan 07-04: expose pvnodeClient for Wave-2 DI wiring in server.js.
+  // routes-api.js reads ctx.pvnodeBackfill + ctx.pvnodeQuota + ctx.forecastSnapshots
+  // built from this client + store in server.js.
+  return {
+    start,
+    close,
+    tier,
+    store,
+    pvnodeClient,
+    buildForecastResponse,
+    get forecastVersion() { return forecastVersion; }
+  };
 }

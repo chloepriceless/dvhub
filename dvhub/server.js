@@ -56,6 +56,11 @@ import { createPoller, loadEnergy } from './polling.js';
 import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 import { createForecastService } from './services/forecast/index.js';
+// Phase 07 Plan 07-04: Wave-2 forecast services wired directly in server.js so routes-api.js
+// can consume them via ctx.forecastSnapshots / ctx.pvnodeBackfill / ctx.pvnodeQuota.
+import { createForecastSnapshots } from './services/forecast/forecast-snapshots.js';
+import { createPvnodeBackfill } from './services/forecast/pvnode-backfill.js';
+import { createPvnodeQuota } from './services/forecast/pvnode-quota.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
@@ -614,6 +619,28 @@ ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
 const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
+
+// Phase 07 Plan 07-04: Wave-2 forecast services wired for routes-api.js consumption.
+// - pvnodeQuota: single quota authority (REVIEWS L2). Backs /api/forecast/pvnode/quota.
+// - pvnodeBackfill: admin-triggered 6-month history backfill (Plan 07-03). Backs
+//   POST /api/admin/backfill + GET /api/admin/backfill/status.
+// - forecastSnapshots: event-driven authoritative + 00:05 recovery-fallback scheduler
+//   (REVIEWS L3). writeSnapshot fired by pv-forecast.js after each successful forecastVersion
+//   bump with source='forecast_version_bump'.
+const pvnodeQuota = createPvnodeQuota(ctx, { store: forecast.store });
+const pvnodeBackfill = createPvnodeBackfill(ctx, {
+  pvnodeClient: forecast.pvnodeClient,
+  quota: pvnodeQuota,
+  store: forecast.store,
+  forecastService: forecast
+});
+const forecastSnapshots = createForecastSnapshots(ctx, {
+  store: forecast.store,
+  forecastService: forecast
+});
+ctx.pvnodeQuota = pvnodeQuota;
+ctx.pvnodeBackfill = pvnodeBackfill;
+ctx.forecastSnapshots = forecastSnapshots;
 const optimizer = createOptimizerService(ctx);
 ctx.optimizerService = optimizer;
 // buildFallbackStatusPayload is assigned later (line ~622) -- family service uses
@@ -958,6 +985,9 @@ if (IS_RUNTIME_PROCESS) {
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
   telemetryReady.then(() => {
     forecast.start().catch(err => console.error('Forecast service start error:', err.message));
+    // Phase 07 Plan 07-04: REVIEWS L3 recovery-fallback scheduler (00:05 local daily).
+    // The authoritative event-driven path fires from pv-forecast.js after each bumpForecastVersion.
+    forecastSnapshots.start();
   });
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
@@ -990,6 +1020,8 @@ async function gracefulShutdown(signal) {
   scheduler.stop();
   liveTelemetryBuffer?.flush({ force: true });
   epex.stop();
+  // Phase 07 Plan 07-04: stop Wave-2 recovery scheduler before forecast.close() tears down the store.
+  try { forecastSnapshots.close(); } catch { /* best-effort */ }
   await forecast.close();
   await optimizer.close();
   await familyService.close();
