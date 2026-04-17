@@ -1,11 +1,23 @@
 // ml-training.js -- Daily ML training orchestrator with rollback.
 // Queries DB for training data, calls ml_train.py, handles rollback on MAE regression.
 // Schedules daily training at configurable hour/minute (default 21:30 UTC = 23:30 CET).
+//
+// Phase 07 MLAI-08 additions:
+//   - has14DaysOfAccuracyData (REVIEWS H10): 14-day rolling-MAE precondition gate
+//   - promoteIfBetter (REVIEWS H11): true-atomic validate → archive → swap → verify
+//     → rollback pattern for v1→v2 LightGBM transition
+//   - runRetrainEndpoint: orchestrates gate → triggerTraining → ml_load_heldout →
+//     promoteIfBetter; the job is invoked async by routes-api.js via
+//     ml-retrain-jobs.startJob (REVIEWS H12)
+//
 // Factory: createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorrection })
-//   -> { triggerTraining, scheduleDaily, cancelSchedule, getTrainingLog }
+//   -> { triggerTraining, scheduleDaily, cancelSchedule, getTrainingLog,
+//        has14DaysOfAccuracyData, promoteIfBetter, runRetrainEndpoint }
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkModelSchema, RUNTIME_FEATURE_SCHEMA_VERSION } from './ml-schema-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, '../python-bridge/scripts');
@@ -242,5 +254,344 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
     return [...trainingLog];
   }
 
-  return { triggerTraining, scheduleDaily, cancelSchedule, getTrainingLog };
+  // ───────────────────────────────────────────────────────────────────────
+  // Phase 07 MLAI-08: REVIEWS H10 + H11 + H12 additions
+  // ───────────────────────────────────────────────────────────────────────
+
+  /** Absolute path to the ACTIVE model directory (config-driven). */
+  function getActivePath() {
+    return getCfg().ml?.activeModelPath ?? '/opt/dvhub/ml-models/active';
+  }
+
+  /** Absolute path to the CANDIDATE model directory (config-driven). */
+  function getCandidatePath() {
+    return getCfg().ml?.candidateModelPath ?? '/opt/dvhub/ml-models/candidate_v2';
+  }
+
+  /**
+   * REVIEWS H10: 14-day precondition gate.
+   *
+   * Verifies at least 14 distinct `evaluation_date` rows exist in
+   * forecast_accuracy with non-null `mae_7d_pvnode` in the last 14 days.
+   * Day-1 retrain returns `{ok:false, daysAvailable:N}` so the HTTP handler
+   * can respond 409 without spawning a job.
+   *
+   * @returns {Promise<{ok: boolean, daysAvailable: number}>}
+   */
+  async function has14DaysOfAccuracyData() {
+    try {
+      const result = await store.query(`
+        SELECT COUNT(DISTINCT evaluation_date) AS d
+        FROM forecast_accuracy
+        WHERE mae_7d_pvnode IS NOT NULL
+          AND evaluation_date >= CURRENT_DATE - INTERVAL '14 days'
+      `);
+      const d = Number(result.rows[0]?.d ?? 0);
+      return { ok: d >= 14, daysAvailable: d };
+    } catch (err) {
+      pushLog('ml_retrain_gate_query_error', { error: err.message });
+      return { ok: false, daysAvailable: 0, error: err.message };
+    }
+  }
+
+  /**
+   * REVIEWS H11: validate a model directory by checking its meta.json
+   * declares the expected feature_schema_version. This stops us from
+   * promoting a candidate whose schema drift would crash predict().
+   *
+   * @param {string} modelPath
+   */
+  async function validateModel(modelPath) {
+    const metaPath = path.join(modelPath, 'meta.json');
+    const check = checkModelSchema(metaPath);
+    if (!check.ok) {
+      throw new Error(`validateModel failed: ${check.reason ?? 'unknown'}`);
+    }
+    return true;
+  }
+
+  /**
+   * REVIEWS H12: delegate to ml_eval.py Python helper.
+   *
+   * @param {string} modelPath
+   * @param {Array<object>} heldOutRows
+   * @returns {Promise<number>} MAE
+   */
+  async function evalModel(modelPath, heldOutRows) {
+    const scriptPath = path.join(SCRIPTS_DIR, 'ml_eval.py');
+    const result = await pythonBridge.call(scriptPath, {
+      model_path: modelPath,
+      held_out: heldOutRows,
+    });
+    if (!result || !result.ok) {
+      throw new Error(`eval_failed: ${result?.error ?? 'null_result'}`);
+    }
+    return Number(result.mae);
+  }
+
+  /**
+   * Load held-out slice via ml_load_heldout.py helper.
+   *
+   * @param {string} heldOutPath
+   * @returns {Promise<Array<object>>} rows
+   */
+  async function loadHeldOutSlice(heldOutPath) {
+    const scriptPath = path.join(SCRIPTS_DIR, 'ml_load_heldout.py');
+    const result = await pythonBridge.call(scriptPath, { path: heldOutPath });
+    if (!result || !result.ok) {
+      throw new Error(`load_heldout_failed: ${result?.error ?? 'null_result'}`);
+    }
+    return Array.isArray(result.rows) ? result.rows : [];
+  }
+
+  /**
+   * Move a rejected candidate out of the way so the next retrain starts from
+   * a clean slate. Named with a timestamp for audit.
+   *
+   * @param {string} candidatePath
+   * @returns {Promise<string>} rejectedPath
+   */
+  async function moveToRejected(candidatePath) {
+    const rejectedDir = path.join(path.dirname(candidatePath), 'rejected');
+    const rejectedPath = path.join(
+      rejectedDir,
+      `rejected_${new Date().toISOString().replace(/[:.]/g, '-')}`
+    );
+    await fs.promises.mkdir(rejectedDir, { recursive: true });
+    await fs.promises.rename(candidatePath, rejectedPath);
+    return rejectedPath;
+  }
+
+  /**
+   * REVIEWS H11: true-atomic validate → archive → swap → verify → rollback.
+   *
+   * Flow:
+   *   1. Validate candidate (reject before touching active)
+   *   2. Evaluate v1 and v2 MAE on held-out slice
+   *   3. Promotion gate: ≥10% improvement → promote,
+   *      smaller improvement → promote_weak,
+   *      regression → reject
+   *   4. On promote: archive active → `${active}.backup-${ts}`,
+   *      rename candidate → active, validate promoted, cleanup archive
+   *   5. On ANY failure after step 4a: rollback archive → active,
+   *      log `ml_atomic_swap_rollback_*` events
+   *
+   * No two-step window where both paths could be gone — see
+   * anchor comment `ml_atomic_swap_rollback` below.
+   *
+   * @param {{candidatePath: string, activePath: string, heldOutRows: Array}} args
+   * @returns {Promise<{decision: string, v1Mae: number, v2Mae: number, improveRatio: number, rejectedPath?: string}>}
+   */
+  async function promoteIfBetter({ candidatePath, activePath, heldOutRows }) {
+    // Step 1: validate candidate BEFORE touching active
+    await validateModel(candidatePath);
+
+    // Step 2: evaluate both on held-out
+    const v1Mae = await evalModel(activePath, heldOutRows);
+    const v2Mae = await evalModel(candidatePath, heldOutRows);
+    const improveRatio = v1Mae > 0 ? (v1Mae - v2Mae) / v1Mae : 0;
+    pushLog('ml_candidate_eval', { v1Mae, v2Mae, improveRatio });
+
+    // Promotion gate: ≥10% improvement → promoted;
+    // any improvement 0-10% → promoted_weak;
+    // regression → rejected.
+    const shouldPromote = improveRatio >= 0.10 || v2Mae < v1Mae;
+    if (!shouldPromote) {
+      const rejectedPath = await moveToRejected(candidatePath);
+      pushLog('ml_candidate_rejected', { v1Mae, v2Mae, improveRatio, rejectedPath });
+      return { decision: 'rejected', v1Mae, v2Mae, improveRatio, rejectedPath };
+    }
+
+    // Step 3: archive active to timestamped backup BEFORE swap
+    const archivePath = `${activePath}.backup-${Date.now()}`;
+    await fs.promises.rename(activePath, archivePath);
+
+    // ml_atomic_swap_rollback: the try/catch below guarantees that any
+    // failure between the archive-rename and the final validate is reversed
+    // via a symmetric rename that restores the previous active model.
+    try {
+      // Step 4: promote candidate → active
+      await fs.promises.rename(candidatePath, activePath);
+
+      // Step 5: verify promoted model still loads with the expected schema
+      await validateModel(activePath);
+
+      // Step 6: cleanup archive on success (best-effort — swallow cleanup errors)
+      await fs.promises.rm(archivePath, { recursive: true, force: true }).catch(() => {});
+
+      pushLog('ml_atomic_swap_ok', { archivePath, activePath });
+      const decision = improveRatio >= 0.10 ? 'promoted' : 'promoted_weak';
+      return { decision, v1Mae, v2Mae, improveRatio };
+    } catch (err) {
+      // ml_atomic_swap_rollback: restore active from archive
+      pushLog('ml_atomic_swap_rollback_attempt', { err: err.message });
+      try {
+        // If the candidate was already moved to active and then failed validation,
+        // move it aside first so the rollback rename has a clean target.
+        if (fs.existsSync(activePath)) {
+          await fs.promises.rename(activePath, `${candidatePath}.failed-${Date.now()}`);
+        }
+        await fs.promises.rename(archivePath, activePath);
+        pushLog('ml_atomic_swap_rollback_ok', { activePath });
+      } catch (rollbackErr) {
+        pushLog('ml_atomic_swap_rollback_failed', { error: rollbackErr.message });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 07 MLAI-08 D-C1 + REVIEWS H10/H11/H12: one-shot retrain endpoint.
+   *
+   * Called asynchronously by POST /api/ml/retrain via ml-retrain-jobs. Orchestrates:
+   *   1. 14-day gate (early 409-equivalent if insufficient data)
+   *   2. triggerTraining targeting candidate path
+   *   3. Load held-out slice via ml_load_heldout.py
+   *   4. promoteIfBetter with true-atomic swap + rollback
+   *
+   * @returns {Promise<object>}
+   */
+  async function runRetrainEndpoint() {
+    // REVIEWS H10: 14-day gate BEFORE any training work
+    const gate = await has14DaysOfAccuracyData();
+    if (!gate.ok) {
+      pushLog('ml_retrain_gate_insufficient_data', { daysAvailable: gate.daysAvailable });
+      return {
+        ok: false,
+        error: 'insufficient_accuracy_data',
+        message: 'Need ≥14 days of rolling MAE data before retrain',
+        daysAvailable: gate.daysAvailable,
+      };
+    }
+
+    const activePath = getActivePath();
+    const candidatePath = getCandidatePath();
+    const cfg = getCfg();
+
+    // Step 1: invoke triggerTraining (reuses existing DB query + ml_train.py call)
+    // Directly invoke the Python bridge with an explicit candidate model_dir so
+    // the candidate artifact lands at candidatePath rather than the daily-training
+    // default path.
+    const { training_data, data_days } = await queryTrainingData();
+    if (data_days < 14) {
+      // Belt-and-braces with the REVIEWS H10 gate above — should never reach
+      // here unless the gate query and queryTrainingData disagree.
+      return {
+        ok: false,
+        error: 'insufficient_accuracy_data',
+        message: 'queryTrainingData returned <14 distinct days',
+        daysAvailable: data_days,
+      };
+    }
+
+    currentVersion++;
+    const scriptPath = path.join(SCRIPTS_DIR, 'ml_train.py');
+    const trainResult = await pythonBridge.call(scriptPath, {
+      training_data,
+      data_days,
+      version: currentVersion,
+      previous_mae: mlCorrection?.getModelInfo?.()?.mae ?? null,
+      model_dir: path.dirname(candidatePath),
+      candidate_path: candidatePath,
+      feature_schema_version: RUNTIME_FEATURE_SCHEMA_VERSION,
+    });
+
+    if (!trainResult || trainResult.ok !== true) {
+      pushLog('ml_retrain_train_failed', { error: trainResult?.error ?? 'null_result' });
+      return {
+        ok: false,
+        meta: {
+          training_samples: 0,
+          mae_before: null,
+          mae_after: null,
+          decision: 'train_failed',
+          error: trainResult?.error ?? 'null_result',
+        },
+      };
+    }
+
+    // Step 2: load held-out slice via ml_load_heldout.py (REVIEWS H12)
+    const heldOutPath = trainResult.held_out_slice_path
+      ?? path.join(trainResult.model_path ?? candidatePath, 'held_out_slice.parquet');
+    let heldOutRows = [];
+    try {
+      heldOutRows = await loadHeldOutSlice(heldOutPath);
+    } catch (err) {
+      pushLog('ml_retrain_heldout_load_failed', { error: err.message, heldOutPath });
+      return {
+        ok: false,
+        meta: {
+          training_samples: trainResult.n_samples ?? 0,
+          mae_before: null,
+          mae_after: trainResult.mae ?? null,
+          decision: 'heldout_load_failed',
+          error: err.message,
+        },
+      };
+    }
+
+    // Step 3: promoteIfBetter with true-atomic swap + rollback (REVIEWS H11)
+    // When there is no active model yet (first-ever retrain), skip the eval
+    // and just publish the candidate.
+    const resolvedCandidatePath = trainResult.model_path ?? candidatePath;
+    if (!fs.existsSync(activePath)) {
+      await fs.promises.rename(resolvedCandidatePath, activePath);
+      pushLog('ml_atomic_swap_initial', { activePath });
+      mlCorrection?.setModel?.(trainResult);
+      return {
+        ok: true,
+        meta: {
+          training_samples: trainResult.n_samples ?? data_days,
+          mae_before: null,
+          mae_after: trainResult.mae ?? null,
+          decision: 'promoted_initial',
+        },
+      };
+    }
+
+    try {
+      const promotion = await promoteIfBetter({
+        candidatePath: resolvedCandidatePath,
+        activePath,
+        heldOutRows,
+      });
+      if (promotion.decision === 'promoted' || promotion.decision === 'promoted_weak') {
+        mlCorrection?.setModel?.(trainResult);
+      }
+      return {
+        ok: true,
+        meta: {
+          training_samples: trainResult.n_samples ?? data_days,
+          mae_before: promotion.v1Mae,
+          mae_after: promotion.v2Mae,
+          decision: promotion.decision,
+          improveRatio: promotion.improveRatio,
+        },
+      };
+    } catch (err) {
+      pushLog('ml_retrain_promote_failed', { error: err.message });
+      return {
+        ok: false,
+        meta: {
+          training_samples: trainResult.n_samples ?? 0,
+          mae_before: null,
+          mae_after: trainResult.mae ?? null,
+          decision: 'promote_failed',
+          error: err.message,
+        },
+      };
+    }
+  }
+
+  return {
+    triggerTraining,
+    scheduleDaily,
+    cancelSchedule,
+    getTrainingLog,
+    // Phase 07 MLAI-08 exports
+    has14DaysOfAccuracyData,
+    promoteIfBetter,
+    runRetrainEndpoint,
+    validateModel,
+  };
 }

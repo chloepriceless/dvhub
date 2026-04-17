@@ -48,7 +48,16 @@ export function createMlService(ctx) {
         tierFeatures: []
       }),
       getAccuracyTrend: () => [],
-      getTrainingLog: () => []
+      getTrainingLog: () => [],
+      // Phase 07 MLAI-08 Tier-1 stubs: admin endpoints still return 409/ok
+      // so the HTTP handler has a consistent contract regardless of tier.
+      has14DaysOfAccuracyData: async () => ({ ok: false, daysAvailable: 0 }),
+      runRetrainEndpoint: async () => ({
+        ok: false,
+        error: 'ml_disabled_tier1',
+        message: 'ML retrain requires Tier 2+',
+      }),
+      promoteIfBetter: async () => { throw new Error('ml_disabled_tier1'); },
     };
   }
 
@@ -154,6 +163,10 @@ export function createMlService(ctx) {
     correct: mlCorrection.correct,
     getStatus: mlHealth.getStatus,
     getAccuracyTrend: mlHealth.getAccuracyTrend,
-    getTrainingLog: mlTraining.getTrainingLog
+    getTrainingLog: mlTraining.getTrainingLog,
+    // Phase 07 MLAI-08 REVIEWS H10/H11/H12 — async retrain pipeline
+    has14DaysOfAccuracyData: mlTraining.has14DaysOfAccuracyData,
+    runRetrainEndpoint: mlTraining.runRetrainEndpoint,
+    promoteIfBetter: mlTraining.promoteIfBetter,
   };
 }

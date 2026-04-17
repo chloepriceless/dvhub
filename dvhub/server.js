@@ -70,6 +70,7 @@ import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
 import { createDeviceService } from './services/devices/index.js';
 import { createNotificationService } from './services/notifications/index.js';
 import { createMlService } from './services/ml/index.js';
+import { createRetrainJobs } from './services/ml/ml-retrain-jobs.js';
 import { createLlmService } from './services/llm/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -665,6 +666,10 @@ ctx.notificationService = notificationService;
 // Phase 05: ML & Edge-AI (v0.9)
 const mlService = createMlService(ctx);
 ctx.mlService = mlService;
+// Phase 07 MLAI-08 REVIEWS H12: async retrain job registry — POST /api/ml/retrain
+// returns 202 + jobId and the heavy work runs in a background Promise tracked here.
+const mlRetrainJobs = createRetrainJobs(ctx);
+ctx.mlRetrainJobs = mlRetrainJobs;
 const llmService = createLlmService(ctx);
 ctx.llmService = llmService;
 

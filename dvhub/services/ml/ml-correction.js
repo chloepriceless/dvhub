@@ -4,8 +4,10 @@
 // Builds feature dict internally (D-A1), caches by forecastVersion (D-A3).
 // Factory: createMlCorrection({ pythonBridge, getCfg, pushLog, store, state }) -> { correct, getModelInfo, setModel }
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkModelSchema } from './ml-schema-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, '../python-bridge/scripts');
@@ -68,8 +70,25 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
       azimuthDeg = Number(dominant.azimuthDeg ?? dominant.azimuth) || azimuthDeg;
     }
 
-    // D-A2: Accuracy features are constant zeros (real accuracy tracking deferred)
-    const accuracy = { mae_7d_solcast: 0, mae_7d_pvlib: 0, mae_7d_merged: 0 };
+    // Phase 07 D-C2/D-C3 + REVIEWS H2: read real mae_7d_* from accuracy_tracker
+    // via the single-source store.getLatestAccuracyRow() helper. Pre-14-day
+    // periods return all-zero accuracy dict (matches Pattern 5 accumulation
+    // phase — v1 model remains active until the rolling window is populated).
+    let accuracyRow = null;
+    if (store?.getLatestAccuracyRow) {
+      try {
+        accuracyRow = await store.getLatestAccuracyRow();
+      } catch (err) {
+        pushLog('ml_accuracy_read_error', { error: err.message });
+      }
+    }
+    const accuracy = {
+      mae_7d_pvnode:  accuracyRow?.mae_7d_pvnode  ?? 0,
+      mae_7d_solcast: accuracyRow?.mae_7d_solcast ?? 0,
+      mae_7d_pvlib:   accuracyRow?.mae_7d_pvlib   ?? 0,
+      mae_7d_merged:  accuracyRow?.mae_7d_merged  ?? 0,
+      mae_7d_ml:      accuracyRow?.mae_7d_ml      ?? 0,
+    };
 
     return {
       weather,
@@ -105,6 +124,24 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
     }
 
     try {
+      // Phase 07 MLAI-08 Pitfall ML-1: schema-version guard before Python call.
+      // Short-circuits with applied=false ONLY when a meta.json exists AND
+      // declares a mismatched feature_schema_version. Missing meta.json / read
+      // errors are passed through to Python (ml_predict has the same guard
+      // and owns the fail-open behaviour — this Node-side check is a
+      // defence-in-depth shortcut to skip the subprocess spawn when we can
+      // already see the model version won't match).
+      const modelDir = getCfg().ml?.mlModelDir ?? '/opt/dvhub/ml-models';
+      const modelName = `pv_correction_${currentModel.model_type}_v${currentModel.version}`;
+      const metaPath = path.join(modelDir, modelName, 'meta.json');
+      if (fs.existsSync(metaPath)) {
+        const guard = checkModelSchema(metaPath);
+        if (!guard.ok && guard.reason === 'schema_mismatch') {
+          pushLog('ml_schema_guard_block', guard);
+          return { applied: false, corrected: pvSlots, model: null };
+        }
+      }
+
       // D-A1: Build feature dict internally
       const features = await buildFeatures(pvSlots, getCfg());
 
@@ -112,7 +149,7 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
       const result = await pythonBridge.call(scriptPath, {
         slots: pvSlots,
         features,
-        model_dir: getCfg().ml.mlModelDir,
+        model_dir: modelDir,
         model_type: currentModel.model_type,
         version: currentModel.version
       }, 30000);

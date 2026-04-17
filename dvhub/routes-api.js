@@ -1717,6 +1717,55 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // Phase 07 MLAI-08 D-C1 + REVIEWS H10 + H12: async retrain pipeline.
+    // POST /api/ml/retrain — dual gate (isLanSafeRequest + checkAuth), then
+    //   1. REVIEWS H10 14-day precondition check — 409 on insufficient data,
+    //      BEFORE spawning a job so operators see the reason immediately
+    //   2. REVIEWS H12 async — ctx.mlRetrainJobs.startJob wraps
+    //      mlService.runRetrainEndpoint; return 202 with {jobId, statusUrl}
+    //      so the handler releases the HTTP socket immediately
+    if (url.pathname === '/api/ml/retrain' && req.method === 'POST') {
+      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      try {
+        if (!ctx.mlService || !ctx.mlRetrainJobs) {
+          return json(res, 503, { error: 'ml_retrain_service_unavailable' });
+        }
+        // REVIEWS H10: 14-day precondition check — 409 fast-fail
+        const gate = await ctx.mlService.has14DaysOfAccuracyData?.();
+        if (gate && !gate.ok) {
+          return json(res, 409, {
+            error: 'insufficient_accuracy_data',
+            message: 'Need ≥14 days of rolling MAE data before retrain',
+            daysAvailable: gate.daysAvailable ?? 0,
+          });
+        }
+
+        // REVIEWS H12: async — return 202 immediately
+        const jobId = ctx.mlRetrainJobs.startJob(() => ctx.mlService.runRetrainEndpoint());
+        return json(res, 202, {
+          jobId,
+          statusUrl: `/api/ml/retrain/status/${jobId}`,
+        });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
+    // Phase 07 MLAI-08 REVIEWS H12: job status endpoint.
+    // GET /api/ml/retrain/status/:jobId — returns current state.
+    if (url.pathname.startsWith('/api/ml/retrain/status/') && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      try {
+        const jobId = url.pathname.substring('/api/ml/retrain/status/'.length);
+        if (!jobId) return json(res, 400, { error: 'jobId required' });
+        const status = ctx.mlRetrainJobs?.getStatus(jobId);
+        if (!status) return json(res, 404, { error: 'job not found', jobId });
+        return json(res, 200, { jobId, ...status });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
     // Phase 07 FORE-10 / D-A5 (re-scoped): pvnode client-side quota counter exposure.
     // GET /api/forecast/pvnode/quota — read-only, auth-gated.
     if (url.pathname === '/api/forecast/pvnode/quota' && req.method === 'GET') {

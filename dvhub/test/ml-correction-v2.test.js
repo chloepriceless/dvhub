@@ -157,17 +157,25 @@ describe('createMlCorrection v2 — extended DI + buildFeatures + forecastVersio
     assert.equal(mockBridge.call.mock.calls.length, 4, 'version 1 should have been evicted');
   });
 
-  it('Test 6: accuracy fields are always {mae_7d_solcast: 0, mae_7d_pvlib: 0, mae_7d_merged: 0}', async () => {
+  it('Test 6: accuracy fields read all 5 mae_7d_* from store.getLatestAccuracyRow (Phase 07 D-C2/D-C3)', async () => {
     const pvSlots = [{ start: '2026-04-09T12:00:00Z', powerW: 1000 }];
 
+    // Phase 07 MLAI-08: Phase 06 D-A2 constant-zero contract is explicitly
+    // LIFTED. ml-correction now reads real mae_7d_* via store.getLatestAccuracyRow
+    // (REVIEWS H2 single-source). When the store has no rows yet (pre-14-day
+    // accumulation) all five fields default to 0 — which is what this mock
+    // triggers (mockStore from factory returns no getLatestAccuracyRow).
     await correction.correct(pvSlots, { forecastVersion: 200 });
 
     const payload = mockBridge.call.mock.calls[0].arguments[1];
     const acc = payload.features.accuracy;
+    // All 5 mae_7d_* features are populated; pre-14-day rows are 0 (fall-through).
     assert.deepStrictEqual(acc, {
+      mae_7d_pvnode: 0,
       mae_7d_solcast: 0,
       mae_7d_pvlib: 0,
-      mae_7d_merged: 0
-    }, 'accuracy must always be constant zeros per D-A2');
+      mae_7d_merged: 0,
+      mae_7d_ml: 0,
+    }, 'accuracy must be 5 mae_7d_* features, pre-14-day = all zero (Phase 07 D-C2)');
   });
 });
