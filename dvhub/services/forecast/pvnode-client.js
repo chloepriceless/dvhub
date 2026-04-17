@@ -332,8 +332,122 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
     return points;
   }
 
+  /**
+   * Fetch historical PV production for a date range — used by pvnode-backfill (Plan 07-03).
+   *
+   * Endpoint: GET /v1/history/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD + same plane params
+   * as /v1/forecast. Iterates chunkPlants(plants) groups serially, sums power_w per 15-min slot
+   * across plane-groups, returns an aligned slot array.
+   *
+   * NOT subject to MIN_INTERVAL_MS throttling (admin-triggered, different semantics).
+   * Uses a longer 30s timeout per request (history responses are larger than forecast).
+   *
+   * Quota routed through pvnodeQuota.increment() per plane-group (REVIEWS L2 consistency with
+   * fetchForecast); falls back to store.incrementPvnodeQuota when pvnodeQuota is absent.
+   *
+   * REVIEWS H8: returns `planeGroupsCalled` so pvnode-backfill can track apiCallsUsed
+   * accurately — no more fixed `+= 2` constant approximation.
+   *
+   * @param {{startDate:string,endDate:string,plants?:Array}} args
+   *   startDate/endDate: YYYY-MM-DD strings (inclusive boundaries per REVIEWS H8)
+   *   plants: optional override; falls back to cfg.userEnergyPricing.pvPlants sanitized list
+   * @returns {Promise<{slots:Array<{ts_utc:string,power_w:number}>, planeGroupsCalled:number}>}
+   */
+  async function fetchHistory({ startDate, endDate, plants: overridePlants } = {}) {
+    const cfg = getCfg();
+    const apiKey = cfg.forecast?.pvnode?.apiKey;
+    if (!apiKey) throw new Error('pvnode_not_configured');
+
+    const fc = cfg.forecast || {};
+    const lat = fc.location?.latitude
+      ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
+    const lon = fc.location?.longitude
+      ?? cfg.schedule?.smallMarketAutomation?.location?.longitude;
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) {
+      throw new Error('pvnode_no_coords');
+    }
+
+    // Use override plants (admin-controlled) or fall back to config plants
+    let plants = overridePlants;
+    if (!Array.isArray(plants) || plants.length === 0) {
+      const rawPlants = Array.isArray(cfg.userEnergyPricing?.pvPlants)
+        ? cfg.userEnergyPricing.pvPlants
+        : [];
+      plants = rawPlants
+        .filter(p => Number(p?.kwp) > 0
+          && Number.isFinite(Number(p?.tiltDeg))
+          && Number.isFinite(Number(p?.azimuthDeg)))
+        .map(p => ({
+          kwp: Number(p.kwp),
+          tiltDeg: Number(p.tiltDeg),
+          azimuthDeg: Number(p.azimuthDeg),
+          skyObstructionConfig: p.skyObstructionConfig,
+          shadingConfig: p.shadingConfig
+        }));
+    }
+    if (plants.length === 0) throw new Error('pvnode_no_plants');
+
+    const groups = chunkPlants(plants);
+    const merged = new Map();
+    let planeGroupsCalled = 0;
+
+    for (const group of groups) {
+      const q = buildQueryParams({
+        lat: Number(lat),
+        lon: Number(lon),
+        plants: group,
+        nowcast: false
+      });
+      // Swap forecast-specific params for history-specific params:
+      q.delete('forecast_days');
+      q.delete('past_days');
+      q.delete('nowcast');
+      q.set('start_date', startDate);
+      q.set('end_date', endDate);
+
+      const url = `${PVNODE_BASE}/history/?${q.toString()}`;
+      const data = await pRetry(
+        async () => {
+          const r = await fetch(url, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+            signal: AbortSignal.timeout(30000) // longer timeout for history range
+          });
+          if (r.status === 429) throw new AbortError('pvnode_rate_limited');
+          if (r.status === 401 || r.status === 403) throw new AbortError(`pvnode_auth_${r.status}`);
+          if (!r.ok) throw new Error(`pvnode_history_http_${r.status}`);
+          return r.json();
+        },
+        { retries: 3, factor: 2, minTimeout: 1000, maxTimeout: 10000 }
+      );
+
+      // REVIEWS L2: route quota through pvnodeQuota (fallback to store.incrementPvnodeQuota)
+      if (pvnodeQuota && typeof pvnodeQuota.increment === 'function') {
+        await pvnodeQuota.increment(1);
+      } else if (store && typeof store.incrementPvnodeQuota === 'function') {
+        await store.incrementPvnodeQuota(1);
+      }
+      planeGroupsCalled += 1;
+      pushLog('pvnode_history_ok', { startDate, endDate, planes: group.length });
+
+      const rows = extractPowerSeries(data);
+      for (const { ts_utc, power_w } of rows) {
+        const key = floorToQuarterIso(ts_utc);
+        merged.set(key, (merged.get(key) ?? 0) + power_w);
+      }
+    }
+
+    const slots = [...merged.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ts_utc, power_w]) => ({ ts_utc, power_w: Math.round(power_w * 10) / 10 }));
+
+    // REVIEWS H8 accurate counter: expose actual plane-group call count to caller
+    return { slots, planeGroupsCalled };
+  }
+
   return {
     fetchForecast,
+    fetchHistory,
     get lastFetchAt() { return lastFetchAt; },
     get isConfigured() { return Boolean(getCfg().forecast?.pvnode?.apiKey); }
   };
