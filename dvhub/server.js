@@ -53,7 +53,13 @@ import {
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
-import { createApiRoutes, SECURITY_HEADERS } from './routes-api.js';
+import {
+  createApiRoutes,
+  SECURITY_HEADERS,
+  getRequestHost,
+  isHostAllowed,
+  resolveCorsAllowedOrigin
+} from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 import { createForecastService } from './services/forecast/index.js';
 // Phase 07 Plan 07-04: Wave-2 forecast services wired directly in server.js so routes-api.js
@@ -825,22 +831,46 @@ const web = http.createServer(async (req, res) => {
       console.log(`${req.method} ${url.pathname} ${res.statusCode} ${ms}ms`);
     });
 
-    // CORS: restrict cross-origin API access to same origin only (defense-in-depth, stays in orchestrator)
-    const origin = req.headers.origin;
-    if (origin && url.pathname.startsWith('/api/')) {
-      const host = req.headers.host;
-      const allowedOrigins = [`http://${host}`, `https://${host}`];
-      if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-        res.setHeader('Access-Control-Max-Age', '3600');
-      }
-      if (req.method === 'OPTIONS') {
-        res.writeHead(allowedOrigins.includes(origin) ? 204 : 403, SECURITY_HEADERS);
-        res.end();
+    // Plan 08-04 Task 2 Step 5: CORS allowlist + Host-header guard.
+    // Previous implementation echoed any same-Host origin back — which made
+    // a cross-origin request from http://<lan-ip>:port (attacker-controlled
+    // DNS rebind / same-Host redirect) appear trusted. Now we only emit
+    // ACAO when the origin is in cfg.corsAllowedOrigins (explicit operator
+    // opt-in). Host header is already re-checked inside routes.handleRequest
+    // but we short-circuit OPTIONS here to avoid routing preflights into auth.
+    const cfgForCors = getCfg();
+    const originHeader = String(req.headers.origin || '');
+    const allowedOrigin = originHeader
+      ? resolveCorsAllowedOrigin(originHeader, cfgForCors)
+      : null;
+
+    if (req.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+      // If an Origin was sent, it MUST be on the allowlist — otherwise 403.
+      // If no Origin was sent, it's a same-origin preflight quirk; 204 with no
+      // ACAO is safe.
+      if (originHeader && !allowedOrigin) {
+        res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'cors_origin_not_allowed' }));
         return;
       }
+      const preflightHeaders = { ...SECURITY_HEADERS };
+      if (allowedOrigin) {
+        preflightHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+        preflightHeaders['Vary'] = 'Origin';
+        preflightHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
+        preflightHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Session-Id';
+        preflightHeaders['Access-Control-Max-Age'] = '600';
+      }
+      res.writeHead(204, preflightHeaders);
+      res.end();
+      return;
+    }
+
+    // For non-OPTIONS requests, set ACAO only when the origin is explicitly
+    // allowed. Never echo unlisted origins — that would re-open the flaw.
+    if (allowedOrigin && url.pathname.startsWith('/api/')) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+      res.setHeader('Vary', 'Origin');
     }
 
     // All routes handled by routes-api.js
@@ -1018,11 +1048,41 @@ if (IS_RUNTIME_PROCESS) {
 
   // Remote monitoring heartbeat (hot-reloadable)
   let monitoringTimerId = null;
+  // Plan 08-04 Task 2 Step 4: SSRF guard for monitoring.pushUrl. The heartbeat
+  // is a legitimate outbound call (Uptime Kuma / hosted monitor), but the URL
+  // comes from config and could be weaponised to pivot into internal networks
+  // from the Pi. Require https:, reject loopback / RFC1918 / link-local so the
+  // heartbeat can ONLY leave the LAN.
+  function isAllowedHeartbeatUrl(raw) {
+    try {
+      const u = new URL(String(raw || ''));
+      if (u.protocol !== 'https:') return false;
+      const host = u.hostname.toLowerCase();
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
+      const parts = host.split('.').map(Number);
+      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
+        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16.0.0/12
+        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168.0.0/16
+        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254.0.0/16 (link-local)
+      }
+      return true;
+    } catch { return false; }
+  }
   function startMonitoringHeartbeat() {
     if (monitoringTimerId) { clearInterval(monitoringTimerId); monitoringTimerId = null; }
     const pushUrl = cfg.monitoring?.pushUrl || '';
     const intervalMs = (Number(cfg.monitoring?.pushIntervalSec) || 240) * 1000;
     if (!pushUrl) return;
+    // Plan 08-04 Task 2 Step 4: refuse to start the heartbeat at all when the
+    // configured URL is not an allowed external HTTPS target. A misconfigured
+    // URL just means "no heartbeat" — never "silently pivot to internal host".
+    if (!isAllowedHeartbeatUrl(pushUrl)) {
+      const safe = redactUrlCreds(pushUrl);
+      console.warn('  [WARN] Monitoring heartbeat disabled — pushUrl blocked (https+external only): ' + safe.substring(0, 80));
+      pushLog('monitoring_heartbeat_blocked', { reason: 'host_not_allowed', url: safe });
+      return;
+    }
     const sendHeartbeat = async (msg) => {
       try {
         const sep = pushUrl.includes('?') ? '&' : '?';

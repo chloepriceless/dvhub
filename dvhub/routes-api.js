@@ -55,6 +55,41 @@ export const MAX_MESSAGE_DATA_BYTES = 4 * 1024;
 // further collapses per-address fan-out.
 export const RATE_LIMIT_MAX_KEYS = 5000;
 
+// ── Plan 08-04 Task 2 Step 5: Host / CORS / trustProxy helpers ──────────
+// Kept as pure free functions (no closure over ctx) so server.js can reuse
+// them from the request-entry middleware before routes.handleRequest runs.
+
+// Derive the authoritative request host. X-Forwarded-Host is ONLY honoured
+// when the operator explicitly opted in via cfg.trustProxy=true — otherwise a
+// LAN client could spoof the Host downstream of nothing.
+export function getRequestHost(req, cfg) {
+  const trustProxy = cfg && cfg.trustProxy === true;
+  const raw = trustProxy
+    ? String(req.headers['x-forwarded-host'] || req.headers.host || '')
+    : String(req.headers.host || '');
+  return raw.toLowerCase();
+}
+
+// Host allowlist check. Empty array = permissive (LAN-dev default). Operators
+// on public / reverse-proxy deployments MUST populate cfg.allowedHosts with
+// their real FQDN(s) before exposing the service.
+export function isHostAllowed(hostVal, cfg) {
+  const list = Array.isArray(cfg?.allowedHosts) ? cfg.allowedHosts : [];
+  if (list.length === 0) return true;
+  const normalized = String(hostVal || '').toLowerCase();
+  return list.map((h) => String(h).toLowerCase()).includes(normalized);
+}
+
+// CORS origin resolver. Returns the matching allowlist entry (verbatim, to
+// preserve case of the configured value) or null — NEVER echoes the request
+// Origin header unconditionally.
+export function resolveCorsAllowedOrigin(originHeader, cfg) {
+  if (!originHeader) return null;
+  const list = Array.isArray(cfg?.corsAllowedOrigins) ? cfg.corsAllowedOrigins : [];
+  if (list.length === 0) return null;
+  return list.includes(originHeader) ? originHeader : null;
+}
+
 // Compare two semver-ish tags numerically on major.minor.patch. Strips a leading
 // `v`, ignores pre-release/build metadata (after `-` / `+`). Returns -1 / 0 / +1.
 // Used by /api/admin/update/apply downgrade guard.
@@ -838,6 +873,48 @@ export function createApiRoutes(ctx) {
 
   // ── Main request handler ─────────────────────────────────────────────
   async function handleRequest(req, res, url) {
+    // Plan 08-04 Task 2 Step 5: Host-header allowlist. Runs before everything
+    // else (including /health and /) — spoofed Host must not drive absolute-URL
+    // generation or redirect targets anywhere in the handler chain. Empty
+    // allowedHosts = LAN-dev permissive (returns true unconditionally).
+    const cfgForHost = getCfg();
+    const hostVal = getRequestHost(req, cfgForHost);
+    if (!isHostAllowed(hostVal, cfgForHost)) {
+      pushLog('host_header_rejected', {
+        host: hostVal,
+        forwarded: !!req.headers['x-forwarded-host'],
+        trustProxy: cfgForHost.trustProxy === true,
+        path: url.pathname
+      });
+      return json(res, 400, { ok: false, error: 'host_not_allowed' });
+    }
+
+    // Plan 08-04 Task 2 Step 5: defense-in-depth CORS check for non-OPTIONS
+    // state-changing requests. The orchestrator (server.js) already handles
+    // OPTIONS preflights and sets ACAO on allowed origins; here we reject
+    // writes from any unlisted Origin so a misconfigured CDN / proxy that
+    // strips preflights cannot tunnel cross-origin writes. GET/HEAD pass
+    // through (no Origin check) — browsers never send them with credentials
+    // cross-origin unless the server opted in with ACAO, which we don't.
+    if (
+      url.pathname.startsWith('/api/')
+      && req.method !== 'GET'
+      && req.method !== 'HEAD'
+      && req.method !== 'OPTIONS'
+    ) {
+      const originHeader = String(req.headers.origin || '');
+      if (originHeader) {
+        const allowed = resolveCorsAllowedOrigin(originHeader, cfgForHost);
+        // When corsAllowedOrigins is empty, cross-origin writes are rejected.
+        // When populated, only listed origins are accepted.
+        const list = Array.isArray(cfgForHost.corsAllowedOrigins) ? cfgForHost.corsAllowedOrigins : [];
+        if (list.length > 0 && !allowed) {
+          pushLog('cors_origin_rejected', { origin: originHeader, path: url.pathname, method: req.method });
+          return json(res, 403, { ok: false, error: 'cors_origin_not_allowed' });
+        }
+      }
+    }
+
     if (url.pathname === '/' && req.method === 'GET') {
       return servePage(res, ctx.needsSetup() ? 'setup.html' : 'index.html');
     }
@@ -1198,6 +1275,18 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/meter/scan' && req.method === 'POST') {
       const body = await parseBody(req);
+      // Plan 08-04 Task 2 Step 3: SSRF guard. Meter scan talks raw Modbus TCP —
+      // an attacker with a stolen token could otherwise point it at any host on
+      // the internet (data-exfil, port-scan via the Pi, liveness oracle).
+      // Restrict to RFC1918 + loopback, validate port range.
+      const scanHost = body?.host || getCfg().scan?.host;
+      if (!isRfc1918OrLoopback(String(scanHost || ''))) {
+        return json(res, 400, { ok: false, error: 'host_not_in_rfc1918', host: scanHost });
+      }
+      const scanPort = Number(body?.port ?? getCfg().scan?.port);
+      if (!Number.isFinite(scanPort) || scanPort < 1 || scanPort > 65535) {
+        return json(res, 400, { ok: false, error: 'port_out_of_range', port: scanPort });
+      }
       runMeterScan(body).catch((e) => {
         state.scan.running = false;
         state.scan.error = e.message;
@@ -1984,6 +2073,19 @@ export function createApiRoutes(ctx) {
         if (!ctx.mlService || !ctx.mlRetrainJobs) {
           return json(res, 503, { error: 'ml_retrain_service_unavailable' });
         }
+        // Plan 08-04 Task 2 Step 2: concurrency mutex pre-check. Without this
+        // a second POST during an active retrain would fork a second Python
+        // training process on the Pi — OOM + CPU starvation. Fast-fail 409
+        // before the 14-day gate so operators see the real reason.
+        const mutex = ctx.mlRetrainJobs.isRetrainInProgress?.() || { inProgress: false };
+        if (mutex.inProgress) {
+          return json(res, 409, {
+            error: 'retrain_in_progress',
+            jobId: mutex.jobId,
+            elapsedMs: mutex.elapsedMs,
+            statusUrl: mutex.jobId ? `/api/ml/retrain/status/${mutex.jobId}` : null,
+          });
+        }
         // REVIEWS H10: 14-day precondition check — 409 fast-fail
         const gate = await ctx.mlService.has14DaysOfAccuracyData?.();
         if (gate && !gate.ok) {
@@ -1994,8 +2096,13 @@ export function createApiRoutes(ctx) {
           });
         }
 
-        // REVIEWS H12: async — return 202 immediately
+        // REVIEWS H12: async — return 202 immediately.
+        // Plan 08-04 Task 2: startJob now returns null if the mutex was grabbed
+        // between our pre-check and now (race window with a concurrent request).
         const jobId = ctx.mlRetrainJobs.startJob(() => ctx.mlService.runRetrainEndpoint());
+        if (!jobId) {
+          return json(res, 409, { error: 'retrain_in_progress' });
+        }
         return json(res, 202, {
           jobId,
           statusUrl: `/api/ml/retrain/status/${jobId}`,

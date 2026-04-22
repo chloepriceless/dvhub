@@ -2098,7 +2098,16 @@ export function createDefaultConfig() {
     },
     optimizer: {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 }
-    }
+    },
+    // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
+    // Defaults stay permissive for LAN-first installs (empty arrays = no check);
+    // operators on public-facing / reverse-proxy deployments MUST populate
+    // allowedHosts (FQDN list), corsAllowedOrigins (exact origins), and opt in
+    // to trustProxy=true only when a known reverse proxy is actually in front.
+    // Never auto-populate from req.headers.host at runtime — defeats the guard.
+    allowedHosts: [],
+    corsAllowedOrigins: [],
+    trustProxy: false
   };
 }
 

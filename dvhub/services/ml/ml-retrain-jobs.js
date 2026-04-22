@@ -33,14 +33,35 @@ export function createRetrainJobs(ctx = {}) {
   /** @type {Map<string, JobState>} */
   const jobs = new Map();
 
+  // Plan 08-04 Task 2 Step 1: concurrency mutex. On a Pi with one CPU and a
+  // ~500 MB OOM guard for Python ML, two overlapping retrains would fork-bomb
+  // the device. We keep the flag module-local (closure scope) so every call
+  // goes through the same gate regardless of which ctx variant invokes it.
+  let retrainInProgress = false;
+  let retrainStartedAt = 0;
+  let retrainCurrentJobId = null;
+
   /**
    * Start a retrain job asynchronously.
    *
+   * Returns `null` when a retrain is already in progress — callers translate
+   * that into a 409 for the HTTP layer. The flag is cleared in `finally` so
+   * a thrown retrain never wedges the mutex permanently.
+   *
    * @param {() => Promise<any>} runFn - the actual retrain logic (usually
    *   () => mlService.runRetrainEndpoint())
-   * @returns {string} jobId (UUID) — caller returns this in a 202 Accepted body
+   * @returns {string | null} jobId (UUID) — caller returns this in a 202
+   *   Accepted body, or null when retrain is already in progress.
    */
   function startJob(runFn) {
+    if (retrainInProgress) {
+      pushLog?.('ml_retrain_rejected_in_progress', {
+        currentJobId: retrainCurrentJobId,
+        elapsedMs: Date.now() - retrainStartedAt,
+      });
+      return null;
+    }
+
     const jobId = randomUUID();
     /** @type {JobState} */
     const job = {
@@ -50,6 +71,9 @@ export function createRetrainJobs(ctx = {}) {
       error: null,
     };
     jobs.set(jobId, job);
+    retrainInProgress = true;
+    retrainStartedAt = Date.now();
+    retrainCurrentJobId = jobId;
 
     // Kick off async — fire and forget. Deliberately NOT awaited so the
     // route handler can 202 immediately.
@@ -66,6 +90,9 @@ export function createRetrainJobs(ctx = {}) {
         job.error = err?.message || String(err);
         job.completedAt = new Date().toISOString();
         pushLog?.('ml_retrain_job_failed', { jobId, error: job.error });
+      } finally {
+        retrainInProgress = false;
+        retrainCurrentJobId = null;
       }
     });
 
@@ -86,5 +113,21 @@ export function createRetrainJobs(ctx = {}) {
     return [...jobs.entries()].map(([jobId, state]) => ({ jobId, ...state }));
   }
 
-  return { startJob, getStatus, list };
+  /**
+   * Plan 08-04 Task 2: expose mutex state so the /api/ml/retrain handler can
+   * fail fast with 409 before spawning anything. Returned shape is stable —
+   * consumers can rely on `inProgress` being a boolean for the foreseeable
+   * life of the factory.
+   *
+   * @returns {{ inProgress: boolean, jobId: string | null, elapsedMs: number }}
+   */
+  function isRetrainInProgress() {
+    return {
+      inProgress: retrainInProgress,
+      jobId: retrainCurrentJobId,
+      elapsedMs: retrainInProgress ? Date.now() - retrainStartedAt : 0,
+    };
+  }
+
+  return { startJob, getStatus, list, isRetrainInProgress };
 }
