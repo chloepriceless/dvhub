@@ -37,7 +37,23 @@
   function syncTokenFromUrl() {
     const url = new URL(window.location.href);
     const token = url.searchParams.get('token');
-    if (token) setStoredApiToken(token);
+    if (!token) return;
+    // Plan 08-03 Task 3: persist the token BEFORE we rewrite the URL so a
+    // navigation/race can never lose the value.
+    setStoredApiToken(token);
+    url.searchParams.delete('token');
+    // Defensive: also strip `token=` from any hash fragment that might carry it.
+    if (url.hash && url.hash.includes('token=')) {
+      const hashParts = url.hash.replace(/^#/, '').split('&').filter((p) => !/^token=/.test(p));
+      url.hash = hashParts.length ? '#' + hashParts.join('&') : '';
+    }
+    try {
+      const rewritten = url.pathname + (url.search || '') + (url.hash || '');
+      window.history.replaceState(null, '', rewritten);
+    } catch (err) {
+      // history API may be unavailable in some embedded contexts (file://, sandboxed iframe)
+      console.warn('[syncTokenFromUrl] history.replaceState failed', err);
+    }
   }
 
   function buildApiUrl(path) {
