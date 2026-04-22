@@ -12,7 +12,7 @@ import {
   loadConfigFile,
   saveConfigFile
 } from './config-model.js';
-import { createTelemetryStorePg, ensurePgSchema } from './telemetry-store-pg.js';
+import { createTelemetryStorePg, ensurePgSchema, runPendingMigrations } from './telemetry-store-pg.js';
 import { createPool } from './db-client.js';
 import {
   buildLiveTelemetrySamples
@@ -332,6 +332,11 @@ async function createTelemetryStoreIfEnabled() {
     // Connectivity check + schema init — fail fast if DB is unreachable
     await pool.query('SELECT 1');
     await ensurePgSchema(pool);
+    // Plan 08-01 Task 3: apply any pending SQL migrations under dvhub/db/migrations/
+    // directly after ensurePgSchema so schema is always brought up to date before
+    // the rest of startup (market-value backfill, forecast services, etc.) runs.
+    // This is the single canonical call site for runPendingMigrations.
+    await runPendingMigrations(pool);
     const store = createTelemetryStorePg(pool, {
       rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });

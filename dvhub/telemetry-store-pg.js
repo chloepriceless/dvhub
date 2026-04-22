@@ -1,3 +1,13 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
+// so the runner works regardless of where node is invoked from (systemd CWD,
+// tests, Docker entrypoints etc.).
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
   return new Date(input).toISOString();
@@ -262,7 +272,10 @@ export async function ensurePgSchema(pool) {
       forecast_for_date TEXT,
       source TEXT,
       meta_json TEXT,
-      UNIQUE(forecast_type, ts_utc)
+      -- Plan 08-01 Task 3 (CRITICAL #6): UNIQUE must cover the same 3 columns
+      -- the INSERT uses in ON CONFLICT (forecast_type, ts_utc, forecast_for_date).
+      -- Migration 001-vrm-forecasts-unique.sql realigns pre-existing databases.
+      UNIQUE(forecast_type, ts_utc, forecast_for_date)
     );
     CREATE INDEX IF NOT EXISTS idx_vrm_forecasts_ts ON vrm_forecasts(ts_utc);
 
@@ -273,6 +286,15 @@ export async function ensurePgSchema(pool) {
       status TEXT NOT NULL,
       error TEXT
     );
+
+    -- Plan 08-01 Task 3: schema_migrations tracks which SQL migration files
+    -- under dvhub/db/migrations/ have been applied. Runner defined below
+    -- (runPendingMigrations) inserts rows after a successful apply.
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      description TEXT NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
   // Ensure connected user owns all tables (fixes tables created by a different user, e.g. postgres)
   const { rows } = await pool.query(`
@@ -282,6 +304,37 @@ export async function ensurePgSchema(pool) {
   for (const row of rows) {
     const safeName = assertSqlIdentifier(row.tablename, 'tablename');
     await pool.query(`ALTER TABLE public.${safeName} OWNER TO current_user`);
+  }
+}
+
+/**
+ * Plan 08-01 Task 3: apply pending SQL migrations from dvhub/db/migrations/.
+ *
+ * Scans for files matching ^\d{3}-.+\.sql$, sorts them by version number,
+ * and runs each file whose version number is not yet recorded in
+ * schema_migrations. Each file is responsible for its own transaction and
+ * for inserting its schema_migrations row (ON CONFLICT DO NOTHING).
+ *
+ * Wired from server.js startup, immediately after ensurePgSchema(pool) —
+ * that is the single canonical call site so ordering is deterministic.
+ */
+export async function runPendingMigrations(pool) {
+  const migDir = path.join(__dirname, 'db', 'migrations');
+  if (!fs.existsSync(migDir)) return;
+  const files = fs.readdirSync(migDir)
+    .filter(f => /^\d{3}-.+\.sql$/.test(f))
+    .sort();
+  for (const f of files) {
+    const version = parseInt(f.slice(0, 3), 10);
+    const { rows } = await pool.query(
+      'SELECT 1 FROM schema_migrations WHERE version = $1',
+      [version]
+    );
+    if (rows.length > 0) continue;
+    const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
+    // eslint-disable-next-line no-console
+    console.log(`[migration] applying ${f}`);
+    await pool.query(sql);
   }
 }
 
