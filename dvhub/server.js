@@ -2,6 +2,8 @@ import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
+import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +131,22 @@ const SUN_TIMES_CACHE_PATH = path.join(
 const LIVE_TELEMETRY_FLUSH_MS = 5000;
 const MARKET_VALUE_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
 const MARKET_VALUE_BACKFILL_MAX_YEARS_PER_RUN = 2;
+// ── Plan 08-05 Task 1: TLS hardening ──────────────────────────────────────
+// Minimum TLS version: TLSv1.2 (rejects SSLv3 / TLSv1.0 / TLSv1.1 downgrades).
+// The cipher allowlist is the intersection of Mozilla "intermediate" profile
+// and Node.js v18+ OpenSSL defaults — all AEAD, all ECDHE, no CBC / 3DES / RC4.
+const TLS_MIN_VERSION = 'TLSv1.2';
+const TLS_ALLOWED_CIPHERS = [
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'TLS_AES_128_GCM_SHA256',
+  'ECDHE-ECDSA-AES256-GCM-SHA384',
+  'ECDHE-RSA-AES256-GCM-SHA384',
+  'ECDHE-ECDSA-CHACHA20-POLY1305',
+  'ECDHE-RSA-CHACHA20-POLY1305',
+  'ECDHE-ECDSA-AES128-GCM-SHA256',
+  'ECDHE-RSA-AES128-GCM-SHA256'
+].join(':');
 const RUNTIME_WORKER_ENABLED = process.env.DVHUB_ENABLE_RUNTIME_WORKER === '1';
 const PROCESS_ROLE = process.env.DVHUB_PROCESS_ROLE || (RUNTIME_WORKER_ENABLED ? 'web' : 'monolith');
 const IS_WEB_PROCESS = PROCESS_ROLE === 'web' || PROCESS_ROLE === 'monolith';
@@ -959,7 +977,16 @@ if (IS_WEB_PROCESS) {
     try {
       const certData = fs.readFileSync(tlsCert);
       const keyData = fs.readFileSync(tlsKey);
-      const webTls = https.createServer({ cert: certData, key: keyData }, web.listeners('request')[0]);
+      // Plan 08-05 Task 1: TLS floor at 1.2 + AEAD-only cipher allowlist +
+      // server-honoured cipher order. Blocks SSLv3/TLSv1.0/TLSv1.1 downgrades
+      // and weak-cipher negotiation (3DES/RC4/CBC-SHA1).
+      const webTls = https.createServer({
+        cert: certData,
+        key: keyData,
+        minVersion: TLS_MIN_VERSION,
+        ciphers: TLS_ALLOWED_CIPHERS,
+        honorCipherOrder: true
+      }, web.listeners('request')[0]);
       webTls.listen(httpsPort, () => {
         console.log(`HTTPS server listening on :${httpsPort}`);
       });
@@ -1083,10 +1110,33 @@ if (IS_RUNTIME_PROCESS) {
       pushLog('monitoring_heartbeat_blocked', { reason: 'host_not_allowed', url: safe });
       return;
     }
+    // Plan 08-05 Task 1: HMAC-SHA256 sign the outbound heartbeat so the
+    // monitoring endpoint can verify origin (prevents LAN attackers from
+    // forging "DVhub OK" pings to silence a compromised appliance). The
+    // Uptime-Kuma push API is GET-based, so we sign the canonical payload
+    // `${event}|${ts}|${host}|${version}` and ship the signature in a
+    // request header. Endpoints that ignore the header still work (backward
+    // compat); endpoints that know the shared signingKey can verify.
+    const signingKey = cfg.monitoring?.signingKey || '';
+    const hostname = os.hostname();
+    const appVersion = APP_VERSION?.version || '';
     const sendHeartbeat = async (msg) => {
       try {
+        const ts = Date.now();
+        const payload = `${msg}|${ts}|${hostname}|${appVersion}`;
+        const sig = signingKey
+          ? 'sha256=' + crypto.createHmac('sha256', signingKey).update(payload).digest('hex')
+          : 'unsigned';
         const sep = pushUrl.includes('?') ? '&' : '?';
-        await fetch(pushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=', { signal: AbortSignal.timeout(10000) });
+        await fetch(pushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=', {
+          signal: AbortSignal.timeout(10000),
+          headers: {
+            'x-dvhub-signature': sig,
+            'x-dvhub-ts': String(ts),
+            'x-dvhub-host': hostname,
+            'x-dvhub-version': appVersion
+          }
+        });
       } catch (e) { /* silent */ }
     };
     monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);

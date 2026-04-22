@@ -9,6 +9,7 @@ export const REDACTED_PATHS = Object.freeze([
   'forecast.pvnode.apiKey',
   'mqtt.username',
   'mqtt.password',
+  'monitoring.signingKey',
   'notifications.providers.telegram.botToken',
   'notifications.providers.telegram.chatId',
   'notifications.providers.pushover.appToken',

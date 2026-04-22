@@ -1938,7 +1938,11 @@ export function createDefaultConfig() {
     pvCoupling: 'ac_dc',
     monitoring: {
       pushUrl: '',
-      pushIntervalSec: 240
+      pushIntervalSec: 240,
+      // Plan 08-05 Task 1: optional HMAC-SHA256 signing key for outbound
+      // heartbeat. Empty string = heartbeat ships as `x-dvhub-signature: unsigned`
+      // (backward compatible). When set, the receiver can verify origin.
+      signingKey: ''
     },
     dcExportMode: {
       enabled: false,

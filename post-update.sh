@@ -50,10 +50,12 @@ echo "  Verzeichnisse: OK"
 # ── 4. Self-Signed TLS Zertifikat ──
 if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
   echo "  Generiere Self-Signed TLS Zertifikat..."
+  # Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
+  # (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
   openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$CONFIG_DIR/tls/key.pem" \
     -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 3650 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
+    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
   chmod 600 "$CONFIG_DIR/tls/key.pem"
   chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
 else
