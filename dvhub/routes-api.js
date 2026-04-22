@@ -13,6 +13,7 @@ import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, redactConfig, redactUrlCreds } from './config-redaction.js';
+import { createDefaultConfig } from './config-model.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +23,83 @@ export const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://dvhub.de https://*.tile.openstreetmap.org; connect-src 'self' https://api.dvhub.de"
 };
+
+// ── Plan 08-04: Input-validation + DoS bounds constants ─────────────────
+// Numeric upper bounds for /api/control/write — |value| above this is an
+// obvious attacker payload on residential HEMS hardware (highest plausible
+// industrial setpoint is ~50 kW; 100 kW is headroom).
+export const MAX_GRID_SETPOINT_W = 100_000;
+export const MAX_MINSOC_PCT = 100;
+// /api/telemetry/series cap — (endMs-startMs)/stepMs * seriesCount must stay below this
+// to protect the Pi from range-explosion DoS queries.
+export const MAX_TELEMETRY_SCAN_SLOTS = 50_000;
+// /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
+// and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
+// with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
+export const SEMVER_TAG = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/;
+// /api/messages/generate prompt-injection markers. Not a complete LLM-injection
+// defence — just a first-pass filter for obvious overrides (`ignore instructions`,
+// system-prompt tags, jailbreak phrasing, Llama/Mistral/ChatML prompt templates).
+export const PROMPT_INJECTION_PATTERNS = [
+  /\bignore\b.*\binstructions?\b/i,
+  /\bsystem\s*prompt\b/i,
+  /\bjailbreak\b/i,
+  /<\|im_start\|>|<\|im_end\|>/,
+  /\[\[SYSTEM\]\]|\[INST\]|<<SYS>>/
+];
+// /api/messages/generate body.data cap — 4 KB is plenty for status/savings
+// message context and bounds how much attacker text can reach the LLM per call.
+export const MAX_MESSAGE_DATA_BYTES = 4 * 1024;
+// Rate-limit Map eviction ceiling. Before this was unbounded, so IPv6-rotation
+// attackers could pin Node heap. Key normalisation (v4 verbatim, v6 /64 prefix)
+// further collapses per-address fan-out.
+export const RATE_LIMIT_MAX_KEYS = 5000;
+
+// Compare two semver-ish tags numerically on major.minor.patch. Strips a leading
+// `v`, ignores pre-release/build metadata (after `-` / `+`). Returns -1 / 0 / +1.
+// Used by /api/admin/update/apply downgrade guard.
+export function compareSemverTag(a, b) {
+  const parse = (s) => {
+    const m = String(s || '').trim().replace(/^v/, '').split(/[-+]/)[0].split('.');
+    return [Number(m[0]) || 0, Number(m[1]) || 0, Number(m[2]) || 0];
+  };
+  const [a0, a1, a2] = parse(a);
+  const [b0, b1, b2] = parse(b);
+  if (a0 !== b0) return a0 < b0 ? -1 : 1;
+  if (a1 !== b1) return a1 < b1 ? -1 : 1;
+  if (a2 !== b2) return a2 < b2 ? -1 : 1;
+  return 0;
+}
+
+// Derive allowed POST /api/config root keys from the canonical default config
+// PLUS the well-known live-config sections that are seeded by migrations
+// (vpn, https*, tls*, notifications, mqtt, forecast, family, devices, etc.).
+// Deep-path validation is plan 08-06's scope — this plan only covers
+// root-level strictness so an attacker cannot sneak in `__proto__`-ish keys
+// or bogus sections that get persisted and later consumed by unvalidated code.
+export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
+  ...Object.keys(createDefaultConfig()),
+  // Migration-seeded / optional sections
+  'vpn',
+  'httpsPort',
+  'tlsCertPath',
+  'tlsKeyPath',
+  'notifications',
+  'mqtt',
+  'forecast',
+  'family',
+  'devices',
+  'shelly',
+  'teslamate',
+  'teslamateCarId',
+  'snapshotIntervalSec',
+  'integrations',
+  'baseUrl',
+  // Plan 08-04 Task 2: Host / CORS / trust-proxy allowlist fields added to config
+  'allowedHosts',
+  'corsAllowedOrigins',
+  'trustProxy'
+]));
 
 export function createApiRoutes(ctx) {
   const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
@@ -256,9 +334,20 @@ export function createApiRoutes(ctx) {
   const RATE_LIMIT_WINDOW_MS = 60_000;
   const RATE_LIMIT_MAX_REQUESTS = 120;     // 120 req/min per IP for external (2/s avg)
   const LAN_RATE_LIMIT_MAX_REQUESTS = 600; // 600 req/min for LAN (10/s avg) — compromised IoT protection
+  // Plan 08-04 Task 1 Step 6: collapse the key space so IPv6-rotation attackers
+  // cannot make each request land in a new bucket. v4 addresses stay full, v6
+  // collapses to /64 prefix (which is the smallest externally-routable block).
   function getRateLimitKey(req) {
-    const raw = req.socket?.remoteAddress || '';
-    return raw.replace(/^::ffff:/, '');
+    const raw = (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+    if (!raw) return 'unknown';
+    if (raw.includes(':')) {
+      // IPv6 — collapse to /64 (first 4 hextets). Handles `::1` / `fe80::…` too.
+      const expanded = raw.split(':');
+      const groups = expanded.slice(0, 4).map((g) => g || '0');
+      while (groups.length < 4) groups.push('0');
+      return `v6:${groups.join(':')}::/64`;
+    }
+    return `v4:${raw}`;
   }
 
   function checkRateLimit(req, res) {
@@ -272,6 +361,13 @@ export function createApiRoutes(ctx) {
 
     let bucket = rateLimitBuckets.get(ip);
     if (!bucket) {
+      // Plan 08-04 Task 1 Step 6: evict the oldest-inserted entry when the Map
+      // hits the ceiling. Map iteration order is insertion order, so the first
+      // key returned is the oldest. This bounds Node heap under rotation DoS.
+      if (rateLimitBuckets.size >= RATE_LIMIT_MAX_KEYS) {
+        const firstKey = rateLimitBuckets.keys().next().value;
+        if (firstKey !== undefined) rateLimitBuckets.delete(firstKey);
+      }
       bucket = { windowStart: now, count: 0, prevCount: 0 };
       rateLimitBuckets.set(ip, bucket);
     }
@@ -340,6 +436,49 @@ export function createApiRoutes(ctx) {
     if (typeof rule.target !== 'string') return false;
     if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
     return true;
+  }
+
+  // Plan 08-04 Task 1 Step 5: walk a JSON payload depth-first, return the first
+  // path+pattern that matches any PROMPT_INJECTION_PATTERNS entry. Returns null
+  // when the payload is clean. Strings only — numbers / booleans / null skipped
+  // since they cannot carry prose instructions. Arrays and nested objects are
+  // recursed. Path uses `foo.0.bar` dotted form for error reporting.
+  function scanForInjection(obj, path = '') {
+    if (obj == null) return null;
+    if (typeof obj === 'string') {
+      for (const rx of PROMPT_INJECTION_PATTERNS) {
+        if (rx.test(obj)) return { path, pattern: rx.source };
+      }
+      return null;
+    }
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const hit = scanForInjection(obj[i], path ? `${path}.${i}` : String(i));
+        if (hit) return hit;
+      }
+      return null;
+    }
+    if (typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        const hit = scanForInjection(v, path ? `${path}.${k}` : k);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
+  // used by /api/meter/scan to refuse SSRF to internet hosts and by the
+  // heartbeat guard (via isAllowedHeartbeatUrl) to refuse internal pivots.
+  function isRfc1918OrLoopback(host) {
+    const h = String(host || '').toLowerCase();
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
+    const parts = h.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    if (parts[0] === 10) return true;                                      // 10.0.0.0/8
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
+    if (parts[0] === 192 && parts[1] === 168) return true;                 // 192.168.0.0/16
+    return false;
   }
 
   // ── Response builders ────────────────────────────────────────────────
@@ -957,6 +1096,22 @@ export function createApiRoutes(ctx) {
       const start = url.searchParams.get('start') || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const end = url.searchParams.get('end') || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
       const maxRes = Number(url.searchParams.get('maxResolution')) || 900;
+      // Plan 08-04 Task 1 Step 7: bound total slot scan. Without this an
+      // attacker could pass start=0&end=now&step=1 across many keys and drag
+      // the Pi into a multi-minute DB scan, starving foreground traffic.
+      // maxRes is in SECONDS (maxResolution=900 -> 15 min buckets).
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      const stepMs = Math.max(1, Number(maxRes)) * 1000;
+      const totalSlots = Math.ceil(((Number.isFinite(endMs) ? endMs : 0) - (Number.isFinite(startMs) ? startMs : 0)) / stepMs) * (keys.length || 1);
+      if (!Number.isFinite(totalSlots) || totalSlots < 0 || totalSlots > MAX_TELEMETRY_SCAN_SLOTS) {
+        return json(res, 400, {
+          ok: false,
+          error: 'scan_too_large',
+          limit: MAX_TELEMETRY_SCAN_SLOTS,
+          requested: Number.isFinite(totalSlots) ? totalSlots : null
+        });
+      }
       try {
         const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
@@ -1087,6 +1242,14 @@ export function createApiRoutes(ctx) {
       if (Object.prototype.hasOwnProperty.call(body.config, 'apiToken')
           && (body.config.apiToken === '' || body.config.apiToken == null)) {
         return json(res, 400, { ok: false, error: 'api_token_cannot_be_empty' });
+      }
+      // Plan 08-04 Task 1 Step 3: strict root-level schema. Reject any top-level
+      // key that is not in ALLOWED_CONFIG_ROOTS so an attacker cannot pass
+      // arbitrary paths that future handlers might read without validation.
+      // (Deep-path validation — e.g. schema of `victron.*` — stays in Plan 08-06.)
+      const unknownRoots = Object.keys(body.config).filter((k) => !ALLOWED_CONFIG_ROOTS.has(k));
+      if (unknownRoots.length > 0) {
+        return json(res, 400, { ok: false, error: 'unknown_config_paths', paths: unknownRoots });
       }
       const result = ctx.saveAndApplyConfig(body.config);
       pushLog('config_saved', {
@@ -1298,7 +1461,27 @@ export function createApiRoutes(ctx) {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
         const body = await parseBody(req).catch(() => ({}));
-        const targetVersion = body?.version || null; // optional: install specific version
+        // Plan 08-04 Task 1 Step 4: semver validation + downgrade guard.
+        // targetVersion is passed directly to `git checkout` — an attacker with
+        // a stolen token otherwise gets arbitrary-ref checkout (incl. shell
+        // metacharacters if git ever interprets them) and version-downgrade attacks.
+        const rawVersion = body?.version;
+        let targetVersion = null;
+        if (rawVersion !== undefined && rawVersion !== null && rawVersion !== '') {
+          const versionStr = String(rawVersion).trim();
+          if (!SEMVER_TAG.test(versionStr)) {
+            pushLog('update_apply_rejected', { reason: 'invalid_semver', got: versionStr });
+            return json(res, 400, { ok: false, error: 'invalid_semver', got: versionStr });
+          }
+          // Downgrade guard: compare against currently-installed package version.
+          // compareSemver returns -1/0/+1 (a<b, a==b, a>b).
+          const currentVersion = ctx.getAppVersion?.()?.version || ctx.getAppVersion?.()?.versionLabel || '0.0.0';
+          if (!body?.allowDowngrade && compareSemverTag(versionStr, currentVersion) < 0) {
+            pushLog('update_apply_rejected', { reason: 'downgrade_blocked', current: currentVersion, requested: versionStr });
+            return json(res, 400, { ok: false, error: 'downgrade_blocked', current: currentVersion, requested: versionStr });
+          }
+          targetVersion = versionStr;
+        }
         const repoRoot = ctx.getRepoRoot();
         const appDir = ctx.getAppDir();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
@@ -1636,6 +1819,25 @@ export function createApiRoutes(ctx) {
       const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct']);
       if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
       const value = Number(body.value);
+      // Plan 08-04 Task 1 Step 2: numeric bounds before applyControlTarget so an
+      // attacker with a stolen token cannot push 1e308 into the ESS write pipeline.
+      if (!Number.isFinite(value)) {
+        return json(res, 400, { ok: false, error: 'value_not_finite' });
+      }
+      if (target === 'gridSetpointW' && Math.abs(value) > MAX_GRID_SETPOINT_W) {
+        return json(res, 400, { ok: false, error: 'value_out_of_range', max: MAX_GRID_SETPOINT_W });
+      }
+      if (target === 'minSocPct' && (value < 0 || value > MAX_MINSOC_PCT)) {
+        return json(res, 400, { ok: false, error: 'minsoc_out_of_range', max: MAX_MINSOC_PCT });
+      }
+      // chargeCurrentA: ±1000 A is an order of magnitude above residential inverter spec.
+      if (target === 'chargeCurrentA' && Math.abs(value) > 1000) {
+        return json(res, 400, { ok: false, error: 'charge_current_out_of_range', max: 1000 });
+      }
+      // feedExcessDcPv is a boolean flag at the Modbus layer (0/1); anything else is a bug.
+      if (target === 'feedExcessDcPv' && value !== 0 && value !== 1) {
+        return json(res, 400, { ok: false, error: 'feed_excess_flag_must_be_0_or_1' });
+      }
       ctx.assertValidRuntimeCommand('control_write', { target, value });
       state.schedule.manualOverride[target] = { value, at: Date.now() };
       const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
@@ -1915,12 +2117,24 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       if (!ctx.llmService) return json(res, 503, { error: 'LLM service not available' });
       try {
-        // Parse optional body
+        // Parse optional body (4 KB cap — Plan 08-04 Step 5 MAX_MESSAGE_DATA_BYTES).
         let body = {};
         try {
-          const raw = await readRawBody(req, 4096);
+          const raw = await readRawBody(req, MAX_MESSAGE_DATA_BYTES);
           if (raw) body = JSON.parse(raw);
         } catch { /* ignore body parse errors */ }
+
+        // Plan 08-04 Task 1 Step 5: prompt-injection guard. Walk body.data and
+        // reject any string matching the injection patterns BEFORE it reaches
+        // the LLM. This is a coarse first-pass filter — deeper LLM-defence is
+        // the LLM service's concern, not a route handler — but it blocks the
+        // obvious attacker payloads (`ignore all previous instructions`,
+        // ChatML/Llama/Mistral template tags, `jailbreak` phrasing).
+        const injection = scanForInjection(body?.data);
+        if (injection) {
+          pushLog('prompt_injection_rejected', { path: injection.path });
+          return json(res, 400, { ok: false, error: 'prompt_injection_detected', path: injection.path });
+        }
 
         // Default: build status message from current state
         const type = body.type || 'status';
