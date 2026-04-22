@@ -348,7 +348,17 @@ if command -v python3 &>/dev/null; then
     sudo mkdir -p "$(dirname "$VENV_DIR")"
     sudo python3 -m venv "$VENV_DIR"
     sudo "$VENV_DIR/bin/pip" install --upgrade pip
-    sudo "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
+    # Plan 08-05 Task 3 (REPOLENS security/dependency-cves/002):
+    # Prefer the hash-pinned lockfile (requirements.lock) when available.
+    # --require-hashes rejects any wheel whose sha256 is not in the lockfile,
+    # blocking transitive-dep substitution + upstream pypi compromise.
+    REQUIREMENTS_LOCK="$APP_DIR/python/requirements.lock"
+    if [ -f "$REQUIREMENTS_LOCK" ]; then
+      echo "Installing from lockfile with --require-hashes ($REQUIREMENTS_LOCK)"
+      sudo "$VENV_DIR/bin/pip" install --require-hashes --no-deps -r "$REQUIREMENTS_LOCK"
+    else
+      sudo "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
+    fi
     echo "Forecast venv created successfully."
   else
     echo "No requirements.txt found, skipping Python forecast setup."
@@ -383,8 +393,43 @@ install_ml_deps() {
   if [ "$RAM_MB" -ge 7500 ]; then
     echo "  LLM: Tier 3 erkannt (${RAM_MB}MB RAM) — installiere Ollama + TinyLlama..."
     if ! command -v ollama &>/dev/null; then
-      curl -fsSL https://ollama.com/install.sh | sh
-      echo "  LLM: Ollama installiert."
+      # Plan 08-05 Task 3 (REPOLENS security/dependency-cves/001):
+      # curl | sh lets the upstream (or any MITM) run arbitrary root code.
+      # Pin to a known version and verify sha256 before installing.
+      OLLAMA_VERSION="0.1.48"
+      OLLAMA_UNAME_M="$(uname -m)"
+      case "$OLLAMA_UNAME_M" in
+        x86_64|amd64)
+          OLLAMA_ARCH="amd64"
+          OLLAMA_SHA256="7641b21e9d0822ba44e494f5ed3d3796d9e9fcdf4dbb66064f8c34c865bbec0b"
+          ;;
+        aarch64|arm64)
+          OLLAMA_ARCH="arm64"
+          OLLAMA_SHA256="8ccaea237c3ef2a34d0cc00d8a89ffb1179d5c49211b6cbdf80d8d88e3f0add6"
+          ;;
+        *)
+          echo "  LLM: Unbekannte Architektur ${OLLAMA_UNAME_M} — Ollama wird uebersprungen."
+          OLLAMA_ARCH=""
+          ;;
+      esac
+      if [ -n "$OLLAMA_ARCH" ]; then
+        OLLAMA_URL="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-${OLLAMA_ARCH}"
+        OLLAMA_TMP="$(mktemp)"
+        echo "  LLM: Lade Ollama v${OLLAMA_VERSION} (${OLLAMA_ARCH}) herunter..."
+        if curl -fsSL -o "$OLLAMA_TMP" "$OLLAMA_URL"; then
+          echo "${OLLAMA_SHA256}  ${OLLAMA_TMP}" | sha256sum -c - >/dev/null 2>&1 || {
+            echo "  LLM: sha256 checksum mismatch — Installation abgebrochen."
+            rm -f "$OLLAMA_TMP"
+            exit 1
+          }
+          sudo install -m 0755 "$OLLAMA_TMP" /usr/local/bin/ollama
+          rm -f "$OLLAMA_TMP"
+          echo "  LLM: Ollama installiert (sha256 verifiziert)."
+        else
+          echo "  LLM: Download von ${OLLAMA_URL} fehlgeschlagen — Ollama wird uebersprungen."
+          rm -f "$OLLAMA_TMP"
+        fi
+      fi
     else
       echo "  LLM: Ollama bereits installiert."
     fi

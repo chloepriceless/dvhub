@@ -23,3 +23,17 @@ docs/plans/
 # Temp
 tmp/
 *.tmp
+
+# Secrets (Plan 08-05 Task 3 — REPOLENS security/secrets/002-003)
+# Keep operator-local config and key material out of git under any path.
+config.json
+dvhub/config.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+# migration-runner.js writes timestamped backups alongside config.json
+config.backup-*.json
+dvhub/config.backup-*.json
