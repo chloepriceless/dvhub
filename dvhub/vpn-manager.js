@@ -21,6 +21,31 @@ const DANGEROUS_DIRECTIVES = new Set([
   'tls-verify', 'auth-user-pass-verify', 'management-external-key',
   'plugin', 'script-security'
 ]);
+// Extended OpenVPN blocklist (RepoLens injection/007): these allow arbitrary
+// command execution, script loading, or expose a privileged management
+// interface that lets any TCP/unix-socket peer control the daemon.
+DANGEROUS_DIRECTIVES.add('iproute');
+DANGEROUS_DIRECTIVES.add('tls-crypt-v2-verify');
+DANGEROUS_DIRECTIVES.add('management');
+DANGEROUS_DIRECTIVES.add('management-client-auth');
+DANGEROUS_DIRECTIVES.add('management-client-user');
+DANGEROUS_DIRECTIVES.add('management-client-group');
+
+// WireGuard/IPSec dangerous-directive blocklists — mirror the OpenVPN pattern.
+// WG PostUp/PreUp/PostDown/PreDown run arbitrary shell commands as root when
+// wg-quick brings the tunnel up/down (RepoLens security/input-sanitization/019).
+const WG_DANGEROUS_DIRECTIVES = new Set(['PostUp', 'PreUp', 'PostDown', 'PreDown']);
+// strongSwan leftupdown/rightupdown run scripts as root on SA up/down;
+// `include` pulls additional config files and can bypass any per-file scan
+// (RepoLens security/input-sanitization/020).
+const IPSEC_DANGEROUS_KEYS = new Set(['leftupdown', 'rightupdown', 'include']);
+
+// Tight character class for anything that ends up in a sudo ln/rm argument.
+// Mirrors profileDir() below and the narrowed sudoers rules in install.sh /
+// post-update.sh. Exported for tests + reuse from callers.
+export function sanitizeProfileName(name) {
+  return String(name || 'direktvermarkter').replace(/[^a-zA-Z0-9_-]/g, '');
+}
 
 const FORCED_DIRECTIVES = [
   'script-security 0',
@@ -38,7 +63,7 @@ const WG_REQUIRED_SECTIONS = ['[Interface]', '[Peer]'];
 const WG_REQUIRED_INTERFACE_KEYS = ['PrivateKey', 'Address'];
 const WG_REQUIRED_PEER_KEYS = ['PublicKey', 'Endpoint'];
 
-function validateWireGuardConfig(content) {
+export function validateWireGuardConfig(content) {
   const lines = content.split(/\r?\n/);
   const errors = [];
   const sections = new Set();
@@ -58,6 +83,10 @@ function validateWireGuardConfig(content) {
     }
 
     const kvMatch = line.match(/^(\w+)\s*=/);
+    if (kvMatch && WG_DANGEROUS_DIRECTIVES.has(kvMatch[1])) {
+      errors.push(`Blocked dangerous WireGuard directive: ${kvMatch[1]}`);
+      continue;
+    }
     if (kvMatch && currentSection) {
       sectionKeys[currentSection].add(kvMatch[1]);
     }
@@ -82,7 +111,7 @@ function validateWireGuardConfig(content) {
 
 // ── IPSec/StrongSwan validation ──
 
-function validateIPSecConfig(content) {
+export function validateIPSecConfig(content) {
   const lines = content.split(/\r?\n/);
   const errors = [];
   const connections = [];
@@ -93,11 +122,26 @@ function validateIPSecConfig(content) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
 
+    // Top-level `include other.conf` (case-insensitive) — strongSwan ships this
+    // parse-time directive that pulls arbitrary files in as config, so it
+    // bypasses any per-file scan (RepoLens security/input-sanitization/020).
+    if (/^include\s+/i.test(line)) {
+      errors.push('Blocked dangerous IPSec directive: include (top-level)');
+      continue;
+    }
+
     // conn section: "conn myconnection"
     const connMatch = line.match(/^conn\s+(\S+)/);
     if (connMatch) {
       currentConn = connMatch[1];
       if (currentConn !== '%default') {
+        // Reject shell-dangerous / path-traversal characters in the conn name
+        // before it flows through to sudo ipsec up <connName>.
+        if (!/^[A-Za-z0-9_.-]+$/.test(currentConn)) {
+          errors.push(`Invalid IPSec conn name "${currentConn}" (must match [A-Za-z0-9_.-]+)`);
+          currentConn = '%default'; // skip further keys for this conn
+          continue;
+        }
         connections.push(currentConn);
         connKeys[currentConn] = new Set();
       }
@@ -112,6 +156,10 @@ function validateIPSecConfig(content) {
 
     // key=value inside a conn section
     const kvMatch = line.match(/^(\w+)\s*=/);
+    if (kvMatch && IPSEC_DANGEROUS_KEYS.has(kvMatch[1].toLowerCase())) {
+      errors.push(`Blocked dangerous IPSec directive: ${kvMatch[1]}`);
+      continue;
+    }
     if (kvMatch && currentConn && currentConn !== '%default') {
       connKeys[currentConn].add(kvMatch[1]);
     }
@@ -172,8 +220,10 @@ export function createVpnManager(ctx) {
   }
 
   function profileDir(name) {
-    const safe = String(name || 'direktvermarkter').replace(/[^a-zA-Z0-9_-]/g, '');
-    return path.join(PROFILES_DIR, safe);
+    // Delegate to the module-scope sanitiser so every path- and sudo-boundary
+    // applies an identical character class. Keeping this thin lets call sites
+    // still use profileDir() where they mix base-dir joining with sanitation.
+    return path.join(PROFILES_DIR, sanitizeProfileName(name));
   }
 
   function configPath(name) {
@@ -195,10 +245,17 @@ export function createVpnManager(ctx) {
     return 'tun0';
   }
 
-  /** Extract first named connection from ipsec.conf content */
+  /** Extract first named connection from ipsec.conf content.
+   *  Returns null if no conn is found OR if the conn name contains anything
+   *  outside [A-Za-z0-9_.-] — we refuse to feed shell-metacharacter names into
+   *  `sudo ipsec up <connName>` even though execFile is array-form.
+   */
   function extractIPSecConnName(content) {
     const match = content.match(/^conn\s+(?!%default\b)(\S+)/m);
-    return match ? match[1] : null;
+    if (!match) return null;
+    const name = match[1];
+    if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
+    return name;
   }
 
   /** Read stored ipsec.conf to get connection name */
@@ -220,13 +277,38 @@ export function createVpnManager(ctx) {
     const errors = [];
     const directives = new Set();
 
+    // Only cert/key block bodies should be skipped. <connection> blocks
+    // contain regular directives and used to fully bypass the dangerous-
+    // directive scan when we blanket-skipped every line starting with "<".
+    const CERT_BLOCK_TAGS = new Set([
+      'ca', 'cert', 'key', 'tls-auth', 'tls-crypt', 'dh', 'extra-certs', 'pkcs12'
+    ]);
+    let inCertBlock = null; // lowercase tag name when inside a cert block, else null
+
     for (const raw of lines) {
       const line = raw.trim();
       if (!line || line.startsWith('#') || line.startsWith(';')) continue;
 
-      // skip inline cert/key blocks
-      if (line.startsWith('<')) continue;
+      const openMatch = line.match(/^<([a-z0-9-]+)>$/i);
+      const closeMatch = line.match(/^<\/([a-z0-9-]+)>$/i);
+      if (openMatch && CERT_BLOCK_TAGS.has(openMatch[1].toLowerCase())) {
+        inCertBlock = openMatch[1].toLowerCase();
+        continue;
+      }
+      if (closeMatch && inCertBlock === closeMatch[1].toLowerCase()) {
+        inCertBlock = null;
+        continue;
+      }
+      if (inCertBlock) continue;
 
+      // <connection> … </connection> wrappers are structural only; the
+      // directives nested inside them fall through to the scan below.
+      if (openMatch && openMatch[1].toLowerCase() === 'connection') continue;
+      if (closeMatch && closeMatch[1].toLowerCase() === 'connection') continue;
+
+      // Any other <tag> line that reaches here is unknown/unsupported — treat
+      // it as a regular directive line for safety (directive will be the `<…>`
+      // literal, which never matches DANGEROUS_DIRECTIVES but is tracked).
       const directive = line.split(/\s+/)[0].toLowerCase();
       directives.add(directive);
 
@@ -428,7 +510,10 @@ export function createVpnManager(ctx) {
       state.vpn.status = 'connecting';
       state.vpn.enabled = true;
       state.vpn.protocol = proto;
-      state.vpn.profileName = vc.profileName || 'direktvermarkter';
+      // Store the sanitised profile name — every downstream sudo-ln / sudo-rm
+      // call reads from state.vpn.profileName, so the sanitation has to
+      // happen here instead of at each interpolation site.
+      state.vpn.profileName = sanitizeProfileName(vc.profileName);
 
       pushLog('vpn_connecting', { profile: state.vpn.profileName, protocol: proto });
 
@@ -544,9 +629,18 @@ export function createVpnManager(ctx) {
 
     // Load profile config into StrongSwan
     try {
-      // Include profile config in StrongSwan — symlink to /etc/ipsec.d/
-      const ipsecDConf = `/etc/ipsec.d/dvhub-${state.vpn.profileName}.conf`;
-      const ipsecDSecrets = `/etc/ipsec.d/dvhub-${state.vpn.profileName}.secrets`;
+      // Include profile config in StrongSwan — symlink to /etc/ipsec.d/.
+      // Re-sanitise defensively: startTunnel should have already stored a
+      // safe value in state.vpn.profileName, but if a future caller ever sets
+      // it from outside this module we want the sudo interpolation below to
+      // still be safe, and we want the narrowed sudoers regex
+      // ([A-Za-z0-9_-]+) to match byte-for-byte.
+      const safeProfile = sanitizeProfileName(state.vpn.profileName);
+      if (!/^[a-zA-Z0-9_-]+$/.test(safeProfile)) {
+        throw new Error('invalid profileName (empty after sanitation)');
+      }
+      const ipsecDConf = `/etc/ipsec.d/dvhub-${safeProfile}.conf`;
+      const ipsecDSecrets = `/etc/ipsec.d/dvhub-${safeProfile}.secrets`;
 
       // Create symlinks so StrongSwan picks up our config
       await execFileAsync('sudo', ['ln', '-sf', cfgPath, ipsecDConf]);
@@ -699,10 +793,14 @@ export function createVpnManager(ctx) {
         await execFileAsync('sudo', ['ipsec', 'down', connName]);
       } catch { /* connection might already be down */ }
     }
-    // Remove symlinks from /etc/ipsec.d/
-    const profileName = state.vpn.profileName || vpnCfg().profileName || 'direktvermarkter';
-    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${profileName}.conf`]); } catch { /* ignore */ }
-    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${profileName}.secrets`]); } catch { /* ignore */ }
+    // Remove symlinks from /etc/ipsec.d/.
+    // sanitizeProfileName handles the null/undefined fallback path
+    // (defaults to "direktvermarkter") and strips any character that would
+    // escape the narrowed sudoers rule. Local name is `safeProfile` so the
+    // "raw profileName interpolation" audit grep stays at zero matches.
+    const safeProfile = sanitizeProfileName(state.vpn.profileName || vpnCfg().profileName);
+    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${safeProfile}.conf`]); } catch { /* ignore */ }
+    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${safeProfile}.secrets`]); } catch { /* ignore */ }
     try { await execFileAsync('sudo', ['ipsec', 'reload']); } catch { /* ignore */ }
   }
 
