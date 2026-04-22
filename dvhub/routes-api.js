@@ -204,12 +204,14 @@ export function createApiRoutes(ctx) {
     return false;
   }
 
-  // Read-only endpoints safe for LAN access without auth token.
-  // ALL other endpoints require auth, even from LAN. Default-deny.
+  // LAN-safe endpoints: read-only, no secrets, no admin surface, no internal paths/errors.
+  // Any endpoint leaking credentials, topology, or server errors MUST require Bearer auth.
+  // Plan 08-03: removed /api/log (error bodies/paths), /api/vpn/config (topology+key fingerprints),
+  // /api/integrations/status (MQTT broker URL with creds).
   const LAN_SAFE_ENDPOINTS = new Set([
     '/api/keepalive/modbus',
     '/api/keepalive/pulse',
-    '/api/config',           // GET only (read config)
+    '/api/config',           // GET only (read config — values redacted via redactConfig)
     '/api/config/export',
     '/api/discovery/systems',
     '/api/status',
@@ -219,7 +221,6 @@ export function createApiRoutes(ctx) {
     '/api/integration/eos',
     '/api/integration/emhass',
     '/api/optimizer/status',
-    '/api/log',
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
@@ -233,11 +234,9 @@ export function createApiRoutes(ctx) {
     '/api/schedule/automation/config',
     '/api/meter/scan',
     '/api/vpn/status',
-    '/api/vpn/config',
     '/api/vpn/history',
     '/dv/control-value',
     '/api/devices',                // Phase 04 — device list (INTG-05)
-    '/api/integrations/status',    // Phase 04 — integration status overview
     '/api/messages',               // Phase 05 — LLM messages (family tablet)
     '/api/messages/history',       // Phase 05 — message history (family tablet)
   ]);
@@ -714,6 +713,18 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
       if (!checkRateLimit(req, res)) return;
+      if (!checkAuth(req, res)) return;
+    }
+
+    // Plan 08-03 Task 1: gate OpenAPI/Swagger UI behind auth.
+    // These describe the admin surface and include Try-It-Out buttons that would otherwise
+    // let any LAN client enumerate and probe the API without a Bearer token.
+    if (
+      url.pathname === '/api-docs.html' ||
+      url.pathname === '/api-docs' ||
+      url.pathname === '/openapi.json' ||
+      url.pathname === '/api-docs-init.js'
+    ) {
       if (!checkAuth(req, res)) return;
     }
 
