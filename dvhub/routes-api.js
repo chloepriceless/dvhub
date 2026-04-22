@@ -12,7 +12,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImpor
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
-import { REDACTED_PATHS, redactConfig } from './config-redaction.js';
+import { REDACTED_PATHS, redactConfig, redactUrlCreds } from './config-redaction.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -886,7 +886,11 @@ export function createApiRoutes(ctx) {
         timestamp: Date.now(),
         mqtt: {
           connected: ctx.mqttHub?.connected ?? false,
-          broker: mqttCfg.brokerUrl || 'embedded',
+          // Plan 08-03 Task 2: strip user:pass from the broker URL before emit.
+          // Previously this field leaked the full `mqtt://user:secret@host:1883` to
+          // any (now-authenticated) client. We keep the host/port intact so the UI
+          // can still display "which broker am I on" without exposing credentials.
+          broker: mqttCfg.brokerUrl ? redactUrlCreds(mqttCfg.brokerUrl) : 'embedded',
           embedded: !mqttCfg.brokerUrl,
           topicCount: ctx.mqttPublisher?.topicCount ?? 0
         },

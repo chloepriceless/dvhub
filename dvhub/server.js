@@ -28,7 +28,7 @@ import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-prot
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
-import { REDACTED_PATHS, restoreRedacted } from './config-redaction.js';
+import { REDACTED_PATHS, restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
   createMarketAutomationBuilder
@@ -1031,7 +1031,10 @@ if (IS_RUNTIME_PROCESS) {
     };
     monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
     setTimeout(() => sendHeartbeat('DVhub started'), 5000);
-    console.log('  Monitoring heartbeat -> ' + pushUrl.substring(0, 60) + '...');
+    // Plan 08-03 Task 2: run through redactUrlCreds before any logging/exposure so that
+    // `https://user:token@push.example/uk` never appears in journalctl or systemd logs.
+    const safePushUrl = redactUrlCreds(pushUrl);
+    console.log('  Monitoring heartbeat -> ' + safePushUrl.substring(0, 60) + '...');
   }
   startMonitoringHeartbeat();
 }
