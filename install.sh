@@ -563,10 +563,11 @@ IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
 LN_PATH="$(command -v ln || echo /usr/bin/ln)"
 RM_PATH="$(command -v rm || echo /usr/bin/rm)"
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
-KILL_PATH="$(which kill 2>/dev/null || echo /usr/bin/kill)"
+PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
 cat >"${SUDOERS_FILE}" <<SUDOERS
+# BEGIN DVHUB SUDOERS — keep this block byte-identical with install.sh.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.service *
@@ -578,12 +579,26 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} reload
-${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-*
+# Narrowed ln/rm rules — only permit operations rooted at dvhub VPN paths.
+# profileName regex: [A-Za-z0-9_-]+ (enforced in vpn-manager.js sanitizeProfileName).
+# Note: sudoers wildcard * in argument slots matches any string including
+# slashes; the anchored path prefix + bounded character class provide
+# defence-in-depth behind the application-layer sanitizeProfileName() check.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf /etc/dvhub/vpn/profiles/*/ipsec.conf /etc/ipsec.d/dvhub-*.conf
+${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf /etc/dvhub/vpn/profiles/*/ipsec.secrets /etc/ipsec.d/dvhub-*.secrets
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-[A-Za-z0-9_-]*.conf
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-[A-Za-z0-9_-]*.secrets
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -0 *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${KILL_PATH} -15 *
+# Process control — pkill by exact process name, not generic kill PID.
+# OpenVPN daemon (stopTunnel/healthCheck), strongSwan charon/starter.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -0 -x openvpn
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x openvpn
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x openvpn
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
@@ -591,6 +606,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
+# END DVHUB SUDOERS
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 

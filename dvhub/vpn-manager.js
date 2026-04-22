@@ -762,8 +762,12 @@ export function createVpnManager(ctx) {
   async function stopOpenVpn() {
     if (openvpnPid) {
       try {
-        await execFileAsync('sudo', ['kill', '-15', String(openvpnPid)]);
-      } catch { /* already dead */ }
+        // pkill -x openvpn matches the narrowed sudoers rule (install.sh /
+        // post-update.sh only allow `pkill -15 -x openvpn`, not generic
+        // `kill -15 *`). The name match is fine because we only ever spawn
+        // one openvpn daemon per dvhub service.
+        await execFileAsync('sudo', ['pkill', '-15', '-x', 'openvpn']);
+      } catch { /* already dead or no matching process */ }
     }
 
     if (openvpnProcess) {
@@ -856,10 +860,13 @@ export function createVpnManager(ctx) {
       return;
     }
 
-    // 1. PID alive check (OpenVPN only — WireGuard is a kernel module)
+    // 1. Liveness check (OpenVPN only — WireGuard is a kernel module).
+    // `pkill -0 -x openvpn` returns 0 if at least one openvpn process exists
+    // and non-zero otherwise — same semantics as `kill -0 <pid>` without
+    // needing the generic `kill -0 *` sudoers rule.
     if (state.vpn.protocol === 'openvpn' && openvpnPid) {
       try {
-        await execFileAsync('sudo', ['kill', '-0', String(openvpnPid)]);
+        await execFileAsync('sudo', ['pkill', '-0', '-x', 'openvpn']);
       } catch {
         pushLog('vpn_watchdog_pid_dead', {});
         scheduleReconnect();
