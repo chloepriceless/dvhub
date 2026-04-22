@@ -306,9 +306,15 @@ export function createApiRoutes(ctx) {
 
   function checkAuth(req, res) {
     const cfg = getCfg();
-    if (!cfg.apiToken) return true;
     // LAN requests bypass token check only for allowlisted read-only GET endpoints
     if (isLocalNetworkRequest(req) && isLanSafeRequest(req)) return true;
+    // Plan 08-01 Task 1 (CRITICAL #1): removed the legacy empty-token fast-path bypass.
+    // When no token is configured we now hard-fail with 503 rather than silently opening auth.
+    if (!cfg.apiToken || typeof cfg.apiToken !== 'string' || cfg.apiToken.length === 0) {
+      res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'api_token_not_configured' }));
+      return false;
+    }
     const expected = Buffer.from(cfg.apiToken);
     const auth = req.headers.authorization || '';
     if (auth.startsWith('Bearer ')) {
@@ -1060,6 +1066,12 @@ export function createApiRoutes(ctx) {
       const body = await parseBody(req);
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
+      }
+      // Plan 08-01 Task 1 (CRITICAL #1 companion): never allow a config write
+      // that empties the apiToken — that would re-open the auth bypass we just closed.
+      if (Object.prototype.hasOwnProperty.call(body.config, 'apiToken')
+          && (body.config.apiToken === '' || body.config.apiToken == null)) {
+        return json(res, 400, { ok: false, error: 'api_token_cannot_be_empty' });
       }
       const result = ctx.saveAndApplyConfig(body.config);
       pushLog('config_saved', {

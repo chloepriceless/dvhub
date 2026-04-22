@@ -94,6 +94,18 @@ let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
 let cfg = loadedConfig.effectiveConfig;
 const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
+
+// Plan 08-01 Task 1 (CRITICAL #1): refuse to start with service actions enabled
+// but no real apiToken configured — that combination is remote root via /api/admin/*.
+// Log only the condition, never the token itself.
+if (SERVICE_ACTIONS_ENABLED && (!cfg.apiToken || typeof cfg.apiToken !== 'string' || cfg.apiToken.length < 16)) {
+  console.error('[FATAL] apiToken missing or too short (<16 chars) while DV_ENABLE_SERVICE_ACTIONS=1 — refusing to start');
+  process.exit(1);
+}
+if (!cfg.apiToken || cfg.apiToken === '') {
+  console.warn('[WARN] apiToken is empty — all authenticated endpoints will return 503 until token is configured');
+}
+
 const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 const DATA_DIR = process.env.DV_DATA_DIR || '';
