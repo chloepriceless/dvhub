@@ -1139,6 +1139,10 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/admin/system/updates/apply' && req.method === 'POST') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      // Plan 08-01 Task 2 (CRITICAL #3): parse body BEFORE the try so `securityOnly`
+      // is in scope for both the success (pushLog / response) and error branches.
+      const body = await parseBody(req).catch(() => ({}));
+      const securityOnly = body?.securityOnly === true;
       try {
         // Wait for any running apt/dpkg lock (max 60s)
         for (let i = 0; i < 12; i++) {
@@ -1147,7 +1151,19 @@ export function createApiRoutes(ctx) {
             await new Promise(r => setTimeout(r, 5000)); // lock held, wait 5s
           } catch { break; } // fuser exits non-zero = no lock
         }
-        const result = await execFileAsync('sudo', ['apt-get', 'upgrade', '-y', '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'], { timeout: 300000 });
+        // Plan 08-01 Task 2: honour securityOnly by switching to the security-only
+        // apt invocation (reads only /etc/apt/security.sources.list.d/*).
+        const aptCmd = securityOnly
+          ? ['apt-get', '-y',
+             '-o', 'Dir::Etc::SourceList=/etc/apt/sources.list',
+             '-o', 'Dir::Etc::SourceParts=/etc/apt/security.sources.list.d',
+             '-o', 'Dpkg::Options::=--force-confdef',
+             '-o', 'Dpkg::Options::=--force-confold',
+             'upgrade']
+          : ['apt-get', 'upgrade', '-y',
+             '-o', 'Dpkg::Options::=--force-confdef',
+             '-o', 'Dpkg::Options::=--force-confold'];
+        const result = await execFileAsync('sudo', aptCmd, { timeout: 300000 });
         // Re-apply setcap in case node was upgraded
         const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
         await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
@@ -1159,10 +1175,11 @@ export function createApiRoutes(ctx) {
           ok: true,
           upgraded: upgraded.length,
           packages: upgraded.slice(0, 50),
+          securityOnly,
           message: `${upgraded.length} Pakete aktualisiert`
         });
       } catch (e) {
-        pushLog('system_updates_error', { error: e.message });
+        pushLog('system_updates_error', { error: e.message, securityOnly });
         return json(res, 500, { ok: false, error: e.message });
       }
     }
