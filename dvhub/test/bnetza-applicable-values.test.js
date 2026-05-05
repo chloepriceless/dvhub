@@ -245,7 +245,8 @@ test('createBundesnetzagenturApplicableValueService persists fetched reference d
 
   assert.equal(fetches, 1);
   assert.equal(first.getApplicableValueCtKwh({ commissionedAt: '2023-09-01', kwp: 5 }), 8.2);
-  assert.equal(first.getApplicableValueCtKwh({ commissionedAt: '2023-09-20', kwp: 50 }), 5.8);
+  // EEG §48 tier-weighted: (10×8.2 + 30×7.1 + 10×5.8) / 50 = 7.06
+  assert.equal(first.getApplicableValueCtKwh({ commissionedAt: '2023-09-20', kwp: 50 }), 7.06);
   assert.equal(second.getApplicableValueCtKwh({ commissionedAt: '2024-02-01', kwp: 8 }), 8.11);
   assert.ok(fs.existsSync(cachePath));
 

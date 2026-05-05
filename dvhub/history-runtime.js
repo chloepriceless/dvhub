@@ -566,8 +566,16 @@ function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValue
   };
 }
 
-function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary }) {
+function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary, applicableValueOverrideCtKwh = null }) {
   const plants = Array.isArray(pvPlants) ? pvPlants : [];
+  const overrideValue = Number(applicableValueOverrideCtKwh);
+  if (Number.isFinite(overrideValue) && overrideValue > 0) {
+    return {
+      weightedApplicableValueCtKwh: round2(overrideValue),
+      configuredPlantCount: plants.length,
+      resolvedPlantCount: plants.length
+    };
+  }
   const applicableValueCtKwhByMonth = applicableValueSummary?.applicableValueCtKwhByMonth || {};
   const applicableValueLookup = typeof applicableValueSummary?.getApplicableValueCtKwh === 'function'
     ? applicableValueSummary.getApplicableValueCtKwh
@@ -655,7 +663,8 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
 
   const weightedApplicableValue = summarizeWeightedApplicableValue({
     pvPlants: pricingConfig?.pvPlants,
-    applicableValueSummary
+    applicableValueSummary,
+    applicableValueOverrideCtKwh: pricingConfig?.applicableValueOverrideCtKwh
   });
   const selectedYear = parseDateOnly(startOfYear(meta?.selectedDate || ''))?.year;
   const currentYear = parseDateOnly(startOfYear(getCurrentDateValue(meta?.currentDate || '')))?.year;
@@ -1139,7 +1148,8 @@ export function createHistoryRuntime({
     });
     const weightedApplicableValue = summarizeWeightedApplicableValue({
       pvPlants: pricingConfig?.pvPlants,
-      applicableValueSummary
+      applicableValueSummary,
+      applicableValueOverrideCtKwh: pricingConfig?.applicableValueOverrideCtKwh
     });
     const weightedApplicableValueCtKwh = weightedApplicableValue.weightedApplicableValueCtKwh;
 

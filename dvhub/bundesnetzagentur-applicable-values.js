@@ -192,10 +192,29 @@ export function selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp,
   if (!Array.isArray(tiers) || tiers.length === 0) return null;
   const numericKwp = normalizeNumber(kwp);
   if (!Number.isFinite(numericKwp) || numericKwp <= 0) return null;
+
+  // EEG §48 Stufentarif: each kWp earns the rate of the tier its position
+  // falls into. A 29.7 kWp installation earns the 10 kWp-tier rate on its
+  // first 10 kWp and the 40 kWp-tier rate on the remaining 19.7 kWp; the
+  // overall AW is the capacity-weighted average.
+  let weightedSumCt = 0;
+  let prevUpTo = 0;
   for (const tier of tiers) {
-    if (numericKwp <= tier.upToKwp) return tier.ctKwh;
+    const tierTopKwp = Number(tier?.upToKwp);
+    const tierCtKwh = Number(tier?.ctKwh);
+    if (!Number.isFinite(tierTopKwp) || !Number.isFinite(tierCtKwh)) continue;
+    const tierShareKwp = Math.max(0, Math.min(numericKwp, tierTopKwp) - prevUpTo);
+    weightedSumCt += tierShareKwp * tierCtKwh;
+    prevUpTo = tierTopKwp;
+    if (numericKwp <= tierTopKwp) break;
   }
-  return tiers[tiers.length - 1]?.ctKwh ?? null;
+  if (numericKwp > prevUpTo) {
+    const lastCtKwh = Number(tiers[tiers.length - 1]?.ctKwh);
+    if (Number.isFinite(lastCtKwh)) {
+      weightedSumCt += (numericKwp - prevUpTo) * lastCtKwh;
+    }
+  }
+  return round2(weightedSumCt / numericKwp);
 }
 
 function buildApplicableValueSummary(referenceData, { year, pvPlants = [], feedType = 'partial' } = {}) {
