@@ -214,6 +214,35 @@ function parseEnergyChartsPriceRows(payload = {}) {
   return rows;
 }
 
+function parseDvhubApiPriceRows(payload = {}) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  const rows = [];
+  for (const entry of data) {
+    if (!entry) continue;
+    const ts = new Date(entry.ts).getTime();
+    const eurMwh = Number(entry.price);
+    if (!Number.isFinite(ts) || !Number.isFinite(eurMwh)) continue;
+    rows.push({ ts, eur_mwh: eurMwh, ct_kwh: eurMwh / 10 });
+  }
+  return rows;
+}
+
+async function fetchDvhubApiRange({ bzn, startDay, endDayExclusive, fetchImpl, baseUrl }) {
+  const cleanBase = String(baseUrl || '').replace(/\/$/, '');
+  const url = `${cleanBase}/api/prices?start=${startDay}&end=${endDayExclusive}&zone=${encodeURIComponent(bzn)}`;
+  const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+  if (!response.ok) {
+    const rangeLabel = startDay === addDays(endDayExclusive, -1)
+      ? startDay
+      : `${startDay}..${addDays(endDayExclusive, -1)}`;
+    const error = new Error(`DVhub Price API failed for ${rangeLabel}: HTTP ${response.status}`);
+    error.status = Number(response.status);
+    error.day = startDay;
+    throw error;
+  }
+  return parseDvhubApiPriceRows(await response.json());
+}
+
 async function fetchEnergyChartsDay({ bzn, day, fetchImpl }) {
   return fetchEnergyChartsRange({
     bzn,
@@ -270,8 +299,17 @@ async function fetchEnergyChartsRangeWithRetry({
   fetchImpl,
   waitImpl,
   maxAttempts = 3,
-  retryDelayMs = 250
+  retryDelayMs = 250,
+  dvhubApiBaseUrl = null
 }) {
+  if (dvhubApiBaseUrl) {
+    try {
+      const rows = await fetchDvhubApiRange({ bzn, startDay, endDayExclusive, fetchImpl, baseUrl: dvhubApiBaseUrl });
+      if (rows.length > 0) return rows;
+    } catch {
+      // Fall through to Energy-Charts
+    }
+  }
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -1280,6 +1318,7 @@ async function fetchVrmStatsWithRetry({
 export function createHistoryImportManager({
   store,
   telemetryConfig = {},
+  getEpexConfig = () => ({}),
   fetchImpl = globalThis.fetch,
   waitImpl = async () => {}
 }) {
@@ -1818,6 +1857,7 @@ export function createHistoryImportManager({
     const openDays = [];
     const errors = [];
 
+    const dvhubApiBaseUrl = String(getEpexConfig()?.priceApiUrl || '').trim() || null;
     for (const window of dayWindows) {
       try {
         const rows = await fetchEnergyChartsRangeWithRetry({
@@ -1825,7 +1865,8 @@ export function createHistoryImportManager({
           startDay: window.startDay,
           endDayExclusive: window.endDayExclusive,
           fetchImpl,
-          waitImpl
+          waitImpl,
+          dvhubApiBaseUrl
         });
         for (const row of rows) {
           if (!missingSet.has(bucketIso(row.ts))) continue;

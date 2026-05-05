@@ -489,14 +489,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   async function listMissingPriceBuckets({ start = null, end = null, seriesKeys = ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'] } = {}) {
     const keys = Array.isArray(seriesKeys) && seriesKeys.length ? seriesKeys : ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'];
 
-    // Telemetry query: series keys + optional start/end
+    // Telemetry query: union both raw samples and 15-min aggregated slots so
+    // the price-backfill picks up coverage gaps even for periods where only
+    // energy_slots_15m exists (long-term aggregates) without per-minute samples.
     const telemetryParams = [...keys];
     let telemetryIdx = keys.length;
-    let telemetryWhere = '';
-    if (start) { telemetryIdx++; telemetryWhere += ` AND ts_utc >= $${telemetryIdx}`; telemetryParams.push(isoTimestamp(start)); }
-    if (end) { telemetryIdx++; telemetryWhere += ` AND ts_utc < $${telemetryIdx}`; telemetryParams.push(isoTimestamp(end)); }
+    let tsWhere = '';
+    let slotWhere = '';
+    if (start) { telemetryIdx++; const p = `$${telemetryIdx}`; tsWhere += ` AND ts_utc >= ${p}`; slotWhere += ` AND slot_start_utc >= ${p}`; telemetryParams.push(isoTimestamp(start)); }
+    if (end) { telemetryIdx++; const p = `$${telemetryIdx}`; tsWhere += ` AND ts_utc < ${p}`; slotWhere += ` AND slot_start_utc < ${p}`; telemetryParams.push(isoTimestamp(end)); }
     const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-    const telemetryRows = (await pool.query(`SELECT ts_utc FROM timeseries_samples WHERE series_key IN (${placeholders})${telemetryWhere}`, telemetryParams)).rows;
+    const telemetryRows = (await pool.query(
+      `SELECT ts_utc FROM timeseries_samples WHERE series_key IN (${placeholders})${tsWhere}`
+      + ` UNION `
+      + `SELECT slot_start_utc AS ts_utc FROM energy_slots_15m WHERE series_key IN (${placeholders})${slotWhere}`,
+      telemetryParams
+    )).rows;
 
     // Price query: separate params with own indices
     const priceParams = [];

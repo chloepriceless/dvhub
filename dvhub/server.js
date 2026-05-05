@@ -932,7 +932,8 @@ const telemetryReady = (async () => {
   }) : null;
   historyImportManager = telemetryStore ? createHistoryImportManager({
     store: telemetryStore,
-    telemetryConfig: cfg.telemetry || {}
+    telemetryConfig: cfg.telemetry || {},
+    getEpexConfig: () => cfg.epex || {}
   }) : null;
   ctx.historyImportManager = historyImportManager;
   if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
