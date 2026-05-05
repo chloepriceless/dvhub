@@ -1161,6 +1161,11 @@ button {
     background: var(--flow-bg);
     border-top: 1px solid var(--flow-border);
     z-index: 50;
+    max-height: calc(100vh - 56px);
+    max-height: calc(100dvh - 56px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Pure CSS toggle: checkbox checked → show nav */

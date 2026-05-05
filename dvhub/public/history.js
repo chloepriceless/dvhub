@@ -1125,6 +1125,127 @@ function renderAggregatePriceHint(mountId) {
   mount.innerHTML = '<div class="history-chart-empty">Preisvergleich nur in der Tagesansicht. In aggregierten Ansichten liegt der Fokus auf dem kombinierten Finanzchart.</div>';
 }
 
+function renderMonthDailyStackedChart(mountId, items) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  if (typeof Chart === 'undefined') return;
+  if (historyChartInstances[mountId]) { historyChartInstances[mountId].destroy(); delete historyChartInstances[mountId]; }
+  if (!Array.isArray(items) || !items.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diesen Monat.</div>';
+    return;
+  }
+
+  const labels = items.map((item) => compactAxisLabel(item?.label || '-'));
+  const selfConsumption = items.map((item) => Math.max(0, Number(item?.pvKwh || 0) - Number(item?.exportKwh || 0)));
+  const exportKwh = items.map((item) => Number(item?.exportKwh || 0));
+  const yieldEur = items.map((item) => Number(item?.exportRevenueEur || 0));
+
+  mount.innerHTML = `<div style="position:relative;height:280px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  const canvas = document.getElementById(mountId + 'Canvas');
+  if (!canvas) return;
+
+  historyChartInstances[mountId] = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Eigenverbrauch',
+          data: selfConsumption,
+          backgroundColor: '#f5c451',
+          borderColor: '#f5c451',
+          borderWidth: 0,
+          stack: 'erzeugung',
+          yAxisID: 'yKwh',
+          order: 2
+        },
+        {
+          type: 'bar',
+          label: 'Einspeisung',
+          data: exportKwh,
+          backgroundColor: '#34d399',
+          borderColor: '#34d399',
+          borderWidth: 0,
+          stack: 'erzeugung',
+          yAxisID: 'yKwh',
+          order: 2
+        },
+        {
+          type: 'line',
+          label: 'Einspeise-Erlös',
+          data: yieldEur,
+          borderColor: '#67a5ff',
+          backgroundColor: '#67a5ff33',
+          borderWidth: 2,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          tension: 0.3,
+          yAxisID: 'yEur',
+          order: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { color: '#9ca3af', font: { size: 10 }, usePointStyle: true, padding: 10 }
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#1a1a2eee',
+          titleColor: '#e5e7eb',
+          bodyColor: '#e5e7eb',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 8,
+          displayColors: true,
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.raw;
+              if (ctx.dataset.label === 'Einspeise-Erlös') return `Einspeise-Erlös: ${fmtEur(v)}`;
+              return `${ctx.dataset.label}: ${fmtKwh(v)}`;
+            },
+            afterBody: (ctxs) => {
+              const i = ctxs?.[0]?.dataIndex;
+              if (i == null) return '';
+              const total = (selfConsumption[i] || 0) + (exportKwh[i] || 0);
+              return `Erzeugung: ${fmtKwh(total)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 16 },
+          grid: { color: '#e5e7eb20' }
+        },
+        yKwh: {
+          stacked: true,
+          position: 'left',
+          beginAtZero: true,
+          title: { display: true, text: 'kWh', color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => fmtKwh(v) },
+          grid: { color: '#e5e7eb20' }
+        },
+        yEur: {
+          position: 'right',
+          beginAtZero: true,
+          title: { display: true, text: 'EUR', color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => fmtEur(v) },
+          grid: { drawOnChartArea: false }
+        }
+      }
+    }
+  });
+}
+
 function renderCharts(summary) {
   const charts = summary?.charts || {};
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
@@ -1132,6 +1253,13 @@ function renderCharts(summary) {
   const dayPriceLines = Array.isArray(charts.dayPriceLines) ? charts.dayPriceLines : [];
   const periodCombinedBars = Array.isArray(charts.periodCombinedBars) ? charts.periodCombinedBars : [];
   const view = String(summary?.view || '');
+
+  if (view === 'month') {
+    renderMonthDailyStackedChart('historyMonthDailyChart', periodCombinedBars);
+  } else if (historyChartInstances['historyMonthDailyChart']) {
+    historyChartInstances['historyMonthDailyChart'].destroy();
+    delete historyChartInstances['historyMonthDailyChart'];
+  }
 
   if (view === 'day') {
     renderLineChart('historyFinancialChart', dayFinancialLines.map((item) => ({
@@ -1261,6 +1389,7 @@ function renderLayout(summary) {
   const financialPanel = byId('historyFinancialPanel');
   const energyPanel = byId('historyEnergyPanel');
   const pricePanel = byId('historyPricePanel');
+  const monthDailyPanel = byId('historyMonthDailyPanel');
   const aggregateMode = byId('historyAggregateMode');
   const overviewButton = byId('historyAggregateOverviewBtn');
   const tableButton = byId('historyAggregateTableBtn');
@@ -1273,6 +1402,7 @@ function renderLayout(summary) {
   }
   if (energyPanel) energyPanel.hidden = !isDayView;
   if (pricePanel) pricePanel.hidden = !isDayView;
+  if (monthDailyPanel) monthDailyPanel.hidden = view !== 'month';
   if (aggregateMode) {
     aggregateMode.hidden = isDayView;
     aggregateMode.className = `history-aggregate-mode ${isDayView ? '' : 'is-visible'}`.trim();
