@@ -1014,17 +1014,49 @@
       return;
     }
 
-    var pvSlots = forecastData.pv?.slots || [];
-    var rawSlots = forecastData.rawPv?.slots || [];
-    var loadSlots = forecastData.load?.slots || [];
+    var pvSlotsAll = forecastData.pv?.slots || [];
+    var rawSlotsAll = forecastData.rawPv?.slots || [];
+    var loadSlotsAll = forecastData.load?.slots || [];
     var pvRes = forecastData.pv?.resolution || '1h';
     var loadRes = forecastData.load?.resolution || '1h';
     var pvH = pvRes === '15min' ? 0.25 : 1;
     var loadH = loadRes === '15min' ? 0.25 : 1;
 
+    // "Tagesprognose" must be a single calendar day (Berlin local), not the
+    // whole 36–72h forecast horizon. Pick today's local YYYY-MM-DD and bucket
+    // slots by their local date — surplus card also reports "morgen".
+    var berlinTodayKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+    var berlinTomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+    var berlinTomorrowKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(berlinTomorrow);
+    function localDateKey(isoStart) {
+      if (!isoStart) return '';
+      try {
+        return new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+        }).format(new Date(isoStart));
+      } catch (e) { return ''; }
+    }
+    function filterToday(slots) {
+      return slots.filter(function (s) { return localDateKey(s.start) === berlinTodayKey; });
+    }
+    function filterTomorrow(slots) {
+      return slots.filter(function (s) { return localDateKey(s.start) === berlinTomorrowKey; });
+    }
+    var pvSlots = filterToday(pvSlotsAll);
+    var rawSlots = filterToday(rawSlotsAll);
+    var loadSlots = filterToday(loadSlotsAll);
+    var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
+    var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
+
     var pvKwh = 0; pvSlots.forEach(function (s) { pvKwh += (s.powerW || 0) / 1000 * pvH; });
     var rawKwh = 0; rawSlots.forEach(function (s) { rawKwh += (s.powerW || 0) / 1000 * pvH; });
     var loadKwh = 0; loadSlots.forEach(function (s) { loadKwh += (s.powerW || 0) / 1000 * loadH; });
+    var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
+    var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
 
     // Battery state from /api/status
     var soc = statusData?.victron?.soc;
@@ -1047,11 +1079,13 @@
 
     // Detail lines
     if (detailEl) {
+      var pvParts = [];
       if (Math.abs(pvKwh - rawKwh) > 0.5) {
-        detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">ML: ' + pvKwh.toFixed(1) + ' · Basis: ' + rawKwh.toFixed(1) + ' kWh</span>';
-      } else {
-        detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + pvSlots.length + ' Slots (' + pvRes + ')</span>';
+        pvParts.push('ML: ' + pvKwh.toFixed(1) + ' · Basis: ' + rawKwh.toFixed(1));
       }
+      if (pvKwhTomorrow > 0) pvParts.push('Morgen: ' + pvKwhTomorrow.toFixed(1) + ' kWh');
+      if (!pvParts.length) pvParts.push(pvSlots.length + ' Slots (' + pvRes + ')');
+      detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + pvParts.join(' · ') + '</span>';
     }
 
     // Load detail: warn if flat baseload
@@ -1059,8 +1093,12 @@
       var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
       if (allSame) {
         loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
+      } else if (!loadSlots.length) {
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">⚠ Kein Load-Forecast für heute</span>';
       } else {
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + loadSlots.length + ' Slots (' + loadRes + ')</span>';
+        var loadParts = [loadSlots.length + ' Slots (' + loadRes + ')'];
+        if (loadKwhTomorrow > 0) loadParts.push('Morgen: ' + loadKwhTomorrow.toFixed(1) + ' kWh');
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + loadParts.join(' · ') + '</span>';
       }
     }
 
