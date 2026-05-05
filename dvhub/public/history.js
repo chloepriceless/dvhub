@@ -3,12 +3,26 @@ const { apiFetch } = common;
 
 const historyChartInstances = {};
 
+const ENERGY_CHART_MODE_KEY = 'dvhub.history.energyChartMode';
+
+function readEnergyChartMode() {
+  try {
+    const stored = window?.localStorage?.getItem(ENERGY_CHART_MODE_KEY);
+    return stored === 'lines' ? 'lines' : 'flows';
+  } catch (e) { return 'flows'; }
+}
+
+function writeEnergyChartMode(mode) {
+  try { window?.localStorage?.setItem(ENERGY_CHART_MODE_KEY, mode === 'lines' ? 'lines' : 'flows'); } catch (e) { /* ignore */ }
+}
+
 const historyState = {
   loading: false,
   backfillBusy: false,
   lastSummary: null,
   chartCursorByMount: {},
   aggregateModeByView: {},
+  energyChartMode: readEnergyChartMode(),
   detailsExpanded: false,
   statusInfoExpanded: false,
   statusInfoHtml: ''
@@ -1252,6 +1266,97 @@ function renderMonthDailyStackedChart(mountId, items) {
   });
 }
 
+function renderDayFlowStackedBars(mountId, items) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  if (typeof Chart === 'undefined') {
+    renderDetailedDayChart(mountId, items);
+    return;
+  }
+  if (historyChartInstances[mountId]) { historyChartInstances[mountId].destroy(); delete historyChartInstances[mountId]; }
+  if (!Array.isArray(items) || !items.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diesen Tag.</div>';
+    return;
+  }
+
+  const labels = items.map((item) => compactAxisLabel(item?.label || '-'));
+  const pickPositive = (key) => items.map((item) => Math.max(0, Number(item?.[key] || 0)));
+  const pickNegative = (key) => items.map((item) => -Math.max(0, Number(item?.[key] || 0)));
+
+  const datasets = [
+    { label: 'Solar zum Verbrauch', data: pickPositive('solarDirectUseKwh'), backgroundColor: '#f5c451' },
+    { label: 'Solar zur Batterie',  data: pickPositive('solarToBatteryKwh'), backgroundColor: '#34d399' },
+    { label: 'Solar ins Netz',      data: pickPositive('solarToGridKwh'),    backgroundColor: '#f59e0b' },
+    { label: 'Batterie ins Netz',   data: pickPositive('batteryToGridKwh'),  backgroundColor: '#22d3ee' },
+    { label: 'Batterie zum Verbrauch', data: pickNegative('batteryDirectUseKwh'), backgroundColor: '#67a5ff' },
+    { label: 'Netz zum Verbrauch',  data: pickNegative('gridDirectUseKwh'),  backgroundColor: '#f472b6' },
+    { label: 'Netz zur Batterie',   data: pickNegative('gridToBatteryKwh'),  backgroundColor: '#c084fc' }
+  ].map((ds) => ({
+    type: 'bar',
+    stack: 'flows',
+    borderWidth: 0,
+    borderSkipped: false,
+    yAxisID: 'yKwh',
+    ...ds
+  }));
+
+  mount.innerHTML = `<div style="position:relative;height:280px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  const canvas = document.getElementById(mountId + 'Canvas');
+  if (!canvas) return;
+
+  historyChartInstances[mountId] = new Chart(canvas, {
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: { color: '#9ca3af', font: { size: 10 }, usePointStyle: true, padding: 10, boxWidth: 10, boxHeight: 10 }
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#1a1a2eee',
+          titleColor: '#e5e7eb',
+          bodyColor: '#e5e7eb',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 8,
+          displayColors: true,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtKwh(Math.abs(Number(ctx.raw) || 0))}`,
+            afterBody: (ctxs) => {
+              const i = ctxs?.[0]?.dataIndex;
+              if (i == null) return '';
+              const item = items[i] || {};
+              const solarTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.solarToBatteryKwh) || 0) + (Number(item.solarToGridKwh) || 0);
+              const loadTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.batteryDirectUseKwh) || 0) + (Number(item.gridDirectUseKwh) || 0);
+              return [`Gesamt Solar: ${fmtKwh(solarTotal)}`, `Gesamtverbrauch: ${fmtKwh(loadTotal)}`];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 13 },
+          grid: { color: '#e5e7eb20' }
+        },
+        yKwh: {
+          stacked: true,
+          position: 'left',
+          title: { display: true, text: 'kWh', color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => fmtKwh(v) },
+          grid: { color: '#e5e7eb20' }
+        }
+      }
+    }
+  });
+}
+
 function renderCharts(summary) {
   const charts = summary?.charts || {};
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
@@ -1277,7 +1382,11 @@ function renderCharts(summary) {
       { key: 'exportRevenueEur', label: 'Erlöse', className: 'history-series-revenue' },
       { key: 'actualNetEur', label: 'Netto', className: 'history-series-net' }
     ], fmtEur, 'EUR');
-    renderDetailedDayChart('historyEnergyChart', dayEnergyLines);
+    if (historyState.energyChartMode === 'lines') {
+      renderDetailedDayChart('historyEnergyChart', dayEnergyLines);
+    } else {
+      renderDayFlowStackedBars('historyEnergyChart', dayEnergyLines);
+    }
     renderLineChart('historyPriceChart', dayPriceLines, [
       { key: 'marketPriceCtKwh', label: 'Marktpreis', className: 'history-series-market' },
       { key: 'userImportPriceCtKwh', label: 'Bezugspreis', className: 'history-series-user' }
@@ -1423,6 +1532,23 @@ function renderLayout(summary) {
     tableButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isTable ? 'is-active' : ''}`.trim();
     tableButton.ariaPressed = isTable ? 'true' : 'false';
   }
+  const energyMode = byId('historyEnergyMode');
+  const flowsButton = byId('historyEnergyFlowsBtn');
+  const linesButton = byId('historyEnergyLinesBtn');
+  if (energyMode) {
+    energyMode.hidden = !isDayView;
+    energyMode.className = `history-aggregate-mode ${isDayView ? 'is-visible' : ''}`.trim();
+  }
+  if (flowsButton) {
+    const isFlows = historyState.energyChartMode === 'flows';
+    flowsButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isFlows ? 'is-active' : ''}`.trim();
+    flowsButton.ariaPressed = isFlows ? 'true' : 'false';
+  }
+  if (linesButton) {
+    const isLines = historyState.energyChartMode === 'lines';
+    linesButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isLines ? 'is-active' : ''}`.trim();
+    linesButton.ariaPressed = isLines ? 'true' : 'false';
+  }
 }
 
 function bindHistoryToggle(id, handler) {
@@ -1499,6 +1625,18 @@ function renderSummary(summary) {
     if (!isAggregateView(currentView)) return;
     setAggregateMode(currentView, 'table');
     renderSummary(historyState.lastSummary);
+  });
+  bindHistoryToggle('historyEnergyFlowsBtn', () => {
+    if (historyState.energyChartMode === 'flows') return;
+    historyState.energyChartMode = 'flows';
+    writeEnergyChartMode('flows');
+    if (historyState.lastSummary) renderSummary(historyState.lastSummary);
+  });
+  bindHistoryToggle('historyEnergyLinesBtn', () => {
+    if (historyState.energyChartMode === 'lines') return;
+    historyState.energyChartMode = 'lines';
+    writeEnergyChartMode('lines');
+    if (historyState.lastSummary) renderSummary(historyState.lastSummary);
   });
 }
 

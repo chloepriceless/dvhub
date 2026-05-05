@@ -194,12 +194,45 @@ export function createForecastService(ctx) {
       }
     }
 
-    const mlActive = mlResult.applied || false;
-    const correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
+    let mlActive = mlResult.applied || false;
+    let correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
+
+    // Sanity fallback: if ML correction collapses the forecast to ~zero while raw
+    // has real values (observed: lightgbm v7 squashing 22kW peaks down to <1W),
+    // disable ML for this response and fall back to raw — otherwise the
+    // Börsenchart overlay disappears entirely.
+    let mlSanityFallback = false;
+    if (mlActive) {
+      const maxOf = (slots) => slots.reduce((m, s) => Math.max(m, Number(s?.powerW) || 0), 0);
+      const rawMax = maxOf(pv.slots);
+      const corrMax = maxOf(correctedPv.slots);
+      if (rawMax >= 200 && corrMax < rawMax * 0.01) {
+        pushLog('ml_correction_sanity_fallback', { rawMaxW: Math.round(rawMax), corrMaxW: Math.round(corrMax * 10) / 10, mlModel: mlResult.model });
+        correctedPv = pv;
+        mlActive = false;
+        mlSanityFallback = true;
+      }
+    }
 
     // H-12 restored: use ML-corrected PV for Börsenchart solar overlay (not raw PV)
     const solar = correctedPv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
     const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+
+    // VRM PV forecast for Börsenchart overlay — independent of active model.
+    // Lets users compare Victron's prediction against the active source.
+    let vrmSolar = [];
+    if (vrmForecast?.isAvailable) {
+      try {
+        const vrmRows = await vrmForecast.readPvForecast();
+        if (Array.isArray(vrmRows)) {
+          vrmSolar = vrmRows
+            .map((r) => ({ ts: new Date(r.ts_utc).getTime(), w: Number(r.power_w) || 0 }))
+            .filter((p) => Number.isFinite(p.ts));
+        }
+      } catch (e) {
+        pushLog('vrm_solar_overlay_error', { error: e.message });
+      }
+    }
 
     // D-B1: fetch last 12h of measured PV from energy_slots_15m via telemetryStore
     let actual = [];
@@ -223,6 +256,7 @@ export function createForecastService(ctx) {
         loadModel: cfg.forecast?.load?.model || 'sql_weekday',
         mlActive,
         mlModel: mlActive ? (mlResult.model || null) : null,
+        mlSanityFallback,
         // Phase 07 Plan 07-04: ensembleWeights from inverse-MAE merge (REVIEWS H2 + D-C3).
         // Dashboard debug-overlay renders these per forecast cycle.
         ensembleWeights: state.forecast.pv.ensembleWeights ?? null
@@ -234,7 +268,8 @@ export function createForecastService(ctx) {
       actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts)
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
       solar,
-      consumption
+      consumption,
+      vrmSolar
     };
   }
 

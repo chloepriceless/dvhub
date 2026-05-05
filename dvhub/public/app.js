@@ -688,7 +688,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   chartSelectionState.baseBarColors = [...barColors];
 
-  const hasForecast = solarFc.some(v => v != null && v > 0);
+  const hasSolarFc = solarFc.some(v => v != null && v > 0);
   const hasImport = importPrices.some(v => v != null);
 
   // --- Datasets ---
@@ -724,7 +724,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     });
   }
 
-  if (hasForecast) {
+  if (hasSolarFc) {
     datasets.push({
       label: '☀ PV Forecast',
       type: 'line',
@@ -736,6 +736,48 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       pointRadius: 0,
       pointHoverRadius: 3,
       fill: true,
+      spanGaps: false,
+      yAxisID: 'kw',
+      order: 0
+    });
+  }
+
+  // VRM-Prognose overlay (independent of active model — lets users see Victron's
+  // PV forecast even when the active source is solcast/pvlib/ML).
+  let vrmFc = data.map(() => null);
+  if (forecast && Array.isArray(forecast.vrmSolar) && forecast.vrmSolar.length > 1) {
+    const vrmPoints = forecast.vrmSolar
+      .map(p => ({ ts: Number(p.ts), kw: Number(p.w || 0) / 1000 }))
+      .filter(p => Number.isFinite(p.ts))
+      .sort((a, b) => a.ts - b.ts);
+    if (vrmPoints.length >= 2) {
+      vrmFc = data.map(d => {
+        const ts = Number(d.ts);
+        if (ts < vrmPoints[0].ts || ts > vrmPoints[vrmPoints.length - 1].ts) return null;
+        for (let j = 0; j < vrmPoints.length - 1; j++) {
+          if (ts >= vrmPoints[j].ts && ts <= vrmPoints[j + 1].ts) {
+            const dt = vrmPoints[j + 1].ts - vrmPoints[j].ts || 1;
+            const ratio = (ts - vrmPoints[j].ts) / dt;
+            const v = vrmPoints[j].kw + ratio * (vrmPoints[j + 1].kw - vrmPoints[j].kw);
+            return v > 0 ? v : null;
+          }
+        }
+        return null;
+      });
+    }
+  }
+  if (vrmFc.some(v => v != null && v > 0)) {
+    datasets.push({
+      label: '☀ VRM-Prognose',
+      type: 'line',
+      data: vrmFc,
+      borderColor: '#22d3ee',
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      borderDash: [3, 3],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      fill: false,
       spanGaps: false,
       yAxisID: 'kw',
       order: 0
@@ -1027,7 +1069,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         kw: {
           position: 'right',
-          display: hasForecast,
+          display: datasets.some(d => d.yAxisID === 'kw'),
           title: { display: true, text: 'kW', color: fcColor, font: { size: 11 } },
           ticks: { color: fcColor + '90', font: { size: 10 } },
           grid: { display: false },
