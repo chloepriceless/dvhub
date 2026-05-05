@@ -197,6 +197,12 @@ function renderKpis(summary) {
     setText('historyKpiDvRevenue', fmtEur(kpis.dvRevenueEur));
     setText('historyKpiDvRevenueRate', fmtCt(kpis.dvRevenueCtKwh));
 
+    const dvMarketValueCt = kpis?.periodMarketValueCtKwh ?? kpis?.annualMarketValueCtKwh;
+    const dvMarketLabel = dvView === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
+    setText('historyKpiDvMarketValueLabel', dvMarketLabel);
+    setText('historyKpiDvMarketValue', hasFiniteNumber(dvMarketValueCt) ? fmtCt(dvMarketValueCt) : 'noch nicht verfügbar');
+    setText('historyKpiDvApplicableValue', hasFiniteNumber(kpis?.weightedApplicableValueCtKwh) ? fmtCt(kpis.weightedApplicableValueCtKwh) : '-');
+
     setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
     setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
 
