@@ -480,9 +480,10 @@
   // they're merged internally in pv-forecast.js before the response.
   // To re-add them, extend buildForecastResponse() to expose per-source slot arrays.
   var COMPARISON_DATASETS = [
-    { key: 'actual', label: 'Ist (gemessen)',  color: 'rgba(46, 204, 113, 1)', dash: [],     width: 2   },
-    { key: 'ml',     label: 'ML-korrigiert',    color: '#A78BFA', dash: [],     width: 2.5 },
-    { key: 'merged', label: 'Basis-Prognose',   color: '#22D3EE', dash: [4, 3], width: 1.8 }
+    { key: 'actual', label: 'Ist (gemessen)',          color: 'rgba(46, 204, 113, 1)', dash: [],     width: 2   },
+    { key: 'past',   label: 'Prognose (historisch)',   color: 'rgba(46, 204, 113, 0.55)', dash: [3, 3], width: 1.5 },
+    { key: 'ml',     label: 'ML-korrigiert',           color: '#A78BFA', dash: [],     width: 2.5 },
+    { key: 'merged', label: 'Basis-Prognose',          color: '#22D3EE', dash: [4, 3], width: 1.8 }
   ];
 
   function initForecastComparisonChart() {
@@ -649,15 +650,24 @@
           return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
         })
       : [];
+    // Historic forecast for the same 12h window — lets users see Prognose vs Ist
+    // overlapping on the time axis (without this, Ist and Prognose are time-disjoint).
+    var pastForecastData = Array.isArray(forecastData && forecastData.pastForecast)
+      ? forecastData.pastForecast.map(function (s) {
+          return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
+        })
+      : [];
 
-    forecastCompChart.data.datasets[0].data = actualData;  // Ist (gemessen) — solid green line
-    forecastCompChart.data.datasets[1].data = mlData;       // ML-korrigiert
-    forecastCompChart.data.datasets[2].data = mergedData;   // Basis-Prognose
+    forecastCompChart.data.datasets[0].data = actualData;        // Ist (gemessen)
+    forecastCompChart.data.datasets[1].data = pastForecastData;  // Prognose (historisch)
+    forecastCompChart.data.datasets[2].data = mlData;            // ML-korrigiert
+    forecastCompChart.data.datasets[3].data = mergedData;        // Basis-Prognose
 
     // Compute X-axis range: span from earliest data point to latest, padded 1h each side
     var nowMs = Date.now();
     var allTimestamps = []
       .concat(actualData.map(function (d) { return d.x; }))
+      .concat(pastForecastData.map(function (d) { return d.x; }))
       .concat(mlData.map(function (d) { return d.x; }))
       .concat(mergedData.map(function (d) { return d.x; }))
       .filter(function (t) { return t > 0; });

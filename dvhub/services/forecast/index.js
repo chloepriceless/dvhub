@@ -236,11 +236,50 @@ export function createForecastService(ctx) {
 
     // D-B1: fetch last 12h of measured PV from energy_slots_15m via telemetryStore
     let actual = [];
+    let pastForecast = [];
     if (ctx.telemetryStore?.listPvActualSlots) {
       try {
         const end = new Date();
         const start = new Date(end.getTime() - 12 * 3600 * 1000);
         actual = await ctx.telemetryStore.listPvActualSlots({ start, end });
+
+        // Fetch historic PV forecasts for the same time range so the comparison
+        // chart can plot Ist vs Prognose at matching timestamps. Without this
+        // the Ist line (past) and the Prognose lines (future) are time-disjoint
+        // and the user sees no real overlap.
+        try {
+          const historicRows = await store.getLatestPvForecast({
+            start: start.toISOString(),
+            end: end.toISOString()
+          });
+          if (Array.isArray(historicRows)) {
+            // Pick latest forecast per timestamp (multiple models may have written
+            // for the same slot — prefer 'combined' > 'solcast' > 'pvlib' > 'pvnode'
+            // > anything else, and within the same model the row with latest
+            // generated_at wins thanks to the ORDER BY ts_utc ASC + Map overwrite).
+            const modelRank = (m) => {
+              const idx = ['combined', 'solcast', 'pvlib', 'pvnode'].indexOf(m);
+              return idx === -1 ? 999 : idx;
+            };
+            const byTs = new Map();
+            for (const row of historicRows) {
+              const key = new Date(row.ts_utc).toISOString();
+              const prev = byTs.get(key);
+              if (!prev || modelRank(row.model) < modelRank(prev.model)) {
+                byTs.set(key, row);
+              }
+            }
+            pastForecast = Array.from(byTs.values())
+              .sort((a, b) => new Date(a.ts_utc) - new Date(b.ts_utc))
+              .map((r) => ({
+                start: new Date(r.ts_utc).toISOString(),
+                powerW: Number(r.power_w) || 0,
+                model: r.model
+              }));
+          }
+        } catch (e) {
+          pushLog('forecast_historic_query_error', { error: e.message });
+        }
       } catch (e) {
         pushLog('forecast_actual_query_error', { error: e.message });
       }
@@ -266,6 +305,7 @@ export function createForecastService(ctx) {
       rawPv: pv,           // Pre-ML for comparison chart (D-22)
       load,
       actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts)
+      pastForecast,        // Historic pv_forecasts for the same 12h window (for chart overlay)
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
       solar,
       consumption,
