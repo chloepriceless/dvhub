@@ -1064,15 +1064,18 @@ export function createHistoryRuntime({
   getApplicableValueSummary = () => ({ applicableValueCtKwhByMonth: {} }),
   getCurrentDate = currentBerlinDate
 }) {
-  function batteryUsableCapacityKwh() {
+  function batteryNominalCapacityKwh() {
     const cfg = getOptimizerConfig() || {};
     const totalWh = Number(cfg.batteryCapacityWh);
     if (!Number.isFinite(totalWh) || totalWh <= 0) return null;
-    const minSocPct = Math.max(0, Math.min(100, Number(cfg.minSocPct) || 0));
-    return (totalWh * (100 - minSocPct) / 100) / 1000;
+    return totalWh / 1000;
   }
+  // 1 cycle = cumulative discharge equal to one nominal capacity (0%→100%).
+  // 43 kWh in + 43 kWh out across one day = 1 cycle (counts the discharge half;
+  // the user's mental model). Multi-day: 90% discharge + 10% discharge = 100%
+  // cumulated = 1.0 cycles.
   function computeCycles(dischargeKwh) {
-    const cap = batteryUsableCapacityKwh();
+    const cap = batteryNominalCapacityKwh();
     if (!Number.isFinite(cap) || cap <= 0) return null;
     const d = Math.max(0, Number(dischargeKwh) || 0);
     return Math.round((d / cap) * 100) / 100;
@@ -1563,7 +1566,7 @@ export function createHistoryRuntime({
       pricingConfig
     });
     capacityAppliedKpis.cycles = computeCycles(capacityAppliedKpis.batteryDischargeKwh);
-    capacityAppliedKpis.batteryUsableCapacityKwh = batteryUsableCapacityKwh();
+    capacityAppliedKpis.batteryNominalCapacityKwh = batteryNominalCapacityKwh();
     const baseRows = summarizeRows(slots, view).map((row) => ({
       ...row,
       cycles: computeCycles(row.batteryDischargeKwh)

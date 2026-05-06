@@ -186,8 +186,8 @@ function renderKpis(summary) {
   if (cyclesEl) {
     if (hasFiniteNumber(kpis?.cycles)) {
       cyclesEl.textContent = `${Number(kpis.cycles).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Zyklen`;
-      if (cyclesLabelEl && hasFiniteNumber(kpis?.batteryUsableCapacityKwh)) {
-        cyclesLabelEl.title = `Vollzyklen = Entladung ÷ ${Number(kpis.batteryUsableCapacityKwh).toFixed(1)} kWh nutzbare Akkukapazität`;
+      if (cyclesLabelEl && hasFiniteNumber(kpis?.batteryNominalCapacityKwh)) {
+        cyclesLabelEl.title = `Vollzyklen = kumulative Entladung ÷ ${Number(kpis.batteryNominalCapacityKwh).toFixed(1)} kWh Nennkapazität (0–100 %)`;
       }
     } else {
       cyclesEl.textContent = '-';
