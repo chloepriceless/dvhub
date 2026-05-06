@@ -1345,6 +1345,27 @@ export function createApiRoutes(ctx) {
       return json(res, result.status, result.body);
     }
 
+    if (url.pathname === '/api/history/export' && req.method === 'GET') {
+      if (!ctx.historyApi || typeof ctx.historyApi.getExportCsv !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const result = await ctx.historyApi.getExportCsv({
+        view: url.searchParams.get('view'),
+        date: url.searchParams.get('date')
+      });
+      if (result.status !== 200 || !result.rawBody) {
+        return json(res, result.status || 400, result.body || { ok: false, error: 'export failed' });
+      }
+      const body = String(result.rawBody);
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        ...result.headers,
+        'content-length': Buffer.byteLength(body, 'utf8')
+      });
+      res.end(body);
+      return;
+    }
+
     // --- Config POST / Import POST ---
     if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
       const body = await parseBody(req);

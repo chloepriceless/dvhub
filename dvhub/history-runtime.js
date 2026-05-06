@@ -1693,6 +1693,90 @@ export function createHistoryApiHandlers({
         }
       };
     },
+    async getExportCsv(query = {}) {
+      if (!telemetryEnabled || !historyRuntime) {
+        return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };
+      }
+      const view = String(query.view || 'day');
+      const date = String(query.date || '');
+      if (!SUPPORTED_VIEWS.has(view)) {
+        return { status: 400, body: { ok: false, error: 'view must be one of day, week, month, year' } };
+      }
+      if (!isDateOnly(date)) {
+        return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
+      }
+      let solarMarketValues = null;
+      if (view !== 'day' && typeof getSolarMarketValueSummary === 'function') {
+        try {
+          solarMarketValues = await getSolarMarketValueSummary({
+            year: parseDateOnly(startOfYear(date))?.year
+          });
+        } catch (_error) {
+          solarMarketValues = null;
+        }
+      }
+      const summary = await historyRuntime.getSummary({ view, date, solarMarketValues });
+      const rows = Array.isArray(summary?.rows) ? summary.rows : [];
+      const includeSolar = view === 'year';
+      // German Excel: semicolon separator + UTF-8 BOM. Use comma decimals.
+      const fmtNumber = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(4).replace('.', ',') : '';
+      const csvCell = (v) => {
+        const s = v == null ? '' : String(v);
+        return /[;\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const headers = [
+        'Periode', 'Import_kWh', 'Verbrauch_kWh', 'PV_erzeugt_kWh', 'PV_AC_kWh',
+        'PV_direkt_kWh', 'PV_zu_Akku_kWh', 'PV_zu_Netz_kWh',
+        'Netz_direkt_kWh', 'Netz_zu_Akku_kWh', 'Akku_direkt_kWh', 'Akku_zu_Netz_kWh',
+        'Akku_geladen_kWh', 'Akku_entladen_kWh', 'Akku_Zyklen',
+        'Eigenverbrauch_kWh', 'Eigenverbrauch_Netz_kWh', 'Eigenverbrauch_PV_kWh', 'Eigenverbrauch_Akku_kWh',
+        'Export_kWh',
+        'Netzkosten_EUR', 'PV_Kosten_EUR', 'Akku_Kosten_EUR', 'Vermiedener_Bezug_EUR',
+        'Erloes_Einspeisung_EUR', 'Kosten_EUR', 'Netto_EUR', 'Brutto_Erloes_EUR'
+      ];
+      if (includeSolar) headers.push('Marktwert_Solar_ct_kWh', 'Solar_Ausgleich_EUR');
+      headers.push('estimatedSlots', 'incompleteSlots', 'sourceKind');
+      const lines = [headers.map(csvCell).join(';')];
+      for (const row of rows) {
+        const cost = Number(row.gridCostEur ?? row.importCostEur ?? 0)
+          + Number(row.pvCostEur || 0) + Number(row.batteryCostEur || 0);
+        const net = Number(row.exportRevenueEur || 0) - cost;
+        const cells = [
+          row.label || row.key || '',
+          fmtNumber(row.importKwh), fmtNumber(row.loadKwh), fmtNumber(row.pvKwh), fmtNumber(row.pvAcKwh),
+          fmtNumber(row.solarDirectUseKwh), fmtNumber(row.solarToBatteryKwh), fmtNumber(row.solarToGridKwh),
+          fmtNumber(row.gridDirectUseKwh), fmtNumber(row.gridToBatteryKwh),
+          fmtNumber(row.batteryDirectUseKwh), fmtNumber(row.batteryToGridKwh),
+          fmtNumber(row.batteryChargeKwh), fmtNumber(row.batteryDischargeKwh), fmtNumber(row.cycles),
+          fmtNumber(row.selfConsumptionKwh), fmtNumber(row.gridShareKwh),
+          fmtNumber(row.pvShareKwh), fmtNumber(row.batteryShareKwh),
+          fmtNumber(row.exportKwh),
+          fmtNumber(row.gridCostEur ?? row.importCostEur), fmtNumber(row.pvCostEur), fmtNumber(row.batteryCostEur),
+          fmtNumber(row.avoidedImportGrossEur),
+          fmtNumber(row.exportRevenueEur), fmtNumber(cost), fmtNumber(net), fmtNumber(row.grossReturnEur)
+        ];
+        if (includeSolar) {
+          cells.push(fmtNumber(row.solarMarketValueCtKwh), fmtNumber(row.solarCompensationEur));
+        }
+        cells.push(
+          String(row.estimatedSlots ?? ''),
+          String(row.incompleteSlots ?? ''),
+          row.sourceKind || ''
+        );
+        lines.push(cells.map(csvCell).join(';'));
+      }
+      const bom = '﻿';
+      const csv = bom + lines.join('\r\n') + '\r\n';
+      const filename = `dvhub-history-${view}-${date}.csv`;
+      return {
+        status: 200,
+        headers: {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="${filename}"`
+        },
+        rawBody: csv
+      };
+    },
     async postPriceBackfill(body = {}) {
       if (!telemetryEnabled || !historyImportManager) {
         return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };

@@ -1949,15 +1949,46 @@ function stepCurrentRange(delta) {
   loadHistorySummary().catch((error) => setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error'));
 }
 
+async function triggerCsvExport() {
+  const view = byId('historyView')?.value || 'day';
+  const date = byId('historyDate')?.value || currentDateValue();
+  const button = byId('historyExportCsvBtn');
+  if (button) { button.disabled = true; button.textContent = 'Export...'; }
+  try {
+    const response = await apiFetch(`/api/history/export?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}`);
+    if (!response.ok) {
+      const text = await response.text();
+      setBanner(`CSV-Export fehlgeschlagen: ${response.status} ${text.slice(0, 200)}`, 'error');
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dvhub-history-${view}-${date}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setBanner('CSV-Export gespeichert.', 'success');
+  } catch (error) {
+    setBanner(`CSV-Export fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'CSV-Export'; }
+  }
+}
+
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
   const backfill = byId('historyBackfillBtn');
+  const exportBtn = byId('historyExportCsvBtn');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   if (view) view.addEventListener('change', loadHistorySummary);
   if (date) date.addEventListener('change', loadHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);
+  if (exportBtn) exportBtn.addEventListener('click', triggerCsvExport);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }
