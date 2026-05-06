@@ -1609,7 +1609,10 @@ function renderLayout(summary) {
     financialPanel.hidden = false;
     financialPanel.className = `panel history-chart-panel ${isDayView ? '' : 'history-chart-panel-wide'}`.trim();
   }
-  if (energyPanel) energyPanel.hidden = !isDayView;
+  // Energy panel stays visible in all views — Sankey aggregates work for
+  // week/month/year too. Day-only renderers (Flüsse stacked / Linien detail)
+  // are gated by the per-button `hidden` flag below.
+  if (energyPanel) energyPanel.hidden = false;
   if (pricePanel) pricePanel.hidden = !isDayView;
   if (monthDailyPanel) monthDailyPanel.hidden = view !== 'month';
   if (aggregateMode) {

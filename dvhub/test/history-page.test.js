@@ -797,7 +797,7 @@ test('history page defaults aggregated week view to overview mode with summary a
   assert.match(String(elements.get('historyAggregateTableBtn').ariaPressed), /false/);
   assert.doesNotMatch(elements.get('historyFinancialChart').innerHTML, /history-period-card/);
   assert.match(elements.get('historyFinancialPanel').className, /history-chart-panel-wide/);
-  assert.equal(elements.get('historyEnergyPanel').hidden, true);
+  assert.equal(elements.get('historyEnergyPanel').hidden, false);
   assert.equal(elements.get('historyPricePanel').hidden, true);
   assert.equal(elements.get('historyDetailsContent').hidden, true);
   assert.match(elements.get('historyDetailsToggle').textContent, /anzeigen/i);
