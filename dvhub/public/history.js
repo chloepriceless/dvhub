@@ -1377,6 +1377,8 @@ function renderPeriodGroupedBars(mountId, items) {
   const solarSelf = items.map((it) => Math.max(0, (Number(it?.solarDirectUseKwh) || 0) + (Number(it?.solarToBatteryKwh) || 0)));
   const solarExport = items.map((it) => Math.max(0, Number(it?.solarToGridKwh) || 0));
   const battery = items.map((it) => Math.max(0, Number(it?.batteryDischargeKwh) || 0));
+  const gridDirect = items.map((it) => Math.max(0, Number(it?.gridDirectUseKwh) || 0));
+  const gridToBattery = items.map((it) => Math.max(0, Number(it?.gridToBatteryKwh) || 0));
   const autarky = items.map((it) => {
     const load = Number(it?.loadKwh) || 0;
     const grid = Number(it?.gridDirectUseKwh) || 0;
@@ -1417,6 +1419,16 @@ function renderPeriodGroupedBars(mountId, items) {
           type: 'bar', label: 'Batterie',
           data: battery, yAxisID: 'yKwh', order: 2, stack: 'battery',
           backgroundColor: '#67a5ff', borderColor: '#67a5ff', borderWidth: 0
+        },
+        {
+          type: 'bar', label: 'Netzbezug (Verbrauch)',
+          data: gridDirect, yAxisID: 'yKwh', order: 2, stack: 'grid',
+          backgroundColor: '#22c55e', borderColor: '#22c55e', borderWidth: 0
+        },
+        {
+          type: 'bar', label: 'Netzbezug (Akku)',
+          data: gridToBattery, yAxisID: 'yKwh', order: 2, stack: 'grid',
+          backgroundColor: '#16a34a', borderColor: '#16a34a', borderWidth: 0
         }
       ]
     },
