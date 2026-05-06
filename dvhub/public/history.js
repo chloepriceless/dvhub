@@ -181,6 +181,18 @@ function renderKpis(summary) {
   setText('historyKpiImport', fmtKwh(kpis?.importKwh));
   setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
   setText('historyKpiVbh', hasFiniteNumber(kpis?.pvFullLoadHours) ? fmtHours(kpis?.pvFullLoadHours) : '-');
+  const cyclesEl = byId('historyKpiCycles');
+  const cyclesLabelEl = byId('historyKpiCyclesLabel');
+  if (cyclesEl) {
+    if (hasFiniteNumber(kpis?.cycles)) {
+      cyclesEl.textContent = `${Number(kpis.cycles).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Zyklen`;
+      if (cyclesLabelEl && hasFiniteNumber(kpis?.batteryUsableCapacityKwh)) {
+        cyclesLabelEl.title = `Vollzyklen = Entladung ÷ ${Number(kpis.batteryUsableCapacityKwh).toFixed(1)} kWh nutzbare Akkukapazität`;
+      }
+    } else {
+      cyclesEl.textContent = '-';
+    }
+  }
 
   // Karte 6: Gesamtbilanz
   setText('historyKpiGrossReturn', fmtEur(gross));

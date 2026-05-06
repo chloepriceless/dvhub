@@ -445,6 +445,7 @@ function buildPeriodCharts(rows) {
       batteryToGridKwh: row.batteryToGridKwh,
       batteryChargeKwh: row.batteryChargeKwh,
       batteryDischargeKwh: row.batteryDischargeKwh,
+      cycles: row.cycles,
       selfConsumptionKwh: row.selfConsumptionKwh,
       gridShareKwh: row.gridShareKwh,
       pvShareKwh: row.pvShareKwh,
@@ -1058,10 +1059,24 @@ function buildSummarySeries(view, slots) {
 export function createHistoryRuntime({
   store,
   getPricingConfig = () => ({}),
+  getOptimizerConfig = () => ({}),
   getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} }),
   getApplicableValueSummary = () => ({ applicableValueCtKwhByMonth: {} }),
   getCurrentDate = currentBerlinDate
 }) {
+  function batteryUsableCapacityKwh() {
+    const cfg = getOptimizerConfig() || {};
+    const totalWh = Number(cfg.batteryCapacityWh);
+    if (!Number.isFinite(totalWh) || totalWh <= 0) return null;
+    const minSocPct = Math.max(0, Math.min(100, Number(cfg.minSocPct) || 0));
+    return (totalWh * (100 - minSocPct) / 100) / 1000;
+  }
+  function computeCycles(dischargeKwh) {
+    const cap = batteryUsableCapacityKwh();
+    if (!Number.isFinite(cap) || cap <= 0) return null;
+    const d = Math.max(0, Number(dischargeKwh) || 0);
+    return Math.round((d / cap) * 100) / 100;
+  }
   async function listRawFallbackSlotsForRange({ start, end }) {
     const today = getCurrentDate();
     const todayStart = localDateTimeToUtcIso(today, 0, 0);
@@ -1547,7 +1562,12 @@ export function createHistoryRuntime({
       kpis,
       pricingConfig
     });
-    const baseRows = summarizeRows(slots, view);
+    capacityAppliedKpis.cycles = computeCycles(capacityAppliedKpis.batteryDischargeKwh);
+    capacityAppliedKpis.batteryUsableCapacityKwh = batteryUsableCapacityKwh();
+    const baseRows = summarizeRows(slots, view).map((row) => ({
+      ...row,
+      cycles: computeCycles(row.batteryDischargeKwh)
+    }));
     const solarApplied = applySolarMarketValues({
       rows: baseRows,
       view,

@@ -473,6 +473,7 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
     batteryToGridKwh: 0.4,
     batteryChargeKwh: 0,
     batteryDischargeKwh: 0.4,
+    cycles: null,
     selfConsumptionKwh: 0,
     gridShareKwh: 0,
     pvShareKwh: 0,

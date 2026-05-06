@@ -940,6 +940,7 @@ const telemetryReady = (async () => {
   historyRuntime = telemetryStore ? createHistoryRuntime({
     store: telemetryStore,
     getPricingConfig: () => cfg.userEnergyPricing || {},
+    getOptimizerConfig: () => cfg.optimizer || {},
     getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants })
   }) : null;
   historyApi = createHistoryApiHandlers({
