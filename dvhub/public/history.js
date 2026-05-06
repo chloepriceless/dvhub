@@ -1494,8 +1494,12 @@ function renderCharts(summary) {
   }
   if (historyState.energyChartMode === 'sankey') {
     renderEnergyFlowSankey('historyEnergyChart', periodCombinedBars);
-  } else {
+  } else if (historyState.energyChartMode === 'lines') {
+    // Lines mode in period views falls back to the legacy detailed cards
+    // (no useful "lines" abstraction for already-aggregated period data).
     renderCombinedPeriodBars('historyEnergyChart', periodCombinedBars);
+  } else {
+    renderDayFlowStackedBars('historyEnergyChart', periodCombinedBars);
   }
   setHtml('historyPriceChart', '');
   setHtml('historyPriceList', '');
@@ -1633,9 +1637,11 @@ function renderLayout(summary) {
   const flowsButton = byId('historyEnergyFlowsBtn');
   const linesButton = byId('historyEnergyLinesBtn');
   const sankeyButton = byId('historyEnergySankeyBtn');
-  // Sankey works in any view (uses summed flows). Lines/Flow stacked bars are
-  // day-only, so hide them in aggregate views — but keep the toggle visible
-  // so users can switch to Sankey on month/year too.
+  // All three modes work everywhere now: Flüsse renders Victron-style stacked
+  // bars (15-min in day, per-day in week/month, per-month in year), Sankey
+  // shows aggregated flows, Linien is day-only (line chart with 96 datapoints
+  // per series — no useful equivalent for aggregated periods, falls back to
+  // the legacy period-cards layout).
   if (energyMode) {
     energyMode.hidden = false;
     energyMode.className = 'history-aggregate-mode is-visible';
@@ -1644,7 +1650,7 @@ function renderLayout(summary) {
     const isFlows = historyState.energyChartMode === 'flows';
     flowsButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isFlows ? 'is-active' : ''}`.trim();
     flowsButton.ariaPressed = isFlows ? 'true' : 'false';
-    flowsButton.hidden = !isDayView;
+    flowsButton.hidden = false;
   }
   if (linesButton) {
     const isLines = historyState.energyChartMode === 'lines';
