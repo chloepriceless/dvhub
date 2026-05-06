@@ -5,15 +5,20 @@ const historyChartInstances = {};
 
 const ENERGY_CHART_MODE_KEY = 'dvhub.history.energyChartMode';
 
+const ENERGY_CHART_MODES = ['flows', 'lines', 'sankey'];
+
 function readEnergyChartMode() {
   try {
     const stored = window?.localStorage?.getItem(ENERGY_CHART_MODE_KEY);
-    return stored === 'lines' ? 'lines' : 'flows';
+    return ENERGY_CHART_MODES.includes(stored) ? stored : 'flows';
   } catch (e) { return 'flows'; }
 }
 
 function writeEnergyChartMode(mode) {
-  try { window?.localStorage?.setItem(ENERGY_CHART_MODE_KEY, mode === 'lines' ? 'lines' : 'flows'); } catch (e) { /* ignore */ }
+  try {
+    const normalized = ENERGY_CHART_MODES.includes(mode) ? mode : 'flows';
+    window?.localStorage?.setItem(ENERGY_CHART_MODE_KEY, normalized);
+  } catch (e) { /* ignore */ }
 }
 
 const historyState = {
@@ -1357,6 +1362,89 @@ function renderDayFlowStackedBars(mountId, items) {
   });
 }
 
+function renderEnergyFlowSankey(mountId, items) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  if (typeof Chart === 'undefined' || !Chart.controllers || !Chart.controllers.sankey) {
+    mount.innerHTML = '<div class="history-chart-empty">Sankey-Plugin konnte nicht geladen werden.</div>';
+    return;
+  }
+  if (historyChartInstances[mountId]) { historyChartInstances[mountId].destroy(); delete historyChartInstances[mountId]; }
+  if (!Array.isArray(items) || !items.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
+    return;
+  }
+
+  const sumOf = (key) => items.reduce((acc, it) => acc + Math.max(0, Number(it?.[key]) || 0), 0);
+  const flows = [
+    { from: 'PV',       to: 'Verbrauch', flow: sumOf('solarDirectUseKwh'),  color: '#f5c451' },
+    { from: 'PV',       to: 'Akku',      flow: sumOf('solarToBatteryKwh'),  color: '#34d399' },
+    { from: 'PV',       to: 'Netz',      flow: sumOf('solarToGridKwh'),     color: '#f59e0b' },
+    { from: 'Akku',     to: 'Verbrauch', flow: sumOf('batteryDirectUseKwh'), color: '#67a5ff' },
+    { from: 'Akku',     to: 'Netz',      flow: sumOf('batteryToGridKwh'),   color: '#22d3ee' },
+    { from: 'NetzImp',  to: 'Verbrauch', flow: sumOf('gridDirectUseKwh'),   color: '#f472b6' },
+    { from: 'NetzImp',  to: 'Akku',      flow: sumOf('gridToBatteryKwh'),   color: '#c084fc' }
+  ].filter((edge) => edge.flow > 0.01);
+
+  if (!flows.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Flussdaten für diese Periode.</div>';
+    return;
+  }
+
+  const data = flows.map((edge) => ({ from: edge.from, to: edge.to, flow: Math.round(edge.flow * 100) / 100 }));
+  const colors = {};
+  flows.forEach((edge) => {
+    colors[edge.from] = colors[edge.from] || (edge.from === 'PV' ? '#f5c451' : edge.from === 'Akku' ? '#67a5ff' : '#f472b6');
+    colors[edge.to]   = colors[edge.to]   || (edge.to === 'Verbrauch' ? '#9ca3af' : edge.to === 'Akku' ? '#67a5ff' : '#22d3ee');
+  });
+  const labels = { PV: 'Solar ☀', Akku: 'Akku 🔋', Netz: 'Netz ➡', NetzImp: 'Netz ⬅', Verbrauch: 'Verbrauch 🏠' };
+
+  mount.innerHTML = `<div style="position:relative;height:340px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  const canvas = document.getElementById(mountId + 'Canvas');
+  if (!canvas) return;
+
+  historyChartInstances[mountId] = new Chart(canvas, {
+    type: 'sankey',
+    data: {
+      datasets: [{
+        label: 'Energiefluss',
+        data,
+        colorFrom: (ctx) => colors[ctx.dataset.data[ctx.dataIndex]?.from] || '#9ca3af',
+        colorTo:   (ctx) => colors[ctx.dataset.data[ctx.dataIndex]?.to]   || '#9ca3af',
+        colorMode: 'gradient',
+        labels,
+        priority: { PV: 1, NetzImp: 2, Akku: 3, Verbrauch: 1, Netz: 2 },
+        column:   { PV: 0, NetzImp: 0, Akku: 1, Verbrauch: 2, Netz: 2 },
+        size: 'max'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1a2eee',
+          titleColor: '#e5e7eb',
+          bodyColor: '#e5e7eb',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 8,
+          callbacks: {
+            label: (ctx) => {
+              const d = ctx.dataset.data[ctx.dataIndex];
+              const from = labels[d.from] || d.from;
+              const to = labels[d.to] || d.to;
+              return `${from} → ${to}: ${fmtKwh(d.flow)}`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
 function renderCharts(summary) {
   const charts = summary?.charts || {};
   const dayEnergyLines = Array.isArray(charts.dayEnergyLines) ? charts.dayEnergyLines : [];
@@ -1384,6 +1472,8 @@ function renderCharts(summary) {
     ], fmtEur, 'EUR');
     if (historyState.energyChartMode === 'lines') {
       renderDetailedDayChart('historyEnergyChart', dayEnergyLines);
+    } else if (historyState.energyChartMode === 'sankey') {
+      renderEnergyFlowSankey('historyEnergyChart', dayEnergyLines);
     } else {
       renderDayFlowStackedBars('historyEnergyChart', dayEnergyLines);
     }
@@ -1402,7 +1492,11 @@ function renderCharts(summary) {
   } else {
     renderAggregateOverview('historyFinancialChart', summary);
   }
-  renderCombinedPeriodBars('historyEnergyChart', periodCombinedBars);
+  if (historyState.energyChartMode === 'sankey') {
+    renderEnergyFlowSankey('historyEnergyChart', periodCombinedBars);
+  } else {
+    renderCombinedPeriodBars('historyEnergyChart', periodCombinedBars);
+  }
   setHtml('historyPriceChart', '');
   setHtml('historyPriceList', '');
   renderAggregatePriceHint('historyAggregatePriceHint');
@@ -1535,19 +1629,30 @@ function renderLayout(summary) {
   const energyMode = byId('historyEnergyMode');
   const flowsButton = byId('historyEnergyFlowsBtn');
   const linesButton = byId('historyEnergyLinesBtn');
+  const sankeyButton = byId('historyEnergySankeyBtn');
+  // Sankey works in any view (uses summed flows). Lines/Flow stacked bars are
+  // day-only, so hide them in aggregate views — but keep the toggle visible
+  // so users can switch to Sankey on month/year too.
   if (energyMode) {
-    energyMode.hidden = !isDayView;
-    energyMode.className = `history-aggregate-mode ${isDayView ? 'is-visible' : ''}`.trim();
+    energyMode.hidden = false;
+    energyMode.className = 'history-aggregate-mode is-visible';
   }
   if (flowsButton) {
     const isFlows = historyState.energyChartMode === 'flows';
     flowsButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isFlows ? 'is-active' : ''}`.trim();
     flowsButton.ariaPressed = isFlows ? 'true' : 'false';
+    flowsButton.hidden = !isDayView;
   }
   if (linesButton) {
     const isLines = historyState.energyChartMode === 'lines';
     linesButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isLines ? 'is-active' : ''}`.trim();
     linesButton.ariaPressed = isLines ? 'true' : 'false';
+    linesButton.hidden = !isDayView;
+  }
+  if (sankeyButton) {
+    const isSankey = historyState.energyChartMode === 'sankey';
+    sankeyButton.className = `btn btn-secondary btn-inline history-aggregate-mode-btn ${isSankey ? 'is-active' : ''}`.trim();
+    sankeyButton.ariaPressed = isSankey ? 'true' : 'false';
   }
 }
 
@@ -1636,6 +1741,12 @@ function renderSummary(summary) {
     if (historyState.energyChartMode === 'lines') return;
     historyState.energyChartMode = 'lines';
     writeEnergyChartMode('lines');
+    if (historyState.lastSummary) renderSummary(historyState.lastSummary);
+  });
+  bindHistoryToggle('historyEnergySankeyBtn', () => {
+    if (historyState.energyChartMode === 'sankey') return;
+    historyState.energyChartMode = 'sankey';
+    writeEnergyChartMode('sankey');
     if (historyState.lastSummary) renderSummary(historyState.lastSummary);
   });
 }
