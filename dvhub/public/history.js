@@ -1362,6 +1362,111 @@ function renderDayFlowStackedBars(mountId, items) {
   });
 }
 
+function renderPeriodGroupedBars(mountId, items) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  if (typeof Chart === 'undefined') return;
+  if (historyChartInstances[mountId]) { historyChartInstances[mountId].destroy(); delete historyChartInstances[mountId]; }
+  if (!Array.isArray(items) || !items.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
+    return;
+  }
+
+  const labels = items.map((it) => compactAxisLabel(it?.label || '-'));
+  const consumption = items.map((it) => Math.max(0, Number(it?.loadKwh) || 0));
+  const solarSelf = items.map((it) => Math.max(0, (Number(it?.solarDirectUseKwh) || 0) + (Number(it?.solarToBatteryKwh) || 0)));
+  const solarExport = items.map((it) => Math.max(0, Number(it?.solarToGridKwh) || 0));
+  const battery = items.map((it) => Math.max(0, Number(it?.batteryDischargeKwh) || 0));
+  const autarky = items.map((it) => {
+    const load = Number(it?.loadKwh) || 0;
+    const grid = Number(it?.gridDirectUseKwh) || 0;
+    if (load <= 0) return null;
+    return Math.max(0, Math.min(100, ((load - grid) / load) * 100));
+  });
+
+  mount.innerHTML = `<div style="position:relative;height:340px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  const canvas = document.getElementById(mountId + 'Canvas');
+  if (!canvas) return;
+
+  historyChartInstances[mountId] = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'line', label: 'Autarkie',
+          data: autarky, yAxisID: 'yPct', order: 0,
+          borderColor: '#67a5ff', backgroundColor: 'rgba(103,165,255,0.15)',
+          fill: true, tension: 0.3, pointRadius: 1.5, pointHoverRadius: 4, borderWidth: 1.5, spanGaps: true
+        },
+        {
+          type: 'bar', label: 'Verbrauch',
+          data: consumption, yAxisID: 'yKwh', order: 2, stack: 'load',
+          backgroundColor: '#f472b6', borderColor: '#f472b6', borderWidth: 0
+        },
+        {
+          type: 'bar', label: 'Solar (Eigenverbrauch)',
+          data: solarSelf, yAxisID: 'yKwh', order: 2, stack: 'solar',
+          backgroundColor: '#f5c451', borderColor: '#f5c451', borderWidth: 0
+        },
+        {
+          type: 'bar', label: 'Solar (Einspeisung)',
+          data: solarExport, yAxisID: 'yKwh', order: 2, stack: 'solar',
+          backgroundColor: '#f59e0b', borderColor: '#f59e0b', borderWidth: 0
+        },
+        {
+          type: 'bar', label: 'Batterie',
+          data: battery, yAxisID: 'yKwh', order: 2, stack: 'battery',
+          backgroundColor: '#67a5ff', borderColor: '#67a5ff', borderWidth: 0
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true, position: 'bottom',
+          labels: { color: '#9ca3af', font: { size: 10 }, usePointStyle: true, padding: 10, boxWidth: 10, boxHeight: 10 }
+        },
+        tooltip: {
+          backgroundColor: '#1a1a2eee', titleColor: '#e5e7eb', bodyColor: '#e5e7eb',
+          borderColor: '#334155', borderWidth: 1, padding: 8, displayColors: true,
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.dataset.label === 'Autarkie') {
+                const v = ctx.parsed.y;
+                return v == null ? null : `Autarkie: ${v.toFixed(0)} %`;
+              }
+              return `${ctx.dataset.label}: ${fmtKwh(ctx.raw)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: false,
+          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 45, minRotation: 0, autoSkip: true, maxTicksLimit: 32 },
+          grid: { color: '#e5e7eb20' }
+        },
+        yKwh: {
+          stacked: false, position: 'left', beginAtZero: true,
+          title: { display: true, text: 'kWh', color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => fmtKwh(v) },
+          grid: { color: '#e5e7eb20' }
+        },
+        yPct: {
+          position: 'right', beginAtZero: true, min: 0, max: 100,
+          title: { display: true, text: '% Autarkie', color: '#9ca3af', font: { size: 10 } },
+          ticks: { color: '#9ca3af', font: { size: 9 }, callback: (v) => `${v} %` },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+}
+
 function renderEnergyFlowSankey(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -1499,7 +1604,7 @@ function renderCharts(summary) {
     // (no useful "lines" abstraction for already-aggregated period data).
     renderCombinedPeriodBars('historyEnergyChart', periodCombinedBars);
   } else {
-    renderDayFlowStackedBars('historyEnergyChart', periodCombinedBars);
+    renderPeriodGroupedBars('historyEnergyChart', periodCombinedBars);
   }
   setHtml('historyPriceChart', '');
   setHtml('historyPriceList', '');
