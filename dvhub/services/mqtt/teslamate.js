@@ -66,9 +66,14 @@ const SCHEMA_SQL = `
     CONSTRAINT tesla_snapshots_state_enum
       CHECK (state IS NULL OR state IN ('asleep', 'online', 'offline', 'charging', 'driving')),
     CONSTRAINT tesla_snapshots_charging_state_enum
-      CHECK (charging_state IS NULL OR charging_state IN ('Disconnected', 'Charging', 'Complete', 'Stopped', 'Starting', 'NoPower'))
+      CHECK (charging_state IS NULL OR charging_state IN ('Disconnected', 'Charging', 'Complete', 'Stopped', 'Starting', 'NoPower')),
+    -- Plan 08-08 Task 2: prevent duplicate snapshots per car/timestamp.
+    -- Migration 006-unique-constraints.sql also drops the redundant non-unique
+    -- index idx_tesla_snapshots_car_ts since the UNIQUE constraint creates its
+    -- own implicit btree on the same columns. Fresh installs skip the index
+    -- entirely (UNIQUE covers the lookup pattern).
+    CONSTRAINT tesla_snapshots_unique_car_ts UNIQUE (car_id, ts_utc)
   );
-  CREATE INDEX IF NOT EXISTS idx_tesla_snapshots_car_ts ON tesla_snapshots(car_id, ts_utc);
 `;
 
 async function ensureSchema(db) {
