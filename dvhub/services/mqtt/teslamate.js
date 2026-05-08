@@ -52,7 +52,21 @@ const SCHEMA_SQL = `
     plugged_in BOOLEAN,
     geofence TEXT,
     inside_temp_c DOUBLE PRECISION,
-    meta_json TEXT
+    meta_json TEXT,
+    -- Plan 08-08 Task 1: SoC percentages bounded to [0,100]; state/charging_state
+    -- enums match Tesla API canonical values. A SoC of 110 nearly always means a
+    -- unit-mix-up (fraction vs percent) — fail loud instead of silently corrupting
+    -- charge logic. Unknown enum strings should also fail so we notice API drift.
+    CONSTRAINT tesla_snapshots_battery_level_range
+      CHECK (battery_level IS NULL OR (battery_level >= 0 AND battery_level <= 100)),
+    CONSTRAINT tesla_snapshots_usable_battery_range
+      CHECK (usable_battery_level IS NULL OR (usable_battery_level >= 0 AND usable_battery_level <= 100)),
+    CONSTRAINT tesla_snapshots_charge_limit_range
+      CHECK (charge_limit_soc IS NULL OR (charge_limit_soc >= 0 AND charge_limit_soc <= 100)),
+    CONSTRAINT tesla_snapshots_state_enum
+      CHECK (state IS NULL OR state IN ('asleep', 'online', 'offline', 'charging', 'driving')),
+    CONSTRAINT tesla_snapshots_charging_state_enum
+      CHECK (charging_state IS NULL OR charging_state IN ('Disconnected', 'Charging', 'Complete', 'Stopped', 'Starting', 'NoPower'))
   );
   CREATE INDEX IF NOT EXISTS idx_tesla_snapshots_car_ts ON tesla_snapshots(car_id, ts_utc);
 `;

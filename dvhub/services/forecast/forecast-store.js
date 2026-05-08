@@ -31,7 +31,12 @@ const SCHEMA_SQL = `
     confidence DOUBLE PRECISION NOT NULL DEFAULT 0.3,
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     meta_json TEXT,
-    UNIQUE(model, ts_utc)
+    UNIQUE(model, ts_utc),
+    -- Plan 08-08 Task 1: confidence is a probability scalar in [0,1]; values
+    -- outside that range mean the producer is broken. Reject at write time so
+    -- downstream merge logic can trust the field as a weight.
+    CONSTRAINT pv_forecasts_confidence_range
+      CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
   );
   CREATE INDEX IF NOT EXISTS idx_pv_forecasts_ts ON pv_forecasts(ts_utc);
 
@@ -58,7 +63,14 @@ const SCHEMA_SQL = `
     sample_count INTEGER,
     confidence_score DOUBLE PRECISION,
     meta_json TEXT,
-    UNIQUE(forecast_type, model, evaluation_date)
+    UNIQUE(forecast_type, model, evaluation_date),
+    -- Plan 08-08 Task 1: error metrics are non-negative by definition (REPOLENS
+    -- database/data-integrity/011). A negative MAE/RMSE/MAPE almost always
+    -- indicates a sign error in the producer; sample_count below zero is nonsense.
+    CONSTRAINT forecast_accuracy_mae_nonneg CHECK (mae IS NULL OR mae >= 0),
+    CONSTRAINT forecast_accuracy_rmse_nonneg CHECK (rmse IS NULL OR rmse >= 0),
+    CONSTRAINT forecast_accuracy_mape_nonneg CHECK (mape IS NULL OR mape >= 0),
+    CONSTRAINT forecast_accuracy_sample_count_nonneg CHECK (sample_count IS NULL OR sample_count >= 0)
   );
   CREATE INDEX IF NOT EXISTS idx_forecast_accuracy_date ON forecast_accuracy(evaluation_date);
 

@@ -124,6 +124,12 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     }
     return value;
   }
+  // Plan 08-08 Task 1 (REPOLENS database/data-integrity/001-001): SQLite ignores
+  // declared FOREIGN KEY constraints by default — they only fire when this PRAGMA
+  // is set, and it is per-connection so the file-level migration would be a no-op.
+  // Setting it before any DDL/DML guarantees that ON DELETE CASCADE on
+  // optimizer_run_series → optimizer_runs(id) actually executes.
+  db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec(`
