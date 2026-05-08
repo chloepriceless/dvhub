@@ -94,7 +94,10 @@ CREATE TABLE IF NOT EXISTS dv.decisions (
   source_rule_id UUID REFERENCES dv.rules(id) ON DELETE SET NULL,
   details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK (slot_end IS NULL OR slot_start IS NOT NULL)
+  -- WR-04: enforce slot validity — both endpoints set together AND end > start.
+  -- Mirrors the (valid_to > valid_from) pattern used by dv.rules, tariff_sets,
+  -- exec.effective_plans, opt.plans, opt.forecast_runs.
+  CHECK (slot_end IS NULL OR (slot_start IS NOT NULL AND slot_end > slot_start))
 );
 
 CREATE INDEX IF NOT EXISTS dv_decisions_site_ts_idx ON dv.decisions(site_id, ts DESC);
