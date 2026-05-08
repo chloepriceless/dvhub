@@ -326,9 +326,9 @@ export async function runPendingMigrations(pool, cfg = {}) {
     .sort();
   for (const f of files) {
     // D-09: Migration 014 (TimescaleDB) is opt-in. Skip unless explicitly enabled.
-    if (f === '014-timescaledb.sql' && cfg?.database?.timescaledb !== true) {
+    if (f === '014-timescaledb.sql' && cfg?.telemetry?.database?.timescaledb !== true) {
       // eslint-disable-next-line no-console
-      console.log(`[migration] skipping 014-timescaledb.sql (cfg.database.timescaledb !== true)`);
+      console.log(`[migration] skipping 014-timescaledb.sql (cfg.telemetry.database.timescaledb !== true)`);
       continue;
     }
     const version = parseInt(f.slice(0, 3), 10);

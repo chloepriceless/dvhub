@@ -7,10 +7,10 @@
 --   optimizer_runs, etc.) that are ALREADY created by ensurePgSchema() in
 --   dvhub/telemetry-store-pg.js:149-298. Including them here would be redundant or
 --   conflicting.
--- CONTEXT decision: D-09 (default OFF; gated by cfg.database.timescaledb at the runner level).
+-- CONTEXT decision: D-09 (default OFF; gated by cfg.telemetry.database.timescaledb at the runner level).
 --
 -- Skip mechanism (Option A from PATTERNS.md): runPendingMigrations() in
--- dvhub/telemetry-store-pg.js skips this file unless cfg.database.timescaledb === true.
+-- dvhub/telemetry-store-pg.js skips this file unless cfg.telemetry.database.timescaledb === true.
 --
 -- Scope of operations:
 --   1. CREATE EXTENSION IF NOT EXISTS timescaledb
