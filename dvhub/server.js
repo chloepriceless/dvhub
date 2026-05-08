@@ -418,7 +418,7 @@ async function createTelemetryStoreIfEnabled() {
     // directly after ensurePgSchema so schema is always brought up to date before
     // the rest of startup (market-value backfill, forecast services, etc.) runs.
     // This is the single canonical call site for runPendingMigrations.
-    await runPendingMigrations(pool);
+    await runPendingMigrations(pool, cfg);
     const store = createTelemetryStorePg(pool, {
       rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });
