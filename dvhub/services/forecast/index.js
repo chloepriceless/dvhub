@@ -234,6 +234,19 @@ export function createForecastService(ctx) {
       }
     }
 
+    // Tagesgesamt for the dashboard summary cards (PV + Verbrauch). The
+    // pv/load slots above only contain ts_utc >= NOW, so summing them gives
+    // "remaining today", not the full day. The Leitstand cards want the
+    // whole day — query VRM forecast directly for full Berlin-local-day totals.
+    let dailyTotals = null;
+    if (vrmForecast?.readDailyTotals) {
+      try {
+        dailyTotals = await vrmForecast.readDailyTotals();
+      } catch (e) {
+        pushLog('vrm_daily_totals_query_error', { error: e.message });
+      }
+    }
+
     // D-B1: fetch last 12h of measured PV from energy_slots_15m via telemetryStore
     let actual = [];
     let pastForecast = [];
@@ -306,6 +319,10 @@ export function createForecastService(ctx) {
       load,
       actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts)
       pastForecast,        // Historic pv_forecasts for the same 12h window (for chart overlay)
+      // Berlin-local full-day totals from VRM forecast (today + tomorrow). Frontend
+      // uses these for Tagesgesamt cards; existing pv/load.slots stay future-only
+      // and feed the "noch X kWh übrig" detail line.
+      dailyTotals,
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
       solar,
       consumption,

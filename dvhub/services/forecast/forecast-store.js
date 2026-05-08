@@ -176,8 +176,13 @@ export function createForecastStore(ctx) {
         power_w = EXCLUDED.power_w, confidence = EXCLUDED.confidence,
         meta_json = EXCLUDED.meta_json, fetched_at = NOW()
     `;
+    // power_w is NOT NULL in the schema. Some upstream merges (ensemble) can
+    // produce rows where a slot has no value for a given model — coerce to 0
+    // here so a single bad slot does not abort the whole forecast.start()
+    // chain (which would in turn block load-forecast and forecast-aware reserve).
+    const power = Number.isFinite(Number(row.power_w)) ? Number(row.power_w) : 0;
     const params = [
-      row.model, row.ts_utc, row.power_w,
+      row.model, row.ts_utc, power,
       row.confidence ?? 0.3, row.meta_json ?? null
     ];
     return pool.query(sql, params);
@@ -191,8 +196,9 @@ export function createForecastStore(ctx) {
         power_w = EXCLUDED.power_w, confidence = EXCLUDED.confidence,
         meta_json = EXCLUDED.meta_json, fetched_at = NOW()
     `;
+    const loadPower = Number.isFinite(Number(row.power_w)) ? Number(row.power_w) : 0;
     const params = [
-      row.model || 'sql_weekday', row.ts_utc, row.power_w,
+      row.model || 'sql_weekday', row.ts_utc, loadPower,
       row.confidence ?? 0.3, row.meta_json ?? null
     ];
     return pool.query(sql, params);

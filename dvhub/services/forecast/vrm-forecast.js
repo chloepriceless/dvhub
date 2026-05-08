@@ -93,9 +93,66 @@ export function createVrmForecast(ctx) {
     return Boolean(cfg.telemetry?.historyImport?.vrmToken);
   }
 
+  // Berlin local day totals for today + tomorrow.
+  // Filtered by ts_utc projected into Europe/Berlin so DST shifts and the
+  // forecast_for_date label-bug (UTC date of local midnight) don't matter.
+  // Resolution is 1h, so SUM(value_w)/1000 == kWh for the day.
+  async function readDailyTotals() {
+    if (!getDb()) return null;
+    try {
+      // to_char keeps the date as a plain ISO string (YYYY-MM-DD) so the
+      // pg driver can't silently shift it via local-zone Date conversion.
+      const result = await getDb().query(`
+        SELECT
+          forecast_type,
+          to_char((ts_utc AT TIME ZONE 'Europe/Berlin')::date, 'YYYY-MM-DD') AS day_local,
+          ROUND((SUM(value_w) / 1000.0)::numeric, 2) AS kwh,
+          COUNT(*) AS slots
+        FROM vrm_forecasts
+        WHERE source = 'vrm'
+          AND forecast_type IN ('solar_yield', 'consumption')
+          AND (ts_utc AT TIME ZONE 'Europe/Berlin')
+              >= ((NOW() AT TIME ZONE 'Europe/Berlin')::date)::timestamp
+          AND (ts_utc AT TIME ZONE 'Europe/Berlin')
+              <  ((NOW() AT TIME ZONE 'Europe/Berlin')::date + INTERVAL '2 days')::timestamp
+        GROUP BY forecast_type, day_local
+      `);
+      const todayBerlin = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date());
+      const tomorrowDate = new Date(Date.now() + 24 * 3600 * 1000);
+      const tomorrowBerlin = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(tomorrowDate);
+
+      const blank = { pvKwh: 0, loadKwh: 0, pvSlots: 0, loadSlots: 0 };
+      const out = { today: { ...blank }, tomorrow: { ...blank } };
+      for (const r of result.rows) {
+        const dayKey = String(r.day_local || '').slice(0, 10);
+        const bucket = dayKey === todayBerlin ? out.today
+          : dayKey === tomorrowBerlin ? out.tomorrow
+          : null;
+        if (!bucket) continue;
+        const kwh = Number(r.kwh) || 0;
+        if (r.forecast_type === 'solar_yield') {
+          bucket.pvKwh = kwh;
+          bucket.pvSlots = Number(r.slots) || 0;
+        } else if (r.forecast_type === 'consumption') {
+          bucket.loadKwh = kwh;
+          bucket.loadSlots = Number(r.slots) || 0;
+        }
+      }
+      return out;
+    } catch (e) {
+      pushLog('vrm_daily_totals_error', { error: e.message });
+      return null;
+    }
+  }
+
   return {
     readPvForecast,
     readLoadForecast,
+    readDailyTotals,
     isAvailable
   };
 }
