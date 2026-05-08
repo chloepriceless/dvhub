@@ -58,107 +58,49 @@ function setControlMsg(text, isErr = false) {
   el.classList.add(isErr ? 'off' : 'ok');
 }
 
+// DVhub Powerflow Constellation — handle to the mounted component.
+let powerflowInstance = null;
+
 function updateFlowDiagram(status) {
-  const gridTotal = Number(status?.meter?.grid_total_w || 0);
   const batPower = Number(status?.victron?.batteryPowerW || 0);
   const pvPower = Number(status?.victron?.pvTotalW || status?.victron?.pvPowerW || 0);
   const loadW = Number(status?.victron?.selfConsumptionW || 0);
   const soc = Number(status?.victron?.soc || 0);
-
-  // Grid flow direction & node — use victron gridExportW/gridImportW for reliable direction
-  const gridLine = document.getElementById('flowLineGrid');
-  const gridNode = document.getElementById('flowNodeGridValue');
-  const gridLabel = document.getElementById('flowNodeGridLabel');
   const gridExportW = Number(status?.victron?.gridExportW || 0);
   const gridImportW = Number(status?.victron?.gridImportW || 0);
-  const isExport = gridExportW > gridImportW;
-  const gridAbsW = isExport ? gridExportW : gridImportW;
-  if (gridLine) {
-    gridLine.setAttribute('stroke', isExport ? cssVar('--node-grid-export', '#3fb950') : cssVar('--node-grid-import', '#ff7b72'));
-    gridLine.setAttribute('opacity', String(Math.min(gridAbsW / 5000, 1) * 0.6 + 0.2));
-  }
-  if (gridNode) {
-    gridNode.textContent = `${gridAbsW} W`;
-    gridNode.style.color = isExport ? 'var(--node-grid-export)' : 'var(--node-grid-import)';
-  }
-  if (gridLabel) gridLabel.textContent = isExport ? 'Export' : 'Import';
 
-  // Battery flow
-  const batLine = document.getElementById('flowLineBat');
-  const batNode = document.getElementById('flowNodeBatValue');
-  const batPowerNode = document.getElementById('flowNodeBatPower');
-  if (batLine) {
-    batLine.setAttribute('stroke', batPower < 0 ? cssVar('--node-bat', '#3fb950') : cssVar('--node-house', '#58a6ff'));
-    batLine.setAttribute('opacity', String(Math.min(Math.abs(batPower) / 3000, 1) * 0.6 + 0.2));
-  }
-  if (batNode) batNode.textContent = `${soc} %`;
-  if (batPowerNode) batPowerNode.textContent = `${batPower} W`;
+  // Component contract: pv ≥ 0 kW, house ≥ 0 kW,
+  // bat: + = entlädt, − = lädt, grid: + = Bezug, − = Export.
+  // DVhub reports batteryPowerW with the OPPOSITE convention (positive = laden,
+  // i.e. power flowing into the battery), so flip the sign for the component.
+  // Day's net Euro balance — positive = earned, negative = paid. Pulled from
+  // /api/status .costs.netEur so the powerflow center can show it instead of
+  // duplicating the grid direction (which already lives in the bottom Netz node).
+  const netEur = (status && status.costs && Number.isFinite(Number(status.costs.netEur)))
+    ? Number(status.costs.netEur)
+    : null;
 
-  // PV flow
-  const pvLine = document.getElementById('flowLinePV');
-  const pvNode = document.getElementById('flowNodePvValue');
-  if (pvLine) pvLine.setAttribute('opacity', String(Math.min(pvPower / 5000, 1) * 0.6 + 0.2));
-  if (pvNode) pvNode.textContent = `${pvPower} W`;
-
-  // House flow
-  const houseLine = document.getElementById('flowLineHouse');
-  const houseNode = document.getElementById('flowNodeHouseValue');
-  if (houseLine) houseLine.setAttribute('opacity', String(Math.min(loadW / 5000, 1) * 0.6 + 0.2));
-  if (houseNode) houseNode.textContent = loadW > 0 ? `${loadW} W` : 'Haus';
-
-  // Center ring
-  const centerNet = document.getElementById('flowCenterNet');
-  const centerDir = document.getElementById('flowCenterDir');
-  const c = status?.costs || {};
-  if (centerNet) centerNet.textContent = c.netEur != null ? `${c.netEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : '-';
-  if (centerDir) {
-    centerDir.textContent = isExport ? 'Export' : 'Import';
-    centerDir.style.color = isExport ? 'var(--ok)' : 'var(--danger)';
+  if (powerflowInstance) {
+    powerflowInstance.update({
+      pv:    pvPower / 1000,
+      bat:   -batPower / 1000,
+      house: loadW / 1000,
+      grid:  (gridImportW - gridExportW) / 1000,
+      costEur: netEur
+    });
   }
 
-  // SOC progress bar
+  // SOC progress bar (left rail) still updated independently
   const socBar = document.getElementById('socBar');
   if (socBar) socBar.style.width = `${Math.max(0, Math.min(100, soc))}%`;
 }
 
 function initFlowDiagram() {
-  const svg = document.getElementById('flowDiagram');
-  if (!svg) return;
-
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  const lines = [
-    { id: 'flowLinePV', d: 'M 250,40 C 250,75 250,110 250,150', color: cssVar('--node-pv', '#e3b341') },
-    { id: 'flowLineBat', d: 'M 70,200 C 120,200 160,200 195,200', color: cssVar('--node-bat', '#3fb950') },
-    { id: 'flowLineHouse', d: 'M 305,200 C 340,200 380,200 430,200', color: cssVar('--node-house', '#58a6ff') },
-    { id: 'flowLineGrid', d: 'M 250,250 C 250,290 250,330 250,380', color: cssVar('--ok', '#3fb950') }
-  ];
-
-  for (const { id, d, color } of lines) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('id', id);
-    path.setAttribute('d', d);
-    path.setAttribute('stroke', color);
-    path.setAttribute('stroke-width', '2');
-    path.setAttribute('fill', 'none');
-    path.setAttribute('opacity', '0.3');
-    svg.appendChild(path);
-
-    if (prefersReducedMotion) continue;
-
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('r', '4');
-    circle.setAttribute('fill', color);
-    circle.setAttribute('opacity', '0.6');
-    const animate = document.createElementNS('http://www.w3.org/2000/svg', 'animateMotion');
-    animate.setAttribute('dur', '3s');
-    animate.setAttribute('repeatCount', 'indefinite');
-    const mpath = document.createElementNS('http://www.w3.org/2000/svg', 'mpath');
-    mpath.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', `#${id}`);
-    animate.appendChild(mpath);
-    circle.appendChild(animate);
-    svg.appendChild(circle);
-  }
+  if (typeof window.DVhubPowerflow === 'undefined') return;
+  const mountEl = document.getElementById('leitstandPowerflow');
+  if (!mountEl) return;
+  if (powerflowInstance) powerflowInstance.destroy();
+  powerflowInstance = window.DVhubPowerflow.mount(mountEl);
 }
 
 function cssVar(name, fallback) {

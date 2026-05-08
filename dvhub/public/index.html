@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dvhub-powerflow.css" />
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
   <link rel="manifest" href="/manifest.json">
@@ -118,58 +119,9 @@
 
       </aside>
 
-      <!-- Flow Center -->
+      <!-- Flow Center · DVhub Powerflow Constellation -->
       <div class="flow-center">
-        <div class="flow-diagram">
-          <svg id="flowDiagram" viewBox="0 0 500 400" role="img" aria-label="Energiefluss-Diagramm">
-            <!-- SVG paths populated by app.js initFlowDiagram() -->
-          </svg>
-
-          <!-- PV node overlay (top center) -->
-          <div class="flow-node flow-node-pv" role="img" aria-label="PV-Anlage Leistung">
-            <div class="flow-node-icon">☀</div>
-            <div class="flow-node-value" id="flowNodePvValue" style="color:var(--node-pv);">- W</div>
-            <div class="flow-node-label">PV</div>
-          </div>
-
-          <!-- Battery node overlay (left) -->
-          <div class="flow-node flow-node-bat" role="img" aria-label="Batterie Status">
-            <div class="flow-node-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="12" rx="2"/><path d="M22 11v4"/><path d="M6 11v4"/><path d="M10 11v4"/><path d="M14 11v4"/></svg></div>
-            <div class="flow-node-value" id="flowNodeBatValue" style="color:var(--node-bat);">- %</div>
-            <div class="flow-node-sub" id="flowNodeBatPower">-</div>
-          </div>
-
-          <!-- House node overlay (right) -->
-          <div class="flow-node flow-node-house" role="img" aria-label="Hausverbrauch">
-            <div class="flow-node-icon">⌂</div>
-            <div class="flow-node-value" id="flowNodeHouseValue" style="color:var(--node-house);">Haus</div>
-            <div class="flow-node-sub">Verbrauch</div>
-          </div>
-
-          <!-- Grid node overlay (bottom) — compact, detail moved to left rail -->
-          <div class="flow-node flow-node-grid" role="img" aria-label="Netzleistung">
-            <div class="flow-node-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L12 6"/><path d="M8 6 L16 6"/><path d="M9 6 L7 14"/><path d="M15 6 L17 14"/><path d="M7 14 L17 14"/><path d="M8 14 L5 22"/><path d="M16 14 L19 22"/><path d="M12 14 L12 22"/><path d="M4 10 L8.5 10"/><path d="M15.5 10 L20 10"/></svg></div>
-            <div class="flow-node-value" id="flowNodeGridValue" style="color:var(--ok);">- W</div>
-            <div class="flow-node-label" id="flowNodeGridLabel">Netz</div>
-          </div>
-
-          <!-- Center ring -->
-          <div class="center-ring">
-            <div class="cr-lbl">Netto</div>
-            <div class="cr-val" id="flowCenterNet">-</div>
-            <div class="cr-sub" id="flowCenterDir">-</div>
-          </div>
-        </div>
-
-        <!-- Netzphasen detail — outside flow-diagram for mobile stacking -->
-        <div class="flow-grid-detail">
-          <p class="card-kicker" style="font-size:0.6rem;margin-bottom:4px;">Netzphasen</p>
-          <div class="metric-row"><span>L1</span><strong id="l1">-</strong></div>
-          <div class="metric-row"><span>L2</span><strong id="l2">-</strong></div>
-          <div class="metric-row"><span>L3</span><strong id="l3">-</strong></div>
-          <div class="metric-row"><span>Ges.</span><strong id="total">-</strong></div>
-        </div>
-
+        <div class="dvhub-powerflow" id="leitstandPowerflow"></div>
       </div>
 
       <!-- Right Rail -->
@@ -268,9 +220,9 @@
           <div class="meta" id="chartMeta">-</div>
         </div>
 
-        <!-- Zeitplan + Automatik side by side under chart -->
+        <!-- Zeitplan (mit integrierter Börsenautomatik) -->
         <div class="chart-sub-row">
-          <div class="chart-span-card">
+          <div class="chart-span-card" style="grid-column:1 / -1;">
             <p class="card-title">Zeitplan</p>
             <h2 class="section-title">Börsenfenster und Regeln</h2>
             <div class="schedule-flags">
@@ -308,31 +260,40 @@
               <button id="saveScheduleBtn" class="btn btn-primary btn-small" type="button">Speichern</button>
             </div>
             <div class="meta" id="controlMsg">-</div>
-          </div>
 
-          <div class="chart-span-card">
-            <section id="automationPanel">
-              <p class="card-title">Kleine Börsenautomatik</p>
-              <h2 class="section-title" id="automationStatusTitle">—</h2>
-              <div class="automation-status-bar" id="automationStatusBarPanel">
+            <!-- Integrierte kleine Börsenautomatik (vorher eigene Kachel) -->
+            <section id="automationPanel" class="sma-inline-panel" style="margin-top:18px;border-top:1px solid #2a3550;padding-top:14px;">
+              <div class="sma-inline-head" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                <p class="card-title" style="margin:0;">Kleine Börsenautomatik</p>
+                <label class="settings-field" style="display:inline-flex;align-items:center;gap:8px;margin:0;">
+                  <input type="checkbox" id="automationEnabled">
+                  <span style="font-weight:500;">Aktiv</span>
+                </label>
+                <h2 class="section-title" id="automationStatusTitle" style="margin:0 0 0 auto;font-size:0.95rem;">—</h2>
+              </div>
+              <div class="automation-status-bar" id="automationStatusBarPanel" style="margin-top:8px;">
                 <span id="automationOutcomePanel">—</span>
                 <span id="automationRuleCountPanel">—</span>
                 <span id="automationAvailableEnergyPanel">—</span>
               </div>
-              <div class="automation-config-grid" id="automationConfigGrid">
-                <label class="settings-field"><span>Aktiviert</span><input type="checkbox" id="automationEnabled"></label>
-                <label class="settings-field"><span>Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
-                <label class="settings-field"><span>Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
-                <label class="settings-field"><span>Kapazität (kWh)</span><input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6"></label>
-                <label class="settings-field"><span>Effizienz (%)</span><input type="number" id="automationInverterEfficiency" min="1" max="100" value="85"></label>
-                <label class="settings-field"><span>Max Entladung (W)</span><input type="number" id="automationMaxDischargeW" value="-12000"></label>
-                <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" value="30"></label>
-              </div>
-              <div id="automationStagesContainer"></div>
-              <div class="sched-controls">
-                <button id="addAutomationStageBtn" class="btn btn-small" type="button">+ Stufe</button>
-                <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
-              </div>
+              <details class="sma-inline-details" style="margin-top:10px;border:1px solid #2a3550;border-radius:6px;background:rgba(20,28,48,0.4);">
+                <summary style="cursor:pointer;padding:10px 14px;color:#8b95a8;font-size:12px;user-select:none;">⚙️ Einstellungen ein-/ausklappen</summary>
+                <div style="padding:10px 14px 14px;">
+                  <div class="automation-config-grid" id="automationConfigGrid">
+                    <label class="settings-field"><span>Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
+                    <label class="settings-field"><span>Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
+                    <label class="settings-field"><span>Kapazität (kWh)</span><input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6"></label>
+                    <label class="settings-field"><span>Effizienz (%)</span><input type="number" id="automationInverterEfficiency" min="1" max="100" value="85"></label>
+                    <label class="settings-field"><span>Max Entladung (W)</span><input type="number" id="automationMaxDischargeW" value="-12000"></label>
+                    <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" value="30"></label>
+                  </div>
+                  <div id="automationStagesContainer"></div>
+                  <div class="sched-controls" style="margin-top:10px;">
+                    <button id="addAutomationStageBtn" class="btn btn-small" type="button">+ Stufe</button>
+                    <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
+                  </div>
+                </div>
+              </details>
             </section>
           </div>
         </div>
@@ -367,13 +328,7 @@
         </div>
       </div>
 
-      <div class="chart-span-card" id="pv-forecast-card">
-        <span class="card-kicker">PV-PROGNOSE VS. IST</span>
-        <div class="chart-skeleton" id="pv-forecast-skeleton"></div>
-        <canvas id="pv-forecast-chart" role="img" aria-label="PV-Prognose vs. Ist" style="display:none"></canvas>
-      </div>
-
-      <div class="chart-span-card" id="forecastComparisonCard" style="display:none;">
+      <div class="chart-span-card" id="forecastComparisonCard">
         <div class="chart-skeleton" id="forecastCompSkeleton">
           <div class="skeleton-bar"></div>
         </div>
@@ -436,6 +391,7 @@
   <script src="/hammer.min.js"></script>
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
+  <script src="/dvhub-powerflow.js"></script>
   <script src="/app.js"></script>
   <script src="/leitstand-charts.js?v=3"></script>
 </body>
