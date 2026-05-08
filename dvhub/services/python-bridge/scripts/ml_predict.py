@@ -35,7 +35,11 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import joblib
+# Plan 08-06 Task 3: replace direct joblib.load with sha256-verified loader.
+# Direct joblib.load is an RCE primitive if /opt/dvhub/models is ever writable
+# by a compromised process. safe_load_model refuses unregistered or tampered
+# files before joblib touches them.
+from model_loader import safe_load_model
 
 # Phase 07 MLAI-08: runtime schema version — must match meta.feature_schema_version
 # written by ml_train.py save_model. Mismatch triggers fail-open in predict().
@@ -166,8 +170,8 @@ def predict(params):
         scaler_file = os.path.join(model_path, 'scaler.joblib')
         if not os.path.isfile(model_file):
             return {'ok': True, 'applied': False, 'reason': 'no_model'}
-        model = joblib.load(model_file)
-        scaler = joblib.load(scaler_file) if os.path.isfile(scaler_file) else None
+        model = safe_load_model(model_file)
+        scaler = safe_load_model(scaler_file) if os.path.isfile(scaler_file) else None
     else:
         import lightgbm as lgb
         model_file = os.path.join(model_path, 'model.txt')

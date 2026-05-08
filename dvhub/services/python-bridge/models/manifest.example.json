@@ -1,0 +1,9 @@
+{
+  "_comment_purpose": "Plan 08-06 Task 3 manifest schema. The runtime loader (model_loader.safe_load_model) refuses to load any .joblib whose basename is missing from this dictionary or whose sha256 does not match. The runtime path defaults to /opt/dvhub/models/manifest.json; override via the DVHUB_MODEL_MANIFEST env var.",
+  "_comment_keys_meta": "Underscore-prefixed keys are ignored by the loader (it only looks up files by their literal basename). They are documentation, not schema entries.",
+  "_comment_workflow": "After ml_train.py writes a new model.joblib, run `python model_loader.py /opt/dvhub/models/<dir>/model.joblib` to print its sha256, then add it here under the basename key. Commit the manifest change so an attacker who replaces the .joblib without manifest access cannot get the new hash to verify.",
+  "_comment_format": "{ <basename>: <sha256-hex>, ... }. Basename collisions (e.g. two `model.joblib` files in different dirs) MUST be resolved by symlinks or path-rename — sha256 must be unique per basename.",
+
+  "model.joblib": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scaler.joblib": "0000000000000000000000000000000000000000000000000000000000000000"
+}

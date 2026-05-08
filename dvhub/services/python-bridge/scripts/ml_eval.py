@@ -77,10 +77,11 @@ def eval_model(params):
         X = np.array([[float(row.get(col, 0.0) or 0.0) for col in FEATURE_COLS] for row in held_out])
         y_pred = booster.predict(X)
     else:
-        import joblib
-        model = joblib.load(os.path.join(model_path, 'model.joblib'))
+        # Plan 08-06 Task 3: sha256-verified loader replaces joblib.load.
+        from model_loader import safe_load_model
+        model = safe_load_model(os.path.join(model_path, 'model.joblib'))
         scaler_file = os.path.join(model_path, 'scaler.joblib')
-        scaler = joblib.load(scaler_file) if os.path.isfile(scaler_file) else None
+        scaler = safe_load_model(scaler_file) if os.path.isfile(scaler_file) else None
         X = np.array([[float(row.get(col, 0.0) or 0.0) for col in FEATURE_COLS] for row in held_out])
         if scaler is not None:
             X = scaler.transform(X)
