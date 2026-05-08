@@ -39,8 +39,10 @@ import { createScheduleEvaluator } from './schedule-eval.js';
 import {
   buildSunTimesCacheKey,
   isSunTimesCacheStale,
-  readSunTimesCacheStore
+  readSunTimesCacheStore,
+  writeSunTimesCacheStore
 } from './sun-times-cache.js';
+import { buildSunTimesYearCache } from './sun-times-compute.js';
 import {
   sanitizePersistedScheduleRules
 } from './schedule-runtime.js';
@@ -278,14 +280,47 @@ function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
   });
   if (cachedEntry && !cacheIsStale) return cachedEntry;
 
-  const store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
+  let store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
   const cacheKey = buildSunTimesCacheKey({ latitude, longitude, year });
+
+  // Lazy-populate: sunrise/sunset are deterministic per (lat,lng,year).
+  // First call for a given key computes the full year via NOAA formulas
+  // and persists to disk; subsequent calls hit the cache.
+  let cache = store?.entries?.[cacheKey]?.cache;
+  if (!cache || !Object.keys(cache).length) {
+    cache = buildSunTimesYearCache({ year, latitude, longitude });
+    const nextStore = {
+      ...(store || {}),
+      entries: {
+        ...(store?.entries || {}),
+        [cacheKey]: { location: requestedLocation, year, cache }
+      }
+    };
+    // Pre-populate next year in Q4 to cover overnight slots crossing into January.
+    if (new Date(now).getUTCMonth() >= 9) {
+      const nextYearKey = buildSunTimesCacheKey({ latitude, longitude, year: year + 1 });
+      if (!store?.entries?.[nextYearKey]?.cache) {
+        nextStore.entries[nextYearKey] = {
+          location: requestedLocation,
+          year: year + 1,
+          cache: buildSunTimesYearCache({ year: year + 1, latitude, longitude })
+        };
+      }
+    }
+    try {
+      writeSunTimesCacheStore(SUN_TIMES_CACHE_PATH, nextStore);
+    } catch (e) {
+      console.error('[sun-times] persist failed:', e.message);
+    }
+    store = nextStore;
+  }
+
   const nextEntry = {
     key: cacheKey,
     year,
     location: requestedLocation,
     cachePath: SUN_TIMES_CACHE_PATH,
-    cache: store?.entries?.[cacheKey]?.cache || {}
+    cache
   };
   sunTimesCacheState = { entry: nextEntry, loadedAt: Date.now() };
   return nextEntry;
@@ -856,7 +891,7 @@ const web = http.createServer(async (req, res) => {
     // ACAO when the origin is in cfg.corsAllowedOrigins (explicit operator
     // opt-in). Host header is already re-checked inside routes.handleRequest
     // but we short-circuit OPTIONS here to avoid routing preflights into auth.
-    const cfgForCors = getCfg();
+    const cfgForCors = ctx.getCfg();
     const originHeader = String(req.headers.origin || '');
     const allowedOrigin = originHeader
       ? resolveCorsAllowedOrigin(originHeader, cfgForCors)
