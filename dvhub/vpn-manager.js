@@ -820,7 +820,11 @@ export function createVpnManager(ctx) {
     stopWatchdog();
     const vc = vpnCfg();
     const interval = vc.watchdog?.intervalMs || 10000;
-    watchdogInterval = setInterval(() => healthCheck(), interval);
+    watchdogInterval = setInterval(() => {
+      healthCheck().catch(err => {
+        pushLog('vpn_watchdog_error', { error: err?.message ?? String(err) });
+      });
+    }, interval);
   }
 
   function stopWatchdog() {
@@ -954,7 +958,11 @@ export function createVpnManager(ctx) {
 
   function startCertCheck() {
     stopCertCheck();
-    certCheckInterval = setInterval(() => checkCertExpiry(), 24 * 60 * 60 * 1000);
+    certCheckInterval = setInterval(() => {
+      checkCertExpiry().catch(err => {
+        pushLog('vpn_cert_check_error', { error: err?.message ?? String(err) });
+      });
+    }, 24 * 60 * 60 * 1000);
   }
 
   function stopCertCheck() {

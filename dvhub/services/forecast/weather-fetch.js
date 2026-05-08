@@ -129,11 +129,20 @@ export function createWeatherFetch(ctx, { store }) {
     const cfg = getCfg();
     const intervalMs = cfg.forecast?.weather?.fetchIntervalMs ?? 3_600_000;
 
-    // Fetch immediately on start
-    fetchWeather();
+    // Fetch immediately on start — never let a throw prevent the interval
+    fetchWeather().catch(err => {
+      pushLog('weather_fetch_first_run_error', { error: err?.message ?? String(err) });
+    });
 
-    // Then fetch on interval
-    timer = setInterval(fetchWeather, intervalMs);
+    // Then fetch on interval — overlap-guard prevents pile-up if upstream is slow
+    let running = false;
+    timer = setInterval(() => {
+      if (running) return;
+      running = true;
+      fetchWeather()
+        .catch(err => pushLog('weather_fetch_interval_error', { error: err?.message ?? String(err) }))
+        .finally(() => { running = false; });
+    }, intervalMs);
   }
 
   /**

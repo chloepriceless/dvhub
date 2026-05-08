@@ -386,8 +386,19 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       pushLog('load_forecast_skip', { reason: 'no_db' });
       return;
     }
-    await runForecast();
-    intervalHandle = setInterval(runForecast, 6 * 60 * 60 * 1000);
+    try {
+      await runForecast();
+    } catch (err) {
+      pushLog('load_forecast_first_run_error', { error: err?.message ?? String(err) });
+    }
+    let running = false;
+    intervalHandle = setInterval(() => {
+      if (running) return;
+      running = true;
+      runForecast()
+        .catch(err => pushLog('load_forecast_interval_error', { error: err?.message ?? String(err) }))
+        .finally(() => { running = false; });
+    }, 6 * 60 * 60 * 1000);
   }
 
   /**

@@ -448,10 +448,17 @@ export function createAccuracyTracker(ctx, { store }) {
       }
     }
 
-    timeoutHandle = setTimeout(async () => {
-      await runDailyEvaluation();
-      // Then run every 24 hours
-      intervalHandle = setInterval(runDailyEvaluation, 24 * 60 * 60 * 1000);
+    timeoutHandle = setTimeout(() => {
+      // First run — never let a throw prevent the recurring schedule
+      runDailyEvaluation().catch(err => {
+        pushLog('accuracy_tracker_first_run_error', { error: err?.message ?? String(err) });
+      });
+      // Schedule recurring regardless of first-run outcome
+      intervalHandle = setInterval(() => {
+        runDailyEvaluation().catch(err => {
+          pushLog('accuracy_tracker_interval_error', { error: err?.message ?? String(err) });
+        });
+      }, 24 * 60 * 60 * 1000);
     }, delayMs);
 
     pushLog('accuracy_tracker_scheduled', { nextRunAt: next0200.toISOString() });

@@ -1058,12 +1058,17 @@ if (IS_RUNTIME_PROCESS) {
       pushLog('vpn_start_error', { error: err.message });
     });
   }
-  setInterval(expireLeaseIfNeeded, 1000);
   setInterval(() => {
-    liveTelemetryBuffer?.flush();
+    try { expireLeaseIfNeeded(); }
+    catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
   }, 1000);
   setInterval(() => {
-    publishRuntimeSnapshot();
+    try { liveTelemetryBuffer?.flush(); }
+    catch (err) { pushLog('live_telemetry_flush_error', { error: err?.message ?? String(err) }); }
+  }, 1000);
+  setInterval(() => {
+    try { publishRuntimeSnapshot(); }
+    catch (err) { pushLog('runtime_snapshot_publish_error', { error: err?.message ?? String(err) }); }
   }, 1000);
 }
 
@@ -1108,7 +1113,11 @@ if (IS_RUNTIME_PROCESS) {
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
-  setInterval(startAutomaticMarketValueBackfill, MARKET_VALUE_BACKFILL_INTERVAL_MS);
+  setInterval(() => {
+    startAutomaticMarketValueBackfill().catch(err => {
+      pushLog('market_value_backfill_error', { error: err?.message ?? String(err) });
+    });
+  }, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
   // Remote monitoring heartbeat (hot-reloadable)
   let monitoringTimerId = null;
@@ -1174,7 +1183,9 @@ if (IS_RUNTIME_PROCESS) {
             'x-dvhub-version': appVersion
           }
         });
-      } catch (e) { /* silent */ }
+      } catch (e) {
+        pushLog('heartbeat_send_error', { error: e?.message ?? String(e) });
+      }
     };
     monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
     setTimeout(() => sendHeartbeat('DVhub started'), 5000);
