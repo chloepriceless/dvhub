@@ -116,10 +116,29 @@
   }
 
   async function fetchOptimizerData() {
+    // The Gantt chart used to read optimizer.lastSchedule, but that path is
+    // empty when the optimizer is disabled (the typical case for SMA-only
+    // setups) and even when active the slot shape ({ts, endTs, powerW})
+    // doesn't match what the renderer expects (rule.start/end/source). Pull
+    // the live schedule rules directly — they cover all sources (manual,
+    // small-market-automation, forecast_optimizer) and have the right shape.
     try {
-      const res = await apiFetch('/api/optimizer/status');
+      const res = await apiFetch('/api/schedule');
       if (!res.ok) return null;
-      return await res.json();
+      const body = await res.json();
+      const rules = Array.isArray(body?.rules) ? body.rules : [];
+      // Adapt to the shape the gantt renderer expects: surface a numeric
+      // start/end via slotTs / slotEndTs when present (SMA rules carry them).
+      // For manual rules only HH:MM is available — those are skipped because
+      // they recur daily and a Gantt timeline expects absolute timestamps.
+      const ganttRules = rules
+        .filter((r) => Number.isFinite(Number(r?.slotTs)) && Number.isFinite(Number(r?.slotEndTs)))
+        .map((r) => ({
+          ...r,
+          start: new Date(Number(r.slotTs)).toISOString(),
+          end: new Date(Number(r.slotEndTs)).toISOString()
+        }));
+      return { lastSchedule: ganttRules };
     } catch (e) {
       return null;
     }
@@ -483,7 +502,8 @@
     { key: 'actual', label: 'Ist (gemessen)',          color: 'rgba(46, 204, 113, 1)', dash: [],     width: 2   },
     { key: 'past',   label: 'Prognose (historisch)',   color: 'rgba(46, 204, 113, 0.55)', dash: [3, 3], width: 1.5 },
     { key: 'ml',     label: 'ML-korrigiert',           color: '#A78BFA', dash: [],     width: 2.5 },
-    { key: 'merged', label: 'Basis-Prognose',          color: '#22D3EE', dash: [4, 3], width: 1.8 }
+    { key: 'merged', label: 'Basis-Prognose',          color: '#22D3EE', dash: [4, 3], width: 1.8 },
+    { key: 'load',   label: 'Last-Prognose',           color: '#58a6ff', dash: [4, 3], width: 1.5 }
   ];
 
   function initForecastComparisonChart() {
@@ -658,10 +678,18 @@
         })
       : [];
 
+    // Last-Prognose: future load slots from the same /api/forecast response.
+    // Folded in here so we don't need a second "PV vs Ist" chart that duplicated the same data.
+    var loadSlots = forecastData && forecastData.load && forecastData.load.slots ? forecastData.load.slots : [];
+    var loadData = loadSlots.map(function (s) {
+      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
+    });
+
     forecastCompChart.data.datasets[0].data = actualData;        // Ist (gemessen)
     forecastCompChart.data.datasets[1].data = pastForecastData;  // Prognose (historisch)
     forecastCompChart.data.datasets[2].data = mlData;            // ML-korrigiert
     forecastCompChart.data.datasets[3].data = mergedData;        // Basis-Prognose
+    forecastCompChart.data.datasets[4].data = loadData;          // Last-Prognose
 
     // Compute X-axis range: span from earliest data point to latest, padded 1h each side
     var nowMs = Date.now();
@@ -670,6 +698,7 @@
       .concat(pastForecastData.map(function (d) { return d.x; }))
       .concat(mlData.map(function (d) { return d.x; }))
       .concat(mergedData.map(function (d) { return d.x; }))
+      .concat(loadData.map(function (d) { return d.x; }))
       .filter(function (t) { return t > 0; });
     var dataMin = allTimestamps.length ? Math.min.apply(null, allTimestamps) : nowMs - 12 * 3600000;
     var dataMax = allTimestamps.length ? Math.max.apply(null, allTimestamps) : nowMs + 24 * 3600000;
@@ -1062,11 +1091,21 @@
     var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
     var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
 
-    var pvKwh = 0; pvSlots.forEach(function (s) { pvKwh += (s.powerW || 0) / 1000 * pvH; });
-    var rawKwh = 0; rawSlots.forEach(function (s) { rawKwh += (s.powerW || 0) / 1000 * pvH; });
-    var loadKwh = 0; loadSlots.forEach(function (s) { loadKwh += (s.powerW || 0) / 1000 * loadH; });
+    // "Rest" = future-only (slots with ts_utc >= NOW, already filtered server-side).
+    var pvKwhRest = 0; pvSlots.forEach(function (s) { pvKwhRest += (s.powerW || 0) / 1000 * pvH; });
+    var rawKwhRest = 0; rawSlots.forEach(function (s) { rawKwhRest += (s.powerW || 0) / 1000 * pvH; });
+    var loadKwhRest = 0; loadSlots.forEach(function (s) { loadKwhRest += (s.powerW || 0) / 1000 * loadH; });
     var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
     var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
+
+    // Tagesgesamt: prefer backend-computed VRM full-day totals (past+future)
+    // when available. Fallback to "Rest" when no VRM forecast exists yet.
+    var totals = forecastData.dailyTotals || null;
+    var pvKwh = totals?.today?.pvKwh != null ? totals.today.pvKwh : pvKwhRest;
+    var loadKwh = totals?.today?.loadKwh != null ? totals.today.loadKwh : loadKwhRest;
+    var rawKwh = rawKwhRest; // ML-vs-raw delta still relates to the future portion
+    if (totals?.tomorrow?.pvKwh != null && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
+    if (totals?.tomorrow?.loadKwh != null && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
 
     // Battery state from /api/status
     var soc = statusData?.victron?.soc;
@@ -1089,24 +1128,24 @@
 
     // Detail lines
     if (detailEl) {
-      var pvParts = [];
-      if (Math.abs(pvKwh - rawKwh) > 0.5) {
-        pvParts.push('ML: ' + pvKwh.toFixed(1) + ' · Basis: ' + rawKwh.toFixed(1));
+      var pvParts = ['Rest heute: ' + pvKwhRest.toFixed(1) + ' kWh'];
+      if (Math.abs(pvKwhRest - rawKwhRest) > 0.5) {
+        pvParts.push('ML/Basis: ' + pvKwhRest.toFixed(1) + '/' + rawKwhRest.toFixed(1));
       }
       if (pvKwhTomorrow > 0) pvParts.push('Morgen: ' + pvKwhTomorrow.toFixed(1) + ' kWh');
-      if (!pvParts.length) pvParts.push(pvSlots.length + ' Slots (' + pvRes + ')');
       detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + pvParts.join(' · ') + '</span>';
     }
 
     // Load detail: warn if flat baseload
     if (loadDetailEl) {
+      var hasTotalsLoad = !!(totals && totals.today && totals.today.loadKwh > 0);
       var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
       if (allSame) {
         loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
-      } else if (!loadSlots.length) {
+      } else if (!loadSlots.length && !hasTotalsLoad) {
         loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">⚠ Kein Load-Forecast für heute</span>';
       } else {
-        var loadParts = [loadSlots.length + ' Slots (' + loadRes + ')'];
+        var loadParts = ['Rest heute: ' + loadKwhRest.toFixed(1) + ' kWh'];
         if (loadKwhTomorrow > 0) loadParts.push('Morgen: ' + loadKwhTomorrow.toFixed(1) + ' kWh');
         loadDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + loadParts.join(' · ') + '</span>';
       }
@@ -1142,7 +1181,9 @@
     var statusData = results[5].status === 'fulfilled' ? results[5].value : null;
 
     updateForecastSummary(forecastData, statusData);
-    renderPvForecastChart(forecastData);
+    // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
+    // (Ist + Last-Prognose are now both there) — keeping the call would draw
+    // duplicate datasets in a removed canvas anyway.
     renderGanttChart(optimizerData);
     renderSavingsCard(costData);
     updateBadges();
