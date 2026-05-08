@@ -83,7 +83,55 @@
       .replaceAll("'", '&#39;');
   }
 
+  // Plan 08-07 Task 3: global frontend error boundary.
+  // Surfaces uncaught exceptions and unhandled promise rejections to /api/log
+  // so widget crashes are observable in the operator log instead of dying silently
+  // in the console. keepalive:true lets POST survive page-navigation away.
+  function installGlobalErrorBoundary() {
+    if (window.__dvhubErrorBoundaryInstalled) return;
+    window.__dvhubErrorBoundaryInstalled = true;
+
+    function postFrontendError(payload) {
+      if (!getStoredApiToken()) return; // no auth — server would 401 anyway
+      try {
+        apiFetch('/api/log', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            level: 'error',
+            source: 'frontend',
+            page: window.location.pathname,
+            ts: new Date().toISOString(),
+            ...payload
+          }),
+          keepalive: true
+        }).catch(() => { /* never loop on log post failure */ });
+      } catch { /* defensive: never let error logging itself throw */ }
+    }
+
+    window.addEventListener('error', (event) => {
+      postFrontendError({
+        type: 'window.onerror',
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error && event.error.stack ? String(event.error.stack).slice(0, 4000) : null
+      });
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason;
+      postFrontendError({
+        type: 'unhandledrejection',
+        reason: reason && reason.message ? reason.message : String(reason),
+        stack: reason && reason.stack ? String(reason.stack).slice(0, 4000) : null
+      });
+    });
+  }
+
   syncTokenFromUrl();
+  installGlobalErrorBoundary();
 
   window.DVhubCommon = {
     apiFetch,

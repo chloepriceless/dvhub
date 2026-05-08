@@ -1,4 +1,40 @@
 const { apiFetch } = window.DVhubCommon || {};
+
+// Plan 08-07 Task 3: per-widget error boundary. A throw inside one wrapped
+// widget's refresh path is caught here, logged to the server via /api/log,
+// and visualised by adding a `.widget-error` class to any matching DOM
+// element marked with data-widget="<name>". Other widgets keep refreshing.
+function withWidgetBoundary(widgetName, fn) {
+  return async function widgetBoundaryWrapped(...args) {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      console.error(`[widget:${widgetName}]`, err);
+      const el = document.querySelector(`[data-widget="${widgetName}"]`);
+      if (el) {
+        el.classList.add('widget-error');
+        el.setAttribute('title', `Widget-Fehler: ${err && err.message ? err.message : String(err)}`);
+      }
+      try {
+        if (typeof apiFetch === 'function') {
+          await apiFetch('/api/log', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              level: 'error',
+              source: 'widget',
+              widget: widgetName,
+              message: err && err.message ? err.message : String(err),
+              stack: err && err.stack ? String(err.stack).slice(0, 4000) : null,
+              page: window.location.pathname
+            }),
+            keepalive: true
+          });
+        }
+      } catch { /* never loop on log post failure */ }
+    }
+  };
+}
 const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 const SMALL_MARKET_AUTOMATION_LABEL = 'kleine Börsenautomatik';
 const SMA_ID_PREFIX = 'sma-';
@@ -1475,9 +1511,9 @@ const refreshDashboardTask = createDashboardRefreshTask({
   applyLog: async (logs) => renderDashboardLog(logs)
 });
 
-async function refresh() {
+const refresh = withWidgetBoundary('dashboard', async function refresh() {
   await refreshDashboardTask();
-}
+});
 
 const dashboardRefreshCoordinator = createRefreshCoordinator({
   refreshTask: refresh
@@ -1487,10 +1523,10 @@ function requestDashboardRefresh() {
   return dashboardRefreshCoordinator.run();
 }
 
-async function refreshEpex() {
+const refreshEpex = withWidgetBoundary('epex', async function refreshEpex() {
   await apiFetch('/api/epex/refresh', { method: 'POST' });
   await requestDashboardRefresh();
-}
+});
 
 /* --- Manual Write (separate buttons) --- */
 

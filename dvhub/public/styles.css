@@ -5401,4 +5401,22 @@ body:has(.settings-aurora) .location-picker-footer {
 .settings-aurora .sa-vpn-label[data-status="error"]        { color: var(--sa-red); }
 @keyframes saVpnPulse { 50% { opacity: .4; } }
 
+/* Plan 08-07 Task 3: per-widget error boundary visual.
+   When withWidgetBoundary catches a throw it adds .widget-error to the
+   matching [data-widget="<name>"] element so operators see which tile broke. */
+.widget-error {
+  border: 1px dashed var(--dvhub-warn, #E6A23C);
+  opacity: 0.6;
+  position: relative;
+}
+.widget-error::after {
+  content: "⚠ Widget-Fehler — siehe /api/log";
+  font-size: 11px;
+  color: var(--dvhub-warn, #E6A23C);
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  pointer-events: none;
+}
+
 

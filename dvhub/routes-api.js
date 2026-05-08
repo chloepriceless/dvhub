@@ -1198,6 +1198,36 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { rows: state.log.slice(-limit) });
     }
 
+    // Plan 08-07 Task 3: frontend error reporting endpoint. The browser POSTs
+    // window.onerror / unhandledrejection / per-widget catch payloads here so
+    // operator-visible logs show frontend crashes too. Auth-required (handled by
+    // checkAuth above for any non-LAN-safe /api/ path).
+    if (url.pathname === '/api/log' && req.method === 'POST') {
+      const body = await parseBody(req);
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'json_body_required' });
+      }
+      const level = String(body.level || 'error').slice(0, 16);
+      const source = String(body.source || 'frontend').slice(0, 32);
+      // Cap free-form fields to keep the in-memory ring buffer bounded.
+      const message = typeof body.message === 'string' ? body.message.slice(0, 500) : null;
+      const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null;
+      const stack = typeof body.stack === 'string' ? body.stack.slice(0, 4000) : null;
+      pushLog(`frontend_${level}`, {
+        source,
+        page: typeof body.page === 'string' ? body.page.slice(0, 200) : null,
+        type: typeof body.type === 'string' ? body.type.slice(0, 64) : null,
+        widget: typeof body.widget === 'string' ? body.widget.slice(0, 64) : null,
+        message,
+        reason,
+        filename: typeof body.filename === 'string' ? body.filename.slice(0, 200) : null,
+        lineno: Number.isFinite(body.lineno) ? body.lineno : null,
+        colno: Number.isFinite(body.colno) ? body.colno : null,
+        stack
+      });
+      return json(res, 200, { ok: true });
+    }
+
     // Persistent DV signal log from database
     if (url.pathname === '/api/log/dv-signals' && req.method === 'GET') {
       if (!ctx.telemetryStore?.listControlEvents) return json(res, 503, { ok: false, error: 'telemetry store not available' });
