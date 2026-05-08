@@ -11,6 +11,8 @@
 //
 // DI context: { getCfg, pushLog }
 
+import { redactUrlCreds } from '../../config-redaction.js';
+
 /**
  * Match an MQTT topic against a subscription pattern.
  * Supports + (single level) and # (multi-level) wildcards.
@@ -125,7 +127,11 @@ export function createMqttHub(ctx) {
       client = mqtt.connect(brokerUrl, connectOpts);
 
       client.on('connect', () => {
-        pushLog(`[MQTT] Connected to ${brokerUrl}`);
+        // Plan 08-06 Task 2 Step 5: redact creds from any URL ever logged.
+        // brokerUrl may be `mqtt://user:pass@host:1883` — write it verbatim and the
+        // password leaks into journalctl, the operator UI log, and any monitoring
+        // pipeline that scrapes those logs.
+        pushLog(`[MQTT] Connected to ${redactUrlCreds(brokerUrl)}`);
         // Re-subscribe all registered topics
         for (const pattern of handlers.keys()) {
           client.subscribe(pattern, { qos: 0 });

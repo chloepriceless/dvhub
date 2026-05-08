@@ -10,6 +10,27 @@ export function createModbusServer(ctx) {
 
   let mbServer = null;
 
+  // Plan 08-06 Task 2 Step 1: LAN-only gate for Modbus TCP clients.
+  // Modbus FC6/FC16 writes to register 0/3 toggle the device-wide forcedOff flag,
+  // which is safety-critical for grid assets. The previous 0.0.0.0:1502 listener
+  // accepted writes from anywhere on the network. This gate accepts:
+  //   - explicit allowlist when cfg.modbusAllowedClients is non-empty (CIDR-free, exact strings)
+  //   - otherwise: loopback + RFC1918 only (10/8, 172.16/12, 192.168/16)
+  // Rejected sockets are destroyed immediately and recorded in the audit log.
+  function isAllowedModbusClient(socket, cfg) {
+    const raw = String(socket.remoteAddress || '').replace(/^::ffff:/, '');
+    const allowlist = Array.isArray(cfg?.modbusAllowedClients) ? cfg.modbusAllowedClients : [];
+    if (allowlist.length > 0) return allowlist.includes(raw);
+    if (raw === '127.0.0.1' || raw === '::1') return true;
+    const parts = raw.split('.').map(Number);
+    if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+      if (parts[0] === 10) return true;
+      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+      if (parts[0] === 192 && parts[1] === 168) return true;
+    }
+    return false;
+  }
+
   function setReg(addr, value) { state.dvRegs[addr] = u16(value); }
   function getReg(addr) { return u16(state.dvRegs[addr] ?? 0); }
 
@@ -129,6 +150,12 @@ export function createModbusServer(ctx) {
   function start() {
     const cfg = getCfg();
     mbServer = net.createServer((socket) => {
+      // Plan 08-06 Task 2 Step 1: enforce LAN-only / allowlist on every accepted socket.
+      if (!isAllowedModbusClient(socket, getCfg())) {
+        pushLog('modbus_unauthorized_client', { remote: socket.remoteAddress });
+        socket.destroy();
+        return;
+      }
       const remote = `${socket.remoteAddress}:${socket.remotePort}`;
       let buffer = Buffer.alloc(0);
 

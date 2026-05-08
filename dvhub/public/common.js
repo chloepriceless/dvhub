@@ -2,16 +2,31 @@
   const STORAGE_KEY = 'dvhub.apiToken';
   const LEGACY_STORAGE_KEY = ['plex', 'lite.apiToken'].join('');
 
+  // Plan 08-06 Task 2 Step 4: token storage moved off localStorage.
+  // localStorage survives tab close + is readable by ANY script running on the
+  // origin → trivial XSS exfiltration vector. sessionStorage scopes to a single
+  // tab/session, removing the persistent-cookie-style attack surface.
+  // One-time migration: any existing localStorage token is moved into
+  // sessionStorage on first call, then the localStorage entry is cleared.
+  function tokenStore() {
+    try { return window.sessionStorage; } catch { return null; }
+  }
+
   function migrateLegacyToken() {
     try {
-      const currentToken = window.localStorage.getItem(STORAGE_KEY);
-      if (currentToken) return currentToken;
-      const legacyToken = window.localStorage.getItem(LEGACY_STORAGE_KEY) || '';
-      if (legacyToken) {
-        window.localStorage.setItem(STORAGE_KEY, legacyToken);
-        window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      const store = tokenStore();
+      if (store && store.getItem(STORAGE_KEY)) return store.getItem(STORAGE_KEY);
+      // Pull from localStorage (current STORAGE_KEY first, then very-old "plexlite" key).
+      const fromLocal = window.localStorage.getItem(STORAGE_KEY)
+        || window.localStorage.getItem(LEGACY_STORAGE_KEY)
+        || '';
+      if (fromLocal && store) {
+        store.setItem(STORAGE_KEY, fromLocal);
       }
-      return legacyToken;
+      // Clear localStorage either way so future XSS cannot read it.
+      try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      try { window.localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* ignore */ }
+      return fromLocal;
     } catch {
       return '';
     }
@@ -19,7 +34,9 @@
 
   function getStoredApiToken() {
     try {
-      return window.localStorage.getItem(STORAGE_KEY) || migrateLegacyToken();
+      const store = tokenStore();
+      const fromSession = store ? store.getItem(STORAGE_KEY) : null;
+      return fromSession || migrateLegacyToken() || '';
     } catch {
       return '';
     }
@@ -27,8 +44,12 @@
 
   function setStoredApiToken(token) {
     try {
-      if (token) window.localStorage.setItem(STORAGE_KEY, token);
-      else window.localStorage.removeItem(STORAGE_KEY);
+      const store = tokenStore();
+      if (!store) return;
+      if (token) store.setItem(STORAGE_KEY, token);
+      else store.removeItem(STORAGE_KEY);
+      // Defensive: keep localStorage cleared so an old value never re-surfaces.
+      try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     } catch {
       // ignore storage errors
     }
@@ -58,8 +79,14 @@
 
   function buildApiUrl(path) {
     const url = new URL(path, window.location.origin);
-    const token = getStoredApiToken();
-    if (token && !url.searchParams.has('token')) url.searchParams.set('token', token);
+    // Plan 08-06 Task 2 Step 3: do NOT append ?token= to API URLs. The server now
+    // rejects ?token= on every endpoint except /api/config/export (which uses
+    // window.location.href for the file download and cannot send a header).
+    // Auth flows through the Authorization: Bearer <token> header in apiFetch().
+    if (url.pathname === '/api/config/export') {
+      const token = getStoredApiToken();
+      if (token && !url.searchParams.has('token')) url.searchParams.set('token', token);
+    }
     return url.toString();
   }
 

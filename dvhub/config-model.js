@@ -1941,6 +1941,10 @@ export function createDefaultConfig() {
     apiToken: '',
     modbusListenHost: '0.0.0.0',
     modbusListenPort: 1502,
+    // Plan 08-06 Task 2 Step 1: optional allowlist of remote IPs permitted to talk
+    // to the Modbus TCP listener. Empty = LAN/loopback default (RFC1918 + 127.0.0.1).
+    // Non-empty = exact-string allowlist (no CIDR).
+    modbusAllowedClients: [],
     offLeaseMs: 8 * 60 * 1000,
     meterPollMs: 2000,
     keepalivePulseSec: 60,

@@ -119,6 +119,29 @@ if (!cfg.apiToken || cfg.apiToken === '') {
 const SERVICE_NAME = process.env.DV_SERVICE_NAME || 'dvhub.service';
 const SERVICE_USE_SUDO = process.env.DV_SERVICE_USE_SUDO !== '0';
 const DATA_DIR = process.env.DV_DATA_DIR || '';
+
+// Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap token.
+// On first boot with no apiToken, generate a random token and write it to
+// ${DATA_DIR}/bootstrap.token (mode 0600). The legitimate operator reads this
+// via SSH and supplies it as `x-bootstrap-token` when POSTing to /api/config to
+// set the initial apiToken. /api/config (routes-api.js) deletes the file after
+// a successful setup save, closing the takeover window. Without this gate, any
+// LAN client could race to set apiToken because LAN bypasses checkAuth.
+const BOOTSTRAP_TOKEN_PATH = path.join(DATA_DIR || __dirname, 'bootstrap.token');
+if (!cfg.apiToken || cfg.apiToken === '') {
+  if (!fs.existsSync(BOOTSTRAP_TOKEN_PATH)) {
+    try {
+      const bootstrap = crypto.randomBytes(24).toString('hex');
+      fs.writeFileSync(BOOTSTRAP_TOKEN_PATH, bootstrap + '\n', { mode: 0o600 });
+      console.log(`[setup] bootstrap.token written to ${BOOTSTRAP_TOKEN_PATH} (mode 0600).`);
+      console.log('[setup] read it via SSH and pass as `x-bootstrap-token` header to POST /api/config when setting apiToken.');
+    } catch (e) {
+      console.error('[setup] could not write bootstrap.token:', e.message);
+    }
+  } else {
+    console.warn(`[setup] bootstrap.token already present at ${BOOTSTRAP_TOKEN_PATH} — supply that value as x-bootstrap-token`);
+  }
+}
 const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
 const APPLICABLE_VALUES_CACHE_PATH = path.join(
   DATA_DIR || __dirname,

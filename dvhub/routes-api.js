@@ -472,6 +472,22 @@ export function createApiRoutes(ctx) {
     // Phase-08-01 GET-allowlist gate. A proper user/device-registration phase is the
     // right place to tighten this further (see backlog).
     if (isLocalNetworkRequest(req)) return true;
+    // Plan 08-06 Task 2 Step 3: server-side rejection of ?token= query params.
+    // syncTokenFromUrl (Plan 08-03) strips ?token= on first page load — this gate
+    // refuses any direct API call with a token in the URL so it cannot leak via
+    // server logs, HTTP referers, or shoulder-surfing. The single exception is
+    // /api/config/export, which uses window.location.href for the file download
+    // and therefore cannot send an Authorization header.
+    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+    if (reqUrl.searchParams.has('token') && reqUrl.pathname !== '/api/config/export') {
+      pushLog('token_in_url_rejected', { path: reqUrl.pathname });
+      res.writeHead(400, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'token_in_url_forbidden',
+        hint: 'Use Authorization: Bearer <token>'
+      }));
+      return false;
+    }
     // Outside LAN, a configured token is mandatory; missing token fails closed.
     if (!cfg.apiToken || typeof cfg.apiToken !== 'string' || cfg.apiToken.length === 0) {
       res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
@@ -485,7 +501,6 @@ export function createApiRoutes(ctx) {
       if (token.length === expected.length && crypto.timingSafeEqual(token, expected)) return true;
     }
     // ?token= only accepted for the config download endpoint (window.location.href redirect, no headers possible)
-    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
     if (reqUrl.pathname === '/api/config/export') {
       const urlToken = reqUrl.searchParams.get('token');
       if (urlToken) {
@@ -496,6 +511,41 @@ export function createApiRoutes(ctx) {
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'unauthorized' }));
     return false;
+  }
+
+  // Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap.
+  // When apiToken is currently empty, the device is in setup phase. LAN clients
+  // bypass checkAuth, so any compromised device on the LAN could otherwise win the
+  // first-caller race and take over the box. The bootstrap.token file (mode 0600,
+  // generated at startup by server.js) requires the legitimate operator to prove
+  // file-system access via SSH before they can set apiToken.
+  // After successful setup the file is deleted, closing the bootstrap path.
+  function getBootstrapTokenPath() {
+    const dir = process.env.DV_DATA_DIR || (typeof ctx.getAppDir === 'function' ? ctx.getAppDir() : process.cwd());
+    return path.join(dir, 'bootstrap.token');
+  }
+  function requireBootstrapToken(req, res) {
+    const tokenPath = getBootstrapTokenPath();
+    if (!fs.existsSync(tokenPath)) {
+      pushLog('setup_bootstrap_unavailable', { ip: req.socket?.remoteAddress, path: tokenPath });
+      res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'setup_already_completed' }));
+      return false;
+    }
+    let expected = '';
+    try { expected = fs.readFileSync(tokenPath, 'utf8').trim(); } catch (_) { /* fall through */ }
+    const given = String(req.headers['x-bootstrap-token'] || '').trim();
+    if (!expected || !given || given !== expected) {
+      pushLog('setup_bootstrap_rejected', { ip: req.socket?.remoteAddress });
+      res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'bootstrap_token_required_or_invalid' }));
+      return false;
+    }
+    return true;
+  }
+  function consumeBootstrapToken() {
+    const tokenPath = getBootstrapTokenPath();
+    try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
   }
 
   // ── Validation helpers ───────────────────────────────────────────────
@@ -1447,6 +1497,20 @@ export function createApiRoutes(ctx) {
       );
       const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge'];
       const currentCfgForGate = getCfg();
+      // Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap.
+      // If apiToken is currently empty AND this request is trying to set it, the
+      // caller MUST present a valid x-bootstrap-token header (matched against
+      // ${DV_DATA_DIR}/bootstrap.token, written at startup, mode 0600). This blocks
+      // the first-caller-wins race on a fresh device — even LAN attackers cannot
+      // take over the box without filesystem access.
+      const currentApiToken = currentCfgForGate.apiToken;
+      const settingApiToken = Object.prototype.hasOwnProperty.call(body.config, 'apiToken')
+        && typeof body.config.apiToken === 'string'
+        && body.config.apiToken.length > 0;
+      const setupPhase = (!currentApiToken || currentApiToken === '') && settingApiToken;
+      if (setupPhase) {
+        if (!requireBootstrapToken(req, res)) return;
+      }
       const flippedLegalGates = LEGAL_GATE_PATHS.filter((p) => {
         const before = getByPath(currentCfgForGate, p);
         const after = getByPath(body.config, p);
@@ -1471,6 +1535,13 @@ export function createApiRoutes(ctx) {
         });
       }
       const result = ctx.saveAndApplyConfig(body.config);
+      // Plan 08-06 Task 2 Step 2: consume the one-shot bootstrap token after
+      // a successful setup-phase save. From here on, only Bearer-authenticated
+      // requests can rewrite config — the takeover window is closed.
+      if (setupPhase) {
+        consumeBootstrapToken();
+        pushLog('setup_bootstrap_consumed', { ip: req.socket?.remoteAddress });
+      }
       pushLog('config_saved', {
         changedPaths: result.changedPaths.length,
         restartRequired: result.restartRequired,
