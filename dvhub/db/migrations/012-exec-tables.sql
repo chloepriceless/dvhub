@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS exec.arbitration_runs (
 
 CREATE INDEX IF NOT EXISTS arbitration_runs_site_started_idx ON exec.arbitration_runs(site_id, started_at DESC);
 
+-- FK indexes for nullable ON DELETE SET NULL FKs (avoid seq scans on parent deletes).
+CREATE INDEX IF NOT EXISTS arbitration_runs_dv_decision_idx
+  ON exec.arbitration_runs(active_dv_decision_id)
+  WHERE active_dv_decision_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS arbitration_runs_opt_plan_idx
+  ON exec.arbitration_runs(active_opt_plan_id)
+  WHERE active_opt_plan_id IS NOT NULL;
+
 -- exec.effective_plans — final plan after arbitration.
 CREATE TABLE IF NOT EXISTS exec.effective_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -124,6 +133,11 @@ CREATE TABLE IF NOT EXISTS exec.command_events (
 );
 
 CREATE INDEX IF NOT EXISTS command_events_site_sent_idx ON exec.command_events(site_id, sent_at DESC);
+
+-- FK index for nullable ON DELETE SET NULL FK to exec.effective_plan_slots(id).
+CREATE INDEX IF NOT EXISTS command_events_plan_slot_idx
+  ON exec.command_events(effective_plan_slot_id)
+  WHERE effective_plan_slot_id IS NOT NULL;
 
 -- exec.manual_overrides — operator overrides (force a target value temporarily).
 CREATE TABLE IF NOT EXISTS exec.manual_overrides (
