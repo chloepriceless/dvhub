@@ -1,0 +1,2201 @@
+{
+  "source": "bundesnetzagentur",
+  "updatedAt": "2026-05-08T01:06:31.636Z",
+  "archiveUrl": "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/start.html",
+  "publications": [
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeFeb26bisJul26.xlsx?__blob=publicationFile&v=2",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeAug25bisJan26.xlsx?__blob=publicationFile&v=2",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeFebbisJul25.xlsx?__blob=publicationFile&v=2",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeAug24bisJan25.xlsx?__blob=publicationFile&v=3",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeFeb_bis_Juli2024.xlsx?__blob=publicationFile&v=2",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze1122bis0124.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08bis1022.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetzeAugbisOkt22EEGNovelle.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05bis0722.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02bis0422.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_01121bis0122.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_21.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_21.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_21.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_21.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_20.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_20.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_20.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_20.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_19.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_19.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_19.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_19.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_18.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Mai-Juli18.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Feb18-April18.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Nov17-Jan18.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Aug-Okt2017.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Mai-Juli2017.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_10_2018.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_07_2018.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_04_2018.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_08_2017.xlsx?__blob=publicationFile&v=1",
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_05_2017.xlsx?__blob=publicationFile&v=1"
+  ],
+  "applicableValueTiersByMonth": {
+    "2023-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2023-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2024-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2024-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.51
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.43
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.14
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.14
+      }
+    ],
+    "2024-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2024-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2024-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2024-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2024-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2025-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.43
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.35
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.08
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.08
+      }
+    ],
+    "2025-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.34
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.28
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 6.02
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 6.02
+      }
+    ],
+    "2025-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2025-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2025-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2025-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2025-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2026-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.26
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.2
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.96
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.96
+      }
+    ],
+    "2026-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2026-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2026-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2026-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2026-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2026-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.18
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.13
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 5.9
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 5.9
+      }
+    ],
+    "2022-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 8.6
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 7.5
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 6.2
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ]
+  },
+  "fullFeedApplicableValueTiersByMonth": {
+    "2023-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2023-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2024-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 8.1
+      }
+    ],
+    "2024-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.27
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.19
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.31
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 8.02
+      }
+    ],
+    "2024-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2024-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2024-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2024-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2024-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2025-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.08
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.21
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.94
+      }
+    ],
+    "2025-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.96
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.12
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.86
+      }
+    ],
+    "2025-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2025-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2025-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2025-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2025-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2026-01": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.87
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.85
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 9.03
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.78
+      }
+    ],
+    "2026-02": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2026-03": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2026-04": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2026-05": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2026-06": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2026-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 12.74
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 10.75
+      },
+      {
+        "upToKwp": 400,
+        "ctKwh": 8.94
+      },
+      {
+        "upToKwp": 1000,
+        "ctKwh": 7.7
+      }
+    ],
+    "2022-07": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-08": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-09": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-10": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-11": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ],
+    "2022-12": [
+      {
+        "upToKwp": 10,
+        "ctKwh": 13.4
+      },
+      {
+        "upToKwp": 40,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 100,
+        "ctKwh": 11.3
+      },
+      {
+        "upToKwp": 300,
+        "ctKwh": 9.4
+      },
+      {
+        "upToKwp": 750,
+        "ctKwh": 6.2
+      }
+    ]
+  }
+}
