@@ -10,6 +10,7 @@ import {
   computeAvailableEnergyKwh,
   computeDynamicAutomationMinSocPct,
   computeEnergyBasedSlotAllocation,
+  computeForecastReserveSocPct,
   computeNextPeriodBounds,
   expandChainSlots,
   filterSlotsByTimeWindow,
@@ -188,6 +189,64 @@ export function createMarketAutomationBuilder(ctx) {
     // Raw PV reading — adjusted below after sunset time is known
     const rawPvW = Math.max(0, Number(state.victron?.pvTotalW ?? state.victron?.pvPowerW ?? 0));
 
+    // Forecast-aware reserve (toggle: schedule.smallMarketAutomation.forecastAware).
+    // When enabled, replaces the static automationMinSocPct with a dynamic value derived
+    // from PV + load forecast for the next 24h. Forecast can only RELAX the configured
+    // floor (it acts as a CEILING on conservatism). Also surfaces a hoarding-gate that
+    // suppresses discharge entirely when the 24h energy balance is negative.
+    // state.forecast.{pv,load}.data are the raw forecast subsystems' rows. Shape varies
+    // per source (ts vs ts_utc, powerW vs power_w). Normalize to {start, end, powerW, confidence}
+    // so sumForecastSlotsKwh can consume either uniformly.
+    const normalizeForecastRows = (rows, baselineConfidence, slotMin) => {
+      if (!Array.isArray(rows)) return [];
+      const slotMs = slotMin * 60000;
+      return rows.map((row) => {
+        const startMs = row.ts ? new Date(row.ts).getTime()
+                       : row.ts_utc ? new Date(row.ts_utc).getTime()
+                       : null;
+        if (!Number.isFinite(startMs)) return null;
+        return {
+          start: new Date(startMs).toISOString(),
+          end: new Date(startMs + slotMs).toISOString(),
+          powerW: Number(row.powerW ?? row.power_w ?? row.expected_w ?? 0),
+          confidence: Number(row.confidence ?? baselineConfidence ?? 0.3)
+        };
+      }).filter(Boolean);
+    };
+    const forecastReserve = automationConfig?.forecastAware
+      ? computeForecastReserveSocPct({
+          pvSlots: normalizeForecastRows(state.forecast?.pv?.data, state.forecast?.pv?.confidence, 15),
+          loadSlots: normalizeForecastRows(state.forecast?.load?.data, state.forecast?.load?.confidence, 60),
+          nowTs: now,
+          horizonHours: 24,
+          currentSocPct,
+          batteryCapacityKwh,
+          configuredMinSocPct: automationConfig?.minSocPct,
+          globalMinSocPct: state.victron?.minSocPct ?? 5,
+          safetyMarginKwh: 1.5,
+          // Ensemble forecast confidences on prod sit at 0.25-0.30 (PV baseline, load baseline).
+          // 0.25 is the lowest meaningful threshold that lets the forecast actually drive the
+          // reserve; tighter values silently fall back to the configured static floor.
+          confidenceThreshold: 0.25
+        })
+      : null;
+    const baseMinSocPct = forecastReserve?.effectiveMinSocPct ?? automationConfig?.minSocPct ?? 30;
+
+    // Hoarding-Gate: forecast says 24h energy budget is negative — preserve all stored
+    // energy for self-consumption rather than selling it cheap and re-importing at retail.
+    if (forecastReserve?.hoardingActive) {
+      const skip = [];
+      skip._planMeta = {
+        availableEnergyKwh: 0,
+        effectiveMinSocPct: baseMinSocPct,
+        pvFeedInW: 0,
+        sunriseTs: null,
+        sunsetTs: null,
+        forecastReserve
+      };
+      return skip;
+    }
+
     // Dynamic SOC floor: sunrise/sunset-aware energy budgeting.
     // Each slot gets a time-dependent energy budget — morning slots near sunrise
     // can access more battery energy because the SOC floor is lower then.
@@ -240,7 +299,7 @@ export function createMarketAutomationBuilder(ctx) {
           .sort((a, b) => a - b)
           .map(ts => {
             const dynamicMin = computeDynamicAutomationMinSocPct({
-              automationMinSocPct: automationConfig?.minSocPct,
+              automationMinSocPct: baseMinSocPct,
               globalMinSocPct: state.victron?.minSocPct ?? 10,
               sunsetTs: sunsetMsForPlanning,
               sunriseTs: sunriseMsForPlanning,
@@ -260,14 +319,14 @@ export function createMarketAutomationBuilder(ctx) {
     }
 
     // Overall energy budget: use the most generous (latest/sunrise) budget
-    let effectiveMinSocPct = automationConfig?.minSocPct ?? 30;
+    let effectiveMinSocPct = baseMinSocPct;
     if (batteryCapacityKwh > 0 && currentSocPct != null) {
       if (perSlotBudgets?.length) {
         availableEnergyKwh = perSlotBudgets[perSlotBudgets.length - 1].budgetKwh;
         // Compute the effective dynamic min SOC for the last (most generous) slot
         const lastSlotTs = Math.max(...perSlotBudgets.map(b => b.ts));
         effectiveMinSocPct = Math.round(computeDynamicAutomationMinSocPct({
-          automationMinSocPct: automationConfig?.minSocPct,
+          automationMinSocPct: baseMinSocPct,
           globalMinSocPct: state.victron?.minSocPct ?? 10,
           sunsetTs: sunsetMsForPlanning,
           sunriseTs: sunriseMsForPlanning,
@@ -277,7 +336,7 @@ export function createMarketAutomationBuilder(ctx) {
         availableEnergyKwh = computeAvailableEnergyKwh({
           batteryCapacityKwh,
           currentSocPct,
-          minSocPct: automationConfig?.minSocPct,
+          minSocPct: baseMinSocPct,
           inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
         });
       }
@@ -434,13 +493,75 @@ export function createMarketAutomationBuilder(ctx) {
         displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
       };
     }).filter(Boolean);
+
+    // ── Post-plan recomputation of the displayed/enforced SOC floor ──
+    // The pre-plan `effectiveMinSocPct` was based on the LATEST slot in the
+    // entire search window (which often sits past sunrise → falls all the way
+    // to globalMin = 5%). When the actual plan only uses evening slots, that
+    // display value lies and — if the greedy fallback path was taken — the
+    // global `availableEnergyKwh` cap was also wrong-sized for those slots.
+    // Recompute both based on the last *selected* slot, and trim trailing
+    // low-revenue slots if the plan exceeds the actual budget at that ts.
+    if (rules.length && batteryCapacityKwh > 0 && currentSocPct != null
+        && sunsetMsForPlanning != null && sunriseMsForPlanning != null) {
+      const lastSelectedTs = Math.max(...rules.map((r) => Number(r.slotTs) || 0));
+      const dynMin = computeDynamicAutomationMinSocPct({
+        automationMinSocPct: baseMinSocPct,
+        globalMinSocPct: state.victron?.minSocPct ?? 10,
+        sunsetTs: sunsetMsForPlanning,
+        sunriseTs: sunriseMsForPlanning,
+        nowTs: lastSelectedTs
+      });
+      effectiveMinSocPct = Math.round(dynMin * 10) / 10;
+      const budgetAtLastSlot = computeAvailableEnergyKwh({
+        batteryCapacityKwh,
+        currentSocPct,
+        minSocPct: dynMin,
+        inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct
+      });
+      availableEnergyKwh = budgetAtLastSlot;
+
+      // Safety: if the planner over-allocated (e.g. greedy fallback ran
+      // against a too-large `availableEnergyKwh`), trim trailing low-revenue
+      // slots so cumulative energy at lastSelectedTs ≤ budgetAtLastSlot.
+      const slotEnergyKwh = (Math.abs(automationConfig?.maxDischargeW ?? 0) / 1000) * SLOT_DURATION_HOURS;
+      let totalEnergyKwh = rules.reduce((sum, r) => {
+        const w = Math.abs(Number(r.value) || 0);
+        return sum + (w / 1000) * SLOT_DURATION_HOURS;
+      }, 0);
+      if (totalEnergyKwh > budgetAtLastSlot + 0.001 && slotEnergyKwh > 0) {
+        // Drop slots with the lowest price (least lost revenue) first.
+        const priceFor = (r) => {
+          const slot = (state.epex?.data || []).find((s) => Number(s?.ts) === Number(r.slotTs));
+          return Number(slot?.ct_kwh ?? 0);
+        };
+        const sortedByPriceAsc = [...rules].sort((a, b) => priceFor(a) - priceFor(b));
+        const drop = new Set();
+        for (const r of sortedByPriceAsc) {
+          if (totalEnergyKwh <= budgetAtLastSlot + 0.001) break;
+          drop.add(r.id);
+          const w = Math.abs(Number(r.value) || 0);
+          totalEnergyKwh -= (w / 1000) * SLOT_DURATION_HOURS;
+        }
+        const before = rules.length;
+        for (let i = rules.length - 1; i >= 0; i--) if (drop.has(rules[i].id)) rules.splice(i, 1);
+        pushLog?.('sma_plan_trimmed_to_budget', {
+          droppedCount: before - rules.length,
+          budgetKwh: Math.round(budgetAtLastSlot * 100) / 100,
+          finalEnergyKwh: Math.round(totalEnergyKwh * 100) / 100,
+          effectiveMinSocPct
+        });
+      }
+    }
+
     // Attach planning metadata for the plan summary
     rules._planMeta = {
       availableEnergyKwh,
       effectiveMinSocPct,
       pvFeedInW,
       sunriseTs: sunriseMsForPlanning,
-      sunsetTs: sunsetMsForPlanning
+      sunsetTs: sunsetMsForPlanning,
+      forecastReserve
     };
     return rules;
   }
@@ -583,6 +704,8 @@ export function createMarketAutomationBuilder(ctx) {
       sunriseTs: planMeta.sunriseTs ? new Date(planMeta.sunriseTs).toISOString() : null,
       sunsetTs: planMeta.sunsetTs ? new Date(planMeta.sunsetTs).toISOString() : null,
       maxDischargeW: automationConfig?.maxDischargeW,
+      forecastAware: !!automationConfig?.forecastAware,
+      forecastReserve: planMeta.forecastReserve ?? null,
       estimatedRevenueCt: generatedRules.reduce((sum, r) => {
         const slot = state.epex?.data?.find((s) => {
           const match = r?.id?.match(/^sma-(\d+)-/);

@@ -145,6 +145,126 @@ function truncateChainToEnergy(chain, availableKwh, slotDurationH = SLOT_DURATIO
   return result;
 }
 
+/**
+ * Sum forecast slots between [fromTs, toTs).
+ * Slots have shape { start: ISO-string, powerW: number, confidence: number }.
+ * Resolution may be '15min' or '1h' — the slot duration is detected from `start`/`end`.
+ * Returns { totalKwh, avgConfidence, slotsCounted }.
+ */
+export function sumForecastSlotsKwh({ slots = [], fromTs, toTs, defaultDurationMin = 60 }) {
+  if (!Array.isArray(slots) || !Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs <= fromTs) {
+    return { totalKwh: 0, avgConfidence: 0, slotsCounted: 0 };
+  }
+  let totalWh = 0;
+  let confSum = 0;
+  let counted = 0;
+  for (const s of slots) {
+    const startMs = s?.start ? Date.parse(s.start) : null;
+    if (!Number.isFinite(startMs)) continue;
+    const endMs = s?.end ? Date.parse(s.end) : (startMs + defaultDurationMin * 60000);
+    const slotEndMs = Number.isFinite(endMs) ? endMs : startMs + defaultDurationMin * 60000;
+    // Overlap with [fromTs, toTs)
+    const overlapStart = Math.max(startMs, fromTs);
+    const overlapEnd = Math.min(slotEndMs, toTs);
+    if (overlapEnd <= overlapStart) continue;
+    const overlapH = (overlapEnd - overlapStart) / 3600000;
+    totalWh += toFiniteNumber(s.powerW, 0) * overlapH;
+    confSum += toFiniteNumber(s.confidence, 0);
+    counted++;
+  }
+  return {
+    totalKwh: Math.round((totalWh / 1000) * 100) / 100,
+    avgConfidence: counted ? Math.round((confSum / counted) * 100) / 100 : 0,
+    slotsCounted: counted
+  };
+}
+
+/**
+ * Forecast-aware reserve and hoarding-gate computation.
+ *
+ * Inputs are the live forecast horizon (typically 18-24h ahead) and battery state.
+ * Returns:
+ *   - effectiveMinSocPct: lower of (configured automationMinSocPct, forecast-derived reserve).
+ *     The configured value acts as a CEILING — forecast can only relax, never tighten.
+ *   - hoardingActive: true when the 24h energy balance is negative (PV+stored < load) AND
+ *     forecast confidence is sufficient. Caller should skip discharge planning entirely.
+ *   - reasoning fields for plan summary.
+ *
+ * Falls back to configured minSocPct when forecast data is missing or low-confidence.
+ */
+export function computeForecastReserveSocPct({
+  pvSlots = [],
+  loadSlots = [],
+  nowTs,
+  horizonHours = 24,
+  currentSocPct,
+  batteryCapacityKwh,
+  configuredMinSocPct,
+  globalMinSocPct = 5,
+  safetyMarginKwh = 1.5,
+  confidenceThreshold = 0.4
+} = {}) {
+  const fallback = {
+    effectiveMinSocPct: toFiniteNumber(configuredMinSocPct, 25),
+    hoardingActive: false,
+    pvKwh: 0,
+    loadKwh: 0,
+    netKwh: 0,
+    confidence: 0,
+    reason: 'no_forecast_data'
+  };
+
+  const cap = toFiniteNumber(batteryCapacityKwh, 0);
+  const soc = toFiniteNumber(currentSocPct, null);
+  const cfgMin = toFiniteNumber(configuredMinSocPct, 25);
+  const globalMin = toFiniteNumber(globalMinSocPct, 5);
+  if (cap <= 0 || soc == null || !Number.isFinite(nowTs)) return fallback;
+
+  const horizonMs = horizonHours * 3600000;
+  const pv = sumForecastSlotsKwh({ slots: pvSlots, fromTs: nowTs, toTs: nowTs + horizonMs, defaultDurationMin: 15 });
+  const load = sumForecastSlotsKwh({ slots: loadSlots, fromTs: nowTs, toTs: nowTs + horizonMs, defaultDurationMin: 60 });
+  const minConfidence = Math.min(pv.avgConfidence, load.avgConfidence);
+
+  // Without enough confidence, do not let forecast override configured floor.
+  if (minConfidence < confidenceThreshold || pv.slotsCounted === 0 || load.slotsCounted === 0) {
+    return { ...fallback, pvKwh: pv.totalKwh, loadKwh: load.totalKwh, confidence: minConfidence, reason: 'low_confidence' };
+  }
+
+  // Stored energy at current SOC, above the global hard floor.
+  const storedKwh = (cap * Math.max(0, soc - globalMin)) / 100;
+  const netHorizonKwh = storedKwh + pv.totalKwh - load.totalKwh;
+
+  // Hoarding-Gate: if total energy budget is negative, hold everything for self-consumption.
+  // Tomorrow's grid-import price (~26.9 ct/kWh) typically exceeds today's discharge revenue.
+  if (netHorizonKwh < -safetyMarginKwh) {
+    return {
+      effectiveMinSocPct: Math.max(soc, cfgMin),  // freeze at current SOC
+      hoardingActive: true,
+      pvKwh: pv.totalKwh,
+      loadKwh: load.totalKwh,
+      netKwh: Math.round(netHorizonKwh * 10) / 10,
+      confidence: minConfidence,
+      reason: 'hoarding_deficit'
+    };
+  }
+
+  // Reserve calc: hold enough kWh to cover load-PV deficit + safety margin.
+  const deficitKwh = Math.max(0, load.totalKwh - pv.totalKwh) + safetyMarginKwh;
+  const reserveSoc = (deficitKwh / cap) * 100 + globalMin;
+  // Forecast can only RELAX the configured floor, never tighten it.
+  const effective = Math.max(globalMin, Math.min(cfgMin, reserveSoc));
+
+  return {
+    effectiveMinSocPct: Math.round(effective * 10) / 10,
+    hoardingActive: false,
+    pvKwh: pv.totalKwh,
+    loadKwh: load.totalKwh,
+    netKwh: Math.round(netHorizonKwh * 10) / 10,
+    confidence: minConfidence,
+    reason: 'forecast_relaxed'
+  };
+}
+
 export function computeDynamicAutomationMinSocPct({
   automationMinSocPct,
   globalMinSocPct,

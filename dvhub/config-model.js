@@ -914,6 +914,16 @@ function buildFieldDefinitions() {
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.forecastAware',
+      label: 'Forecast-aware Reserve (Beta)',
+      type: 'boolean',
+      help: 'Wenn aktiv: Reserve und Hoarding-Gate werden aus PV-/Last-Forecast der nächsten 24 h gerechnet. Sonniger Tag erwartet → mehr Slots; PV-Mangel → weniger oder keine Slots. Statisches Minimum-SOC bleibt Obergrenze. Aus = altes Verhalten (statische Reserve).'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.searchWindowStart',
       label: 'Suchfenster Start',
       type: 'time',
@@ -2003,6 +2013,7 @@ export function createDefaultConfig() {
       smallMarketAutomation: {
       engine: 'milp',
         enabled: false,
+        forecastAware: false,
         searchWindowStart: '14:00',
         searchWindowEnd: '09:00',
         targetSlotCount: null,

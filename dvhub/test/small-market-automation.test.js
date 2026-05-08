@@ -7,9 +7,11 @@ import {
   computeAvailableEnergyKwh,
   computeEnergyBasedSlotAllocation,
   computeDynamicAutomationMinSocPct,
+  computeForecastReserveSocPct,
   filterFreeAutomationSlots,
   pickBestAutomationPlan,
-  splitIntoContiguousSegments
+  splitIntoContiguousSegments,
+  sumForecastSlotsKwh
 } from '../small-market-automation.js';
 
 const SLOT_MS = 15 * 60 * 1000;
@@ -421,4 +423,139 @@ test('pickBestAutomationPlan selects most profitable chain variant', () => {
   // Should pick the longer chain (7 slots) since prices rise, giving more total revenue
   assert.ok(plan.selectedSlotTimestamps.length > 0);
   assert.ok(plan.totalRevenueCt > 0);
+});
+
+// --- sumForecastSlotsKwh ---
+
+test('sumForecastSlotsKwh sums 15-min PV slots over the requested horizon', () => {
+  const NOW = Date.parse('2026-05-07T08:00:00Z');
+  const slots = [
+    { start: '2026-05-07T08:00:00Z', powerW: 4000, confidence: 0.5 }, // 1 kWh
+    { start: '2026-05-07T08:15:00Z', powerW: 8000, confidence: 0.5 }, // 2 kWh
+    { start: '2026-05-07T08:30:00Z', powerW: 4000, confidence: 0.4 }, // 1 kWh
+    { start: '2026-05-07T20:00:00Z', powerW: 0,    confidence: 0.6 }  // outside 1h horizon
+  ];
+  const r = sumForecastSlotsKwh({ slots, fromTs: NOW, toTs: NOW + 3600000, defaultDurationMin: 15 });
+  assert.equal(r.totalKwh, 4);
+  assert.equal(r.slotsCounted, 3);
+  assert.ok(r.avgConfidence > 0.4 && r.avgConfidence < 0.5);
+});
+
+test('sumForecastSlotsKwh clips slot tails that overflow the horizon end', () => {
+  const NOW = Date.parse('2026-05-07T08:00:00Z');
+  const slots = [
+    // start 07:30, end 08:30 (60-min slot at 4 kW) → 30 min overlap with [08:00, 09:00) = 2 kWh
+    { start: '2026-05-07T07:30:00Z', end: '2026-05-07T08:30:00Z', powerW: 4000, confidence: 0.5 },
+    // start 08:50, end 09:30 → 10 min overlap with [08:00, 09:00) = 0.667 kWh
+    { start: '2026-05-07T08:50:00Z', end: '2026-05-07T09:30:00Z', powerW: 4000, confidence: 0.5 }
+  ];
+  const r = sumForecastSlotsKwh({ slots, fromTs: NOW, toTs: NOW + 3600000 });
+  assert.ok(Math.abs(r.totalKwh - 2.67) < 0.05, `expected ~2.67 got ${r.totalKwh}`);
+});
+
+// --- computeForecastReserveSocPct ---
+
+test('computeForecastReserveSocPct relaxes reserve when sunny day expected', () => {
+  const NOW = Date.parse('2026-05-06T18:00:00Z');
+  // 30 PV slots × 15 min × 8 kW ≈ 60 kWh; 24 load slots × 1h × 1 kW = 24 kWh
+  const pvSlots = Array.from({ length: 30 }, (_, i) => ({
+    start: new Date(NOW + (i + 12) * 15 * 60000).toISOString(),
+    powerW: 8000, confidence: 0.6
+  }));
+  const loadSlots = Array.from({ length: 24 }, (_, i) => ({
+    start: new Date(NOW + i * 3600000).toISOString(),
+    powerW: 1000, confidence: 0.5
+  }));
+  const r = computeForecastReserveSocPct({
+    pvSlots, loadSlots, nowTs: NOW, horizonHours: 24,
+    currentSocPct: 50, batteryCapacityKwh: 40, configuredMinSocPct: 25,
+    globalMinSocPct: 5, safetyMarginKwh: 1.5
+  });
+  assert.equal(r.hoardingActive, false);
+  assert.ok(r.effectiveMinSocPct < 25, `expected relax below 25, got ${r.effectiveMinSocPct}`);
+  assert.ok(r.effectiveMinSocPct >= 5);
+  assert.equal(r.reason, 'forecast_relaxed');
+});
+
+test('computeForecastReserveSocPct triggers hoarding when 24h budget is negative', () => {
+  const NOW = Date.parse('2026-05-06T18:00:00Z');
+  // No PV (cloudy), heavy load
+  const pvSlots = [
+    { start: new Date(NOW).toISOString(), powerW: 0, confidence: 0.6 }
+  ];
+  const loadSlots = Array.from({ length: 24 }, (_, i) => ({
+    start: new Date(NOW + i * 3600000).toISOString(),
+    powerW: 2000, confidence: 0.5
+  }));
+  const r = computeForecastReserveSocPct({
+    pvSlots, loadSlots, nowTs: NOW, horizonHours: 24,
+    currentSocPct: 30, batteryCapacityKwh: 40, configuredMinSocPct: 25,
+    globalMinSocPct: 5, safetyMarginKwh: 1.5
+  });
+  // stored = 40 * (30-5)/100 = 10 kWh; load = 48 kWh; pv ~ 0; net = 10 - 48 = -38 → hoarding
+  assert.equal(r.hoardingActive, true);
+  assert.equal(r.reason, 'hoarding_deficit');
+});
+
+test('computeForecastReserveSocPct caps reserve at configured minSocPct', () => {
+  const NOW = Date.parse('2026-05-06T18:00:00Z');
+  // Forecast says reserve ≈ 21%, config caps at 10% — verify the cap wins.
+  // Setup: 24 PV-15min slots × 1 kW = 6 kWh, 24 load-1h slots × 1 kW = 24 kWh
+  // → deficit = 18 + 1.5 safety = 19.5 kWh / 40 kWh * 100 + 5 = 53.75% raw
+  // → capped at min(10, 53.75) = 10
+  // SOC=90 → stored = 40 * (90-5)/100 = 34 kWh; net = 34 + 6 - 24 = +16 (no hoarding)
+  const pvSlots = Array.from({ length: 24 }, (_, i) => ({
+    start: new Date(NOW + i * 3600000).toISOString(),
+    end: new Date(NOW + (i + 1) * 3600000).toISOString(),
+    powerW: 1000, confidence: 0.6
+  }));
+  const loadSlots = Array.from({ length: 24 }, (_, i) => ({
+    start: new Date(NOW + i * 3600000).toISOString(),
+    end: new Date(NOW + (i + 1) * 3600000).toISOString(),
+    powerW: 1000, confidence: 0.5
+  }));
+  const r = computeForecastReserveSocPct({
+    pvSlots, loadSlots, nowTs: NOW, horizonHours: 24,
+    currentSocPct: 90, batteryCapacityKwh: 40, configuredMinSocPct: 10,
+    globalMinSocPct: 5, safetyMarginKwh: 1.5
+  });
+  assert.equal(r.hoardingActive, false, `unexpected hoarding (net=${r.netKwh})`);
+  assert.ok(r.effectiveMinSocPct <= 10, `expected ≤ 10 (cap), got ${r.effectiveMinSocPct}`);
+});
+
+test('computeForecastReserveSocPct falls back to configured minSocPct on low confidence', () => {
+  const NOW = Date.parse('2026-05-06T18:00:00Z');
+  const pvSlots = [{ start: new Date(NOW).toISOString(), powerW: 4000, confidence: 0.2 }];
+  const loadSlots = [{ start: new Date(NOW).toISOString(), powerW: 1000, confidence: 0.3 }];
+  const r = computeForecastReserveSocPct({
+    pvSlots, loadSlots, nowTs: NOW, horizonHours: 24,
+    currentSocPct: 60, batteryCapacityKwh: 40, configuredMinSocPct: 25,
+    globalMinSocPct: 5, safetyMarginKwh: 1.5, confidenceThreshold: 0.4
+  });
+  assert.equal(r.effectiveMinSocPct, 25);
+  assert.equal(r.reason, 'low_confidence');
+  assert.equal(r.hoardingActive, false);
+});
+
+test('computeForecastReserveSocPct returns config fallback when forecast missing', () => {
+  const r = computeForecastReserveSocPct({
+    pvSlots: [], loadSlots: [], nowTs: Date.now(),
+    currentSocPct: 50, batteryCapacityKwh: 40, configuredMinSocPct: 25
+  });
+  assert.equal(r.effectiveMinSocPct, 25);
+  assert.equal(r.hoardingActive, false);
+  // Empty slot lists fall through the confidence branch — caller can't distinguish from
+  // genuinely-low-confidence; both should preserve the configured floor.
+  assert.ok(['low_confidence', 'no_forecast_data'].includes(r.reason), `unexpected reason: ${r.reason}`);
+});
+
+test('computeForecastReserveSocPct uses no_forecast_data fallback when battery state is missing', () => {
+  const r = computeForecastReserveSocPct({
+    pvSlots: [{ start: new Date().toISOString(), powerW: 4000, confidence: 0.5 }],
+    loadSlots: [{ start: new Date().toISOString(), powerW: 1000, confidence: 0.5 }],
+    nowTs: Date.now(),
+    currentSocPct: null, batteryCapacityKwh: 0, configuredMinSocPct: 25
+  });
+  assert.equal(r.effectiveMinSocPct, 25);
+  assert.equal(r.reason, 'no_forecast_data');
 });
