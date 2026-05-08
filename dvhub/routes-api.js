@@ -158,7 +158,12 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   // Plan 08-04 Task 2: Host / CORS / trust-proxy allowlist fields added to config
   'allowedHosts',
   'corsAllowedOrigins',
-  'trustProxy'
+  'trustProxy',
+  // Migration metadata + legacy integration roots that live in existing config.json
+  // and are echoed back unchanged when the settings UI saves; without these,
+  // the strict-root check rejects a normal save with `unknown_config_paths`.
+  'configSchemaVersion',
+  'influx'
 ]));
 
 export function createApiRoutes(ctx) {
@@ -461,10 +466,13 @@ export function createApiRoutes(ctx) {
 
   function checkAuth(req, res) {
     const cfg = getCfg();
-    // LAN requests bypass token check only for allowlisted read-only GET endpoints
-    if (isLocalNetworkRequest(req) && isLanSafeRequest(req)) return true;
-    // Plan 08-01 Task 1 (CRITICAL #1): removed the legacy empty-token fast-path bypass.
-    // When no token is configured we now hard-fail with 503 rather than silently opening auth.
+    // LAN-trust: any client reachable on the local subnet bypasses the token check.
+    // This is the operator's explicit security stance — phones/tablets/laptops on the
+    // same WLAN are trusted without having to register a token. Reverted from the
+    // Phase-08-01 GET-allowlist gate. A proper user/device-registration phase is the
+    // right place to tighten this further (see backlog).
+    if (isLocalNetworkRequest(req)) return true;
+    // Outside LAN, a configured token is mandatory; missing token fails closed.
     if (!cfg.apiToken || typeof cfg.apiToken !== 'string' || cfg.apiToken.length === 0) {
       res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'api_token_not_configured' }));
@@ -1392,6 +1400,17 @@ export function createApiRoutes(ctx) {
         restartRequired: result.restartRequired,
         source: url.pathname.endsWith('/import') ? 'import' : 'settings'
       });
+      // If any small-market-automation setting changed (e.g. forecastAware,
+      // searchWindow, minSoc, …), force a replan so the user immediately sees
+      // the new plan instead of waiting for the next ambient regeneration tick
+      // — which only fires on price/SOC/day changes, not on config edits.
+      const smaChanged = Array.isArray(result.changedPaths)
+        && result.changedPaths.some((p) => typeof p === 'string'
+          && p.startsWith('schedule.smallMarketAutomation'));
+      if (smaChanged && typeof ctx.regenerateSmallMarketAutomationRules === 'function') {
+        ctx.regenerateSmallMarketAutomationRules({ force: true })
+          .catch((e) => pushLog('sma_regen_after_config_save_error', { error: e.message }));
+      }
       const freshCfg = getCfg();
       return json(res, 200, {
         ok: true,
@@ -1911,7 +1930,8 @@ export function createApiRoutes(ctx) {
       const allowedKeys = new Set([
         'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
         'maxDischargeW', 'batteryCapacityKwh', 'inverterEfficiencyPct',
-        'minSocPct', 'aggressivePremiumPct', 'location', 'stages'
+        'minSocPct', 'aggressivePremiumPct', 'location', 'stages',
+        'engine', 'forecastAware'
       ]);
       const filteredBody = Object.fromEntries(
         Object.entries(body).filter(([key]) => allowedKeys.has(key))
