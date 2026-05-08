@@ -142,8 +142,10 @@ CREATE TABLE IF NOT EXISTS dv.measurement_exports (
   site_id UUID NOT NULL REFERENCES shared.sites(id) ON DELETE CASCADE,
   provider_id UUID REFERENCES dv.providers(id) ON DELETE SET NULL,
   ts TIMESTAMPTZ NOT NULL,
-  grid_import_w BIGINT NOT NULL DEFAULT 0,
-  grid_export_w BIGINT NOT NULL DEFAULT 0,
+  -- WR-05: NULLable per REPOLENS schema-design/011 (NULL = no data, 0 = measured zero).
+  -- Matches the convention used for shared.live_snapshots.grid_import_w/grid_export_w.
+  grid_import_w BIGINT,
+  grid_export_w BIGINT,
   grid_l1_w BIGINT,
   grid_l2_w BIGINT,
   grid_l3_w BIGINT,
