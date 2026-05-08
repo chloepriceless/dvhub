@@ -551,6 +551,10 @@ function assertValidRuntimeCommand(type, payload) {
   return request;
 }
 
+let runtimeWorkerRestartCount = 0;
+let runtimeWorkerStableTimer = null;
+let shuttingDown = false;
+
 function startDedicatedRuntimeWorker() {
   const worker = startRuntimeWorker({
     cwd: __dirname,
@@ -558,6 +562,14 @@ function startDedicatedRuntimeWorker() {
       DVHUB_PROCESS_ROLE: 'runtime-worker'
     }
   });
+
+  // Reset restart count after >5 minutes of stable operation.
+  // Prevents a slow leak (one crash every 10min) from staying in long-backoff forever.
+  if (runtimeWorkerStableTimer) clearTimeout(runtimeWorkerStableTimer);
+  runtimeWorkerStableTimer = setTimeout(() => {
+    runtimeWorkerRestartCount = 0;
+  }, 5 * 60 * 1000);
+  runtimeWorkerStableTimer.unref?.();
 
   worker.on('message', (message) => {
     if (!message || typeof message !== 'object') return;
@@ -577,10 +589,25 @@ function startDedicatedRuntimeWorker() {
     }
   });
 
+  worker.on('error', (err) => {
+    pushLog('runtime_worker_error', { error: err?.message ?? String(err) });
+  });
+
   worker.on('exit', (code, signal) => {
     runtimeWorkerState.ready = false;
     runtimeWorkerState.lastError = `runtime worker exited (code=${code}, signal=${signal})`;
     runtimeWorkerHeartbeatAt = 0;
+    pushLog('runtime_worker_exit', { code, signal });
+
+    if (shuttingDown) return;
+
+    // Exponential backoff capped at 60s, reset to 0 after sustained operation (timer above).
+    const delayMs = Math.min(60_000, 1000 * Math.pow(2, runtimeWorkerRestartCount++));
+    setTimeout(() => {
+      if (shuttingDown) return;
+      pushLog('runtime_worker_respawn', { attempt: runtimeWorkerRestartCount, delayMs });
+      runtimeWorker = startDedicatedRuntimeWorker();
+    }, delayMs).unref?.();
   });
 
   return worker;
@@ -934,6 +961,12 @@ const web = http.createServer(async (req, res) => {
     return routes.serveStatic(req, res);
   } catch (e) {
     console.error('HTTP handler error:', e);
+    pushLog('route_dispatch_error', {
+      path: req.url,
+      method: req.method,
+      error: e?.message ?? String(e),
+      statusCode: Number.isInteger(e?.statusCode) ? e.statusCode : 500
+    });
     if (!res.headersSent) {
       res.writeHead(Number.isInteger(e?.statusCode) ? e.statusCode : 500,
         { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' });
@@ -1199,31 +1232,52 @@ if (IS_RUNTIME_PROCESS) {
 
 async function gracefulShutdown(signal) {
   console.log(`\n${signal} received, shutting down...`);
-  poller.stop();
-  scheduler.stop();
-  liveTelemetryBuffer?.flush({ force: true });
-  epex.stop();
+  // Tell the runtime-worker exit handler not to respawn while we tear down.
+  shuttingDown = true;
+
+  const safeSync = (step, fn) => {
+    try { fn(); }
+    catch (err) { pushLog('shutdown_step_error', { step, error: err?.message ?? String(err) }); }
+  };
+  const safeAsync = (step, fn) =>
+    Promise.resolve()
+      .then(() => fn())
+      .catch(err => pushLog('shutdown_step_error', { step, error: err?.message ?? String(err) }));
+
+  // 1. Sync best-effort stops — pollers/timers must stop before async closes
+  //    so they don't re-enter into a tearing-down store.
+  safeSync('poller.stop', () => poller.stop());
+  safeSync('scheduler.stop', () => scheduler.stop());
+  safeSync('liveTelemetryBuffer.flush', () => liveTelemetryBuffer?.flush({ force: true }));
+  safeSync('epex.stop', () => epex.stop());
   // Phase 07 Plan 07-04: stop Wave-2 recovery scheduler before forecast.close() tears down the store.
-  try { forecastSnapshots.close(); } catch { /* best-effort */ }
-  await forecast.close();
-  await optimizer.close();
-  await familyService.close();
-  // Phase 05: Shutdown ML & LLM services (reverse init order)
-  await llmService.close().catch(() => {});
-  await mlService.close().catch(() => {});
-  // Phase 04: Shutdown integration services (reverse init order, Hub last)
-  await notificationService.close().catch(() => {});
-  await deviceService.close().catch(() => {});
-  await teslamateService.close().catch(() => {});
-  await mqttPublisher.close().catch(() => {});
-  await mqttHub.close().catch(() => {});
-  if (runtimeWorker) runtimeWorker.kill();
-  // Close Modbus TCP connections gracefully (FIN, not RST)
-  await Promise.all([transport.destroy(), scanTransport.destroy()]);
-  if (telemetryStore) telemetryStore.close();
-  modbus.close();
-  await vpnManager.close();
-  if (IS_WEB_PROCESS) web.close();
+  safeSync('forecastSnapshots.close', () => forecastSnapshots.close());
+
+  // 2. Parallel async closes — one rejection must NOT block the others.
+  //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).
+  await Promise.all([
+    safeAsync('forecast.close', () => forecast.close()),
+    safeAsync('optimizer.close', () => optimizer.close()),
+    safeAsync('familyService.close', () => familyService.close()),
+    safeAsync('llmService.close', () => llmService.close()),
+    safeAsync('mlService.close', () => mlService.close()),
+    safeAsync('notificationService.close', () => notificationService.close()),
+    safeAsync('deviceService.close', () => deviceService.close()),
+    safeAsync('teslamateService.close', () => teslamateService.close()),
+    safeAsync('mqttPublisher.close', () => mqttPublisher.close()),
+    safeAsync('mqttHub.close', () => mqttHub.close()),
+    // Close Modbus TCP connections gracefully (FIN, not RST)
+    safeAsync('transport.destroy', () => transport.destroy()),
+    safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
+    safeAsync('vpnManager.close', () => vpnManager.close())
+  ]);
+
+  // 3. Sync teardown of remaining handles
+  if (runtimeWorker) safeSync('runtimeWorker.kill', () => runtimeWorker.kill());
+  if (telemetryStore) safeSync('telemetryStore.close', () => telemetryStore.close());
+  safeSync('modbus.close', () => modbus.close());
+  if (IS_WEB_PROCESS) safeSync('web.close', () => web.close());
+
   // Short delay to let TCP FIN packets flush before exiting
   setTimeout(() => process.exit(0), 500).unref();
 }

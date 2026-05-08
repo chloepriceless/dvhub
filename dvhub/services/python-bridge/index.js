@@ -179,6 +179,14 @@ export function createPersistentBridge(ctx, { scriptPath }) {
   const MAX_HEARTBEAT_FAILURES = 3;
   const HEARTBEAT_INTERVAL_MS = 60_000;
   let closing = false;
+  // Respawn circuit breaker: if the process keeps crashing (>=5 in 60s) the model
+  // is broken — stop respawning and surface a fatal pushLog so ops can intervene.
+  // Without this we'd hammer the OS with fork() retries indefinitely.
+  /** @type {number[]} timestamps of recent respawn-triggering exits */
+  const respawnHistory = [];
+  const RESPAWN_BREAKER_WINDOW_MS = 60_000;
+  const RESPAWN_BREAKER_MAX = 5;
+  let circuitBreakerTripped = false;
 
   /**
    * Spawn the Python process and set up JSON-RPC line reader.
@@ -232,10 +240,28 @@ export function createPersistentBridge(ctx, { scriptPath }) {
 
       if (!closing) {
         pushLog('python_persistent_exit', { code });
+
+        // Respawn circuit breaker: drop history older than 60s, then check.
+        const now = Date.now();
+        while (respawnHistory.length && now - respawnHistory[0] > RESPAWN_BREAKER_WINDOW_MS) {
+          respawnHistory.shift();
+        }
+        respawnHistory.push(now);
+
+        if (respawnHistory.length >= RESPAWN_BREAKER_MAX) {
+          circuitBreakerTripped = true;
+          pushLog('python_persistent_breaker_tripped', {
+            crashes: respawnHistory.length,
+            windowMs: RESPAWN_BREAKER_WINDOW_MS,
+            reason: `>=${RESPAWN_BREAKER_MAX} respawns in ${RESPAWN_BREAKER_WINDOW_MS / 1000}s — stopped to avoid fork-loop`
+          });
+          return;
+        }
+
         // Auto-respawn
         setTimeout(() => {
-          if (!closing) {
-            pushLog('python_persistent_respawn', {});
+          if (!closing && !circuitBreakerTripped) {
+            pushLog('python_persistent_respawn', { recent: respawnHistory.length });
             spawnProcess();
           }
         }, 2000);

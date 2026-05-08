@@ -470,10 +470,14 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
    * Sets interval for periodic forecast (every 6h). Runs immediately on start.
    */
   async function start() {
-    // Run once immediately
-    await runForecast();
+    // Run once immediately — never let a throw prevent the interval scheduling
+    try {
+      await runForecast();
+    } catch (err) {
+      pushLog('pv_forecast_first_run_error', { error: err?.message ?? String(err) });
+    }
 
-    // Schedule periodic runs
+    // Schedule periodic runs (always, even if first run threw)
     intervalId = setInterval(() => {
       runForecast().catch(err => {
         pushLog('pv_forecast_interval_error', { error: err.message });

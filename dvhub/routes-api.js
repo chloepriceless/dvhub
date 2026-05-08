@@ -662,7 +662,16 @@ export function createApiRoutes(ctx) {
     };
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
-    const forecastResp = await ctx.forecastService?.buildForecastResponse?.();
+    // Per-section error isolation (Plan 08-07 Task 2): one section failing must
+    // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
+    const sectionErrors = [];
+    let forecastResp = null;
+    try {
+      forecastResp = await ctx.forecastService?.buildForecastResponse?.();
+    } catch (err) {
+      sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
+      pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
+    }
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
@@ -696,6 +705,10 @@ export function createApiRoutes(ctx) {
     const teslaState = ctx.teslamateService?.getState?.();
     if (teslaState && Object.values(teslaState).some(v => v != null)) {
       base.dvhub_tesla = teslaState;
+    }
+
+    if (sectionErrors.length > 0) {
+      base.dvhub_errors = sectionErrors;
     }
 
     return base;

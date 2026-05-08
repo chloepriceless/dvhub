@@ -71,14 +71,31 @@ export function createForecastService(ctx) {
   async function start() {
     // ctx.db is a getter that reads dbPool — set during createTelemetryStoreIfEnabled() before start() is called
     if (ctx.db) {
-      await store.ensureSchema(ctx.db);
-      pushLog('forecast_schema_ready', { tier });
+      try {
+        await store.ensureSchema(ctx.db);
+        pushLog('forecast_schema_ready', { tier });
+      } catch (err) {
+        pushLog('forecast_schema_error', { error: err?.message ?? String(err) });
+      }
     }
-    await weatherFetch.start();
-    await pvForecast.start();
-    await loadForecast.start();
-    await accuracyTracker.start();
-    pushLog('forecast_started', { tier, subsystems: ['weather', 'pv', 'load', 'accuracy'] });
+    // Per-subsystem boundary: one failed start MUST NOT block the others.
+    // Records which subsystems came up; the rest fail-in-place and surface via pushLog.
+    const subs = [
+      ['weather', weatherFetch],
+      ['pv', pvForecast],
+      ['load', loadForecast],
+      ['accuracy', accuracyTracker]
+    ];
+    const started = [];
+    for (const [name, sub] of subs) {
+      try {
+        await sub.start();
+        started.push(name);
+      } catch (err) {
+        pushLog(`forecast_${name}_start_error`, { error: err?.message ?? String(err) });
+      }
+    }
+    pushLog('forecast_started', { tier, subsystems: started });
   }
 
   /**
