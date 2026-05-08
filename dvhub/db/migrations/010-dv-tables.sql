@@ -119,6 +119,11 @@ CREATE TABLE IF NOT EXISTS dv.actions (
 
 CREATE INDEX IF NOT EXISTS dv_actions_site_created_idx ON dv.actions(site_id, created_at DESC);
 
+-- FK index for nullable ON DELETE SET NULL FK to dv.decisions(id).
+CREATE INDEX IF NOT EXISTS dv_actions_decision_idx
+  ON dv.actions(decision_id)
+  WHERE decision_id IS NOT NULL;
+
 -- dv.action_results — readback after sending an action.
 CREATE TABLE IF NOT EXISTS dv.action_results (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
