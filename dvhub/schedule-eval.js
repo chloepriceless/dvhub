@@ -90,6 +90,9 @@ export function createScheduleEvaluator(ctx) {
       //   - Positive gridSetpointW (>0) = grid import (Netzladen) → needs allowGridCharge
       //   - Negative gridSetpointW (<0) = grid export (Netzentladung) → needs allowGridDischarge
       // User rules and SMA (Börsenautomatik) are never blocked by these flags.
+      // Defence-in-depth: the canonical EEG/§14a gate now lives in applyControlTarget
+      // (Plan 08-06 Task 1) and catches ALL caller sources at write time. This filter
+      // short-circuits optimizer rules earlier so they never reach the hardware-write path.
       if (r.source === 'forecast_optimizer') {
         if (!optimizerEnabled) return false;
         if (r.target === 'gridSetpointW') {
@@ -187,6 +190,27 @@ export function createScheduleEvaluator(ctx) {
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
+
+    // === EEG/§14a legal gate — applies to ALL callers (schedule rules, manual control,
+    // dc-export, eos/emhass optimizer, negative-price triggers). Source of truth:
+    // cfg.optimizer.allowGridCharge / allowGridDischarge.
+    // User memory: these flags are legally relevant — never auto-flip, never flip for demos.
+    // Runs BEFORE the prev-value short-circuit so a flag flip between identical writes
+    // cannot produce a silently-skipped illegal write.
+    if (target === 'gridSetpointW') {
+      const numericValue = Number(value);
+      const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
+      const allowGridDischarge = cfg.optimizer?.allowGridDischarge ?? false;
+      if (numericValue > 0 && !allowGridCharge) {
+        pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
+        return { ok: false, error: 'grid_charge_not_allowed' };
+      }
+      if (numericValue < 0 && !allowGridDischarge) {
+        pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_discharge_not_allowed' });
+        return { ok: false, error: 'grid_discharge_not_allowed' };
+      }
+    }
+    // === end EEG/§14a gate ===
 
     const prev = state.schedule.lastWrite[target];
     if (prev != null && Number(prev.value) === Number(value)) {

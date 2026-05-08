@@ -1437,6 +1437,39 @@ export function createApiRoutes(ctx) {
       if (unknownRoots.length > 0) {
         return json(res, 400, { ok: false, error: 'unknown_config_paths', paths: unknownRoots });
       }
+      // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
+      // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. Flipping either
+      // requires an explicit `x-confirm-legal-gate: true` header AND emits a distinct
+      // audit event so the actor IP is recorded separately from generic config_saved.
+      const getByPath = (obj, dotPath) => dotPath.split('.').reduce(
+        (a, k) => (a != null && Object.prototype.hasOwnProperty.call(a, k)) ? a[k] : undefined,
+        obj
+      );
+      const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge'];
+      const currentCfgForGate = getCfg();
+      const flippedLegalGates = LEGAL_GATE_PATHS.filter((p) => {
+        const before = getByPath(currentCfgForGate, p);
+        const after = getByPath(body.config, p);
+        return after !== undefined && before !== after;
+      });
+      if (flippedLegalGates.length > 0 && req.headers['x-confirm-legal-gate'] !== 'true') {
+        pushLog('legal_gate_flip_rejected', {
+          paths: flippedLegalGates,
+          ip: req.socket?.remoteAddress
+        });
+        return json(res, 403, {
+          ok: false,
+          error: 'legal_gate_flip_requires_confirmation',
+          paths: flippedLegalGates,
+          hint: 'Add header x-confirm-legal-gate: true after reading EEG/§14a compliance documentation'
+        });
+      }
+      if (flippedLegalGates.length > 0) {
+        pushLog('legal_gate_flipped', {
+          paths: flippedLegalGates,
+          ip: req.socket?.remoteAddress
+        });
+      }
       const result = ctx.saveAndApplyConfig(body.config);
       pushLog('config_saved', {
         changedPaths: result.changedPaths.length,
