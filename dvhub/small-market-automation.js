@@ -265,6 +265,14 @@ export function computeForecastReserveSocPct({
   };
 }
 
+// Grace period after sunrise during which PV is too weak to cover own
+// consumption — battery still has to carry the load. The dynamic SOC floor
+// only fully relaxes to globalMin AFTER this window. 1h chosen empirically:
+// in Berlin-class latitudes the first hour after geometric sunrise typically
+// produces <500W (well below the ~800-1500W base load), so discharging deeper
+// before then would just force re-import at retail price.
+const SUNRISE_PV_GRACE_MS = 60 * 60 * 1000;
+
 export function computeDynamicAutomationMinSocPct({
   automationMinSocPct,
   globalMinSocPct,
@@ -281,10 +289,11 @@ export function computeDynamicAutomationMinSocPct({
   if (sunset == null || sunrise == null || now == null || sunrise <= sunset) {
     return automationMin;
   }
+  const effectiveSunrise = sunrise + SUNRISE_PV_GRACE_MS;
   if (now <= sunset) return automationMin;
-  if (now >= sunrise) return globalMin;
+  if (now >= effectiveSunrise) return globalMin;
 
-  const progress = (now - sunset) / (sunrise - sunset);
+  const progress = (now - sunset) / (effectiveSunrise - sunset);
   return automationMin - ((automationMin - globalMin) * progress);
 }
 

@@ -71,7 +71,9 @@ test('buildAutomationRuleChain handles non-array stages gracefully', () => {
 
 // --- computeDynamicAutomationMinSocPct ---
 
-test('computeDynamicAutomationMinSocPct relaxes linearly toward the global min by sunrise', () => {
+test('computeDynamicAutomationMinSocPct relaxes linearly toward the global min by sunrise+1h grace', () => {
+  // sunset 20:00 → effective-sunrise 07:00 (sunrise 06:00 + 1h PV-warmup grace)
+  // = 11h window. now 01:00 = 5h after sunset → progress 5/11.
   const result = computeDynamicAutomationMinSocPct({
     automationMinSocPct: 30,
     globalMinSocPct: 3,
@@ -79,7 +81,8 @@ test('computeDynamicAutomationMinSocPct relaxes linearly toward the global min b
     sunriseTs: Date.parse('2026-06-02T06:00:00+02:00'),
     nowTs: Date.parse('2026-06-02T01:00:00+02:00')
   });
-  assert.equal(result, 16.5);
+  // 30 - 27 * (5/11) = 17.7272…
+  assert.ok(Math.abs(result - (30 - 27 * 5 / 11)) < 1e-9, `expected ~17.727, got ${result}`);
 });
 
 test('computeDynamicAutomationMinSocPct returns automationMin before sunset', () => {
@@ -93,13 +96,28 @@ test('computeDynamicAutomationMinSocPct returns automationMin before sunset', ()
   assert.equal(result, 30);
 });
 
-test('computeDynamicAutomationMinSocPct returns globalMin at or after sunrise', () => {
+test('computeDynamicAutomationMinSocPct keeps SOC floor restrictive at sunrise (PV still too weak)', () => {
+  // At geometric sunrise, the 1h grace window still applies — sun just cleared
+  // the horizon and produces <500W, so we stay near automationMin, not at globalMin.
   const result = computeDynamicAutomationMinSocPct({
     automationMinSocPct: 30,
     globalMinSocPct: 3,
     sunsetTs: Date.parse('2026-06-01T20:00:00+02:00'),
     sunriseTs: Date.parse('2026-06-02T06:00:00+02:00'),
     nowTs: Date.parse('2026-06-02T06:00:00+02:00')
+  });
+  // 10h after sunset, 11h total → 30 - 27 * 10/11 ≈ 5.45
+  assert.ok(Math.abs(result - (30 - 27 * 10 / 11)) < 1e-9, `expected ~5.45, got ${result}`);
+  assert.ok(result > 3, 'must not drop to globalMin yet at geometric sunrise');
+});
+
+test('computeDynamicAutomationMinSocPct returns globalMin at or after sunrise+1h grace', () => {
+  const result = computeDynamicAutomationMinSocPct({
+    automationMinSocPct: 30,
+    globalMinSocPct: 3,
+    sunsetTs: Date.parse('2026-06-01T20:00:00+02:00'),
+    sunriseTs: Date.parse('2026-06-02T06:00:00+02:00'),
+    nowTs: Date.parse('2026-06-02T07:00:00+02:00')
   });
   assert.equal(result, 3);
 });
