@@ -144,9 +144,9 @@ button {
 }
 
 .topbar-brand img {
-  width: 28px;
   height: 28px;
-  border-radius: 6px;
+  width: auto;
+  display: block;
 }
 
 .topbar-nav {

@@ -87,7 +87,7 @@ test('shell branding includes the DVhub logo asset and menu buttons are solid-co
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
 
-  assert.match(html, /\/assets\/dvhub\.jpg/);
+  assert.match(html, /\/assets\/dvhub-wordmark\.png/);
   assert.doesNotMatch(html, /Produktbild|Dunkler Energy-Tech-Leitstand für Routing, Messwerte und Steuerung\./);
   assert.match(css, /\.app-brand-logo\s*\{/);
   assert.match(css, /\.app-nav-link\s*\{[^}]*background:\s*rgba\(/s);
@@ -202,7 +202,7 @@ test('settings disclosures use explicit affordance styling for hover, focus, and
 test('readme references the DVhub assets folder for logo and screenshot gallery', () => {
   const readme = fs.readFileSync(readmePath, 'utf8');
 
-  assert.match(readme, /assets\/dvhub\.jpg/);
+  assert.match(readme, /assets\/dvhub-wordmark\.png/);
   assert.match(readme, /assets\/screenshots\/dashboard-live-full-2026-03-24\.png/);
   assert.match(readme, /assets\/screenshots\/history-day-2026-03-24-full\.png/);
   assert.doesNotMatch(readme, /docs\/dvhub-logo\.png|docs\/dashboard-desktop\.png/);

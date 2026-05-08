@@ -9,9 +9,9 @@ Diese Richtlinie beschreibt das visuelle System für DVhub und ist auf die Websi
 - Visuelle Leitidee: Energiefluss (Solar + Netz) als spannungsreiche, kontrastreiche Leitgrafik
 
 ## 2. Logo System
-- Primarlogo: `public/assets/a_digital_logo_design_for_dvhub_is_displayed_by.png`
-- Logoaufbau: Badge + Ribbon + Bolt als zentrales Erkennungszeichen
-- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `D` im Wort `DVhub`
+- Primarlogo: `public/assets/dvhub-wordmark.png` (Aurora-Wordmark "D⚡hub", 2048×1002, transparent)
+- Logoaufbau: Wordmark mit Aurora-Verlauf (Cyan → Blau → Gelb → Grün) und gelbem Bolt zwischen `D` und `hub`
+- Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `D` im Wort `Dhub`
 - Nicht erlaubt:
   - Logo verzerren
   - Farben austauschen ausserhalb der definierten Palette

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/dvhub.jpg" alt="DVhub Logo" width="640" />
+  <img src="assets/dvhub-wordmark.png" alt="DVhub" width="640" />
 </p>
 
 ```
