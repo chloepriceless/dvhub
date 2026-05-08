@@ -4260,3 +4260,1145 @@ body.has-changes .config-save-bar { transform: translateY(0); }
     font-size: 0.75rem;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Tablet landscape (iPad Mini & co.): the default <1199px stack
+   makes the Leitstand scroll forever on a ~768px-tall landscape
+   viewport. Restore a compact 3-column layout, shrink the
+   Powerflow component, and shorten the Forecast/Optimizer charts
+   so the dashboard fits without aggressive scrolling.
+   ────────────────────────────────────────────────────────────── */
+@media (min-width: 900px) and (max-width: 1199px) and (orientation: landscape) {
+  .main-body {
+    grid-template-columns: 220px 1fr 240px;
+    grid-template-areas:
+      "left-rail  flow-center  right-rail"
+      "chart-area chart-area   right-rail";
+  }
+  .rail { flex-direction: column; overflow-x: visible; }
+  .rail-card { padding: 10px; min-width: 0; flex: 0 0 auto; }
+  .rail-card .card-value { font-size: 1.3rem; }
+  .flow-center { min-height: auto; }
+
+  .dvhub-powerflow { min-height: 340px !important; }
+  .dvhub-powerflow .pf-node .pf-v { font-size: 24px; padding: 4px 10px; }
+  .dvhub-powerflow .pf-center .v { font-size: 30px; padding: 4px 14px; }
+  .dvhub-powerflow .pf-hubglow { width: 220px; height: 220px; }
+
+  /* Forecast/Optimizer charts: compact heights */
+  .forecast-optimizer-section .chart-span-card canvas { height: 160px !important; }
+  .forecast-optimizer-section .chart-skeleton { height: 160px; }
+  #forecastComparisonCard div[style*="height:200px"] { height: 160px !important; }
+  #optimizerPlanCard div[style*="height:220px"] { height: 170px !important; }
+
+  /* Schedule table tighter */
+  .sched-table th, .sched-table td { padding: 4px 6px; font-size: 0.78rem; }
+}
+
+/* Short-viewport-in-landscape catch-all (phones in landscape, etc.) */
+@media (max-height: 820px) and (orientation: landscape) {
+  .dvhub-powerflow { min-height: 300px !important; }
+}
+
+/* ============================================================
+   SETTINGS · AURORA LAYOUT
+   Drop-in look from "DVhub Settings Component" mockup.
+   Scoped under .settings-aurora so other pages stay untouched.
+   ============================================================ */
+.settings-aurora {
+  --sa-bg-0: #030610;
+  --sa-bg-1: #050a17;
+  --sa-glass: rgba(10, 20, 40, 0.45);
+  --sa-glass-strong: rgba(14, 24, 44, 0.78);
+  --sa-glass-brd: rgba(120, 180, 255, 0.14);
+  --sa-glass-brd-hot: rgba(120, 210, 255, 0.32);
+  --sa-text: #e8f1ff;
+  --sa-text-dim: #8aa3c7;
+  --sa-text-mute: #4a5d7c;
+  --sa-blue: #1f8dff;
+  --sa-cyan: #34dbff;
+  --sa-green: #46d344;
+  --sa-yellow: #ffd421;
+  --sa-orange: #ff9f43;
+  --sa-purple: #bc8cff;
+  --sa-red: #ff6868;
+  --sa-r: 12px;
+
+  position: relative;
+  padding: 14px 16px 88px;
+  max-width: 1400px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  color: var(--sa-text);
+}
+.settings-aurora::before {
+  content: '';
+  position: absolute; inset: 0;
+  z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse at 20% -10%, #0b1d3d 0%, transparent 55%),
+    radial-gradient(ellipse at 110% 110%, #0e1a38 0%, transparent 55%);
+  opacity: .55;
+  border-radius: 14px;
+}
+.settings-aurora > * { position: relative; z-index: 1; }
+
+/* Page header */
+.settings-aurora .sa-page-header {
+  padding: 14px 16px;
+  border-radius: var(--sa-r);
+  background: var(--sa-glass);
+  border: 1px solid var(--sa-glass-brd);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.settings-aurora .sa-page-header h1 {
+  font-family: var(--font-brand, 'Space Grotesk', sans-serif);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 0;
+}
+.settings-aurora .sa-page-kicker {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9px;
+  color: var(--sa-cyan);
+  letter-spacing: .25em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.settings-aurora .sa-page-sub {
+  font-size: 12px;
+  color: var(--sa-text-dim);
+  margin-top: 4px;
+}
+.settings-aurora .sa-meta {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: rgba(232, 234, 240, 0.35);
+  display: block;
+  margin-top: 4px;
+}
+.settings-aurora .sa-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Two-column shell: nav + body */
+.settings-aurora .sa-shell {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .settings-aurora .sa-shell { grid-template-columns: 1fr; }
+}
+
+/* Vertical sidebar nav (re-styles existing .settings-tabs) */
+.settings-aurora .settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  margin: 0;
+  border: 1px solid var(--sa-glass-brd);
+  border-bottom: 1px solid var(--sa-glass-brd);
+  border-radius: var(--sa-r);
+  background: var(--sa-glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  position: sticky;
+  top: 12px;
+  overflow-x: visible;
+}
+
+/* Group heading inside the sidebar nav (mockup-style kicker) */
+.settings-aurora .settings-tabs .sa-nav-group {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--sa-text-mute);
+  padding: 8px 10px 4px;
+}
+.settings-aurora .settings-tabs .sa-nav-group:first-child {
+  padding-top: 4px;
+}
+.settings-aurora .settings-tab {
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--sa-text-dim);
+  border: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all .2s;
+  white-space: nowrap;
+}
+.settings-aurora .settings-tab:hover {
+  background: rgba(120, 180, 255, .05);
+  color: var(--sa-text);
+}
+.settings-aurora .settings-tab.is-active {
+  background: rgba(52, 219, 255, .08);
+  color: var(--sa-text);
+  border-color: var(--sa-glass-brd-hot);
+}
+.settings-aurora .settings-tab .sa-ico {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+  color: var(--sa-cyan);
+  width: 14px;
+  display: inline-block;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Body column */
+.settings-aurora .sa-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-aurora .settings-tab-panel { display: block; }
+.settings-aurora .settings-tab-panel[hidden] { display: none; }
+.settings-aurora .settings-tab-panel > .config-grid {
+  margin: 0;
+}
+
+/* Glass override for config-group cards */
+.settings-aurora .config-group {
+  background: var(--sa-glass);
+  border: 1px solid var(--sa-glass-brd);
+  border-left: 3px solid rgba(123, 151, 178, 0.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  border-radius: var(--sa-r);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
+}
+.settings-aurora .config-group[data-accent="green"]  { border-left-color: var(--sa-green); }
+.settings-aurora .config-group[data-accent="blue"]   { border-left-color: var(--sa-blue); }
+.settings-aurora .config-group[data-accent="cyan"]   { border-left-color: var(--sa-cyan); }
+.settings-aurora .config-group-kicker {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sa-text-dim);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  padding: 12px 16px 6px;
+}
+
+/* Row + dashed divider in mockup style */
+.settings-aurora .config-row {
+  border-bottom: 1px dashed var(--sa-glass-brd);
+}
+.settings-aurora .config-row:last-child { border-bottom: 0; }
+.settings-aurora .config-row-label {
+  color: var(--sa-text-dim);
+  font-size: 12px;
+}
+.settings-aurora .config-row-value {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: var(--sa-text);
+  font-size: 12px;
+}
+
+/* Aurora-styled inputs (mono + glass field) */
+.settings-aurora .config-input,
+.settings-aurora .config-select,
+.settings-aurora input[type="text"]:not(.sa-no-aurora),
+.settings-aurora input[type="number"]:not(.sa-no-aurora),
+.settings-aurora input[type="datetime-local"]:not(.sa-no-aurora),
+.settings-aurora textarea:not(.sa-no-aurora),
+.settings-aurora select:not(.sa-no-aurora) {
+  background: rgba(5, 10, 22, .5);
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 6px;
+  color: var(--sa-text);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+  padding: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-aurora .config-input:focus,
+.settings-aurora .config-select:focus,
+.settings-aurora input:focus,
+.settings-aurora textarea:focus,
+.settings-aurora select:focus {
+  border-color: var(--sa-glass-brd-hot);
+  outline: 0;
+}
+.settings-aurora select option { background: var(--sa-bg-1); color: var(--sa-text); }
+
+/* Banners */
+.settings-aurora .config-banner {
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* Buttons inside aurora — only tint primary */
+.settings-aurora .btn-primary,
+.settings-aurora .btn.btn-primary {
+  background: linear-gradient(180deg, var(--sa-blue), #0f4fb9);
+  border-color: rgba(52, 219, 255, .4);
+  box-shadow: 0 0 20px rgba(31, 141, 255, .25), 0 1px 0 rgba(255, 255, 255, .1) inset;
+}
+.settings-aurora .btn-primary:hover,
+.settings-aurora .btn.btn-primary:hover {
+  box-shadow: 0 0 28px rgba(31, 141, 255, .45), 0 1px 0 rgba(255, 255, 255, .1) inset;
+}
+
+/* Toast (shared) */
+.settings-aurora .sa-toast {
+  position: fixed;
+  bottom: 76px;
+  right: 16px;
+  z-index: 250;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--sa-glass-strong);
+  border: 1px solid var(--sa-glass-brd-hot);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: var(--sa-text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
+  transform: translateY(80px);
+  opacity: 0;
+  transition: all .3s ease;
+  pointer-events: none;
+}
+.settings-aurora .sa-toast.show {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Mobile: nav becomes horizontal pills again, no sticky */
+@media (max-width: 900px) {
+  .settings-aurora .settings-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    position: static;
+  }
+  .settings-aurora .settings-tab { white-space: nowrap; }
+}
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 2 (Apple-style polish)
+   - iOS-style pill toggle on .config-checkbox
+   - Card hover lift, input focus ring
+   - Stronger ambient gradient + glass refresh
+   ============================================================ */
+
+/* Stronger ambient backdrop */
+.settings-aurora::before {
+  background:
+    radial-gradient(ellipse at 18% -8%, rgba(31, 141, 255, .22) 0%, transparent 55%),
+    radial-gradient(ellipse at 110% 110%, rgba(52, 219, 255, .14) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 120%, rgba(70, 211, 68, .08) 0%, transparent 60%);
+  opacity: 1;
+}
+
+/* Subtle card hover lift */
+.settings-aurora .config-group {
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+}
+.settings-aurora .config-group:hover {
+  transform: translateY(-1px);
+  border-color: rgba(120, 210, 255, 0.22);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .35);
+}
+
+/* Input focus ring (Apple-ish) */
+.settings-aurora .config-input:focus,
+.settings-aurora .config-select:focus,
+.settings-aurora input:focus,
+.settings-aurora textarea:focus,
+.settings-aurora select:focus {
+  border-color: var(--sa-glass-brd-hot);
+  box-shadow: 0 0 0 3px rgba(52, 219, 255, .12);
+  outline: 0;
+}
+
+/* Sidebar nav: tiny vertical accent on active item */
+.settings-aurora .settings-tab.is-active {
+  position: relative;
+}
+.settings-aurora .settings-tab.is-active::before {
+  content: '';
+  position: absolute;
+  left: 4px; top: 8px; bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--sa-cyan), var(--sa-blue));
+  box-shadow: 0 0 8px var(--sa-cyan);
+}
+
+/* ── iOS-style pill toggle for .config-checkbox ────────────────
+   Override the native checkbox inside the Aurora settings panel
+   so booleans render as Apple-style sliders without JS changes.
+*/
+.settings-aurora input[type="checkbox"].config-checkbox {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  background: rgba(120, 180, 255, 0.18);
+  border: 1px solid rgba(120, 180, 255, 0.20);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .25s ease, border-color .25s ease, box-shadow .25s ease;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.settings-aurora input[type="checkbox"].config-checkbox::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .35);
+  transition: transform .25s cubic-bezier(.4, 0, .2, 1);
+}
+.settings-aurora input[type="checkbox"].config-checkbox:hover {
+  background: rgba(120, 180, 255, 0.26);
+}
+.settings-aurora input[type="checkbox"].config-checkbox:checked {
+  background: var(--sa-green);
+  border-color: rgba(70, 211, 68, .55);
+  box-shadow: 0 0 14px rgba(70, 211, 68, .45);
+}
+.settings-aurora input[type="checkbox"].config-checkbox:checked::after {
+  transform: translateX(16px);
+}
+.settings-aurora input[type="checkbox"].config-checkbox:focus-visible {
+  outline: 2px solid var(--sa-cyan);
+  outline-offset: 2px;
+}
+.settings-aurora input[type="checkbox"].config-checkbox:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* Number-input spin buttons subtler */
+.settings-aurora input[type=number]::-webkit-inner-spin-button,
+.settings-aurora input[type=number]::-webkit-outer-spin-button {
+  opacity: .35;
+}
+
+/* Labels in rows: a touch lighter weight to match mockup */
+.settings-aurora .config-row-label {
+  font-weight: 400;
+}
+
+/* Sticky save bar tinted to match Aurora glass */
+body:has(.settings-aurora) .config-save-bar {
+  background: rgba(5, 10, 22, .8);
+  border-top: 1px solid rgba(120, 180, 255, 0.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+}
+
+/* Ghost button slight Aurora tint */
+.settings-aurora .btn-ghost,
+.settings-aurora .btn.btn-ghost {
+  background: rgba(120, 180, 255, .04);
+  border: 1px solid var(--sa-glass-brd);
+  color: var(--sa-text);
+  transition: background .18s ease, border-color .18s ease;
+}
+.settings-aurora .btn-ghost:hover,
+.settings-aurora .btn.btn-ghost:hover {
+  background: rgba(120, 180, 255, .10);
+  border-color: var(--sa-glass-brd-hot);
+}
+
+/* Stat cards in System/ML tab align with glass language */
+.settings-aurora .stat-card {
+  background: rgba(5, 10, 22, .42);
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 10px;
+  padding: 12px 14px;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 3
+   Coverage for hardcoded System & ML tab patterns:
+   .data-table, .panel-stats, .panel-details, .stat-*,
+   .config-banner.info, .form-control / .config-label,
+   #scheduleJson textarea, links inside config-row.
+   ============================================================ */
+
+/* Stat-card content typography */
+.settings-aurora .stat-label {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--sa-text-dim);
+}
+.settings-aurora .stat-val {
+  font-family: var(--font-brand, 'Space Grotesk', sans-serif);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--sa-text);
+  letter-spacing: -.01em;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-aurora .stat-delta {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: var(--sa-cyan);
+  margin-top: 2px;
+}
+
+/* Stat layout grids (Modell-Status, LLM) */
+.settings-aurora .panel-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 10px 14px 14px;
+}
+.settings-aurora .panel-details {
+  padding: 6px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--sa-text-dim);
+}
+.settings-aurora .panel-details > * {
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--sa-glass-brd);
+}
+.settings-aurora .panel-details > *:last-child { border-bottom: 0; }
+
+/* Data tables in System tab (Modbus scan, DV signals) */
+.settings-aurora .data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.settings-aurora .data-table th,
+.settings-aurora .data-table td {
+  text-align: left;
+  border-bottom: 1px dashed var(--sa-glass-brd);
+  padding: 7px 8px;
+  vertical-align: middle;
+}
+.settings-aurora .data-table th {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--sa-cyan);
+  background: rgba(5, 10, 22, .35);
+}
+.settings-aurora .data-table tr:hover td {
+  background: rgba(120, 180, 255, .04);
+}
+
+/* Banner info variant (used for health/update/import) */
+.settings-aurora .config-banner.info {
+  background: rgba(52, 219, 255, .06);
+  border: 1px solid rgba(52, 219, 255, .18);
+  color: var(--sa-text);
+}
+.settings-aurora .config-banner.warn {
+  background: rgba(255, 211, 46, .08);
+  border: 1px solid rgba(255, 211, 46, .22);
+}
+.settings-aurora .config-banner.error {
+  background: rgba(255, 108, 99, .08);
+  border: 1px solid rgba(255, 108, 99, .22);
+}
+.settings-aurora .config-banner.ok,
+.settings-aurora .config-banner.success {
+  background: rgba(70, 211, 68, .08);
+  border: 1px solid rgba(70, 211, 68, .22);
+  color: var(--sa-green);
+}
+
+/* LLM-Section uses .form-control + .config-label */
+.settings-aurora .form-control {
+  background: rgba(5, 10, 22, .5);
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 6px;
+  color: var(--sa-text);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.settings-aurora .form-control:focus {
+  border-color: var(--sa-glass-brd-hot);
+  box-shadow: 0 0 0 3px rgba(52, 219, 255, .12);
+  outline: 0;
+}
+.settings-aurora .config-label {
+  color: var(--sa-text-dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Schedule JSON textarea — neutralise inline styling */
+.settings-aurora #scheduleJson {
+  background: rgba(5, 10, 22, .5) !important;
+  border: 1px solid var(--sa-glass-brd) !important;
+  color: var(--sa-text) !important;
+  border-radius: 8px !important;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace) !important;
+}
+.settings-aurora #scheduleJson:focus {
+  border-color: var(--sa-glass-brd-hot) !important;
+  box-shadow: 0 0 0 3px rgba(52, 219, 255, .12);
+}
+
+/* Inline anchors inside config-row should pick up cyan */
+.settings-aurora .config-row a {
+  color: var(--sa-cyan);
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: border-color .2s;
+}
+.settings-aurora .config-row a:hover {
+  border-bottom-color: var(--sa-cyan);
+}
+
+/* Config-row-grid with inline flex (Modbus scan inputs row) */
+.settings-aurora .config-row-grid label {
+  font-size: 11px;
+  color: var(--sa-text-dim);
+}
+
+/* Action button rows: small horizontal gap between primary/ghost */
+.settings-aurora .config-group [style*="display:flex"] .btn {
+  font-size: 11px;
+}
+
+/* Code tags + small helper paragraphs */
+.settings-aurora code,
+.settings-aurora pre {
+  background: rgba(5, 10, 22, .55);
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: var(--sa-cyan);
+}
+
+/* History full-backfill advanced fieldset gets a subtle frame */
+.settings-aurora .history-full-backfill-advanced {
+  margin: 4px 14px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--sa-glass-brd);
+  border-radius: 8px;
+  background: rgba(5, 10, 22, .25);
+}
+.settings-aurora .history-full-backfill-lookback {
+  margin-top: 4px;
+}
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 4
+   Coverage for Anlage-tab dynamic content + modals.
+   ============================================================ */
+
+/* Summary card (selected device summary in Anlage) */
+.settings-aurora .summary-card {
+  background: rgba(5, 10, 22, .42);
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 10px;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.settings-aurora .summary-card strong {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: var(--sa-cyan);
+  font-size: 10px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+}
+.settings-aurora .summary-card span {
+  color: var(--sa-text-dim);
+  font-size: 12px;
+}
+
+/* Discovery detail rows (host scan results) */
+.settings-aurora .detail-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--sa-glass-brd);
+}
+.settings-aurora .detail-row:last-child { border-bottom: 0; }
+.settings-aurora .detail-key {
+  color: var(--sa-text-dim);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+.settings-aurora .detail-val {
+  color: var(--sa-text);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* Location picker modal: glass refresh */
+.settings-aurora ~ .location-picker-overlay,
+body:has(.settings-aurora) .location-picker-overlay {
+  background: rgba(3, 6, 16, .75);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.settings-aurora ~ .location-picker-overlay .location-picker-modal,
+body:has(.settings-aurora) .location-picker-modal {
+  background: rgba(14, 24, 44, .95);
+  border: 1px solid rgba(120, 210, 255, .32);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .55), 0 0 60px rgba(31, 141, 255, .15);
+}
+.settings-aurora ~ .location-picker-overlay .location-picker-header,
+body:has(.settings-aurora) .location-picker-header {
+  border-bottom: 1px solid rgba(120, 180, 255, .18);
+  font-family: var(--font-brand, 'Space Grotesk', sans-serif);
+}
+.settings-aurora ~ .location-picker-overlay .location-picker-footer,
+body:has(.settings-aurora) .location-picker-footer {
+  border-top: 1px solid rgba(120, 180, 255, .18);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+/* Help-icon (?) tooltip — keep visible but Aurora-tinted */
+.settings-aurora .config-help-icon {
+  color: rgba(120, 210, 255, .55);
+}
+.settings-aurora .config-help-icon:hover {
+  color: var(--sa-cyan);
+}
+.settings-aurora .config-help-icon:hover::after {
+  background: rgba(14, 24, 44, .95);
+  border-color: rgba(120, 210, 255, .32);
+  color: var(--sa-text);
+}
+
+/* Required-marker uses cyan dot in Aurora */
+.settings-aurora .config-required {
+  color: var(--sa-cyan) !important;
+}
+
+/* Inputs used inline in Modbus-scan (#scanUnit etc.) inherit Aurora */
+.settings-aurora #scanUnit,
+.settings-aurora #scanStart,
+.settings-aurora #scanEnd,
+.settings-aurora #scanStep,
+.settings-aurora #scanQty {
+  background: rgba(5, 10, 22, .5);
+  border: 1px solid var(--sa-glass-brd);
+  color: var(--sa-text);
+  border-radius: 6px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+}
+
+/* Disclosure accent strip on left of selected sub-section */
+.settings-aurora .settings-group-accent {
+  background: linear-gradient(180deg, var(--sa-cyan), var(--sa-blue));
+}
+
+/* Soft animation on tab switch */
+.settings-aurora .settings-tab-panel {
+  animation: saFadeIn .22s ease;
+}
+@keyframes saFadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 5 (Source-of-Truth migration)
+   Replaces inline-style overrides previously set by settings.js
+   and settings.html. Once an accent is set on a .config-group
+   via [data-accent], all visual properties (border, kicker
+   color) come from CSS — design language lives entirely here.
+   ============================================================ */
+
+/* Border-left accent map (covers all GROUP_ACCENTS values) */
+.settings-aurora .config-group[data-accent="green"]  { border-left-color: var(--sa-green); }
+.settings-aurora .config-group[data-accent="blue"]   { border-left-color: var(--sa-blue); }
+.settings-aurora .config-group[data-accent="cyan"]   { border-left-color: var(--sa-cyan); }
+.settings-aurora .config-group[data-accent="yellow"] { border-left-color: var(--sa-yellow); }
+.settings-aurora .config-group[data-accent="orange"] { border-left-color: var(--sa-orange); }
+.settings-aurora .config-group[data-accent="purple"] { border-left-color: var(--sa-purple); }
+.settings-aurora .config-group[data-accent="red"]    { border-left-color: var(--sa-red); }
+
+/* Kicker color follows the same accent (replaces inline style="color:..."
+   that used to live on every kicker, both in settings.js and settings.html).
+   Two trigger points: (a) data-accent on the parent .config-group, or
+   (b) data-accent set directly on a kicker (used for sub-kickers like
+   Marktprämie that need their own accent). */
+.settings-aurora .config-group .config-group-kicker { color: var(--sa-text-dim); }
+.settings-aurora .config-group[data-accent="green"]  > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="green"]   { color: var(--sa-green); }
+.settings-aurora .config-group[data-accent="blue"]   > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="blue"]    { color: var(--sa-blue); }
+.settings-aurora .config-group[data-accent="cyan"]   > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="cyan"]    { color: var(--sa-cyan); }
+.settings-aurora .config-group[data-accent="yellow"] > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="yellow"]  { color: var(--sa-yellow); }
+.settings-aurora .config-group[data-accent="orange"] > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="orange"]  { color: var(--sa-orange); }
+.settings-aurora .config-group[data-accent="purple"] > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="purple"]  { color: var(--sa-purple); }
+.settings-aurora .config-group[data-accent="red"]    > .config-group-kicker,
+.settings-aurora .config-group-kicker[data-accent="red"]     { color: var(--sa-red); }
+
+/* Input sizing was previously computed via input.style.width in JS.
+   Now governed by CSS so all inputs share a uniform glass-field shape. */
+.settings-aurora .config-input {
+  width: auto;
+  min-width: 96px;
+  max-width: 240px;
+  text-align: right;
+}
+.settings-aurora .config-input[type="number"] {
+  min-width: 88px;
+  max-width: 132px;
+}
+.settings-aurora .config-input[type="time"] {
+  min-width: 88px;
+  max-width: 110px;
+}
+.settings-aurora .config-select {
+  width: auto;
+  min-width: 120px;
+  max-width: 280px;
+}
+
+/* Right-aligned controls in a row */
+.settings-aurora .config-row > .config-input,
+.settings-aurora .config-row > .config-select,
+.settings-aurora .config-row > .config-checkbox,
+.settings-aurora .config-row > input,
+.settings-aurora .config-row > select {
+  margin-left: auto;
+}
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 6 (utility classes)
+   Replaces inline-style debt in settings.js. After migration,
+   settings.js contains zero design strings — only data flow.
+   Naming: .sa-* prefix, semantic where possible.
+   ============================================================ */
+
+/* Layout / padding helpers */
+.settings-aurora .sa-pad           { padding: 8px 14px; }
+.settings-aurora .sa-pad-tight     { padding: 4px 14px; }
+.settings-aurora .sa-pad-form      { padding: 0 14px 14px; }
+.settings-aurora .sa-pad-status    { padding: 0 14px 14px; font-size: 12px; }
+.settings-aurora .sa-pad-list      { padding: 4px 14px; }
+.settings-aurora .sa-pad-actions   { padding: 0 14px 10px; display: flex; gap: 8px; align-items: center; }
+.settings-aurora .sa-mt-tight      { margin-top: 4px; }
+.settings-aurora .sa-mt-loose      { margin: 4px 0 8px; }
+.settings-aurora .sa-self-start    { align-self: flex-start; margin-top: 6px; }
+
+/* Description / help text */
+.settings-aurora .sa-help          {
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--sa-text-dim);
+  margin: 0;
+}
+.settings-aurora .sa-help-tight    {
+  padding: 2px 14px 4px;
+  font-size: 11px;
+  color: var(--sa-text-mute);
+  margin: 0;
+}
+.settings-aurora .sa-help-vpn      {
+  font-size: 12px;
+  opacity: .7;
+  padding: 0 14px 8px;
+  margin: 0;
+}
+
+/* Action button rows */
+.settings-aurora .sa-actions       {
+  padding: 8px 14px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Internal divider */
+.settings-aurora .sa-divider-top   {
+  border-top: 1px solid var(--sa-glass-brd);
+  padding-top: 4px;
+}
+
+/* PV-strings + Pricing-periods 5-column grid */
+.settings-aurora .sa-grid-strings,
+.settings-aurora .sa-grid-strings-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 80px 80px auto;
+  gap: 8px;
+  align-items: center;
+}
+.settings-aurora .sa-grid-strings-header {
+  font-size: 11px;
+  color: var(--sa-text-dim);
+  padding: 4px 14px;
+}
+.settings-aurora .sa-grid-strings-row {
+  margin-bottom: 6px;
+}
+
+/* Banner inline-margin variants (banner inside config-group) */
+.settings-aurora .sa-banner-inline        { margin: 4px 14px; }
+.settings-aurora .sa-banner-inline-bottom { margin: 4px 14px 8px; }
+.settings-aurora .sa-banner-inline-loose  { margin: 6px 14px; }
+
+/* Discovery row + map container */
+.settings-aurora .sa-discovery-row {
+  padding: 4px 14px 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.settings-aurora .sa-map-row { padding: 4px 14px 12px; }
+
+/* Width tokens for inputs */
+.settings-aurora .sa-w-num      { width: 80px; }
+.settings-aurora .sa-w-label    { width: 120px; }
+.settings-aurora .sa-w-date     { width: 140px; }
+.settings-aurora .sa-w-datetime { width: 180px; }
+
+/* Text utilities */
+.settings-aurora .sa-text-right { text-align: right; }
+.settings-aurora .sa-text-ok    { color: var(--sa-green); }
+.settings-aurora .sa-text-err   { color: var(--sa-red); }
+.settings-aurora .sa-text-warn  { color: var(--sa-yellow); }
+.settings-aurora .sa-text-info  { color: var(--sa-cyan); }
+.settings-aurora .sa-text-mute  { color: var(--sa-text-mute); }
+.settings-aurora .sa-text-dim   { color: var(--sa-text-dim); }
+
+/* Empty-state placeholder */
+.settings-aurora .sa-empty {
+  color: rgba(232, 234, 240, .3);
+  font-style: italic;
+}
+
+/* VPN buttons (purple accent persistence) */
+.settings-aurora .sa-btn-vpn {
+  background: var(--sa-purple);
+  color: #fff;
+}
+.settings-aurora .sa-btn-vpn-ghost {
+  border-color: var(--sa-purple);
+  color: var(--sa-purple);
+}
+
+/* Action result text (small inline status) */
+.settings-aurora .sa-action-result {
+  font-size: 12px;
+  min-height: 1.2em;
+}
+.settings-aurora .sa-action-result-inline {
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+/* Tier feature labels — color via data-status (replaces inline color/text-decoration) */
+.settings-aurora .sa-tier-label[data-status="active"]          { color: var(--sa-green); }
+.settings-aurora .sa-tier-label[data-status="inactive-locked"] { color: var(--sa-text-mute); text-decoration: line-through; }
+.settings-aurora .sa-tier-label[data-status="inactive"]        { color: var(--sa-text-mute); }
+.settings-aurora .sa-tier-label[data-status="collecting"]      { color: var(--sa-yellow); }
+.settings-aurora .sa-tier-label[data-status="unknown"]         { color: var(--sa-text-mute); }
+
+/* Training-log timestamp */
+.settings-aurora .sa-ts-mono {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+}
+
+/* VPN file-upload widgets */
+.settings-aurora .sa-file-input             { font-size: 12px; }
+.settings-aurora .sa-file-input-cell span   { font-size: 11px; opacity: .6; }
+.settings-aurora .sa-file-input-cell input  { font-size: 11px; width: 100%; }
+
+/* Config drift / package update tables */
+.settings-aurora .sa-drift-row[data-changed="no"]  { opacity: .6; }
+.settings-aurora .sa-drift-row[data-changed="yes"] { background: rgba(255,159,67,.06); }
+.settings-aurora .sa-drift-cell-key   { padding: 3px 10px; white-space: nowrap; }
+.settings-aurora .sa-drift-cell-value {
+  padding: 3px 10px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.settings-aurora .sa-pkg-table-head td { padding: 2px 6px; opacity: .6; }
+.settings-aurora .sa-pkg-table-cell    {
+  padding: 2px 6px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.settings-aurora .sa-pkg-table-cell--old { padding: 2px 6px; opacity: .6; }
+
+/* Helper for "remove" button text color */
+.settings-aurora .sa-remove-btn { color: var(--sa-red); }
+
+/* ============================================================
+   SETTINGS · AURORA · LAYER 7 (additions for Phase-2 migration)
+   New utility classes referenced by settings.js after the
+   inline-style purge (VPN form, drift table, restart button,
+   training-log result, package update table, map container).
+   ============================================================ */
+
+/* Restart button (was: margin-left:12px;vertical-align:middle;) */
+.settings-aurora .sa-restart-btn {
+  margin-left: 12px;
+  vertical-align: middle;
+}
+
+/* VPN upload form */
+.settings-aurora .sa-vpn-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-aurora .sa-vpn-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sa-text-dim);
+}
+.settings-aurora .sa-vpn-file-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+/* VPN imported config table (replaces inline drift table) */
+.settings-aurora .sa-vpn-config { padding: 0 14px 14px; font-size: 12px; }
+.settings-aurora .sa-vpn-config-frame {
+  margin-top: 6px;
+  border: 1px solid var(--sa-glass-brd);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.settings-aurora .sa-vpn-config-title {
+  padding: 6px 10px;
+  font-weight: 600;
+  font-size: 11px;
+  background: rgba(5, 10, 22, .55);
+  color: var(--sa-purple);
+}
+.settings-aurora .sa-vpn-config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.settings-aurora .sa-vpn-config-table tr[data-zebra="odd"] {
+  background: rgba(255, 255, 255, .02);
+}
+.settings-aurora .sa-vpn-badge-forced {
+  font-size: 9px;
+  background: var(--sa-purple);
+  color: #fff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  letter-spacing: .05em;
+}
+
+/* Package update table (system upgrades) */
+.settings-aurora .sa-pkg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.settings-aurora .sa-pkg-table-head td {
+  padding: 2px 6px;
+  opacity: .6;
+  font-weight: 500;
+}
+.settings-aurora .sa-pkg-table-cell {
+  padding: 2px 6px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.settings-aurora .sa-pkg-table-cell--old {
+  padding: 2px 6px;
+  opacity: .6;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+/* ML training-log result chip */
+.settings-aurora .sa-result {
+  font-weight: 600;
+}
+
+/* Disabled / read-only inputs (replaces input.style.opacity = '0.6') */
+.settings-aurora .config-input:disabled,
+.settings-aurora .config-input[readonly],
+.settings-aurora input:disabled,
+.settings-aurora input[readonly],
+.settings-aurora select:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+/* Map container — was inline width:100%;height:400px (functional sizing for Leaflet) */
+#location-picker-map {
+  width: 100%;
+  height: 400px;
+}
+
+/* VPN status dot + label, color via data-status (replaces dynamic inline color) */
+.settings-aurora .sa-vpn-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--sa-text-mute);
+}
+.settings-aurora .sa-vpn-dot[data-status="connected"]    { background: var(--sa-green); box-shadow: 0 0 8px var(--sa-green); }
+.settings-aurora .sa-vpn-dot[data-status="connecting"]   { background: var(--sa-yellow); animation: saVpnPulse 1.4s ease-in-out infinite; }
+.settings-aurora .sa-vpn-dot[data-status="disconnected"] { background: var(--sa-text-mute); }
+.settings-aurora .sa-vpn-dot[data-status="error"]        { background: var(--sa-red); box-shadow: 0 0 8px var(--sa-red); }
+.settings-aurora .sa-vpn-label[data-status="connected"]    { color: var(--sa-green); }
+.settings-aurora .sa-vpn-label[data-status="connecting"]   { color: var(--sa-yellow); }
+.settings-aurora .sa-vpn-label[data-status="disconnected"] { color: var(--sa-text-mute); }
+.settings-aurora .sa-vpn-label[data-status="error"]        { color: var(--sa-red); }
+@keyframes saVpnPulse { 50% { opacity: .4; } }
+
+

@@ -38,43 +38,53 @@
     </header>
 
     <main class="page-content">
-      <div class="settings-compact-bar">
+      <div class="settings-aurora">
         <!-- Page header -->
-        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:16px 16px 0;">
-          <h1 style="font-family:var(--font-title);font-size:18px;font-weight:600;">Einstellungen</h1>
-          <small id="configMeta" style="font-size:11px;color:rgba(232,234,240,0.25);font-family:var(--font-mono);">-</small>
+        <div class="sa-page-header">
+          <div>
+            <div class="sa-page-kicker">Einstellungen</div>
+            <h1>System &middot; Konfiguration</h1>
+            <p class="sa-page-sub">Anlage, Steuerung, Preise, Systemstatus und ML &mdash; alles in einer Ansicht.</p>
+            <small id="configMeta" class="sa-meta">-</small>
+          </div>
+          <div class="sa-header-actions">
+            <button id="saveAllHeaderBtn" class="btn btn-primary btn-small" type="button">Speichern &middot; &#8984;S</button>
+          </div>
         </div>
 
-        <!-- Tabs -->
-        <div class="settings-tabs">
-          <button class="settings-tab is-active" data-tab="connection">Anlage</button>
-          <button class="settings-tab" data-tab="control">Steuerung</button>
-          <button class="settings-tab" data-tab="services">Preise</button>
-          <button class="settings-tab" data-tab="system">System</button>
-          <button class="settings-tab" data-tab="ml">ML &amp; AI</button>
-        </div>
-      </div>
+        <div class="sa-shell">
+          <!-- Linke Sektions-Navigation -->
+          <nav class="settings-tabs" aria-label="Einstellungs-Sektionen">
+            <div class="sa-nav-group">Konfiguration</div>
+            <button class="settings-tab is-active" data-tab="connection"><span class="sa-ico">&#9881;</span>Anlage</button>
+            <button class="settings-tab" data-tab="control"><span class="sa-ico">&#9889;</span>Steuerung</button>
+            <button class="settings-tab" data-tab="services"><span class="sa-ico">&euro;</span>Preise</button>
 
-      <!-- Tab panels -->
-      <div style="padding:12px 16px 80px;max-width:2400px;margin:0 auto;box-sizing:border-box;">
-        <div id="settingsBanner" class="config-banner warn">Konfiguration wird geladen...</div>
+            <div class="sa-nav-group">System</div>
+            <button class="settings-tab" data-tab="system"><span class="sa-ico">&#9670;</span>Status</button>
+            <button class="settings-tab" data-tab="ml"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
+          </nav>
 
-        <div id="tab-connection" class="settings-tab-panel">
-          <div id="connectionBanner" class="config-banner" style="display:none;"></div>
-          <div id="connectionGrid" class="config-grid"></div>
-        </div>
-        <div id="tab-control" class="settings-tab-panel" hidden>
-          <div id="controlGrid" class="config-grid"></div>
-        </div>
-        <div id="tab-services" class="settings-tab-panel" hidden>
-          <div id="servicesGrid" class="config-grid"></div>
-        </div>
-        <div id="tab-system" class="settings-tab-panel" hidden>
+          <!-- Rechts: Sektionen -->
+          <div class="sa-body">
+            <div id="settingsBanner" class="config-banner warn">Konfiguration wird geladen...</div>
+
+            <div id="tab-connection" class="settings-tab-panel">
+              <div id="connectionBanner" class="config-banner" style="display:none;"></div>
+              <div id="connectionGrid" class="config-grid"></div>
+            </div>
+            <div id="tab-control" class="settings-tab-panel" hidden>
+              <div id="controlGrid" class="config-grid"></div>
+            </div>
+            <div id="tab-services" class="settings-tab-panel" hidden>
+              <div id="servicesGrid" class="config-grid"></div>
+            </div>
+            <div id="tab-system" class="settings-tab-panel" hidden>
           <div class="config-grid">
 
             <!-- Systemstatus -->
             <div class="config-group" data-accent="green">
-              <div class="config-group-kicker" style="color:var(--flow-green);">Systemstatus</div>
+              <div class="config-group-kicker">Systemstatus</div>
               <div id="healthBanner" class="config-banner info">Health-Status wird geladen...</div>
               <div id="healthChecks" class="config-row-grid" style="margin-top:6px;"></div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="serviceMeta">-</p>
@@ -85,7 +95,7 @@
 
             <!-- Software Update -->
             <div class="config-group" data-accent="blue">
-              <div class="config-group-kicker" style="color:var(--flow-blue);">Software</div>
+              <div class="config-group-kicker">Software</div>
               <div class="config-row">
                 <span class="config-row-label">Update-Kanal</span>
                 <select id="updateChannel" class="config-select">
@@ -106,7 +116,7 @@
 
             <!-- System Updates (OS) -->
             <div class="config-group" data-accent="orange">
-              <div class="config-group-kicker" style="color:var(--flow-orange);">Betriebssystem</div>
+              <div class="config-group-kicker">Betriebssystem</div>
               <div id="systemInfoBanner" class="config-banner info">Systeminfo wird geladen...</div>
               <div id="systemUpdatesBanner" class="config-banner info" style="display:none;margin:6px 14px 0;"></div>
               <div id="systemUpdatesList" style="display:none;margin:6px 14px 0;max-height:200px;overflow-y:auto;font-size:0.72rem;"></div>
@@ -121,7 +131,7 @@
 
             <!-- Dienst -->
             <div class="config-group" data-accent="green">
-              <div class="config-group-kicker" style="color:var(--flow-green);">Dienst</div>
+              <div class="config-group-kicker">Dienst</div>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <button id="restartServiceBtn" class="btn btn-ghost btn-small" type="button">DVhub neu starten</button>
                 <button id="rebootSystemBtn" class="btn btn-danger btn-small" type="button">System neu starten</button>
@@ -131,7 +141,7 @@
 
             <!-- Config Import / Export -->
             <div class="config-group" data-accent="cyan">
-              <div class="config-group-kicker" style="color:var(--flow-cyan);">Config</div>
+              <div class="config-group-kicker">Config</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Konfiguration sichern, pr&uuml;fen oder aus einer vorbereiteten Datei wieder einspielen.</p>
               <div id="importBanner" class="config-banner info" style="margin:8px 14px 0;">Noch kein Import oder Export ausgef&uuml;hrt.</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;" id="importMeta">Export l&auml;dt die aktuelle wirksame Config. Import nutzt dieselbe Server-Validierung wie die Einstellungen.</p>
@@ -144,7 +154,7 @@
 
             <!-- Historie -->
             <div class="config-group" data-accent="yellow">
-              <div class="config-group-kicker" style="color:var(--flow-yellow);">Historie</div>
+              <div class="config-group-kicker">Historie</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Historische Nachimporte bleiben absichtlich in der Wartung, damit die Einstellungen ruhig und platzsparend bleibt.</p>
               <div id="historyBanner" class="config-banner info" style="margin:8px 14px 0;">VRM-Status wird geladen...</div>
               <div class="config-row">
@@ -202,7 +212,7 @@
 
             <!-- API Dokumentation -->
             <div class="config-group" data-accent="purple">
-              <div class="config-group-kicker" style="color:var(--flow-purple);">API</div>
+              <div class="config-group-kicker">API</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Interaktive API-Dokumentation mit Swagger UI. Alle Endpoints testen und Daten inspizieren.</p>
               <div class="config-row">
                 <span class="config-row-label">Swagger UI</span>
@@ -220,7 +230,7 @@
 
             <!-- Diagnose -->
             <div class="config-group" data-accent="orange">
-              <div class="config-group-kicker" style="color:var(--flow-orange);">Diagnose</div>
+              <div class="config-group-kicker">Diagnose</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Registerscan und Zeitplan-JSON bleiben erhalten, sind aber klar als Diagnosewerkzeuge markiert.</p>
               <div class="config-row">
                 <span class="config-row-label">Scan</span>
@@ -234,7 +244,7 @@
 
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
-              <div class="config-group-kicker" style="color:var(--flow-yellow);">DV-Signale</div>
+              <div class="config-group-kicker">DV-Signale</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Alle Schalt- und Steuersignale des Direktvermarkters. Zeigt Abregelungen, Freigaben, Lease-Events und Modbus-Writes.</p>
               <div class="config-row">
                 <span class="config-row-label">Quelle</span>
@@ -272,7 +282,7 @@
 
             <!-- Modbus-Scan -->
             <div class="config-group" data-accent="orange">
-              <div class="config-group-kicker" style="color:var(--flow-orange);">Modbus</div>
+              <div class="config-group-kicker">Modbus</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Direktscan von Registerbereichen f&uuml;r schnelle Diagnose und Mapping.</p>
               <div class="config-row-grid" style="padding:8px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
                 <label style="font-size:0.72rem;">Unit <input id="scanUnit" type="number" value="0" class="config-input" style="width:60px;margin-left:4px;" /></label>
@@ -300,7 +310,7 @@
 
             <!-- Schedule / Control -->
             <div class="config-group" data-accent="blue" style="grid-column:1/-1;">
-              <div class="config-group-kicker" style="color:var(--flow-blue);">Zeitplan</div>
+              <div class="config-group-kicker">Zeitplan</div>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Regeln laden, pr&uuml;fen und als JSON gezielt anpassen.</p>
               <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">JSON-Format: <code>{ "rules": [ ... ] }</code></p>
               <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -321,7 +331,7 @@
 
             <!-- Modell-Status -->
             <div class="config-group" data-accent="purple">
-              <div class="config-group-kicker" style="color:var(--flow-purple);">Modell-Status</div>
+              <div class="config-group-kicker">Modell-Status</div>
               <div class="panel-stats">
                 <div class="stat-card">
                   <div class="stat-label">Aktives Modell</div>
@@ -341,7 +351,7 @@
 
             <!-- Genauigkeits-Trend -->
             <div class="config-group" data-accent="yellow">
-              <div class="config-group-kicker" style="color:var(--flow-yellow);">Genauigkeits-Trend</div>
+              <div class="config-group-kicker">Genauigkeits-Trend</div>
               <div class="stat-card" style="padding:16px;">
                 <div class="stat-label">MAE (Letzte 30 Tage)</div>
                 <div style="position:relative;height:80px;">
@@ -356,7 +366,7 @@
 
             <!-- Tier-Features -->
             <div class="config-group" data-accent="blue">
-              <div class="config-group-kicker" style="color:var(--flow-blue);">Tier-Features</div>
+              <div class="config-group-kicker">Tier-Features</div>
               <div class="panel-details" id="mlTierFeatures">
                 <!-- Rendered by settings.js -->
               </div>
@@ -364,7 +374,7 @@
 
             <!-- Training-Log -->
             <div class="config-group" data-accent="green">
-              <div class="config-group-kicker" style="color:var(--flow-green);">Training-Log</div>
+              <div class="config-group-kicker">Training-Log</div>
               <div class="panel-details" id="mlTrainingLog">
                 <!-- Last 5 training runs rendered by settings.js -->
               </div>
@@ -372,7 +382,7 @@
 
             <!-- LLM Status (Tier 3 only) -->
             <div class="config-group" data-accent="cyan" id="mlLlmGroup" hidden>
-              <div class="config-group-kicker" style="color:var(--flow-cyan);">LLM Modell</div>
+              <div class="config-group-kicker">LLM Modell</div>
               <div class="config-row">
                 <label for="llmModelSelect" class="config-label">Aktives Modell</label>
                 <select id="llmModelSelect" class="form-control" style="max-width:320px;">
@@ -397,7 +407,11 @@
 
           </div><!-- /.config-grid -->
         </div><!-- /#tab-ml -->
-      </div>
+          </div><!-- /.sa-body -->
+        </div><!-- /.sa-shell -->
+
+        <div class="sa-toast" id="settingsAuroraToast" role="status" aria-live="polite">—</div>
+      </div><!-- /.settings-aurora -->
 
       <!-- Sticky save bar -->
       <div class="config-save-bar">

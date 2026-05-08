@@ -48,7 +48,7 @@ function createConfigGroup(label, accent) {
   if (accent) group.dataset.accent = accent;
   const kicker = document.createElement('div');
   kicker.className = 'config-group-kicker';
-  kicker.style.color = `var(--flow-${accent || 'green'})`;
+  // Kicker color comes from CSS [data-accent] rules — keeps design language in styles.css
   kicker.textContent = label;
   group.appendChild(kicker);
   return group;
@@ -136,9 +136,7 @@ function createConfigInput(field, value, inherited) {
         input.placeholder = String(inherited);
       }
     }
-    const valStr = String(input.value || input.placeholder || '');
-    const charW = field.type === 'number' ? 10 : 8;
-    input.style.width = `${Math.max(field.type === 'number' ? 80 : 120, valStr.length * charW + 30)}px`;
+    // Width is governed by CSS (.settings-aurora .config-input) — keeps the look uniform.
   }
   input.id = fieldId(field.path);
   input.dataset.path = field.path;
@@ -146,7 +144,6 @@ function createConfigInput(field, value, inherited) {
   if (field.readOnly) {
     input.readOnly = true;
     input.disabled = true;
-    input.style.opacity = '0.6';
     input.title = field.help || 'Dieses Feld wird automatisch uebernommen';
   }
   return input;
@@ -154,6 +151,27 @@ function createConfigInput(field, value, inherited) {
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+let _settingsToastTimer = null;
+function showSettingsToast(msg) {
+  if (typeof document === 'undefined') return;
+  const t = document.getElementById('settingsAuroraToast');
+  if (!t) return;
+  t.textContent = String(msg || '');
+  t.classList.add('show');
+  if (_settingsToastTimer) clearTimeout(_settingsToastTimer);
+  _settingsToastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+// Sets a status class on an element (replaces inline el.style.color = 'var(--ok|err|warn)').
+// Status values: 'ok', 'err', 'warn', or '' to clear.
+function setStatusClass(el, status) {
+  if (!el) return;
+  el.classList.remove('sa-text-ok', 'sa-text-err', 'sa-text-warn');
+  if (status === 'ok') el.classList.add('sa-text-ok');
+  else if (status === 'err') el.classList.add('sa-text-err');
+  else if (status === 'warn') el.classList.add('sa-text-warn');
 }
 
 function getSettingsSectionFields(definitionLike, sectionId) {
@@ -492,7 +510,7 @@ function validatePvPlants(plants = []) {
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
-    <div class="config-group-kicker" style="color:var(--flow-purple);padding-top:10px;">Marktprämie</div>
+    <div class="config-group-kicker" data-accent="purple">Marktprämie</div>
     ${validationHtml}
     <div class="config-row-grid">
       <div class="config-row">
@@ -507,21 +525,21 @@ function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [
         <strong class="config-row-value">${plants.length} konfiguriert</strong>
       </div>
     </div>
-    <div style="padding:8px 14px;">
+    <div class="sa-pad">
       <button id="addPvPlantBtn" class="btn btn-ghost btn-small" type="button">+ PV-Anlage</button>
     </div>
     ${plants.map((plant) => `
-      <div class="config-row-grid" data-pv-plant-id="${escapeHtml(plant.id)}" style="border-top:1px solid rgba(255,255,255,0.06);">
+      <div class="config-row-grid sa-divider-top" data-pv-plant-id="${escapeHtml(plant.id)}">
         <div class="config-row">
           <span class="config-row-label">Leistung (kWp)</span>
-          <input class="config-input" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${escapeHtml(plant.kwp ?? '')}" style="width:80px;" />
+          <input class="config-input sa-w-num" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="kwp" type="number" step="0.01" min="0" value="${escapeHtml(plant.kwp ?? '')}" />
         </div>
         <div class="config-row">
           <span class="config-row-label">Inbetriebnahme</span>
-          <input class="config-input" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="commissionedAt" type="date" value="${escapeHtml(plant.commissionedAt || '')}" style="width:140px;" />
+          <input class="config-input sa-w-date" data-pv-plant-id="${escapeHtml(plant.id)}" data-pv-plant-path="commissionedAt" type="date" value="${escapeHtml(plant.commissionedAt || '')}" />
         </div>
       </div>
-      <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${escapeHtml(plant.id)}">Entfernen</button></div>
+      <div class="sa-pad-tight"><button class="btn btn-danger btn-small" type="button" data-remove-pv-plant="${escapeHtml(plant.id)}">Entfernen</button></div>
     `).join('')}
   `;
 }
@@ -604,8 +622,7 @@ function showSettingsRestartButton() {
   if (el.querySelector('#settingsRestartBtn')) return;
   const btn = document.createElement('button');
   btn.id = 'settingsRestartBtn';
-  btn.className = 'btn btn-danger btn-small';
-  btn.style.cssText = 'margin-left:12px;vertical-align:middle;';
+  btn.className = 'btn btn-danger btn-small sa-restart-btn';
   btn.textContent = 'Jetzt neu starten';
   btn.addEventListener('click', async () => {
     btn.disabled = true;
@@ -833,7 +850,7 @@ function openLocationPicker(locationBasePath) {
         <strong>Standort auf Karte w\u00e4hlen</strong>
         <button type="button" class="btn btn-ghost location-picker-close">\u2715</button>
       </div>
-      <div id="location-picker-map" style="width:100%;height:400px;"></div>
+      <div id="location-picker-map"></div>
       <div class="location-picker-footer">
         <span id="location-picker-coords">${currentLat.toFixed(6)}, ${currentLon.toFixed(6)}</span>
         <button type="button" class="btn btn-primary" id="location-picker-apply">\u00dcbernehmen</button>
@@ -988,8 +1005,7 @@ function createSummaryCard(title, text) {
  */
 function renderForecastTierInfo() {
   const tierDiv = document.createElement('div');
-  tierDiv.className = 'config-row-grid';
-  tierDiv.style.cssText = 'margin:4px 0 8px;';
+  tierDiv.className = 'config-row-grid sa-mt-loose';
 
   const tierLabel = forecastTierCache
     ? `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`
@@ -1043,24 +1059,23 @@ function renderForecastStringEditor() {
 
   const kicker = document.createElement('div');
   kicker.className = 'config-group-kicker';
-  kicker.style.color = 'var(--flow-green)';
   kicker.textContent = 'PV-Strings (Detailliert)';
   section.appendChild(kicker);
 
   const desc = document.createElement('p');
-  desc.style.cssText = 'padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;';
+  desc.className = 'sa-help';
   desc.textContent = 'Jede Dachflaeche mit eigener Ausrichtung als separaten String anlegen. Beispiel: Sued-Dach 15 kWp + Ost-Garage 5 kWp.';
   section.appendChild(desc);
 
   // Column headers
   const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;padding:4px 14px;font-size:11px;color:rgba(232,234,240,0.4);';
-  headerRow.innerHTML = '<span>Bezeichnung</span><span style="text-align:right">kWp</span><span style="text-align:right">Neigung°</span><span style="text-align:right">Richtung°</span><span></span>';
+  headerRow.className = 'sa-grid-strings sa-grid-strings-header';
+  headerRow.innerHTML = '<span>Bezeichnung</span><span class="sa-text-right">kWp</span><span class="sa-text-right">Neigung°</span><span class="sa-text-right">Richtung°</span><span></span>';
   section.appendChild(headerRow);
 
   const list = document.createElement('div');
   list.id = 'forecastStringsList';
-  list.style.cssText = 'padding:4px 14px;';
+  list.className = 'sa-pad-list';
 
   for (let i = 0; i < forecastStringsDraft.length; i++) {
     list.appendChild(renderStringRow(i));
@@ -1068,7 +1083,7 @@ function renderForecastStringEditor() {
   section.appendChild(list);
 
   const addRow = document.createElement('div');
-  addRow.style.cssText = 'padding:8px 14px;';
+  addRow.className = 'sa-pad';
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'btn btn-ghost btn-small';
@@ -1093,7 +1108,7 @@ function renderForecastStringEditor() {
 function renderStringRow(index) {
   const s = forecastStringsDraft[index];
   const row = document.createElement('div');
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 80px 80px 80px auto;gap:8px;align-items:center;margin-bottom:6px;';
+  row.className = 'sa-grid-strings-row';
 
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
@@ -1158,8 +1173,7 @@ function renderStringRow(index) {
 
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
-  removeBtn.className = 'btn btn-ghost btn-small';
-  removeBtn.style.color = 'var(--err)';
+  removeBtn.className = 'btn btn-ghost btn-small sa-remove-btn';
   removeBtn.textContent = 'X';
   removeBtn.addEventListener('click', () => {
     forecastStringsDraft.splice(index, 1);
@@ -1222,7 +1236,7 @@ function renderDestinationGrid(destinationId) {
       rowContainer.appendChild(createConfigRow(field.label, input, { help: field.help }));
       if (model.discovery.visible) {
         const discoveryRow = document.createElement('div');
-        discoveryRow.style.cssText = 'padding:4px 14px 8px;display:flex;gap:8px;align-items:center;';
+        discoveryRow.className = 'sa-discovery-row';
         const discBtn = document.createElement('button');
         discBtn.type = 'button';
         discBtn.className = 'btn btn-ghost btn-small';
@@ -1251,7 +1265,7 @@ function renderDestinationGrid(destinationId) {
     if (locationField) {
       const basePath = locationField.path.replace('.latitude', '');
       const mapRow = document.createElement('div');
-      mapRow.style.cssText = 'padding:4px 14px 12px;';
+      mapRow.className = 'sa-map-row';
       const mapBtn = document.createElement('button');
       mapBtn.type = 'button';
       mapBtn.className = 'btn btn-ghost btn-small';
@@ -1292,9 +1306,9 @@ function renderDestinationGrid(destinationId) {
     mount.appendChild(renderVpnUploadPanel());
   }
 
-  // If only one card in the grid, span full width
+  // If only one card in the grid, span full width via existing class
   if (mount.children.length === 1) {
-    mount.children[0].style.gridColumn = '1 / -1';
+    mount.children[0].classList.add('config-group--full');
   }
 }
 
@@ -1308,7 +1322,6 @@ function buildHistoryImportSummary(status) {
 function renderHistoryImportPanel(destinationId) {
   const panel = document.createElement('section');
   panel.className = 'config-group config-group--full';
-  panel.style.gridColumn = '1 / -1';
   panel.dataset.accent = 'yellow';
 
   const actionState = buildHistoryImportActionState({
@@ -1324,8 +1337,8 @@ function renderHistoryImportPanel(destinationId) {
   });
 
   panel.innerHTML = `
-    <div class="config-group-kicker" style="color:var(--flow-yellow);">VRM Backfill</div>
-    <div class="config-banner ${currentHistoryImportStatus?.ready ? 'ok' : 'warn'}" style="margin:4px 14px;">
+    <div class="config-group-kicker" data-accent="yellow">VRM Backfill</div>
+    <div class="config-banner sa-banner-inline ${currentHistoryImportStatus?.ready ? 'ok' : 'warn'}">
       ${buildHistoryImportSummary(currentHistoryImportStatus)}
     </div>
     <div class="config-row-grid">
@@ -1341,18 +1354,18 @@ function renderHistoryImportPanel(destinationId) {
     <div class="config-row-grid">
       <div class="config-row">
         <span class="config-row-label">Von</span>
-        <input id="historyImportStart" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.start || ''}" />
+        <input id="historyImportStart" type="datetime-local" class="config-input sa-w-datetime" value="${historyImportFormState.start || ''}" />
       </div>
       <div class="config-row">
         <span class="config-row-label">Bis</span>
-        <input id="historyImportEnd" type="datetime-local" class="config-input" style="width:180px;" value="${historyImportFormState.end || ''}" />
+        <input id="historyImportEnd" type="datetime-local" class="config-input sa-w-datetime" value="${historyImportFormState.end || ''}" />
       </div>
     </div>
     <div class="config-row">
       <span class="config-row-label">Intervall</span>
       <strong class="config-row-value">15 Minuten</strong>
     </div>
-    <div style="padding:8px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <div class="sa-actions">
       <button id="historyImportBtn" type="button" class="btn btn-primary btn-small" ${actionState.disabled ? 'disabled' : ''}>
         ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Historie importieren'}
       </button>
@@ -1360,10 +1373,10 @@ function renderHistoryImportPanel(destinationId) {
         ${historyImportBusy ? 'VRM-Job läuft...' : 'VRM-Backfill starten'}
       </button>
     </div>
-    <p style="padding:2px 14px 4px;font-size:11px;color:rgba(232,234,240,0.35);margin:0;">
+    <p class="sa-help-tight">
       ${actionState.reason || backfillState.reason || 'Importiert einen expliziten Zeitraum oder startet einen automatischen VRM-Backfill.'}
     </p>
-    <div id="historyImportResult" class="config-banner ${currentHistoryImportResult?.ok ? 'ok' : currentHistoryImportResult?.error ? 'error' : 'info'}" style="margin:4px 14px 8px;">
+    <div id="historyImportResult" class="config-banner sa-banner-inline-bottom ${currentHistoryImportResult?.ok ? 'ok' : currentHistoryImportResult?.error ? 'error' : 'info'}">
       ${formatHistoryImportResult(currentHistoryImportResult)}
     </div>
   `;
@@ -1400,7 +1413,6 @@ function updatePvPlantField(plantId, path, value) {
 function renderPvPlantsEditor() {
   const section = document.createElement('section');
   section.className = 'config-group config-group--full';
-  section.style.gridColumn = '1 / -1';
   section.dataset.accent = 'purple';
   const validation = pvPlantsValidation.length
     ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
@@ -1445,9 +1457,9 @@ function renderEpexPriceSourceInfo() {
   section.className = 'config-group';
   section.dataset.accent = 'green';
   section.innerHTML = `
-    <div class="config-group-kicker" style="color:var(--flow-green);">Preisquelle</div>
-    <p style="padding:4px 14px;font-size:12px;color:rgba(232,234,240,0.4);margin:0;">Day-Ahead Börsenstrompreise von <strong>api.dvhub.de</strong> (EPEX SPOT).</p>
-    <div id="epexBacklogInfo" class="config-banner info" style="margin:6px 14px;">
+    <div class="config-group-kicker" data-accent="green">Preisquelle</div>
+    <p class="sa-help">Day-Ahead Börsenstrompreise von <strong>api.dvhub.de</strong> (EPEX SPOT).</p>
+    <div id="epexBacklogInfo" class="config-banner info sa-banner-inline-loose">
       Lade Preis-Backlog...
     </div>
   `;
@@ -1477,7 +1489,7 @@ function renderEpexPriceSourceInfo() {
         <strong>Letztes Update:</strong> ${escapeHtml(updatedAt)} &nbsp;|&nbsp;
         <strong>Heute:</strong> ${escapeHtml(datapoints)} Slots (${escapeHtml(hoursAvailable)}h)
         ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${escapeHtml(backlogRange)}` : ''}
-        <br><small style="opacity:0.7">Quelle: api.dvhub.de → EPEX SPOT Day-Ahead Auktion</small>
+        <br><small class="sa-text-mute">Quelle: api.dvhub.de → EPEX SPOT Day-Ahead Auktion</small>
       `;
     }).catch(() => {
       const el = document.getElementById('epexBacklogInfo');
@@ -1490,28 +1502,27 @@ function renderEpexPriceSourceInfo() {
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
   section.className = 'config-group config-group--full';
-  section.style.gridColumn = '1 / -1';
   section.dataset.accent = 'yellow';
   const validation = pricingPeriodsValidation.length
     ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
     : '';
 
   section.innerHTML = `
-    <div class="config-group-kicker" style="color:var(--flow-yellow);">Bezugspreise nach Zeitraum</div>
+    <div class="config-group-kicker" data-accent="yellow">Bezugspreise nach Zeitraum</div>
     <div class="config-row">
       <span class="config-row-label">Tarifzeiträume</span>
       <strong class="config-row-value">${pricingPeriodsDraft.length} definiert</strong>
     </div>
     ${validation}
-    <div style="padding:8px 14px;">
+    <div class="sa-pad">
       <button id="addPricingPeriodBtn" class="btn btn-ghost btn-small" type="button">+ Zeitraum</button>
     </div>
     ${pricingPeriodsDraft.map((period) => `
-      <div style="border-top:1px solid rgba(255,255,255,0.06);padding:4px 0;">
+      <div class="sa-divider-top">
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Bezeichnung</span>
-            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" style="width:120px;" />
+            <input class="config-input sa-w-label" data-period-id="${escapeHtml(period.id)}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Modus</span>
@@ -1524,43 +1535,43 @@ function renderPricingPeriodsEditor() {
         <div class="config-row-grid">
           <div class="config-row">
             <span class="config-row-label">Start</span>
-            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="startDate" type="date" value="${escapeHtml(period.startDate || '')}" style="width:140px;" />
+            <input class="config-input sa-w-date" data-period-id="${escapeHtml(period.id)}" data-period-path="startDate" type="date" value="${escapeHtml(period.startDate || '')}" />
           </div>
           <div class="config-row">
             <span class="config-row-label">Ende</span>
-            <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="endDate" type="date" value="${escapeHtml(period.endDate || '')}" style="width:140px;" />
+            <input class="config-input sa-w-date" data-period-id="${escapeHtml(period.id)}" data-period-path="endDate" type="date" value="${escapeHtml(period.endDate || '')}" />
           </div>
         </div>
         ${period.mode === 'fixed' ? `
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Bruttopreis (ct/kWh)</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(period.fixedGrossImportCtKwh ?? '')}" style="width:80px;" />
+              <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(period.fixedGrossImportCtKwh ?? '')}" />
             </div>
           </div>
         ` : `
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Energie-Aufschlag</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.energyMarkupCtKwh ?? '')}" style="width:80px;" />
+              <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.energyMarkupCtKwh ?? '')}" />
             </div>
             <div class="config-row">
               <span class="config-row-label">Netzentgelte</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.gridChargesCtKwh ?? '')}" style="width:80px;" />
+              <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.gridChargesCtKwh ?? '')}" />
             </div>
           </div>
           <div class="config-row-grid">
             <div class="config-row">
               <span class="config-row-label">Umlagen &amp; Abgaben</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.leviesAndFeesCtKwh ?? '')}" style="width:80px;" />
+              <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.leviesAndFeesCtKwh ?? '')}" />
             </div>
             <div class="config-row">
               <span class="config-row-label">MwSt (%)</span>
-              <input class="config-input" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.vatPct ?? '')}" style="width:80px;" />
+              <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.vatPct ?? '')}" />
             </div>
           </div>
         `}
-        <div style="padding:2px 14px 8px;"><button class="btn btn-danger btn-small" type="button" data-remove-period="${escapeHtml(period.id)}">Entfernen</button></div>
+        <div class="sa-pad-tight"><button class="btn btn-danger btn-small" type="button" data-remove-period="${escapeHtml(period.id)}">Entfernen</button></div>
       </div>
     `).join('')}
   `;
@@ -1995,18 +2006,18 @@ async function checkSystemUpdates() {
     const data = await r.json();
     if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
     if (data.totalCount === 0) {
-      banner.innerHTML = '<span style="color:var(--ok);">System ist aktuell — keine Updates verfügbar.</span>';
+      banner.innerHTML = '<span class="sa-text-ok">System ist aktuell — keine Updates verfügbar.</span>';
       if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
       return;
     }
     const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheits-Updates)` : '';
-    banner.innerHTML = `<strong style="color:var(--c-amber-600);">${data.totalCount} Updates verfügbar${secNote}</strong>`;
+    banner.innerHTML = `<strong class="sa-text-warn">${data.totalCount} Updates verfügbar${secNote}</strong>`;
     if (list && data.packages.length > 0) {
       list.style.display = '';
-      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;">';
-      html += '<tr style="opacity:0.6;"><td style="padding:2px 6px;">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
+      let html = '<table class="sa-pkg-table">';
+      html += '<tr class="sa-pkg-table-head"><td>Paket</td><td>Aktuell</td><td>Neu</td></tr>';
       for (const p of data.packages) {
-        html += `<tr><td style="padding:2px 6px;font-family:monospace;">${escapeHtml(p.name)}</td><td style="opacity:0.6;">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
+        html += `<tr><td class="sa-pkg-table-cell">${escapeHtml(p.name)}</td><td class="sa-pkg-table-cell--old">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
       }
       html += '</table>';
       list.innerHTML = html;
@@ -2024,20 +2035,20 @@ async function applySystemUpdates() {
   const btn = document.getElementById('applySystemUpdatesBtn');
   if (!banner) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Updates werden installiert...'; }
-  banner.innerHTML = '<span style="color:var(--c-amber-600);">Updates werden installiert — das kann einige Minuten dauern...</span>';
+  banner.innerHTML = '<span class="sa-text-warn">Updates werden installiert — das kann einige Minuten dauern...</span>';
   try {
     const r = await apiFetch('/api/admin/system/updates/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
     const data = await r.json();
     if (data.ok) {
-      banner.innerHTML = `<span style="color:var(--ok);">${data.upgraded} Pakete aktualisiert.</span>`;
+      banner.innerHTML = `<span class="sa-text-ok">${data.upgraded} Pakete aktualisiert.</span>`;
       if (actions) actions.style.display = 'none';
       const list = document.getElementById('systemUpdatesList');
       if (list) list.style.display = 'none';
     } else {
-      banner.innerHTML = `<span style="color:var(--err);">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
+      banner.innerHTML = `<span class="sa-text-err">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
     }
   } catch (e) {
-    banner.innerHTML = `<span style="color:var(--err);">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
+    banner.innerHTML = `<span class="sa-text-err">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Alle Updates installieren'; }
   }
@@ -2064,31 +2075,30 @@ function renderVpnUploadPanel() {
   const kicker = document.createElement('div');
   kicker.className = 'config-group-kicker';
   kicker.textContent = 'VPN-Profil hochladen';
-  kicker.style.color = 'var(--node-vpn, #7F77DD)';
   panel.appendChild(kicker);
 
   const desc = document.createElement('p');
-  desc.style.cssText = 'font-size:0.78rem;opacity:0.7;padding:0 14px 8px;margin:0;';
+  desc.className = 'sa-help-vpn';
   desc.textContent = '.ovpn- oder WireGuard .conf-Datei hochladen. Bei OpenVPN optional separate Zertifikate. Private Keys werden sicher gespeichert und nie per API zurückgegeben.';
   panel.appendChild(desc);
 
   const form = document.createElement('div');
-  form.style.cssText = 'padding:0 14px 14px;';
+  form.className = 'sa-pad-form';
   form.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <label style="font-size:0.78rem;font-weight:600;">VPN-Konfiguration (.ovpn / .conf)</label>
-      <input type="file" id="vpnOvpnFile" accept=".ovpn,.conf" style="font-size:0.78rem;">
-      <label style="font-size:0.78rem;font-weight:600;margin-top:4px;">Optionale Dateien</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div><span style="font-size:0.7rem;opacity:0.6;">ca.crt</span><input type="file" id="vpnCaFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">client.crt</span><input type="file" id="vpnCertFile" accept=".crt,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">client.key</span><input type="file" id="vpnKeyFile" accept=".key,.pem" style="font-size:0.7rem;width:100%;"></div>
-        <div><span style="font-size:0.7rem;opacity:0.6;">ta.key / ipsec.secrets</span><input type="file" id="vpnTaFile" accept=".key,.pem,.secrets" style="font-size:0.7rem;width:100%;"></div>
+    <div class="sa-vpn-form">
+      <label class="sa-vpn-label">VPN-Konfiguration (.ovpn / .conf)</label>
+      <input type="file" id="vpnOvpnFile" accept=".ovpn,.conf" class="sa-file-input">
+      <label class="sa-vpn-label sa-mt-tight">Optionale Dateien</label>
+      <div class="sa-vpn-file-grid">
+        <div class="sa-file-input-cell"><span>ca.crt</span><input type="file" id="vpnCaFile" accept=".crt,.pem"></div>
+        <div class="sa-file-input-cell"><span>client.crt</span><input type="file" id="vpnCertFile" accept=".crt,.pem"></div>
+        <div class="sa-file-input-cell"><span>client.key</span><input type="file" id="vpnKeyFile" accept=".key,.pem"></div>
+        <div class="sa-file-input-cell"><span>ta.key / ipsec.secrets</span><input type="file" id="vpnTaFile" accept=".key,.pem,.secrets"></div>
       </div>
-      <button id="vpnUploadBtn" type="button" class="btn btn-small" style="margin-top:6px;background:var(--node-vpn,#7F77DD);color:#fff;align-self:flex-start;">
+      <button id="vpnUploadBtn" type="button" class="btn btn-small sa-btn-vpn sa-self-start">
         Hochladen
       </button>
-      <div id="vpnUploadResult" style="font-size:0.75rem;min-height:1.2em;"></div>
+      <div id="vpnUploadResult" class="sa-action-result"></div>
     </div>
   `;
   panel.appendChild(form);
@@ -2096,34 +2106,34 @@ function renderVpnUploadPanel() {
   // VPN status summary
   const statusDiv = document.createElement('div');
   statusDiv.id = 'vpnSettingsStatus';
-  statusDiv.style.cssText = 'padding:0 14px 14px;font-size:0.78rem;';
+  statusDiv.className = 'sa-pad-status';
   panel.appendChild(statusDiv);
 
   // VPN action buttons
   const actionsDiv = document.createElement('div');
-  actionsDiv.style.cssText = 'padding:0 14px 10px;display:flex;gap:8px;align-items:center;';
+  actionsDiv.className = 'sa-pad-actions';
   actionsDiv.innerHTML = `
-    <button id="vpnSettingsStart" class="btn btn-small" style="background:var(--node-vpn,#7F77DD);color:#fff;">Verbinden</button>
-    <button id="vpnSettingsStop" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Trennen</button>
-    <button id="vpnSettingsRestart" class="btn btn-small btn-ghost" style="border-color:var(--node-vpn,#7F77DD);color:var(--node-vpn,#7F77DD);">Reconnect</button>
-    <span id="vpnSettingsActionResult" style="font-size:0.72rem;margin-left:6px;"></span>
+    <button id="vpnSettingsStart" class="btn btn-small sa-btn-vpn">Verbinden</button>
+    <button id="vpnSettingsStop" class="btn btn-small btn-ghost sa-btn-vpn-ghost">Trennen</button>
+    <button id="vpnSettingsRestart" class="btn btn-small btn-ghost sa-btn-vpn-ghost">Reconnect</button>
+    <span id="vpnSettingsActionResult" class="sa-action-result-inline"></span>
   `;
   panel.appendChild(actionsDiv);
 
   async function vpnSettingsAction(action, btn) {
     const resultEl = document.getElementById('vpnSettingsActionResult');
     btn.disabled = true;
-    if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = ''; }
+    if (resultEl) { resultEl.textContent = '...'; setStatusClass(resultEl, ''); }
     try {
       const r = await apiFetch('/api/vpn/' + action, { method: 'POST' });
       const out = await r.json();
       if (resultEl) {
         resultEl.textContent = out.ok ? (action === 'stop' ? 'Getrennt' : 'OK') : (out.error || 'Fehler');
-        resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
+        setStatusClass(resultEl, out.ok ? 'ok' : 'err');
       }
       refreshVpnSettingsStatus();
     } catch (e) {
-      if (resultEl) { resultEl.textContent = e.message; resultEl.style.color = 'var(--err)'; }
+      if (resultEl) { resultEl.textContent = e.message; setStatusClass(resultEl, 'err'); }
     } finally {
       btn.disabled = false;
     }
@@ -2139,9 +2149,9 @@ function renderVpnUploadPanel() {
   function refreshVpnSettingsStatus() {
     apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
       const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-      const colors = { connected: 'var(--ok,#22c55e)', error: 'var(--err,#ef4444)', connecting: 'var(--c-amber-600,#d97706)', disconnected: 'var(--flow-text-muted,#9ca3af)' };
-      let html = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${colors[vpn.status] || '#888'};margin-right:6px;"></span>`;
-      html += `<strong style="color:${colors[vpn.status] || '#888'};">${labels[vpn.status] || vpn.status || 'unbekannt'}</strong>`;
+      const status = vpn.status || 'unknown';
+      let html = `<span class="sa-vpn-dot" data-status="${status}"></span>`;
+      html += `<strong class="sa-vpn-label" data-status="${status}">${labels[vpn.status] || vpn.status || 'unbekannt'}</strong>`;
       if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
       if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
       if (vpn.uptimeSeconds > 0) {
@@ -2151,9 +2161,9 @@ function renderVpnUploadPanel() {
       }
       if (vpn.reconnectAttempts > 0) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
       if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-        html += ` | <span style="color:var(--c-amber-600);">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
+        html += ` | <span class="sa-text-warn">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
       }
-      if (vpn.lastError) html += ` | <span style="color:var(--err);">${escapeHtml(vpn.lastError)}</span>`;
+      if (vpn.lastError) html += ` | <span class="sa-text-err">${escapeHtml(vpn.lastError)}</span>`;
       statusDiv.innerHTML = html;
     }).catch(() => {
       statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';
@@ -2163,25 +2173,25 @@ function renderVpnUploadPanel() {
 
   // fetch VPN config details
   const configDiv = document.createElement('div');
-  configDiv.style.cssText = 'padding:0 14px 14px;font-size:0.75rem;';
+  configDiv.className = 'sa-vpn-config';
   panel.appendChild(configDiv);
 
   apiFetch('/api/vpn/config').then(r => r.json()).then(cfg => {
     if (!cfg || !cfg.configExists) {
-      configDiv.innerHTML = '<span style="opacity:0.5;">Kein VPN-Profil importiert.</span>';
+      configDiv.innerHTML = '<span class="sa-empty">Kein VPN-Profil importiert.</span>';
       return;
     }
     if (!cfg.fields || !cfg.fields.length) return;
 
-    let html = '<div style="margin-top:6px;border:1px solid var(--flow-border,#333);border-radius:8px;overflow:hidden;">';
-    html += '<div style="padding:6px 10px;font-weight:600;font-size:0.72rem;background:var(--flow-surface,#1a1a2e);color:var(--node-vpn,#7F77DD);">Importierte VPN-Konfiguration</div>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;">';
+    let html = '<div class="sa-vpn-config-frame">';
+    html += '<div class="sa-vpn-config-title">Importierte VPN-Konfiguration</div>';
+    html += '<table class="sa-vpn-config-table">';
     cfg.fields.forEach((f, i) => {
-      const bg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)';
-      const labelStyle = f.forced ? 'opacity:0.6;' : '';
-      const valStyle = f.warn ? 'color:var(--c-amber-600);font-weight:600;' : f.forced ? 'opacity:0.6;' : '';
-      const badge = f.forced ? ' <span style="font-size:0.6rem;opacity:0.5;background:var(--node-vpn,#7F77DD);color:#fff;padding:1px 4px;border-radius:3px;">forced</span>' : '';
-      html += `<tr style="background:${bg};"><td style="padding:3px 10px;white-space:nowrap;${labelStyle}">${escapeHtml(f.key)}${badge}</td><td style="padding:3px 10px;font-family:monospace;${valStyle}">${escapeHtml(f.value)}</td></tr>`;
+      const rowAttrs = `data-zebra="${i % 2 === 0 ? 'even' : 'odd'}"`;
+      const labelClass = f.forced ? 'sa-drift-cell-key sa-text-mute' : 'sa-drift-cell-key';
+      const valClass   = f.warn   ? 'sa-drift-cell-value sa-text-warn' : (f.forced ? 'sa-drift-cell-value sa-text-mute' : 'sa-drift-cell-value');
+      const badge = f.forced ? ' <span class="sa-vpn-badge-forced">forced</span>' : '';
+      html += `<tr ${rowAttrs}><td class="${labelClass}">${escapeHtml(f.key)}${badge}</td><td class="${valClass}">${escapeHtml(f.value)}</td></tr>`;
     });
     html += '</table></div>';
     configDiv.innerHTML = html;
@@ -2232,10 +2242,10 @@ async function handleVpnUpload() {
       resultEl.textContent = out.ok
         ? `Profil "${out.profile}" importiert.`
         : `Fehler: ${(out.errors || [out.error]).join(', ')}`;
-      resultEl.style.color = out.ok ? 'var(--ok)' : 'var(--err)';
+      setStatusClass(resultEl, out.ok ? 'ok' : 'err');
     }
   } catch (e) {
-    if (resultEl) { resultEl.textContent = `Upload fehlgeschlagen: ${e.message}`; resultEl.style.color = 'var(--err)'; }
+    if (resultEl) { resultEl.textContent = `Upload fehlgeschlagen: ${e.message}`; setStatusClass(resultEl, 'err'); }
   }
 }
 
@@ -2295,6 +2305,25 @@ function initSettingsPage() {
     setBanner(`Speichern fehlgeschlagen: ${error.message}`, 'error');
   }));
 
+  // Aurora-Header "Speichern · ⌘S" — leitet auf die bestehende Save-Logik um
+  function triggerHeaderSave() {
+    saveCurrentForm().then((ok) => {
+      showSettingsToast(ok === false ? 'Speichern fehlgeschlagen' : 'Einstellungen gespeichert');
+    }).catch((error) => {
+      setBanner(`Speichern fehlgeschlagen: ${error.message}`, 'error');
+      showSettingsToast('Speichern fehlgeschlagen');
+    });
+  }
+  document.getElementById('saveAllHeaderBtn')?.addEventListener('click', triggerHeaderSave);
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+      // nur, wenn die Settings-Seite aktiv im DOM ist
+      if (!document.querySelector('.settings-aurora')) return;
+      e.preventDefault();
+      triggerHeaderSave();
+    }
+  });
+
   document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
   document.getElementById('refreshHealthBtn')?.addEventListener('click', () => loadHealth().catch((error) => {
     setHealthBanner(`Health-Status konnte nicht geladen werden: ${error.message}`, 'error');
@@ -2309,13 +2338,13 @@ function initSettingsPage() {
   document.getElementById('rebootSystemBtn')?.addEventListener('click', async () => {
     if (!confirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.')) return;
     const resultEl = document.getElementById('rebootResult');
-    if (resultEl) { resultEl.textContent = 'Neustart...'; resultEl.style.color = 'var(--c-amber-600)'; }
+    if (resultEl) { resultEl.textContent = 'Neustart...'; setStatusClass(resultEl, 'warn'); }
     try {
       await apiFetch('/api/admin/system/reboot', { method: 'POST' });
       if (resultEl) { resultEl.textContent = 'System startet neu — Seite wird in 30s neu geladen...'; }
       setTimeout(() => window.location.reload(), 30000);
     } catch (e) {
-      if (resultEl) { resultEl.textContent = 'Fehler: ' + e.message; resultEl.style.color = 'var(--err)'; }
+      if (resultEl) { resultEl.textContent = 'Fehler: ' + e.message; setStatusClass(resultEl, 'err'); }
     }
   });
   loadSystemInfo();
@@ -2571,7 +2600,7 @@ function renderTierFeatures(status) {
   var tierFeatures = status.tierFeatures || [];
 
   if (tierFeatures.length === 0) {
-    container.innerHTML = '<div class="detail-row"><span class="detail-key" style="color:rgba(232,234,240,0.3);">Keine Tier-Informationen verfuegbar</span></div>';
+    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Keine Tier-Informationen verfuegbar</span></div>';
     return;
   }
 
@@ -2582,30 +2611,29 @@ function renderTierFeatures(status) {
     var rawStatus = f.status || 'inactive';
     var minTier = f.requiredTier != null ? f.requiredTier : (f.minTier || 1);
 
-    var label, color, textDeco = 'none';
+    var label, dataStatus;
     if (rawStatus === 'active') {
       label = 'aktiv';
-      color = 'var(--ok)';
+      dataStatus = 'active';
     } else if (rawStatus === 'inactive') {
       if (tier < minTier) {
         label = 'nicht verfuegbar (Tier ' + minTier + '+)';
-        color = 'var(--flow-text-dim)';
-        textDeco = 'line-through';
+        dataStatus = 'inactive-locked';
       } else {
         label = 'inaktiv';
-        color = 'var(--flow-text-muted)';
+        dataStatus = 'inactive';
       }
     } else if (rawStatus === 'collecting') {
       label = 'sammelt Daten';
-      color = 'var(--warn)';
+      dataStatus = 'collecting';
     } else {
       label = rawStatus;
-      color = 'var(--flow-text-muted)';
+      dataStatus = 'unknown';
     }
 
     return '<div class="detail-row">' +
       '<span class="detail-key">' + escapeHtml(featureLabel) + '</span>' +
-      '<span class="detail-val" style="color:' + color + ';text-decoration:' + textDeco + ';">' + escapeHtml(label) + '</span>' +
+      '<span class="detail-val sa-tier-label" data-status="' + dataStatus + '">' + escapeHtml(label) + '</span>' +
       '</div>';
   }).join('');
 }
@@ -2616,7 +2644,7 @@ function renderTrainingLog(status) {
 
   var log = status.trainingLog || [];
   if (log.length === 0) {
-    container.innerHTML = '<div class="detail-row"><span class="detail-key" style="color:rgba(232,234,240,0.3);">Noch keine Trainingslaeufe</span></div>';
+    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Noch keine Trainingslaeufe</span></div>';
     return;
   }
 
@@ -2628,21 +2656,21 @@ function renderTrainingLog(status) {
     var version = entry.version || entry.modelVersion || '?';
     var mae = entry.mae != null ? entry.mae + 'W' : '--';
     var result = entry.status || entry.result || 'OK';
-    var color;
+    var resultClass;
 
     if (result === 'OK' || result === 'ok' || result === 'success') {
-      color = 'var(--ok)';
+      resultClass = 'sa-text-ok';
     } else if (result === 'Rollback' || result === 'rollback') {
-      color = 'var(--warn)';
+      resultClass = 'sa-text-warn';
     } else {
-      color = 'var(--danger)';
+      resultClass = 'sa-text-err';
       result = 'Fehler';
     }
 
     return '<div class="detail-row">' +
-      '<span class="detail-key" style="font-family:\'JetBrains Mono\',monospace;font-size:10px;">' + escapeHtml(ts) + '</span>' +
+      '<span class="detail-key sa-ts-mono">' + escapeHtml(ts) + '</span>' +
       '<span class="detail-val">' + model + ' v' + escapeHtml(String(version)) + ' &middot; MAE ' + escapeHtml(mae) +
-      ' <span style="color:' + color + ';font-weight:600;">' + escapeHtml(result) + '</span></span>' +
+      ' <span class="sa-result ' + resultClass + '">' + escapeHtml(result) + '</span></span>' +
       '</div>';
   }).join('');
 }
