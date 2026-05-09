@@ -166,6 +166,19 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   'influx'
 ]));
 
+// Plan 08-09 Task 2: actor context extracted from a request — feeds the
+// audit_log mirror in pushLog (server.js) and the new exec.manual_overrides
+// rows. Strips the IPv4-in-IPv6 prefix that node http exposes by default
+// (::ffff:192.168.1.5 → 192.168.1.5). Caps free-form fields so an attacker
+// can't pump multi-MB User-Agent strings into the audit table.
+export function actorContext(req) {
+  return {
+    actor_ip: String(req.socket?.remoteAddress || '').replace(/^::ffff:/, ''),
+    actor_ua: String(req.headers?.['user-agent'] || '').slice(0, 256),
+    actor_session: String(req.headers?.['x-session-id'] || '').slice(0, 64) || null,
+  };
+}
+
 export function createApiRoutes(ctx) {
   const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
 
@@ -480,7 +493,11 @@ export function createApiRoutes(ctx) {
     // and therefore cannot send an Authorization header.
     const reqUrl = new URL(req.url, `http://${req.headers.host}`);
     if (reqUrl.searchParams.has('token') && reqUrl.pathname !== '/api/config/export') {
-      pushLog('token_in_url_rejected', { path: reqUrl.pathname });
+      // Plan 08-09 Task 2: enrich existing token-in-url rejection with actor context.
+      pushLog('token_in_url_rejected', {
+        path: reqUrl.pathname,
+        method: req.method,
+      }, actorContext(req));
       res.writeHead(400, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({
         error: 'token_in_url_forbidden',
@@ -490,6 +507,15 @@ export function createApiRoutes(ctx) {
     }
     // Outside LAN, a configured token is mandatory; missing token fails closed.
     if (!cfg.apiToken || typeof cfg.apiToken !== 'string' || cfg.apiToken.length === 0) {
+      // Plan 08-09 Task 2: 503 because the device is mis-configured, not because
+      // the caller is wrong — but it's still an auth-gate failure that an
+      // operator must be able to find in audit_log.
+      pushLog('auth_failed', {
+        path: reqUrl.pathname,
+        method: req.method,
+        reason: 'token_not_configured',
+        statusCode: 503,
+      }, actorContext(req));
       res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'api_token_not_configured' }));
       return false;
@@ -508,6 +534,15 @@ export function createApiRoutes(ctx) {
         if (urlBuf.length === expected.length && crypto.timingSafeEqual(urlBuf, expected)) return true;
       }
     }
+    // Plan 08-09 Task 2: every 401 emits a durable audit entry with actor
+    // context (ip, ua, session) so brute-force attempts and credential
+    // mistakes are visible long after the in-memory ring buffer has rolled.
+    pushLog('auth_failed', {
+      path: reqUrl.pathname,
+      method: req.method,
+      reason: auth ? 'bearer_invalid' : 'bearer_missing',
+      statusCode: 401,
+    }, actorContext(req));
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'unauthorized' }));
     return false;
@@ -527,7 +562,9 @@ export function createApiRoutes(ctx) {
   function requireBootstrapToken(req, res) {
     const tokenPath = getBootstrapTokenPath();
     if (!fs.existsSync(tokenPath)) {
-      pushLog('setup_bootstrap_unavailable', { ip: req.socket?.remoteAddress, path: tokenPath });
+      // Plan 08-09 Task 2: full actor context so we can attribute attempted
+      // takeovers after the bootstrap token has been consumed.
+      pushLog('setup_bootstrap_unavailable', { path: tokenPath }, actorContext(req));
       res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'setup_already_completed' }));
       return false;
@@ -536,7 +573,9 @@ export function createApiRoutes(ctx) {
     try { expected = fs.readFileSync(tokenPath, 'utf8').trim(); } catch (_) { /* fall through */ }
     const given = String(req.headers['x-bootstrap-token'] || '').trim();
     if (!expected || !given || given !== expected) {
-      pushLog('setup_bootstrap_rejected', { ip: req.socket?.remoteAddress });
+      // Plan 08-09 Task 2: bootstrap-token rejection is a high-signal auth
+      // failure — durable + actor-attributed.
+      pushLog('setup_bootstrap_rejected', {}, actorContext(req));
       res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'bootstrap_token_required_or_invalid' }));
       return false;
@@ -1517,10 +1556,11 @@ export function createApiRoutes(ctx) {
         return after !== undefined && before !== after;
       });
       if (flippedLegalGates.length > 0 && req.headers['x-confirm-legal-gate'] !== 'true') {
+        // Plan 08-09 Task 2 Step 6: actor context (ip + ua + session) so we
+        // can attribute attempted illegal-gate flips, not just see the IP.
         pushLog('legal_gate_flip_rejected', {
           paths: flippedLegalGates,
-          ip: req.socket?.remoteAddress
-        });
+        }, actorContext(req));
         return json(res, 403, {
           ok: false,
           error: 'legal_gate_flip_requires_confirmation',
@@ -1528,11 +1568,14 @@ export function createApiRoutes(ctx) {
           hint: 'Add header x-confirm-legal-gate: true after reading EEG/§14a compliance documentation'
         });
       }
+      // Plan 08-09 Task 2 Step 6: legal-gate flip events get the same actor
+      // context as every other audited mutation (replaces the legacy ip-only
+      // shorthand from plan 08-06).
+      const cfgActor = actorContext(req);
       if (flippedLegalGates.length > 0) {
         pushLog('legal_gate_flipped', {
           paths: flippedLegalGates,
-          ip: req.socket?.remoteAddress
-        });
+        }, cfgActor);
       }
       const result = ctx.saveAndApplyConfig(body.config);
       // Plan 08-06 Task 2 Step 2: consume the one-shot bootstrap token after
@@ -1540,13 +1583,22 @@ export function createApiRoutes(ctx) {
       // requests can rewrite config — the takeover window is closed.
       if (setupPhase) {
         consumeBootstrapToken();
-        pushLog('setup_bootstrap_consumed', { ip: req.socket?.remoteAddress });
+        pushLog('setup_bootstrap_consumed', {}, cfgActor);
       }
+      // Plan 08-09 Task 2 Step 5: config_saved emits the FULL changedPaths
+      // array (regulator-readable diff) plus the legacy count. Path entries
+      // are dot-paths (e.g. 'optimizer.minSoc') — the actual VALUES are NOT
+      // included to keep secrets out of the audit log (apiToken, mqtt
+      // credentials etc. are in REDACTED_PATHS but the policy is "paths
+      // only" anyway). This in-handler log is in addition to the generic
+      // config_saved emitted by persistConfig (which sees only fs-level
+      // context, not the path delta).
       pushLog('config_saved', {
-        changedPaths: result.changedPaths.length,
+        changedPaths: Array.isArray(result.changedPaths) ? result.changedPaths : [],
+        pathCount: Array.isArray(result.changedPaths) ? result.changedPaths.length : 0,
         restartRequired: result.restartRequired,
-        source: url.pathname.endsWith('/import') ? 'import' : 'settings'
-      });
+        source: url.pathname.endsWith('/import') ? 'import' : 'settings',
+      }, cfgActor);
       // If any small-market-automation setting changed (e.g. forecastAware,
       // searchWindow, minSoc, …), force a replan so the user immediately sees
       // the new plan instead of waiting for the next ambient regeneration tick
@@ -2143,6 +2195,29 @@ export function createApiRoutes(ctx) {
       ctx.assertValidRuntimeCommand('control_write', { target, value });
       state.schedule.manualOverride[target] = { value, at: Date.now() };
       const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
+      // Plan 08-09 Task 2: every manual control write produces a durable
+      // audit_log entry with full actor attribution AND (best-effort) a row
+      // in exec.manual_overrides for the regulator-facing structured log.
+      // Both writes happen AFTER applyControlTarget so failed gates (e.g.
+      // EEG/§14a legal-gate rejection) are still recorded as attempts.
+      const actor = actorContext(req);
+      pushLog('control_write', {
+        target,
+        value,
+        result: result.ok ? 'applied' : 'rejected',
+        error: result.error || null,
+      }, actor);
+      if (result.ok && ctx.telemetryStore?.writeManualOverride) {
+        // Fire-and-forget — failures are logged inside writeManualOverride and
+        // must NEVER turn an applied control write into a 500 to the operator.
+        ctx.telemetryStore.writeManualOverride({
+          target,
+          value_num: Number(value),
+          ts_utc: new Date(),
+          ...actor,
+          reason: 'api_manual_write',
+        }).catch((err) => pushLog('manual_override_persist_error', { error: err?.message ?? String(err) }, actor));
+      }
       return json(res, result.ok ? 200 : 500, result);
     }
 
@@ -2160,30 +2235,51 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      // Plan 08-09 Task 2: VPN start/stop/restart are operator-initiated
+      // network changes that need a durable audit trail with actor context.
+      const actor = actorContext(req);
       try {
         await ctx.vpnManager.start();
-        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
+        const status = ctx.vpnManager.getStatus();
+        pushLog('vpn_started', {
+          profile: status?.profileName ?? state.vpn?.profileName ?? null,
+          status: status?.status ?? null,
+        }, actor);
+        return json(res, 200, { ok: true, status: status.status });
       } catch (e) {
+        pushLog('vpn_start_error', { error: e.message }, actor);
         return json(res, 500, { ok: false, error: e.message });
       }
     }
 
     if (url.pathname === '/api/vpn/stop' && req.method === 'POST') {
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      const actor = actorContext(req);
       try {
         await ctx.vpnManager.stop();
+        pushLog('vpn_stopped', {
+          profile: ctx.vpnManager.getStatus()?.profileName ?? state.vpn?.profileName ?? null,
+        }, actor);
         return json(res, 200, { ok: true });
       } catch (e) {
+        pushLog('vpn_stop_error', { error: e.message }, actor);
         return json(res, 500, { ok: false, error: e.message });
       }
     }
 
     if (url.pathname === '/api/vpn/restart' && req.method === 'POST') {
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
+      const actor = actorContext(req);
       try {
         await ctx.vpnManager.restart();
-        return json(res, 200, { ok: true, status: ctx.vpnManager.getStatus().status });
+        const status = ctx.vpnManager.getStatus();
+        pushLog('vpn_restarted', {
+          profile: status?.profileName ?? state.vpn?.profileName ?? null,
+          status: status?.status ?? null,
+        }, actor);
+        return json(res, 200, { ok: true, status: status.status });
       } catch (e) {
+        pushLog('vpn_restart_error', { error: e.message }, actor);
         return json(res, 500, { ok: false, error: e.message });
       }
     }

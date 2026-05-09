@@ -2835,9 +2835,41 @@ export function loadConfigFile(configPath) {
   };
 }
 
+// Plan 08-09 Task 1: backup-on-write retention. Keep the 10 most recent
+// timestamped backups so a config-corrupting save can be reverted from disk
+// without git access. 10 covers ~daily ops for ~10 days; older backups are
+// pruned to keep the data dir tidy. Mirrors migration-runner.js:71-87 pattern
+// established in plan 08-01 for SQL migrations (consistency for ops).
+const CONFIG_BACKUP_RETENTION = 10;
+
 export function saveConfigFile(configPath, rawInput) {
   const normalized = normalizeConfigInput(rawInput);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  // Plan 08-09 Task 1: backup-on-write — copy the existing config.json to a
+  // timestamped sibling BEFORE we overwrite it, so a bad save can be rolled
+  // back from disk. Wrapped in try/catch because backup failure (e.g. disk
+  // full, permission flip) MUST NOT prevent the actual save from proceeding —
+  // operator continuity beats backup completeness in this safety order.
+  if (fs.existsSync(configPath)) {
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const dir = path.dirname(configPath);
+      const backupPath = path.join(dir, `config.backup-${timestamp}.json`);
+      fs.copyFileSync(configPath, backupPath);
+      try { fs.chmodSync(backupPath, 0o600); } catch { /* best-effort */ }
+      // Prune oldest beyond retention (sort DESC by name = lexicographic = ts).
+      const backups = fs.readdirSync(dir)
+        .filter((f) => /^config\.backup-/.test(f))
+        .sort()
+        .reverse();
+      for (const old of backups.slice(CONFIG_BACKUP_RETENTION)) {
+        try { fs.unlinkSync(path.join(dir, old)); } catch { /* best-effort */ }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[config] backup-on-write failed:', err.message);
+    }
+  }
   // Atomic write: temp file + rename prevents corruption on crash/power loss
   const tmpPath = configPath + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
