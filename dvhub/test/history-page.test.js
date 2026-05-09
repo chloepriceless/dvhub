@@ -140,23 +140,19 @@ function loadHistoryPageHelpers() {
 }
 
 test('navigation exposes Historie across shell pages', () => {
-  for (const fileName of ['index.html', 'settings.html', 'tools.html', 'history.html']) {
+  // Plan 08-10: tools.html is a meta-refresh stub — Historie nav lives on the
+  // remaining shell pages (index/settings/history).
+  for (const fileName of ['index.html', 'settings.html', 'history.html']) {
     const html = readPublic(fileName);
     assert.match(html, />Historie</);
   }
 });
 
-test('tools page exposes separate gap and full VRM backfill controls', () => {
-  const html = readPublic('tools.html');
-
-  assert.match(html, /id="historyBackfillBtn"/);
-  assert.match(html, /VRM-Lücken schließen/);
-  assert.match(html, /id="historyFullBackfillAck"/);
-  assert.match(html, /id="historyFullBackfillExtendedLookback"/);
-  assert.match(html, /id="historyFullBackfillLookbackDays"/);
-  assert.match(html, /id="historyFullBackfillBtn"/);
-  assert.match(html, /Voll-Backfill/);
-});
+// "tools page exposes separate gap and full VRM backfill controls" was removed
+// in Plan 08-10. The backfill helpers (`buildHistoryGapBackfillRequest`,
+// `buildHistoryFullBackfillRequest`, etc.) are still exercised by
+// `tools-history-backfill.test.js` against the underlying tools.js module,
+// which settings.html (System tab) loads.
 
 test('history page exposes view switcher, unified summary card, chart containers, and grouped rows mount', () => {
   const html = readPublic('history.html');

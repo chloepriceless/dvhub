@@ -65,6 +65,8 @@ test('common script exposes DVhub branding, migrates legacy token storage, and e
 });
 
 test('all public HTML entrypoints use DVhub branding and remove legacy product copy', () => {
+  // tools.html is a meta-refresh stub since Plan 08-10 (redirects to /settings.html#system),
+  // so it is no longer a full HTML entrypoint. It still contains "DVhub" in the title.
   for (const fileName of ['index.html', 'settings.html', 'tools.html', 'setup.html']) {
     const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
     assert.match(html, /DVhub/);
@@ -105,7 +107,8 @@ test('settings page uses a compact control bar and no longer exposes service car
 });
 
 test('public pages use compact topbars instead of large hero-style headers', () => {
-  for (const fileName of ['index.html', 'settings.html', 'tools.html', 'setup.html']) {
+  // tools.html is a meta-refresh stub since Plan 08-10 — no rendered topbar required.
+  for (const fileName of ['index.html', 'settings.html', 'setup.html']) {
     const html = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
     assert.match(html, /compact-topbar/);
     assert.doesNotMatch(html, /page-topbar/);
@@ -155,14 +158,17 @@ test('settings page moves the status block into the top row and removes the perm
   assert.doesNotMatch(html, /Dienst neu starten/);
 });
 
-test('maintenance page groups status, import export, history, and diagnose sections', () => {
+test('tools.html is a meta-refresh stub redirecting to /settings.html#system (Plan 08-10)', () => {
+  // Plan 08-10 retired the standalone "Wartung" page in favour of the System tab
+  // inside Einstellungen. tools.html now ships only as a redirect shim.
   const html = fs.readFileSync(path.join(publicDir, 'tools.html'), 'utf8');
+  const lineCount = html.split('\n').length;
 
-  assert.match(html, /DVhub Wartung/);
-  assert.match(html, /Systemstatus/);
-  assert.match(html, /Import &amp; Export/);
-  assert.match(html, /Historie/);
-  assert.match(html, /Diagnose/);
+  assert.ok(lineCount <= 20, `tools.html should be <= 20 lines, got ${lineCount}`);
+  assert.match(html, /<meta\s+http-equiv="refresh"\s+content="0;\s*url=\/settings\.html#system"/);
+  assert.match(html, /window\.location\.replace\(['"]\/settings\.html#system['"]\)/);
+  // Must NOT contain the old page bodies
+  assert.doesNotMatch(html, /Modbus-Scan|Schedule \/ Control|VRM-L/);
 });
 
 test('global styles use the DVhub palette and typography', () => {
