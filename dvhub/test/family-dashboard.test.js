@@ -95,12 +95,15 @@ describe('family dashboard static assets (DASH-01)', () => {
     assert.ok(!js.match(/['"]energy_slots['"]/), 'must not use generic energy_slots key');
   });
 
-  it('family.js has offline fallback (D-22 — does not clear lastStatus on error)', () => {
+  it('family.js has offline fallback (D-22 revised 08-11 — does not clear lastStatus on error, no banner)', () => {
     const js = readFileOnce(FAMILY_JS);
     assert.ok(js.includes('lastStatus'), 'must track lastStatus');
+    // Plan 08-11 Task 2: showOfflineBanner / offline-banner element removed.
+    // DVhub is a LAN-only app (no SW). On poll failure, the dashboard keeps
+    // last-known values; staleness is implicit via the timestamp widget.
     assert.ok(
-      js.includes('showOfflineBanner') || js.includes('offline-banner'),
-      'must have offline banner'
+      !js.includes('showOfflineBanner') && !js.includes("getElementById('offline-banner')"),
+      'must NOT register an offline banner (08-11 removed it)'
     );
     assert.ok(
       /failedPolls\s*\+=\s*1[^}]*lastStatus\s*=\s*null/s.test(js) === false,

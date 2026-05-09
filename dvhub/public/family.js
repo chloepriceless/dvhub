@@ -614,14 +614,15 @@
       lastStatus = data;
       lastStatusAt = Date.now();
       failedPolls = 0;
-      hideOfflineBanner();
+      // Plan 08-11 Task 2: SW + offline-banner removed. DVhub is a LAN-only
+      // app — when the server is unreachable the dashboard simply keeps the
+      // last-known values on screen. No banner needed.
       applyFamilyStatus(data);
     } catch (err) {
       failedPolls += 1;
-      if (failedPolls >= LS_OFFLINE_GRACE_POLLS) {
-        showOfflineBanner(lastStatusAt);
-      }
-      // D-22 — do NOT clear lastStatus; last known values remain visible
+      // D-22 (revised 08-11) — do NOT clear lastStatus; last known values
+      // remain visible. Operator can see staleness via the time widget.
+      void failedPolls;
     }
   }
 
@@ -862,29 +863,10 @@
     ];
   }
 
-  /* ===================== OFFLINE BANNER (D-22) ===================== */
-  function showOfflineBanner(sinceTs) {
-    var el = document.getElementById('offline-banner');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'offline-banner';
-      el.className = 'offline-banner';
-      var vp = document.querySelector('.viewport');
-      if (vp) vp.appendChild(el); else document.body.appendChild(el);
-    }
-    if (sinceTs) {
-      var minutes = Math.max(0, Math.floor((Date.now() - sinceTs) / 60000));
-      el.textContent = 'Keine Verbindung — letztes Update vor ' + minutes + ' min';
-    } else {
-      el.textContent = 'Keine Verbindung zum DVhub-Server';
-    }
-    el.style.display = 'block';
-  }
-
-  function hideOfflineBanner() {
-    var el = document.getElementById('offline-banner');
-    if (el) el.style.display = 'none';
-  }
+  /* ===================== OFFLINE BANNER (D-22) — REMOVED 08-11 =====================
+     Service Worker + offline banner deleted; DVhub is a LAN-only app, so
+     "offline" means the server is unreachable and the right action is to
+     show the last-known values stale rather than overlay a warning banner. */
 
   /* ===================== WIDGET RENDERERS (D-10) ===================== */
   var forecastChart = null;

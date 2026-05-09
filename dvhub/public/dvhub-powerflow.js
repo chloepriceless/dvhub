@@ -4,21 +4,26 @@
   const fmt = (v, dec=2) => v.toFixed(dec).replace('.', ',');
   const fmtS = v => (v >= 0 ? '+' : '') + fmt(v);
 
+  // Plan 08-11 Task 2: powerflow center widgets render `.chart-skeleton`
+  // shimmer placeholders on initial mount so the user sees a "loading" pulse
+  // instead of bare "—" dashes that flash for 3 s before the first refresh
+  // populates them. The skeleton is removed by `clearSkeletons()` on the
+  // first `update()` call.
   const TPL = `
     <div class="pf-stars"></div>
     <canvas class="pf-cv"></canvas>
     <div class="pf-hubglow"></div>
     <div class="pf-legend">
-      <span class="pf-chip"><span class="d" style="background:var(--pf-pv);  box-shadow:0 0 8px var(--pf-pv)"></span>PV</span>
-      <span class="pf-chip"><span class="d" style="background:var(--pf-bat); box-shadow:0 0 8px var(--pf-bat)"></span>Akku</span>
-      <span class="pf-chip"><span class="d" style="background:var(--pf-house);box-shadow:0 0 8px var(--pf-house)"></span>Haus</span>
-      <span class="pf-chip"><span class="d" style="background:var(--pf-grid);box-shadow:0 0 8px var(--pf-grid)"></span>Netz</span>
+      <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-pv"></span>PV</span>
+      <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-bat"></span>Akku</span>
+      <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-house"></span>Haus</span>
+      <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-grid"></span>Netz</span>
     </div>
-    <div class="pf-node pf-nPV">    <div class="pf-star"></div><div class="pf-v">—</div><div class="pf-lbl">PV · DC + AC</div><div class="pf-sub">—</div></div>
-    <div class="pf-node pf-nBat">   <div class="pf-star"></div><div class="pf-v">—</div><div class="pf-lbl">Akku</div>      <div class="pf-sub">—</div></div>
-    <div class="pf-node pf-nHouse"> <div class="pf-star"></div><div class="pf-v">—</div><div class="pf-lbl">Haus</div>      <div class="pf-mix"></div></div>
-    <div class="pf-node pf-nGrid">  <div class="pf-star"></div><div class="pf-v">—</div><div class="pf-lbl">Netz</div>      <div class="pf-mix"></div></div>
-    <div class="pf-center"><div class="l">Bilanz heute</div><div class="v">—</div><div class="d">€ Netto</div></div>
+    <div class="pf-node pf-nPV">    <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">PV · DC + AC</div><div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div></div>
+    <div class="pf-node pf-nBat">   <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Akku</div>      <div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div></div>
+    <div class="pf-node pf-nHouse"> <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Haus</div>      <div class="pf-mix"></div></div>
+    <div class="pf-node pf-nGrid">  <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Netz</div>      <div class="pf-mix"></div></div>
+    <div class="pf-center"><div class="l">Bilanz heute</div><div class="v chart-skeleton" aria-busy="true">&nbsp;</div><div class="d">€ Netto</div></div>
   `;
 
   function mount(target, opts={}){
@@ -103,6 +108,11 @@
       };
       streams.forEach(s => { s.count = pwr2count(map[s.id]); s.speed = pwr2speed(map[s.id]); });
 
+      // Plan 08-11 Task 2: skip text writes while the skeleton placeholders
+      // are still showing (= no live data yet). The stream counters above
+      // are still updated so the dust animation is in a sane state.
+      if (!skeletonCleared) return;
+
       const $ = sel => root.querySelector(sel);
       $('.pf-nPV .pf-v').textContent  = fmt(f.pv) + ' kW';
       $('.pf-nPV .pf-sub').textContent= f.pv > 0 ? '100 % der Erzeugung' : 'keine Erzeugung';
@@ -176,6 +186,20 @@
       raf = requestAnimationFrame(draw);
     }
 
+    // Plan 08-11 Task 2: clear `.chart-skeleton` shimmer + aria-busy on the
+    // first `update()` call (= first data refresh). Idempotent: subsequent
+    // calls are no-ops because the class+attribute are gone.
+    let skeletonCleared = false;
+    function clearSkeletons() {
+      if (skeletonCleared) return;
+      skeletonCleared = true;
+      const nodes = root.querySelectorAll('.chart-skeleton');
+      for (let i = 0; i < nodes.length; i++) {
+        nodes[i].classList.remove('chart-skeleton');
+        nodes[i].removeAttribute('aria-busy');
+      }
+    }
+
     const api = {
       update(s){
         if (s && typeof s === 'object') {
@@ -185,6 +209,7 @@
           if ('grid' in s) state.grid = (typeof s.grid === 'number') ? s.grid : null;
           if ('costEur' in s) state.costEur = (typeof s.costEur === 'number') ? s.costEur : null;
         }
+        clearSkeletons();
         applyFlows();
       },
       destroy(){

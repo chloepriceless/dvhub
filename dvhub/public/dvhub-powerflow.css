@@ -44,6 +44,19 @@
   background:rgba(5,10,22,.55);border:1px solid var(--pf-brd);
   font-family:var(--pf-m);font-size:10px;color:var(--pf-dim);letter-spacing:.04em}
 .dvhub-powerflow .pf-chip .d{width:7px;height:7px;border-radius:50%}
+/* Plan 08-11 Task 1: legend dot colors moved out of inline style= for CSP. */
+.dvhub-powerflow .pf-chip-dot-pv   {background:var(--pf-pv);   box-shadow:0 0 8px var(--pf-pv)}
+.dvhub-powerflow .pf-chip-dot-bat  {background:var(--pf-bat);  box-shadow:0 0 8px var(--pf-bat)}
+.dvhub-powerflow .pf-chip-dot-house{background:var(--pf-house);box-shadow:0 0 8px var(--pf-house)}
+.dvhub-powerflow .pf-chip-dot-grid {background:var(--pf-grid); box-shadow:0 0 8px var(--pf-grid)}
+
+/* Plan 08-11 Task 2: skeleton placeholder for first-paint values.
+   .chart-skeleton (defined in styles.css) only paints the gradient on the
+   text background; we need a minimum width so the empty &nbsp; element
+   has a visible shimmer area before data arrives. */
+.dvhub-powerflow .pf-v.chart-skeleton  { min-width: 80px; min-height: 1.2em; }
+.dvhub-powerflow .pf-sub.chart-skeleton{ min-width: 90px; min-height: 1em; display:inline-block; border-radius:6px; }
+.dvhub-powerflow .pf-center .v.chart-skeleton { min-width: 120px; min-height: 1.2em; }
 
 .dvhub-powerflow .pf-node{position:absolute;text-align:center;z-index:6;pointer-events:none}
 .dvhub-powerflow .pf-node .pf-star{width:8px;height:8px;border-radius:50%;margin:0 auto 10px;

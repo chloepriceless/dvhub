@@ -891,6 +891,105 @@ async function loadSetup() {
   hydrateSetupWizardState(payload);
   if (payload.meta.needsSetup) setBanner('Noch keine gültige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
   else setBanner('Es existiert bereits eine gültige Config. Der Assistent kann trotzdem zum schnellen Ueberschreiben genutzt werden.', 'success');
+  // Plan 08-11 Task 2: paint EEG/§14a section with the *current* (loaded)
+  // toggle values so the operator sees the actual state. Does NOT auto-tick
+  // the checkboxes — they remain disabled until #legalAck is checked.
+  paintLegalToggles(payload);
+  renderSetupProgress();
+}
+
+// Plan 08-11 Task 2: EEG/§14a wizard-step plumbing
+//
+// Per project_grid_charge_legal.md (user memory rule), the wizard must NEVER
+// auto-flip allowGridCharge/allowGridDischarge. They both default to false.
+// The operator must:
+//   1. Read the EEG/§14a explainer copy
+//   2. Tick #legalAck to acknowledge legal responsibility
+//   3. THEN tick allowGridCharge / allowGridDischarge if desired
+// On save, the legal toggle values are merged into draftConfig.optimizer.
+
+function paintLegalToggles(payload) {
+  const config = payload?.effectiveConfig || payload?.config || {};
+  const optimizer = (config && typeof config === 'object' && config.optimizer) || {};
+  const ackEl = document.getElementById('legalAck');
+  const chargeEl = document.getElementById('allowGridCharge');
+  const dischargeEl = document.getElementById('allowGridDischarge');
+  if (!ackEl || !chargeEl || !dischargeEl) return;
+
+  // Reflect actual current values (read-only paint; not an auto-flip — the
+  // checkbox is still disabled until #legalAck is ticked).
+  chargeEl.checked = Boolean(optimizer.allowGridCharge);
+  dischargeEl.checked = Boolean(optimizer.allowGridDischarge);
+
+  // If either flag is already true in the saved config, the operator must
+  // have already accepted the legal text in the past — pre-check #legalAck
+  // so they aren't forced to re-acknowledge on every visit. The toggles
+  // remain interactive in this case.
+  if (optimizer.allowGridCharge || optimizer.allowGridDischarge) {
+    ackEl.checked = true;
+    chargeEl.disabled = false;
+    dischargeEl.disabled = false;
+  } else {
+    ackEl.checked = false;
+    chargeEl.disabled = true;
+    dischargeEl.disabled = true;
+  }
+}
+
+function wireLegalSection() {
+  const ackEl = document.getElementById('legalAck');
+  const chargeEl = document.getElementById('allowGridCharge');
+  const dischargeEl = document.getElementById('allowGridDischarge');
+  if (!ackEl || !chargeEl || !dischargeEl) return;
+
+  ackEl.addEventListener('change', () => {
+    const acknowledged = ackEl.checked;
+    chargeEl.disabled = !acknowledged;
+    dischargeEl.disabled = !acknowledged;
+    if (!acknowledged) {
+      // Ack revoked: defensively un-tick both toggles so they cannot stay
+      // active behind a now-untrusted acknowledgement.
+      chargeEl.checked = false;
+      dischargeEl.checked = false;
+    }
+    syncLegalTogglesToDraft();
+  });
+  chargeEl.addEventListener('change', syncLegalTogglesToDraft);
+  dischargeEl.addEventListener('change', syncLegalTogglesToDraft);
+}
+
+function syncLegalTogglesToDraft() {
+  const chargeEl = document.getElementById('allowGridCharge');
+  const dischargeEl = document.getElementById('allowGridDischarge');
+  if (!chargeEl || !dischargeEl) return;
+  const nextDraft = clone(setupWizardState.draftConfig || {});
+  if (!nextDraft.optimizer || typeof nextDraft.optimizer !== 'object') nextDraft.optimizer = {};
+  nextDraft.optimizer.allowGridCharge = Boolean(chargeEl.checked);
+  nextDraft.optimizer.allowGridDischarge = Boolean(dischargeEl.checked);
+  setSetupWizardState({ ...setupWizardState, draftConfig: nextDraft });
+  updateSetupSaveBar();
+}
+
+function renderSetupProgress() {
+  const el = document.getElementById('setupProgress');
+  if (!el) return;
+  const steps = setupWizardState?.steps || [];
+  const total = steps.length || 1;
+  const currentIndex = Math.max(0, steps.findIndex((step) => step.id === setupWizardState?.activeStepId));
+  const stepNumber = currentIndex + 1;
+  const pct = Math.min(100, Math.max(0, Math.round((stepNumber / total) * 100)));
+  el.innerHTML = '';
+  const text = document.createElement('span');
+  text.className = 'wizard-progress-text';
+  text.textContent = `Schritt ${stepNumber} von ${total}`;
+  el.appendChild(text);
+  const bar = document.createElement('span');
+  bar.className = 'wizard-progress-bar';
+  const fill = document.createElement('span');
+  fill.className = 'wizard-progress-fill';
+  fill.style.setProperty('width', `${pct}%`);
+  bar.appendChild(fill);
+  el.appendChild(bar);
 }
 
 async function importSetupFile(file) {
@@ -977,6 +1076,10 @@ if (typeof document !== 'undefined') {
   window.addEventListener('dvhub:unauthorized', () => {
     setBanner('API-Zugriff abgelehnt. Wenn ein Token aktiv ist, die Seite mit ?token=DEIN_TOKEN öffnen.', 'error');
   });
+
+  // Plan 08-11 Task 2: wire EEG/§14a legal section once the DOM exists.
+  // paintLegalToggles() is called inside loadSetup() once the config arrives.
+  wireLegalSection();
 
   loadSetup().catch((error) => setBanner(`Setup konnte nicht geladen werden: ${error.message}`, 'error'));
 }

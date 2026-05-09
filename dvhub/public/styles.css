@@ -5623,7 +5623,7 @@ body:has(.settings-aurora) .location-picker-footer {
   font-size: 0.75rem;
 }
 .history-banner-mb { margin-bottom: 10px; }
-.history-kpi-grid {
+.history-kpi-row-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 10px;
