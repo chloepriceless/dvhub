@@ -399,15 +399,87 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   }
 
   async function writeControlEvent(event) {
+    // Plan 08-09 Task 1: persist actor_ip / actor_ua / actor_session into the
+    // new columns added by migration 016. Backwards-compatible: callers that
+    // do not pass actor fields get NULLs (no schema break).
     await pool.query(`
-      INSERT INTO control_events (event_type, target, value_num, value_text, reason, source, ts_utc, meta_json)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO control_events (event_type, target, value_num, value_text, reason, source, ts_utc, meta_json, actor_ip, actor_ua, actor_session)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `, [
       event.eventType, event.target ?? null, event.valueNum ?? null,
       event.valueText ?? null, event.reason ?? null,
       event.source || 'runtime', isoTimestamp(event.ts),
-      event.meta == null ? null : JSON.stringify(event.meta)
+      event.meta == null ? null : JSON.stringify(event.meta),
+      event.actor_ip ?? null,
+      event.actor_ua ?? null,
+      event.actor_session ?? null
     ]);
+  }
+
+  // Plan 08-09 Task 1: durable mirror for pushLog() entries. Fire-and-forget
+  // from server.js — failures are logged locally and never propagated, since
+  // an audit-write failure must NEVER kill the request that triggered it.
+  async function writeAuditEntry(entry) {
+    if (!pool) return;
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (ts_utc, event_type, payload, actor_ip, actor_ua, actor_session, severity)
+         VALUES (NOW(), $1, $2::jsonb, $3, $4, $5, COALESCE($6, 'info'))`,
+        [
+          entry.eventType,
+          JSON.stringify(entry.payload || {}),
+          entry.actor_ip || null,
+          entry.actor_ua || null,
+          entry.actor_session || null,
+          entry.severity || null,
+        ]
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[audit] writeAuditEntry failed', err.message);
+    }
+  }
+
+  // Plan 08-09 Task 2: persist manual /api/control/write entries to
+  // exec.manual_overrides so regulators have a durable, structured log of
+  // operator-initiated control writes (separate from the generic audit_log).
+  // Maps plan-named columns to existing schema:
+  //   - plan target           → existing target_key
+  //   - plan ts_utc           → existing created_at
+  //   - actor_ip/_ua/_session → new columns added by migration 016
+  // site_id is left NULL (made nullable in migration 016) until a per-site
+  // provisioning workflow lands. Best-effort: silently no-op if the exec
+  // schema does not exist (single-tenant SQLite/early Postgres deployments).
+  async function writeManualOverride({ target, value_num, ts_utc, actor_ip, actor_ua, actor_session, reason, created_by }) {
+    if (!pool) return;
+    try {
+      // Defensive: check schema exists before attempting INSERT. avoids 42P01
+      // errors when running against a Postgres that hasn't had Phase 8.1
+      // migrations applied.
+      const probe = await pool.query(
+        `SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'exec' AND table_name = 'manual_overrides' LIMIT 1`
+      );
+      if (probe.rows.length === 0) return;
+      await pool.query(
+        `INSERT INTO exec.manual_overrides
+           (target_key, value_num, created_at, actor_ip, actor_ua, actor_session, reason, created_by)
+         VALUES ($1, $2, COALESCE($3, NOW()), $4, $5, $6, $7, $8)`,
+        [
+          target,
+          value_num,
+          ts_utc ? isoTimestamp(ts_utc) : null,
+          actor_ip || null,
+          actor_ua || null,
+          actor_session || null,
+          reason || null,
+          created_by || 'api_manual_write',
+        ]
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[audit] writeManualOverride failed', err.message);
+    }
   }
 
   async function writeScheduleSnapshot(snapshot) {
@@ -877,6 +949,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     },
     writeSamples,
     writeControlEvent,
+    // Plan 08-09 Task 1+2: durable audit mirror + manual_override persistence.
+    writeAuditEntry,
+    writeManualOverride,
     writeScheduleSnapshot,
     writeOptimizerRun,
     getLatestOptimizerRun,

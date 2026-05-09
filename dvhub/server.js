@@ -376,6 +376,11 @@ function saveAndApplyConfig(nextRawConfig) {
   };
 }
 
+// Plan 08-09 Task 1: persistConfig delegates to saveAndApplyConfig →
+// saveConfigFile (config-model.js), where backup-on-write writes a
+// timestamped `config.backup-YYYY-MM-DDTHH-MM-SS.json` sibling before each
+// overwrite (10-file retention). Operators can roll back a bad save without
+// git access. See config-model.js saveConfigFile for the implementation.
 function persistConfig() {
   try {
     const current = JSON.parse(JSON.stringify(rawCfg || {}));
@@ -654,10 +659,26 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
 
 const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 
-function pushLog(event, details = {}) {
+function pushLog(event, details = {}, options = {}) {
   const row = { ts: nowIso(), event, ...details };
   state.log.push(row);
   if (state.log.length > 1000) state.log.shift();
+  // Plan 08-09 Task 1: durable mirror to audit_log (ring buffer is now a
+  // cache, no longer the source of truth). Fire-and-forget — never block the
+  // caller and never throw out. options.actor_ip / actor_ua / actor_session
+  // come from routes-api.js actorContext(req) at every mutation boundary;
+  // older callers that still pass two args get NULL actor columns and the
+  // event is still durably persisted.
+  if (telemetryStore?.writeAuditEntry) {
+    telemetryStore.writeAuditEntry({
+      eventType: event,
+      payload: details,
+      actor_ip: options.actor_ip,
+      actor_ua: options.actor_ua,
+      actor_session: options.actor_session,
+      severity: options.severity,
+    }).catch(() => { /* writeAuditEntry already logs internally */ });
+  }
 }
 
 function expireLeaseIfNeeded() {
