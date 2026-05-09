@@ -1,6 +1,8 @@
 // test/family-nav-consistency.test.js -- Enforces Plan 03-03 + D-02:
 // every non-family public page has "Familie" as the 2nd nav link, and
 // family.html itself has NO topbar (Kiosk feel).
+// Phase 8 Plan 10 reduced tools.html to a meta-refresh stub, so it no
+// longer participates in nav consistency checks.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
-const NAV_FILES = ['index.html', 'settings.html', 'history.html', 'tools.html'];
+const NAV_FILES = ['index.html', 'settings.html', 'history.html'];
 
 function readNavBlock(file) {
   const html = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
