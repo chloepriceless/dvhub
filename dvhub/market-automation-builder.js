@@ -478,6 +478,18 @@ export function createMarketAutomationBuilder(ctx) {
       if (!slot) return null;
       const start = new Date(slot.ts);
       const end = new Date(slot.ts + SLOT_DURATION_MS);
+      // Per-slot SOC safety floor: schedule-runtime.js:57-59 stops execution when SOC < stopSocPct.
+      // Anchored on the static automationConfig.minSocPct (NOT the forecast-relaxed baseMinSocPct) so
+      // an optimistic forecast cannot lower the per-slot stop floor and drain the battery overnight.
+      const slotFloorSocPct = (sunsetMsForPlanning != null && sunriseMsForPlanning != null)
+        ? Math.round(computeDynamicAutomationMinSocPct({
+            automationMinSocPct: automationConfig?.minSocPct ?? 30,
+            globalMinSocPct: state.victron?.minSocPct ?? 10,
+            sunsetTs: sunsetMsForPlanning,
+            sunriseTs: sunriseMsForPlanning,
+            nowTs: slot.ts
+          }) * 10) / 10
+        : null;
       return {
         id: `sma-${slotTs}-${index + 1}`,
         enabled: true,
@@ -490,7 +502,8 @@ export function createMarketAutomationBuilder(ctx) {
         slotEndTs: slot.ts + SLOT_DURATION_MS,
         source: SMALL_MARKET_AUTOMATION_SOURCE,
         autoManaged: true,
-        displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE
+        displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE,
+        stopSocPct: slotFloorSocPct ?? undefined
       };
     }).filter(Boolean);
 
