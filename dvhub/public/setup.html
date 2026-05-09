@@ -37,36 +37,71 @@
     </header>
 
     <main class="page-content">
-      <div style="max-width:420px;margin:0 auto;padding:16px 16px 80px;">
-        <div style="text-align:center;margin-bottom:20px;">
-          <h1 style="font-family:var(--font-title);font-size:22px;font-weight:600;margin-bottom:4px;">Victron-Anlage verbinden</h1>
-          <p style="font-size:13px;color:rgba(232,234,240,0.4);">Hersteller und IP-Adresse eingeben</p>
+      <div class="setup-wrap">
+        <div class="setup-header">
+          <h1 class="setup-header-title">Victron-Anlage verbinden</h1>
+          <p class="setup-header-subtitle">Hersteller und IP-Adresse eingeben</p>
         </div>
 
-        <div style="text-align:center;margin:16px 0 20px;padding:16px;border:1px solid rgba(0,168,255,0.15);border-radius:10px;">
-          <h2 style="font-family:var(--font-title);font-size:17px;font-weight:600;margin:0 0 6px;">Geführter Einstieg</h2>
-          <p style="font-size:13px;color:rgba(232,234,240,0.5);margin:0 0 10px;">Dieser Assistent richtet die Victron-Anbindung ein. Für die vollständige Einrichtung aller Optionen:</p>
-          <a href="/settings.html" class="btn btn-ghost" style="font-size:13px;">Zur Einrichtung</a>
+        <div class="setup-info-card">
+          <h2 class="setup-info-card-title">Geführter Einstieg</h2>
+          <p class="setup-info-card-text">Dieser Assistent richtet die Victron-Anbindung ein. Für die vollständige Einrichtung aller Optionen:</p>
+          <a href="/settings.html" class="btn btn-ghost u-fz-13">Zur Einrichtung</a>
         </div>
+
+        <!-- Wizard progress (Schritt N von M) -->
+        <div id="setupProgress" class="wizard-progress" aria-label="Wizard-Fortschritt"></div>
 
         <div id="setupBanner" class="config-banner warn">Setup wird geladen...</div>
 
         <div id="setupGrid"></div>
 
-        <div id="setupImportRow" style="text-align:center;margin-top:16px;">
-          <p style="font-size:11px;color:rgba(232,234,240,0.25);">Oder <a id="setupImportLink" href="#" style="color:#4CE36C;text-decoration:none;">vorhandene Config importieren</a></p>
+        <!-- Plan 08-11 Task 2: EEG/§14a legal step before allowGridCharge / allowGridDischarge toggles.
+             User memory rule (project_grid_charge_legal.md): NEVER auto-enable these toggles.
+             Both default to unchecked; the operator must read the legal copy and tick #legalAck first. -->
+        <section id="setupLegalSection" class="legal-section" data-step="legal" aria-labelledby="setupLegalHeading">
+          <h2 id="setupLegalHeading">Netzladen und Netzeinspeisung — rechtlicher Hinweis (EEG / § 14a EnWG)</h2>
+          <p>
+            Die folgenden Schalter steuern, ob Ihr Speicher aus dem öffentlichen Netz <em>geladen</em> oder
+            in das öffentliche Netz <em>entladen</em> werden darf. Beide Vorgänge sind in Deutschland nach
+            <strong>EEG § 51</strong> und <strong>§ 14a EnWG</strong> rechtlich reglementiert.
+          </p>
+          <ul>
+            <li><strong>Netzladen:</strong> Kostenpflichtige Netzentnahme. Führt zu zusätzlichen Netzentgelten und kann Ihre EEG-Einspeisevergütung gefährden, wenn aus dem Netz geladene Energie später als „PV-Einspeisung" deklariert wird.</li>
+            <li><strong>Netzeinspeisung aus Speicher:</strong> Nur zulässig, wenn der Speicher ausschließlich aus eigener PV-Erzeugung geladen wurde (Ausschließlichkeitsprinzip) und der Netzbetreiber die DV-Vermarktung freigegeben hat.</li>
+            <li><strong>§ 14a EnWG:</strong> Steuerbare Verbrauchseinrichtungen können vom Netzbetreiber temporär gedrosselt werden — dieser Vorrang ist immer zu respektieren.</li>
+          </ul>
+          <label class="legal-ack" for="legalAck">
+            <input type="checkbox" id="legalAck" required>
+            <span>Ich habe die rechtlichen Hinweise gelesen und bestätige, dass ich für die Einhaltung der EEG- und § 14a-Regeln selbst verantwortlich bin.</span>
+          </label>
+          <div class="legal-toggles">
+            <label>
+              <input type="checkbox" id="allowGridCharge" disabled>
+              <span class="legal-toggle-text">Netzladen erlauben (Standard: deaktiviert)</span>
+            </label>
+            <label>
+              <input type="checkbox" id="allowGridDischarge" disabled>
+              <span class="legal-toggle-text">Netzeinspeisung aus Speicher erlauben (Standard: deaktiviert)</span>
+            </label>
+          </div>
+        </section>
+
+        <div id="setupImportRow" class="setup-import-row">
+          <p class="setup-import-text">Oder <a id="setupImportLink" href="#" class="setup-import-link">vorhandene Config importieren</a></p>
           <input id="setupImportFile" type="file" accept="application/json,.json" hidden />
         </div>
       </div>
 
-      <div class="config-save-bar" style="justify-content:center;gap:12px;">
+      <div class="config-save-bar setup-save-bar">
         <span class="config-save-bar-text" id="setupSaveBarText">-</span>
-        <button id="setupSaveBtn" class="btn btn-primary" style="padding:10px 28px;font-size:13px;font-weight:600;">Konfiguration speichern</button>
+        <button id="setupSaveBtn" class="btn btn-primary setup-save-btn">Konfiguration speichern</button>
       </div>
     </main>
   </div>
 
   <script src="/common.js"></script>
+  <script src="/dv-modal.js"></script>
   <script src="/setup.js"></script>
 </body>
 </html>

@@ -2336,7 +2336,12 @@ function initSettingsPage() {
   document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', checkSystemUpdates);
   document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', applySystemUpdates);
   document.getElementById('rebootSystemBtn')?.addEventListener('click', async () => {
-    if (!confirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.')) return;
+    // Plan 08-11 Task 1: replace native confirm() with branded dvConfirm modal.
+    if (!(await window.dvConfirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.', {
+      title: 'System neu starten',
+      okLabel: 'Neu starten',
+      variant: 'danger'
+    }))) return;
     const resultEl = document.getElementById('rebootResult');
     if (resultEl) { resultEl.textContent = 'Neustart...'; setStatusClass(resultEl, 'warn'); }
     try {

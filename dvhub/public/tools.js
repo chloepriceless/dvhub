@@ -640,7 +640,11 @@ async function switchUpdateChannel(newChannel) {
   const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; };
 
   const label = newChannel === 'stable' ? 'Stable (Releases)' : 'Bleeding Edge (Dev Commits)';
-  if (!confirm(`Wechsel zu ${label}?\n\nDVhub wird auf den ${newChannel === 'stable' ? 'neuesten Release-Tag' : 'aktuellen main-Branch'} umgestellt und neu gestartet.`)) {
+  // Plan 08-11 Task 1: replace native confirm() with branded dvConfirm modal.
+  if (!(await window.dvConfirm(
+    `Wechsel zu ${label}?\n\nDVhub wird auf den ${newChannel === 'stable' ? 'neuesten Release-Tag' : 'aktuellen main-Branch'} umgestellt und neu gestartet.`,
+    { title: 'Update-Channel wechseln', okLabel: 'Wechseln', variant: 'primary' }
+  ))) {
     revertDropdown();
     return;
   }

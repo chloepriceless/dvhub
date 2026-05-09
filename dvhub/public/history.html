@@ -36,27 +36,27 @@
       <div class="topbar-right"></div>
     </header>
 
-    <main class="page-content" style="padding:12px;max-width:100%;">
+    <main class="page-content history-page-content">
       <!-- Page header with nav controls -->
       <div class="page-header-card">
         <div class="panel-head">
           <div>
             <p class="card-kicker">Historie</p>
-            <h1 class="section-title" style="font-size:1.4rem;">DVhub Historie</h1>
-            <div id="historyMeta" class="meta" style="margin-top:4px;">Historienansicht wird vorbereitet...</div>
+            <h1 class="section-title history-section-title-lg">DVhub Historie</h1>
+            <div id="historyMeta" class="meta history-meta-mt">Historienansicht wird vorbereitet...</div>
           </div>
-          <div class="controls" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <div class="history-nav-buttons" aria-label="Zeitraum wechseln" style="display:flex;gap:4px;">
+          <div class="controls history-controls-row">
+            <div class="history-nav-buttons history-nav-buttons-row" aria-label="Zeitraum wechseln">
               <button id="historyPrevBtn" class="btn btn-ghost btn-small" type="button" aria-label="Vorheriger Zeitraum">&#8592;</button>
               <button id="historyNextBtn" class="btn btn-ghost btn-small" type="button" aria-label="Nächster Zeitraum">&#8594;</button>
             </div>
-            <select id="historyView" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:4px 8px;border-radius:6px;font-size:0.75rem;">
+            <select id="historyView" class="history-select-input">
               <option value="day">Tag</option>
               <option value="week">Woche</option>
               <option value="month">Monat</option>
               <option value="year">Jahr</option>
             </select>
-            <input id="historyDate" type="date" style="background:var(--flow-surface);border:1px solid var(--flow-border);color:var(--flow-text);padding:4px 8px;border-radius:6px;font-size:0.75rem;" />
+            <input id="historyDate" type="date" class="history-select-input" />
             <button id="historyBackfillBtn" class="btn btn-primary btn-small" type="button">Preise nachladen</button>
             <button id="historyExportCsvBtn" class="btn btn-ghost btn-small" type="button" title="Detail-Tabelle als CSV (Excel-kompatibel) exportieren">CSV-Export</button>
           </div>
@@ -64,7 +64,7 @@
       </div>
 
       <!-- History banner -->
-      <section id="historyBanner" class="status-banner" style="margin-bottom:10px;">
+      <section id="historyBanner" class="status-banner history-banner-mb">
         <div class="history-status-main">
           <span id="historyBannerText">Lade Historie...</span>
           <button id="historyStatusInfoToggle" class="btn btn-ghost btn-small" type="button">Info</button>
@@ -73,56 +73,56 @@
       </section>
 
       <!-- KPI Cards -->
-      <div class="history-kpi-row" style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;">
+      <div class="history-kpi-row history-kpi-grid">
 
         <!-- 1: Energiekosten -->
         <div class="config-group" data-accent="orange">
-          <div class="config-group-kicker" style="color:var(--flow-orange);">Energiekosten</div>
-          <div id="historyKpiTotalCost" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-orange);">-</div>
-          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiAvoidedPvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiAvoidedBatteryCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-group-kicker history-color-orange">Energiekosten</div>
+          <div id="historyKpiTotalCost" class="card-value history-card-kpi history-color-orange">-</div>
+          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCost" class="config-row-value history-color-orange">-</strong></div>
+          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiAvoidedPvCost" class="config-row-value history-color-orange">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiAvoidedBatteryCost" class="config-row-value history-color-orange">-</strong></div>
         </div>
 
         <!-- 2: Energieeinnahmen -->
         <div class="config-group" data-accent="green">
-          <div class="config-group-kicker" style="color:var(--flow-green);">Energieeinnahmen</div>
-          <div id="historyKpiTotalRevenue" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-green);">-</div>
-          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiRevenue" class="config-row-value" style="color:var(--flow-green);">-</strong></div>
+          <div class="config-group-kicker history-color-green">Energieeinnahmen</div>
+          <div id="historyKpiTotalRevenue" class="card-value history-card-kpi history-color-green">-</div>
+          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiRevenue" class="config-row-value history-color-green">-</strong></div>
         </div>
 
         <!-- 3: Netto Cashflow -->
         <div class="config-group" data-accent="blue">
-          <div class="config-group-kicker" style="color:var(--flow-blue);">Netto Cashflow</div>
-          <div id="historyKpiNet" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-blue);">-</div>
-          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiCashIn" class="config-row-value" style="color:var(--flow-green);">-</strong></div>
-          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCashOut" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-group-kicker history-color-blue">Netto Cashflow</div>
+          <div id="historyKpiNet" class="card-value history-card-kpi history-color-blue">-</div>
+          <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiCashIn" class="config-row-value history-color-green">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Strombezug</span><strong id="historyKpiCashOut" class="config-row-value history-color-orange">-</strong></div>
         </div>
 
         <!-- 4: Vermiedene Kosten (with Marktwert toggle) -->
         <div class="config-group" data-accent="cyan">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px 0;">
-            <span class="config-group-kicker" style="padding:0;color:var(--flow-cyan);" id="historyAvoidedLabel">Vermiedene Kosten</span>
-            <button id="historyMarketToggle" type="button" class="btn btn-ghost btn-small" style="font-size:9px;padding:2px 6px;opacity:0.6;">Marktwert</button>
+          <div class="history-avoided-head">
+            <span class="config-group-kicker history-kicker-flat history-color-cyan" id="historyAvoidedLabel">Vermiedene Kosten</span>
+            <button id="historyMarketToggle" type="button" class="btn btn-ghost btn-small history-toggle-mini">Marktwert</button>
           </div>
-          <div id="historyKpiAvoided" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-cyan);">-</div>
+          <div id="historyKpiAvoided" class="card-value history-card-kpi history-color-cyan">-</div>
           <!-- Default: Bezugspreis-Modus -->
           <div id="historyAvoidedDefault">
-            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
-            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatteryGross" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
+            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvGross" class="config-row-value history-color-cyan">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatteryGross" class="config-row-value history-color-cyan">-</strong></div>
           </div>
           <!-- Marktwert-Modus (hidden by default) -->
           <div id="historyAvoidedMarket" hidden>
-            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvMarket" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
-            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatMarket" class="config-row-value" style="color:var(--flow-cyan);">-</strong></div>
-            <div class="config-row"><span class="config-row-label">Opportunit&auml;t</span><strong id="historyKpiOppCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+            <div class="config-row"><span class="config-row-label">PV</span><strong id="historyKpiAvoidedPvMarket" class="config-row-value history-color-cyan">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Akku</span><strong id="historyKpiAvoidedBatMarket" class="config-row-value history-color-cyan">-</strong></div>
+            <div class="config-row"><span class="config-row-label">Opportunit&auml;t</span><strong id="historyKpiOppCost" class="config-row-value history-color-orange">-</strong></div>
           </div>
         </div>
 
         <!-- 5: Energiebilanz -->
         <div class="config-group" data-accent="purple">
-          <div class="config-group-kicker" style="color:var(--flow-purple);">Energiebilanz</div>
-          <div class="config-row"><span class="config-row-label">PV-Erzeugung</span><strong id="historyKpiPv" class="config-row-value" style="color:var(--flow-purple);">-</strong></div>
+          <div class="config-group-kicker history-color-purple">Energiebilanz</div>
+          <div class="config-row"><span class="config-row-label">PV-Erzeugung</span><strong id="historyKpiPv" class="config-row-value history-color-purple">-</strong></div>
           <div class="config-row"><span class="config-row-label">Eigenverbrauch</span><strong id="historyKpiSelfCons" class="config-row-value">-</strong></div>
           <div class="config-row"><span class="config-row-label">Bezug</span><strong id="historyKpiImport" class="config-row-value">-</strong></div>
           <div class="config-row"><span class="config-row-label">Einspeisung</span><strong id="historyKpiExport" class="config-row-value">-</strong></div>
@@ -132,17 +132,17 @@
 
         <!-- 6: Gesamtbilanz -->
         <div class="config-group" id="historyKpiBilanzCard" data-accent="green">
-          <div class="config-group-kicker" style="color:var(--flow-green);">Gesamtbilanz</div>
-          <div id="historyKpiGrossReturn" class="card-value" style="padding:2px 14px;font-size:18px;font-weight:700;color:var(--flow-green);">-</div>
+          <div class="config-group-kicker history-color-green">Gesamtbilanz</div>
+          <div id="historyKpiGrossReturn" class="card-value history-card-kpi history-color-green">-</div>
           <div class="config-row"><span class="config-row-label">Vermiedene Kosten</span><strong id="historyKpiBilanzAvoided" class="config-row-value">-</strong></div>
           <div class="config-row"><span class="config-row-label">Netto Cashflow</span><strong id="historyKpiBilanzNet" class="config-row-value">-</strong></div>
-          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiBilanzPvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiBilanzBatCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
+          <div class="config-row"><span class="config-row-label">PV-Gestehung</span><strong id="historyKpiBilanzPvCost" class="config-row-value history-color-orange">-</strong></div>
+          <div class="config-row"><span class="config-row-label">Akku-Verschleiss</span><strong id="historyKpiBilanzBatCost" class="config-row-value history-color-orange">-</strong></div>
         </div>
       </div>
 
       <!-- DV-Einspeisevergütung (nur Monat/Jahr) -->
-      <div id="historyDvCard" class="chart-span-card" style="display:none;margin-bottom:10px;">
+      <div id="historyDvCard" class="chart-span-card history-dv-card-hidden">
         <div class="panel-head">
           <div>
             <p class="card-kicker">Direktvermarktung</p>
@@ -152,7 +152,7 @@
         <div class="history-dv-grid">
           <div class="history-dv-section">
             <div class="history-dv-label">Tats&auml;chlich (DV)</div>
-            <div id="historyKpiDvRevenue" class="history-dv-value" style="color:var(--flow-green);">-</div>
+            <div id="historyKpiDvRevenue" class="history-dv-value history-color-green">-</div>
             <div class="config-row"><span class="config-row-label">ct/kWh (effektiv)</span><strong id="historyKpiDvRevenueRate" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label" id="historyKpiDvMarketValueLabel">Tats&auml;chlicher Monatsmarktwert</span><strong id="historyKpiDvMarketValue" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label">Anzulegender Wert</span><strong id="historyKpiDvApplicableValue" class="config-row-value">-</strong></div>
@@ -165,15 +165,15 @@
           <div class="history-dv-section">
             <div class="history-dv-label">Vergleich</div>
             <div class="config-row"><span class="config-row-label">DV-Mehrerl&ouml;s</span><strong id="historyKpiDvExcess" class="config-row-value">-</strong></div>
-            <div class="config-row"><span class="config-row-label">DV-Kosten</span><strong id="historyKpiDvCost" class="config-row-value" style="color:var(--flow-orange);">-</strong></div>
-            <div class="config-row" style="margin-top:6px;"><span class="config-row-label" style="font-weight:600;">Netto DV-Vorteil</span><strong id="historyKpiDvNetAdvantage" class="config-row-value" style="font-weight:700;">-</strong></div>
+            <div class="config-row"><span class="config-row-label">DV-Kosten</span><strong id="historyKpiDvCost" class="config-row-value history-color-orange">-</strong></div>
+            <div class="config-row history-row-mt"><span class="config-row-label history-row-strong">Netto DV-Vorteil</span><strong id="historyKpiDvNetAdvantage" class="config-row-value history-row-strong-700">-</strong></div>
           </div>
         </div>
       </div>
 
       <!-- Full-width chart area -->
-      <section id="historyChartGrid" class="history-chart-grid" style="margin-bottom:10px;">
-        <article id="historyFinancialPanel" class="chart-span-card" style="margin-bottom:10px;">
+      <section id="historyChartGrid" class="history-chart-grid history-chart-grid-mb">
+        <article id="historyFinancialPanel" class="chart-span-card history-panel-mb">
           <div class="panel-head">
             <div>
               <p class="card-title">Analyse</p>
@@ -188,7 +188,7 @@
           <div id="historySolarSummary"></div>
         </article>
 
-        <article id="historyMonthDailyPanel" class="chart-span-card" style="margin-bottom:10px;" hidden>
+        <article id="historyMonthDailyPanel" class="chart-span-card history-panel-mb" hidden>
           <div class="panel-head">
             <div>
               <p class="card-title">Monatsübersicht</p>
@@ -198,7 +198,7 @@
           <div id="historyMonthDailyChart" class="history-chart-shell"></div>
         </article>
 
-        <article id="historyEnergyPanel" class="chart-span-card" style="margin-bottom:10px;">
+        <article id="historyEnergyPanel" class="chart-span-card history-panel-mb">
           <div class="panel-head">
             <div>
               <p class="card-title">Energie</p>
@@ -213,7 +213,7 @@
           <div id="historyEnergyChart" class="history-chart-shell"></div>
         </article>
 
-        <article id="historyPricePanel" class="chart-span-card" style="margin-bottom:10px;">
+        <article id="historyPricePanel" class="chart-span-card history-panel-mb">
           <div class="panel-head">
             <div>
               <p class="card-title">Preise</p>
@@ -227,7 +227,7 @@
       </section>
 
       <!-- Detail cards -->
-      <div class="page-grid" style="margin-bottom:10px;">
+      <div class="page-grid history-page-grid-mb">
         <!-- Marktprämie -->
         <article id="historyPremiumFields" class="sub-card" hidden>
           <div class="panel-head">
@@ -263,6 +263,7 @@
   <script src="/chart.min.js"></script>
   <script src="/chartjs-chart-sankey.min.js"></script>
   <script src="/common.js"></script>
+  <script src="/dv-modal.js"></script>
   <script src="/history.js"></script>
 </body>
 </html>

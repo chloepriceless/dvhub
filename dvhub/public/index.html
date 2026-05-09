@@ -49,11 +49,11 @@
         <span class="intg-badge" id="badge-loxone" data-system="loxone" title="Loxone" hidden>
           <span class="dot dot-ok"></span> Loxone
         </span>
-        <span class="intg-badge" id="badge-ml" data-system="ml" title="ML Forecast" style="display:none;">
+        <span class="intg-badge u-hidden" id="badge-ml" data-system="ml" title="ML Forecast">
           <span class="dot"></span> ML
         </span>
         <span id="connStatus" class="dot dot-ok" title="Verbindungsstatus"></span>
-        <span id="nowTime" style="font-size:0.65rem;color:var(--flow-text-muted);font-family:var(--font-mono);">--:--</span>
+        <span id="nowTime" class="topbar-clock">--:--</span>
       </div>
     </header>
 
@@ -65,8 +65,8 @@
 
         <!-- PV Card -->
         <div class="rail-card" data-accent="pv">
-          <p class="card-kicker" style="color:var(--node-pv);">☀ PV Gesamt</p>
-          <div id="pvTotal" class="card-value" style="color:var(--node-pv);">-</div>
+          <p class="card-kicker kicker-pv">☀ PV Gesamt</p>
+          <div id="pvTotal" class="card-value value-pv">-</div>
           <div class="metric-row"><span>DC-PV</span><strong id="pvP">-</strong></div>
           <div class="metric-row"><span>AC-PV</span><strong id="pvAc">-</strong></div>
           <div class="metric-row"><span>DC-PV-Einspeisung</span><strong id="dvDcPv">-</strong></div>
@@ -75,9 +75,9 @@
 
         <!-- Battery Card -->
         <div class="rail-card" data-accent="bat">
-          <p class="card-kicker" style="color:var(--node-bat);">⏻ Batterie</p>
-          <div id="soc" class="card-value" style="color:var(--node-bat);">-</div>
-          <div class="progress-bar"><div class="progress-fill" id="socBar" style="width:0%"></div></div>
+          <p class="card-kicker kicker-bat">⏻ Batterie</p>
+          <div id="soc" class="card-value value-bat">-</div>
+          <div class="progress-bar"><div class="progress-fill progress-fill-init" id="socBar"></div></div>
           <div class="metric-row"><span>Akku-Leistung</span><strong id="batP">-</strong></div>
           <div class="metric-row"><span>Grid Setpoint</span><strong id="gridSetpoint">-</strong></div>
           <div id="minSocRow" class="metric-row metric-row-action" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor">
@@ -94,25 +94,25 @@
 
         <!-- DV-Status Card -->
         <div class="rail-card" data-accent="dv">
-          <p class="card-kicker" style="color:var(--node-dv);">⚡ DV-Status</p>
-          <div id="dvStatus" class="card-value" style="color:var(--node-dv);">-</div>
+          <p class="card-kicker kicker-dv">⚡ DV-Status</p>
+          <div id="dvStatus" class="card-value value-dv">-</div>
           <div class="metric-row"><span>Control Value</span><strong id="dvValue">-</strong></div>
           <div class="metric-row"><span>Lease bis</span><strong id="offUntil">-</strong></div>
           <div class="metric-row"><span>Letzte Modbus-Abfrage</span><strong id="kaModbus">-</strong></div>
-          <div id="dvVpnRow" class="metric-row" style="display:none;"><span style="color:var(--node-vpn);">VPN-Tunnel</span><strong id="dvVpnStatus" style="color:var(--node-vpn);">-</strong></div>
+          <div id="dvVpnRow" class="metric-row dv-vpn-row"><span>VPN-Tunnel</span><strong id="dvVpnStatus">-</strong></div>
         </div>
 
-        <div class="rail-card" data-accent="vpn" id="vpnCard" style="display:none;">
-          <p class="card-kicker" style="color:var(--node-vpn);">VPN-Tunnel</p>
-          <div id="vpnStatus" class="card-value" style="color:var(--node-vpn);">-</div>
+        <div class="rail-card u-hidden" data-accent="vpn" id="vpnCard">
+          <p class="card-kicker kicker-vpn">VPN-Tunnel</p>
+          <div id="vpnStatus" class="card-value value-vpn">-</div>
           <div class="metric-row"><span>Tunnel-IP</span><strong id="vpnTunIp">-</strong></div>
           <div class="metric-row"><span>Uptime</span><strong id="vpnUptime">-</strong></div>
           <div class="metric-row"><span>Reconnects</span><strong id="vpnReconnects">0</strong></div>
-          <div id="vpnCertWarn" class="metric-row" style="display:none;color:var(--c-amber-600);">
+          <div id="vpnCertWarn" class="metric-row metric-row-amber">
             <span>Zertifikat</span><strong id="vpnCertDays">-</strong>
           </div>
-          <div style="margin-top:8px;">
-            <button id="vpnReconnectBtn" class="btn-xs" style="background:var(--node-vpn);color:#fff;">Reconnect</button>
+          <div class="vpn-card-actions">
+            <button id="vpnReconnectBtn" class="btn-xs vpn-reconnect-btn">Reconnect</button>
           </div>
         </div>
 
@@ -128,7 +128,7 @@
 
         <!-- Markt Card -->
         <div class="rail-card" data-accent="market">
-          <p class="card-kicker" style="color:var(--node-market);">★ Marktdaten</p>
+          <p class="card-kicker kicker-market">★ Marktdaten</p>
           <div id="priceNow" class="card-value">-</div>
           <div class="metric-row"><span>Nächster Slot</span><strong id="priceNext">-</strong></div>
           <div class="metric-row"><span>Heute noch negativ</span><strong id="negLater">-</strong></div>
@@ -150,9 +150,9 @@
 
         <!-- Automatik Summary Card -->
         <div class="rail-card" data-accent="auto">
-          <p class="card-kicker" style="color:var(--node-dv);">Automatik</p>
-          <div id="automationSummaryTitle" class="card-value" style="font-size:1.2rem;">-</div>
-          <div id="automationStatusBar" style="margin-top:6px;">
+          <p class="card-kicker kicker-dv">Automatik</p>
+          <div id="automationSummaryTitle" class="card-value u-fz-12rem">-</div>
+          <div id="automationStatusBar" class="u-mt-2">
             <div class="metric-row"><span>Status</span><strong id="automationOutcome">-</strong></div>
             <div class="metric-row"><span>Regeln</span><strong id="automationRuleCount">-</strong></div>
             <div class="metric-row"><span>Energie</span><strong id="automationAvailableEnergy">-</strong></div>
@@ -168,7 +168,7 @@
           <div class="metric-row"><span>DC-Einspeisung</span><strong id="activeDcFeed">-</strong></div>
           <div class="metric-row"><span>Letzter Write</span><strong id="lastControlWrite">-</strong></div>
 
-          <p class="card-kicker" style="margin-top:12px;">Direkt schreiben</p>
+          <p class="card-kicker kicker-mt-12">Direkt schreiben</p>
           <div class="ctrl-row">
             <label>Grid (W) <input id="manualGridValue" type="number" value="-40"></label>
             <button id="manualGridBtn" class="btn btn-small btn-primary" type="button">Schreiben</button>
@@ -178,7 +178,7 @@
             <button id="manualChargeBtn" class="btn btn-small btn-primary" type="button">Schreiben</button>
           </div>
 
-          <p class="card-kicker" style="margin-top:12px;">Standards</p>
+          <p class="card-kicker kicker-mt-12">Standards</p>
           <div class="ctrl-row">
             <label>Default Grid <input id="defaultGridSetpointInput" type="number" value="-40"></label>
           </div>
@@ -201,10 +201,10 @@
             <p class="card-title">Day-Ahead-Preise (ct/kWh)</p>
             <button id="refreshEpex" class="btn btn-primary btn-small" type="button">EPEX aktualisieren</button>
           </div>
-          <div id="priceChartContainer" style="width:100%;position:relative;">
+          <div id="priceChartContainer" class="chart-container-relative-w">
             <canvas id="priceChartCanvas"></canvas>
           </div>
-          <div id="tooltip" style="display:none;">-</div>
+          <div id="tooltip" class="tooltip-hidden">-</div>
           <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
             <div class="chart-selection-copy">
               <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
@@ -221,14 +221,14 @@
 
         <!-- Zeitplan (mit integrierter Börsenautomatik) -->
         <div class="chart-sub-row">
-          <div class="chart-span-card" style="grid-column:1 / -1;">
+          <div class="chart-span-card chart-span-full">
             <p class="card-title">Zeitplan</p>
             <h2 class="section-title">Börsenfenster und Regeln</h2>
             <div class="schedule-flags">
               <label><input type="checkbox" id="schedColGrid" checked> Grid-Spalte</label>
               <label><input type="checkbox" id="schedColCharge"> Charge-Spalte</label>
             </div>
-            <div id="automationPlanSummary" class="automation-plan-summary" style="display:none;">
+            <div id="automationPlanSummary" class="automation-plan-summary u-hidden">
               <div class="automation-plan-header">
                 <p class="card-title">Aktueller Automationsplan</p>
                 <button id="replanAutomationBtn" class="btn btn-small btn-ghost" type="button" title="Plan sofort neu berechnen">Neu planen</button>
@@ -261,23 +261,23 @@
             <div class="meta" id="controlMsg">-</div>
 
             <!-- Integrierte kleine Börsenautomatik (vorher eigene Kachel) -->
-            <section id="automationPanel" class="sma-inline-panel" style="margin-top:18px;border-top:1px solid #2a3550;padding-top:14px;">
-              <div class="sma-inline-head" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-                <p class="card-title" style="margin:0;">Kleine Börsenautomatik</p>
-                <label class="settings-field" style="display:inline-flex;align-items:center;gap:8px;margin:0;">
+            <section id="automationPanel" class="sma-inline-panel sma-section-block">
+              <div class="sma-inline-head sma-head-flex">
+                <p class="card-title sma-head-title">Kleine Börsenautomatik</p>
+                <label class="settings-field sma-toggle-label">
                   <input type="checkbox" id="automationEnabled">
-                  <span style="font-weight:500;">Aktiv</span>
+                  <span class="sma-head-active">Aktiv</span>
                 </label>
-                <h2 class="section-title" id="automationStatusTitle" style="margin:0 0 0 auto;font-size:0.95rem;">—</h2>
+                <h2 class="section-title section-title-flex-end" id="automationStatusTitle">—</h2>
               </div>
-              <div class="automation-status-bar" id="automationStatusBarPanel" style="margin-top:8px;">
+              <div class="automation-status-bar sma-status-line" id="automationStatusBarPanel">
                 <span id="automationOutcomePanel">—</span>
                 <span id="automationRuleCountPanel">—</span>
                 <span id="automationAvailableEnergyPanel">—</span>
               </div>
-              <details class="sma-inline-details" style="margin-top:10px;border:1px solid #2a3550;border-radius:6px;background:rgba(20,28,48,0.4);">
-                <summary style="cursor:pointer;padding:10px 14px;color:#8b95a8;font-size:12px;user-select:none;">⚙️ Einstellungen ein-/ausklappen</summary>
-                <div style="padding:10px 14px 14px;">
+              <details class="sma-inline-details sma-details-block">
+                <summary class="sma-details-summary">⚙️ Einstellungen ein-/ausklappen</summary>
+                <div class="sma-details-body">
                   <div class="automation-config-grid" id="automationConfigGrid">
                     <label class="settings-field"><span>Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
                     <label class="settings-field"><span>Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
@@ -287,7 +287,7 @@
                     <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" value="30"></label>
                   </div>
                   <div id="automationStagesContainer"></div>
-                  <div class="sched-controls" style="margin-top:10px;">
+                  <div class="sched-controls u-mt-4">
                     <button id="addAutomationStageBtn" class="btn btn-small" type="button">+ Stufe</button>
                     <button id="saveAutomationConfigBtn" class="btn btn-small btn-accent" type="button">Speichern</button>
                   </div>
@@ -335,15 +335,15 @@
           <span class="chart-title">Forecast-Vergleich</span>
           <span class="chart-subtitle" id="forecastCompSubtitle">-12h / +24h</span>
         </div>
-        <div style="position:relative;height:200px;">
+        <div class="chart-container-relative-200">
           <canvas id="forecastComparisonChart"></canvas>
         </div>
         <div class="chart-legend" id="forecastCompLegend"></div>
-        <div id="forecastDaySummary" style="padding:6px 0 0;font-size:0.8rem;color:#8b95a8;font-family:'JetBrains Mono',monospace;text-align:center;"></div>
+        <div id="forecastDaySummary" class="chart-day-summary"></div>
       </div>
 
       <!-- Optimizer-Plan Chart: shows optimizer's 48h battery plan vs PV/Load/Price -->
-      <div class="chart-span-card" id="optimizerPlanCard" style="display:none;">
+      <div class="chart-span-card u-hidden" id="optimizerPlanCard">
         <div class="chart-skeleton" id="optimizerPlanSkeleton">
           <div class="skeleton-bar"></div>
         </div>
@@ -351,7 +351,7 @@
           <span class="chart-title">Optimizer-Plan (48h)</span>
           <span class="chart-subtitle" id="optimizerPlanSubtitle">--</span>
         </div>
-        <div style="position:relative;height:220px;">
+        <div class="chart-container-relative-220">
           <canvas id="optimizerPlanChart"></canvas>
         </div>
         <div class="chart-legend" id="optimizerPlanLegend"></div>
@@ -361,7 +361,7 @@
         <div class="chart-span-card" id="gantt-card">
           <span class="card-kicker">OPTIMIZER-SCHEDULE</span>
           <div class="chart-skeleton" id="gantt-skeleton"></div>
-          <canvas id="gantt-chart" role="img" aria-label="Optimizer-Schedule Timeline" style="display:none"></canvas>
+          <canvas id="gantt-chart" class="u-hidden" role="img" aria-label="Optimizer-Schedule Timeline"></canvas>
         </div>
         <div class="savings-card chart-span-card" id="savings-card">
           <span class="card-kicker">ERSPARNIS HEUTE</span>
@@ -390,6 +390,7 @@
   <script src="/hammer.min.js"></script>
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
+  <script src="/dv-modal.js"></script>
   <script src="/dvhub-powerflow.js"></script>
   <script src="/app.js"></script>
   <script src="/leitstand-charts.js?v=3"></script>
