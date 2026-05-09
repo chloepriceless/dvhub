@@ -4,14 +4,15 @@
   // ---------------------------------------------------------------------------
   // Constants
   // ---------------------------------------------------------------------------
+  // Brand-aligned palette (DVhub design system, Phase 8 Plan 10)
   const CHART_COLORS = {
     pvForecast: '#e3b341',
     pvActual: 'rgba(227, 179, 65, 0.5)',
     loadForecast: '#58a6ff',
-    scheduleInternal: '#6366F1',
-    scheduleEos: '#3fb950',
+    scheduleInternal: '#0077FF', // brand blue (was #6366F1 indigo)
+    scheduleEos: '#39E06F',      // brand green (was #3fb950 GitHub green)
     scheduleSma: '#f2c94c',
-    savingsPositive: '#3fb950',
+    savingsPositive: '#39E06F',  // brand green (was #3fb950)
     savingsNegative: '#ff7b72',
     sparkline: '#5a6a8a'
   };
@@ -952,7 +953,7 @@
       {
         label: 'Preis (ct/kWh)',
         data: priceCt,
-        borderColor: '#3fb950',
+        borderColor: '#39E06F',
         backgroundColor: 'transparent',
         borderWidth: 1.5,
         pointRadius: 0,
@@ -981,8 +982,8 @@
       y1: {
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#3fb950', font: { family: 'JetBrains Mono', size: 9 } },
-        title: { display: true, text: 'ct/kWh', color: '#3fb950', font: { size: 10 } }
+        ticks: { color: '#39E06F', font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'ct/kWh', color: '#39E06F', font: { size: 10 } }
       }
     };
     config.options.plugins.tooltip.callbacks = {
@@ -1124,7 +1125,7 @@
     // Surplus: green if positive, red if negative
     var sign = surplus >= 0 ? '+' : '';
     surplusEl.textContent = sign + surplus.toFixed(1) + ' kWh';
-    surplusEl.style.color = surplus >= 0 ? '#3fb950' : '#ff7b72';
+    surplusEl.style.color = surplus >= 0 ? '#39E06F' : '#ff7b72';
 
     // Detail lines
     if (detailEl) {
