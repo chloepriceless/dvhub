@@ -179,19 +179,73 @@ export function createPersistentBridge(ctx, { scriptPath }) {
   const MAX_HEARTBEAT_FAILURES = 3;
   const HEARTBEAT_INTERVAL_MS = 60_000;
   let closing = false;
-  // Respawn circuit breaker: if the process keeps crashing (>=5 in 60s) the model
-  // is broken — stop respawning and surface a fatal pushLog so ops can intervene.
-  // Without this we'd hammer the OS with fork() retries indefinitely.
-  /** @type {number[]} timestamps of recent respawn-triggering exits */
-  const respawnHistory = [];
-  const RESPAWN_BREAKER_WINDOW_MS = 60_000;
-  const RESPAWN_BREAKER_MAX = 5;
-  let circuitBreakerTripped = false;
+
+  // Respawn circuit breaker (08-12 — REPOLENS concurrency MEDIUM):
+  // If the persistent Python child keeps crashing (>= maxRestarts within windowMs)
+  // the model is broken — stop respawning and surface a fatal pushLog so ops can
+  // intervene. Without this we'd hammer the OS with fork() retries indefinitely.
+  // The breaker is per-bridge-instance (closure-scoped) to avoid cross-test leakage.
+  const PYTHON_BRIDGE_BREAKER = {
+    windowMs: 60_000,
+    maxRestarts: 5,
+    /** @type {number[]} timestamps of recent respawn-triggering exits */
+    restartTimestamps: [],
+    tripped: false,
+  };
+
+  /**
+   * Record a restart attempt and check the breaker.
+   * Returns true if a respawn is allowed; false if the breaker has tripped.
+   * Pushes a `python_bridge_breaker_tripped` log event on trip (the legacy
+   * `python_persistent_breaker_tripped` event is also emitted for
+   * back-compat with existing log consumers).
+   */
+  function recordRestart() {
+    const now = Date.now();
+    const b = PYTHON_BRIDGE_BREAKER;
+    // Drop timestamps older than the rolling window.
+    b.restartTimestamps = b.restartTimestamps.filter((t) => now - t < b.windowMs);
+    b.restartTimestamps.push(now);
+    if (b.restartTimestamps.length > b.maxRestarts) {
+      b.tripped = true;
+      pushLog('python_bridge_breaker_tripped', {
+        count: b.restartTimestamps.length,
+        windowMs: b.windowMs,
+        maxRestarts: b.maxRestarts,
+        reason: `>${b.maxRestarts} respawns in ${b.windowMs / 1000}s — stopped to avoid fork-loop`,
+      });
+      // Legacy event name kept for back-compat with existing dashboards / log scrapers.
+      pushLog('python_persistent_breaker_tripped', {
+        crashes: b.restartTimestamps.length,
+        windowMs: b.windowMs,
+        reason: `>${b.maxRestarts} respawns in ${b.windowMs / 1000}s — stopped to avoid fork-loop`,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Manually reset the breaker (e.g. via an admin endpoint). Clears the
+   * tripped flag and the restart history, then attempts a fresh spawn.
+   */
+  function resetBreaker() {
+    PYTHON_BRIDGE_BREAKER.tripped = false;
+    PYTHON_BRIDGE_BREAKER.restartTimestamps = [];
+    pushLog('python_bridge_breaker_reset', {});
+    if (!closing) spawnProcess();
+  }
 
   /**
    * Spawn the Python process and set up JSON-RPC line reader.
+   * Refuses to spawn when the circuit breaker has tripped — call resetBreaker()
+   * to clear the trip and try again.
    */
   function spawnProcess() {
+    if (PYTHON_BRIDGE_BREAKER.tripped) {
+      // Circuit open — do not respawn; only a manual reset clears it.
+      return;
+    }
     if (!fs.existsSync(VENV_PYTHON)) {
       pushLog('python_persistent_not_installed', { expectedPath: VENV_PYTHON });
       return;
@@ -241,27 +295,17 @@ export function createPersistentBridge(ctx, { scriptPath }) {
       if (!closing) {
         pushLog('python_persistent_exit', { code });
 
-        // Respawn circuit breaker: drop history older than 60s, then check.
-        const now = Date.now();
-        while (respawnHistory.length && now - respawnHistory[0] > RESPAWN_BREAKER_WINDOW_MS) {
-          respawnHistory.shift();
-        }
-        respawnHistory.push(now);
-
-        if (respawnHistory.length >= RESPAWN_BREAKER_MAX) {
-          circuitBreakerTripped = true;
-          pushLog('python_persistent_breaker_tripped', {
-            crashes: respawnHistory.length,
-            windowMs: RESPAWN_BREAKER_WINDOW_MS,
-            reason: `>=${RESPAWN_BREAKER_MAX} respawns in ${RESPAWN_BREAKER_WINDOW_MS / 1000}s — stopped to avoid fork-loop`
-          });
+        // Run the breaker: returns false (and emits *_breaker_tripped) once we exceed
+        // maxRestarts inside windowMs. When the breaker trips we stop respawning until
+        // resetBreaker() is called.
+        if (!recordRestart()) {
           return;
         }
 
-        // Auto-respawn
+        // Auto-respawn after 2s — defensive double-check on tripped + closing.
         setTimeout(() => {
-          if (!closing && !circuitBreakerTripped) {
-            pushLog('python_persistent_respawn', { recent: respawnHistory.length });
+          if (!closing && !PYTHON_BRIDGE_BREAKER.tripped) {
+            pushLog('python_persistent_respawn', { recent: PYTHON_BRIDGE_BREAKER.restartTimestamps.length });
             spawnProcess();
           }
         }, 2000);
@@ -380,5 +424,5 @@ export function createPersistentBridge(ctx, { scriptPath }) {
     pending.clear();
   }
 
-  return { call, start, close };
+  return { call, start, close, resetBreaker };
 }
