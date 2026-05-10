@@ -62,6 +62,7 @@
             <div class="sa-nav-group">System</div>
             <button class="settings-tab" data-tab="system"><span class="sa-ico">&#9670;</span>Status</button>
             <button class="settings-tab" data-tab="ml"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
+            <button class="settings-tab" data-tab="vpn"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
 
           <!-- Rechts: Sektionen -->
@@ -406,6 +407,60 @@
 
           </div><!-- /.config-grid -->
         </div><!-- /#tab-ml -->
+
+        <div id="tab-vpn" class="settings-tab-panel" data-tab-content="vpn" hidden>
+          <div class="config-grid">
+
+            <!-- VPN Allgemein -->
+            <div class="config-group" data-accent="purple">
+              <div class="config-group-kicker">VPN-Fernzugriff</div>
+              <p class="svc-meta">
+                Aktivieren Sie VPN, um DVhub aus dem Au&szlig;ennetz sicher zu erreichen.
+                Die Profil-Konfigurationsdatei wird auf dem Ger&auml;t validiert; gef&auml;hrliche Skript-Direktiven werden blockiert.
+              </p>
+
+              <div class="config-row">
+                <span class="config-row-label">VPN aktiviert</span>
+                <input type="checkbox" data-path="vpn.enabled" data-cfg="vpn.enabled" id="vpnEnabled">
+              </div>
+              <p class="svc-meta-tight">Wenn deaktiviert, ist der Tunnel offline und es werden keine Verbindungsversuche unternommen.</p>
+
+              <div class="config-row">
+                <span class="config-row-label">Protokoll</span>
+                <select data-path="vpn.protocol" data-cfg="vpn.protocol" id="vpnProtocol" class="config-select">
+                  <option value="openvpn">OpenVPN</option>
+                  <option value="wireguard">WireGuard</option>
+                  <option value="ipsec">IPSec</option>
+                </select>
+              </div>
+              <p class="svc-meta-tight">Muss zu der hochgeladenen Profil-Datei passen.</p>
+
+              <div class="config-row">
+                <span class="config-row-label">Profilname</span>
+                <input type="text"
+                       data-path="vpn.profileName"
+                       data-cfg="vpn.profileName"
+                       id="vpnProfileName"
+                       pattern="[A-Za-z0-9_-]+"
+                       maxlength="64"
+                       placeholder="direktvermarkter"
+                       title="Nur Buchstaben, Ziffern, Unterstrich und Bindestrich"
+                       class="config-input">
+              </div>
+              <p class="svc-meta-tight">Erlaubt sind nur <code>A-Z, a-z, 0-9, _ und -</code>. Server validiert nochmals.</p>
+
+              <div class="config-row">
+                <span class="config-row-label">Automatisch verbinden</span>
+                <input type="checkbox" data-path="vpn.autoConnect" data-cfg="vpn.autoConnect" id="vpnAutoConnect">
+              </div>
+              <p class="svc-meta-tight">Verbindet das VPN beim DVhub-Start automatisch, sobald ein Profil importiert ist.</p>
+            </div>
+
+            <!-- VPN-Profil-Upload + Status (gerendert von settings.js via renderVpnUploadPanel) -->
+            <div id="vpnUploadMount" class="config-group-mount"></div>
+
+          </div><!-- /.config-grid -->
+        </div><!-- /#tab-vpn -->
           </div><!-- /.sa-body -->
         </div><!-- /.sa-shell -->
 

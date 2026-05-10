@@ -40,6 +40,25 @@
       <h1 class="section-title">Integrationen</h1>
       <p class="intg-subtitle">Verbundene Systeme und Services</p>
 
+      <!-- VRM Backfill status banner (08-12): explain the 6-month availability window
+           so operators don't think missing pre-6-month data is a bug. The full
+           backfill UI lives in /settings.html#system (Historie config-group). -->
+      <section class="intg-row" data-integration="vrm" aria-label="VRM Backfill Status">
+        <span class="intg-row-icon">&#x2601;</span>
+        <span class="intg-row-label">VRM Backfill (Victron Cloud)</span>
+        <span class="intg-row-status u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
+      </section>
+      <div class="intg-detail">
+        <p>
+          Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
+          <strong>Verf&uuml;gbar:</strong> Backfill der letzten 6 Monate.
+        </p>
+        <p class="u-text-muted">
+          &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
+          Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
+        </p>
+      </div>
+
       <div id="intg-list">
         <div class="intg-empty" id="intg-empty">
           <h3>Keine Integrationen konfiguriert</h3>

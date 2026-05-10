@@ -1302,9 +1302,7 @@ function renderDestinationGrid(destinationId) {
     mount.appendChild(renderHistoryImportPanel(destinationId));
   }
 
-  if (destinationId === 'connection') {
-    mount.appendChild(renderVpnUploadPanel());
-  }
+  // VPN upload panel was moved to its own tab (08-12). Keep `connection` clean.
 
   // If only one card in the grid, span full width via existing class
   if (mount.children.length === 1) {
@@ -2249,6 +2247,65 @@ async function handleVpnUpload() {
   }
 }
 
+// ============================================================================
+// VPN settings tab (08-12) — separate tab with toggles + reuses renderVpnUploadPanel
+// Acceptance: data-tab="vpn" panel in settings.html with pattern="[A-Za-z0-9_-]+"
+// ============================================================================
+var vpnTabInitialized = false;
+function initVpnTab() {
+  // Mount the existing renderVpnUploadPanel into the new VPN tab (idempotent).
+  const mount = document.getElementById('vpnUploadMount');
+  if (mount && !mount.firstChild) {
+    try {
+      mount.appendChild(renderVpnUploadPanel());
+    } catch (err) {
+      // Defensive: do not break tab switching if panel render fails.
+      mount.innerHTML = '<div class="config-banner error">VPN-Panel konnte nicht geladen werden.</div>';
+    }
+  }
+
+  // Wire the four data-path inputs to currentDraftConfig + save bar.
+  // Initial population from currentEffectiveConfig (loaded by loadConfig()).
+  const eff = currentEffectiveConfig || {};
+  const vpn = eff.vpn || {};
+  const enabledEl = document.getElementById('vpnEnabled');
+  const protoEl = document.getElementById('vpnProtocol');
+  const nameEl = document.getElementById('vpnProfileName');
+  const autoEl = document.getElementById('vpnAutoConnect');
+  if (enabledEl && typeof vpn.enabled === 'boolean') enabledEl.checked = vpn.enabled;
+  if (protoEl && typeof vpn.protocol === 'string') protoEl.value = vpn.protocol;
+  if (nameEl && typeof vpn.profileName === 'string') nameEl.value = vpn.profileName;
+  if (autoEl && typeof vpn.autoConnect === 'boolean') autoEl.checked = vpn.autoConnect;
+
+  // Client-side profileName sanity (server-side is authoritative via sanitizeProfileName).
+  if (nameEl && !nameEl.dataset.vpnSanitizerWired) {
+    nameEl.dataset.vpnSanitizerWired = '1';
+    nameEl.addEventListener('input', function (e) {
+      const cleaned = e.target.value.replace(/[^A-Za-z0-9_-]/g, '');
+      if (cleaned !== e.target.value) {
+        e.target.value = cleaned;
+      }
+    });
+  }
+
+  // Change listeners → write into currentDraftConfig (mirrors patterns used by other tabs).
+  if (!vpnTabInitialized) {
+    vpnTabInitialized = true;
+    function pushDraft(path, value) {
+      if (!currentDraftConfig.vpn || typeof currentDraftConfig.vpn !== 'object') {
+        currentDraftConfig.vpn = Object.assign({}, (currentRawConfig && currentRawConfig.vpn) || {});
+      }
+      const key = path.split('.').slice(1).join('.');
+      currentDraftConfig.vpn[key] = value;
+      if (typeof updateSaveBar === 'function') updateSaveBar();
+    }
+    enabledEl?.addEventListener('change', function (e) { pushDraft('vpn.enabled', !!e.target.checked); });
+    protoEl?.addEventListener('change', function (e) { pushDraft('vpn.protocol', String(e.target.value || 'openvpn')); });
+    nameEl?.addEventListener('change', function (e) { pushDraft('vpn.profileName', String(e.target.value || '')); });
+    autoEl?.addEventListener('change', function (e) { pushDraft('vpn.autoConnect', !!e.target.checked); });
+  }
+}
+
 function initSettingsPage() {
   // Delegated change listeners on the three grid containers
   for (const gridId of ['connectionGrid', 'controlGrid', 'servicesGrid']) {
@@ -2414,6 +2471,10 @@ function initSettingsPage() {
             checkForUpdate().catch(() => {});
           }
         }
+      }
+      // Lazy-init VPN tab: render upload panel + wire toggles to current config
+      if (target === 'vpn') {
+        initVpnTab();
       }
     });
     // Restore tab from URL hash

@@ -113,13 +113,7 @@
     "bzn": "DE-LU",
     "timezone": "Europe/Berlin"
   },
-  "optimizer": {
-    "eosProxy": {
-      "enabled": false,
-      "url": "http://127.0.0.1:8503",
-      "timeoutMs": 30000
-    }
-  },
+  "optimizer": {},
   "vpn": {
     "enabled": false,
     "protocol": "openvpn",
