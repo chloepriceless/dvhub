@@ -851,9 +851,16 @@ function hydrateSetupWizardState(payload) {
 }
 
 async function saveSetup(config, source = 'setup') {
+  // WR-01 fix: on a fresh install the EEG/§14a toggles transition undefined → false,
+  // which the server treats as a flip and rejects with 403 unless the operator has
+  // ticked #legalAck and we forward the confirmation header.
+  const headers = { 'content-type': 'application/json' };
+  if (document.getElementById('legalAck')?.checked === true) {
+    headers['x-confirm-legal-gate'] = 'true';
+  }
   const response = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ config })
   });
   const payload = await response.json();
