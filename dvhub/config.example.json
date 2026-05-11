@@ -98,7 +98,8 @@
       "port": 5432,
       "name": "dvhub",
       "user": "dvhub",
-      "password": ""
+      "password": "",
+      "timescaledb": true
     },
     "rawRetentionDays": 45,
     "historyImport": {
