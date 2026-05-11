@@ -1,0 +1,74 @@
+/* DVhub History page styles — Aurora additions (Plan 09.1-03 Wave 2).
+   Loaded AFTER /dvhub-app.css (Aurora tokens) and /styles.css (legacy
+   stylesheet — to be deleted in Plan 09.1-07). This file carries
+   page-specific Aurora tweaks that bridge the legacy markup classes
+   (.compact-topbar, .config-group, .history-*) into the Aurora token
+   surface (var(--cyan), var(--accent), etc.).
+
+   Cascade contract:
+     /dvhub-app.css  — :root Aurora tokens + chart-token compat shim
+                       + .topbar / .theme-toggle / .status-pill / .btn
+                       (note: Aurora .btn uses `.btn.primary/.ghost/.sm`,
+                        not `.btn-primary/-ghost/-small` — legacy classes
+                        keep their styles.css definitions until Plan 09.1-07)
+     /styles.css     — Legacy stylesheet (unchanged from Wave 1 baseline)
+     /history.css    — THIS FILE: theme-toggle wiring + topbar Aurora paint
+                       hooks specific to the history page.
+
+   Why this file is minimal: history.html does not have an embedded
+   <style> block (unlike family.html which had a 220-line one). Every
+   visual class history.html references already has a definition in
+   /styles.css — those rules carry through unchanged. The Aurora upgrade
+   for history.html v1.0 is delivered via:
+     1. Aurora token block in dvhub-app.css (provides --cyan/--green/...
+        that history.js's cssVar() chart-color reads pick up via the
+        chart-token compat shim)
+     2. theme.js attached, with a .theme-toggle button mounted in the
+        topbar — toggles <html data-theme="dark|auto|light">
+     3. <html data-theme="dark"> default applied in markup so first paint
+        already sees the Aurora dark palette (avoids flash-of-legacy
+        before theme.js runs)
+   Plan 09.1-07 deletes /styles.css and folds the page-required legacy
+   rules either into /dvhub-app.css (cross-page utilities) or into per-
+   page CSS files (page-specific shells). At that point this file may
+   grow to absorb history-* rules currently in styles.css. */
+
+/* ── Aurora theme-toggle button: hook the legacy .topbar-right slot. ───
+   The dvhub-app.css :root + light-theme blocks define .theme-toggle. We
+   only need to ensure the button is visible and inherits the Aurora
+   token palette. */
+.compact-topbar .theme-toggle {
+  /* Lift the Aurora .theme-toggle styles into the compact-topbar slot.
+     dvhub-app.css already defines the base button (border, padding, hover).
+     This rule is the bridge so the button does not collide with
+     compact-topbar's flex layout. */
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Topbar Aurora paint: light theme support. ────────────────────────
+   When theme.js sets <html data-theme="light">, the legacy
+   /styles.css compact-topbar uses fixed dark colors. Override here so
+   the topbar respects the user's theme preference. */
+[data-theme="light"] .compact-topbar {
+  background: var(--bg-1);
+  color: var(--text);
+  border-bottom: 1px solid var(--hairline);
+}
+
+[data-theme="light"] .compact-topbar .topbar-nav a {
+  color: var(--text-2);
+}
+
+[data-theme="light"] .compact-topbar .topbar-nav a:hover {
+  color: var(--accent);
+}
+
+[data-theme="light"] .compact-topbar .topbar-nav a.is-active {
+  color: var(--accent);
+}
+
+/* ── Chart palette: the chart-token compat shim in dvhub-app.css aliases
+   --chart-positive → var(--cyan), --chart-negative → var(--red), etc.
+   No history.css overrides needed. history.js's cssVar() reads pick up
+   the Aurora palette automatically once dvhub-app.css is loaded. */

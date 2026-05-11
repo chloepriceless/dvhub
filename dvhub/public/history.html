@@ -1,5 +1,17 @@
 <!doctype html>
-<html lang="de">
+<!-- History page — Aurora port (Plan 09.1-03 Wave 2).
+     - Loads Aurora design tokens (dvhub-app.css) + theme.js + legacy
+       styles.css (deleted in Plan 09.1-07) + page-specific history.css.
+     - theme.js is the SOLE writer of localStorage['dvhub.theme']
+       (AURORA-02 single-writer); history.js MUST NOT call setItem on
+       that key.
+     - Chart.js canvases (historyEnergyChart, historyFinancialChart,
+       historyMonthDailyChart, historyPriceChart) keep their current
+       mount IDs — history.js's renderLineChart etc. create the inner
+       <canvas id="${mountId}Canvas"> dynamically via innerHTML.
+     - <html data-theme="dark"> default avoids flash-of-light before
+       theme.js runs; theme.js refines based on localStorage. -->
+<html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,7 +19,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/history.css" />
+  <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
   <link rel="manifest" href="/manifest.json">
@@ -33,7 +48,9 @@
         <a href="/explorer.html">Explorer</a>
         <a href="/settings.html">Einstellungen</a>
       </nav>
-      <div class="topbar-right"></div>
+      <div class="topbar-right">
+        <button class="theme-toggle" type="button" aria-label="Theme wechseln"></button>
+      </div>
     </header>
 
     <main class="page-content history-page-content">
