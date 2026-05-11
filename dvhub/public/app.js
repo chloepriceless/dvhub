@@ -1,4 +1,4 @@
-const { apiFetch } = window.DVhubCommon || {};
+const { apiFetch, safeRender } = window.DVhubCommon || {};
 
 // Plan 08-07 Task 3: per-widget error boundary. A throw inside one wrapped
 // widget's refresh path is caught here, logged to the server via /api/log,
@@ -1345,132 +1345,161 @@ async function handleMinSocSubmit() {
 }
 
 function renderDashboardStatus(status) {
-  const dvOn = Number(status.dvControlValue) === 1;
-  setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
-  setText('nowTime', fmtTs(status.now));
-  setText('dvValue', String(status.dvControlValue));
-  setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
-  setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
+  // Plan 09-04: each top-level dashboard card update is wrapped in
+  // DVhubCommon.safeRender(...) so a throw in ONE card does NOT abort the
+  // sibling card updates inside the same refresh tick. The OUTER
+  // withWidgetBoundary('dashboard', refresh) wrapper from Plan 08-07 stays
+  // (see line ~1589) and remains the catch-all for anything safeRender
+  // misses (e.g., throws in the refresh control flow itself).
+  // safeRender returns a Promise but a synchronous throw inside fn() is
+  // caught synchronously, so the fire-and-forget pattern below is safe.
 
-  // VPN Rail-Card
-  renderVpnCard(status.vpn);
+  safeRender('dashboard.dv-status', () => {
+    const dvOn = Number(status.dvControlValue) === 1;
+    setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
+    setText('nowTime', fmtTs(status.now));
+    setText('dvValue', String(status.dvControlValue));
+    setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
+    setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
+  });
 
-  // VPN status in DV card
-  const dvVpnRow = document.getElementById('dvVpnRow');
-  if (dvVpnRow) {
-    const vpn = status.vpn;
-    if (vpn && vpn.enabled) {
-      dvVpnRow.style.display = '';
-      const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-      const text = labels[vpn.status] || vpn.status || '-';
-      const extra = vpn.tunIp ? ` (${vpn.tunIp})` : '';
-      setText('dvVpnStatus', text + extra, vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : ''));
-    } else {
-      dvVpnRow.style.display = 'none';
+  safeRender('dashboard.vpn', () => {
+    // VPN Rail-Card
+    renderVpnCard(status.vpn);
+
+    // VPN status in DV card
+    const dvVpnRow = document.getElementById('dvVpnRow');
+    if (dvVpnRow) {
+      const vpn = status.vpn;
+      if (vpn && vpn.enabled) {
+        dvVpnRow.style.display = '';
+        const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
+        const text = labels[vpn.status] || vpn.status || '-';
+        const extra = vpn.tunIp ? ` (${vpn.tunIp})` : '';
+        setText('dvVpnStatus', text + extra, vpn.status === 'connected' ? 'ok' : (vpn.status === 'error' ? 'off' : ''));
+      } else {
+        dvVpnRow.style.display = 'none';
+      }
     }
-  }
-
-  const dvIndicators = resolveDvControlIndicators(status);
-  setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
-  setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
-
-  const s = status.epex?.summary;
-  setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
-  setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtCentFromCt(s.next.ct_kwh)})` : '-');
-  setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
-  setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
-  setText(
-    'todayMinMax',
-    s && s.todayMin != null && s.todayMax != null
-      ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
-      : '-'
-  );
-  const negActive = status.ctrl?.negativePriceActive;
-  setText('negPriceProtection', negActive ? 'AKTIV (Abregelung)' : 'Inaktiv', negActive ? 'off' : 'ok');
-  setText(
-    'tomorrowMinMax',
-    s && s.tomorrowMin != null && s.tomorrowMax != null
-      ? `${fmtCentFromTenthCt(Number(s.tomorrowMin))} / ${fmtCentFromTenthCt(Number(s.tomorrowMax))}`
-      : '-'
-  );
-
-  setText('l1', `${status.meter?.grid_l1_w ?? '-'} W`);
-  setText('l2', `${status.meter?.grid_l2_w ?? '-'} W`);
-  setText('l3', `${status.meter?.grid_l3_w ?? '-'} W`);
-  setText('total', `${status.meter?.grid_total_w ?? '-'} W`, status.meter?.grid_total_w < 0 ? 'ok' : (status.meter?.grid_total_w > 0 ? 'off' : ''));
-  updateFlowDiagram(status);
-
-  const vic = status.victron || {};
-  setText('soc', vic.soc == null ? '-' : `${vic.soc} %`);
-  setText('batP', vic.batteryPowerW == null ? '-' : `${vic.batteryPowerW} W`);
-  setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
-  setText('pvAc', vic.pvAcW == null ? '-' : `${vic.pvAcW} W`);
-  setText('pvTotal', vic.pvTotalW == null ? '-' : `${vic.pvTotalW} W`);
-  setText('gridSetpoint', vic.gridSetpointW == null ? '-' : `${vic.gridSetpointW} W`);
-  const minSocRenderState = computeMinSocRenderState({
-    readbackValue: vic.minSocPct,
-    pendingState: dashboardState.pendingMinSocWrite
   });
-  dashboardState.pendingMinSocWrite = minSocRenderState.pendingState;
-  dashboardState.lastMinSocReadback = vic.minSocPct;
-  setText('minSoc', vic.minSocPct == null ? '-' : `${vic.minSocPct} %`);
-  applyMinSocPendingVisualState(minSocRenderState.shouldBlink);
-  if (!dashboardState.minSocEditorOpen) syncMinSocEditorFromReadback(vic.minSocPct);
 
-  const c = status.costs || {};
-  setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);
-  setText('costExport', c.exportKwh == null ? '-' : `${c.exportKwh} kWh`);
-  setText('costCost', c.costEur == null ? '-' : `${c.costEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`);
-  setText('costRevenue', c.revenueEur == null ? '-' : `${c.revenueEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`);
-  setText('costNet', c.netEur == null ? '-' : `${c.netEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`, c.netEur >= 0 ? 'ok' : 'off');
+  safeRender('dashboard.dv-indicators', () => {
+    const dvIndicators = resolveDvControlIndicators(status);
+    setText('dvDcPv', dvIndicators.dc.text, dvIndicators.dc.tone);
+    setText('dvAcPv', dvIndicators.ac.text, dvIndicators.ac.tone);
+  });
 
-  const sch = status.schedule || {};
-  const ag = sch.active?.gridSetpointW;
-  const ac = sch.active?.chargeCurrentA;
-  const am = sch.active?.minSocPct;
-  const lwG = sch.lastWrite?.gridSetpointW;
-  const lwC = sch.lastWrite?.chargeCurrentA;
-  const lwM = sch.lastWrite?.minSocPct;
-  setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
-  setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
-  setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
-  const adc = sch.active?.feedExcessDcPv;
-  setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
-  const lwParts = [];
-  if (lwG?.at) lwParts.push(`Grid: ${lwG.value} @ ${fmtTs(lwG.at)}`);
-  if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
-  if (lwM?.at) lwParts.push(`MinSOC: ${lwM.value} @ ${fmtTs(lwM.at)}`);
-  setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
-  applyScheduleRowStates(status.now);
-  updateChartComparisonSummary(status.userEnergyPricing);
+  safeRender('dashboard.market', () => {
+    const s = status.epex?.summary;
+    setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
+    setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtCentFromCt(s.next.ct_kwh)})` : '-');
+    setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
+    setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
+    setText(
+      'todayMinMax',
+      s && s.todayMin != null && s.todayMax != null
+        ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
+        : '-'
+    );
+    const negActive = status.ctrl?.negativePriceActive;
+    setText('negPriceProtection', negActive ? 'AKTIV (Abregelung)' : 'Inaktiv', negActive ? 'off' : 'ok');
+    setText(
+      'tomorrowMinMax',
+      s && s.tomorrowMin != null && s.tomorrowMax != null
+        ? `${fmtCentFromTenthCt(Number(s.tomorrowMin))} / ${fmtCentFromTenthCt(Number(s.tomorrowMax))}`
+        : '-'
+    );
+  });
 
-  // Fetch forecast + history slots for chart overlay
-  const today = new Date(status.now).toISOString().slice(0, 10);
-  const userSlotTimestamps = (status.schedule?.rules || [])
-    .filter(r => r.enabled !== false && !isSmallMarketAutomationRule(r))
-    .flatMap(r => {
-      const epexData = status.epex?.data || [];
-      return epexData.filter(s => {
-        const slotTime = new Date(s.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
-        return slotTime >= (r.start || '') && slotTime < (r.end || '');
-      }).map(s => Number(s.ts));
+  safeRender('dashboard.meter-flow', () => {
+    setText('l1', `${status.meter?.grid_l1_w ?? '-'} W`);
+    setText('l2', `${status.meter?.grid_l2_w ?? '-'} W`);
+    setText('l3', `${status.meter?.grid_l3_w ?? '-'} W`);
+    setText('total', `${status.meter?.grid_total_w ?? '-'} W`, status.meter?.grid_total_w < 0 ? 'ok' : (status.meter?.grid_total_w > 0 ? 'off' : ''));
+    updateFlowDiagram(status);
+  });
+
+  safeRender('dashboard.victron-battery', () => {
+    const vic = status.victron || {};
+    setText('soc', vic.soc == null ? '-' : `${vic.soc} %`);
+    setText('batP', vic.batteryPowerW == null ? '-' : `${vic.batteryPowerW} W`);
+    setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
+    setText('pvAc', vic.pvAcW == null ? '-' : `${vic.pvAcW} W`);
+    setText('pvTotal', vic.pvTotalW == null ? '-' : `${vic.pvTotalW} W`);
+    setText('gridSetpoint', vic.gridSetpointW == null ? '-' : `${vic.gridSetpointW} W`);
+    const minSocRenderState = computeMinSocRenderState({
+      readbackValue: vic.minSocPct,
+      pendingState: dashboardState.pendingMinSocWrite
     });
-  const baseChartArgs = [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
-  const smaPlan = status.schedule?.smallMarketAutomation?.plan;
-  const sunTimes = (smaPlan?.sunsetTs || smaPlan?.sunriseTs)
-    ? { sunsetTs: smaPlan.sunsetTs ?? null, sunriseTs: smaPlan.sunriseTs ?? null }
-    : null;
-  Promise.all([
-    apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
-    apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
-  ]).then(([fc, hist]) => {
-    drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes);
-  }).catch(() => {
-    drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes);
+    dashboardState.pendingMinSocWrite = minSocRenderState.pendingState;
+    dashboardState.lastMinSocReadback = vic.minSocPct;
+    setText('minSoc', vic.minSocPct == null ? '-' : `${vic.minSocPct} %`);
+    applyMinSocPendingVisualState(minSocRenderState.shouldBlink);
+    if (!dashboardState.minSocEditorOpen) syncMinSocEditorFromReadback(vic.minSocPct);
   });
-  setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
 
-  renderAutomationStatus(status.schedule);
+  safeRender('dashboard.costs', () => {
+    const c = status.costs || {};
+    setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);
+    setText('costExport', c.exportKwh == null ? '-' : `${c.exportKwh} kWh`);
+    setText('costCost', c.costEur == null ? '-' : `${c.costEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`);
+    setText('costRevenue', c.revenueEur == null ? '-' : `${c.revenueEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`);
+    setText('costNet', c.netEur == null ? '-' : `${c.netEur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} \u20ac`, c.netEur >= 0 ? 'ok' : 'off');
+  });
+
+  safeRender('dashboard.schedule', () => {
+    const sch = status.schedule || {};
+    const ag = sch.active?.gridSetpointW;
+    const ac = sch.active?.chargeCurrentA;
+    const am = sch.active?.minSocPct;
+    const lwG = sch.lastWrite?.gridSetpointW;
+    const lwC = sch.lastWrite?.chargeCurrentA;
+    const lwM = sch.lastWrite?.minSocPct;
+    setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
+    setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
+    setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
+    const adc = sch.active?.feedExcessDcPv;
+    setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
+    const lwParts = [];
+    if (lwG?.at) lwParts.push(`Grid: ${lwG.value} @ ${fmtTs(lwG.at)}`);
+    if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
+    if (lwM?.at) lwParts.push(`MinSOC: ${lwM.value} @ ${fmtTs(lwM.at)}`);
+    setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
+    applyScheduleRowStates(status.now);
+    updateChartComparisonSummary(status.userEnergyPricing);
+  });
+
+  safeRender('dashboard.price-chart', () => {
+    // Fetch forecast + history slots for chart overlay
+    const today = new Date(status.now).toISOString().slice(0, 10);
+    const userSlotTimestamps = (status.schedule?.rules || [])
+      .filter(r => r.enabled !== false && !isSmallMarketAutomationRule(r))
+      .flatMap(r => {
+        const epexData = status.epex?.data || [];
+        return epexData.filter(s => {
+          const slotTime = new Date(s.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+          return slotTime >= (r.start || '') && slotTime < (r.end || '');
+        }).map(s => Number(s.ts));
+      });
+    const baseChartArgs = [status.epex?.data || [], status.now, status.userEnergyPricing?.slots || [], status?.schedule?.smallMarketAutomation?.selectedSlotTimestamps || []];
+    const smaPlan = status.schedule?.smallMarketAutomation?.plan;
+    const sunTimes = (smaPlan?.sunsetTs || smaPlan?.sunriseTs)
+      ? { sunsetTs: smaPlan.sunsetTs ?? null, sunriseTs: smaPlan.sunriseTs ?? null }
+      : null;
+    Promise.all([
+      apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
+      apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
+    ]).then(([fc, hist]) => {
+      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes);
+    }).catch(() => {
+      drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes);
+    });
+    setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
+  }, { placeholderTarget: document.getElementById('priceChartContainer') });
+
+  safeRender('dashboard.automation', () => {
+    renderAutomationStatus(status.schedule);
+  });
 }
 
 // Plan 09-06 (D-09): UI log level filter state. Persisted in-memory only —
