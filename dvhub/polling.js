@@ -42,12 +42,40 @@ export function createPoller(ctx) {
 
   const MIN_POLL_INTERVAL_MS = 1000;
 
+  // Plan 09-08 Task 3 — backoff invariants (locked in plan frontmatter must_haves):
+  //   power = max(0, consecutiveErrors - BACKOFF_THRESHOLD)
+  //   nextDelay = min(MAX_BACKOFF_MS, BASE_POLL_MS * 1.5^power)
+  // With BASE_POLL_MS=500, threshold=3 → cE∈{0,1,2,3} all yield 500 ms;
+  // cE=4 → 750; cE=5 → 1125; cE=15 → 30000 (cap). First success resets cE to 0.
+  // BASE_POLL_MS resolves cfg.pollMs (plan invariant — test-injectable) first,
+  // then falls back to the project's existing meterPollMs cadence so production
+  // behaviour with the default 1000 ms interval is preserved.
+  const MAX_BACKOFF_MS = 30_000;
+  const BACKOFF_THRESHOLD = 3;
+
   let stopping = false;
   let pollTimeout = null;
   let persistInterval = null;
 
   // --- effectivePollIntervalMs ---
   const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
+
+  // Plan 09-08 Task 3 — resolve BASE_POLL_MS at every tick so config changes
+  // (and test injection of cfg.pollMs) take effect without reboot.
+  const getBasePollMs = () => {
+    const cfg = getCfg() || {};
+    const fromPollMs = Number(cfg.pollMs);
+    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return fromPollMs;
+    return effectivePollIntervalMs();
+  };
+
+  // Plan 09-08 Task 3 — ensure backoff state fields exist on state.meter even
+  // before the first pollMeter() invocation. The /api/status payload reads
+  // state.meter directly so these are visible immediately on boot.
+  if (state.meter) {
+    if (state.meter.consecutiveErrors === undefined) state.meter.consecutiveErrors = 0;
+    if (state.meter.nextRetryAt === undefined) state.meter.nextRetryAt = null;
+  }
 
   // --- persistEnergy: atomic write (tmp + rename) for crash-safe persistence ---
   function persistEnergy() {
@@ -219,7 +247,11 @@ export function createPoller(ctx) {
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: [ml1, ml2, ml3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
-          error: null
+          error: null,
+          // Plan 09-08 Task 3: success path resets backoff (consecutiveErrors=0,
+          // nextRetryAt=null). Mirrors the Modbus branch below.
+          consecutiveErrors: 0,
+          nextRetryAt: null
         };
       } else {
         // Modbus: Register lesen und signed interpretieren
@@ -238,7 +270,11 @@ export function createPoller(ctx) {
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: regs,
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
-          error: null
+          error: null,
+          // Plan 09-08 Task 3: success path resets backoff (consecutiveErrors=0,
+          // nextRetryAt=null). Mirrors the MQTT branch above.
+          consecutiveErrors: 0,
+          nextRetryAt: null
         };
       }
 
@@ -252,6 +288,12 @@ export function createPoller(ctx) {
       state.meter.ok = false;
       state.meter.error = e.message;
       state.meter.updatedAt = Date.now();
+      // Plan 09-08 Task 3: increment consecutiveErrors here, BEFORE
+      // pollMeterWithBackoff schedules the next tick. The delay formula
+      // (power = max(0, cE - BACKOFF_THRESHOLD); delay = BASE * 1.5^power)
+      // then uses the post-increment value — matches the locked delay table
+      // in the plan's must_haves.truths block.
+      state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
     }
 
     await Promise.all([
@@ -322,21 +364,42 @@ export function createPoller(ctx) {
     return pollMeterRunner.run();
   }
 
-  function schedulePollLoop() {
-    pollTimeout = setTimeout(async () => {
-      try {
-        await requestPoll();
-      } catch (e) {
-        pushLog('poll_meter_error', { error: e.message });
-      }
-      if (!stopping) schedulePollLoop();
-    }, effectivePollIntervalMs());
+  // Plan 09-08 Task 3 — pollMeterWithBackoff: replaces the fixed-cadence
+  // schedulePollLoop. Each tick awaits pollMeter (which updates
+  // state.meter.consecutiveErrors in its catch block), then computes the next
+  // delay using the locked formula:
+  //   power = max(0, consecutiveErrors - BACKOFF_THRESHOLD)
+  //   nextDelay = min(MAX_BACKOFF_MS, BASE_POLL_MS * 1.5^power)
+  // BASE_POLL_MS resolves cfg.pollMs ?? effectivePollIntervalMs() so
+  // production behaviour (1 s default) is preserved while tests can inject
+  // cfg.pollMs=500 for the locked delay table (cE=4 → 750 ms, cE=5 → 1125 ms,
+  // cE=15 → 30 000 ms cap).
+  async function pollMeterWithBackoff() {
+    try {
+      await requestPoll();
+    } catch (e) {
+      pushLog('poll_meter_error', { error: e.message });
+    }
+    if (stopping) return;
+    const cE = (state.meter && state.meter.consecutiveErrors) || 0;
+    const basePollMs = getBasePollMs();
+    let nextDelay = basePollMs;
+    if (cE >= BACKOFF_THRESHOLD) {
+      const power = Math.max(0, cE - BACKOFF_THRESHOLD);
+      nextDelay = Math.min(MAX_BACKOFF_MS, basePollMs * Math.pow(1.5, power));
+    }
+    if (state.meter) state.meter.nextRetryAt = Date.now() + nextDelay;
+    pollTimeout = setTimeout(pollMeterWithBackoff, nextDelay);
+    if (typeof pollTimeout?.unref === 'function') pollTimeout.unref();
   }
 
   function start() {
     stopping = false;
-    requestPoll().catch(e => console.error('Initial pollMeter error:', e));
-    schedulePollLoop();
+    // Plan 09-08 Task 3: single pollMeterWithBackoff kickoff replaces the
+    // original `requestPoll() + schedulePollLoop()` pair. The function
+    // self-reschedules with exponential backoff after BACKOFF_THRESHOLD
+    // consecutive failures.
+    pollMeterWithBackoff().catch(e => console.error('Initial pollMeter error:', e));
     persistInterval = setInterval(persistEnergy, 60000);
   }
 
