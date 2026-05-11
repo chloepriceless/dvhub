@@ -28,10 +28,6 @@
   <canvas class="bg-flow" id="bgFlow"></canvas>
   <div class="bg-dim"></div>
 
-  <!-- Live powerflow mount — particles between solar/battery/home/grid/ev tags.
-       /dvhub-powerflow.js auto-mounts on any .dvhub-powerflow element on DOMContentLoaded. -->
-  <div class="dvhub-powerflow" id="leitstandPowerflow"></div>
-
   <div class="greeting"><div class="greeting-top"><div><div class="greeting-hello" id="g-hello">Guten Tag</div><div class="greeting-msg" id="g-msg">Dein Haus produziert mehr<br>Strom als es braucht</div><div class="greeting-mood" id="g-mood">Alles l&auml;uft perfekt</div></div><div class="greeting-right"><div class="greeting-time" id="g-time">14:32</div><div class="greeting-date" id="g-date"></div></div></div></div>
   <svg class="flow-svg" id="flowSvg" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gl"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g id="flowGroup"></g></svg>
 
@@ -41,7 +37,7 @@
   <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji">&#128664;</div><div class="tag-friendly" id="tf-ev">Auto l&auml;dt mit Solar</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-status" id="ts-ev">Fertig ca. 22 Uhr</div></div>
   <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Wir speisen ein</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">Verdienen gerade</div></div>
 
-  <!-- Center net-Erlös readout (Aurora) — positioned overlay above #leitstandPowerflow. -->
+  <!-- Center net-Erlös readout (Aurora) — sits in the middle of the bgFlow dust constellation. -->
   <div class="pf-center-readout" id="pfCenter">
     <div class="l">Bilanz heute</div>
     <div class="v" id="pf-center-v">+0,00 &euro;</div>

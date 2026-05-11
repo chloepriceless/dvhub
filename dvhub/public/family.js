@@ -647,6 +647,29 @@
     return Math.round(v) + '%';
   }
 
+  /* Conservation-of-energy fallback for energy.homeKw.
+     Sign conventions on the /api/family/status payload:
+       batteryKw > 0 = charging, < 0 = discharging
+       gridKw    > 0 = importing, < 0 = exporting
+     Sources INTO the house bus: solar + bat_discharge + grid_import
+     Other sinks pulling FROM it:  bat_charge + grid_export + ev
+     The remainder must be home consumption. The Victron stack occasionally
+     drops the homeKw sensor reading to 0 even while the battery is clearly
+     discharging into the house — when reported and inferred disagree by
+     ≥0.1 kW (100 W), trust conservation over the missing telemetry. */
+  function inferHomeKw(e) {
+    if (!e || typeof e !== 'object') return 0;
+    var solar = Math.max(0, Number(e.solarKw   || 0));
+    var bat   = Number(e.batteryKw || 0);
+    var grid  = Number(e.gridKw    || 0);
+    var ev    = Math.max(0, Number(e.evKw      || 0));
+    var reported = Math.max(0, Number(e.homeKw || 0));
+    var sources    = solar + Math.max(0, -bat) + Math.max(0,  grid);
+    var otherSinks = Math.max(0,  bat) + Math.max(0, -grid) + ev;
+    var inferred = Math.max(0, sources - otherSinks);
+    return Math.abs(reported - inferred) < 0.1 ? reported : inferred;
+  }
+
   function applyFamilyStatus(data) {
     var energy = data.energy || {};
     var battery = data.battery || {};
@@ -656,6 +679,12 @@
     // LLM-generated tile captions, refreshed every 15 min server-side.
     // Falsy / missing per-tile field → fall through to the rule-based text below.
     var tileFriendlies = data.tileFriendlies || {};
+
+    // Patch energy.homeKw via conservation when the API reports 0 / wrong value.
+    // Mutating the payload's energy object here means every downstream consumer
+    // (tag-home v-h, friendly-text rules, autarky calc, panel-stats, bgFlow)
+    // sees a consistent home-consumption number.
+    energy.homeKw = inferHomeKw(energy);
 
     // Plan 09-04: per-card error boundary inside applyFamilyStatus. A throw in
     // one visible-card render does NOT blank a sibling card on the family
@@ -796,27 +825,12 @@
       updateFlowState(energy);
     });
 
-    sr('family.aurora-powerflow', function () {
-      // Plan 09.1-02: feed live energy into the dvhub-powerflow widget mounted
-      // at #leitstandPowerflow (Aurora pilot). Mount lazily on first poll so
-      // we don't race the script load. costEur comes from savings.todayEur on
-      // the family service payload (positive = earning, negative = paying).
-      var pf = ensureAuroraPowerflow();
-      if (pf && typeof pf.update === 'function') {
-        var sav = data.savings || {};
-        var todayEur = parseFloat(sav.todayEur);
-        pf.update({
-          pv: Number(energy.solarKw || 0),
-          bat: Number(energy.batteryKw || 0),
-          house: Number(energy.homeKw || 0),
-          grid: typeof energy.gridKw === 'number' ? Number(energy.gridKw) : null,
-          costEur: isFinite(todayEur) ? todayEur : null,
-        });
-      }
-
-      // Aurora pf-center-readout (id="pfCenter") overlays the live widget with
-      // the day-net-Euro headline; we wire it independently so the readout works
-      // even if dvhub-powerflow.js failed to mount (e.g. during a degraded boot).
+    sr('family.bg-flow', function () {
+      // Aurora dust constellation between the 5 tag DOM centers, rendered into
+      // <canvas id="bgFlow"> by initBgFlow() at bootstrap. This replaces the
+      // legacy SVG flow (#flowSvg) which is hidden by family.css.
+      updateBgFlowFromStatus(data);
+      // Aurora pf-center-readout (#pfCenter) shows the day-net-Euro headline.
       updatePfCenterReadout(data);
     });
 
@@ -1237,27 +1251,166 @@
     if (overlayBg) overlayBg.addEventListener('click', closeMsgOverlay);
   }
 
-  /* ===================== AURORA POWERFLOW (Plan 09.1-02) ===================== */
-  // The kitchen-tablet family page mounts the live dvhub-powerflow widget at
-  // #leitstandPowerflow on first poll. dvhub-powerflow.js exposes
-  // window.DVhubPowerflow.mount() and returns a {update, destroy, root} handle.
-  // The mount is byte-identical to the leitstand mount (AURORA-04 frozen file).
-  var _auroraPowerflow = null;
-  var _auroraPowerflowMountAttempted = false;
-  function ensureAuroraPowerflow() {
-    if (_auroraPowerflow) return _auroraPowerflow;
-    if (_auroraPowerflowMountAttempted) return null; // don't retry on transient failures
-    _auroraPowerflowMountAttempted = true;
-    var pf = window.DVhubPowerflow;
-    if (!pf || typeof pf.mount !== 'function') return null;
-    var mountEl = document.getElementById('leitstandPowerflow');
-    if (!mountEl) return null;
-    try {
-      _auroraPowerflow = pf.mount(mountEl);
-    } catch (err) {
-      console.error('[family.aurora-powerflow] mount failed', err);
+  /* ===================== AURORA BG-FLOW DUST CONSTELLATION (Plan 09.1-02) ====
+     Dust particles flow between the 5 tag DOM centers (tag-solar, tag-bat,
+     tag-home, tag-ev, tag-grid), painted into <canvas id="bgFlow"> as a
+     fullscreen background layer. This is the Aurora replacement for the legacy
+     SVG flowSvg/flowGroup rendering, which is kept in the DOM (binding-contract
+     compatibility) but visually suppressed via #flowSvg{opacity:0} in family.css.
+
+     Ported from .planning/DESIGN-2026-05-10-aurora/family.html inline <script>
+     block (~lines 384-509). The Aurora source's fetch-sniffer pattern is
+     replaced here by an explicit updateBgFlowFromStatus(data) call wired into
+     applyStatus().
+     ======================================================================== */
+  /* Hub-and-spoke wiring: all flows route through a virtual hub at the visual
+     center of the viewport (#pfCenter, where the "Bilanz heute" readout sits).
+     This mirrors the dvhub-powerflow widget topology — sources (PV/Bat/Grid)
+     feed INTO the hub; sinks (Bat/Home/EV/Grid) draw FROM the hub. Battery and
+     Grid have one "source" stream and one "sink" stream each — only one is
+     active at any moment (positive batteryKw = charging = sink; negative =
+     discharging = source. Positive gridKw = importing = source; negative =
+     exporting = sink). The visual effect: bat→home is rendered as two segments
+     (bat→hub, then hub→home) so the dust visibly passes through the Bilanz. */
+  /* Per-source nameplate maximums for flow intensity scaling — count and speed
+     of dust on each stream is computed from kW / maxKw (ratio 0..1), not raw
+     kW. This way a 1 kW grid feed-in produces visibly different intensity than
+     a 20 kW solar peak even though both are "moderate" in absolute terms.
+     EV defaults to 22 kW (typical 3-phase wallbox); user-spec did not list EV. */
+  var BG_FLOWS_BASE = [
+    // Source streams (feed INTO the hub at pfCenter)
+    { from: 'tag-solar', to: 'pfCenter', color: [255,212,33],  id: 's_pv',   maxKw: 27 },
+    { from: 'tag-bat',   to: 'pfCenter', color: [70,211,68],   id: 's_bat',  maxKw: 24 },
+    { from: 'tag-grid',  to: 'pfCenter', color: [255,122,198], id: 's_grid', maxKw: 30 },
+    // Sink streams (drawn FROM the hub at pfCenter)
+    { from: 'pfCenter',  to: 'tag-bat',  color: [70,211,68],   id: 'k_bat',  maxKw: 24 },
+    { from: 'pfCenter',  to: 'tag-home', color: [75,123,236],  id: 'k_home', maxKw: 40 },
+    { from: 'pfCenter',  to: 'tag-ev',   color: [165,94,234],  id: 'k_ev',   maxKw: 22 },
+    { from: 'pfCenter',  to: 'tag-grid', color: [255,122,198], id: 'k_grid', maxKw: 30 }
+  ];
+  var bgFlowDust = [];
+  var bgFlowCanvas = null;
+  var bgFlowCtx = null;
+  var BG_FLOW_W = 0;
+  var BG_FLOW_H = 0;
+  var BG_FLOW_DPR = Math.min(2, window.devicePixelRatio || 1);
+  var DUST_PER_STREAM = 400;
+
+  function bgFlowSize() {
+    if (!bgFlowCanvas) return;
+    BG_FLOW_DPR = Math.min(2, window.devicePixelRatio || 1);
+    BG_FLOW_W = bgFlowCanvas.width  = Math.max(1, window.innerWidth  * BG_FLOW_DPR);
+    BG_FLOW_H = bgFlowCanvas.height = Math.max(1, window.innerHeight * BG_FLOW_DPR);
+    bgFlowCanvas.style.width  = window.innerWidth  + 'px';
+    bgFlowCanvas.style.height = window.innerHeight + 'px';
+  }
+
+  function bgFlowSeedDust(s) {
+    s.count = 0; s.speed = 0; s.reverse = false; s.kw = 0;
+    for (var i = 0; i < DUST_PER_STREAM; i++) {
+      bgFlowDust.push({
+        s: s, p: Math.random(), life: Math.random(),
+        phase: Math.random() * 6.28, sz: Math.random() * 1.4 + 0.4,
+        jit: (Math.random() - 0.5) * 0.05
+      });
     }
-    return _auroraPowerflow;
+  }
+
+  function bgFlowEndpoint(id) {
+    var el = document.getElementById(id);
+    if (!el || el.offsetParent === null) return null;
+    var r = el.getBoundingClientRect();
+    return { x: (r.left + r.width / 2) * BG_FLOW_DPR, y: (r.top + r.height / 2) * BG_FLOW_DPR };
+  }
+
+  function bgFlowDraw() {
+    if (!bgFlowCtx) return;
+    bgFlowCtx.fillStyle = 'rgba(3,6,16,.32)';
+    bgFlowCtx.fillRect(0, 0, BG_FLOW_W, BG_FLOW_H);
+    bgFlowCtx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < bgFlowDust.length; i++) {
+      var d = bgFlowDust[i], s = d.s;
+      if (!s || s.kw < 0.05) continue;
+      var rank = (d.phase * 1000) % 1;
+      if (rank > Math.min(s.count / DUST_PER_STREAM, 1)) continue;
+      var a = bgFlowEndpoint(s.from), b = bgFlowEndpoint(s.to);
+      if (!a || !b) continue;
+      if (s.reverse) { var tmp = a; a = b; b = tmp; }
+      var dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+      var nx = -dy / len, ny = dx / len;
+      var jit = Math.sin(d.p * Math.PI * 8 + d.life * 10) * d.jit * len;
+      var x = a.x + dx * d.p + nx * jit, y = a.y + dy * d.p + ny * jit;
+      var env = Math.sin(d.p * Math.PI);
+      var aa = env * 0.85;
+      var sz = d.sz * BG_FLOW_DPR * (0.6 + env * 0.6);
+      var c = s.color;
+      bgFlowCtx.fillStyle = 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + aa + ')';
+      bgFlowCtx.beginPath(); bgFlowCtx.arc(x, y, sz, 0, Math.PI * 2); bgFlowCtx.fill();
+      bgFlowCtx.fillStyle = 'rgba(255,255,255,' + (aa * 0.55) + ')';
+      bgFlowCtx.beginPath(); bgFlowCtx.arc(x, y, sz * 0.35, 0, Math.PI * 2); bgFlowCtx.fill();
+      d.p += s.speed * 0.018;
+      if (d.p > 1) { d.p = 0; d.life = Math.random(); }
+    }
+    bgFlowCtx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(bgFlowDraw);
+  }
+
+  /* Convert raw kW + stream nameplate max into an "effective kW" in 0..14.5 so
+     the existing dust-density and speed curves keep their visual feel: 100% of
+     maxKw maps to ~320 dust + speed 0.195 (which used to require ~14.5 kW
+     absolute). Below 5% of capacity the stream is treated as idle to avoid
+     visible single-particle noise. */
+  function bgFlowEffectiveKw(kW, maxKw) {
+    if (!maxKw || maxKw <= 0) return 0;
+    var ratio = Math.max(0, Math.min(1, kW / maxKw));
+    return ratio * 14.5;
+  }
+  function bgFlowPwr2Speed(kW) { return 0.005 + 0.05 * Math.sqrt(Math.max(kW, 0)); }
+  function bgFlowPwr2Count(kW) { return Math.min(Math.round(kW * 22), 320); }
+
+  function initBgFlow() {
+    bgFlowCanvas = document.getElementById('bgFlow');
+    if (!bgFlowCanvas) return;
+    bgFlowCtx = bgFlowCanvas.getContext('2d');
+    bgFlowSize();
+    window.addEventListener('resize', bgFlowSize);
+    BG_FLOWS_BASE.forEach(bgFlowSeedDust);
+    bgFlowDraw();
+  }
+
+  /* Drive BG_FLOWS_BASE from a /api/family/status payload (called from applyStatus).
+     Sign conventions (matches /api/family/status):
+       batteryKw > 0  → charging (hub → bat, k_bat active)
+       batteryKw < 0  → discharging (bat → hub, s_bat active)
+       gridKw    > 0  → importing (grid → hub, s_grid active)
+       gridKw    < 0  → exporting (hub → grid, k_grid active)
+     Each opposing pair is mutually exclusive — the inactive stream has kw=0
+     and is skipped by bgFlowDraw's `s.kw < 0.05` threshold. */
+  function updateBgFlowFromStatus(data) {
+    if (!data || !data.energy) return;
+    var e = data.energy;
+    var solar = Math.max(0, Number(e.solarKw   || 0));
+    var bat   = Number(e.batteryKw || 0);
+    var grid  = Number(e.gridKw    || 0);
+    var home  = Math.max(0, Number(e.homeKw    || 0));
+    var ev    = Math.max(0, Number(e.evKw      || 0));
+
+    // Sources → hub
+    BG_FLOWS_BASE[0].kw = solar;                      // s_pv:   pv  → hub
+    BG_FLOWS_BASE[1].kw = bat  < 0 ? -bat  : 0;       // s_bat:  bat → hub (discharging)
+    BG_FLOWS_BASE[2].kw = grid > 0 ?  grid : 0;       // s_grid: grid→ hub (importing)
+    // Hub → sinks
+    BG_FLOWS_BASE[3].kw = bat  > 0 ?  bat  : 0;       // k_bat:  hub → bat (charging)
+    BG_FLOWS_BASE[4].kw = home;                       // k_home: hub → home
+    BG_FLOWS_BASE[5].kw = ev;                         // k_ev:   hub → ev
+    BG_FLOWS_BASE[6].kw = grid < 0 ? -grid : 0;       // k_grid: hub → grid (exporting)
+
+    BG_FLOWS_BASE.forEach(function (s) {
+      var eff   = bgFlowEffectiveKw(s.kw, s.maxKw);   // scale by stream's nameplate
+      s.count   = bgFlowPwr2Count(eff);
+      s.speed   = bgFlowPwr2Speed(eff);
+      s.reverse = false;                              // direction is encoded in from/to
+    });
   }
 
   // Aurora pf-center-readout — net Euro headline above the live powerflow.
@@ -1277,9 +1430,10 @@
   }
 
   /* ===================== BOOTSTRAP ===================== */
-  // Mount the Aurora powerflow widget eagerly so the dust constellation paints
-  // a background before the first /api/family/status poll completes.
-  ensureAuroraPowerflow();
+  // Initialise the Aurora bgFlow dust constellation eagerly so the background
+  // paints (idle) before the first /api/family/status poll completes; the poll
+  // then drives stream kW/speed/count from real data.
+  initBgFlow();
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
   initMessageWidget();

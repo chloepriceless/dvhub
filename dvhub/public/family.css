@@ -44,9 +44,14 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-solar{top:6%;left:32%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
 .tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
 .tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
-.tag-home{top:38%;left:50%;transform:translateX(-50%);border:1.5px solid rgba(75,123,236,.25);padding:18px 26px;animation-delay:0s;min-width:170px}
-.tag-home .tag-emoji{font-size:28px}.tag-home .tag-friendly{font-size:15px}.tag-home .tag-val{color:var(--home);font-size:26px}
-.tag-home:hover,.tag-home:active{transform:translateX(-50%) scale(1.08)}.tag-home .tag-dot{display:none}
+/* tag-home moved off-center to the right (Plan 09.1-02 follow-up): house is the
+   destination for solar/bat/grid flows, and the user wants the bat→home flow to
+   cross through the center where pfCenter (Bilanz heute) sits. Original Aurora
+   source put tag-home at left:50% center which occluded pfCenter — incompatible
+   with the family page's hub-and-spoke flow semantics. */
+.tag-home{top:38%;right:18%;border:1.5px solid rgba(75,123,236,.25);padding:18px 26px;animation-delay:0s;min-width:170px}
+.tag-home .tag-emoji{font-size:28px}.tag-home .tag-friendly{font-size:15px}.tag-home .tag-val{color:var(--home);font-size:36px}
+.tag-home:hover,.tag-home:active{transform:scale(1.08)}.tag-home .tag-dot{display:none}
 .tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
 .tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
@@ -87,6 +92,11 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .dev-bar{height:100%;border-radius:2px;transition:width .8s ease;min-width:2px}
 
 .flow-svg{position:absolute;inset:0;width:100%;height:100%;z-index:15;pointer-events:none}
+/* Aurora replaces the legacy SVG flow with the canvas dust constellation rendered into
+   #bgFlow by family.js. #flowSvg / #flowGroup must stay in the DOM (binding contract
+   preserves flowSvg+flowGroup IDs so family.js's legacy updateFlowState() / repositionFlows()
+   /buildFlows() keep their query targets), but the visual output is suppressed. */
+#flowSvg{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
 
 /* D-10 — Forecast / Preis / Optimizer widgets (right side, new in Phase 03) */
 .widgets{position:absolute;z-index:21;top:50%;right:20px;transform:translateY(-50%);display:flex;flex-direction:column;gap:10px;pointer-events:auto;max-width:220px}
@@ -187,6 +197,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   .tag-val{font-size:16px!important}.tag-home .tag-val{font-size:20px!important}
   .tag-home{padding:14px 20px;min-width:140px}
   .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}
+  .tag-home{right:3%;top:42%}
   .glass{padding:12px 16px}.glass-top{flex-wrap:wrap;gap:8px}.glass-metric{min-width:70px}
   .panel-stats{grid-template-columns:repeat(2,1fr)}.panel{max-height:85vh}
   .dev-card{min-width:78px;padding:8px 10px}.dev-watts{font-size:14px}
@@ -216,29 +227,21 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
    .planning/DESIGN-2026-05-10-aurora/family.html
    ========================================================================== */
 
-/* Live powerflow mount — fills the viewport behind the tag layer; the tags
-   sit z:20 above this. The live <canvas> painted by /dvhub-powerflow.js carries
-   particle streams between the 5 tag centers. */
-.dvhub-powerflow#leitstandPowerflow{
-  position:absolute;
-  inset:0;
-  z-index:14;
-  pointer-events:none;
-}
-
-/* Auxiliary Aurora background canvas (4th new ID — currently inert; reserved
-   for future visual enhancement layered above the .bg gradient). */
+/* Aurora dust-particle constellation — full-viewport canvas painted by family.js
+   between the 5 tag DOM centers (tag-solar, tag-bat, tag-home, tag-ev, tag-grid).
+   Replaces the now-suppressed legacy #flowSvg. Tags sit at higher z above this. */
 .bg-flow#bgFlow{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
   pointer-events:none;
-  z-index:13;
+  z-index:14;
 }
 
-/* Center net-Erlös readout (mirrors DVhubPowerflow .pf-center). Positioned
-   over the live powerflow mount; dynamically updated by family.js. */
+/* Center net-Erlös readout (Aurora source position) — Bilanz heute sits at the
+   visual center of the viewport. tag-home was moved to the right (see above) so
+   the bat→home dust flow passes directly through this readout. */
 .pf-center-readout{
   position:absolute;
   left:50%;
