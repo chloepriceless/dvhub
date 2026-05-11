@@ -1181,20 +1181,26 @@
     var optimizerPlan = results[4].status === 'fulfilled' ? results[4].value : null;
     var statusData = results[5].status === 'fulfilled' ? results[5].value : null;
 
-    updateForecastSummary(forecastData, statusData);
+    // Plan 09-04: each chart render is wrapped in DVhubCommon.safeRender so a
+    // throw in ONE chart does NOT abort the sibling charts in the same refresh
+    // cycle. safeRender is a defensive sibling-isolation layer — Promise.allSettled
+    // above already isolates the FETCHES; this isolates the RENDERS.
+    var sr = (window.DVhubCommon && window.DVhubCommon.safeRender) || function (_, fn) { try { fn(); } catch (e) { console.error('[leitstand-chart-fallback]', _, e); } };
+
+    sr('leitstand.forecast-summary', function () { updateForecastSummary(forecastData, statusData); });
     // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
     // (Ist + Last-Prognose are now both there) — keeping the call would draw
     // duplicate datasets in a removed canvas anyway.
-    renderGanttChart(optimizerData);
-    renderSavingsCard(costData);
-    updateBadges();
+    sr('leitstand.gantt', function () { renderGanttChart(optimizerData); });
+    sr('leitstand.savings', function () { renderSavingsCard(costData); });
+    sr('leitstand.badges', function () { updateBadges(); });
 
     // ML additions
-    updateMlBadge(mlStatus);
-    if (forecastData) updateForecastComparisonChart(forecastData);
+    sr('leitstand.ml-badge', function () { updateMlBadge(mlStatus); });
+    if (forecastData) sr('leitstand.forecast-comparison', function () { updateForecastComparisonChart(forecastData); });
 
     // Optimizer-Plan chart (Phase 05 follow-up)
-    renderOptimizerPlanChart(optimizerPlan);
+    sr('leitstand.optimizer-plan', function () { renderOptimizerPlanChart(optimizerPlan); });
   }
 
   // ---------------------------------------------------------------------------
