@@ -724,6 +724,27 @@ button {
   scrollbar-color: var(--flow-border) transparent;
 }
 
+/* --- Plan 09-06 (D-09): log-panel level filter + per-row badge --- */
+.level-filter {
+  background: rgba(8, 12, 24, 0.5);
+  color: var(--flow-text-muted);
+  border: 1px solid var(--flow-border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+.log-level-badge {
+  display: inline-block;
+  padding: 0 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+.log-level-debug { background: #888; color: #fff; }
+.log-level-info  { background: #2a7; color: #fff; }
+.log-level-warn  { background: #e90; color: #fff; }
+.log-level-error { background: #d33; color: #fff; }
+
 /* --- Buttons --- */
 .btn {
   font-family: var(--font-body);

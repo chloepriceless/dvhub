@@ -1473,9 +1473,84 @@ function renderDashboardStatus(status) {
   renderAutomationStatus(status.schedule);
 }
 
+// Plan 09-06 (D-09): UI log level filter state. Persisted in-memory only —
+// reverts to 'all' on page reload. The level dropdown is injected lazily by
+// renderDashboardLog so existing pages without a dedicated container still work.
+const dashboardLogState = { rows: [], filter: 'all' };
+
+function ensureLogLevelFilterUi() {
+  const logBox = document.getElementById('logBox');
+  if (!logBox) return null;
+  let select = document.getElementById('log-level-filter');
+  if (select) return select;
+  // Inject the dropdown right above the logBox. Container/styling stays
+  // minimal — the existing .bottom-card layout absorbs it inline.
+  select = document.createElement('select');
+  select.id = 'log-level-filter';
+  select.className = 'level-filter';
+  select.style.cssText = 'margin-bottom:6px;padding:2px 8px;font-size:0.85em;';
+  const levels = [
+    ['all', 'Alle Level'],
+    ['debug', 'DEBUG'],
+    ['info', 'INFO'],
+    ['warn', 'WARN'],
+    ['error', 'ERROR']
+  ];
+  for (const [value, label] of levels) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (value === dashboardLogState.filter) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    dashboardLogState.filter = select.value;
+    rerenderDashboardLog();
+  });
+  // Insert dropdown right before the <pre id="logBox">.
+  logBox.parentNode.insertBefore(select, logBox);
+  return select;
+}
+
+// Plan 09-06 (D-09): supported badge classes. Listed as static class names
+// alongside the dynamic template literal so a CSS/JS audit grep
+// (e.g., grep -E 'log-level-(debug|info|warn|error)') finds them. The
+// constant is also used as the level allowlist when sanitising row.level.
+const LOG_LEVEL_BADGE_CLASSES = ['log-level-debug', 'log-level-info', 'log-level-warn', 'log-level-error'];
+
+function rerenderDashboardLog() {
+  const logBox = document.getElementById('logBox');
+  if (!logBox) return;
+  const filter = dashboardLogState.filter || 'all';
+  const all = dashboardLogState.rows;
+  // Plan 09-06 (D-09): default missing level to 'info' so rows that predate
+  // this plan stay visible under the INFO filter (backward compat).
+  const visibleRows = (filter === 'all')
+    ? all
+    : all.filter((r) => (r.level || 'info') === filter);
+  if (visibleRows.length === 0) {
+    logBox.innerHTML = '-';
+    return;
+  }
+  // Render with level badges. The <pre>-style monospaced log block is
+  // preserved — each row is a single line so existing operator muscle memory
+  // (scroll-back, copy-paste) survives.
+  logBox.innerHTML = visibleRows.map((r) => {
+    const level = (r.level || 'info').toLowerCase();
+    const safeLevel = ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
+    const badge = `<span class="log-level-badge log-level-${escapeHtml(safeLevel)}">${escapeHtml(safeLevel.toUpperCase())}</span>`;
+    const { level: _omit, ...rest } = r;
+    void _omit; // suppress unused-destructure lint
+    return `${badge} ${escapeHtml(JSON.stringify(rest))}`;
+  }).join('\n');
+}
+
 function renderDashboardLog(logs) {
-  const rows = (logs.rows || []).slice(-20).reverse();
-  document.getElementById('logBox').textContent = rows.map((r) => JSON.stringify(r)).join('\n') || '-';
+  // Plan 09-06 (D-09): cache rows so the level dropdown can re-filter without
+  // re-fetching, and ensure the dropdown UI is present.
+  dashboardLogState.rows = (logs.rows || []).slice(-20).reverse();
+  ensureLogLevelFilterUi();
+  rerenderDashboardLog();
 }
 
 function getDashboardLogUrl(limit = 20) {
