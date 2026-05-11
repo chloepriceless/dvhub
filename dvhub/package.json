@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js && node ../tests/binding-contract.mjs && node ../tests/csp-lint.mjs && node ../tests/css-tokens.test.mjs && node ../tests/endpoint-inventory.mjs --verify",
     "test:sqlite": "node --experimental-sqlite --test test/sqlite/*.test.js",
     "test:all": "node --experimental-sqlite --test"
   },
