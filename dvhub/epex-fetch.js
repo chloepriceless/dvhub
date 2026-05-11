@@ -4,6 +4,10 @@
 
 import { berlinDateString, addDays } from './server-utils.js';
 import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
+// Plan 09-07: shared safeInterval — catches sync throws AND awaited Promise
+// rejections from the ticker, logs via configured logger + pushLog, and the
+// next tick still fires. Stops one-bad-fetch from disabling the loop forever.
+import { safeInterval } from './services/safe-async.js';
 
 const VRM_FORECAST_API = 'https://vrmapi.victronenergy.com';
 
@@ -212,7 +216,7 @@ export function createEpexFetcher(ctx) {
     fetchEpexDay();
 
     // EPEX refresh: check every 5 min
-    const epexInterval = setInterval(() => {
+    const epexInterval = safeInterval('epex-fetch.refresh', () => {
       const cfg = getCfg();
       const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString(new Date(), cfg.epex.timezone);
       if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
@@ -226,7 +230,7 @@ export function createEpexFetcher(ctx) {
     timers.push(vrmInitTimeout);
 
     // VRM forecast: every 2 hours
-    const vrmInterval = setInterval(() => {
+    const vrmInterval = safeInterval('epex-fetch.vrm', () => {
       fetchVrmForecast().catch(e => pushLog('vrm_forecast_error', { error: e.message }));
     }, 2 * 60 * 60 * 1000);
     timers.push(vrmInterval);

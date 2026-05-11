@@ -5,6 +5,12 @@ import net from 'node:net';
 // style output without touching console.* directly.
 // eslint-disable-next-line no-unused-vars
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
+// Plan 09-07: safeInterval reserved import — Modbus transport currently uses
+// setTimeout-based reconnect chains (no setInterval call sites today). Import
+// kept so future setInterval introductions inherit the helper without a
+// separate edit. Auditable via grep "from './services/safe-async.js'".
+// eslint-disable-next-line no-unused-vars
+import { safeInterval } from './services/safe-async.js';
 
 /**
  * Modbus TCP Transport für Victron-Kommunikation.

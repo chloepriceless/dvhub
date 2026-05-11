@@ -5,6 +5,10 @@
  *
  * Benötigt: npm install mqtt
  */
+// Plan 09-07: shared safeInterval wraps the keepalive ticker so a sendKeepalive
+// throw (e.g. broker mid-disconnect) never disables the loop.
+import { safeInterval } from './services/safe-async.js';
+
 export function createMqttTransport(victronConfig) {
   const mqttCfg = victronConfig.mqtt || {};
   const broker = mqttCfg.broker || `mqtt://${victronConfig.host}:1883`;
@@ -103,7 +107,7 @@ export function createMqttTransport(victronConfig) {
             // Keepalive starten — sorgt dafür, dass Settings-Topics gepublished werden
             sendKeepalive();
             if (keepaliveTimer) clearInterval(keepaliveTimer);
-            keepaliveTimer = setInterval(sendKeepalive, keepaliveMs);
+            keepaliveTimer = safeInterval('transport-mqtt.keepalive', sendKeepalive, keepaliveMs);
             resolve();
           });
         });
