@@ -167,6 +167,12 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
     state.finishedAt = null;
     state.error = null;
 
+    // Plan 09-05 Task 3: envelope-level audit metrics. Tracked across all chunks
+    // so the matching backfill_finished payload aggregates slotsWritten + status.
+    const runStartedAtMs = Date.now();
+    let slotsWrittenTotal = 0;
+    let chunkErrorCount = 0;
+
     // Pitfall B-1: suspend nowcast to avoid quota competition during backfill
     if (forecastService && typeof forecastService.setNowcastSuspended === 'function') {
       try { forecastService.setNowcastSuspended(true); } catch { /* best-effort */ }
@@ -177,6 +183,14 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
       pushLog('pvnode_backfill_started', {
         from, to, chunks: chunks.length, days_total: state.daysTotal
       });
+      // Plan 09-05 Task 3: also emit the canonical envelope event so the
+      // audit_log mirror sees a consistent backfill_started row for pvnode jobs
+      // even when /api/admin/backfill is bypassed (e.g., internal scheduler).
+      // Allowlisted in routes-api.js AUDIT_LOG_EVENT_ALLOWLIST.
+      pushLog('backfill_started', {
+        kind: 'pvnode',
+        range: { from, to }
+      }, 'info');
 
       // REVIEWS H8: forecast_date (today UTC) is recorded ONCE per run — provenance for
       // every row written by this particular backfill invocation.
@@ -219,6 +233,16 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
               days_total: state.daysTotal
             });
             state.state = 'paused';
+            // Plan 09-05 Task 3: matching backfill_finished for the quota-low
+            // early return. Treated as 'partial' (not error) — operator can
+            // resume on next admin invocation (idempotency handles re-run).
+            pushLog('backfill_finished', {
+              kind: 'pvnode',
+              daysDone: state.daysDone,
+              slotsWritten: slotsWrittenTotal,
+              status: 'partial',
+              durationMs: Date.now() - runStartedAtMs
+            }, 'warn');
             return {
               ok: false,
               error: 'quota_low',
@@ -264,6 +288,7 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
             }));
           if (batchRows.length > 0) await store.insertSnapshotBatch(batchRows);
           const slotsWritten = batchRows.length;
+          slotsWrittenTotal += slotsWritten;
 
           state.daysDone += daysInChunk.length;
           pushLog('pvnode_backfill_chunk_ok', {
@@ -274,6 +299,7 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
             plane_groups_called: planeGroupsUsed
           });
         } catch (err) {
+          chunkErrorCount += 1;
           pushLog('pvnode_backfill_chunk_error', {
             chunk: `${chunk.startDate}..${chunk.endDate}`,
             error: err?.message || String(err)
@@ -291,6 +317,19 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
         daysTotal: state.daysTotal,
         apiCallsUsed: state.apiCallsUsed
       });
+      // Plan 09-05 Task 3: canonical envelope completion. status='ok' when no
+      // chunk errors were recorded, 'partial' when SOME chunks failed (others
+      // succeeded — operator can re-run idempotently). The kind label stays
+      // 'pvnode' across started/finished so audit consumers can pair the rows.
+      const completionStatus = chunkErrorCount === 0 ? 'ok' : 'partial';
+      const completionLevel = chunkErrorCount === 0 ? 'info' : 'warn';
+      pushLog('backfill_finished', {
+        kind: 'pvnode',
+        daysDone: state.daysDone,
+        slotsWritten: slotsWrittenTotal,
+        status: completionStatus,
+        durationMs: Date.now() - runStartedAtMs
+      }, completionLevel);
       return {
         ok: true,
         daysDone: state.daysDone,
@@ -301,6 +340,17 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
       state.error = err?.message || String(err);
       state.finishedAt = new Date().toISOString();
       pushLog('pvnode_backfill_error', { error: state.error });
+      // Plan 09-05 Task 3: canonical envelope error path — status='error'
+      // (fully failed, no partial completion). errorMessage is the short
+      // message ONLY (never the stack trace, T-9-05-02).
+      pushLog('backfill_finished', {
+        kind: 'pvnode',
+        daysDone: state.daysDone,
+        slotsWritten: slotsWrittenTotal,
+        status: 'error',
+        durationMs: Date.now() - runStartedAtMs,
+        errorMessage: state.error
+      }, 'error');
       return { ok: false, error: state.error };
     } finally {
       // Always resume nowcast — REVIEWS H8 defensive: finally block guarantees state is

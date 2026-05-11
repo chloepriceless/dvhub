@@ -2531,7 +2531,23 @@ export function createApiRoutes(ctx) {
         mode: requestedMode,
         requestedBy: 'history_backfill_endpoint'
       });
+      // Plan 09-05 Task 3: audit envelope for the VRM history backfill route.
+      const vrmBackfillStartedAt = Date.now();
+      pushLog('backfill_started', {
+        kind: 'vrm',
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        range: { from: body?.requestedFrom ?? body?.start ?? null, to: body?.requestedTo ?? body?.end ?? null }
+      }, { ...actorContext(req), severity: 'info' });
       const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: requestedMode, requestedBy: 'api' });
+      const vrmStatus = result?.ok ? 'ok' : 'error';
+      pushLog('backfill_finished', {
+        kind: 'vrm',
+        daysDone: Number(result?.daysDone ?? 0),
+        slotsWritten: Number(result?.importedRows ?? result?.slotsWritten ?? 0),
+        status: vrmStatus,
+        durationMs: Date.now() - vrmBackfillStartedAt
+      }, { ...actorContext(req), severity: vrmStatus === 'ok' ? 'info' : 'warn' });
       return json(res, result.ok ? 200 : 400, result);
     }
 
@@ -2541,7 +2557,23 @@ export function createApiRoutes(ctx) {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
       const body = await parseBody(req);
+      // Plan 09-05 Task 3: audit envelope for the price backfill route.
+      const priceBackfillStartedAt = Date.now();
+      pushLog('backfill_started', {
+        kind: 'price',
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        range: { from: body?.from ?? null, to: body?.to ?? null }
+      }, { ...actorContext(req), severity: 'info' });
       const result = await ctx.historyApi.postPriceBackfill(body || {});
+      const priceStatus = (result?.status >= 200 && result?.status < 300) ? 'ok' : 'error';
+      pushLog('backfill_finished', {
+        kind: 'price',
+        daysDone: Number(result?.body?.daysDone ?? 0),
+        slotsWritten: Number(result?.body?.slotsWritten ?? result?.body?.rowsWritten ?? 0),
+        status: priceStatus,
+        durationMs: Date.now() - priceBackfillStartedAt
+      }, { ...actorContext(req), severity: priceStatus === 'ok' ? 'info' : 'warn' });
       return json(res, result.status, result.body);
     }
 
@@ -2958,6 +2990,17 @@ export function createApiRoutes(ctx) {
         if (currentStatus?.state === 'running') {
           return json(res, 409, { error: 'backfill_already_running', status: currentStatus });
         }
+
+        // Plan 09-05 Task 3: audit envelope BEFORE the fire-and-forget job
+        // starts. The matching backfill_finished is emitted from
+        // pvnode-backfill.js run()'s completion path (success/partial/error
+        // are all covered there with consistent kind='pvnode').
+        pushLog('backfill_started', {
+          kind: 'pvnode',
+          actor: req.headers['x-actor'] || 'admin',
+          actorIp: deriveClientIp(req, getCfg()),
+          range: { from, to }
+        }, { ...actorContext(req), severity: 'info' });
 
         // Fire-and-forget; status polled via GET /api/admin/backfill/status
         ctx.pvnodeBackfill.run({ from, to })
