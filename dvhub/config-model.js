@@ -2126,7 +2126,13 @@ export function createDefaultConfig() {
     // Never auto-populate from req.headers.host at runtime — defeats the guard.
     allowedHosts: [],
     corsAllowedOrigins: [],
-    trustProxy: false
+    trustProxy: false,
+    // Plan 09-03: reverse-proxy IPs whose X-Forwarded-For header is trusted by
+    // deriveClientIp(). Only consulted when trustProxy=true. Empty list with
+    // trustProxy=true is treated as misconfigured (server logs a one-time
+    // warning at startup and falls back to req.socket.remoteAddress — defends
+    // against XFF spoofing, which is the CRITICAL class Phase 8 hardened).
+    trustedProxyIps: []
   };
 }
 

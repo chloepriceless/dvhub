@@ -115,6 +115,49 @@ export function resolveCorsAllowedOrigin(originHeader, cfg) {
   return list.includes(originHeader) ? originHeader : null;
 }
 
+// Plan 09-03: derive the client IP from a request. When cfg.trustProxy is
+// true AND the immediate socket peer is one of cfg.trustedProxyIps,
+// the rightmost X-Forwarded-For hop is the real client. Otherwise we
+// strictly use the socket address — never trust XFF without explicit opt-in.
+//
+// Why "rightmost untrusted": XFF accumulates left-to-right (`client, proxy1, proxy2`).
+// If `cfg.trustedProxyIps` lists `proxy2` only, we pop trusted hops from the right
+// until we hit an untrusted one — that's the real client. This matches the trusted-proxy
+// model used by Express, Spring, and Rails when configured with proxy chain length.
+//
+// Both isLocalNetworkRequest (LAN auth bypass) and getRateLimitKey consume this
+// helper so auth and rate-limit can never disagree on who the client is.
+let trustProxyMisconfigWarned = false;
+export function deriveClientIp(req, cfg) {
+  const raw = (req.socket?.remoteAddress || req.connection?.remoteAddress || '').replace(/^::ffff:/, '');
+  if (!cfg || cfg.trustProxy !== true) return raw;
+  const trustedSet = new Set(Array.isArray(cfg.trustedProxyIps) ? cfg.trustedProxyIps : []);
+  if (trustedSet.size === 0) {
+    if (!trustProxyMisconfigWarned) {
+      // eslint-disable-next-line no-console
+      console.warn('[deriveClientIp] cfg.trustProxy=true but cfg.trustedProxyIps is empty — falling back to socket address. Set trustedProxyIps to a list of reverse-proxy IPs.');
+      trustProxyMisconfigWarned = true;
+    }
+    return raw;
+  }
+  if (!trustedSet.has(raw)) return raw; // direct connection from untrusted source — XFF ignored
+  const xff = String(req.headers?.['x-forwarded-for'] || '').trim();
+  if (!xff) return raw;
+  // Right-to-left scan: pop trusted hops until we find the real client
+  const hops = xff.split(',').map((h) => h.trim().replace(/^::ffff:/, '')).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    if (!trustedSet.has(hops[i])) return hops[i];
+  }
+  // Every hop is in the trusted set — return the leftmost (closest to "client")
+  return hops[0] || raw;
+}
+
+// Test-only: reset the one-time warning latch so the misconfigured-trust test
+// can assert the warning fires. Not part of the public contract.
+export function _resetTrustProxyWarnForTesting() {
+  trustProxyMisconfigWarned = false;
+}
+
 // Compare two semver-ish tags numerically on major.minor.patch. Strips a leading
 // `v`, ignores pre-release/build metadata (after `-` / `+`). Returns -1 / 0 / +1.
 // Used by /api/admin/update/apply downgrade guard.
@@ -159,6 +202,9 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   'allowedHosts',
   'corsAllowedOrigins',
   'trustProxy',
+  // Plan 09-03: reverse-proxy IP allowlist consulted by deriveClientIp when
+  // trustProxy=true. Without an entry here, POST /api/config rejects the field.
+  'trustedProxyIps',
   // Migration metadata + legacy integration roots that live in existing config.json
   // and are echoed back unchanged when the settings UI saves; without these,
   // the strict-root check rejects a normal save with `unknown_config_paths`.
@@ -343,9 +389,12 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Auth / Rate Limiting ─────────────────────────────────────────────
+  // Plan 09-03: route LAN-trust decision through deriveClientIp so that, when
+  // an operator opts in via cfg.trustProxy=true + cfg.trustedProxyIps, XFF from
+  // a known reverse proxy is honoured. Without opt-in, behaviour is unchanged
+  // (req.socket.remoteAddress is the sole source of truth — QUAL-02 backward compat).
   function isLocalNetworkRequest(req) {
-    const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
-    const addr = raw.replace(/^::ffff:/, '');
+    const addr = deriveClientIp(req, getCfg());
     // Localhost
     if (addr === '127.0.0.1' || addr === '::1') return true;
     // Private/LAN ranges (RFC 1918)
@@ -415,8 +464,11 @@ export function createApiRoutes(ctx) {
   // Plan 08-04 Task 1 Step 6: collapse the key space so IPv6-rotation attackers
   // cannot make each request land in a new bucket. v4 addresses stay full, v6
   // collapses to /64 prefix (which is the smallest externally-routable block).
+  // Plan 09-03: use deriveClientIp so rate-limit bucketing tracks the SAME client
+  // IP that isLocalNetworkRequest decides on — auth path + rate-limit path
+  // can never disagree on who the client is.
   function getRateLimitKey(req) {
-    const raw = (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+    const raw = deriveClientIp(req, getCfg());
     if (!raw) return 'unknown';
     if (raw.includes(':')) {
       // IPv6 — collapse to /64 (first 4 hextets). Handles `::1` / `fe80::…` too.
