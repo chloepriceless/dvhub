@@ -2827,6 +2827,24 @@ export function createApiRoutes(ctx) {
           if (p.name === 'secrets' || (p.filename && p.filename === 'ipsec.secrets')) certFiles.secrets = p.data;
         }
 
+        // Plan 09-05 Task 4: audit BEFORE persisting. fingerprint =
+        // sha256(file).slice(0, 16) per D-04 convention — same length as the
+        // Plan 09-01 tokenFingerprint output so audit-log filters work
+        // uniformly across token + VPN rows. The fingerprint lets an operator
+        // verify "is this the same config we uploaded last week?" without
+        // ever logging the key material itself (T-9-05-02).
+        // Single-threaded HTTP handler: the buffer fingerprinted IS the buffer
+        // persisted (T-9-05-04 no TOCTOU window).
+        const mpSizeBytes = Buffer.byteLength(configPart.data, 'utf8');
+        const mpFingerprint = crypto.createHash('sha256').update(configPart.data).digest('hex').slice(0, 16);
+        pushLog('vpn_config_uploaded', {
+          actor: req.headers['x-actor'] || 'admin',
+          actorIp: deriveClientIp(req, getCfg()),
+          sizeBytes: mpSizeBytes,
+          fingerprint: mpFingerprint,
+          protocol: getCfg()?.vpn?.protocol || null
+        }, { ...actorContext(req), severity: 'info' });
+
         const result = await ctx.vpnManager.importConfig(configPart.data, certFiles);
         return json(res, result.ok ? 200 : 400, result);
       }
@@ -2835,6 +2853,21 @@ export function createApiRoutes(ctx) {
       const body = await parseBody(req);
       const configContent = body.ovpn || body.config;
       if (!configContent) return json(res, 400, { ok: false, error: 'missing ovpn/config field' });
+
+      // Plan 09-05 Task 4: audit the JSON-upload path the same way as the
+      // multipart path. 16-hex fingerprint matches D-04. body.protocol
+      // (optional) is recorded when present; otherwise falls back to the
+      // current cfg.vpn.protocol.
+      const jsonSizeBytes = Buffer.byteLength(String(configContent), 'utf8');
+      const jsonFingerprint = crypto.createHash('sha256').update(String(configContent)).digest('hex').slice(0, 16);
+      pushLog('vpn_config_uploaded', {
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        sizeBytes: jsonSizeBytes,
+        fingerprint: jsonFingerprint,
+        protocol: body?.protocol || getCfg()?.vpn?.protocol || null
+      }, { ...actorContext(req), severity: 'info' });
+
       const result = await ctx.vpnManager.importConfig(configContent, {
         ca: body.ca || null,
         cert: body.cert || null,
