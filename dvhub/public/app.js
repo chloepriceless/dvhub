@@ -2239,12 +2239,15 @@ function renderAutomationStatus(scheduleData) {
   const plan = sma.plan;
   if (!planContainer) return;
 
+  // The container ships with `class="u-hidden"` (rule `display: none !important`).
+  // Toggling `style.display` alone cannot override !important — must add/remove
+  // the class. Regression from 08-11 (style="display:none" → class="u-hidden").
   if (!plan || !plan.selectedSlots?.length) {
-    planContainer.style.display = 'none';
+    planContainer.classList.add('u-hidden');
     return;
   }
 
-  planContainer.style.display = '';
+  planContainer.classList.remove('u-hidden');
   const computedEl = document.getElementById('planComputedAt');
   const budgetEl = document.getElementById('planEnergyBudget');
   const revenueEl = document.getElementById('planEstimatedRevenue');

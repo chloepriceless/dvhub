@@ -268,6 +268,9 @@
     if (!canvas || typeof Chart === 'undefined') return;
 
     if (skeleton) skeleton.style.display = 'none';
+    // canvas ships with class="u-hidden" (display: none !important) — must
+    // remove the class, not just clear inline style. Regression from 08-11.
+    canvas.classList.remove('u-hidden');
     canvas.style.display = '';
 
     // VERIFIED: lastSchedule is the rules array directly, NOT nested under schedule.rules
