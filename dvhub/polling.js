@@ -8,6 +8,9 @@ import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-perfo
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
+// Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
+// branches (gauge.set on success duration, counter.inc on catch).
+import { meterPollDurationSeconds, meterPollErrorsTotal } from './routes-api.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -233,6 +236,10 @@ export function createPoller(ctx) {
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
+    // Plan 09-06 (D-06): wall-clock duration of the meter read — recorded into
+    // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
+    // counter on catch. Tracked in seconds (Prometheus convention).
+    const __pollStart = process.hrtime.bigint();
     try {
       let l1, l2, l3, total;
       if (transport.type === 'mqtt') {
@@ -287,6 +294,11 @@ export function createPoller(ctx) {
       state.dvRegs[4] = 0;
 
       updateEnergyIntegrals(state.meter.updatedAt, total);
+      // Plan 09-06 (D-06): success — record poll duration into the gauge.
+      try {
+        const durationSec = Number(process.hrtime.bigint() - __pollStart) / 1e9;
+        meterPollDurationSeconds.set(durationSec);
+      } catch { /* metrics must never break the poll cycle */ }
     } catch (e) {
       state.meter.ok = false;
       state.meter.error = e.message;
@@ -297,6 +309,8 @@ export function createPoller(ctx) {
       // then uses the post-increment value — matches the locked delay table
       // in the plan's must_haves.truths block.
       state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
+      // Plan 09-06 (D-06): error — increment the counter.
+      try { meterPollErrorsTotal.inc(); } catch { /* metrics must never break the poll cycle */ }
     }
 
     await Promise.all([

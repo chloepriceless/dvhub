@@ -14,8 +14,110 @@ import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } fro
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { createDefaultConfig } from './config-model.js';
+// Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
+// Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
+// the exposition format. No other Phase 9 plan adds dependencies.
+import promClient from 'prom-client';
 
 const execFileAsync = promisify(execFile);
+
+// ── Plan 09-06: Prometheus metrics (D-06 + D-07) ─────────────────────────
+// Centralized registry. Default registry collects process metrics (CPU, RSS,
+// event loop lag, heap) — required for Pi-tier signal. Prefix dvhub_node_ keeps
+// the default series distinct from the application-level dvhub_* series below.
+const metricsRegistry = new promClient.Registry();
+promClient.collectDefaultMetrics({ register: metricsRegistry, prefix: 'dvhub_node_' });
+
+// Application instruments. Cardinality budget per CONTEXT.md must_haves:
+// ≤50 route labels (enforced by ROUTE_LABEL_PATTERNS below), ≤8 methods,
+// ≤15 status codes — total ≤ ~6000 distinct series. Pi-acceptable.
+export const httpRequestsTotal = new promClient.Counter({
+  name: 'dvhub_http_requests_total',
+  help: 'Total HTTP requests, partitioned by method, route, status',
+  labelNames: ['method', 'route', 'status'],
+  registers: [metricsRegistry]
+});
+
+export const httpRequestDurationSeconds = new promClient.Histogram({
+  name: 'dvhub_http_request_duration_seconds',
+  help: 'HTTP request duration in seconds',
+  labelNames: ['method', 'route'],
+  // Locked buckets per plan must_haves — Pi Tier 1 friendly.
+  buckets: [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
+  registers: [metricsRegistry]
+});
+
+export const meterPollDurationSeconds = new promClient.Gauge({
+  name: 'dvhub_meter_poll_duration_seconds',
+  help: 'Duration of the last successful meter poll',
+  registers: [metricsRegistry]
+});
+
+export const meterPollErrorsTotal = new promClient.Counter({
+  name: 'dvhub_meter_poll_errors_total',
+  help: 'Total meter poll errors',
+  registers: [metricsRegistry]
+});
+
+export const optimizerRunsTotal = new promClient.Counter({
+  name: 'dvhub_optimizer_runs_total',
+  help: 'Total optimizer runs by result',
+  labelNames: ['result'],
+  registers: [metricsRegistry]
+});
+
+export const forecastAgeSeconds = new promClient.Gauge({
+  name: 'dvhub_forecast_age_seconds',
+  help: 'Age of the most recent forecast in seconds, by model',
+  labelNames: ['model'],
+  registers: [metricsRegistry]
+});
+
+export const auditLogEntriesTotal = new promClient.Counter({
+  name: 'dvhub_audit_log_entries_total',
+  help: 'Total audit_log entries written, by event_type (bounded allowlist)',
+  labelNames: ['event_type'],
+  registers: [metricsRegistry]
+});
+
+// Plan 09-06: Allowlist of event_type values that get a dedicated counter
+// label. Anything outside the allowlist still hits the ring buffer + audit_log
+// — it just doesn't expand the metrics cardinality. Keeps total label count
+// bounded (~12 event types × counter = predictable Pi memory footprint).
+const AUDIT_LOG_EVENT_ALLOWLIST = new Set([
+  'token_rotated', 'token_revoked', 'config_exported',
+  'config_persist_error', 'history_import_started', 'history_import_finished',
+  'backfill_started', 'backfill_finished', 'vpn_config_uploaded',
+  'widget_error', 'uncaught_exception', 'unhandled_rejection'
+]);
+
+// Plan 09-06: route label normalization for metrics. Keeps http_requests_total
+// cardinality bounded (target ~50 distinct route labels for the whole API
+// surface). Maps dynamic-id paths to canonical patterns; falls through to the
+// literal pathname for static routes. Add patterns when a new dynamic-id
+// route is added.
+const ROUTE_LABEL_PATTERNS = [
+  [/^\/api\/devices\/[^/]+$/, '/api/devices/:id'],
+  [/^\/api\/messages\/[^/]+$/, '/api/messages/:id'],
+  [/^\/api\/forecast\/[^/]+$/, '/api/forecast/:id'],
+  [/^\/api\/control\/events\/[^/]+$/, '/api/control/events/:id'],
+  [/^\/api\/optimizer\/runs\/[^/]+$/, '/api/optimizer/runs/:id'],
+];
+
+export function matchRouteLabel(pathname) {
+  for (const [re, label] of ROUTE_LABEL_PATTERNS) {
+    if (re.test(pathname)) return label;
+  }
+  return pathname; // static routes — already low cardinality
+}
+
+// Helper for instrument call sites that want to gate by allowlist.
+export function isAllowedAuditMetricEvent(eventType) {
+  return AUDIT_LOG_EVENT_ALLOWLIST.has(eventType);
+}
+
+// Re-export the registry for tests that want to render or reset metrics.
+export { metricsRegistry };
 
 // Plan 08-05 Task 2: HSTS + tightened CSP.
 //   - Strict-Transport-Security: 1 year, includeSubDomains (preload deferred).
@@ -510,6 +612,7 @@ export function createApiRoutes(ctx) {
     '/api/history/summary',
     '/api/schedule/automation/config',
     '/api/meter/scan',
+    '/api/metrics',                // Plan 09-06 (D-07): LAN scrape allowed — appliance model. External callers still need Bearer.
     '/api/vpn/status',
     '/api/vpn/history',
     '/dv/control-value',
@@ -1135,6 +1238,32 @@ export function createApiRoutes(ctx) {
 
   // ── Main request handler ─────────────────────────────────────────────
   async function handleRequest(req, res, url) {
+    // Plan 09-06 (D-06): per-request metrics. Record start time + canonical
+    // route label so res.on('finish') can emit httpRequestsTotal +
+    // httpRequestDurationSeconds with bounded cardinality (no raw dynamic ids).
+    // Guard for non-EventEmitter mock res objects in unit tests (QUAL-02 —
+    // existing tests synthesise plain { writeHead, end } stubs; calling
+    // res.on() unconditionally would break them).
+    const __metricsStart = process.hrtime.bigint();
+    const __routeLabel = matchRouteLabel(url.pathname);
+    if (!res.__metricsObserved && typeof res.on === 'function') {
+      res.__metricsObserved = true;
+      res.on('finish', () => {
+        try {
+          const durationSec = Number(process.hrtime.bigint() - __metricsStart) / 1e9;
+          httpRequestsTotal.inc({
+            method: req.method || 'GET',
+            route: __routeLabel,
+            status: String(res.statusCode)
+          });
+          httpRequestDurationSeconds.observe(
+            { method: req.method || 'GET', route: __routeLabel },
+            durationSec
+          );
+        } catch { /* metrics must never break the response cycle */ }
+      });
+    }
+
     // Plan 08-04 Task 2 Step 5: Host-header allowlist. Runs before everything
     // else (including /health and /) — spoofed Host must not drive absolute-URL
     // generation or redirect targets anywhere in the handler chain. Empty
@@ -1207,6 +1336,34 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/dv/control-value' && req.method === 'GET') return text(res, 200, ctx.controlValue());
+
+    // Plan 09-06 (D-06 + D-07): Prometheus exposition. /api/metrics IS in
+    // LAN_SAFE_ENDPOINTS so the standard checkAuth above honours the LAN
+    // bypass for /api/metrics — external (non-LAN) callers still go through
+    // the Bearer check. Do NOT add an additional auth override here.
+    // Content-type comes from prom-client (Registry.contentType returns the
+    // canonical 'text/plain; version=0.0.4; charset=utf-8' exposition format).
+    if (url.pathname === '/api/metrics' && req.method === 'GET') {
+      try {
+        // Plan 09-06: stamp uptime gauge on each scrape so /api/metrics carries
+        // the same uptime number as /api/admin/health. Default collectDefaultMetrics
+        // ships nodejs_process_start_time_seconds but operators often want a
+        // ready-to-use seconds-since-start gauge.
+        const body = await metricsRegistry.metrics();
+        const uptimeLine = `\n# HELP dvhub_uptime_seconds Process uptime in seconds\n# TYPE dvhub_uptime_seconds gauge\ndvhub_uptime_seconds ${process.uptime()}\n`;
+        const full = body + uptimeLine;
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          'content-type': metricsRegistry.contentType,
+          'content-length': Buffer.byteLength(full, 'utf8')
+        });
+        res.end(full);
+      } catch (e) {
+        res.writeHead(500, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'metrics_render_failed', detail: e?.message || null }));
+      }
+      return;
+    }
 
     if (url.pathname === '/api/keepalive/modbus' && req.method === 'GET') return json(res, 200, keepaliveModbusPayload());
     if (url.pathname === '/api/keepalive/pulse' && req.method === 'GET') return json(res, 200, keepalivePulsePayload());

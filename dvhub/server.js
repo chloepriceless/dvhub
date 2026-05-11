@@ -62,7 +62,13 @@ import {
   SECURITY_HEADERS,
   getRequestHost,
   isHostAllowed,
-  resolveCorsAllowedOrigin
+  resolveCorsAllowedOrigin,
+  // Plan 09-06 (D-06): metric instrument hooks — call sites in server.js
+  // (pushLog audit branch) + polling.js use these to record dvhub_* counters.
+  auditLogEntriesTotal,
+  isAllowedAuditMetricEvent,
+  meterPollDurationSeconds,
+  meterPollErrorsTotal
 } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 // Plan 09-06 (D-08): services/log.js wrapper around console.* — the in-server.js
@@ -717,6 +723,14 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
       // shorthand callers also get a non-null severity.
       severity: options.severity || level,
     }).catch(() => { /* writeAuditEntry already logs internally */ });
+    // Plan 09-06 (D-06): bump the audit metric for the allowlisted event
+    // types. Anything outside the allowlist still hits audit_log — it just
+    // doesn't expand the metrics cardinality.
+    try {
+      if (isAllowedAuditMetricEvent(event)) {
+        auditLogEntriesTotal.inc({ event_type: event });
+      }
+    } catch { /* metric must never break pushLog */ }
   }
 }
 

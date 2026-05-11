@@ -9,6 +9,10 @@
 // stderr-style messages without going through console.*.
 // eslint-disable-next-line no-unused-vars
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from '../log.js';
+// Plan 09-06 (D-06): forecast-age gauge. Set on each buildForecastResponse so
+// scrapers see "seconds since most recent PV forecast persist". Model label
+// keeps cardinality bounded (one series per forecast model in use).
+import { forecastAgeSeconds } from '../../routes-api.js';
 import { detectRamTier } from './ram-tier.js';
 import { createForecastStore } from './forecast-store.js';
 import { createWeatherFetch } from './weather-fetch.js';
@@ -320,6 +324,18 @@ export function createForecastService(ctx) {
         pushLog('forecast_actual_query_error', { error: e.message });
       }
     }
+
+    // Plan 09-06 (D-06): publish forecast age into the prom-client gauge.
+    // pv.lastFetchAt is a millisecond epoch (or null) — convert to seconds-
+    // since-last-fetch for the Prometheus scrape. Skip when null (no fetch
+    // yet) so the gauge stays at 0 (initial state) until the first persist.
+    try {
+      const lastFetchAt = state.forecast?.pv?.lastFetchAt;
+      const pvModelLabel = state.forecast?.pv?.model || cfg.forecast?.pv?.model || 'solcast';
+      if (lastFetchAt) {
+        forecastAgeSeconds.set({ model: pvModelLabel }, Math.max(0, (Date.now() - lastFetchAt) / 1000));
+      }
+    } catch { /* metrics must never break the forecast response */ }
 
     return {
       ok: true,
