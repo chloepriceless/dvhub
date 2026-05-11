@@ -3104,15 +3104,17 @@ export function createApiRoutes(ctx) {
           return json(res, 400, { ok: false, error: 'prompt_injection_detected', path: injection.path });
         }
 
-        // Default: build status message from current state
+        // Default: build status message from current state. Reuse the LLM
+        // service's buildLiveData() so the manual trigger emits the same
+        // structured fields (socPercent, pvKw, loadKw, priceCtKwh, ...) that
+        // the interval ticker uses — otherwise the prompt templates' Watt-vs-kW
+        // interpolation resolves to undefined and the LLM produces "Fehlende
+        // Daten" output even when state.victron is fully populated.
         const type = body.type || 'status';
-        const v = state?.victron || {};
-        const defaultData = {
-          pvW: v.pvTotalW ?? null,
-          soc: v.soc ?? null,
-          gridW: state?.meter?.grid_total_w ?? null
-        };
-        const data = { ...defaultData, ...(body.data || {}) };
+        const liveData = typeof ctx.llmService.getLiveData === 'function'
+          ? ctx.llmService.getLiveData()
+          : {};
+        const data = { ...liveData, ...(body.data || {}) };
 
         const msg = await ctx.llmService.generateMessage(type, data);
         return json(res, 200, { ok: true, message: msg });

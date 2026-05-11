@@ -101,6 +101,7 @@ export function createLlmService(ctx) {
    */
   function buildLiveData() {
     const v = state?.victron || {};
+    const costs = state?.costs || {};
     const epex = state?.epex?.data;
     const now = Date.now();
 
@@ -114,12 +115,32 @@ export function createLlmService(ctx) {
       if (slot) currentPrice = slot.ct_kwh;
     }
 
+    // Map raw state.victron.* fields (Watt) to the keys the prompt templates
+    // actually interpolate: buildNormalStatus uses {socPercent, pvKw, loadKw},
+    // buildSocWarning/SocFull uses {socPercent}, etc. Pre-Phase-5 plan, this
+    // factory returned {pvW, soc, gridW, pvTodayKwh, consumedKwh} which never
+    // got interpolated by any template — every status message read "Fehlende
+    // Daten" because every ${pvKw}/${socPercent} resolved to `undefined`.
+    const pvW = v.pvTotalW ?? v.pvPowerW ?? null;
+    const loadW = v.selfConsumptionW ?? null;
+    const netGridW = (v.gridImportW ?? 0) - (v.gridExportW ?? 0);
+    const toKw = (w) => (w == null ? null : Math.round(w / 100) / 10);
+
     return {
-      pvW: v.pvW ?? null,
+      // Canonical keys consumed by prompt-templates.js
+      socPercent: v.soc ?? null,
+      pvKw: toKw(pvW),
+      loadKw: toKw(loadW),
+      gridKw: toKw(netGridW),
+      priceCtKwh: currentPrice ?? costs.priceNowCtKwh ?? null,
+      // Today-aggregates from cost-tracker (state.costs computed by routes-api)
+      importKwh: costs.importKwh ?? null,
+      exportKwh: costs.exportKwh ?? null,
+      savingsEur: costs.netEur ?? null,
+      // Legacy keys preserved for callers / future templates that consume raw Watts
+      pvW,
       soc: v.soc ?? null,
-      gridW: v.gridW ?? null,
-      pvTodayKwh: v.pvTodayKwh ?? null,
-      consumedKwh: v.consumedKwh ?? null,
+      gridW: netGridW,
       price: currentPrice
     };
   }
@@ -184,5 +205,5 @@ export function createLlmService(ctx) {
     return buffer.getCount();
   }
 
-  return { start, close, generateMessage, getMessages, getLatest, getMessageCount, listModels: () => ollamaClient.list() };
+  return { start, close, generateMessage, getMessages, getLatest, getMessageCount, getLiveData: buildLiveData, listModels: () => ollamaClient.list() };
 }
