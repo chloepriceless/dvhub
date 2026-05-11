@@ -65,6 +65,20 @@ export function createLlmService(ctx) {
     const intervalMin = llmCfg.llmStatusIntervalMin ?? 60;
     const intervalMs = intervalMin * 60 * 1000;
 
+    // Generate one message early so the family dashboard isn't blank after
+    // service restarts (the buffer is in-memory and wiped on every restart).
+    // Wait 60s for Victron polling + EPEX fetch + forecast service to settle,
+    // then generate immediately rather than waiting for the first interval tick.
+    setTimeout(() => {
+      const liveData = buildLiveData();
+      generator.generateStatus(liveData)
+        .then(msg => {
+          buffer.add(msg);
+          pushLog('llm_status_generated', { source: msg.source, type: msg.type, trigger: 'startup' });
+        })
+        .catch(e => pushLog('llm_error', { error: e.message, context: 'startup_message' }));
+    }, 60000).unref();
+
     statusTimer = safeInterval('llm.status', async () => {
       try {
         // Gather live data from state
