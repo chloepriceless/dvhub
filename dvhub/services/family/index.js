@@ -430,9 +430,24 @@ export function createFamilyService(ctx) {
     else hello = 'Guten Abend';
 
     const surplus = energy.surplus;
-    const message = surplus
+
+    // Prefer the latest LLM-generated status message (Phase 05 Edge-LLM) when
+    // available and reasonably fresh (≤ 60 minutes). The LLM emits a warm,
+    // human-toned sentence built from live state — much more useful than the
+    // static surplus/deficit fallback. Falls back to the hardcoded sentence
+    // when the LLM is disabled, the buffer is empty (e.g. right after restart
+    // before the 60s eager-generate), or the latest message is too stale.
+    const HOUR_MS = 60 * 60 * 1000;
+    let message = surplus
       ? 'Dein Haus produziert mehr Strom als es braucht'
       : 'Dein Haus braucht gerade mehr als die Sonne liefert';
+    const llmLatest = (typeof ctx.llmService?.getLatest === 'function')
+      ? ctx.llmService.getLatest()
+      : null;
+    if (llmLatest && typeof llmLatest.text === 'string' && llmLatest.text.trim()
+        && typeof llmLatest.ts === 'number' && Date.now() - llmLatest.ts < HOUR_MS) {
+      message = llmLatest.text;
+    }
 
     const mood = surplus ? 'good' : 'warn';
     let moodLabel = surplus ? 'Alles läuft perfekt' : 'Batterie hilft aus';
