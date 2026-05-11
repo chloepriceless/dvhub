@@ -41,24 +41,38 @@ ALTER TABLE forecast_accuracy
 -- Tesla API canonical values. A SoC of 110% almost always indicates a
 -- unit-mix-up (fraction vs percent) and downstream charge logic must not
 -- silently accept it.
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_battery_level_range
-  CHECK (battery_level IS NULL OR (battery_level >= 0 AND battery_level <= 100));
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_usable_battery_range
-  CHECK (usable_battery_level IS NULL OR (usable_battery_level >= 0 AND usable_battery_level <= 100));
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_charge_limit_range
-  CHECK (charge_limit_soc IS NULL OR (charge_limit_soc >= 0 AND charge_limit_soc <= 100));
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_state_enum
-  CHECK (state IS NULL OR state IN ('asleep', 'online', 'offline', 'charging', 'driving'));
--- charging_state values from Tesla owner API: Disconnected, Charging, Complete,
--- Stopped, Starting, NoPower. Unknown values should fail loudly so we notice
--- API drift, not silently accept new strings.
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_charging_state_enum
-  CHECK (charging_state IS NULL OR charging_state IN ('Disconnected', 'Charging', 'Complete', 'Stopped', 'Starting', 'NoPower'));
+--
+-- Wrapped in a DO-block with information_schema check so the migration is a
+-- no-op on deployments where tesla_snapshots was never created (e.g. prod
+-- installations without Tesla integration). Mirrors the same pattern used
+-- by migration 016 for exec.manual_overrides.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = current_schema() AND table_name = 'tesla_snapshots'
+  ) THEN
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_battery_level_range '
+         || 'CHECK (battery_level IS NULL OR (battery_level >= 0 AND battery_level <= 100))';
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_usable_battery_range '
+         || 'CHECK (usable_battery_level IS NULL OR (usable_battery_level >= 0 AND usable_battery_level <= 100))';
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_charge_limit_range '
+         || 'CHECK (charge_limit_soc IS NULL OR (charge_limit_soc >= 0 AND charge_limit_soc <= 100))';
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_state_enum '
+         || 'CHECK (state IS NULL OR state IN (''asleep'', ''online'', ''offline'', ''charging'', ''driving''))';
+    -- charging_state values from Tesla owner API: Disconnected, Charging, Complete,
+    -- Stopped, Starting, NoPower. Unknown values should fail loudly so we notice
+    -- API drift, not silently accept new strings.
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_charging_state_enum '
+         || 'CHECK (charging_state IS NULL OR charging_state IN (''Disconnected'', ''Charging'', ''Complete'', ''Stopped'', ''Starting'', ''NoPower''))';
+  END IF;
+END
+$$;
 
 INSERT INTO schema_migrations (version, description, applied_at)
 VALUES (4, 'CHECK constraints: pv_forecasts.confidence, forecast_accuracy non-neg metrics, tesla_snapshots SoC/state', NOW())

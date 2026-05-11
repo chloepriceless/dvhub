@@ -18,19 +18,29 @@
 -- table does not exist yet) is deferred to Phase 8.1 (Multi-Schema Genesis).
 BEGIN;
 
--- De-dup before constraint add. CTE keeps the last row per (car_id, ts_utc).
-DELETE FROM tesla_snapshots a
-USING tesla_snapshots b
-WHERE a.car_id = b.car_id
-  AND a.ts_utc = b.ts_utc
-  AND a.id < b.id;
+-- Wrapped in a DO-block with information_schema check so the migration is a
+-- no-op on deployments where tesla_snapshots was never created (e.g. prod
+-- installations without Tesla integration). Mirrors the pattern used by
+-- migration 016 for exec.manual_overrides.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = current_schema() AND table_name = 'tesla_snapshots'
+  ) THEN
+    -- De-dup before constraint add. Keeps the last row per (car_id, ts_utc).
+    EXECUTE 'DELETE FROM tesla_snapshots a USING tesla_snapshots b '
+         || 'WHERE a.car_id = b.car_id AND a.ts_utc = b.ts_utc AND a.id < b.id';
 
-ALTER TABLE tesla_snapshots
-  ADD CONSTRAINT tesla_snapshots_unique_car_ts UNIQUE (car_id, ts_utc);
+    EXECUTE 'ALTER TABLE tesla_snapshots '
+         || 'ADD CONSTRAINT tesla_snapshots_unique_car_ts UNIQUE (car_id, ts_utc)';
 
--- The UNIQUE constraint creates its own implicit btree index on (car_id, ts_utc).
--- The previous non-unique idx_tesla_snapshots_car_ts is now redundant.
-DROP INDEX IF EXISTS idx_tesla_snapshots_car_ts;
+    -- The UNIQUE constraint creates its own implicit btree index on (car_id, ts_utc).
+    -- The previous non-unique idx_tesla_snapshots_car_ts is now redundant.
+    EXECUTE 'DROP INDEX IF EXISTS idx_tesla_snapshots_car_ts';
+  END IF;
+END
+$$;
 
 INSERT INTO schema_migrations (version, description, applied_at)
 VALUES (6, 'UNIQUE constraint: tesla_snapshots(car_id, ts_utc) + drop redundant non-unique index', NOW())

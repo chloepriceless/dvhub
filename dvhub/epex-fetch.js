@@ -88,7 +88,13 @@ export function createEpexFetcher(ctx) {
       state.epex.updatedAt = Date.now();
       pushLog('epex_refresh_err', { error: e.message });
     }
-    ctx.publishRuntimeSnapshot();
+    // Defensive: ctx.publishRuntimeSnapshot is wired up in server.js init order
+    // AFTER createEpexFetcher() runs (it's assigned to ctx around server.js:1090).
+    // The initial fetchEpexDay() call from setupEpex() can race with that wiring
+    // when EPEX network calls return fast or fail fast during startup. Optional
+    // chaining keeps the eager call as a snapshot-trigger without crashing the
+    // process when the ticker fires before ctx is fully populated.
+    ctx.publishRuntimeSnapshot?.();
   }
 
   // --- Public: fetchVrmForecast ---
