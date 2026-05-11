@@ -26,11 +26,29 @@ const execFileAsync = promisify(execFile);
 //     FLIP TO 'nonce-...' or remove entirely in 08-11.
 //   - frame-ancestors 'none', base-uri 'self', form-action 'self',
 //     object-src 'none' close CSP-level framing/form/plugin vectors.
+//
+// Plan 09-09: defence-in-depth header polish.
+//
+// Cookie policy contract: dvhub does not currently set Set-Cookie. If any future
+// endpoint introduces cookies, the cookie MUST include HttpOnly; Secure; SameSite=Strict
+// to match the LAN-trust threat model. Search for `Set-Cookie` before adding new
+// auth/session paths and ensure these flags are present.
 export const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  // Plan 09-09: disable sensor APIs the HEMS never uses. accelerometer/gyroscope/
+  // magnetometer cover phone-mounted family-tablet defence; camera/microphone/
+  // geolocation/payment/usb cover the broader OWASP-Top-10-2025 sensor-API class.
+  'Permissions-Policy': 'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
+  // Plan 09-09: window.opener isolation. Same-origin only — operator-initiated
+  // popouts work, cross-origin tabs cannot reach back into dvhub windows.
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  // Plan 09-09: block cross-origin embedding of dvhub static assets.
+  // (Cross-Origin-Embedder-Policy intentionally NOT added — would break the Leaflet
+  // tile fetch and Swagger UI which both pull from CDNs that don't ship CORP headers.)
+  'Cross-Origin-Resource-Policy': 'same-origin',
   'Content-Security-Policy': [
     "default-src 'self'",
     // script-src: pinned CDN paths ONLY. swagger-ui-dist@5.11.0 for /api-docs.html,
