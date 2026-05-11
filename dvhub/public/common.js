@@ -205,6 +205,40 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Aurora chart-color readers (Plan 09.1-04 — port Chart.js dataset colors
+  // off hardcoded hex/rgba literals onto Aurora CSS tokens). Chart.js v3+
+  // does NOT resolve `var(--token)` strings in dataset/options values, so we
+  // resolve them at chart-construction time via getComputedStyle. Both app.js
+  // and leitstand-charts.js call these helpers; placing them on
+  // DVhubCommon means common.js (loaded BEFORE app.js + leitstand-charts.js
+  // in index.html) is the single source of the colour-shim.
+  // ---------------------------------------------------------------------------
+  function aurChartColor(name, fallback) {
+    if (typeof document === 'undefined' || !document.documentElement) {
+      return fallback || '#fff';
+    }
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    v = (v || '').trim();
+    return v || fallback || '#fff';
+  }
+  function aurChartColorAlpha(name, alpha, fallback) {
+    var v = aurChartColor(name, fallback);
+    // Best-effort: convert hex (#rgb / #rrggbb) to rgba(); pass through
+    // anything else (already-rgba, already-hsl, named colors, etc.).
+    if (typeof v !== 'string') return fallback || v;
+    var hex = v.replace('#', '');
+    if (/^[0-9a-fA-F]{3}$/.test(hex)) hex = hex.split('').map(function (c) { return c + c; }).join('');
+    if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+      return 'rgba(' +
+        parseInt(hex.slice(0, 2), 16) + ',' +
+        parseInt(hex.slice(2, 4), 16) + ',' +
+        parseInt(hex.slice(4, 6), 16) + ',' +
+        alpha + ')';
+    }
+    return v;
+  }
+
   syncTokenFromUrl();
   installGlobalErrorBoundary();
 
@@ -214,7 +248,9 @@
     escapeHtml,
     getStoredApiToken,
     setStoredApiToken,
-    safeRender  // Plan 09-04 — per-sub-widget error boundary
+    safeRender,         // Plan 09-04 — per-sub-widget error boundary
+    aurChartColor,      // Plan 09.1-04 — Aurora chart token reader (resolves CSS variables at chart-build time)
+    aurChartColorAlpha  // Plan 09.1-04 — Aurora chart token reader with alpha (hex→rgba conversion)
   };
 
   // Unregister any old service workers — DVhub is a LAN app, SW caching causes stale UI

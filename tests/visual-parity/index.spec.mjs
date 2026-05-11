@@ -199,4 +199,107 @@ test.describe('Index/Leitstand page (Aurora Wave 3, AURORA-01/02/03/04/05/06)', 
     const hasAuroraStyles = linkedStyles.some((href) => /\/dvhub-app\.css(\?|$)/.test(href));
     expect(hasAuroraStyles, 'dvhub-app.css must be linked from index.html').toBe(true);
   });
+
+  test('Plan 09.1-04: Chart.js datasets read Aurora CSS tokens (not legacy hex literals)', async ({ page }) => {
+    await page.goto('/index.html');
+    // Wait long enough for the bar chart to attach + first paint cycle.
+    await page.waitForTimeout(3500);
+
+    // 1) DVhubCommon must expose the Aurora chart-color readers.
+    const commonHelpersOk = await page.evaluate(() => {
+      return !!(
+        window.DVhubCommon &&
+        typeof window.DVhubCommon.aurChartColor === 'function' &&
+        typeof window.DVhubCommon.aurChartColorAlpha === 'function'
+      );
+    });
+    expect(commonHelpersOk, 'DVhubCommon.aurChartColor / aurChartColorAlpha must be exported from common.js').toBe(true);
+
+    // 2) The exported helpers must successfully resolve the chart-token shim
+    //    block defined in dvhub-app.css (lines 508-520). If any token is
+    //    missing / empty, the Aurora shim has regressed and charts will fall
+    //    back to legacy hex literals.
+    const tokens = await page.evaluate(() => {
+      const a = window.DVhubCommon.aurChartColor;
+      return {
+        positive: a('--chart-positive', ''),
+        negative: a('--chart-negative', ''),
+        now:      a('--chart-now', ''),
+        grid:     a('--chart-grid', ''),
+        axis:     a('--chart-axis', ''),
+        schedAutomation: a('--schedule-automation-yellow', ''),
+        schedUser:       a('--schedule-user-cyan', '')
+      };
+    });
+    for (const [k, v] of Object.entries(tokens)) {
+      expect(v, `Aurora chart token --chart-${k} (or schedule-*) must resolve to non-empty value (got "${v}")`).toBeTruthy();
+    }
+
+    // 3) The EPEX bar chart (the chart at #priceChartCanvas) is the one users
+    //    flagged as "still uses the old design". On dev with no apiToken the
+    //    chart never paints (API returns 503), so a strict "datasets exist"
+    //    assertion would always fail. Instead, scan app.js source for the
+    //    legacy hex literals the user called out — refactor must remove them.
+    const appJsBody = await page.evaluate(async () => {
+      const resp = await fetch('/app.js');
+      return resp.text();
+    });
+    // Each of these literals appeared as a Chart.js dataset/annotation/axis
+    // color in the pre-refactor file. They MUST now be sourced from Aurora
+    // tokens — finding them as a raw `borderColor:|backgroundColor:|color:`
+    // value in app.js means the refactor missed a site.
+    const forbiddenLegacyLiterals = [
+      "borderColor: '#22d3ee'",
+      "borderColor: '#f5c451'",
+      "borderColor: '#facc15'",
+      "backgroundColor: '#1a1a2eee'",
+      "color: '#9ca3af'",
+      "borderColor: 'rgba(191,199,210,0.7)'",
+      "borderColor: 'rgba(191,199,210,0.9)'",
+      "borderColor: '#ff6b6b90'",
+      "borderColor: 'rgba(251,146,60,0.7)'",
+      "borderColor: 'rgba(250,204,21,0.6)'"
+    ];
+    const stillPresent = forbiddenLegacyLiterals.filter((s) => appJsBody.includes(s));
+    expect(stillPresent, `Legacy chart literals still in app.js: ${stillPresent.join(', ')}`).toEqual([]);
+
+    // Same check for leitstand-charts.js — the EPEX overlay charts + savings
+    // tile pulled hex literals from a const-object that's now a getter.
+    const chartsJsBody = await page.evaluate(async () => {
+      const resp = await fetch('/leitstand-charts.js');
+      return resp.text();
+    });
+    const forbiddenChartsLiterals = [
+      "borderColor: '#0077FF'",
+      "borderColor: '#39E06F'",
+      "borderColor: '#A78BFA'",
+      "borderColor: '#22D3EE'",
+      "borderColor: '#e3b341'",
+      "color: '#5a6a8a'",
+      "grid: { color: 'rgba(90, 106, 138, 0.15)' }"
+    ];
+    const stillPresentCharts = forbiddenChartsLiterals.filter((s) => chartsJsBody.includes(s));
+    expect(stillPresentCharts, `Legacy chart literals still in leitstand-charts.js: ${stillPresentCharts.join(', ')}`).toEqual([]);
+
+    // 4) If the EPEX chart did paint (i.e. apiToken is set on this dev
+    //    server), verify the first dataset background color is NOT a known
+    //    legacy hex. This is a soft check — when no apiToken is set the
+    //    chart stays unpainted and the assertion is skipped.
+    const epexBg = await page.evaluate(() => {
+      if (typeof window.Chart === 'undefined') return null;
+      const chart = window.Chart.getChart('priceChartCanvas');
+      if (!chart || !chart.data || !chart.data.datasets || !chart.data.datasets.length) return null;
+      const bg = chart.data.datasets[0].backgroundColor;
+      // First-bar color (per-bar array)
+      return Array.isArray(bg) ? bg[0] || null : (bg || null);
+    });
+    if (epexBg) {
+      // Token resolution should NEVER hand back the legacy brand blue.
+      expect(epexBg, 'EPEX dataset bg must NOT be raw legacy hex').not.toBe('#0077FF');
+      expect(epexBg, 'EPEX dataset bg must NOT be raw legacy cyan').not.toBe('#22d3ee');
+      // Must be a non-empty Chart.js-acceptable color (hex, rgb, rgba, hsl).
+      expect(typeof epexBg).toBe('string');
+      expect(epexBg.length).toBeGreaterThan(2);
+    }
+  });
 });

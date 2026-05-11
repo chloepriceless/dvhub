@@ -4,81 +4,105 @@
   // ---------------------------------------------------------------------------
   // Constants
   // ---------------------------------------------------------------------------
-  // Brand-aligned palette (DVhub design system, Phase 8 Plan 10)
-  const CHART_COLORS = {
-    pvForecast: '#e3b341',
-    pvActual: 'rgba(227, 179, 65, 0.5)',
-    loadForecast: '#58a6ff',
-    scheduleInternal: '#0077FF', // brand blue (was #6366F1 indigo)
-    scheduleEos: '#39E06F',      // brand green (was #3fb950 GitHub green)
-    scheduleSma: '#f2c94c',
-    savingsPositive: '#39E06F',  // brand green (was #3fb950)
-    savingsNegative: '#ff7b72',
-    sparkline: '#5a6a8a'
-  };
+  // Plan 09.1-04: chart palette is now sourced from Aurora CSS tokens via the
+  // window.DVhubCommon.aurChartColor / aurChartColorAlpha helpers (exported
+  // from common.js). The legacy CHART_COLORS const-object was resolved once
+  // at module load, which meant theme switches (dark ⇄ light) could not
+  // repaint charts because Chart.js had already cached the hex strings.
+  // getChartColors() runs at chart-construction time and reads live CSS
+  // variables, so the existing apply()/refresh() pipeline carries theme
+  // switches through to the chart datasets without any extra plumbing.
+  function _aur(name, fallback) {
+    var c = window.DVhubCommon;
+    return (c && c.aurChartColor) ? c.aurChartColor(name, fallback) : fallback;
+  }
+  function _aurA(name, alpha, fallback) {
+    var c = window.DVhubCommon;
+    return (c && c.aurChartColorAlpha) ? c.aurChartColorAlpha(name, alpha, fallback) : fallback;
+  }
+  function getChartColors() {
+    // Fall back to legacy palette if common.js failed to load — charts must
+    // still paint even if the helper isn't available.
+    return {
+      pvForecast:       _aur('--yellow',                       '#e3b341'),
+      pvActual:         _aurA('--yellow', 0.5,                 'rgba(227, 179, 65, 0.5)'),
+      loadForecast:     _aur('--blue',                         '#58a6ff'),
+      scheduleInternal: _aur('--schedule-user-cyan',           '#0077FF'),
+      scheduleEos:      _aur('--green',                        '#39E06F'),
+      scheduleSma:      _aur('--schedule-automation-yellow',   '#f2c94c'),
+      savingsPositive:  _aur('--chart-positive',               '#39E06F'),
+      savingsNegative:  _aur('--chart-negative',               '#ff7b72'),
+      sparkline:        _aur('--text-dim',                     '#5a6a8a')
+    };
+  }
 
   const REFRESH_MS = 30000;
 
-  const CHART_DEFAULTS = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: {
-      mode: 'index',
-      intersect: false
-    },
-    hover: {
-      mode: 'index',
-      intersect: false
-    },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: 'rgba(11, 15, 26, 0.95)',
-        titleColor: '#e8eaf0',
-        bodyColor: '#c8cdd8',
-        borderColor: 'rgba(99, 102, 241, 0.3)',
-        borderWidth: 1,
-        padding: 8,
-        cornerRadius: 6,
-        titleFont: { family: 'Inter', size: 11 },
-        bodyFont: { family: 'JetBrains Mono', size: 10 }
+  // CHART_DEFAULTS is now a getter — colors must be resolved per chart-build
+  // so theme switches re-paint via the existing apply()/refresh() pipeline.
+  function getChartDefaults() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false
       },
-      zoom: {
-        pan: {
-          enabled: true,
-          mode: 'x'
+      hover: {
+        mode: 'index',
+        intersect: false
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: _aurA('--bg-elev', 0.95, 'rgba(11, 15, 26, 0.95)'),
+          titleColor: _aur('--text', '#e8eaf0'),
+          bodyColor: _aur('--text-2', '#c8cdd8'),
+          borderColor: _aurA('--glass-brd', 0.3, 'rgba(99, 102, 241, 0.3)'),
+          borderWidth: 1,
+          padding: 8,
+          cornerRadius: 6,
+          titleFont: { family: 'Inter', size: 11 },
+          bodyFont: { family: 'JetBrains Mono', size: 10 }
         },
         zoom: {
-          wheel: { enabled: true, modifierKey: 'ctrl' },
-          pinch: { enabled: true },
-          mode: 'x',
-          onZoomComplete: function (ctx) {
-            // Show reset hint on first zoom
-            var card = ctx.chart.canvas.closest('.chart-span-card, .metric-card');
-            if (card && !card.querySelector('.zoom-reset-hint')) {
-              var hint = document.createElement('div');
-              hint.className = 'zoom-reset-hint';
-              hint.textContent = 'Ctrl+Scroll = Zoom, Doppelklick = Reset';
-              hint.style.cssText = 'position:absolute;top:4px;right:8px;font-size:9px;color:#5a6a8a;opacity:0.7;pointer-events:none;';
-              card.style.position = 'relative';
-              card.appendChild(hint);
-              setTimeout(function () { hint.remove(); }, 3000);
+          pan: {
+            enabled: true,
+            mode: 'x'
+          },
+          zoom: {
+            wheel: { enabled: true, modifierKey: 'ctrl' },
+            pinch: { enabled: true },
+            mode: 'x',
+            onZoomComplete: function (ctx) {
+              // Show reset hint on first zoom
+              var card = ctx.chart.canvas.closest('.chart-span-card, .metric-card');
+              if (card && !card.querySelector('.zoom-reset-hint')) {
+                var hint = document.createElement('div');
+                hint.className = 'zoom-reset-hint';
+                hint.textContent = 'Ctrl+Scroll = Zoom, Doppelklick = Reset';
+                hint.style.cssText = 'position:absolute;top:4px;right:8px;font-size:9px;color:' +
+                  _aur('--chart-axis', '#5a6a8a') + ';opacity:0.7;pointer-events:none;';
+                card.style.position = 'relative';
+                card.appendChild(hint);
+                setTimeout(function () { hint.remove(); }, 3000);
+              }
             }
           }
         }
-      }
-    },
-    scales: {
-      x: {
-        grid: { color: 'rgba(90, 106, 138, 0.15)' },
-        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 } }
       },
-      y: {
-        grid: { color: 'rgba(90, 106, 138, 0.15)' },
-        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 } }
+      scales: {
+        x: {
+          grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
+          ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 9 } }
+        },
+        y: {
+          grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
+          ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 9 } }
+        }
       }
-    }
-  };
+    };
+  }
 
   // ---------------------------------------------------------------------------
   // Zoom reset: double-click on canvas resets zoom/pan to original view
@@ -186,13 +210,14 @@
         skeleton.textContent = 'Keine PV-Prognosedaten verfügbar';
         skeleton.style.lineHeight = '200px';
         skeleton.style.textAlign = 'center';
-        skeleton.style.color = '#5a6a8a';
+        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
         skeleton.style.fontSize = '0.85rem';
         skeleton.style.animation = 'none';
       }
       return;
     }
 
+    var c = getChartColors();
     const labels = pvSlots.map(function (s) {
       var d = new Date(s.start);
       return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
@@ -203,7 +228,7 @@
       {
         label: 'PV-Prognose',
         data: forecastKw,
-        borderColor: CHART_COLORS.pvForecast,
+        borderColor: c.pvForecast,
         backgroundColor: 'transparent',
         borderWidth: 2,
         pointRadius: 0,
@@ -218,7 +243,7 @@
       datasets.push({
         label: 'Last-Prognose',
         data: loadSlots.map(function (s) { return s.powerW / 1000; }),
-        borderColor: CHART_COLORS.loadForecast,
+        borderColor: c.loadForecast,
         backgroundColor: 'transparent',
         borderWidth: 1.5,
         borderDash: [4, 3],
@@ -230,10 +255,10 @@
     var config = {
       type: 'line',
       data: { labels: labels, datasets: datasets },
-      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+      options: JSON.parse(JSON.stringify(getChartDefaults()))
     };
     config.options.scales.x.ticks = { maxTicksLimit: 12, maxRotation: 45, font: { size: 10 } };
-    config.options.scales.y.title = { display: true, text: 'kW', color: '#5a6a8a', font: { size: 10 } };
+    config.options.scales.y.title = { display: true, text: 'kW', color: _aur('--chart-axis', '#5a6a8a'), font: { size: 10 } };
     config.options.scales.y.beginAtZero = true;
     config.options.plugins.tooltip.callbacks = {
       label: function (ctx) {
@@ -255,11 +280,12 @@
   // 2. Gantt Timeline (D-06 type 2) — horizontal bar chart
   // ---------------------------------------------------------------------------
   function getSourceCategory(source) {
-    if (!source) return { label: 'Intern', color: CHART_COLORS.scheduleInternal };
+    var c = getChartColors();
+    if (!source) return { label: 'Intern', color: c.scheduleInternal };
     var s = source.toLowerCase();
-    if (s.indexOf('eos') !== -1) return { label: 'EOS', color: CHART_COLORS.scheduleEos };
-    if (s.indexOf('sma') !== -1) return { label: 'SMA', color: CHART_COLORS.scheduleSma };
-    return { label: 'Intern', color: CHART_COLORS.scheduleInternal };
+    if (s.indexOf('eos') !== -1) return { label: 'EOS', color: c.scheduleEos };
+    if (s.indexOf('sma') !== -1) return { label: 'SMA', color: c.scheduleSma };
+    return { label: 'Intern', color: c.scheduleInternal };
   }
 
   function renderGanttChart(optimizerData) {
@@ -282,7 +308,7 @@
         skeleton.textContent = 'Kein Optimizer-Schedule vorhanden';
         skeleton.style.lineHeight = '200px';
         skeleton.style.textAlign = 'center';
-        skeleton.style.color = '#5a6a8a';
+        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
         skeleton.style.fontSize = '0.85rem';
         skeleton.style.animation = 'none';
       }
@@ -320,7 +346,7 @@
           barPercentage: 0.6
         }]
       },
-      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+      options: JSON.parse(JSON.stringify(getChartDefaults()))
     };
 
     config.options.indexAxis = 'y';
@@ -332,9 +358,9 @@
       type: 'linear',
       min: minMs,
       max: maxMs,
-      grid: { color: 'rgba(90, 106, 138, 0.15)' },
+      grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
       ticks: {
-        color: '#5a6a8a',
+        color: _aur('--chart-axis', '#5a6a8a'),
         font: { family: 'JetBrains Mono', size: 9 },
         callback: function (val) { return new Date(val).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); },
         maxTicksLimit: 12
@@ -344,7 +370,7 @@
       type: 'category',
       labels: categories,
       grid: { display: false },
-      ticks: { color: '#5a6a8a', font: { family: 'Inter', size: 10 } }
+      ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'Inter', size: 10 } }
     };
     config.options.plugins.tooltip.callbacks = {
       label: function (ctx) {
@@ -502,19 +528,23 @@
   // Individual source curves (pvlib/solcast/vrm) aren't broken out by the API —
   // they're merged internally in pv-forecast.js before the response.
   // To re-add them, extend buildForecastResponse() to expose per-source slot arrays.
-  var COMPARISON_DATASETS = [
-    { key: 'actual', label: 'Ist (gemessen)',          color: 'rgba(46, 204, 113, 1)', dash: [],     width: 2   },
-    { key: 'past',   label: 'Prognose (historisch)',   color: 'rgba(46, 204, 113, 0.55)', dash: [3, 3], width: 1.5 },
-    { key: 'ml',     label: 'ML-korrigiert',           color: '#A78BFA', dash: [],     width: 2.5 },
-    { key: 'merged', label: 'Basis-Prognose',          color: '#22D3EE', dash: [4, 3], width: 1.8 },
-    { key: 'load',   label: 'Last-Prognose',           color: '#58a6ff', dash: [4, 3], width: 1.5 }
-  ];
+  // Plan 09.1-04: colours resolved per-build via Aurora tokens, not stored in the
+  // const. Each call re-reads tokens so theme switches repaint the legend + lines.
+  function getComparisonDatasets() {
+    return [
+      { key: 'actual', label: 'Ist (gemessen)',        color: _aur('--green', 'rgba(46, 204, 113, 1)'),       dash: [],     width: 2   },
+      { key: 'past',   label: 'Prognose (historisch)', color: _aurA('--green', 0.55, 'rgba(46, 204, 113, 0.55)'), dash: [3, 3], width: 1.5 },
+      { key: 'ml',     label: 'ML-korrigiert',         color: _aur('--violet', '#A78BFA'),                     dash: [],     width: 2.5 },
+      { key: 'merged', label: 'Basis-Prognose',        color: _aur('--cyan', '#22D3EE'),                       dash: [4, 3], width: 1.8 },
+      { key: 'load',   label: 'Last-Prognose',         color: _aur('--blue', '#58a6ff'),                       dash: [4, 3], width: 1.5 }
+    ];
+  }
 
   function initForecastComparisonChart() {
     var canvas = document.getElementById('forecastComparisonChart');
     if (!canvas || typeof Chart === 'undefined') return;
 
-    var datasets = COMPARISON_DATASETS.map(function (ds) {
+    var datasets = getComparisonDatasets().map(function (ds) {
       return {
         label: ds.label,
         data: [],
@@ -532,18 +562,18 @@
     var config = {
       type: 'line',
       data: { datasets: datasets },
-      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+      options: JSON.parse(JSON.stringify(getChartDefaults()))
     };
     // Linear X axis with ms timestamps (no date adapter needed) — 12h back + 24h ahead
     config.options.scales.x = {
       type: 'linear',
       min: nowMs - 12 * 3600000,
       max: nowMs + 24 * 3600000,
-      grid: { color: 'rgba(90, 106, 138, 0.15)' },
+      grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
       ticks: {
         maxTicksLimit: 12,
         maxRotation: 0,
-        color: '#5a6a8a',
+        color: _aur('--chart-axis', '#5a6a8a'),
         font: { family: 'JetBrains Mono', size: 10 },
         callback: function (val) {
           return new Date(val).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -553,7 +583,7 @@
     config.options.scales.y.title = {
       display: true,
       text: 'Leistung (kW)',
-      color: '#5a6a8a',
+      color: _aur('--chart-axis', '#5a6a8a'),
       font: { size: 10 }
     };
     config.options.scales.y.beginAtZero = true;
@@ -566,22 +596,24 @@
         return new Date(items[0].parsed.x).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       }
     };
-    // Now-marker vertical dashed line (D-B2)
+    // Now-marker vertical dashed line (D-B2) — Aurora orange via --chart-now (yellow)
+    // or --orange depending on theme. Use --chart-now (= --yellow) for parity with
+    // app.js Jetzt-line which also reads --chart-now.
     config.options.plugins.annotation = {
       annotations: {
         nowLine: {
           type: 'line',
           xMin: nowMs,
           xMax: nowMs,
-          borderColor: 'rgba(255, 165, 0, 0.8)',
+          borderColor: _aurA('--chart-now', 0.8, 'rgba(255, 165, 0, 0.8)'),
           borderWidth: 2,
           borderDash: [6, 3],
           label: {
             display: true,
             content: 'jetzt',
             position: 'start',
-            backgroundColor: 'rgba(255, 165, 0, 0.7)',
-            color: '#fff',
+            backgroundColor: _aurA('--chart-now', 0.7, 'rgba(255, 165, 0, 0.7)'),
+            color: _aur('--text', '#fff'),
             font: { size: 11 }
           }
         }
@@ -603,7 +635,7 @@
     container.style.padding = '8px 0 0';
     container.style.fontSize = '10px';
 
-    COMPARISON_DATASETS.forEach(function (ds, i) {
+    getComparisonDatasets().forEach(function (ds, i) {
       var item = document.createElement('span');
       item.style.display = 'inline-flex';
       item.style.alignItems = 'center';
@@ -654,7 +686,7 @@
         skeleton.textContent = 'Noch keine Vergleichsdaten vorhanden';
         skeleton.style.lineHeight = '200px';
         skeleton.style.textAlign = 'center';
-        skeleton.style.color = '#5a6a8a';
+        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
         skeleton.style.fontSize = '0.85rem';
         skeleton.style.animation = 'none';
       }
@@ -923,8 +955,8 @@
       {
         label: 'Batterie-Plan (+lade/-entlade)',
         data: batteryKw,
-        borderColor: '#A78BFA',
-        backgroundColor: 'rgba(167, 139, 250, 0.15)',
+        borderColor: _aur('--violet', '#A78BFA'),
+        backgroundColor: _aurA('--violet', 0.15, 'rgba(167, 139, 250, 0.15)'),
         borderWidth: 2.5,
         pointRadius: 0,
         tension: 0.1,
@@ -934,7 +966,7 @@
       {
         label: 'PV-Prognose',
         data: pvKw,
-        borderColor: '#e3b341',
+        borderColor: _aur('--yellow', '#e3b341'),
         backgroundColor: 'transparent',
         borderWidth: 1.5,
         borderDash: [4, 3],
@@ -945,7 +977,7 @@
       {
         label: 'Last-Prognose',
         data: loadKw,
-        borderColor: '#58a6ff',
+        borderColor: _aur('--blue', '#58a6ff'),
         backgroundColor: 'transparent',
         borderWidth: 1.5,
         borderDash: [4, 3],
@@ -956,7 +988,7 @@
       {
         label: 'Preis (ct/kWh)',
         data: priceCt,
-        borderColor: '#39E06F',
+        borderColor: _aur('--green', '#39E06F'),
         backgroundColor: 'transparent',
         borderWidth: 1.5,
         pointRadius: 0,
@@ -968,25 +1000,25 @@
     var config = {
       type: 'line',
       data: { labels: labels, datasets: datasets },
-      options: JSON.parse(JSON.stringify(CHART_DEFAULTS))
+      options: JSON.parse(JSON.stringify(getChartDefaults()))
     };
     // Dual-axis setup: y = kW (battery/PV/load), y1 = ct/kWh (price)
     config.options.scales = {
       x: {
-        grid: { color: 'rgba(90, 106, 138, 0.15)' },
-        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 12, maxRotation: 45 }
+        grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
+        ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 12, maxRotation: 45 }
       },
       y: {
         position: 'left',
-        grid: { color: 'rgba(90, 106, 138, 0.15)' },
-        ticks: { color: '#5a6a8a', font: { family: 'JetBrains Mono', size: 9 } },
-        title: { display: true, text: 'kW', color: '#5a6a8a', font: { size: 10 } }
+        grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
+        ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'kW', color: _aur('--chart-axis', '#5a6a8a'), font: { size: 10 } }
       },
       y1: {
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#39E06F', font: { family: 'JetBrains Mono', size: 9 } },
-        title: { display: true, text: 'ct/kWh', color: '#39E06F', font: { size: 10 } }
+        ticks: { color: _aur('--green', '#39E06F'), font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'ct/kWh', color: _aur('--green', '#39E06F'), font: { size: 10 } }
       }
     };
     config.options.plugins.tooltip.callbacks = {
@@ -1125,10 +1157,17 @@
     pvEl.textContent = pvKwh.toFixed(1) + ' kWh';
     loadEl.textContent = loadKwh.toFixed(1) + ' kWh';
 
-    // Surplus: green if positive, red if negative
+    // Surplus: green if positive, red if negative — via Aurora chart tokens
+    // so the same hue maps the EPEX chart in both light and dark themes.
     var sign = surplus >= 0 ? '+' : '';
     surplusEl.textContent = sign + surplus.toFixed(1) + ' kWh';
-    surplusEl.style.color = surplus >= 0 ? '#39E06F' : '#ff7b72';
+    surplusEl.style.color = surplus >= 0
+      ? _aur('--chart-positive', '#39E06F')
+      : _aur('--chart-negative', '#ff7b72');
+
+    // Aurora text-dim / danger hues shared across all detail spans below
+    var _dimColor = _aur('--chart-axis', '#5a6a8a');
+    var _dangerColor = _aur('--chart-negative', '#ff7b72');
 
     // Detail lines
     if (detailEl) {
@@ -1137,7 +1176,7 @@
         pvParts.push('ML/Basis: ' + pvKwhRest.toFixed(1) + '/' + rawKwhRest.toFixed(1));
       }
       if (pvKwhTomorrow > 0) pvParts.push('Morgen: ' + pvKwhTomorrow.toFixed(1) + ' kWh');
-      detailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + pvParts.join(' · ') + '</span>';
+      detailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + pvParts.join(' · ') + '</span>';
     }
 
     // Load detail: warn if flat baseload
@@ -1145,13 +1184,13 @@
       var hasTotalsLoad = !!(totals && totals.today && totals.today.loadKwh > 0);
       var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
       if (allSame) {
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dangerColor + ';">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
       } else if (!loadSlots.length && !hasTotalsLoad) {
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#ff7b72;">⚠ Kein Load-Forecast für heute</span>';
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dangerColor + ';">⚠ Kein Load-Forecast für heute</span>';
       } else {
         var loadParts = ['Rest heute: ' + loadKwhRest.toFixed(1) + ' kWh'];
         if (loadKwhTomorrow > 0) loadParts.push('Morgen: ' + loadKwhTomorrow.toFixed(1) + ' kWh');
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + loadParts.join(' · ') + '</span>';
+        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + loadParts.join(' · ') + '</span>';
       }
     }
 
@@ -1163,7 +1202,7 @@
         var totalSign = totalAvailable >= 0 ? '+' : '';
         parts.push('Verf\u00fcgbar: ' + totalSign + totalAvailable.toFixed(1) + ' kWh');
       }
-      surplusDetailEl.innerHTML = '<span style="font-size:10px;color:#5a6a8a;">' + parts.join(' · ') + '</span>';
+      surplusDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + parts.join(' · ') + '</span>';
     }
   }
 

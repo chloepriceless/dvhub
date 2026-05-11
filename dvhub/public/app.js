@@ -144,6 +144,26 @@ function cssVar(name, fallback) {
   return value || fallback;
 }
 
+// Plan 09.1-04: Aurora chart-color reader with alpha — converts a hex token
+// (#rgb / #rrggbb) read from CSS variables into an rgba() string so Chart.js
+// dataset / annotation configs can carry transparency without baking the
+// alpha into the design token. Mirrors DVhubCommon.aurChartColorAlpha but
+// stays in-file so the chart builder doesn't need to await common.js loading.
+function cssVarAlpha(name, alpha, fallback) {
+  const v = cssVar(name, fallback);
+  if (typeof v !== 'string') return fallback || v;
+  let hex = v.replace('#', '');
+  if (/^[0-9a-fA-F]{3}$/.test(hex)) hex = hex.split('').map((c) => c + c).join('');
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    return 'rgba(' +
+      parseInt(hex.slice(0, 2), 16) + ',' +
+      parseInt(hex.slice(2, 4), 16) + ',' +
+      parseInt(hex.slice(4, 6), 16) + ',' +
+      alpha + ')';
+  }
+  return v;
+}
+
 function roundCt(value) {
   return Number(Number(value || 0).toFixed(2));
 }
@@ -592,7 +612,34 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartImport = cssVar('--chart-import', '#22c55e');
-  const fcColor = '#f59e0b';
+  // Plan 09.1-04: PV-forecast accent (☀ PV Forecast line + kW axis) now from
+  // Aurora --orange token; falls back to amber-500 if not present.
+  const fcColor = cssVar('--orange', '#f59e0b');
+  // Aurora chart-axis / chart-grid / chart-label hues — shared across all
+  // axes, ticks, gridlines, and tooltip surfaces in this chart so theme
+  // switches repaint the whole frame, not just the bars.
+  const chartAxis = cssVar('--chart-axis', '#9ca3af');
+  const chartLabel = cssVar('--chart-label', '#9ca3af');
+  const chartGrid = cssVar('--chart-grid', '#e5e7eb20');
+  const chartNow = cssVar('--chart-now', '#facc15');
+  const chartNowBg = cssVarAlpha('--bg-elev', 0.93, '#1a1a2eee');
+  const chartTipBg = cssVarAlpha('--bg-elev', 0.8, '#1a1a2ecc');
+  // VRM/Sunset/Sunrise overlay accents (annotation lines) — mapped to Aurora
+  // semantic colour tokens. Each falls back to the pre-Aurora literal so a
+  // failure to find the var still paints something sensible.
+  const chartVrmCyan = cssVar('--cyan', '#22d3ee');
+  const chartPvIstYellow = cssVar('--yellow', '#f5c451');
+  const chartLoadDim = cssVarAlpha('--chart-axis', 0.7, 'rgba(191,199,210,0.7)');
+  const chartLoadActual = cssVarAlpha('--chart-axis', 0.9, 'rgba(191,199,210,0.9)');
+  const chartGridLine = cssVar('--chart-negative-highlight', '#ff6b6b90');
+  const chartSunset = cssVarAlpha('--orange', 0.7, 'rgba(251,146,60,0.7)');
+  const chartSunsetLabel = cssVarAlpha('--orange', 0.9, 'rgba(251,146,60,0.9)');
+  const chartSunrise = cssVarAlpha('--yellow', 0.6, 'rgba(250,204,21,0.6)');
+  const chartSunriseLabel = cssVarAlpha('--yellow', 0.85, 'rgba(250,204,21,0.85)');
+  const chartNegativeTint = cssVarAlpha('--chart-negative', 0.1, 'rgba(239, 68, 68, 0.10)');
+  const chartNegativeRule = cssVarAlpha('--chart-negative', 0.4, 'rgba(239, 68, 68, 0.40)');
+  const chartSelectionDim = cssVarAlpha('--bg-0', 0.6, 'rgba(10, 20, 40, 0.6)');
+  const chartSelectionStroke = cssVar('--text', '#ffffff');
 
   // --- Data prep ---
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
@@ -749,7 +796,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       label: '☀ VRM-Prognose',
       type: 'line',
       data: vrmFc,
-      borderColor: '#22d3ee',
+      borderColor: chartVrmCyan,
       backgroundColor: 'transparent',
       borderWidth: 1.5,
       borderDash: [3, 3],
@@ -783,7 +830,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         label: '⚡ Lastvorhersage',
         type: 'line',
         data: consFc,
-        borderColor: 'rgba(191,199,210,0.7)',
+        borderColor: chartLoadDim,
         borderWidth: 1.5,
         borderDash: [4, 3],
         pointRadius: 0,
@@ -820,7 +867,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         label: '☀ PV Ist',
         type: 'line',
         data: pvActual,
-        borderColor: '#f5c451',
+        borderColor: chartPvIstYellow,
         borderWidth: 2,
         pointRadius: 0,
         pointHoverRadius: 3,
@@ -835,7 +882,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         label: '🏠 Verbrauch',
         type: 'line',
         data: loadActual,
-        borderColor: 'rgba(191,199,210,0.9)',
+        borderColor: chartLoadActual,
         borderWidth: 1.5,
         pointRadius: 0,
         pointHoverRadius: 3,
@@ -850,7 +897,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         label: '🔌 Netz',
         type: 'line',
         data: gridActual,
-        borderColor: '#ff6b6b90',
+        borderColor: chartGridLine,
         borderWidth: 1.5,
         pointRadius: 0,
         pointHoverRadius: 3,
@@ -903,7 +950,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           display: true,
           position: 'bottom',
           labels: {
-            color: '#9ca3af',
+            color: chartLabel,
             font: { size: 11 },
             usePointStyle: true,
             padding: 16
@@ -948,15 +995,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               type: 'line',
               xMin: nowIdx,
               xMax: nowIdx,
-              borderColor: '#facc15',
+              borderColor: chartNow,
               borderWidth: 2.5,
               borderDash: [],
               label: {
                 display: true,
                 content: 'Jetzt',
                 position: 'end',
-                backgroundColor: '#1a1a2eee',
-                color: '#facc15',
+                backgroundColor: chartNowBg,
+                color: chartNow,
                 font: { weight: 'bold', size: 11 },
                 padding: { top: 2, bottom: 2, left: 4, right: 4 }
               }
@@ -966,15 +1013,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 type: 'line',
                 xMin: sunsetIdx,
                 xMax: sunsetIdx,
-                borderColor: 'rgba(251,146,60,0.7)',
+                borderColor: chartSunset,
                 borderWidth: 1.5,
                 borderDash: [5, 4],
                 label: {
                   display: true,
                   content: 'Sonnenuntergang',
                   position: 'start',
-                  backgroundColor: '#1a1a2ecc',
-                  color: 'rgba(251,146,60,0.9)',
+                  backgroundColor: chartTipBg,
+                  color: chartSunsetLabel,
                   font: { size: 10 },
                   padding: { top: 2, bottom: 2, left: 4, right: 4 }
                 }
@@ -985,15 +1032,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 type: 'line',
                 xMin: sunriseIdx,
                 xMax: sunriseIdx,
-                borderColor: 'rgba(250,204,21,0.6)',
+                borderColor: chartSunrise,
                 borderWidth: 1.5,
                 borderDash: [5, 4],
                 label: {
                   display: true,
                   content: 'Sonnenaufgang',
                   position: 'start',
-                  backgroundColor: '#1a1a2ecc',
-                  color: 'rgba(250,204,21,0.85)',
+                  backgroundColor: chartTipBg,
+                  color: chartSunriseLabel,
                   font: { size: 10 },
                   padding: { top: 2, bottom: 2, left: 4, right: 4 }
                 }
@@ -1022,7 +1069,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         x: {
           type: 'category',
           ticks: {
-            color: '#9ca3af',
+            color: chartAxis,
             font: { size: 10 },
             maxRotation: 0,
             autoSkip: false,
@@ -1036,13 +1083,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
             }
           },
-          grid: { color: '#e5e7eb20', lineWidth: 1 }
+          grid: { color: chartGrid, lineWidth: 1 }
         },
         y: {
           position: 'left',
-          title: { display: true, text: 'ct/kWh', color: '#9ca3af', font: { size: 11 } },
-          ticks: { color: '#9ca3af', font: { size: 10 } },
-          grid: { color: '#e5e7eb20', lineWidth: 1 },
+          title: { display: true, text: 'ct/kWh', color: chartAxis, font: { size: 11 } },
+          ticks: { color: chartAxis, font: { size: 10 } },
+          grid: { color: chartGrid, lineWidth: 1 },
           beginAtZero: true
         },
         kw: {
@@ -1076,7 +1123,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       if (ds >= 0) {
         const meta = chart.getDatasetMeta(ds);
         ctx.save();
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.10)';
+        ctx.fillStyle = chartNegativeTint;
         meta.data.forEach((bar, i) => {
           const val = Number(data[i]?.ct_kwh);
           if (val < 0) {
@@ -1091,7 +1138,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         const zeroPixel = yScale.getPixelForValue(0);
         if (zeroPixel < bottom) {
           ctx.save();
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.40)';
+          ctx.strokeStyle = chartNegativeRule;
           ctx.lineWidth = 1;
           ctx.setLineDash([4, 4]);
           ctx.beginPath();
@@ -1118,7 +1165,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       meta.data.forEach((bar, i) => {
         if (!selected.has(i)) {
           ctx.save();
-          ctx.fillStyle = 'rgba(10, 20, 40, 0.6)';
+          ctx.fillStyle = chartSelectionDim;
           ctx.fillRect(bar.x - bar.width / 2, chart.chartArea.top, bar.width, chart.chartArea.bottom - chart.chartArea.top);
           ctx.restore();
         }
@@ -1127,7 +1174,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       meta.data.forEach((bar, i) => {
         if (selected.has(i)) {
           ctx.save();
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = chartSelectionStroke;
           ctx.lineWidth = 2;
           ctx.strokeRect(bar.x - bar.width / 2, bar.y, bar.width, bar.base - bar.y);
           ctx.restore();
