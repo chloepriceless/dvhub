@@ -1719,6 +1719,9 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/admin/system/info' && req.method === 'GET') {
+      if (!ctx.getServiceActionsEnabled()) {
+        return json(res, 403, { ok: false, error: 'service actions disabled' });
+      }
       try {
         const uptimeOut = (await execFileAsync('uptime', ['-p'], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
         const hostnameOut = (await execFileAsync('hostname', [], { timeout: 5000 }).catch(() => ({ stdout: '-' }))).stdout.trim();
