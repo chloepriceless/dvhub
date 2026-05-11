@@ -76,6 +76,9 @@ test('createPvForecast on Tier 1 does NOT call pythonBridge', async () => {
   };
   const mockStore = {
     insertPvForecast: async () => {},
+    // Plan 09-08: batched variant added — keep mocks API-compatible with the
+    // store factory's return-object.
+    insertPvForecastBatch: async () => {},
     getLatestWeather: async () => []
   };
   const mockState = { forecast: { pv: {} } };
@@ -115,6 +118,7 @@ test('createPvForecast on Tier 2 calls pythonBridge.call with correct input sche
   };
   const mockStore = {
     insertPvForecast: async () => {},
+    insertPvForecastBatch: async () => {}, // Plan 09-08 batched variant
     getLatestWeather: async () => [
       { ts_utc: '2026-04-03T10:00:00Z', ghi_wm2: 500, dni_wm2: 400, dhi_wm2: 100, temperature_c: 15, wind_speed_ms: 3 }
     ]
@@ -162,6 +166,12 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
   let storedRows = [];
   const mockStore = {
     insertPvForecast: async (row) => { storedRows.push(row); },
+    // Plan 09-08: batched callers now go through insertPvForecastBatch — flatten
+    // the rows array into storedRows so existing assertions (look up by ts_utc)
+    // continue to work unchanged.
+    insertPvForecastBatch: async (rows) => {
+      if (Array.isArray(rows)) for (const row of rows) storedRows.push(row);
+    },
     getLatestWeather: async () => [
       { ts_utc: '2026-04-03T10:00:00Z', ghi_wm2: 500, dni_wm2: 400, dhi_wm2: 100, temperature_c: 15, wind_speed_ms: 3 }
     ]
