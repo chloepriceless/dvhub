@@ -403,7 +403,18 @@ export function createApiRoutes(ctx) {
   const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
 
   // ── Admin health payload builder ────────────────────────────────────
+  // Plan 09-06 Task 3: every checks[] entry carries additive
+  // latencyMs / lastSuccessAt / lastErrorAt fields alongside the existing
+  // id / label / ok / detail (QUAL-02 — purely additive, no rename or removal).
   async function adminHealthPayload() {
+    // Plan 09-06: helper to compute ISO timestamp from a millisecond epoch.
+    // Returns null when the input is falsy / non-finite — keeps payload shape
+    // stable across cold-start (no successful sample yet) and post-error states.
+    function toIso(ms) {
+      if (!ms || !Number.isFinite(Number(ms))) return null;
+      try { return new Date(Number(ms)).toISOString(); } catch { return null; }
+    }
+
     const service = {
       enabled: ctx.getServiceActionsEnabled(),
       name: ctx.getServiceName(),
@@ -412,12 +423,23 @@ export function createApiRoutes(ctx) {
       detail: 'Service-Aktionen sind per ENV deaktiviert.'
     };
 
+    // Plan 09-06 Task 3: time the service_actions branch — this is the
+    // only adminHealthPayload() check that performs actual async I/O. The
+    // other checks read state synchronously, so their latencyMs is 0.
+    let serviceLatencyMs = 0;
+    let serviceLastSuccessAt = null;
+    let serviceLastErrorAt = null;
     if (ctx.getServiceActionsEnabled()) {
+      const startNs = process.hrtime.bigint();
       const activeCheck = await ctx.runServiceCommand(['is-active', ctx.getServiceName()]);
       const showCheck = await ctx.runServiceCommand(['show', ctx.getServiceName(), '--property=ActiveState,SubState,UnitFileState', '--value']);
+      serviceLatencyMs = Number(process.hrtime.bigint() - startNs) / 1e6;
       service.status = activeCheck.ok ? (activeCheck.stdout || 'unknown') : 'unavailable';
       service.detail = activeCheck.ok ? 'systemctl erreichbar' : activeCheck.error;
       service.show = showCheck.ok ? showCheck.stdout : showCheck.error;
+      const checkedAtIso = new Date().toISOString();
+      serviceLastSuccessAt = activeCheck.ok ? checkedAtIso : null;
+      serviceLastErrorAt = activeCheck.ok ? null : checkedAtIso;
     }
 
     return {
@@ -439,13 +461,22 @@ export function createApiRoutes(ctx) {
           ok: ctx.getLoadedConfig().exists && ctx.getLoadedConfig().valid,
           detail: ctx.getLoadedConfig().exists
             ? (ctx.getLoadedConfig().valid ? `gueltig unter ${ctx.getConfigPath()}` : `ungueltig: ${ctx.getLoadedConfig().parseError}`)
-            : `fehlt: ${ctx.getConfigPath()}`
+            : `fehlt: ${ctx.getConfigPath()}`,
+          // Plan 09-06 Task 3: synchronous state read — zero latency. Config
+          // load happens at boot; treat the loaded-config flag as the
+          // success marker. No discrete error timestamp is tracked.
+          latencyMs: 0,
+          lastSuccessAt: (ctx.getLoadedConfig().exists && ctx.getLoadedConfig().valid) ? toIso(Date.now()) : null,
+          lastErrorAt: !ctx.getLoadedConfig().valid && ctx.getLoadedConfig().exists ? toIso(Date.now()) : null
         },
         {
           id: 'setup',
           label: 'Setup Status',
           ok: !ctx.getLoadedConfig().needsSetup,
-          detail: ctx.getLoadedConfig().needsSetup ? 'Setup noch nicht abgeschlossen' : 'Setup abgeschlossen'
+          detail: ctx.getLoadedConfig().needsSetup ? 'Setup noch nicht abgeschlossen' : 'Setup abgeschlossen',
+          latencyMs: 0,
+          lastSuccessAt: !ctx.getLoadedConfig().needsSetup ? toIso(Date.now()) : null,
+          lastErrorAt: null
         },
         {
           id: 'meter',
@@ -453,7 +484,14 @@ export function createApiRoutes(ctx) {
           ok: state.meter.ok,
           detail: state.meter.ok
             ? `letztes Update ${fmtTs(state.meter.updatedAt)}`
-            : (state.meter.error || 'noch keine erfolgreichen Meter-Daten')
+            : (state.meter.error || 'noch keine erfolgreichen Meter-Daten'),
+          // Plan 09-06 Task 3: state.meter.updatedAt is the meter-poll wall-clock
+          // — used for both lastSuccessAt (when ok=true) and lastErrorAt
+          // (when ok=false). State doesn't separately track "last good ts" so
+          // this aliases through the polling.js .ok flag.
+          latencyMs: 0,
+          lastSuccessAt: state.meter.ok ? toIso(state.meter.updatedAt) : null,
+          lastErrorAt: state.meter.ok ? null : toIso(state.meter.updatedAt)
         },
         {
           id: 'epex',
@@ -463,7 +501,10 @@ export function createApiRoutes(ctx) {
             ? 'deaktiviert'
             : state.epex.ok
               ? `letztes Update ${fmtTs(state.epex.updatedAt)}`
-              : (state.epex.error || 'noch keine Preisdaten')
+              : (state.epex.error || 'noch keine Preisdaten'),
+          latencyMs: 0,
+          lastSuccessAt: state.epex.ok ? toIso(state.epex.updatedAt) : null,
+          lastErrorAt: state.epex.ok ? null : toIso(state.epex.updatedAt)
         },
         {
           id: 'service_actions',
@@ -471,7 +512,12 @@ export function createApiRoutes(ctx) {
           ok: ctx.getServiceActionsEnabled() && service.status !== 'unavailable',
           detail: ctx.getServiceActionsEnabled()
             ? `Service ${ctx.getServiceName()}: ${service.status}`
-            : 'per ENV deaktiviert'
+            : 'per ENV deaktiviert',
+          // Plan 09-06 Task 3: this is the only async check — actual elapsed
+          // milliseconds of the systemctl exec calls.
+          latencyMs: serviceLatencyMs,
+          lastSuccessAt: serviceLastSuccessAt,
+          lastErrorAt: serviceLastErrorAt
         },
         {
           id: 'telemetry',
@@ -481,7 +527,10 @@ export function createApiRoutes(ctx) {
             ? 'deaktiviert'
             : state.telemetry.dbPath
               ? `DB ${state.telemetry.dbPath}, letztes Schreiben ${fmtTs(state.telemetry.lastWriteAt)}`
-              : (state.telemetry.lastError || 'noch keine Telemetrie-Initialisierung')
+              : (state.telemetry.lastError || 'noch keine Telemetrie-Initialisierung'),
+          latencyMs: 0,
+          lastSuccessAt: state.telemetry.ok ? toIso(state.telemetry.lastWriteAt) : null,
+          lastErrorAt: state.telemetry.lastError ? toIso(state.telemetry.lastWriteAt || Date.now()) : null
         }
       ]
     };
