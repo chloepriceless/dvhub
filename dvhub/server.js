@@ -75,7 +75,12 @@ import { createVpnManager } from './vpn-manager.js';
 // monitoring-heartbeat block (~startMonitoringHeartbeat) is the 6th D-08 heavy
 // hitter (the 5 standalone modules are polling.js, services/forecast/index.js,
 // vpn-manager.js, transport-modbus.js — see CONTEXT.md D-08).
-import { info as logInfo, warn as logWarn } from './services/log.js';
+import { info as logInfo, warn as logWarn, logger as appLogger } from './services/log.js';
+// Plan 09-07: Shared safeInterval helper. configureSafeAsync({logger, pushLog})
+// is called once below, after pushLog is in scope, BEFORE any service.start()
+// fires its first interval tick. No console.error fallback — the helper throws
+// loudly if misordered. Hard dep on 09-06 (services/log.js).
+import { configureSafeAsync } from './services/safe-async.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies. Imported here
@@ -733,6 +738,12 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
     } catch { /* metric must never break pushLog */ }
   }
 }
+
+// Plan 09-07: Wire the shared safe-async helper with the logger (09-06) and
+// pushLog (above). MUST be called before any service.start() fires its first
+// safeInterval tick. Throws TypeError if logger or pushLog is missing — fail
+// fast at boot rather than silently swallowing interval errors.
+configureSafeAsync({ logger: appLogger, pushLog });
 
 function expireLeaseIfNeeded() {
   if (state.ctrl.forcedOff && Date.now() > state.ctrl.offUntil) {
