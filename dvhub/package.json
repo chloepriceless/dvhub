@@ -12,7 +12,8 @@
     "start": "node server.js",
     "test": "node --test test/*.test.js && node ../tests/binding-contract.mjs && node ../tests/csp-lint.mjs && node ../tests/css-tokens.test.mjs && node ../tests/endpoint-inventory.mjs --verify",
     "test:sqlite": "node --experimental-sqlite --test test/sqlite/*.test.js",
-    "test:all": "node --experimental-sqlite --test"
+    "test:all": "node --experimental-sqlite --test",
+    "test:e2e": "node -e \"require('fs').existsSync('../tests/node_modules') || require('fs').symlinkSync('../dvhub/node_modules','../tests/node_modules','dir')\" && playwright test --config ../tests/playwright.config.mjs"
   },
   "repository": {
     "type": "git",
@@ -37,5 +38,8 @@
     "p-retry": "^8.0.0",
     "pg": "^8.13.0",
     "prom-client": "^15.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
   }
 }
