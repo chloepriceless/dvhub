@@ -1888,6 +1888,75 @@ export function createApiRoutes(ctx) {
       return;
     }
 
+    /* Plan 09-01 threat model:
+     * T-9-01-01 (Spoofing): admin endpoint requires checkAuth (Bearer + LAN-bypass guards). Mitigated.
+     * T-9-01-02 (Information disclosure): raw token never logged — only 16-hex sha256 fingerprint. Mitigated.
+     * T-9-01-03 (Denial of service): rotate is a 1-write op; rate-limited by plan 09-02 (admin endpoints no longer exempt from 120 req/min). Mitigated.
+     * T-9-01-04 (Tampering): persist via ctx.saveAndApplyConfig — same writer as POST /api/config, atomic write. Mitigated.
+     * T-9-01-05 (Elevation of privilege): revoke restart gated by DV_ENABLE_SERVICE_ACTIONS — operator opt-in, no implicit privilege grant. Mitigated.
+     * T-9-01-06 (Repudiation): rotation/revocation actions land in audit_log via pushLog → writeAuditEntry with actor context + 16-hex fingerprint chain. Mitigated.
+     */
+
+    // Plan 09-01 (D-04): rotate API token. Generates a fresh 32-byte (64-hex-char)
+    // token, persists via the existing config-save path, emits a distinctive
+    // pushLog so rotations are filterable in the audit log panel. The new token
+    // is returned ONCE in the response — operators must capture it immediately
+    // since the old token is invalid the moment saveAndApplyConfig returns.
+    if (url.pathname === '/api/admin/token/rotate' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const oldToken = getCfg().apiToken || '';
+      const newToken = crypto.randomBytes(32).toString('hex'); // 64 hex chars, ~256 bits entropy
+      const oldFp = tokenFingerprint(oldToken);  // null if oldToken was empty (D-05 allows that)
+      const newFp = tokenFingerprint(newToken);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.apiToken = newToken;
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        return json(res, 500, { ok: false, error: 'persist_failed', detail: e?.message || null });
+      }
+      pushLog('token_rotated', {
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        oldFingerprint: oldFp,    // 16-hex chars OR null
+        newFingerprint: newFp     // 16-hex chars
+      }, { ...actorContext(req), severity: 'info' });
+      return json(res, 200, { ok: true, token: newToken, fingerprint: newFp });
+    }
+
+    // Plan 09-01 (D-02 + D-04): revoke API token. Clears apiToken to ''. If
+    // ctx.getServiceActionsEnabled() === true → also schedules a systemd restart so
+    // any in-flight bearer session is invalidated. If service actions are
+    // disabled → returns 503 (NOT 200) so the operator knows the restart didn't
+    // happen, but the token IS still cleared in config (D-02). No process.exit, no crash.
+    if (url.pathname === '/api/admin/token/revoke' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const oldFp = tokenFingerprint(getCfg().apiToken || '');
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.apiToken = '';
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        return json(res, 500, { ok: false, error: 'persist_failed', detail: e?.message || null });
+      }
+      pushLog('token_revoked', {
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        revokedFingerprint: oldFp  // 16-hex chars; null if previously empty
+      }, { ...actorContext(req), severity: 'warn' });
+      if (ctx.getServiceActionsEnabled && ctx.getServiceActionsEnabled()) {
+        // Respond first so the client gets confirmation before the restart kicks
+        json(res, 200, { ok: true, restart: 'scheduled', revokedFingerprint: oldFp });
+        setTimeout(() => {
+          const svc = (typeof ctx.getServiceName === 'function' && ctx.getServiceName()) || 'dvhub.service';
+          execFileAsync('sudo', ['systemctl', 'restart', svc], { timeout: 5000 }).catch(() => {});
+        }, 1000);
+        return;
+      }
+      // D-02: 503 — service actions disabled, restart not performed, no crash
+      return json(res, 503, { ok: false, restart: 'not_available', error: 'service_actions_disabled', revokedFingerprint: oldFp });
+    }
+
     // --- Software Update Check ---
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
