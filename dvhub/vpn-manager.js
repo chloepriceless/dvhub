@@ -5,6 +5,12 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
+// Plan 09-06 (D-08): services/log.js wrapper available for OpenVPN connect/disconnect
+// stderr lines. Today vpn-manager.js routes structured events via ctx.pushLog (which now
+// threads severity to audit_log per Plan 09-06); the wrapper is the new preferred path
+// for any future console-style output without touching console.* directly.
+// eslint-disable-next-line no-unused-vars
+import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 
 const execFileAsync = promisify(execFile);
 const fsPromises = fs.promises;

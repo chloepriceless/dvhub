@@ -3,6 +3,12 @@
 // Exposes buildForecastResponse() for /api/forecast endpoint (D-01).
 // Follows the factory pattern: createForecastService(ctx) -> { start, close, tier, store, buildForecastResponse }
 
+// Plan 09-06 (D-08): services/log.js wrapper imported by this heavy-hitter
+// module per D-08. Current forecast subsystem startup uses pushLog for
+// structured ring-buffer events; the wrapper is available for future
+// stderr-style messages without going through console.*.
+// eslint-disable-next-line no-unused-vars
+import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from '../log.js';
 import { detectRamTier } from './ram-tier.js';
 import { createForecastStore } from './forecast-store.js';
 import { createWeatherFetch } from './weather-fetch.js';

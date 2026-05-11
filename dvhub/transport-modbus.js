@@ -1,4 +1,10 @@
 import net from 'node:net';
+// Plan 09-06 (D-08): services/log.js wrapper imported for Modbus connect/reconnect/error
+// surfaces. The current transport routes errors through Promise rejections to the polling
+// loop (which calls pushLog); the wrapper is the new preferred path for any direct stderr-
+// style output without touching console.* directly.
+// eslint-disable-next-line no-unused-vars
+import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 
 /**
  * Modbus TCP Transport für Victron-Kommunikation.

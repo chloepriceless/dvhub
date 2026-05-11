@@ -1411,7 +1411,14 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/log' && req.method === 'GET') {
       const limit = resolveLogLimit(url.searchParams.get('limit'));
-      return json(res, 200, { rows: state.log.slice(-limit) });
+      // Plan 09-06 (D-09): every row includes a level field. Entries created
+      // before this plan landed (pre-restart) carry no level — default 'info'
+      // so the UI dropdown filter (Plan 09-06 Task 4) renders consistently.
+      const rows = state.log.slice(-limit).map((entry) => ({
+        ...entry,
+        level: entry.level || 'info',
+      }));
+      return json(res, 200, { rows });
     }
 
     // Plan 08-07 Task 3: frontend error reporting endpoint. The browser POSTs
@@ -1429,6 +1436,13 @@ export function createApiRoutes(ctx) {
       const message = typeof body.message === 'string' ? body.message.slice(0, 500) : null;
       const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null;
       const stack = typeof body.stack === 'string' ? body.stack.slice(0, 4000) : null;
+      // Plan 09-06 (D-09): map the frontend-reported level into pushLog's level
+      // shorthand so the UI dropdown filter (Task 4) sees the same value the
+      // browser sent. Unknown levels (e.g., 'critical' from a future client) are
+      // coerced to 'error' so the audit_log severity CHECK passes — Phase 8.1
+      // migration 015 only allows debug/info/warn/error/critical.
+      const NORMALISED_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
+      const pushLevel = NORMALISED_LEVELS.has(level) ? level : 'error';
       pushLog(`frontend_${level}`, {
         source,
         page: typeof body.page === 'string' ? body.page.slice(0, 200) : null,
@@ -1440,7 +1454,7 @@ export function createApiRoutes(ctx) {
         lineno: Number.isFinite(body.lineno) ? body.lineno : null,
         colno: Number.isFinite(body.colno) ? body.colno : null,
         stack
-      });
+      }, pushLevel);
       return json(res, 200, { ok: true });
     }
 

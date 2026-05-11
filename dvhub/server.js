@@ -65,6 +65,18 @@ import {
   resolveCorsAllowedOrigin
 } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
+// Plan 09-06 (D-08): services/log.js wrapper around console.* — the in-server.js
+// monitoring-heartbeat block (~startMonitoringHeartbeat) is the 6th D-08 heavy
+// hitter (the 5 standalone modules are polling.js, services/forecast/index.js,
+// vpn-manager.js, transport-modbus.js — see CONTEXT.md D-08).
+import { info as logInfo, warn as logWarn } from './services/log.js';
+// Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
+// Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
+// the exposition format. No other Phase 9 plan adds dependencies. Imported here
+// only so the dependency is exercised at server boot (the active instrumentation
+// lives in routes-api.js, which owns the Registry + instruments).
+// eslint-disable-next-line no-unused-vars
+import promClient from 'prom-client';
 import { createForecastService } from './services/forecast/index.js';
 // Phase 07 Plan 07-04: Wave-2 forecast services wired directly in server.js so routes-api.js
 // can consume them via ctx.forecastSnapshots / ctx.pvnodeBackfill / ctx.pvnodeQuota.
@@ -399,7 +411,7 @@ function persistConfig() {
       source: 'config_persist'
     }));
   } catch (e) {
-    pushLog('config_persist_error', { error: e.message });
+    pushLog('config_persist_error', { error: e.message }, 'error');
   }
 }
 
@@ -652,15 +664,39 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
   } catch (error) {
     state.telemetry.ok = false;
     state.telemetry.lastError = error.message;
-    pushLog('telemetry_store_error', { error: error.message });
+    pushLog('telemetry_store_error', { error: error.message }, 'error');
     return null;
   }
 }
 
 const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 
-function pushLog(event, details = {}, options = {}) {
-  const row = { ts: nowIso(), event, ...details };
+// Plan 09-06 (D-08, D-09): pushLog gains a `level` field on every ring-buffer
+// entry. The new level threads through to audit_log.severity (column already
+// exists from migration 015; BLOCKER 3 fix — no new migration).
+//
+// Signature is backward-compat: the 3rd argument may be either
+//   (a) a string ('info'|'warn'|'error'|'debug') — convenience shorthand, OR
+//   (b) an options object { actor_ip, actor_ua, actor_session, severity, level }
+//       — the existing Phase 08-09 shape stays untouched.
+// When omitted, level defaults to 'info'. Callers that pass options.severity
+// keep working (severity wins over level when both are present).
+const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'critical']);
+function pushLog(event, details = {}, levelOrOptions = {}) {
+  // Plan 09-06: accept 3rd arg as a level shorthand OR the existing options object.
+  let options;
+  let level;
+  if (typeof levelOrOptions === 'string') {
+    level = levelOrOptions;
+    options = {};
+  } else {
+    options = levelOrOptions || {};
+    // severity wins over level if both provided (Phase 09-01 callers pass severity).
+    level = options.severity || options.level || 'info';
+  }
+  if (!VALID_LOG_LEVELS.has(level)) level = 'info';
+
+  const row = { ts: nowIso(), event, level: level, ...details };
   state.log.push(row);
   if (state.log.length > 1000) state.log.shift();
   // Plan 08-09 Task 1: durable mirror to audit_log (ring buffer is now a
@@ -676,7 +712,10 @@ function pushLog(event, details = {}, options = {}) {
       actor_ip: options.actor_ip,
       actor_ua: options.actor_ua,
       actor_session: options.actor_session,
-      severity: options.severity,
+      // Plan 09-06: severity routes the level into audit_log.severity (column
+      // from migration 015). Falls back to the resolved `level` so 3rd-arg
+      // shorthand callers also get a non-null severity.
+      severity: options.severity || level,
     }).catch(() => { /* writeAuditEntry already logs internally */ });
   }
 }
@@ -1132,7 +1171,7 @@ if (IS_RUNTIME_PROCESS) {
   llmService.start().catch(err => console.error('LLM service start error:', err.message));
   if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
     vpnManager.start().catch(err => {
-      pushLog('vpn_start_error', { error: err.message });
+      pushLog('vpn_start_error', { error: err.message }, 'error');
     });
   }
   setInterval(() => {
@@ -1229,8 +1268,9 @@ if (IS_RUNTIME_PROCESS) {
     // URL just means "no heartbeat" — never "silently pivot to internal host".
     if (!isAllowedHeartbeatUrl(pushUrl)) {
       const safe = redactUrlCreds(pushUrl);
-      console.warn('  [WARN] Monitoring heartbeat disabled — pushUrl blocked (https+external only): ' + safe.substring(0, 80));
-      pushLog('monitoring_heartbeat_blocked', { reason: 'host_not_allowed', url: safe });
+      // Plan 09-06 (D-08): heartbeat block is the 6th D-08 heavy-hitter — routed through services/log.js wrapper.
+      logWarn('Monitoring heartbeat disabled — pushUrl blocked (https+external only)', { url: safe.substring(0, 80) });
+      pushLog('monitoring_heartbeat_blocked', { reason: 'host_not_allowed', url: safe }, 'warn');
       return;
     }
     // Plan 08-05 Task 1: HMAC-SHA256 sign the outbound heartbeat so the
@@ -1269,7 +1309,8 @@ if (IS_RUNTIME_PROCESS) {
     // Plan 08-03 Task 2: run through redactUrlCreds before any logging/exposure so that
     // `https://user:token@push.example/uk` never appears in journalctl or systemd logs.
     const safePushUrl = redactUrlCreds(pushUrl);
-    console.log('  Monitoring heartbeat -> ' + safePushUrl.substring(0, 60) + '...');
+    // Plan 09-06 (D-08): heartbeat block is the 6th D-08 heavy-hitter — routed through services/log.js wrapper.
+    logInfo('Monitoring heartbeat configured', { url: safePushUrl.substring(0, 60) });
   }
   startMonitoringHeartbeat();
 }
@@ -1329,14 +1370,14 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled promise rejection:', reason);
-  pushLog('unhandled_rejection', { error: String(reason?.message || reason) });
+  pushLog('unhandled_rejection', { error: String(reason?.message || reason) }, 'error');
   try { poller.stop(); } catch {}
   liveTelemetryBuffer?.flush({ force: true });
   process.exit(1);
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
-  pushLog('uncaught_exception', { error: String(err?.message || err) });
+  pushLog('uncaught_exception', { error: String(err?.message || err) }, 'error');
   try { poller.stop(); } catch {}
   try { liveTelemetryBuffer?.flush({ force: true }); } catch {}
   process.exit(1);

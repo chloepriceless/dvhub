@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
+// Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
+import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -23,12 +25,13 @@ export function loadEnergy(state, energyPath, timezone = 'Europe/Berlin') {
       state.energy.costEur = Number(data.costEur) || 0;
       state.energy.revenueEur = Number(data.revenueEur) || 0;
       state.energy.lastTs = Number(data.lastTs) || 0;
-      console.log(`Energy state restored for ${data.day}: import=${(state.energy.importWh / 1000).toFixed(2)}kWh export=${(state.energy.exportWh / 1000).toFixed(2)}kWh`);
+      // Plan 09-06 (D-08): routed through services/log.js wrapper.
+      logInfo(`Energy state restored for ${data.day}: import=${(state.energy.importWh / 1000).toFixed(2)}kWh export=${(state.energy.exportWh / 1000).toFixed(2)}kWh`);
     } else {
-      console.log(`Energy state file is from ${data.day}, today is ${today} - starting fresh`);
+      logInfo(`Energy state file is from ${data.day}, today is ${today} - starting fresh`);
     }
   } catch (e) {
-    console.error('Failed to load energy state:', e.message);
+    logError('Failed to load energy state', { error: e.message });
   }
 }
 
@@ -399,7 +402,8 @@ export function createPoller(ctx) {
     // original `requestPoll() + schedulePollLoop()` pair. The function
     // self-reschedules with exponential backoff after BACKOFF_THRESHOLD
     // consecutive failures.
-    pollMeterWithBackoff().catch(e => console.error('Initial pollMeter error:', e));
+    // Plan 09-06 (D-08): routed through services/log.js wrapper.
+    pollMeterWithBackoff().catch(e => logError('Initial pollMeter error', { error: e?.message ?? String(e) }));
     persistInterval = setInterval(persistEnergy, 60000);
   }
 
