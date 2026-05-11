@@ -654,120 +654,149 @@
     var price = data.price || {};
     var greeting = data.greeting || {};
 
-    // 5 main tag values
-    setText('v-s', formatKw(energy.solarKw));
-    setText('v-h', formatKw(energy.homeKw));
-    setText('v-b', typeof battery.socPct === 'number' ? Math.round(battery.socPct) + '%' : '—');
-    setText('v-e', formatKw(ev.powerKw));
-    setText('v-g', formatKw(Math.abs(energy.gridKw || 0)));
+    // Plan 09-04: per-card error boundary inside applyFamilyStatus. A throw in
+    // one visible-card render does NOT blank a sibling card on the family
+    // screensaver. Falls back to inline console logging if DVhubCommon is not
+    // loaded (defensive — family.html might load before common.js in some
+    // standalone preview contexts).
+    var sr = (window.DVhubCommon && window.DVhubCommon.safeRender) || function (_, fn) { try { fn(); } catch (e) { console.error('[family-fallback]', _, e); } };
 
-    // Friendly texts & statuses
-    setText('tf-solar', energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne'));
-    setText('tf-home', (energy.homeKw || 0) > 4 ? 'Hoher Verbrauch' : (energy.homeKw || 0) > 2.5 ? 'Verbrauch normal' : 'Wenig Verbrauch');
+    sr('family.main-tags', function () {
+      // 5 main tag values
+      setText('v-s', formatKw(energy.solarKw));
+      setText('v-h', formatKw(energy.homeKw));
+      setText('v-b', typeof battery.socPct === 'number' ? Math.round(battery.socPct) + '%' : '—');
+      setText('v-e', formatKw(ev.powerKw));
+      setText('v-g', formatKw(Math.abs(energy.gridKw || 0)));
+    });
 
-    var batMode = battery.mode || 'idle';
-    setText('tf-bat', batMode === 'charging' ? 'Batterie lädt' : batMode === 'discharging' ? 'Batterie entlädt' : 'Batterie hält');
-    if (typeof battery.powerKw === 'number') {
-      setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW');
-    }
+    sr('family.solar-home-status', function () {
+      // Friendly texts & statuses
+      setText('tf-solar', energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne'));
+      setText('tf-home', (energy.homeKw || 0) > 4 ? 'Hoher Verbrauch' : (energy.homeKw || 0) > 2.5 ? 'Verbrauch normal' : 'Wenig Verbrauch');
+    });
 
-    var evMode = ev.mode || 'idle';
-    setText('tf-ev', evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt');
-    setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
-    // Hide the EV tag entirely when no wallbox reports power and no vehicle
-    // SoC is known — on installs without an EV integration the empty tile
-    // was sitting on top of the right edge widgets and looked broken.
-    // Phase 04 will populate ev.vehicles[] when an integration is wired.
-    var evConnected = (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
-      || (typeof ev.socPct === 'number' && ev.socPct !== null)
-      || (Array.isArray(ev.vehicles) && ev.vehicles.length > 0);
-    var evTag = document.getElementById('tag-ev');
-    if (evTag) {
-      var wasHidden = evTag.style.display === 'none';
-      evTag.style.display = evConnected ? '' : 'none';
-      // When the tag becomes visible/invisible the flow endpoints move, so
-      // reposition the SVG paths without tearing down the SMIL timers.
-      if (wasHidden !== !evConnected && typeof repositionFlows === 'function') {
-        setTimeout(repositionFlows, 0);
+    sr('family.battery', function () {
+      var batMode = battery.mode || 'idle';
+      setText('tf-bat', batMode === 'charging' ? 'Batterie lädt' : batMode === 'discharging' ? 'Batterie entlädt' : 'Batterie hält');
+      if (typeof battery.powerKw === 'number') {
+        setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW');
       }
-    }
+    });
 
-    setText('tf-grid', energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen');
-    // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
-    // raw EPEX spot. Fall back to EPEX spot only if the tariff-adjusted price is
-    // unavailable so the row never shows a confusing number.
-    var importPrice = typeof price.importCtKwh === 'number' ? price.importCtKwh
-      : (typeof price.nowCtKwh === 'number' ? price.nowCtKwh : null);
-    setText('ts-grid', energy.feedingToGrid ? 'Verdienen gerade' : (importPrice != null ? 'Kosten ' + importPrice.toFixed(1) + ' ct' : ''));
+    sr('family.ev', function () {
+      var evMode = ev.mode || 'idle';
+      setText('tf-ev', evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt');
+      setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
+      // Hide the EV tag entirely when no wallbox reports power and no vehicle
+      // SoC is known — on installs without an EV integration the empty tile
+      // was sitting on top of the right edge widgets and looked broken.
+      // Phase 04 will populate ev.vehicles[] when an integration is wired.
+      var evConnected = (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
+        || (typeof ev.socPct === 'number' && ev.socPct !== null)
+        || (Array.isArray(ev.vehicles) && ev.vehicles.length > 0);
+      var evTag = document.getElementById('tag-ev');
+      if (evTag) {
+        var wasHidden = evTag.style.display === 'none';
+        evTag.style.display = evConnected ? '' : 'none';
+        // When the tag becomes visible/invisible the flow endpoints move, so
+        // reposition the SVG paths without tearing down the SMIL timers.
+        if (wasHidden !== !evConnected && typeof repositionFlows === 'function') {
+          setTimeout(repositionFlows, 0);
+        }
+      }
+    });
 
-    // Greeting (vorkalkuliert per D-07/D-13)
-    if (greeting.hello) setText('g-hello', greeting.hello);
-    if (greeting.message) {
-      var msgEl = document.getElementById('g-msg');
-      if (msgEl) msgEl.innerHTML = String(greeting.message).replace(/\n/g, '<br>');
-    }
-    if (greeting.moodLabel) setText('g-mood', greeting.moodLabel);
-    var moodEl = document.getElementById('g-mood');
-    if (moodEl) moodEl.classList.toggle('warn', greeting.mood === 'warn');
-    if (greeting.time) setText('g-time', greeting.time);
-    if (greeting.date) setText('g-date', greeting.date);
+    sr('family.grid', function () {
+      setText('tf-grid', energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen');
+      // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
+      // raw EPEX spot. Fall back to EPEX spot only if the tariff-adjusted price is
+      // unavailable so the row never shows a confusing number.
+      var importPrice = typeof price.importCtKwh === 'number' ? price.importCtKwh
+        : (typeof price.nowCtKwh === 'number' ? price.nowCtKwh : null);
+      setText('ts-grid', energy.feedingToGrid ? 'Verdienen gerade' : (importPrice != null ? 'Kosten ' + importPrice.toFixed(1) + ' ct' : ''));
+    });
 
-    // Live stats for bottom-bar slots (D-12). The family service emits savings
-    // values as pre-formatted strings ("0.44"), so parseFloat is required —
-    // a typeof === 'number' check would always hit the '--' fallback.
-    var savings = data.savings || {};
-    var today = data.today || {};
-    function parseNum(v) { var n = typeof v === 'number' ? v : parseFloat(v); return (typeof n === 'number' && isFinite(n)) ? n : null; }
-    var savedEurN = parseNum(savings.todayEur);
-    var feedEurN = parseNum(savings.feedInRevenueEur);
-    var avoidedEurN = parseNum(savings.avoidedCostEur);
-    var monthEurN = parseNum(savings.monthEur);
-    liveStats.sr = typeof energy.solarKw === 'number' && energy.solarKw > 0 && typeof energy.homeKw === 'number'
-      ? Math.round(Math.min(100, (Math.min(energy.solarKw, energy.homeKw) / Math.max(energy.solarKw, 0.01)) * 100))
-      : '--';
-    liveStats.autarkie = typeof energy.solarKw === 'number' && typeof energy.homeKw === 'number' && energy.homeKw > 0
-      ? Math.max(0, Math.round(Math.min(100, ((energy.homeKw - Math.max(0, energy.gridKw || 0)) / energy.homeKw) * 100)))
-      : '--';
-    liveStats.savedEur = savedEurN != null ? savedEurN.toFixed(2) : '--';
-    liveStats.feedEur = feedEurN != null ? feedEurN.toFixed(2) : '--';
-    liveStats.avoidedEur = avoidedEurN != null ? avoidedEurN.toFixed(2) : '--';
-    liveStats.monthEur = monthEurN != null ? Math.round(monthEurN) : '--';
-    // Today-derived metrics from real telemetry counters in data.today. CO2
-    // factor: 0.4 kg/kWh (German grid avg 2024). Tree equivalent: ~25 kg
-    // CO2/year absorbed. Solar-km: ~6 km/kWh (EV avg 16.6 kWh/100km). Wash
-    // cycle ~1.5 kWh. Netflix streaming ~0.08 kWh/h.
-    liveStats.dayYield = typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) : '--';
-    if (typeof today.selfConsumptionKwh === 'number') {
-      var co2Kg = today.selfConsumptionKwh * 0.4;
-      liveStats.co2 = co2Kg.toFixed(1);
-      liveStats.trees = (co2Kg / 25).toFixed(2);
-    } else {
-      liveStats.co2 = '--'; liveStats.trees = '--';
-    }
-    liveStats.solarKm = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh * 6) : '--';
-    liveStats.washes = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 1.5) : '--';
-    liveStats.netflixH = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 0.08) : '--';
-    if (typeof today.importKwh === 'number' && typeof today.exportKwh === 'number') {
-      var netKwh = today.exportKwh - today.importKwh; // positive = net export
-      liveStats.netBalance = (netKwh >= 0 ? '+' : '') + netKwh.toFixed(1);
-    } else {
-      liveStats.netBalance = '--';
-    }
-    updateSlotValues();
+    sr('family.greeting', function () {
+      // Greeting (vorkalkuliert per D-07/D-13)
+      if (greeting.hello) setText('g-hello', greeting.hello);
+      if (greeting.message) {
+        var msgEl = document.getElementById('g-msg');
+        if (msgEl) msgEl.innerHTML = String(greeting.message).replace(/\n/g, '<br>');
+      }
+      if (greeting.moodLabel) setText('g-mood', greeting.moodLabel);
+      var moodEl = document.getElementById('g-mood');
+      if (moodEl) moodEl.classList.toggle('warn', greeting.mood === 'warn');
+      if (greeting.time) setText('g-time', greeting.time);
+      if (greeting.date) setText('g-date', greeting.date);
+    });
 
-    // Devices (Phase 03: empty array, Phase 04 fills this in)
-    updateDevices(data.devices || []);
+    sr('family.live-stats', function () {
+      // Live stats for bottom-bar slots (D-12). The family service emits savings
+      // values as pre-formatted strings ("0.44"), so parseFloat is required —
+      // a typeof === 'number' check would always hit the '--' fallback.
+      var savings = data.savings || {};
+      var today = data.today || {};
+      function parseNum(v) { var n = typeof v === 'number' ? v : parseFloat(v); return (typeof n === 'number' && isFinite(n)) ? n : null; }
+      var savedEurN = parseNum(savings.todayEur);
+      var feedEurN = parseNum(savings.feedInRevenueEur);
+      var avoidedEurN = parseNum(savings.avoidedCostEur);
+      var monthEurN = parseNum(savings.monthEur);
+      liveStats.sr = typeof energy.solarKw === 'number' && energy.solarKw > 0 && typeof energy.homeKw === 'number'
+        ? Math.round(Math.min(100, (Math.min(energy.solarKw, energy.homeKw) / Math.max(energy.solarKw, 0.01)) * 100))
+        : '--';
+      liveStats.autarkie = typeof energy.solarKw === 'number' && typeof energy.homeKw === 'number' && energy.homeKw > 0
+        ? Math.max(0, Math.round(Math.min(100, ((energy.homeKw - Math.max(0, energy.gridKw || 0)) / energy.homeKw) * 100)))
+        : '--';
+      liveStats.savedEur = savedEurN != null ? savedEurN.toFixed(2) : '--';
+      liveStats.feedEur = feedEurN != null ? feedEurN.toFixed(2) : '--';
+      liveStats.avoidedEur = avoidedEurN != null ? avoidedEurN.toFixed(2) : '--';
+      liveStats.monthEur = monthEurN != null ? Math.round(monthEurN) : '--';
+      // Today-derived metrics from real telemetry counters in data.today. CO2
+      // factor: 0.4 kg/kWh (German grid avg 2024). Tree equivalent: ~25 kg
+      // CO2/year absorbed. Solar-km: ~6 km/kWh (EV avg 16.6 kWh/100km). Wash
+      // cycle ~1.5 kWh. Netflix streaming ~0.08 kWh/h.
+      liveStats.dayYield = typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) : '--';
+      if (typeof today.selfConsumptionKwh === 'number') {
+        var co2Kg = today.selfConsumptionKwh * 0.4;
+        liveStats.co2 = co2Kg.toFixed(1);
+        liveStats.trees = (co2Kg / 25).toFixed(2);
+      } else {
+        liveStats.co2 = '--'; liveStats.trees = '--';
+      }
+      liveStats.solarKm = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh * 6) : '--';
+      liveStats.washes = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 1.5) : '--';
+      liveStats.netflixH = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 0.08) : '--';
+      if (typeof today.importKwh === 'number' && typeof today.exportKwh === 'number') {
+        var netKwh = today.exportKwh - today.importKwh; // positive = net export
+        liveStats.netBalance = (netKwh >= 0 ? '+' : '') + netKwh.toFixed(1);
+      } else {
+        liveStats.netBalance = '--';
+      }
+      updateSlotValues();
+    });
 
-    // Widgets (D-10)
-    renderForecastWidget(data.forecast, data.today);
-    if (data.price) renderPriceWidget(data.price);
-    if (data.optimizer) renderOptimizerWidget(data.optimizer);
+    sr('family.devices', function () {
+      // Devices (Phase 03: empty array, Phase 04 fills this in)
+      updateDevices(data.devices || []);
+    });
 
-    // Flow animations: hide idle links, reverse direction on discharge/import
-    updateFlowState(energy);
+    sr('family.forecast-widget', function () {
+      // Widgets (D-10)
+      renderForecastWidget(data.forecast, data.today);
+    });
+    if (data.price) sr('family.price-widget', function () { renderPriceWidget(data.price); });
+    if (data.optimizer) sr('family.optimizer-widget', function () { renderOptimizerWidget(data.optimizer); });
 
-    // Also update panel stats so touch-to-open shows live data
-    updatePanelStats(data);
+    sr('family.flow-state', function () {
+      // Flow animations: hide idle links, reverse direction on discharge/import
+      updateFlowState(energy);
+    });
+
+    sr('family.panel-stats', function () {
+      // Also update panel stats so touch-to-open shows live data
+      updatePanelStats(data);
+    });
   }
 
   function formatHour(iso) {
