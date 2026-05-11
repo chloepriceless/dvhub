@@ -11,6 +11,7 @@ import { createMessageBuffer } from './message-buffer.js';
 // The async callback's try/catch already pushLogs on inner errors; safeInterval
 // is the belt to its braces — protects against new error paths added later.
 import { safeInterval } from '../safe-async.js';
+import { buildTileFriendlies, PROMPT_VERSION } from './prompt-templates.js';
 
 /**
  * Create the LLM service.
@@ -24,7 +25,8 @@ export function createLlmService(ctx) {
   const tier = ctx.forecastService?.tier ?? ctx.tier ?? 1;
 
   // Create Ollama client (T-05-07: hardcoded to localhost)
-  const ollamaClient = createOllamaClient();
+  // Pass pushLog so OLLAMA_DEBUG=1 captures per-call diagnostics into audit_log.
+  const ollamaClient = createOllamaClient({ pushLog });
 
   // Create message generator with tier gating
   const generator = createMessageGenerator({ ollamaClient, getCfg, tier, pushLog });
@@ -33,6 +35,7 @@ export function createLlmService(ctx) {
   const buffer = createMessageBuffer({ maxAgeMs: 86400000 });
 
   let statusTimer = null;
+  let tileFriendliesCache = null;  // { solar, home, battery, ev, grid, ts }
 
   /**
    * Start the LLM service.
@@ -69,14 +72,21 @@ export function createLlmService(ctx) {
     // service restarts (the buffer is in-memory and wiped on every restart).
     // Wait 60s for Victron polling + EPEX fetch + forecast service to settle,
     // then generate immediately rather than waiting for the first interval tick.
-    setTimeout(() => {
-      const liveData = buildLiveData();
-      generator.generateStatus(liveData)
-        .then(msg => {
-          buffer.add(msg);
-          pushLog('llm_status_generated', { source: msg.source, type: msg.type, trigger: 'startup' });
-        })
-        .catch(e => pushLog('llm_error', { error: e.message, context: 'startup_message' }));
+    setTimeout(async () => {
+      try {
+        const msg = await generator.generateStatus(buildLiveData());
+        buffer.add(msg);
+        pushLog('llm_status_generated', { source: msg.source, type: msg.type, trigger: 'startup' });
+      } catch (e) {
+        pushLog('llm_error', { error: e.message, context: 'startup_message' });
+      }
+      // Sequential: Ollama serves one model worker — running two long-context
+      // chat calls in parallel race for the slot and one usually returns empty.
+      try {
+        await generateTileFriendlies();
+      } catch (e) {
+        pushLog('llm_error', { error: e.message, context: 'startup_tile_friendlies' });
+      }
     }, 60000).unref();
 
     statusTimer = safeInterval('llm.status', async () => {
@@ -86,12 +96,139 @@ export function createLlmService(ctx) {
         const msg = await generator.generateStatus(liveData);
         buffer.add(msg);
         pushLog('llm_status_generated', { source: msg.source, type: msg.type });
+        // Run tile-friendlies regeneration sequentially after status (Ollama
+        // serves one worker — parallel requests starve and return empty).
+        try {
+          await generateTileFriendlies();
+        } catch (tfErr) {
+          pushLog('llm_error', { error: tfErr.message, context: 'tile_friendlies' });
+        }
       } catch (e) {
         pushLog('llm_error', { error: e.message, context: 'status_timer' });
       }
     }, intervalMs);
 
     pushLog('llm_started', { tier, intervalMin, ollamaAvailable: ollamaClient.isAvailable() });
+  }
+
+  /**
+   * Build the structured "Aktuelle Daten:" payload the tile-friendly prompt
+   * expects, then call Ollama with the JSON-output template and parse the
+   * result. On any failure (Ollama down, JSON unparseable, tier too low,
+   * llmEnabled false), the cache stays untouched and the family-service
+   * falls back to its rule-based friendly strings.
+   *
+   * @returns {Promise<{solar:string, home:string, battery:string, ev:string, grid:string, ts:number} | null>}
+   */
+  async function generateTileFriendlies() {
+    const cfg = getCfg();
+    if (tier < 3 || !cfg?.llm?.llmEnabled || !ollamaClient.isAvailable()) return null;
+
+    const v = state?.victron || {};
+    const epex = state?.epex?.data;
+    const ev = state?.ev || {};
+    const now = Date.now();
+
+    // Find current price slot
+    let priceCtKwh = state?.costs?.priceNowCtKwh ?? null;
+    if (priceCtKwh == null && Array.isArray(epex)) {
+      const slot = epex.find(s => Number(s.ts) <= now && now < Number(s.ts) + 15 * 60 * 1000);
+      if (slot) priceCtKwh = slot.ct_kwh;
+    }
+
+    const pvW = v.pvTotalW ?? v.pvPowerW ?? 0;
+    const homeW = v.selfConsumptionW ?? 0;
+    const batPowW = v.batteryPowerW ?? 0;
+    const gridImport = v.gridImportW ?? 0;
+    const gridExport = v.gridExportW ?? 0;
+    const netGridW = gridImport - gridExport;
+    const evPowW = ev.powerKw != null ? Math.round(ev.powerKw * 1000) : 0;
+    const toKw = (w) => Math.round(w / 100) / 10;
+
+    const promptData = {
+      solarKw: toKw(pvW),
+      homeKw: toKw(homeW),
+      batteryPct: v.soc ?? 0,
+      batteryMode: batPowW > 50 ? 'laedt' : batPowW < -50 ? 'entlaedt' : 'haelt',
+      batteryPowerKw: toKw(Math.abs(batPowW)),
+      evMode: evPowW > 50 ? 'laedt' : 'parkt',
+      evPowerKw: evPowW > 50 ? toKw(evPowW) : null,
+      evFinishHm: ev.finishEstIso ? new Date(ev.finishEstIso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : null,
+      gridDirection: netGridW < 0 ? 'speist ein' : netGridW > 0 ? 'bezieht' : 'neutral',
+      gridKw: toKw(Math.abs(netGridW)),
+      priceCtKwh: priceCtKwh != null ? Number(priceCtKwh).toFixed(1) : 'unbekannt'
+    };
+
+    try {
+      // buildTileFriendlies returns the shared template shape
+      // { version, system, user, examples } — NOT a ready-made `messages`
+      // array. The previous `const { messages } = buildTileFriendlies(...)`
+      // destructure pulled `undefined`, which JSON.stringify omits entirely,
+      // and Ollama then receives a chat request with no messages, loads the
+      // model, and returns done_reason:'load' with empty content (86-byte
+      // request bodies in the audit log proved this).
+      // Convert the same way message-generator.buildPromptMessages does.
+      const template = buildTileFriendlies(promptData);
+      const messages = [{ role: 'system', content: template.system }];
+      for (const ex of template.examples) {
+        messages.push({ role: 'user', content: ex.user });
+        messages.push({ role: 'assistant', content: ex.assistant });
+      }
+      messages.push({ role: 'user', content: template.user });
+      const chatArgs = {
+        model: cfg?.llm?.llmModel ?? 'llama3.2',
+        messages,
+        temperature: cfg?.llm?.llmTemperature ?? 0.7,
+        num_predict: 240  // 5 short sentences + JSON syntax fits comfortably
+      };
+      let result = await ollamaClient.chat(chatArgs);
+      // Ollama returns done_reason: "load" + empty content when the model
+      // wasn't resident — the call kicks off the load but produces nothing.
+      // Wait long enough for the load to finish (3B model ≈ 4-6s on Pi),
+      // then retry once. Mirrors the standard "warm up & retry" pattern.
+      if (result?.done_reason === 'load') {
+        pushLog('llm_tile_retry_after_load', { firstAttemptEmpty: true });
+        await new Promise((r) => setTimeout(r, 6000));
+        result = await ollamaClient.chat(chatArgs);
+      }
+      const raw = (result?.message?.content ?? result?.content ?? '').trim();
+      // Extract first {...} block — model sometimes prefixes/suffixes prose.
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (!m) {
+        pushLog('llm_tile_parse_fail', {
+          reason: 'no_json_block',
+          rawLen: raw.length,
+          sample: raw.slice(0, 200),
+          done_reason: result?.done_reason,
+          messageKeys: Object.keys(result?.message || {}),
+          messageRole: result?.message?.role,
+          messagePreview: typeof result?.message?.content === 'string' ? result.message.content.slice(0, 200) : `non-string:${typeof result?.message?.content}`
+        });
+        return null;
+      }
+      const parsed = JSON.parse(m[0]);
+      const next = {
+        solar:   typeof parsed.solar   === 'string' ? parsed.solar.trim()   : null,
+        home:    typeof parsed.home    === 'string' ? parsed.home.trim()    : null,
+        battery: typeof parsed.battery === 'string' ? parsed.battery.trim() : null,
+        ev:      typeof parsed.ev      === 'string' ? parsed.ev.trim()      : null,
+        grid:    typeof parsed.grid    === 'string' ? parsed.grid.trim()    : null,
+        ts: Date.now(),
+        promptVersion: PROMPT_VERSION
+      };
+      // Need at least 3 valid strings to count as a success — otherwise hold the previous cache.
+      const validCount = ['solar','home','battery','ev','grid'].filter(k => typeof next[k] === 'string' && next[k]).length;
+      if (validCount < 3) {
+        pushLog('llm_tile_parse_fail', { reason: 'too_few_valid_fields', validCount });
+        return null;
+      }
+      tileFriendliesCache = next;
+      pushLog('llm_tile_friendlies_generated', { validCount });
+      return next;
+    } catch (e) {
+      pushLog('llm_error', { error: e.message, context: 'generateTileFriendlies' });
+      return null;
+    }
   }
 
   /**
@@ -205,5 +342,7 @@ export function createLlmService(ctx) {
     return buffer.getCount();
   }
 
-  return { start, close, generateMessage, getMessages, getLatest, getMessageCount, getLiveData: buildLiveData, listModels: () => ollamaClient.list() };
+  function getTileFriendlies() { return tileFriendliesCache; }
+
+  return { start, close, generateMessage, getMessages, getLatest, getMessageCount, getLiveData: buildLiveData, getTileFriendlies, generateTileFriendlies, listModels: () => ollamaClient.list() };
 }

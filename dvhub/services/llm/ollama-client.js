@@ -18,11 +18,20 @@ import { safeInterval } from '../safe-async.js';
  * @param {{ baseUrl?: string, timeoutMs?: number }} options
  * @returns {{ generate: Function, checkHealth: Function, isAvailable: Function }}
  */
-export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 90000 } = {}) {
+export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeoutMs = 90000, pushLog = null } = {}) {
   let available = null; // null = unknown, true/false after health check
+  const debugEnabled = process.env.OLLAMA_DEBUG === '1';
 
   /**
    * Make an HTTP request using node:http. Returns parsed JSON or null on error.
+   *
+   * 2026-05-11: `agent: false` forces a fresh TCP connection per call.
+   * Symptom that pushed this: two sequential /api/chat calls — the first
+   * succeeds, the second returns `done_reason: 'load'` with empty content
+   * in <200 ms. Direct curl with the exact same body works (curl never
+   * reuses sockets across invocations). Strong evidence the global HTTP
+   * agent's keep-alive reuse is interacting badly with Ollama's request
+   * handling on this back-to-back path; fresh sockets matches curl behavior.
    *
    * @param {string} method - HTTP method
    * @param {string} urlPath - URL path (e.g., '/api/generate')
@@ -32,6 +41,7 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
    */
   function httpRequest(method, urlPath, body, timeout) {
     return new Promise((resolve) => {
+      const startedAt = Date.now();
       try {
         const url = new URL(urlPath, baseUrl);
         const options = {
@@ -39,11 +49,13 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
           port: url.port || 11434,
           path: url.pathname,
           method,
-          headers: {}
+          headers: {},
+          agent: false
         };
 
+        let payload = null;
         if (body) {
-          const payload = JSON.stringify(body);
+          payload = JSON.stringify(body);
           options.headers['Content-Type'] = 'application/json';
           options.headers['Content-Length'] = Buffer.byteLength(payload);
         }
@@ -52,11 +64,28 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
           let data = '';
           res.on('data', (chunk) => { data += chunk; });
           res.on('end', () => {
-            try {
-              resolve(JSON.parse(data));
-            } catch {
-              resolve(null);
+            const elapsedMs = Date.now() - startedAt;
+            let parsed = null;
+            try { parsed = JSON.parse(data); } catch { /* parsed stays null */ }
+            if (debugEnabled && pushLog) {
+              try {
+                pushLog('ollama_http', {
+                  method,
+                  urlPath,
+                  status: res.statusCode,
+                  elapsedMs,
+                  reqBytes: payload ? Buffer.byteLength(payload) : 0,
+                  resBytes: Buffer.byteLength(data),
+                  done_reason: parsed?.done_reason ?? null,
+                  eval_count: parsed?.eval_count ?? null,
+                  prompt_eval_count: parsed?.prompt_eval_count ?? null,
+                  contentLen: typeof parsed?.message?.content === 'string'
+                    ? parsed.message.content.length
+                    : null
+                });
+              } catch { /* logging must never break the request */ }
             }
+            resolve(parsed);
           });
         });
 
@@ -70,8 +99,8 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
 
         req.on('close', () => clearTimeout(timer));
 
-        if (body) {
-          req.write(JSON.stringify(body));
+        if (payload) {
+          req.write(payload);
         }
         req.end();
       } catch {

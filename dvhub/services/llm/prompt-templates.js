@@ -192,3 +192,23 @@ export function buildSystemOk({ uptimeHours }) {
     `Aktuelle Daten: Laufzeit ${uptimeHours} Stunden, keine Fehler. Erstelle eine kurze Bestätigung.`
   );
 }
+
+// 2026-05-11: Tile-friendlies for the family-dashboard top tags (Sonne/Haus/Akku/Auto/Netz).
+// Single LLM call returns JSON with 5 short German sentences instead of 5 separate prompts —
+// keeps the daily quota low (1 call/cycle vs 5) and ensures the 5 tiles read as a coherent set
+// rather than 5 independent stylistic voices.
+export function buildTileFriendlies({ solarKw, homeKw, batteryPct, batteryMode, batteryPowerKw, evMode, evPowerKw, evFinishHm, gridDirection, gridKw, priceCtKwh }) {
+  // Minimal prompt — 3 verbose few-shots overwhelmed llama3.2:3b's context
+  // budget and Ollama returned done_reason:'load' with empty content. One
+  // concise example is enough to nail the JSON shape on this 3B model.
+  return build(
+    'Antworte AUSSCHLIESSLICH mit einem deutschen JSON-Objekt der Form {"solar":"...","home":"...","battery":"...","ev":"...","grid":"..."}. Jeder Wert ist ein warmer deutscher Satz mit max. 35 Zeichen. Keine Emojis, keine englischen Wörter, kein Markdown, keine Erklärung — nur das JSON.',
+    [
+      {
+        user: 'Sonne 4.5 kW, Haus 2.1 kW, Akku 78% laedt, Auto laedt, Netz speist 1.0 kW ein.',
+        assistant: '{"solar":"Sonne gibt richtig Power","home":"Verbrauch im Gleichgewicht","battery":"Akku tankt zuegig auf","ev":"Auto bekommt Sonnenstrom","grid":"Wir speisen ein"}'
+      }
+    ],
+    `Sonne ${solarKw} kW, Haus ${homeKw} kW, Akku ${batteryPct}% ${batteryMode}, Auto ${evMode}, Netz ${gridDirection} ${gridKw} kW.`
+  );
+}

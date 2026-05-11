@@ -531,6 +531,25 @@ export function createFamilyService(ctx) {
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
     const today = deriveTodaySection(todayKpis, todayCharts);
 
+    // LLM-generated friendly captions for the 5 status tiles (Sonne/Haus/
+    // Akku/Auto/Netz). Cached server-side by llmService; refreshed every
+    // llmStatusIntervalMin (15 min default) + once 60s after service start.
+    // Null when LLM is disabled, the cache is empty, or the entry is stale
+    // (> 1h) — frontend falls back to its rule-based strings in that case.
+    let tileFriendlies = null;
+    const tfCache = typeof ctx.llmService?.getTileFriendlies === 'function'
+      ? ctx.llmService.getTileFriendlies()
+      : null;
+    if (tfCache && typeof tfCache.ts === 'number' && Date.now() - tfCache.ts < 60 * 60 * 1000) {
+      tileFriendlies = {
+        solar: tfCache.solar || null,
+        home: tfCache.home || null,
+        battery: tfCache.battery || null,
+        ev: tfCache.ev || null,
+        grid: tfCache.grid || null
+      };
+    }
+
     const payload = {
       now,
       energy,
@@ -543,6 +562,7 @@ export function createFamilyService(ctx) {
       optimizer,
       savings,
       greeting,
+      tileFriendlies,
       presence: { ...presence },
       config: {
         screensaver: cfg?.family?.screensaver || null,

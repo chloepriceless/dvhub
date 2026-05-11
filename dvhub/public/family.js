@@ -653,6 +653,9 @@
     var ev = data.ev || {};
     var price = data.price || {};
     var greeting = data.greeting || {};
+    // LLM-generated tile captions, refreshed every 15 min server-side.
+    // Falsy / missing per-tile field → fall through to the rule-based text below.
+    var tileFriendlies = data.tileFriendlies || {};
 
     // Plan 09-04: per-card error boundary inside applyFamilyStatus. A throw in
     // one visible-card render does NOT blank a sibling card on the family
@@ -671,14 +674,14 @@
     });
 
     sr('family.solar-home-status', function () {
-      // Friendly texts & statuses
-      setText('tf-solar', energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne'));
-      setText('tf-home', (energy.homeKw || 0) > 4 ? 'Hoher Verbrauch' : (energy.homeKw || 0) > 2.5 ? 'Verbrauch normal' : 'Wenig Verbrauch');
+      // Friendly texts & statuses — LLM-generated captions when present, else rule-based.
+      setText('tf-solar', tileFriendlies.solar || (energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne')));
+      setText('tf-home', tileFriendlies.home || ((energy.homeKw || 0) > 4 ? 'Hoher Verbrauch' : (energy.homeKw || 0) > 2.5 ? 'Verbrauch normal' : 'Wenig Verbrauch'));
     });
 
     sr('family.battery', function () {
       var batMode = battery.mode || 'idle';
-      setText('tf-bat', batMode === 'charging' ? 'Batterie lädt' : batMode === 'discharging' ? 'Batterie entlädt' : 'Batterie hält');
+      setText('tf-bat', tileFriendlies.battery || (batMode === 'charging' ? 'Batterie lädt' : batMode === 'discharging' ? 'Batterie entlädt' : 'Batterie hält'));
       if (typeof battery.powerKw === 'number') {
         setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW');
       }
@@ -686,7 +689,7 @@
 
     sr('family.ev', function () {
       var evMode = ev.mode || 'idle';
-      setText('tf-ev', evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt');
+      setText('tf-ev', tileFriendlies.ev || (evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt'));
       setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
       // Hide the EV tag entirely when no wallbox reports power and no vehicle
       // SoC is known — on installs without an EV integration the empty tile
@@ -708,7 +711,7 @@
     });
 
     sr('family.grid', function () {
-      setText('tf-grid', energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen');
+      setText('tf-grid', tileFriendlies.grid || (energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen'));
       // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
       // raw EPEX spot. Fall back to EPEX spot only if the tariff-adjusted price is
       // unavailable so the row never shows a confusing number.
