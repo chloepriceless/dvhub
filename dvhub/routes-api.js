@@ -433,8 +433,11 @@ export function createApiRoutes(ctx) {
     const ip = getRateLimitKey(req);
     const now = Date.now();
     const url = new URL(req.url, `http://${req.headers.host}`);
-    // Admin endpoints are auth-protected — no rate limit needed for self-hosted app
-    if (url.pathname.startsWith('/api/admin/')) return true;
+    // Plan 09-02: admin endpoints DO get rate-limited. Auth alone is the first
+    // layer; rate limit is defence-in-depth against authenticated-but-leaked
+    // token brute-forcing additional config keys. Operator volume on /api/admin/*
+    // is well below 120 req/min, so this never affects normal use.
+    // (Removed the prior early-return exemption.)
     const limit = isLan ? LAN_RATE_LIMIT_MAX_REQUESTS : RATE_LIMIT_MAX_REQUESTS;
 
     let bucket = rateLimitBuckets.get(ip);
