@@ -200,6 +200,36 @@ export function createForecastStore(ctx) {
     return pool.query(sql, params);
   }
 
+  // Plan 09-08 Task 1 (BLOCKER 4 ESM + factory): batched variant of
+  // insertPvForecast. Builds a single multi-row INSERT statement
+  // (`VALUES ($1,$2,$3,$4,$5),($6,...)`), preserving the ON CONFLICT (model,
+  // ts_utc) DO UPDATE clause exactly as the single-row variant. Replaces three
+  // sequential per-slot await loops in pv-forecast.js — reduces Pi PG round
+  // trips from O(slots) to O(1) per provider block.
+  async function insertPvForecastBatch(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    const params = [];
+    const valueGroups = [];
+    const COLS = 5; // model, ts_utc, power_w, confidence, meta_json
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const o = i * COLS;
+      valueGroups.push(`($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5})`);
+      // Same NaN-guard as the single-row variant: coerce broken power_w to 0
+      // rather than abort the whole batch on one bad slot.
+      const power = Number.isFinite(Number(r.power_w)) ? Number(r.power_w) : 0;
+      params.push(r.model, r.ts_utc, power, r.confidence ?? 0.3, r.meta_json ?? null);
+    }
+    const sql = `
+      INSERT INTO pv_forecasts (model, ts_utc, power_w, confidence, meta_json)
+      VALUES ${valueGroups.join(', ')}
+      ON CONFLICT (model, ts_utc) DO UPDATE SET
+        power_w = EXCLUDED.power_w, confidence = EXCLUDED.confidence,
+        meta_json = EXCLUDED.meta_json, fetched_at = NOW()
+    `;
+    return pool.query(sql, params);
+  }
+
   async function insertLoadForecast(row) {
     const sql = `
       INSERT INTO load_forecasts (model, ts_utc, power_w, confidence, meta_json)
@@ -376,6 +406,36 @@ export function createForecastStore(ctx) {
     return pool.query(sql, [forecastDate, targetDate, slotUtc, row.layer, row.power_w]);
   }
 
+  // Plan 09-08 Task 1 (BLOCKER 4 ESM + factory): batched variant of
+  // insertSnapshot. Single multi-row INSERT into forecast_snapshots, same
+  // ON CONFLICT (target_date, slot_utc, layer) as the single-row variant.
+  // Replaces per-slot await loop in pvnode-backfill.js (96 slots/day × N days).
+  async function insertSnapshotBatch(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    const params = [];
+    const valueGroups = [];
+    const COLS = 5; // forecast_date, target_date, slot_utc, layer, power_w
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const slotUtc = typeof r.slot_utc === 'string' ? r.slot_utc : new Date(r.slot_utc).toISOString();
+      const forecastDate = r.forecast_date ?? todayUtc;
+      const targetDate = r.target_date ?? slotUtc.slice(0, 10);
+      const o = i * COLS;
+      valueGroups.push(`($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5})`);
+      params.push(forecastDate, targetDate, slotUtc, r.layer, r.power_w);
+    }
+    const sql = `
+      INSERT INTO forecast_snapshots (forecast_date, target_date, slot_utc, layer, power_w)
+      VALUES ${valueGroups.join(', ')}
+      ON CONFLICT (target_date, slot_utc, layer) DO UPDATE SET
+        power_w = EXCLUDED.power_w,
+        forecast_date = EXCLUDED.forecast_date,
+        fetched_at = NOW()
+    `;
+    return pool.query(sql, params);
+  }
+
   /**
    * Increment pvnode monthly call counter (client-side quota tracking per D-A5 re-scope).
    * @param {number} n - increment amount (default 1)
@@ -405,6 +465,7 @@ export function createForecastStore(ctx) {
     ensureSchema,
     insertWeather,
     insertPvForecast,
+    insertPvForecastBatch, // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
     insertLoadForecast,
     insertAccuracy,
     getLatestWeather,
@@ -418,6 +479,7 @@ export function createForecastStore(ctx) {
     getForecastAccuracyRow,
     getLatestAccuracyRow,
     insertSnapshot,
+    insertSnapshotBatch,   // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
     incrementPvnodeQuota,
     getPvnodeQuotaUsed,
     // Exposed for testing
