@@ -248,22 +248,22 @@ export function createPvnodeBackfill(ctx, { pvnodeClient, quota, store, forecast
           state.apiCallsUsed += planeGroupsUsed;
 
           const missingDaysSet = new Set(missingDays);
-          let slotsWritten = 0;
-          for (const slot of historySlots || []) {
-            const dayStr = String(slot?.ts_utc || '').slice(0, 10);
-            if (!missingDaysSet.has(dayStr)) continue; // day already in DB — skip
-
-            // REVIEWS H1: pass BOTH target_date (which day the slot describes)
-            // AND forecast_date (today UTC — when this backfill run generated the row).
-            await store.insertSnapshot({
+          // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop.
+          // REVIEWS H1: pass BOTH target_date (which day the slot describes) AND
+          // forecast_date (today UTC — when this backfill run generated the row).
+          // For 96 slots/day × multi-day chunks, this reduces Pi PG round trips
+          // from O(slots) to O(1) per chunk.
+          const batchRows = (historySlots || [])
+            .filter((slot) => missingDaysSet.has(String(slot?.ts_utc || '').slice(0, 10)))
+            .map((slot) => ({
               forecast_date: forecastDate,
-              target_date: dayStr,
+              target_date: String(slot.ts_utc).slice(0, 10),
               slot_utc: slot.ts_utc,
               layer: 'pvnode',
               power_w: slot.power_w
-            });
-            slotsWritten += 1;
-          }
+            }));
+          if (batchRows.length > 0) await store.insertSnapshotBatch(batchRows);
+          const slotsWritten = batchRows.length;
 
           state.daysDone += daysInChunk.length;
           pushLog('pvnode_backfill_chunk_ok', {

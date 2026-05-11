@@ -334,15 +334,17 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       }
 
       if (Array.isArray(mergedSlots) && mergedSlots.length > 0) {
-        // Persist merged rows under model='combined' for backward-compat with existing UI
-        for (const row of mergedSlots) {
-          await store.insertPvForecast({
+        // Persist merged rows under model='combined' for backward-compat with existing UI.
+        // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop —
+        // collapses N round trips into 1, measurable on Pi (Tier 1 RAM).
+        await store.insertPvForecastBatch(
+          mergedSlots.map((row) => ({
             model: 'combined',
             ts_utc: row.ts_utc,
             power_w: row.power_w,
             confidence: 0.5
-          });
-        }
+          }))
+        );
         state.forecast.pv = {
           lastFetchAt: new Date().toISOString(),
           model: 'combined',
@@ -357,14 +359,15 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
 
     if (!stateUpdated && pvlibResult.length > 0) {
       // pvlib-only results
-      for (const row of pvlibResult) {
-        await store.insertPvForecast({
+      // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop.
+      await store.insertPvForecastBatch(
+        pvlibResult.map((row) => ({
           model: 'pvlib',
           ts_utc: row.ts,
           power_w: row.power_w,
           confidence: 0.4
-        });
-      }
+        }))
+      );
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'pvlib',
@@ -375,14 +378,15 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       ctx.bumpForecastVersion?.();
     } else if (!stateUpdated && solcastResult.length > 0) {
       // Solcast-only results
-      for (const row of solcastResult) {
-        await store.insertPvForecast({
+      // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop.
+      await store.insertPvForecastBatch(
+        solcastResult.map((row) => ({
           model: 'solcast',
           ts_utc: row.ts,
           power_w: row.power_w,
           confidence: 0.6
-        });
-      }
+        }))
+      );
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'solcast',
