@@ -157,6 +157,54 @@
     });
   }
 
+  // Plan 09-04: per-sub-widget error boundary. Operates BELOW the coarse
+  // withWidgetBoundary('dashboard', refresh) wrapper that Plan 08-07 shipped:
+  // each individual widget update inside the refresh cycle is wrapped so one
+  // failure does NOT abort the sibling widgets in the same tick. On throw,
+  // safeRender POSTs to /api/log (same endpoint Plan 08-07 created) with
+  // event='widget_error' and renders an inline placeholder if a target is given.
+  async function safeRender(widgetName, fn, opts = {}) {
+    const placeholderTarget = opts && opts.placeholderTarget ? opts.placeholderTarget : null;
+    try {
+      const ret = fn();
+      if (ret && typeof ret.then === 'function') await ret;
+      return { ok: true };
+    } catch (err) {
+      try {
+        // Best-effort log; do not throw if /api/log is unreachable. Same payload
+        // shape as Plan 08-07 frontend_* events, with event='widget_error' so
+        // audit-log filters can distinguish per-widget from page-level errors.
+        apiFetch('/api/log', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            event: 'widget_error',
+            level: 'error',
+            source: 'widget',
+            widget: widgetName,
+            message: String(err && err.message ? err.message : err),
+            stack: String(err && err.stack ? err.stack : '').slice(0, 500),
+            page: typeof location !== 'undefined' ? location.pathname : null
+          })
+        }).catch(() => { /* never loop on log post failure */ });
+      } catch { /* defensive: never let error logging itself throw */ }
+      if (placeholderTarget && typeof placeholderTarget.appendChild === 'function') {
+        try {
+          const span = document.createElement('span');
+          span.className = 'dvhub-widget-error';
+          span.title = `${widgetName}: ${err && err.message ? err.message : err}`;
+          span.textContent = 'Widget aktuell nicht verfügbar';
+          if (typeof placeholderTarget.replaceChildren === 'function') {
+            placeholderTarget.replaceChildren(span);
+          } else {
+            placeholderTarget.appendChild(span);
+          }
+        } catch { /* ignore DOM errors in placeholder render */ }
+      }
+      return { ok: false, error: err };
+    }
+  }
+
   syncTokenFromUrl();
   installGlobalErrorBoundary();
 
@@ -165,7 +213,8 @@
     buildApiUrl,
     escapeHtml,
     getStoredApiToken,
-    setStoredApiToken
+    setStoredApiToken,
+    safeRender  // Plan 09-04 — per-sub-widget error boundary
   };
 
   // Unregister any old service workers — DVhub is a LAN app, SW caching causes stale UI
