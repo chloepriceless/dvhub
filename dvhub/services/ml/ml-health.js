@@ -53,7 +53,10 @@ export function buildTierFeatures(tier, cfg) {
     },
     {
       feature: 'edge_llm',
-      status: tier >= 3 ? 'inactive' : 'unavailable', // Phase 5 Plan 04/05 will activate
+      // Phase 5 Plan 04/05 shipped — Ollama + services/llm/* are live. Mirror
+      // the ml_training / statsforecast pattern: report 'active' when the
+      // operator has enabled it via cfg.llm.llmEnabled, else 'inactive'.
+      status: tier >= 3 && cfg.llm?.llmEnabled ? 'active' : tier >= 3 ? 'inactive' : 'unavailable',
       requiredTier: 3
     }
   ];
