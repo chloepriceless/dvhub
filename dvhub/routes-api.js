@@ -1419,6 +1419,15 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
 
     if (url.pathname === '/api/config/export' && req.method === 'GET') {
+      // Plan 09-05 Task 1: audit the sensitive config-export download BEFORE the
+      // response body is streamed. actorIp via deriveClientIp (09-03) so XFF
+      // posture is consistent with auth + rate-limiting. Only the COUNT of
+      // redacted keys is logged — never the values themselves (T-9-05-02).
+      pushLog('config_exported', {
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        redactedKeyCount: Array.isArray(REDACTED_PATHS) ? REDACTED_PATHS.length : 0
+      }, { ...actorContext(req), severity: 'info' });
       return downloadJson(res, 'dvhub-config.json', redactConfig(ctx.getRawCfg()));
     }
 
