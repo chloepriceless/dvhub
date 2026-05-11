@@ -2455,18 +2455,48 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/history/import' && req.method === 'POST') {
       if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       const body = await parseBody(req);
+      // Plan 09-05 Task 2: audit envelope around the import lifecycle. history-import.js
+      // is NOT a worker thread (verified via grep — no parentPort / new Worker calls);
+      // its manager methods are plain async returning {ok, ...}. So we emit
+      // history_import_started BEFORE awaiting the manager and history_import_finished
+      // AFTER the result resolves — both from the same route handler, no IPC needed.
+      const importStartedAt = Date.now();
+      const auditActor = req.headers['x-actor'] || 'admin';
+      const auditActorIp = deriveClientIp(req, getCfg());
+      const auditSource = String(body.provider || getCfg().telemetry?.historyImport?.provider || 'vrm');
       if (body.mode === 'backfill') {
         ctx.assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
+        pushLog('history_import_started', {
+          actor: auditActor,
+          actorIp: auditActorIp,
+          range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
+          source: auditSource
+        }, { ...actorContext(req), severity: 'info' });
         const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        const status = result?.ok ? 'ok' : 'error';
+        const completionLevel = status === 'ok' ? 'info' : 'error';
+        pushLog('history_import_finished', {
+          actor: auditActor,
+          rowsWritten: Number(result?.importedRows ?? result?.rowsWritten ?? 0),
+          durationMs: Date.now() - importStartedAt,
+          status,
+          errorMessage: result?.error || null
+        }, { ...actorContext(req), severity: completionLevel });
         return json(res, result.ok ? 200 : 400, result);
       }
-      const provider = String(body.provider || getCfg().telemetry?.historyImport?.provider || 'vrm');
+      const provider = auditSource;
       ctx.assertValidRuntimeCommand('history_import', {
         provider,
         requestedFrom: body.requestedFrom ?? body.start ?? null,
         requestedTo: body.requestedTo ?? body.end ?? null,
         interval: body.interval || '15mins'
       });
+      pushLog('history_import_started', {
+        actor: auditActor,
+        actorIp: auditActorIp,
+        range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
+        source: provider
+      }, { ...actorContext(req), severity: 'info' });
       const result = Array.isArray(body.rows) && body.rows.length
         ? ctx.historyImportManager.importSamples({
           provider,
@@ -2480,6 +2510,15 @@ export function createApiRoutes(ctx) {
           end: body.requestedTo ?? body.end,
           interval: body.interval || '15mins'
         });
+      const status = result?.ok ? 'ok' : 'error';
+      const completionLevel = status === 'ok' ? 'info' : 'error';
+      pushLog('history_import_finished', {
+        actor: auditActor,
+        rowsWritten: Number(result?.importedRows ?? result?.rowsWritten ?? 0),
+        durationMs: Date.now() - importStartedAt,
+        status,
+        errorMessage: result?.error || null
+      }, { ...actorContext(req), severity: completionLevel });
       return json(res, result.ok ? 200 : 400, result);
     }
 
