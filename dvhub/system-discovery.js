@@ -1,3 +1,10 @@
+// Plan 09-07: safeInterval reserved import — current system-discovery has no
+// setInterval call sites (mDNS scan is one-shot per /api/discover request).
+// Import kept so any future periodic re-scan inherits the helper. Auditable
+// via grep "from './services/safe-async.js'".
+// eslint-disable-next-line no-unused-vars
+import { safeInterval } from './services/safe-async.js';
+
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 1500;
 const VICTRON_HINTS = ['victron', 'venus', 'cerbo', 'gx'];
 

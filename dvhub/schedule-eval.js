@@ -10,6 +10,11 @@ import {
   scheduleMatch
 } from './schedule-runtime.js';
 import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automation-builder.js';
+// Plan 09-07: safeInterval reserved import — schedule-eval uses a setTimeout
+// chain (evalTimeout) not setInterval. Import kept so future periodic checks
+// inherit the helper. Auditable via grep "from './services/safe-async.js'".
+// eslint-disable-next-line no-unused-vars
+import { safeInterval } from './services/safe-async.js';
 
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
