@@ -2,6 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { toFiniteNumber } from './util.js';
 
+// Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
+// (also defined in routes-api.js) so the settings-UI field descriptor and the
+// server-side validator agree on a single numeric pin. Acceptance test in
+// dvhub/test/token-lifecycle.test.js checks `MIN_API_TOKEN_LENGTH === 32`.
+export const MIN_API_TOKEN_LENGTH = 32;
+
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const MANUFACTURER_MANAGED_PATHS = [
   'meter',
@@ -369,8 +375,29 @@ function buildFieldDefinitions() {
       path: 'apiToken',
       label: 'API Token',
       type: 'text',
+      // Plan 09-01 (D-03): hint to the settings UI that a non-empty token
+      // must be at least MIN_API_TOKEN_LENGTH chars. The optional-empty
+      // contract (D-05) is preserved by `empty: 'blank'` — empty stays valid.
+      // The Shannon-entropy floor (≥ 3.5 bits/char) is enforced server-side
+      // in routes-api.js validateApiTokenStrength.
+      minLength: 32,
       empty: 'blank',
-      help: 'Optionaler Bearer-Token für alle API-Endpunkte.'
+      help: 'External-access bearer token. OPTIONAL — empty string means no external auth (LAN bypass continues to gate local traffic). When SET, must be >=32 chars with Shannon entropy >=3.5 bits/char (validated server-side in routes-api.js validateApiTokenStrength).'
+    },
+    {
+      section: 'system',
+      group: 'general',
+      groupLabel: 'Grundsystem',
+      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
+      // Plan 09-01 (D-01): optional session TTL knob. Default null = no
+      // automatic expiry (LAN-trust appliance model). Reserved for a later
+      // user/account phase; not consumed by Phase 9 code.
+      path: 'apiTokenSessionTtlMs',
+      label: 'API Token Session TTL (ms)',
+      type: 'number',
+      min: 0,
+      empty: 'blank',
+      help: 'OPTIONAL: token session TTL in milliseconds. Default null = no automatic expiry. Reserved for a future user/account phase; not yet enforced.'
     },
     {
       section: 'system',
@@ -1939,6 +1966,10 @@ export function createDefaultConfig() {
     updateChannel: 'stable',
     httpPort: 8080,
     apiToken: '',
+    // Plan 09-01 (D-01): optional token-session TTL. Default null = no
+    // automatic expiry (LAN-trust appliance model). Reserved for a later
+    // user/account phase; not consumed by Phase 9 code.
+    apiTokenSessionTtlMs: null,
     modbusListenHost: '0.0.0.0',
     modbusListenPort: 1502,
     // Plan 08-06 Task 2 Step 1: optional allowlist of remote IPs permitted to talk

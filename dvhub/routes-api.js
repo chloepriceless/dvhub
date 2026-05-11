@@ -98,6 +98,55 @@ export const MAX_MESSAGE_DATA_BYTES = 4 * 1024;
 // further collapses per-address fan-out.
 export const RATE_LIMIT_MAX_KEYS = 5000;
 
+// ── Plan 09-01 (D-03 / D-04): token strength + audit fingerprint ────────
+// Locked decisions:
+//   D-03: minimum 32 chars AND Shannon entropy ≥ 3.5 bits/char (matches the
+//         64-hex-char strength that `rotate` generates via crypto.randomBytes(32)).
+//   D-04: audit fingerprint = first 16 hex chars of sha256(token).
+//   D-05: apiToken stays OPTIONAL. validateApiTokenStrength MUST only be invoked
+//         when a non-empty token is supplied — POST /api/config enforces the
+//         optional-empty contract at the call site (see body.apiToken.length > 0
+//         guard).
+//
+// 32 chars at hex = 128 bits — matches what `rotate` generates
+// (randomBytes(32).toString('hex') = 64 chars, ~256 bits entropy).
+// Shannon entropy floor 3.5 bits/char rejects "aaaaaaaaa..." while accepting
+// any random hex/base64 string. Fingerprint = first 16 hex chars of sha256(token)
+// (distinct from VPN-config 16-hex pattern from 08-02 — same convention).
+export const MIN_API_TOKEN_LENGTH = 32;
+export const MIN_API_TOKEN_ENTROPY_BITS_PER_CHAR = 3.5;
+export const TOKEN_FINGERPRINT_HEX_CHARS = 16;
+
+export function tokenFingerprint(token) {
+  if (!token || typeof token !== 'string') return null;
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, TOKEN_FINGERPRINT_HEX_CHARS);
+}
+
+export function shannonEntropyBitsPerChar(s) {
+  if (!s || typeof s !== 'string') return 0;
+  const counts = new Map();
+  for (const ch of s) counts.set(ch, (counts.get(ch) || 0) + 1);
+  const len = s.length;
+  let h = 0;
+  for (const c of counts.values()) {
+    const p = c / len;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+// Plan 09-01 (D-03 + D-05): validate ONLY when a non-empty token is supplied.
+// Empty string / undefined → caller must NOT invoke this. The optional-token
+// contract is enforced at the call site (POST /api/config).
+export function validateApiTokenStrength(token) {
+  if (typeof token !== 'string') return { ok: false, error: 'token_not_string' };
+  if (token.length < MIN_API_TOKEN_LENGTH) return { ok: false, error: 'token_too_short' };
+  if (shannonEntropyBitsPerChar(token) < MIN_API_TOKEN_ENTROPY_BITS_PER_CHAR) {
+    return { ok: false, error: 'token_low_entropy' };
+  }
+  return { ok: true };
+}
+
 // ── Plan 08-04 Task 2 Step 5: Host / CORS / trustProxy helpers ──────────
 // Kept as pure free functions (no closure over ctx) so server.js can reuse
 // them from the request-entry middleware before routes.handleRequest runs.
@@ -223,6 +272,11 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   // Plan 09-03: reverse-proxy IP allowlist consulted by deriveClientIp when
   // trustProxy=true. Without an entry here, POST /api/config rejects the field.
   'trustedProxyIps',
+  // Plan 09-01 (D-01): optional token-session TTL knob. Default null (no
+  // automatic expiry — LAN-trust appliance model). Reserved for a later
+  // user/account phase; no Phase 9 code consumes the value but the field
+  // must round-trip through POST /api/config without being stripped.
+  'apiTokenSessionTtlMs',
   // Migration metadata + legacy integration roots that live in existing config.json
   // and are echoed back unchanged when the settings UI saves; without these,
   // the strict-root check rejects a normal save with `unknown_config_paths`.
@@ -1585,11 +1639,20 @@ export function createApiRoutes(ctx) {
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
       }
-      // Plan 08-01 Task 1 (CRITICAL #1 companion): never allow a config write
-      // that empties the apiToken — that would re-open the auth bypass we just closed.
-      if (Object.prototype.hasOwnProperty.call(body.config, 'apiToken')
-          && (body.config.apiToken === '' || body.config.apiToken == null)) {
-        return json(res, 400, { ok: false, error: 'api_token_cannot_be_empty' });
+      // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
+      // OPTIONAL. Empty / null / undefined apiToken is a VALID config state
+      // (LAN-trust appliance model — LAN-bypass continues to gate local traffic;
+      // remote callers fall through to checkAuth's 503 api_token_not_configured).
+      // Mandatory-token semantics arrive with the user/account phase, not here.
+      //
+      // Plan 09-01 (D-03 + D-05): token strength gate fires ONLY when a
+      // non-empty apiToken string is supplied. Skip validation entirely when
+      // missing / empty / null — empty is a valid "no external auth" config.
+      if (typeof body.config.apiToken === 'string' && body.config.apiToken.length > 0) {
+        const tokenCheck = validateApiTokenStrength(body.config.apiToken);
+        if (!tokenCheck.ok) {
+          return json(res, 400, { ok: false, error: tokenCheck.error });
+        }
       }
       // Plan 08-04 Task 1 Step 3: strict root-level schema. Reject any top-level
       // key that is not in ALLOWED_CONFIG_ROOTS so an attacker cannot pass
