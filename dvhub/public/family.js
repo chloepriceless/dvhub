@@ -796,6 +796,30 @@
       updateFlowState(energy);
     });
 
+    sr('family.aurora-powerflow', function () {
+      // Plan 09.1-02: feed live energy into the dvhub-powerflow widget mounted
+      // at #leitstandPowerflow (Aurora pilot). Mount lazily on first poll so
+      // we don't race the script load. costEur comes from savings.todayEur on
+      // the family service payload (positive = earning, negative = paying).
+      var pf = ensureAuroraPowerflow();
+      if (pf && typeof pf.update === 'function') {
+        var sav = data.savings || {};
+        var todayEur = parseFloat(sav.todayEur);
+        pf.update({
+          pv: Number(energy.solarKw || 0),
+          bat: Number(energy.batteryKw || 0),
+          house: Number(energy.homeKw || 0),
+          grid: typeof energy.gridKw === 'number' ? Number(energy.gridKw) : null,
+          costEur: isFinite(todayEur) ? todayEur : null,
+        });
+      }
+
+      // Aurora pf-center-readout (id="pfCenter") overlays the live widget with
+      // the day-net-Euro headline; we wire it independently so the readout works
+      // even if dvhub-powerflow.js failed to mount (e.g. during a degraded boot).
+      updatePfCenterReadout(data);
+    });
+
     sr('family.panel-stats', function () {
       // Also update panel stats so touch-to-open shows live data
       updatePanelStats(data);
@@ -1213,7 +1237,49 @@
     if (overlayBg) overlayBg.addEventListener('click', closeMsgOverlay);
   }
 
+  /* ===================== AURORA POWERFLOW (Plan 09.1-02) ===================== */
+  // The kitchen-tablet family page mounts the live dvhub-powerflow widget at
+  // #leitstandPowerflow on first poll. dvhub-powerflow.js exposes
+  // window.DVhubPowerflow.mount() and returns a {update, destroy, root} handle.
+  // The mount is byte-identical to the leitstand mount (AURORA-04 frozen file).
+  var _auroraPowerflow = null;
+  var _auroraPowerflowMountAttempted = false;
+  function ensureAuroraPowerflow() {
+    if (_auroraPowerflow) return _auroraPowerflow;
+    if (_auroraPowerflowMountAttempted) return null; // don't retry on transient failures
+    _auroraPowerflowMountAttempted = true;
+    var pf = window.DVhubPowerflow;
+    if (!pf || typeof pf.mount !== 'function') return null;
+    var mountEl = document.getElementById('leitstandPowerflow');
+    if (!mountEl) return null;
+    try {
+      _auroraPowerflow = pf.mount(mountEl);
+    } catch (err) {
+      console.error('[family.aurora-powerflow] mount failed', err);
+    }
+    return _auroraPowerflow;
+  }
+
+  // Aurora pf-center-readout — net Euro headline above the live powerflow.
+  function updatePfCenterReadout(data) {
+    var c = document.getElementById('pfCenter');
+    if (!c) return;
+    var sav = (data && data.savings) || {};
+    var feed = parseFloat(sav.feedInRevenueEur || '0');
+    var avoid = parseFloat(sav.avoidedCostEur || '0');
+    var net = (isFinite(feed) ? feed : 0) + (isFinite(avoid) ? avoid : 0);
+    var v = c.querySelector('.v');
+    var d = c.querySelector('.d');
+    var sign = net >= 0 ? '+' : '−'; // unicode minus
+    if (v) v.textContent = sign + Math.abs(net).toFixed(2).replace('.', ',') + ' €';
+    if (d) d.textContent = net >= 0 ? 'Gewinn heute' : 'Kosten heute';
+    c.classList.toggle('loss', net < 0);
+  }
+
   /* ===================== BOOTSTRAP ===================== */
+  // Mount the Aurora powerflow widget eagerly so the dust constellation paints
+  // a background before the first /api/family/status poll completes.
+  ensureAuroraPowerflow();
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
   initMessageWidget();
