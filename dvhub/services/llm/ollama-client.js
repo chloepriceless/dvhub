@@ -5,6 +5,12 @@
 // T-05-07: baseUrl hardcoded to 127.0.0.1, no user-configurable host.
 
 import http from 'node:http';
+// Plan 09-07: safeInterval reserved import — ollama-client currently has 0
+// setInterval call sites (the lone setTimeout is per-request HTTP timeout).
+// Import kept so any future reconnect ticker or model-load watcher inherits
+// the helper. Auditable via grep "from '../safe-async.js'".
+// eslint-disable-next-line no-unused-vars
+import { safeInterval } from '../safe-async.js';
 
 /**
  * Create an Ollama REST API client.

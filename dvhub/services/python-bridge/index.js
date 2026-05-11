@@ -11,6 +11,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+// Plan 09-07: shared safeInterval wraps the heartbeat ticker so a thrown
+// health-check error never disables the loop. Awaits the async callback
+// inside the wrapper so a Promise rejection becomes a logged error tick.
+import { safeInterval } from '../safe-async.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -349,7 +353,7 @@ export function createPersistentBridge(ctx, { scriptPath }) {
    * After 3 consecutive failures, kills and respawns process.
    */
   function startHeartbeat() {
-    heartbeatTimer = setInterval(async () => {
+    heartbeatTimer = safeInterval('python-bridge.heartbeat', async () => {
       try {
         await call('health', {}, 10_000);
         heartbeatFailures = 0;

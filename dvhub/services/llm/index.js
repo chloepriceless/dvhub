@@ -7,6 +7,10 @@
 import { createOllamaClient } from './ollama-client.js';
 import { createMessageGenerator } from './message-generator.js';
 import { createMessageBuffer } from './message-buffer.js';
+// Plan 09-07: shared safeInterval wraps the hourly status-message ticker.
+// The async callback's try/catch already pushLogs on inner errors; safeInterval
+// is the belt to its braces — protects against new error paths added later.
+import { safeInterval } from '../safe-async.js';
 
 /**
  * Create the LLM service.
@@ -61,7 +65,7 @@ export function createLlmService(ctx) {
     const intervalMin = llmCfg.llmStatusIntervalMin ?? 60;
     const intervalMs = intervalMin * 60 * 1000;
 
-    statusTimer = setInterval(async () => {
+    statusTimer = safeInterval('llm.status', async () => {
       try {
         // Gather live data from state
         const liveData = buildLiveData();
