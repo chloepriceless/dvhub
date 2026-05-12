@@ -56,18 +56,38 @@ function readFileSafe(p) {
 /**
  * Extract `getElementById('X')` / "X" literals from a JS source.
  * Returns array of { id, line } records (line is 1-based).
- * Skips lines that ALSO contain `document.createElement(` — those are assignments,
- * not lookups, and would be false positives.
+ *
+ * Skip rules (these capture lookups that are EXPLICITLY safe-when-missing,
+ * so a missing markup id is intentional rather than a bug):
+ *   1. Lines that ALSO contain `document.createElement(` — those are
+ *      assignments to a newly created element, not lookups.
+ *   2. Lookups followed by `?.` optional chaining (e.g.
+ *      `document.getElementById('X')?.addEventListener(...)`) — the author
+ *      explicitly opts in to "no-op if missing".
+ *   3. Lookups whose result is immediately tested against `null` / falsy
+ *      with `if (!element) return` / `if (!el) return` on the next 1-2 lines.
+ *      These are explicit early-returns when the element is absent.
  */
 function extractIdsRequested(src) {
   const ids = [];
   const lines = src.split('\n');
-  const re = /document\.getElementById\(\s*['"]([^'"]+)['"]\s*\)/g;
+  const re = /document\.getElementById\(\s*['"]([^'"]+)['"]\s*\)(\??\.)?/g;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.includes('document.createElement(')) continue; // skip false-positive lines
     let m;
     while ((m = re.exec(line)) !== null) {
+      // Skip rule 2: optional chaining = "no-op if missing" is intentional.
+      if (m[2] === '?.') continue;
+      // Skip rule 3: peek at the next 2 lines for an explicit null-guard
+      // that immediately returns (the canonical pattern for "element is
+      // optional, no-op if absent" — e.g. setBanner() / updateMeta() in
+      // setup.js + settings.js).
+      const next1 = lines[i + 1] || '';
+      const next2 = lines[i + 2] || '';
+      const guarded = /^\s*if\s*\(\s*!\s*(element|el|node|target|input|btn|node)\s*\)\s*return/.test(next1)
+        || /^\s*if\s*\(\s*!\s*(element|el|node|target|input|btn|node)\s*\)\s*return/.test(next2);
+      if (guarded) continue;
       ids.push({ id: m[1], line: i + 1 });
     }
   }
@@ -86,6 +106,40 @@ function extractIdsProvided(src) {
   return ids;
 }
 
+/**
+ * Extract IDs that the JS module *itself* injects into the DOM at runtime.
+ * Two patterns are recognised:
+ *   1. `id="X"` / `id='X'` literals inside template strings or string literals
+ *      in the JS source — covers `innerHTML = \`<div id="X">…\``  (the bulk of
+ *      settings.js's dynamic markup, e.g. renderVpnUploadPanel + location-picker
+ *      overlay + EPEX backlog section).
+ *   2. `el.id = 'X'` / `el.id = "X"` assignments — covers
+ *      `const el = document.createElement('…'); el.id = 'X';`  (e.g.
+ *      forecastTierValue at settings.js:1022).
+ *
+ * Without this, the static `getElementById('X')` regex flags every
+ * dynamically-mounted ID as missing — even though the JS module is the one
+ * that injects it. The HTML host element is the *mount point* (e.g.
+ * #vpnUploadMount, #setupGrid, document.body) — the IDs that LIVE INSIDE
+ * the mounted markup are JS-provided, not HTML-provided.
+ *
+ * Returns a Set of ID strings discovered in the JS source.
+ */
+function extractIdsProvidedByJs(src) {
+  const ids = new Set();
+  // Pattern 1: id="X" or id='X' literal inside any string / template literal.
+  // Matches anywhere in the JS file — false positives are tolerable because
+  // the test compares against `getElementById` lookups (a hostile ID like
+  // `id="commented out"` will never be looked up, so it doesn't matter).
+  const reLiteral = /id=["']([A-Za-z_][\w-]*)["']/g;
+  let m;
+  while ((m = reLiteral.exec(src)) !== null) ids.add(m[1]);
+  // Pattern 2: `.id = 'X'` or `.id = "X"` assignment.
+  const reAssign = /\.id\s*=\s*['"]([A-Za-z_][\w-]*)['"]/g;
+  while ((m = reAssign.exec(src)) !== null) ids.add(m[1]);
+  return ids;
+}
+
 let failures = 0;
 let checked = 0;
 
@@ -101,20 +155,36 @@ for (const [pageName, pair] of pageEntries) {
   }
   const provided = extractIdsProvided(htmlSrc);
 
+  // Build the union of HTML-provided ids + JS-injected ids across every JS
+  // module paired with this page. JS-injected covers `innerHTML = `<div
+  // id="X">…`` template strings and `el.id = 'X'` assignments — see
+  // extractIdsProvidedByJs() above. Without this, the binding contract
+  // false-positives on ~20 dynamic IDs in settings.js / setup.js whose
+  // host markup is built at runtime by the field generator / modal
+  // builders / renderVpnUploadPanel etc.
+  const jsSources = {};
+  const providedByJs = new Set();
   for (const jsName of pair.js) {
     const jsPath = path.join(publicDir, jsName);
     const jsSrc = readFileSafe(jsPath);
-    if (jsSrc === null) {
+    if (jsSrc === null) continue;
+    jsSources[jsName] = jsSrc;
+    for (const id of extractIdsProvidedByJs(jsSrc)) providedByJs.add(id);
+  }
+  for (const jsName of pair.js) {
+    const jsSrc = jsSources[jsName];
+    if (jsSrc === undefined) {
+      const jsPath = path.join(publicDir, jsName);
       console.error(`SKIP: ${jsName} not found at ${jsPath}`);
       continue;
     }
     const requested = extractIdsRequested(jsSrc);
     for (const rec of requested) {
       checked++;
-      if (!provided.has(rec.id)) {
+      if (!provided.has(rec.id) && !providedByJs.has(rec.id)) {
         failures++;
         console.error(
-          `MISSING: dvhub/public/${jsName}:${rec.line} → getElementById('${rec.id}') has no markup in dvhub/public/${pair.html}`
+          `MISSING: dvhub/public/${jsName}:${rec.line} → getElementById('${rec.id}') has no markup in dvhub/public/${pair.html} (and not injected by any paired JS)`
         );
       }
     }
