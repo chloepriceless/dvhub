@@ -1,39 +1,36 @@
-<!doctype html>
-<html lang="de">
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DVhub Setup</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <title>DVhub &middot; Setup</title>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
   <link rel="manifest" href="/manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#0B0F1A">
+  <meta name="theme-color" content="#030610">
+  <link rel="stylesheet" href="/dvhub-app.css">
+  <link rel="stylesheet" href="/setup.css">
+  <script src="/theme.js"></script>
 </head>
-<body>
+<body data-screen-label="Setup">
   <div class="app-shell">
-    <header class="compact-topbar">
+    <!-- Setup wizard has no top-nav (kiosk-style first-run; the user is
+         mid-bootstrap and shouldn't navigate away). The Aurora setup
+         mockup follows the same pattern. The legacy compact-topbar is
+         removed; only the brand mark is shown so the user can tell they
+         are in DVhub. -->
+    <header class="topbar" data-screen-label="Topbar">
       <div class="topbar-brand">
         <img src="/assets/dvhub-wordmark.png" alt="DVhub">
+        <span class="product">Setup</span>
       </div>
-      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
-      <label for="menuToggle" class="topbar-burger" aria-label="Menü öffnen">
-        <span></span><span></span><span></span>
-      </label>
-      <nav class="topbar-nav" aria-label="Hauptnavigation">
-        <a href="/">Leitstand</a>
-        <a href="/family">Familie</a>
-        <a href="/integrations">Integrationen</a>
-        <a href="/history.html">Historie</a>
-        <a href="/explorer.html">Explorer</a>
-        <a href="/settings.html">Einstellungen</a>
-      </nav>
-      <div class="topbar-right"></div>
+      <div class="topbar-right">
+        <button class="theme-toggle" type="button" aria-label="Theme umschalten">
+          <span class="theme-label">Theme</span>
+        </button>
+      </div>
     </header>
 
     <main class="page-content">
