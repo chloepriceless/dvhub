@@ -20,7 +20,7 @@
 [hidden] { display: none !important; }
 
 /* ============================================================
-   Source: styles.css lines 3760-3825 — SETTINGS TABS
+   Source: styles.css lines 3760-3822 — SETTINGS TABS + history-chart-shell
    ============================================================ */
 
 /* ============================================================
@@ -82,11 +82,14 @@
   min-height: 280px;
   background: rgba(8,12,24,0.3);
   border: 1px solid var(--flow-border);
+  border-radius: var(--flow-radius);
+  padding: 12px;
+}
 
 /* ============================================================
-   Source: styles.css lines 3826-3976 — CONFIG COMPONENTS
-   (config-grid / config-group / config-row / config-input / config-select / config-save-bar / config-banner)
+   Source: styles.css lines 3825-3998 — CONFIG COMPONENTS + Group Disclosure Affordance
    ============================================================ */
+/* ============================================================
    CONFIG COMPONENTS — Shared by Settings + Setup
    ============================================================ */
 
@@ -239,9 +242,6 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 .config-banner.warn { background: rgba(255,211,46,0.08); border: 1px solid rgba(255,211,46,0.2); color: #FFD32E; }
 .config-banner.error { background: rgba(255,108,99,0.08); border: 1px solid rgba(255,108,99,0.2); color: rgba(255,108,99,0.85); }
 
-/* ============================================================
-   Source: styles.css lines 3978-3995 — Settings Group Disclosure Affordance
-   ============================================================ */
 /* --- Settings Group Disclosure Affordance --- */
 .settings-group-accent {
   width: 3px;
@@ -260,9 +260,12 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 
 .settings-group-hint {
   font-size: 0.75rem;
+  color: rgba(232, 234, 240, 0.4);
+  margin-top: 2px;
+}
 
 /* ============================================================
-   Source: styles.css lines 4340-5452 — SETTINGS · AURORA (Layers 1-7)
+   Source: styles.css lines 4340-5453 — SETTINGS · AURORA (Layers 1-7)
    ============================================================ */
 .settings-aurora {
   --sa-bg-0: #030610;
@@ -1378,9 +1381,9 @@ body:has(.settings-aurora) .location-picker-footer {
   pointer-events: none;
 }
 
+
 /* ============================================================
-   Source: styles.css lines 5454-5722 — Plan 08-11 utility classes
-   (u-hidden, u-block, etc. — needed for .u-hidden / .u-block etc.)
+   Source: styles.css lines 5454-5726 — Plan 08-11 utility classes + setup-specific blocks
    ============================================================ */
 /* ============================================================
    Plan 08-11 Task 1: Inline-style replacements (utility classes)
@@ -1651,32 +1654,97 @@ body:has(.settings-aurora) .location-picker-footer {
 }
 .stat-card-padded { padding: 16px; }
 .ml-spark-wrap { position: relative; height: 80px; }
+.ml-stat-row { display: flex; justify-content: space-between; margin-top: 8px; }
+.ml-stat-text { color: var(--flow-text); }
+.llm-select-narrow { max-width: 320px; }
+
 
 /* ============================================================
-   Source: styles.css lines 5604-5620 — Setup-specific blocks
+   Source: styles.css lines 5727-5805 — dv-modal component
    ============================================================ */
+/* ============================================================
+   Plan 08-11 Task 1: Branded modal component (dv-modal.js)
+   Replaces native alert()/confirm() with branded dialogs.
+   ============================================================ */
+.dv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 26, 47, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.dv-modal {
+  background: var(--dvhub-card, #112E55);
+  border: 1px solid var(--dvhub-border, #1F4C7A);
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 320px;
+  max-width: 480px;
+  color: var(--dvhub-text, #FFFFFF);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+.dv-modal-title {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--dvhub-text, #FFFFFF);
+}
+.dv-modal-body {
+  margin-bottom: 20px;
+  line-height: 1.5;
+  color: var(--dvhub-text-secondary, #A8C4E8);
+  white-space: pre-line;
+}
+.dv-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dv-modal-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-weight: 500;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dv-modal-btn-primary {
+  background: var(--dvhub-blue, #0077FF);
+  color: white;
+}
+.dv-modal-btn-primary:hover {
+  background: var(--dvhub-blue-hover, #0088FF);
+}
+.dv-modal-btn-danger {
+  background: var(--dvhub-danger, #E05757);
+  color: white;
+}
+.dv-modal-btn-danger:hover {
+  filter: brightness(1.1);
+}
+.dv-modal-btn-default {
+  background: var(--dvhub-blue, #0077FF);
+  color: white;
+}
+.dv-modal-btn-ghost {
+  background: transparent;
+  color: var(--dvhub-text-secondary, #A8C4E8);
+  border-color: var(--dvhub-border, #1F4C7A);
+}
+.dv-modal-btn-ghost:hover {
+  background: rgba(168, 196, 232, 0.08);
+}
+body.dv-modal-open {
+  overflow: hidden;
+}
 
-.intg-row-help { font-size: 11px; color: rgba(232,234,240,0.3); }
-
-.setup-wrap { max-width: 420px; margin: 0 auto; padding: 16px 16px 80px; }
-.setup-header { text-align: center; margin-bottom: 20px; }
-.setup-header-title { font-family: var(--font-title); font-size: 22px; font-weight: 600; margin-bottom: 4px; }
-.setup-header-subtitle { font-size: 13px; color: rgba(232,234,240,0.4); }
-.setup-info-card { text-align: center; margin: 16px 0 20px; padding: 16px; border: 1px solid rgba(0,168,255,0.15); border-radius: 10px; }
-.setup-info-card-title { font-family: var(--font-title); font-size: 17px; font-weight: 600; margin: 0 0 6px; }
-.setup-info-card-text { font-size: 13px; color: rgba(232,234,240,0.5); margin: 0 0 10px; }
-.setup-import-row { text-align: center; margin-top: 16px; }
-.setup-import-text { font-size: 11px; color: rgba(232,234,240,0.25); }
-.setup-import-link { color: #4CE36C; text-decoration: none; }
-.setup-save-bar { justify-content: center; gap: 12px; }
-.setup-save-btn { padding: 10px 28px; font-size: 13px; font-weight: 600; }
-
-.cert-warn-row { display: none; color: var(--c-amber-600); }
 
 /* ============================================================
-   Source: styles.css lines 5805-5892 — Plan 08-11 EEG/§14a legal section
+   Source: styles.css lines 5806-5892 — Plan 08-11 EEG/§14a legal section
    ============================================================ */
-
 /* ============================================================
    Plan 08-11 Task 2: Setup wizard EEG/§14a legal section
    ============================================================ */
@@ -1766,7 +1834,7 @@ body:has(.settings-aurora) .location-picker-footer {
 
 
 /* ============================================================
-   Source: styles.css lines 3269-3360 — Location picker modal + history-full-backfill blocks
+   Source: styles.css lines 3269-3360 — Location picker modal
    ============================================================ */
 .history-full-backfill-advanced { display: grid; gap: 10px; }
 .history-full-backfill-lookback { max-width: 320px; }
@@ -1863,48 +1931,27 @@ body:has(.settings-aurora) .location-picker-footer {
 
 
 /* ============================================================
-   Source: styles.css lines 3260-3268 — history-status-info (used in history backfill)
+   Source: styles.css L1021-1027 + L2266-2290 — .status-banner
+   (setup.js#setBanner / settings.js apply class="status-banner")
    ============================================================ */
-.history-status-info {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+.status-banner {
   margin-top: 8px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
+  border-radius: 10px;
+  border: 1px solid rgba(137, 166, 195, 0.35);
+  background: rgba(10, 24, 38, 0.82);
+  padding: 8px 10px;
+  color: var(--text, #eaf2ff);
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
-
-
-/* ============================================================
-   Page-content wrapper used by settings.html / setup.html
-   ============================================================ */
-.page-content {
-  padding: 16px 24px;
-  max-width: min(1400px, 100%);
-  margin: 0 auto;
-  box-sizing: border-box;
-}
-.page-content .history-chart-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.page-content .history-chart-grid article {
-  width: 100%;
-}
-.page-content .history-chart-shell {
-  min-height: 280px;
-  background: rgba(8,12,24,0.3);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 12px;
+.status-banner.success { border-color: rgba(76, 227, 108, 0.45); background: rgba(8, 36, 18, 0.72); }
+.status-banner.warn    { border-color: rgba(255, 152, 0, 0.5);  background: rgba(61, 32, 3, 0.82); }
+.status-banner.error   { border-color: rgba(255, 104, 104, 0.5); background: rgba(53, 11, 11, 0.8); }
 
 /* ============================================================
    Wave-4 additions: alias btn-primary / btn-ghost / btn-danger / btn-small
-   to Aurora's compound .btn.primary / .btn.ghost / .btn.danger / .btn.sm
-   selectors. settings.html + setup.html use the hyphen-separated
-   names introduced by Phase-8; dvhub-app.css ships the compound
-   selectors. Until a follow-up renames every callsite, alias here.
+   to Aurora compound selectors. settings.html + setup.html use the
+   hyphen-separated names from Phase-8; dvhub-app.css ships compound.
    ============================================================ */
 .btn-primary,
 .btn.primary { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); color: #031024; border-color: var(--accent); }
@@ -1921,10 +1968,9 @@ body:has(.settings-aurora) .location-picker-footer {
 .btn-small,
 .btn.sm { padding: 5px 10px; font-size: 10px; }
 
-/* The compact-topbar variant the Phase-8 settings page used. Now superseded
-   by the Wave-3 Aurora .topbar (dvhub-app.css). Keep this defensive shim so
-   any markup that still hand-rolls compact-topbar paints in dark Aurora
-   tokens until that page is also ported. */
+/* Defensive compact-topbar shim — historical Phase-8 markup. Wave-4 replaced
+   it with the Aurora .topbar header on settings + setup; keeping this block
+   only as defensive paint for any unported page still using it. */
 .compact-topbar {
   display: flex;
   align-items: center;
@@ -1934,43 +1980,26 @@ body:has(.settings-aurora) .location-picker-footer {
   border-bottom: 1px solid var(--glass-brd, rgba(120,180,255,.14));
 }
 .menu-toggle-cb { display: none; }
-.topbar-burger { display: none; }
+.topbar-burger  { display: none; }
 
 /* ============================================================
    Aurora topbar — Wave 4 (Plan 09.1-05)
-   Mobile hamburger toggle + drawer behaviour, ported from index.css
-   (Wave 3) so settings + setup paint the same topbar UX as Leitstand.
+   Mobile hamburger toggle + drawer (ported from index.css ≤ 760px).
    ============================================================ */
-
-/* Mobile hamburger toggle (hidden on desktop; shown ≤ 760px). */
 .nav-toggle {
   display: none;
-  appearance: none;
-  cursor: pointer;
-  background: var(--glass);
-  border: 1px solid var(--glass-brd);
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  padding: 0;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 3px;
+  appearance: none; cursor: pointer;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  width: 38px; height: 38px; border-radius: 8px;
+  flex-shrink: 0; padding: 0;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 3px;
   transition: .15s;
 }
-.nav-toggle:hover {
-  background: var(--glass-2);
-  border-color: var(--glass-brd-strong);
-}
+.nav-toggle:hover { background: var(--glass-2); border-color: var(--glass-brd-strong); }
 .nav-toggle .nav-toggle-bar {
-  display: block;
-  width: 18px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--text-2);
-  transition: .2s;
+  display: block; width: 18px; height: 2px; border-radius: 2px;
+  background: var(--text-2); transition: .2s;
 }
 .nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { transform: translateY(5px) rotate(45deg); }
 .nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity: 0; }
@@ -1979,14 +2008,8 @@ body:has(.settings-aurora) .location-picker-footer {
 @media (max-width: 760px) {
   .nav-toggle { display: inline-flex; }
   .topbar-nav {
-    position: fixed;
-    top: 56px;
-    left: 0;
-    right: 0;
-    z-index: 49;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
+    position: fixed; top: 56px; left: 0; right: 0; z-index: 49;
+    display: flex; flex-direction: column; align-items: stretch;
     flex: none;
     background: var(--bg-1, #0a1226);
     backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.2);
@@ -1994,17 +2017,11 @@ body:has(.settings-aurora) .location-picker-footer {
     border-bottom: 1px solid var(--glass-brd, rgba(120,180,255,.14));
     padding: 8px 14px 12px;
     gap: 4px;
-    transform: translateY(-12px);
-    opacity: 0;
-    pointer-events: none;
+    transform: translateY(-12px); opacity: 0; pointer-events: none;
     transition: transform .2s ease, opacity .2s ease;
     overflow-x: visible;
   }
-  .topbar-nav.is-open {
-    transform: translateY(0);
-    opacity: 1;
-    pointer-events: auto;
-  }
+  .topbar-nav.is-open { transform: translateY(0); opacity: 1; pointer-events: auto; }
   .topbar-nav a { padding: 10px 13px; }
   .topbar-nav a.is-active::after { display: none; }
 }
