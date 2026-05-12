@@ -239,6 +239,41 @@
     return v;
   }
 
+  // Plan 09.1-05 (Wave 4): wire the Aurora topbar burger toggle on every page
+  // that uses `<button id="navToggle"> + <nav id="topbarNav">`. Previously the
+  // wiring lived in app.js#wireNavToggle() (index-only); settings.html + setup.html
+  // also adopt the Aurora topbar in this wave and need the same behaviour, so
+  // hoist the wiring to common.js. Idempotent — a missing #navToggle or
+  // #topbarNav is the canonical "page has no burger" state (e.g. family.html
+  // kiosk) and the function no-ops.
+  function wireAuroraTopbarNavToggle() {
+    var toggle = document.getElementById('navToggle');
+    var nav = document.getElementById('topbarNav');
+    if (!toggle || !nav) return;
+    // Idempotent: app.js#wireNavToggle (index-only) may also try to wire the
+    // same nodes after this common.js call. Mark via data-attr so the second
+    // call short-circuits and we don't end up with two click listeners that
+    // each toggle the open state (net no-op + flicker).
+    if (toggle.dataset.navToggleWired === '1') return;
+    toggle.dataset.navToggleWired = '1';
+    toggle.addEventListener('click', function () {
+      var isOpen = nav.classList.toggle('is-open');
+      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    });
+    var links = nav.querySelectorAll('a');
+    for (var i = 0; i < links.length; i++) {
+      links[i].addEventListener('click', function () {
+        nav.classList.remove('is-open');
+        toggle.setAttribute('aria-expanded', 'false');
+      });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireAuroraTopbarNavToggle);
+  } else {
+    wireAuroraTopbarNavToggle();
+  }
+
   syncTokenFromUrl();
   installGlobalErrorBoundary();
 

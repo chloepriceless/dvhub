@@ -2645,6 +2645,11 @@ function wireNavToggle() {
   const toggle = document.getElementById('navToggle');
   const nav = document.getElementById('topbarNav');
   if (!toggle || !nav) return;
+  // Plan 09.1-05: common.js now also wires this on every page that ships
+  // the Aurora topbar. Honour its dataset guard so we don't double-bind
+  // on index.html (would produce a no-op + class flicker on each click).
+  if (toggle.dataset.navToggleWired === '1') return;
+  toggle.dataset.navToggleWired = '1';
   toggle.addEventListener('click', () => {
     const isOpen = nav.classList.toggle('is-open');
     toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
