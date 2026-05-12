@@ -42,7 +42,9 @@ export function createVrmForecast(ctx) {
         power_w: Math.round(parseFloat(r.value_w) * 10) / 10
       }));
 
-      pushLog('vrm_forecast_read_ok', { slots: slots.length, type: 'solar_yield' });
+      // Silenced: was logging on every forecast build (~5 min) and crowding
+      // out actually-interesting events in the Systemprotokoll ring buffer.
+      // _empty and _error variants below still log so a regression is visible.
       return slots;
 
     } catch (e) {

@@ -39,6 +39,30 @@ export function createForecastService(ctx) {
   // Detect hardware tier
   const { tier, totalMB } = detectRamTier();
 
+  // ML correction sanity-fallback logger — fires pushLog only on state
+  // transitions (or once per 6h while the same state persists) so the
+  // Systemprotokoll isn't spammed every forecast build (~5 min).
+  const mlSanityFallbackLogger = (() => {
+    const REPEAT_MS = 6 * 60 * 60 * 1000;
+    let lastState = false; // start in "healthy" so an initially-healthy startup is silent
+    let lastLogAt = 0;
+    return {
+      report(active, detailsFn) {
+        const stateChanged = active !== lastState;
+        const repeatDue = active && (Date.now() - lastLogAt) > REPEAT_MS;
+        if (!stateChanged && !repeatDue) return;
+        if (active) {
+          const details = (typeof detailsFn === 'function') ? detailsFn() : {};
+          pushLog('ml_correction_sanity_fallback', details);
+          lastLogAt = Date.now();
+        } else if (stateChanged && lastState === true) {
+          pushLog('ml_correction_sanity_recovered', {});
+        }
+        lastState = active;
+      }
+    };
+  })();
+
   // Version counter: increments on any forecast data change.
   // Optimizer polls this to detect when re-optimization is needed (D-02).
   let forecastVersion = 0;
@@ -228,17 +252,35 @@ export function createForecastService(ctx) {
     // has real values (observed: lightgbm v7 squashing 22kW peaks down to <1W),
     // disable ML for this response and fall back to raw — otherwise the
     // Börsenchart overlay disappears entirely.
+    //
+    // The condition usually persists across consecutive forecast builds (the
+    // model is bad until retrained), so logging every call would spam the
+    // Systemprotokoll. We log only on state TRANSITIONS (off→on, on→off) and
+    // throttle re-fires of the same state to once per 6h, so the engineer sees
+    // when the fallback engages or disengages without the log getting buried.
     let mlSanityFallback = false;
     if (mlActive) {
       const maxOf = (slots) => slots.reduce((m, s) => Math.max(m, Number(s?.powerW) || 0), 0);
       const rawMax = maxOf(pv.slots);
       const corrMax = maxOf(correctedPv.slots);
       if (rawMax >= 200 && corrMax < rawMax * 0.01) {
-        pushLog('ml_correction_sanity_fallback', { rawMaxW: Math.round(rawMax), corrMaxW: Math.round(corrMax * 10) / 10, mlModel: mlResult.model });
+        mlSanityFallbackLogger.report(true, () => ({
+          rawMaxW: Math.round(rawMax),
+          corrMaxW: Math.round(corrMax * 10) / 10,
+          mlModel: mlResult.model
+        }));
         correctedPv = pv;
         mlActive = false;
         mlSanityFallback = true;
+      } else {
+        mlSanityFallbackLogger.report(false, () => ({
+          rawMaxW: Math.round(rawMax),
+          corrMaxW: Math.round(corrMax * 10) / 10,
+          mlModel: mlResult.model
+        }));
       }
+    } else {
+      mlSanityFallbackLogger.report(false);
     }
 
     // H-12 restored: use ML-corrected PV for Börsenchart solar overlay (not raw PV)
