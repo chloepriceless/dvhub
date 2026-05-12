@@ -117,8 +117,6 @@
   // ---------------------------------------------------------------------------
   // Chart instances (module scope — reuse on refresh, never recreate)
   // ---------------------------------------------------------------------------
-  let pvForecastChart = null;
-  let ganttChart = null;
   let refreshTimer = null;
 
   // ---------------------------------------------------------------------------
@@ -189,208 +187,17 @@
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // 1. PV-Forecast Chart (D-06 type 1) — standalone chart
-  // ---------------------------------------------------------------------------
-  function renderPvForecastChart(forecastData) {
-    const canvas = document.getElementById('pv-forecast-chart');
-    const skeleton = document.getElementById('pv-forecast-skeleton');
-    if (!canvas || typeof Chart === 'undefined') return;
-
-    // Hide skeleton, show canvas
-    if (skeleton) skeleton.style.display = 'none';
-    canvas.style.display = '';
-
-    // Extract PV forecast slots (VERIFIED: response.pv.slots)
-    const pvSlots = forecastData?.pv?.slots || [];
-    if (pvSlots.length === 0) {
-      canvas.style.display = 'none';
-      if (skeleton) {
-        skeleton.style.display = '';
-        skeleton.textContent = 'Keine PV-Prognosedaten verfügbar';
-        skeleton.style.lineHeight = '200px';
-        skeleton.style.textAlign = 'center';
-        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
-        skeleton.style.fontSize = '0.85rem';
-        skeleton.style.animation = 'none';
-      }
-      return;
-    }
-
-    var c = getChartColors();
-    const labels = pvSlots.map(function (s) {
-      var d = new Date(s.start);
-      return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
-    });
-    const forecastKw = pvSlots.map(function (s) { return s.powerW / 1000; });
-
-    const datasets = [
-      {
-        label: 'PV-Prognose',
-        data: forecastKw,
-        borderColor: c.pvForecast,
-        backgroundColor: 'transparent',
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.3
-      }
-    ];
-
-    // Load forecast data (from pv.slots — actual data would come from history)
-    // PV Actual: if load slots have actual data, overlay them
-    var loadSlots = forecastData?.load?.slots || [];
-    if (loadSlots.length > 0) {
-      datasets.push({
-        label: 'Last-Prognose',
-        data: loadSlots.map(function (s) { return s.powerW / 1000; }),
-        borderColor: c.loadForecast,
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        borderDash: [4, 3],
-        pointRadius: 0,
-        tension: 0.3
-      });
-    }
-
-    var config = {
-      type: 'line',
-      data: { labels: labels, datasets: datasets },
-      options: JSON.parse(JSON.stringify(getChartDefaults()))
-    };
-    config.options.scales.x.ticks = { maxTicksLimit: 12, maxRotation: 45, font: { size: 10 } };
-    config.options.scales.y.title = { display: true, text: 'kW', color: _aur('--chart-axis', '#5a6a8a'), font: { size: 10 } };
-    config.options.scales.y.beginAtZero = true;
-    config.options.plugins.tooltip.callbacks = {
-      label: function (ctx) {
-        return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + ' kW';
-      }
-    };
-
-    if (pvForecastChart) {
-      pvForecastChart.data = config.data;
-      pvForecastChart.options = config.options;
-      pvForecastChart.update('none');
-    } else {
-      pvForecastChart = new Chart(canvas, config);
-      enableZoomReset(pvForecastChart);
-    }
-  }
+  // PV-Forecast standalone chart removed (Aurora 09.1-04 follow-up): PV and
+  // Last forecast are now shown together in the Forecast-Vergleich chart
+  // further below. The previous standalone canvas was never wired into
+  // refreshAllCharts and rendered a perpetual loading skeleton.
 
   // ---------------------------------------------------------------------------
   // 2. Gantt Timeline (D-06 type 2) — horizontal bar chart
   // ---------------------------------------------------------------------------
-  function getSourceCategory(source) {
-    var c = getChartColors();
-    if (!source) return { label: 'Intern', color: c.scheduleInternal };
-    var s = source.toLowerCase();
-    if (s.indexOf('eos') !== -1) return { label: 'EOS', color: c.scheduleEos };
-    if (s.indexOf('sma') !== -1) return { label: 'SMA', color: c.scheduleSma };
-    return { label: 'Intern', color: c.scheduleInternal };
-  }
-
-  function renderGanttChart(optimizerData) {
-    var canvas = document.getElementById('gantt-chart');
-    var skeleton = document.getElementById('gantt-skeleton');
-    if (!canvas || typeof Chart === 'undefined') return;
-
-    if (skeleton) skeleton.style.display = 'none';
-    // canvas ships with class="u-hidden" (display: none !important) — must
-    // remove the class, not just clear inline style. Regression from 08-11.
-    canvas.classList.remove('u-hidden');
-    canvas.style.display = '';
-
-    // VERIFIED: lastSchedule is the rules array directly, NOT nested under schedule.rules
-    var rules = optimizerData?.lastSchedule;
-    if (!Array.isArray(rules) || rules.length === 0) {
-      canvas.style.display = 'none';
-      if (skeleton) {
-        skeleton.style.display = '';
-        skeleton.textContent = 'Kein Optimizer-Schedule vorhanden';
-        skeleton.style.lineHeight = '200px';
-        skeleton.style.textAlign = 'center';
-        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
-        skeleton.style.fontSize = '0.85rem';
-        skeleton.style.animation = 'none';
-      }
-      return;
-    }
-
-    // Build Gantt-style horizontal bars grouped by source category
-    var categories = ['Intern', 'EOS', 'SMA'];
-    var barData = [];
-    var barColors = [];
-    var barLabels = [];
-
-    rules.forEach(function (rule) {
-      var cat = getSourceCategory(rule.source);
-      var startMs = new Date(rule.start).getTime();
-      var endMs = new Date(rule.end).getTime();
-      barData.push({
-        x: [startMs, endMs],
-        y: cat.label,
-        rule: rule
-      });
-      barColors.push(cat.color);
-      barLabels.push(cat.label);
-    });
-
-    var config = {
-      type: 'bar',
-      data: {
-        labels: categories,
-        datasets: [{
-          data: barData.map(function (b) { return [b.x[0], b.x[1]]; }),
-          backgroundColor: barColors,
-          borderRadius: 3,
-          borderSkipped: false,
-          barPercentage: 0.6
-        }]
-      },
-      options: JSON.parse(JSON.stringify(getChartDefaults()))
-    };
-
-    config.options.indexAxis = 'y';
-    // Use linear scale with ms timestamps (no date adapter needed)
-    var allMs = barData.flatMap(function (b) { return b.x; });
-    var minMs = Math.min.apply(null, allMs) || Date.now();
-    var maxMs = Math.max.apply(null, allMs) || (Date.now() + 86400000);
-    config.options.scales.x = {
-      type: 'linear',
-      min: minMs,
-      max: maxMs,
-      grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
-      ticks: {
-        color: _aur('--chart-axis', '#5a6a8a'),
-        font: { family: 'JetBrains Mono', size: 9 },
-        callback: function (val) { return new Date(val).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); },
-        maxTicksLimit: 12
-      }
-    };
-    config.options.scales.y = {
-      type: 'category',
-      labels: categories,
-      grid: { display: false },
-      ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'Inter', size: 10 } }
-    };
-    config.options.plugins.tooltip.callbacks = {
-      label: function (ctx) {
-        var bar = barData[ctx.dataIndex];
-        if (!bar) return '';
-        var startStr = new Date(bar.x[0]).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-        var endStr = new Date(bar.x[1]).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-        var powerW = bar.rule.gridSetpointW;
-        return bar.rule.source + ': ' + startStr + '-' + endStr + ' (' + powerW + ' W)';
-      }
-    };
-
-    if (ganttChart) {
-      ganttChart.data = config.data;
-      ganttChart.options = config.options;
-      ganttChart.update('none');
-    } else {
-      ganttChart = new Chart(canvas, config);
-    }
-  }
+  // Gantt timeline removed (Aurora 09.1-04 follow-up): the Optimizer Schedule
+  // table already shows the schedule chronologically and more legibly than the
+  // 3-row gantt visualisation could.
 
   // ---------------------------------------------------------------------------
   // 3. EPEX Overlay Toggle (D-06 type 3) — reuse existing price chart
@@ -1233,7 +1040,8 @@
     // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
     // (Ist + Last-Prognose are now both there) — keeping the call would draw
     // duplicate datasets in a removed canvas anyway.
-    sr('leitstand.gantt', function () { renderGanttChart(optimizerData); });
+    // Gantt timeline removed in Aurora 09.1-04 follow-up — the Optimizer Schedule
+    // table already shows the schedule by time, more legibly than a 3-row gantt.
     sr('leitstand.savings', function () { renderSavingsCard(costData); });
     sr('leitstand.badges', function () { updateBadges(); });
 

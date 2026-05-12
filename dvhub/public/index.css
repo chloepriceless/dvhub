@@ -15,6 +15,11 @@
    etc.) — never hardcoded hex.
    ════════════════════════════════════════════════════════════ */
 
+/* ─── Hidden attribute normalize ─── */
+/* Author CSS that sets `display:` on a class beats the UA `[hidden]` rule
+   when specificities tie. Force HTML `hidden` to win site-wide. */
+[hidden] { display:none !important; }
+
 /* ─── Topbar polish (Option A — chips in .topbar-right) ─── */
 .topbar-right .intg-badge { font-size:9.5px; padding:3px 8px; }
 .topbar-right .intg-badge .dot { background:var(--green); box-shadow:0 0 5px var(--green); }
@@ -24,7 +29,48 @@
 .topbar-right .topbar-conn .dot { background:var(--green); box-shadow:0 0 5px var(--green); animation:pulse 2s infinite; }
 .topbar-right .topbar-clock { font-variant-numeric:tabular-nums; color:var(--text); }
 
-.page-head-actions { display:flex; gap:var(--gap-2); align-items:center; flex-wrap:wrap; }
+/* ─── Mobile hamburger toggle ─── */
+.nav-toggle {
+  display:none;
+  appearance:none; cursor:pointer;
+  background:var(--glass); border:1px solid var(--glass-brd);
+  width:38px; height:38px; border-radius:8px;
+  flex-shrink:0; padding:0;
+  align-items:center; justify-content:center;
+  flex-direction:column; gap:3px;
+  transition:.15s;
+}
+.nav-toggle:hover { background:var(--glass-2); border-color:var(--glass-brd-strong); }
+.nav-toggle .nav-toggle-bar {
+  display:block; width:18px; height:2px; border-radius:2px;
+  background:var(--text-2); transition:.2s;
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { transform:translateY(5px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity:0; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(3) { transform:translateY(-5px) rotate(-45deg); }
+
+@media (max-width:760px) {
+  .nav-toggle { display:inline-flex; }
+  .topbar-nav {
+    position:fixed; top:56px; left:0; right:0; z-index:49;
+    display:flex; flex-direction:column; align-items:stretch;
+    flex:none;
+    background:var(--header-bg);
+    backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+    -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+    border-bottom:1px solid var(--glass-brd);
+    padding:8px 14px 12px;
+    gap:4px;
+    transform:translateY(-12px); opacity:0; pointer-events:none;
+    transition:transform .2s ease, opacity .2s ease;
+    overflow-x:visible;
+  }
+  .topbar-nav.is-open {
+    transform:translateY(0); opacity:1; pointer-events:auto;
+  }
+  .topbar-nav a { padding:10px 13px; }
+  .topbar-nav a.is-active::after { display:none; }
+}
 
 /* ─── 3-col leit-grid ─── */
 .leit-grid {
@@ -32,7 +78,12 @@
   gap:var(--gap-3);
   grid-template-columns:300px 1fr 320px;
 }
-@media (max-width:1280px) { .leit-grid { grid-template-columns:1fr; } }
+@media (max-width:1280px) {
+  .leit-grid { grid-template-columns:1fr; }
+  /* Mobile / narrow: Powerflow is the most actionable info — surface it
+     first so the user doesn't have to scroll past the rails on a phone. */
+  .leit-grid > .pf-shell { order:-1; }
+}
 
 .rail { display:flex; flex-direction:column; gap:10px; }
 
@@ -87,6 +138,16 @@
   font-family:var(--f-mono); font-variant-numeric:tabular-nums;
   color:var(--text); font-weight:500;
 }
+/* Semantic value tints — match Aurora mockup palette */
+.rail-row .v.ok      { color:var(--green); }
+.rail-row .v.warn    { color:var(--yellow); }
+.rail-row .v.amber   { color:var(--yellow); }
+.rail-row .v.danger  { color:var(--red); }
+.rail-row .v.off     { color:var(--red); }
+.rail-row .v.cyan    { color:var(--cyan); }
+.rail-row .v.violet  { color:var(--violet); }
+.rail-row .v.dim     { color:var(--text-dim); }
+.rail-row .v.pink    { color:var(--pink, #ff7ac6); }
 .rail-row-action { cursor:pointer; transition:.15s; }
 .rail-row-action:hover { background:var(--row-hover); }
 .rail-row-action:hover .v { color:var(--accent); }
@@ -94,13 +155,64 @@
 .rail-row-amber { background:rgba(255,212,33,.06); }
 .rail-row-amber .v { color:var(--yellow); }
 
-/* ─── Battery SOC bar ─── */
-.rail-card .bigbar { margin:6px 0 8px; }
-.rail-card .bigbar > i { width:0%; transition:width .4s ease; }
-.progress-fill-init { width:0% !important; }
-[id="socBar"] { background:linear-gradient(90deg,var(--green),var(--cyan)); }
+/* ─── Two-column rail cards (Kosten heute, Steuerung) ─── */
+.rail-card.rail-rows-2col {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  column-gap:14px;
+  row-gap:0;
+  align-items:start;
+}
+.rail-card.rail-rows-2col > .rail-card-head,
+.rail-card.rail-rows-2col > .rail-row-span-2,
+.rail-card.rail-rows-2col > .rail-big,
+.rail-card.rail-rows-2col > .card-title,
+.rail-card.rail-rows-2col > .ctrl-save-defaults,
+.rail-card.rail-rows-2col > .min-soc-editor,
+.rail-card.rail-rows-2col > .bigbar {
+  grid-column:1 / -1;
+}
+.rail-card.rail-rows-2col > .ctrl-row { margin-bottom:0; }
+@media (max-width:560px) {
+  .rail-card.rail-rows-2col { grid-template-columns:1fr; }
+}
 
-/* ─── Min-SOC editor ─── */
+/* ─── Battery SOC bar (mockup .battery-vis with terminal cap) ─── */
+.battery-vis {
+  position:relative;
+  height:18px;
+  margin:6px 0 5px;
+  border:1px solid var(--glass-brd-strong);
+  border-radius:6px;
+  background:var(--glass);
+  overflow:visible;
+}
+.battery-vis::after {
+  content:'';
+  position:absolute;
+  right:-4px; top:4px; bottom:4px; width:3px;
+  background:var(--glass-brd-strong);
+  border-radius:2px;
+}
+.battery-vis > i {
+  position:absolute; left:0; top:0; bottom:0;
+  width:0%;
+  border-radius:4px;
+  background:linear-gradient(90deg, var(--green), var(--cyan));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.2);
+  transition:width .4s ease;
+}
+.battery-vis-labels {
+  display:flex; justify-content:space-between;
+  margin-bottom:8px;
+  font-family:var(--f-mono); font-size:10px; color:var(--text-dim);
+}
+/* keep legacy .bigbar selector working as a no-op fallback */
+.progress-fill-init { width:0%; }
+.bigbar { display:none; }
+
+/* ─── Min-SOC editor — collapsed by default; row click toggles ─── */
+.min-soc-editor[hidden] { display:none; }
 .min-soc-editor {
   display:grid; grid-template-columns:auto 1fr auto auto;
   gap:8px; align-items:center;
@@ -149,27 +261,35 @@
 /* ─── Steuerung card · direct-write rows ─── */
 .ctrl-section-head { margin-top:10px; }
 .ctrl-row {
-  display:grid; grid-template-columns:1fr auto;
+  display:grid; grid-template-columns:minmax(0,1fr) auto;
   gap:8px; align-items:end; margin-bottom:6px;
+  min-width:0;
 }
 .ctrl-label {
   display:flex; flex-direction:column; gap:4px;
   font-family:var(--f-mono); font-size:9.5px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--text-dim);
+  min-width:0;
 }
 .ctrl-label .input {
+  width:100%; min-width:0; box-sizing:border-box;
   padding:6px 9px; font-size:12px; font-variant-numeric:tabular-nums;
+  background:var(--glass); border:1px solid var(--glass-brd);
+  border-radius:6px; color:var(--text); font-family:var(--f-mono);
 }
+.ctrl-label .input:focus { outline:none; border-color:var(--accent); }
+.ctrl-row .btn.sm { padding:6px 12px; flex-shrink:0; }
 .ctrl-save-defaults { margin-top:8px; align-self:stretch; }
 
 /* ─── Section spacing for full-width cards ─── */
 .section-block { margin-top:var(--gap-3); }
 
-/* ─── EPEX chart card ─── */
+/* ─── EPEX chart card (mockup spacing — denser shell) ─── */
 .epex-chart-shell {
-  position:relative; height:280px; min-height:280px;
+  position:relative; height:240px; min-height:240px;
   background:var(--glass); border:1px solid var(--glass-brd);
-  border-radius:var(--r-md); padding:8px;
+  border-radius:var(--r-md); padding:6px;
+  cursor:crosshair;
 }
 .epex-chart-shell canvas { width:100% !important; height:100% !important; }
 
@@ -294,7 +414,56 @@
 }
 .automation-plan-table { margin:0; }
 
-/* ─── SMA panel (inline inside schedule card) ─── */
+/* ─── SMA panel — own card with yellow accent stripe ─── */
+.sma-card {
+  position:relative;
+  border-left:3px solid var(--yellow);
+  background:linear-gradient(180deg, rgba(255,212,33,.04), transparent 40%), var(--bg-elev);
+}
+.sma-details-root { display:block; }
+.sma-details-root[open] .sma-summary-chevron { transform:rotate(180deg); }
+
+/* Click anywhere on the header to toggle — mockup .sma-summary pattern */
+.sma-summary {
+  display:flex; align-items:center; justify-content:space-between;
+  gap:14px; flex-wrap:wrap;
+  cursor:pointer; user-select:none; list-style:none;
+}
+.sma-summary::-webkit-details-marker { display:none; }
+.sma-summary-title { margin:0; flex-shrink:0; }
+.sma-summary-title .dot {
+  width:6px; height:6px; border-radius:50%;
+  box-shadow:0 0 6px currentColor;
+}
+.sma-summary-chevron {
+  font-size:12px; color:var(--text-dim);
+  transition:transform .2s ease; margin-left:auto;
+}
+
+/* Inline status pills inside the summary (mockup .sma-status) */
+.sma-status {
+  display:flex; gap:18px; flex-wrap:wrap;
+  font-family:var(--f-mono); font-size:10.5px;
+}
+.sma-status > div { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.sma-status .l {
+  font-size:9px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--text-dim);
+}
+.sma-status .v {
+  font-size:12.5px; color:var(--text);
+  font-variant-numeric:tabular-nums; font-weight:600;
+}
+
+/* The Aktiv toggle inside the summary must not collapse the details */
+#automationEnabledLabel { flex-shrink:0; }
+
+/* Body slides out below the header */
+.sma-body {
+  padding-top:14px; margin-top:14px;
+  border-top:1px solid var(--hairline);
+}
+/* Legacy inline panel rules kept as fallbacks (no-op since we moved out) */
 .sma-inline-panel {
   margin-top:14px; padding-top:14px;
   border-top:1px solid var(--hairline);
@@ -355,9 +524,16 @@
 .sma-details-summary {
   cursor:pointer; user-select:none;
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.14em;
-  text-transform:uppercase; color:var(--text-dim);
-  padding:6px 0; list-style:none;
-  display:flex; align-items:center; gap:6px;
+  text-transform:uppercase; color:var(--text-2);
+  padding:7px 13px; list-style:none;
+  display:inline-flex; align-items:center; gap:8px;
+  background:var(--glass); border:1px solid var(--glass-brd);
+  border-radius:8px; transition:.15s;
+  width:fit-content;
+}
+.sma-details-summary:hover {
+  background:var(--glass-2); border-color:var(--glass-brd-strong);
+  color:var(--accent);
 }
 .sma-details-summary::before { content:'\25b8'; transition:.15s; }
 details[open] > .sma-details-summary::before { transform:rotate(90deg); }
@@ -394,22 +570,51 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 
 /* ─── Forecast / Optimizer / Savings section ─── */
 .forecast-optimizer-section .card { gap:14px; }
+
+/* Inline KPI pills inside a glass strip — mockup parity */
 .forecast-summary-grid {
-  display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;
-}
-@media (max-width:880px) { .forecast-summary-grid { grid-template-columns:1fr; } }
-.forecast-summary-tile {
+  display:grid; grid-template-columns:repeat(3, 1fr);
+  gap:0;
+  padding:10px 14px;
   background:var(--glass); border:1px solid var(--glass-brd);
-  border-radius:var(--r-md); padding:10px 12px;
-  display:flex; flex-direction:column; gap:4px;
+  border-radius:var(--r-md);
+}
+@media (max-width:880px) {
+  .forecast-summary-grid { grid-template-columns:1fr; gap:8px; padding:10px 12px; }
+}
+.forecast-summary-tile {
+  display:flex; align-items:baseline; gap:8px; min-width:0;
+  padding:0 14px;
+  border-left:1px solid var(--hairline);
+  background:transparent; border:0; border-radius:0;
+}
+.forecast-summary-tile:first-child {
+  padding-left:0; border-left:0;
+}
+@media (max-width:880px) {
+  .forecast-summary-tile {
+    padding-left:0; border-left:0;
+    padding-top:6px;
+    border-top:1px solid var(--hairline);
+  }
+  .forecast-summary-tile:first-child { padding-top:0; border-top:0; }
 }
 .kicker-mini {
-  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.18em;
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.16em;
   text-transform:uppercase; color:var(--text-dim);
+  white-space:nowrap;
 }
-.forecast-tile-v { font-size:22px; }
+.forecast-tile-v {
+  font-size:20px; font-weight:700;
+  font-variant-numeric:tabular-nums; line-height:1;
+}
+#pv-daily-card    .forecast-tile-v { color:var(--yellow); }
+#load-daily-card  .forecast-tile-v { color:var(--cyan); }
+#surplus-daily-card .forecast-tile-v { color:var(--green); }
 .forecast-summary-detail {
-  font-family:var(--f-mono); font-size:10px; color:var(--text-2);
+  font-family:var(--f-mono); font-size:9.5px; color:var(--text-2);
+  margin-left:auto; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
 }
 
 .forecast-chart-shell {

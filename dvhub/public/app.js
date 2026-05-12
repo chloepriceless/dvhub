@@ -76,12 +76,13 @@ function escapeAttr(value) {
 }
 const escapeHtml = (window.DVhubCommon || {}).escapeHtml || escapeAttr;
 
+const VALUE_TINTS = ['ok', 'off', 'warn', 'danger', 'cyan', 'violet', 'dim', 'amber', 'pink'];
 function setText(id, text, cls) {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
   if (cls !== undefined) {
-    el.classList.remove('ok', 'off');
+    VALUE_TINTS.forEach((c) => el.classList.remove(c));
     if (cls) el.classList.add(cls);
   }
 }
@@ -126,9 +127,34 @@ function updateFlowDiagram(status) {
     });
   }
 
-  // SOC progress bar (left rail) still updated independently
+  // SOC progress bar (left rail) still updated independently. Strip
+  // progress-fill-init once we have a real value so any stale cached
+  // CSS rule with !important cannot pin the bar at 0% while the text
+  // readout shows e.g. 18 %.
+  const socPct = Math.max(0, Math.min(100, soc));
   const socBar = document.getElementById('socBar');
-  if (socBar) socBar.style.width = `${Math.max(0, Math.min(100, soc))}%`;
+  if (socBar) {
+    socBar.classList.remove('progress-fill-init');
+    socBar.style.width = `${socPct}%`;
+  }
+  const socMid = document.getElementById('socMid');
+  if (socMid) socMid.textContent = `SOC ${socPct.toFixed(0)}%`;
+
+  // Battery mode chip (CHARGE / DISCHARGE / IDLE) — mockup parity
+  const chip = document.getElementById('batModeChip');
+  const modeEl = document.getElementById('batMode');
+  if (chip && modeEl) {
+    const w = Number(status?.victron?.batteryPowerW || 0);
+    let label = 'IDLE';
+    let tone = '';
+    if (w > 50) { label = 'CHARGE'; tone = 'info'; }
+    else if (w < -50) { label = 'DISCHARGE'; tone = 'ok'; }
+    else { label = 'IDLE'; tone = ''; }
+    modeEl.textContent = label;
+    chip.classList.remove('info', 'ok', 'warn');
+    if (tone) chip.classList.add(tone);
+    chip.hidden = false;
+  }
 }
 
 function initFlowDiagram() {
@@ -371,7 +397,10 @@ const chartSelectionState = {
   hoveredIndex: null,
   pointerDown: false,
   anchorIndex: null,
-  didDrag: false
+  didDrag: false,
+  anchorWasSelected: false,
+  anchorPriorSelectionSize: 0,
+  activePointerId: null
 };
 const dashboardState = {
   lastMinSocReadback: null,
@@ -472,7 +501,7 @@ function updateChartSelectionCallout() {
 
   const selectedIndices = getSelectedChartIndices();
   const windows = buildScheduleWindowsFromSelection(chartSelectionState.data, selectedIndices);
-  const isVisible = selectedIndices.length > 1;
+  const isVisible = selectedIndices.length >= 1;
 
   callout.hidden = !isVisible;
   callout.classList.toggle('is-visible', isVisible);
@@ -480,11 +509,15 @@ function updateChartSelectionCallout() {
 
   if (!isVisible) {
     summary.textContent = 'Keine Auswahl aktiv';
-    detail.textContent = 'Markiere mehrere Balken im Chart, um Schedule-Zeilen vorzubereiten.';
+    detail.textContent = 'Klicke einen Slot im Chart, um einen Zeitplan-Eintrag vorzubereiten.';
     return;
   }
 
-  summary.textContent = `${selectedIndices.length} Balken markiert`;
+  if (selectedIndices.length === 1) {
+    summary.textContent = '1 Slot markiert';
+  } else {
+    summary.textContent = `${selectedIndices.length} Balken markiert`;
+  }
   detail.textContent = windows.map((window) => `${window.start} - ${window.end}`).join(' | ');
 }
 
@@ -725,8 +758,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       backgroundColor: barColors,
       borderColor: barColors,
       borderWidth: 0,
-      barPercentage: 0.78,
-      categoryPercentage: 0.88,
+      // Aurora mockup spacing: 0.4 px gap per 6.25 px slot ≈ 6 % gap, with
+      // tiny corner rounding to match rx="0.6" in the SVG mockup.
+      barPercentage: 0.94,
+      categoryPercentage: 1.0,
+      borderRadius: 1,
       yAxisID: 'y',
       order: 2
     }
@@ -791,7 +827,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       });
     }
   }
-  if (vrmFc.some(v => v != null && v > 0)) {
+  // Show VRM-Prognose whenever any value is present (even 0 at night) so the
+  // line is in the legend ready to receive daylight values without a page
+  // reload.
+  if (vrmFc.some(v => v != null)) {
     datasets.push({
       label: '☀ VRM-Prognose',
       type: 'line',
@@ -803,7 +842,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       pointRadius: 0,
       pointHoverRadius: 3,
       fill: false,
-      spanGaps: false,
+      spanGaps: true,
       yAxisID: 'kw',
       order: 0
     });
@@ -862,7 +901,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       return slot ? (slot.loadKwh * 4) : null;
     });
 
-    if (pvActual.some(v => v != null && v > 0)) {
+    // Render Ist-lines whenever any slot has data (not just > 0) — at night PV
+    // is legitimately 0 W and the line still belongs on the chart so it's
+    // visible in the legend and connects smoothly when the sun rises.
+    if (pvActual.some(v => v != null)) {
       datasets.push({
         label: '☀ PV Ist',
         type: 'line',
@@ -877,7 +919,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         order: 0
       });
     }
-    if (loadActual.some(v => v != null && v > 0)) {
+    if (loadActual.some(v => v != null)) {
       datasets.push({
         label: '🏠 Verbrauch',
         type: 'line',
@@ -932,6 +974,81 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const sunsetIdx = sunTimes?.sunsetTs ? findClosestDataIdx(Date.parse(sunTimes.sunsetTs)) : null;
   const sunriseIdx = sunTimes?.sunriseTs ? findClosestDataIdx(Date.parse(sunTimes.sunriseTs)) : null;
 
+  // --- Day-boundary annotation: vertical divider where slot day changes ---
+  const dayBoundaryAnnotations = {};
+  {
+    const dayBoundaryColor = cssVarAlpha('--cyan', 0.55, 'rgba(52,219,255,0.55)');
+    const dayBoundaryBg = cssVarAlpha('--cyan', 0.18, 'rgba(52,219,255,0.18)');
+    for (let i = 1; i < data.length; i++) {
+      const prev = data[i - 1]?.day;
+      const cur = data[i]?.day;
+      if (!prev || !cur || prev === cur) continue;
+      const dayLabel = new Date(data[i].ts).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+      dayBoundaryAnnotations[`dayBoundary_${i}`] = {
+        type: 'line',
+        xMin: i - 0.5,
+        xMax: i - 0.5,
+        borderColor: dayBoundaryColor,
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        drawTime: 'beforeDatasetsDraw',
+        label: {
+          display: true,
+          content: `→ ${dayLabel}`,
+          position: 'start',
+          backgroundColor: dayBoundaryBg,
+          color: cssVar('--cyan', '#34dbff'),
+          font: { size: 10, weight: 'bold' },
+          padding: { top: 2, bottom: 2, left: 6, right: 6 },
+          borderRadius: 4
+        }
+      };
+    }
+  }
+
+  // --- Negative-price window annotations (box per contiguous segment) ---
+  const negWindowFill = cssVarAlpha('--chart-negative', 0.12, 'rgba(239,68,68,0.12)');
+  const negWindowBorder = cssVarAlpha('--chart-negative', 0.5, 'rgba(239,68,68,0.5)');
+  const negWindowLabelBg = cssVarAlpha('--chart-negative', 0.78, 'rgba(239,68,68,0.78)');
+  const negWindowAnnotations = {};
+  {
+    let segStart = null;
+    const flush = (start, end) => {
+      const startTs = Number(data[start].ts);
+      const endTs = Number(data[end].ts) + 15 * 60 * 1000;
+      const key = `negWindow_${start}`;
+      negWindowAnnotations[key] = {
+        type: 'box',
+        xMin: start - 0.5,
+        xMax: end + 0.5,
+        backgroundColor: negWindowFill,
+        borderColor: negWindowBorder,
+        borderWidth: 1,
+        drawTime: 'beforeDatasetsDraw',
+        label: {
+          display: true,
+          content: `${fmtHm(startTs)}–${fmtHm(endTs)}`,
+          position: { x: 'center', y: 'start' },
+          backgroundColor: negWindowLabelBg,
+          color: '#fff',
+          font: { size: 10, weight: 'bold' },
+          padding: { top: 2, bottom: 2, left: 6, right: 6 },
+          borderRadius: 4
+        }
+      };
+    };
+    for (let i = 0; i < data.length; i++) {
+      const ct = Number(data[i].ct_kwh);
+      if (ct < 0) {
+        if (segStart == null) segStart = i;
+      } else if (segStart != null) {
+        flush(segStart, i - 1);
+        segStart = null;
+      }
+    }
+    if (segStart != null) flush(segStart, data.length - 1);
+  }
+
   // --- Chart.js config ---
   const config = {
     type: 'bar',
@@ -940,7 +1057,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      layout: { padding: { top: 24, right: 8, bottom: 0, left: 0 } },
+      layout: { padding: { top: 32, right: 8, bottom: 0, left: 0 } },
       interaction: {
         mode: 'index',
         intersect: false
@@ -991,6 +1108,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         annotation: {
           annotations: {
+            ...dayBoundaryAnnotations,
+            ...negWindowAnnotations,
             nowLine: {
               type: 'line',
               xMin: nowIdx,
@@ -1000,12 +1119,14 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               borderDash: [],
               label: {
                 display: true,
-                content: 'Jetzt',
-                position: 'end',
-                backgroundColor: chartNowBg,
-                color: chartNow,
-                font: { weight: 'bold', size: 11 },
-                padding: { top: 2, bottom: 2, left: 4, right: 4 }
+                content: 'JETZT',
+                position: 'start',
+                yAdjust: -2,
+                backgroundColor: chartNow,
+                color: '#0a0f1e',
+                font: { weight: 'bold', size: 12, family: 'JetBrains Mono, monospace' },
+                padding: { top: 4, bottom: 4, left: 8, right: 8 },
+                borderRadius: 4
               }
             },
             ...(sunsetIdx != null ? {
@@ -1014,16 +1135,18 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 xMin: sunsetIdx,
                 xMax: sunsetIdx,
                 borderColor: chartSunset,
-                borderWidth: 1.5,
+                borderWidth: 2,
                 borderDash: [5, 4],
                 label: {
                   display: true,
-                  content: 'Sonnenuntergang',
-                  position: 'start',
-                  backgroundColor: chartTipBg,
-                  color: chartSunsetLabel,
-                  font: { size: 10 },
-                  padding: { top: 2, bottom: 2, left: 4, right: 4 }
+                  content: '🌇 Sonnenuntergang',
+                  position: 'end',
+                  yAdjust: -2,
+                  backgroundColor: cssVar('--orange', '#f59e0b'),
+                  color: '#0a0f1e',
+                  font: { size: 11, weight: 'bold', family: 'JetBrains Mono, monospace' },
+                  padding: { top: 3, bottom: 3, left: 7, right: 7 },
+                  borderRadius: 4
                 }
               }
             } : {}),
@@ -1033,16 +1156,18 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 xMin: sunriseIdx,
                 xMax: sunriseIdx,
                 borderColor: chartSunrise,
-                borderWidth: 1.5,
+                borderWidth: 2,
                 borderDash: [5, 4],
                 label: {
                   display: true,
-                  content: 'Sonnenaufgang',
-                  position: 'start',
-                  backgroundColor: chartTipBg,
-                  color: chartSunriseLabel,
-                  font: { size: 10 },
-                  padding: { top: 2, bottom: 2, left: 4, right: 4 }
+                  content: '🌅 Sonnenaufgang',
+                  position: 'end',
+                  yAdjust: -2,
+                  backgroundColor: cssVar('--yellow', '#facc15'),
+                  color: '#0a0f1e',
+                  font: { size: 11, weight: 'bold', family: 'JetBrains Mono, monospace' },
+                  padding: { top: 3, bottom: 3, left: 7, right: 7 },
+                  borderRadius: 4
                 }
               }
             } : {})
@@ -1196,27 +1321,40 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     priceChartInstance.update('none');
   }
 
-  // --- Click selection for schedule creation ---
-  canvas.addEventListener('mouseleave', () => {
+  // --- Pointer-based slot selection (works on touch + mouse) ---
+  // touch-action:none lets us own all pointer gestures inside the chart;
+  // otherwise the browser intercepts taps as scroll/zoom on mobile.
+  canvas.style.touchAction = 'none';
+
+  canvas.addEventListener('pointerleave', () => {
     const tt = document.getElementById('tooltip');
     if (tt) tt.style.display = 'none';
   });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.shiftKey) return; // Shift+drag = pan (let zoom plugin handle it)
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.shiftKey) return; // shift+drag = pan (let zoom plugin handle it)
     const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
+    // Capture so we keep getting pointermove/up even if finger leaves canvas
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
     e.preventDefault();
     e.stopPropagation();
     chartSelectionState.pointerDown = true;
+    chartSelectionState.activePointerId = e.pointerId;
     chartSelectionState.anchorIndex = idx;
     chartSelectionState.didDrag = false;
     chartSelectionState.hoveredIndex = idx;
+    // Remember pre-click state for tap-to-toggle behaviour
+    const ts = Number(data[idx]?.ts);
+    chartSelectionState.anchorWasSelected = chartSelectionState.selectedTimestamps?.has(ts) || false;
+    chartSelectionState.anchorPriorSelectionSize = chartSelectionState.selectedTimestamps?.size || 0;
     setChartSelection(data, [idx]);
   });
-  canvas.addEventListener('mousemove', (e) => {
-    if (e.shiftKey) return; // Shift+drag = pan
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.shiftKey) return;
     const elements = priceChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
     if (!elements.length) return;
     const idx = elements[0].index;
@@ -1228,14 +1366,29 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       setChartSelection(data, buildChartSelectionRange(chartSelectionState.anchorIndex, idx));
     }
   });
-  canvas.addEventListener('mouseup', () => {
+
+  const endPointer = (e) => {
+    if (!chartSelectionState.pointerDown) return;
+    // Tap-to-toggle: a click/tap (no drag) on the sole selected slot deselects it.
+    if (
+      !chartSelectionState.didDrag &&
+      chartSelectionState.anchorWasSelected &&
+      chartSelectionState.anchorPriorSelectionSize === 1
+    ) {
+      clearChartSelection();
+    }
     chartSelectionState.pointerDown = false;
-  });
-  canvas.addEventListener('mouseleave', () => {
-    chartSelectionState.pointerDown = false;
-    chartSelectionState.hoveredIndex = null;
-  });
-  // Double-click to reset zoom
+    chartSelectionState.anchorWasSelected = false;
+    chartSelectionState.anchorPriorSelectionSize = 0;
+    if (e && e.pointerId != null) {
+      try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    chartSelectionState.activePointerId = null;
+  };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+
+  // Double-tap to reset zoom (Hammer.js dblclick works on touch via chartjs-plugin-zoom)
   canvas.addEventListener('dblclick', () => {
     if (priceChartInstance) priceChartInstance.resetZoom();
   });
@@ -1438,24 +1591,117 @@ function renderDashboardStatus(status) {
 
   safeRender('dashboard.market', () => {
     const s = status.epex?.summary;
-    setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-', s?.current && Number(s.current.ct_kwh) < 0 ? 'off' : 'ok');
-    setText('priceNext', s?.next ? `${fmtDmHm(s.next.ts)} (${fmtCentFromCt(s.next.ct_kwh)})` : '-');
-    setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
-    setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
-    setText(
-      'todayMinMax',
-      s && s.todayMin != null && s.todayMax != null
-        ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
-        : '-'
-    );
+    const rows = Array.isArray(status.epex?.data) ? status.epex.data : [];
+    const todayDate = s?.today || status.epex?.date;
+    const todayRows = todayDate ? rows.filter((r) => r.day === todayDate) : rows;
+
+    // Current spot — tint by sign
+    const currentCt = s?.current ? Number(s.current.ct_kwh) : null;
+    setText('priceNow', s?.current ? fmtCentFromCt(s.current.ct_kwh) : '-',
+      currentCt == null ? '' : (currentCt < 0 ? 'off' : (currentCt > 12 ? 'warn' : 'ok')));
+
+    // Min / Max with times — derived from today's slots
+    let minRow = null;
+    let maxRow = null;
+    let sum = 0;
+    let count = 0;
+    for (const r of todayRows) {
+      const ct = Number(r.ct_kwh);
+      if (!Number.isFinite(ct)) continue;
+      sum += ct; count += 1;
+      if (!minRow || ct < Number(minRow.ct_kwh)) minRow = r;
+      if (!maxRow || ct > Number(maxRow.ct_kwh)) maxRow = r;
+    }
+    setText('priceMinTime', minRow ? fmtHm(minRow.ts) : '--:--');
+    setText('priceMin', minRow ? fmtCentFromCt(minRow.ct_kwh) : '-',
+      minRow && Number(minRow.ct_kwh) < 0 ? 'ok' : 'cyan');
+    setText('priceMaxTime', maxRow ? fmtHm(maxRow.ts) : '--:--');
+    setText('priceMax', maxRow ? fmtCentFromCt(maxRow.ct_kwh) : '-',
+      maxRow && Number(maxRow.ct_kwh) > 12 ? 'warn' : '');
+    const avgCt = count ? sum / count : null;
+    setText('priceAvg', avgCt != null ? fmtCentFromCt(avgCt) : '-', 'cyan');
+
+    // Negativ-Fenster: earliest negative slot start → latest negative slot end (+15min)
+    const negSlots = todayRows.filter((r) => Number(r.ct_kwh) < 0);
+    if (negSlots.length) {
+      const startTs = Math.min(...negSlots.map((r) => Number(r.ts)));
+      const endTs = Math.max(...negSlots.map((r) => Number(r.ts))) + 15 * 60 * 1000;
+      setText('negWindow', `${fmtHm(startTs)}–${fmtHm(endTs)}`, 'ok');
+    } else {
+      setText('negWindow', 'keine', 'dim');
+    }
+
+    // Next slot — split time and value
+    setText('priceNextTime', s?.next ? fmtHm(s.next.ts) : '--:--');
+    setText('priceNext', s?.next ? fmtCentFromCt(s.next.ct_kwh) : '-',
+      s?.next && Number(s.next.ct_kwh) < 0 ? 'ok' : '');
+
+    // Eigenbezug (user import price for current slot)
+    const eigenCt = Number(status.userEnergyPricing?.current?.importPriceCtKwh);
+    setText('priceEigenbezug',
+      Number.isFinite(eigenCt) && eigenCt > 0 ? fmtCentFromCt(eigenCt) : '-',
+      'violet');
+
+    // Avg delta chip — show vs current spot
+    const chip = document.getElementById('priceAvgChip');
+    if (chip) {
+      if (avgCt != null && currentCt != null && Math.abs(avgCt) > 0.01) {
+        const deltaPct = ((currentCt - avgCt) / Math.abs(avgCt)) * 100;
+        const sign = deltaPct >= 0 ? '+' : '';
+        setText('priceAvgDelta', `${sign}${deltaPct.toFixed(0)}% Ø`);
+        chip.hidden = false;
+        chip.classList.remove('ok', 'warn');
+        chip.classList.add(deltaPct < 0 ? 'ok' : 'warn');
+      } else {
+        chip.hidden = true;
+      }
+    }
+
+    // Negativpreis-Schutz status
     const negActive = status.ctrl?.negativePriceActive;
     setText('negPriceProtection', negActive ? 'AKTIV (Abregelung)' : 'Inaktiv', negActive ? 'off' : 'ok');
+
+    // Tomorrow min/max (kept; less prominent)
     setText(
       'tomorrowMinMax',
       s && s.tomorrowMin != null && s.tomorrowMax != null
         ? `${fmtCentFromTenthCt(Number(s.tomorrowMin))} / ${fmtCentFromTenthCt(Number(s.tomorrowMax))}`
         : '-'
     );
+
+    // Hidden bookkeeping spans (kept for backward compat with binding-contract)
+    setText('todayMinMax',
+      s && s.todayMin != null && s.todayMax != null
+        ? `${fmtCentFromTenthCt(Number(s.todayMin))} / ${fmtCentFromTenthCt(Number(s.todayMax))}`
+        : '-');
+    setText('negLater', s ? (s.hasFutureNegative ? 'Ja' : 'Nein') : '-');
+    setText('negTomorrow', s ? (s.tomorrowNegative ? 'Ja' : 'Nein') : '-');
+  });
+
+  safeRender('dashboard.dv-luox', () => {
+    // DV-Signale · LUOX is merged into the DV-Status card on the left rail.
+    // Existing rows (Control Value, Lease bis, Letzte Modbus-Abfrage,
+    // VPN-Tunnel) already act as liveness/heartbeat indicators. We only
+    // additionally populate Curtailment (negativ-price window) and
+    // Replan-Trigger (last SMA plan computed time).
+    const negActive = status.ctrl?.negativePriceActive;
+    const negStart = status.ctrl?.negativePriceWindow?.start || status.ctrl?.negativePriceStart;
+    const negEnd = status.ctrl?.negativePriceWindow?.end || status.ctrl?.negativePriceEnd;
+    if (negActive && negStart && negEnd) {
+      setText('dvCurtailment', `${fmtHm(negStart)}–${fmtHm(negEnd)}`, 'warn');
+    } else if (negActive) {
+      setText('dvCurtailment', 'aktiv', 'warn');
+    } else {
+      setText('dvCurtailment', 'keine', 'dim');
+    }
+
+    const planTs = Number(status?.schedule?.smallMarketAutomation?.plan?.computedAt
+      || status?.schedule?.smallMarketAutomation?.lastPlanComputedAt || 0);
+    if (planTs) {
+      setText('dvReplanTrigger', `${fmtHm(planTs)} · auto`);
+    } else {
+      setText('dvReplanTrigger', '-', 'dim');
+    }
   });
 
   safeRender('dashboard.meter-flow', () => {
@@ -1541,7 +1787,17 @@ function renderDashboardStatus(status) {
     }).catch(() => {
       drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes);
     });
-    setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | Datapoints: ${(status.epex?.data || []).length}`);
+    {
+      const epd = status.epex?.data || [];
+      const distinctDays = Array.from(new Set(epd.map((r) => r.day).filter(Boolean))).sort();
+      const daysLabel = distinctDays.length
+        ? distinctDays.map((d) => d.slice(5)).join(' + ')
+        : '—';
+      const tomorrowHint = (distinctDays.length < 2 && status.epex?.nextDate)
+        ? ` · Morgen (${status.epex.nextDate.slice(5)}) wird nach EPEX-Clearing ~13:00 verfügbar`
+        : '';
+      setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | ${epd.length} Slots · ${daysLabel}${tomorrowHint}`);
+    }
   }, { placeholderTarget: document.getElementById('priceChartContainer') });
 
   safeRender('dashboard.automation', () => {
@@ -1984,6 +2240,18 @@ async function loadScheduleDash() {
   scheduleCache = data || { rules: [], config: {} };
   clearScheduleRows();
   const rules = Array.isArray(data.rules) ? data.rules : [];
+
+  // Update Optimizer Schedule rule-count chip
+  const chip = document.getElementById('schedRuleCountChip');
+  if (chip) {
+    if (rules.length > 0) {
+      setText('schedRuleCount', String(rules.length));
+      chip.hidden = false;
+    } else {
+      chip.hidden = true;
+    }
+  }
+
   const timeSlots = groupScheduleRulesForDashboard(rules);
 
   if (!timeSlots.length) {
@@ -2373,8 +2641,25 @@ function renderVpnCard(vpn) {
   }
 }
 
+function wireNavToggle() {
+  const toggle = document.getElementById('navToggle');
+  const nav = document.getElementById('topbarNav');
+  if (!toggle || !nav) return;
+  toggle.addEventListener('click', () => {
+    const isOpen = nav.classList.toggle('is-open');
+    toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  });
+  nav.querySelectorAll('a').forEach((a) => {
+    a.addEventListener('click', () => {
+      nav.classList.remove('is-open');
+      toggle.setAttribute('aria-expanded', 'false');
+    });
+  });
+}
+
 function initDashboard() {
   initFlowDiagram();
+  wireNavToggle();
   document.getElementById('vpnReconnectBtn')?.addEventListener('click', async () => {
     try {
       await apiFetch('/api/vpn/restart', { method: 'POST' });
@@ -2424,6 +2709,12 @@ function initDashboard() {
 
   document.getElementById('addAutomationStageBtn')?.addEventListener('click', addAutomationStage);
   document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
+
+  // SMA <details> summary contains the Aktiv toggle — stop the click from
+  // bubbling so toggling 'Aktiv' doesn't also collapse/expand the panel.
+  document.getElementById('automationEnabledLabel')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
   document.getElementById('replanAutomationBtn')?.addEventListener('click', replanAutomation);
 
   updateChartSelectionCallout();
