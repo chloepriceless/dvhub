@@ -2442,46 +2442,64 @@ function initSettingsPage() {
     }
   });
 
-  // Tab switching (must be in external JS — CSP blocks inline scripts)
+  // Stacked-sections nav (mockup port · 2026-05-13).
+  // All 6 panels are visible at once. Nav-rail clicks scroll the target into
+  // view; IntersectionObserver tracks the currently-visible section to set the
+  // .is-active state. Lazy inits that used to fire on tab-click (ML, VPN,
+  // system health) now fire once at page-load since all panels render eagerly.
   const tabContainer = document.querySelector('.settings-tabs');
   if (tabContainer) {
-    tabContainer.addEventListener('click', (e) => {
-      const tab = e.target.closest('.settings-tab');
-      if (!tab) return;
-      const target = tab.dataset.tab;
-      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('is-active'));
-      tab.classList.add('is-active');
-      document.querySelectorAll('.settings-tab-panel').forEach(p => { p.hidden = true; });
-      const panel = document.getElementById('tab-' + target);
-      if (panel) panel.hidden = false;
-      history.replaceState(null, '', '#' + target);
-      syncRenderedFieldsToDraft();
-      // Auto-load ML status when switching to ML tab
-      if (target === 'ml') {
-        initMlTab();
-      }
-      // Auto-load health + check for updates when switching to System tab
-      if (target === 'system') {
-        loadHealth().catch(() => {});
-        if (typeof checkForUpdate === 'function') {
-          const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
-          const cooldownMs = 10 * 60 * 1000;
-          if (Date.now() - lastCheck > cooldownMs) {
-            sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-            checkForUpdate().catch(() => {});
-          }
+    // Eager-init what used to be tab-click-deferred work.
+    setTimeout(function () {
+      try { initMlTab(); } catch (_) {}
+      try { initVpnTab(); } catch (_) {}
+      try { loadHealth().catch(function(){}); } catch (_) {}
+      if (typeof checkForUpdate === 'function') {
+        var lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+        var cooldownMs = 10 * 60 * 1000;
+        if (Date.now() - lastCheck > cooldownMs) {
+          sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
+          try { checkForUpdate().catch(function(){}); } catch (_) {}
         }
       }
-      // Lazy-init VPN tab: render upload panel + wire toggles to current config
-      if (target === 'vpn') {
-        initVpnTab();
+    }, 300);
+
+    tabContainer.addEventListener('click', function (e) {
+      var tab = e.target.closest('.settings-tab');
+      if (!tab) return;
+      var target = tab.dataset.tab;
+      document.querySelectorAll('.settings-tab').forEach(function (t) { t.classList.remove('is-active'); });
+      tab.classList.add('is-active');
+      var panel = document.getElementById('tab-' + target);
+      if (panel && typeof panel.scrollIntoView === 'function') {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
+      history.replaceState(null, '', '#' + target);
+      syncRenderedFieldsToDraft();
     });
-    // Restore tab from URL hash
-    const hash = location.hash.replace('#', '');
+
+    // Active-state tracking via IntersectionObserver — picks the topmost
+    // visible panel inside the rootMargin band.
+    var tabs = Array.from(document.querySelectorAll('.settings-tab'));
+    var panels = Array.from(document.querySelectorAll('.settings-tab-panel'));
+    if ('IntersectionObserver' in window && panels.length) {
+      var io = new IntersectionObserver(function (entries) {
+        var visible = entries.filter(function (en) { return en.isIntersecting; });
+        if (!visible.length) return;
+        visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+        var topId = visible[0].target.id.replace(/^tab-/, '');
+        tabs.forEach(function (t) { t.classList.toggle('is-active', t.dataset.tab === topId); });
+      }, { rootMargin: '-20% 0px -60% 0px', threshold: 0 });
+      panels.forEach(function (p) { io.observe(p); });
+    }
+
+    // Hash-jump on load (anchor-style)
+    var hash = location.hash.replace('#', '');
     if (hash) {
-      const tab = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
-      if (tab) tab.click();
+      var panelFromHash = document.getElementById('tab-' + hash);
+      if (panelFromHash) {
+        setTimeout(function () { panelFromHash.scrollIntoView({ block: 'start' }); }, 150);
+      }
     }
   }
 
@@ -2512,15 +2530,9 @@ var mlMaeSparklineChart = null;
 var mlTabInitialized = false;
 
 function initMlTab() {
-  // Also handle direct URL hash navigation
-  if (location.hash === '#ml') {
-    var tab = document.querySelector('.settings-tab[data-tab="ml"]');
-    if (tab && !tab.classList.contains('is-active')) {
-      tab.click();
-      return; // click triggers initMlTab again via the tab handler
-    }
-  }
-
+  // Hash-jump is now handled by the page-load handler (scrollIntoView).
+  // initMlTab itself is called eagerly at page-load in the stacked-sections
+  // layout — no tab-click coupling. Always run the body.
   if (!apiFetch) return;
 
   apiFetch('/api/ml/status').then(function (res) {

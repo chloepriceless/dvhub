@@ -2025,3 +2025,50 @@ body.dv-modal-open {
   .topbar-nav a { padding: 10px 13px; }
   .topbar-nav a.is-active::after { display: none; }
 }
+
+/* ============================================================
+   Mockup port — stacked sections + nav-rail active glow
+   (Plan 09.1-05 Wave-4 follow-up · 2026-05-13)
+   ============================================================ */
+.settings-aurora .sa-section-head {
+  padding: 4px 4px 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--sa-glass-brd);
+}
+.settings-aurora .sa-section-head h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: var(--sa-text);
+  letter-spacing: -.01em;
+}
+.settings-aurora .sa-section-head .sub {
+  font-size: 13px;
+  color: var(--sa-text-mute);
+  margin: 0;
+}
+/* Anchor-scroll target offset so the topbar doesn't cover the heading */
+.settings-aurora .settings-tab-panel {
+  scroll-margin-top: 80px;
+}
+/* Stacked-section separator + breathing room */
+.settings-aurora .settings-tab-panel + .settings-tab-panel {
+  margin-top: 16px;
+  padding-top: 4px;
+}
+/* Nav-rail active glow bar (mockup .nav-rail a.active::before) */
+.settings-aurora .settings-tab {
+  position: relative;
+}
+.settings-aurora .settings-tab.is-active::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 99px;
+  background: var(--sa-cyan, #34dbff);
+  box-shadow: 0 0 8px var(--sa-cyan, #34dbff);
+}

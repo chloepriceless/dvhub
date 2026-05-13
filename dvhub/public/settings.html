@@ -76,34 +76,38 @@
         </div>
 
         <div class="sa-shell">
-          <!-- Linke Sektions-Navigation -->
+          <!-- Linke Sektions-Navigation (nav-rail · mockup pattern) -->
           <nav class="settings-tabs" aria-label="Einstellungs-Sektionen">
             <div class="sa-nav-group">Konfiguration</div>
-            <button class="settings-tab is-active" data-tab="connection"><span class="sa-ico">&#9881;</span>Anlage</button>
-            <button class="settings-tab" data-tab="control"><span class="sa-ico">&#9889;</span>Steuerung</button>
-            <button class="settings-tab" data-tab="services"><span class="sa-ico">&euro;</span>Preise</button>
+            <button class="settings-tab is-active" data-tab="connection" type="button"><span class="sa-ico">&#9881;</span>Anlage</button>
+            <button class="settings-tab" data-tab="control" type="button"><span class="sa-ico">&#9889;</span>Steuerung</button>
+            <button class="settings-tab" data-tab="services" type="button"><span class="sa-ico">&euro;</span>Preise</button>
 
             <div class="sa-nav-group">System</div>
-            <button class="settings-tab" data-tab="system"><span class="sa-ico">&#9670;</span>Status</button>
-            <button class="settings-tab" data-tab="ml"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
-            <button class="settings-tab" data-tab="vpn"><span class="sa-ico">&#10070;</span>VPN</button>
+            <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9670;</span>Status</button>
+            <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
+            <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
 
-          <!-- Rechts: Sektionen -->
+          <!-- Rechts: alle Sektionen gestapelt sichtbar (anchor-scroll · mockup pattern) -->
           <div class="sa-body">
             <div id="settingsBanner" class="config-banner warn">Konfiguration wird geladen...</div>
 
-            <div id="tab-connection" class="settings-tab-panel">
+            <section id="tab-connection" class="settings-tab-panel">
+              <header class="sa-section-head"><h2>Anlage</h2><p class="sub">Geräte-Verbindungen, Modbus-Mapping, Cloud-Integrationen.</p></header>
               <div id="connectionBanner" class="config-banner u-hidden"></div>
               <div id="connectionGrid" class="config-grid"></div>
-            </div>
-            <div id="tab-control" class="settings-tab-panel" hidden>
+            </section>
+            <section id="tab-control" class="settings-tab-panel">
+              <header class="sa-section-head"><h2>Steuerung</h2><p class="sub">Optimizer, Zeitplan, SMA-Automatik (Min-SoC, Stages).</p></header>
               <div id="controlGrid" class="config-grid"></div>
-            </div>
-            <div id="tab-services" class="settings-tab-panel" hidden>
+            </section>
+            <section id="tab-services" class="settings-tab-panel">
+              <header class="sa-section-head"><h2>Preise</h2><p class="sub">EPEX, Tarif &amp; Spot, Direktvermarktung.</p></header>
               <div id="servicesGrid" class="config-grid"></div>
-            </div>
-            <div id="tab-system" class="settings-tab-panel" hidden>
+            </section>
+            <section id="tab-system" class="settings-tab-panel">
+              <header class="sa-section-head"><h2>Status</h2><p class="sub">Health, Updates, Dienst, Config, Historie, API, Diagnose.</p></header>
           <div class="config-grid">
 
             <!-- Systemstatus -->
@@ -348,9 +352,10 @@
             </div>
 
           </div><!-- /.config-grid -->
-        </div><!-- /#tab-system -->
+        </section><!-- /#tab-system -->
 
-        <div id="tab-ml" class="settings-tab-panel" hidden>
+        <section id="tab-ml" class="settings-tab-panel">
+          <header class="sa-section-head"><h2>ML &amp; AI</h2><p class="sub">Modell-Status, Genauigkeits-Trend, Tier-Features, LLM.</p></header>
           <div class="config-grid">
 
             <!-- Modell-Status -->
@@ -430,9 +435,10 @@
             </div>
 
           </div><!-- /.config-grid -->
-        </div><!-- /#tab-ml -->
+        </section><!-- /#tab-ml -->
 
-        <div id="tab-vpn" class="settings-tab-panel" data-tab-content="vpn" hidden>
+        <section id="tab-vpn" class="settings-tab-panel" data-tab-content="vpn">
+          <header class="sa-section-head"><h2>VPN</h2><p class="sub">Sicherer Fernzugriff: OpenVPN / WireGuard / IPSec.</p></header>
           <div class="config-grid">
 
             <!-- VPN Allgemein -->
@@ -484,7 +490,7 @@
             <div id="vpnUploadMount" class="config-group-mount"></div>
 
           </div><!-- /.config-grid -->
-        </div><!-- /#tab-vpn -->
+        </section><!-- /#tab-vpn -->
           </div><!-- /.sa-body -->
         </div><!-- /.sa-shell -->
 
