@@ -360,7 +360,9 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   margin-top: 12px;
   align-items: start;
 }
-@media (max-width: 900px) {
+/* Keep left-sidebar layout down to phone-portrait (600px). The user's
+   mockup intent is a persistent left rail on every reasonable viewport. */
+@media (max-width: 600px) {
   .settings-aurora .sa-shell { grid-template-columns: 1fr; }
 }
 
@@ -553,8 +555,9 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   pointer-events: auto;
 }
 
-/* Mobile: nav becomes horizontal pills again, no sticky */
-@media (max-width: 900px) {
+/* Phone-portrait only: nav flips to horizontal pills (sidebar would
+   crowd out content below ~600px). Above that, keep vertical rail. */
+@media (max-width: 600px) {
   .settings-aurora .settings-tabs {
     flex-direction: row;
     overflow-x: auto;
