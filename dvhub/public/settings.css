@@ -2072,3 +2072,170 @@ body.dv-modal-open {
   background: var(--sa-cyan, #34dbff);
   box-shadow: 0 0 8px var(--sa-cyan, #34dbff);
 }
+
+/* ============================================================
+   Mockup field pattern — vertical-stack labels, 2-col field grid
+   (Plan 09.1-05 follow-up · 2026-05-13)
+
+   Maps:  .config-group  ≈  mockup .form-section
+          .config-row    ≈  mockup .field (vertical: label top, input bottom)
+          .config-group-kicker ≈ mockup .form-section h2
+
+   Pure CSS restyle — no HTML / JS markup changes. Old layout (horizontal
+   label-left / input-right) is fully overridden inside .settings-aurora.
+   ============================================================ */
+.settings-aurora .config-group {
+  padding: 8px 4px 16px;
+  border-left-width: 1px;
+  border-left-color: var(--sa-glass-brd);
+  background: var(--sa-glass);
+}
+.settings-aurora .config-group[data-accent] {
+  position: relative;
+}
+.settings-aurora .config-group[data-accent]::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 22px;
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+.settings-aurora .config-group[data-accent="green"]::before  { color: var(--sa-green, #4CE36C); }
+.settings-aurora .config-group[data-accent="yellow"]::before { color: var(--sa-yellow, #FFD32E); }
+.settings-aurora .config-group[data-accent="blue"]::before   { color: var(--sa-blue, #00A8FF); }
+.settings-aurora .config-group[data-accent="cyan"]::before   { color: var(--sa-cyan, #22D3EE); }
+.settings-aurora .config-group[data-accent="purple"]::before { color: var(--sa-purple, #A78BFA); }
+.settings-aurora .config-group[data-accent="orange"]::before { color: var(--sa-orange, #FF9F43); }
+.settings-aurora .config-group[data-accent]::before {
+  /* Hide on non-data-accent groups via the parent selector */
+}
+
+/* Kicker → mockup-style h2 (18px regular, not the old 9-12px uppercase) */
+.settings-aurora .config-group-kicker {
+  font-family: var(--font-title, var(--font-body), 'Space Grotesk', sans-serif);
+  font-size: 17px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: -0.005em;
+  color: var(--sa-text);
+  padding: 14px 18px 6px 34px;
+}
+
+/* Field row → vertical stack (mockup .field) */
+.settings-aurora .config-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 10px 18px 12px;
+  border-bottom: 0;
+}
+/* Multi-row content (config-row-grid, config-row-stack) keeps its existing
+   inner layout. Only the OUTER .config-row direction flips. */
+.settings-aurora .config-row .config-row-stack { flex-direction: column; }
+
+/* Label → small mono uppercase (mockup .field label) */
+.settings-aurora .config-row-label {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 10.5px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--sa-text-dim, rgba(232, 234, 240, .55));
+  white-space: normal;
+  word-break: normal;
+  margin: 0;
+}
+
+/* Inputs/selects/textareas → full-width with mockup glass styling */
+.settings-aurora .config-row .config-input,
+.settings-aurora .config-row .config-select,
+.settings-aurora .config-row input[type="text"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="number"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="email"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="password"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="datetime-local"]:not(.sa-no-aurora),
+.settings-aurora .config-row textarea:not(.sa-no-aurora),
+.settings-aurora .config-row select:not(.sa-no-aurora) {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(5, 10, 22, .5);
+  border: 1px solid var(--sa-glass-brd-hot, var(--sa-glass-brd));
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 13px;
+  color: var(--sa-text);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.settings-aurora .config-row .config-input:focus,
+.settings-aurora .config-row .config-select:focus,
+.settings-aurora .config-row input:focus,
+.settings-aurora .config-row textarea:focus,
+.settings-aurora .config-row select:focus {
+  outline: 0;
+  border-color: rgba(52, 219, 255, .6);
+  background: rgba(5, 10, 22, .7);
+  box-shadow: 0 0 0 3px rgba(52, 219, 255, .15);
+}
+
+/* Right-aligned values (read-only strong labels like "15 Minuten") */
+.settings-aurora .config-row-value {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: var(--sa-text);
+  font-size: 13px;
+  align-self: flex-start;
+}
+
+/* Checkbox rows: keep horizontal label+control alignment (no point in stacking
+   a 16px checkbox below its label). Detect via the checkbox child. */
+.settings-aurora .config-row:has(> input[type="checkbox"]),
+.settings-aurora .config-row:has(> .config-row-stack > input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-aurora .config-row:has(> input[type="checkbox"]) .config-row-label,
+.settings-aurora .config-row:has(> .config-row-stack > input[type="checkbox"]) .config-row-label {
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--font-body, system-ui, sans-serif);
+  color: var(--sa-text);
+}
+
+/* svc-meta paragraphs inside groups → mockup .sub style */
+.settings-aurora .config-group .svc-meta,
+.settings-aurora .config-group .svc-meta-tight {
+  padding: 0 18px;
+  font-size: 12px;
+  color: var(--sa-text-dim, rgba(232, 234, 240, .55));
+  margin: 2px 0 6px;
+  line-height: 1.5;
+}
+.settings-aurora .config-group .svc-meta-tight { font-size: 11px; margin-top: -2px; }
+
+/* Action rows: keep horizontal, but more breathing room */
+.settings-aurora .config-group .svc-actions-row,
+.settings-aurora .config-group .svc-actions-row-center {
+  padding: 8px 18px 4px;
+  gap: 8px;
+}
+
+/* Multi-col field-grid pattern: when a config-group has a 2-col grid wrapper
+   (.config-row-grid), use mockup .field-grid columns. */
+.settings-aurora .config-row-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+  padding: 0;
+}
+@media (max-width: 680px) {
+  .settings-aurora .config-row-grid { grid-template-columns: 1fr; }
+}
+.settings-aurora .config-row-grid .config-row {
+  border-right: 0 !important;
+}
