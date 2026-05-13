@@ -2363,10 +2363,11 @@ body.dv-modal-open {
   border-color: rgba(52, 219, 255, .55);
 }
 .settings-aurora .config-row input[type="checkbox"]:checked::after {
-  /* 40px inside-width − 16px dot − 2px right-margin = 22px from left */
-  left: 22px;
+  /* 40px inside-width − 16px dot − 4px right-margin = 20px from left.
+     No box-shadow on the dot — Apple's iOS native toggle has none, and
+     any glow would extend past the pill edge (user feedback). */
+  left: 20px;
   background: var(--sa-cyan, #34dbff);
-  box-shadow: 0 0 6px rgba(52, 219, 255, .65);
 }
 .settings-aurora .config-row input[type="checkbox"]:focus-visible {
   outline: 0;
