@@ -2258,10 +2258,10 @@ body.dv-modal-open {
 
 /* Card padding + breathing room (mockup .form-section { padding: 24px }) */
 .settings-aurora .config-group {
-  padding: 6px 0 18px;
+  padding: 2px 0 10px;
 }
 .settings-aurora .config-group + .config-group {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 .settings-aurora .config-group:hover {
   border-color: rgba(120, 180, 255, .25);
@@ -2270,50 +2270,62 @@ body.dv-modal-open {
 
 /* Kicker becomes a proper h2 with bottom-divider (mockup .form-section h2) */
 .settings-aurora .config-group-kicker {
-  padding: 14px 24px 14px 34px;
-  margin-bottom: 8px;
+  padding: 10px 24px 10px 34px;
+  margin-bottom: 4px;
   border-bottom: 1px solid var(--sa-glass-brd);
 }
 .settings-aurora .config-group[data-accent]::before {
   left: 20px;
-  top: 24px;
+  top: 19px;
 }
 
-/* Rows: align padding with the card's 24px gutter */
+/* Rows: tight stacking (user feedback: "spacing kleiner und näher zusammen") */
 .settings-aurora .config-row {
-  padding: 10px 24px 14px;
-  gap: 8px;
+  padding: 4px 24px 6px;
+  gap: 3px;
 }
 .settings-aurora .config-row-grid {
   padding: 0 24px;
-  gap: 4px 20px;
+  gap: 0 16px;
 }
 .settings-aurora .config-row-grid .config-row {
   padding-left: 0;
   padding-right: 0;
 }
 
-/* Hint text (.svc-meta-tight) tucks directly under the preceding row,
-   not as a free-standing paragraph. Matches mockup .field .hint. */
+/* Tighten input padding too */
+.settings-aurora .config-row .config-input,
+.settings-aurora .config-row .config-select,
+.settings-aurora .config-row input[type="text"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="number"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="email"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="password"]:not(.sa-no-aurora),
+.settings-aurora .config-row input[type="datetime-local"]:not(.sa-no-aurora),
+.settings-aurora .config-row textarea:not(.sa-no-aurora),
+.settings-aurora .config-row select:not(.sa-no-aurora) {
+  padding: 7px 10px;
+}
+
+/* Hint text (.svc-meta-tight): tucked tight under the preceding row */
 .settings-aurora .config-group .svc-meta-tight {
-  padding: 0 24px 10px;
-  margin: -10px 0 0;
+  padding: 0 24px 4px;
+  margin: -2px 0 0;
   font-size: 11px;
   color: var(--sa-text-dim, rgba(232, 234, 240, .55));
-  line-height: 1.45;
+  line-height: 1.4;
 }
 .settings-aurora .config-group .svc-meta {
-  padding: 4px 24px 8px;
-  font-size: 12.5px;
+  padding: 2px 24px 4px;
+  font-size: 12px;
   color: var(--sa-text-dim, rgba(232, 234, 240, .6));
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 /* Action rows (buttons inside groups): match card gutter */
 .settings-aurora .config-group .svc-actions-row,
 .settings-aurora .config-group .svc-actions-row-center {
-  padding: 12px 24px 4px;
-  gap: 10px;
+  padding: 8px 24px 4px;
+  gap: 8px;
 }
 
 /* iOS-style pill toggle (mockup .toggle pattern, applied directly to the
