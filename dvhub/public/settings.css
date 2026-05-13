@@ -2200,7 +2200,7 @@ body.dv-modal-open {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 24px;
 }
 .settings-aurora .config-row:has(> input[type="checkbox"]) .config-row-label,
 .settings-aurora .config-row:has(> .config-row-stack > input[type="checkbox"]) .config-row-label {
@@ -2329,12 +2329,15 @@ body.dv-modal-open {
 }
 
 /* iOS-style pill toggle (mockup .toggle pattern, applied directly to the
-   native <input type="checkbox">). Renders 42×24 pill with sliding 18px dot. */
+   native <input type="checkbox">). Renders 44×24 pill with sliding 16px dot.
+   box-sizing:content-box forces deterministic geometry independent of any
+   reset stylesheet that might set border-box globally. */
 .settings-aurora .config-row input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
-  width: 42px;
-  height: 24px;
+  box-sizing: content-box;
+  width: 40px;
+  height: 20px;
   background: rgba(5, 10, 22, .55);
   border: 1px solid var(--sa-glass-brd-hot, rgba(120, 180, 255, .22));
   border-radius: 99px;
@@ -2349,8 +2352,8 @@ body.dv-modal-open {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--sa-text-dim, rgba(232, 234, 240, .55));
   transition: left .2s, background .2s, box-shadow .2s;
@@ -2360,9 +2363,10 @@ body.dv-modal-open {
   border-color: rgba(52, 219, 255, .55);
 }
 .settings-aurora .config-row input[type="checkbox"]:checked::after {
-  left: 20px;
+  /* 40px inside-width − 16px dot − 2px right-margin = 22px from left */
+  left: 22px;
   background: var(--sa-cyan, #34dbff);
-  box-shadow: 0 0 8px rgba(52, 219, 255, .8);
+  box-shadow: 0 0 6px rgba(52, 219, 255, .65);
 }
 .settings-aurora .config-row input[type="checkbox"]:focus-visible {
   outline: 0;
