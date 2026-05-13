@@ -177,14 +177,13 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
       const button = page.locator(`button.settings-tab[data-tab="${t}"]`);
       await expect(button, `tab button for "${t}" must be attached`).toBeAttached();
     }
-    // Stacked-sections layout (mockup port 2026-05-13): all panels are always
-    // visible. Nav-rail click does scrollIntoView + sets .is-active. Assert
-    // the panel exists, isn't hidden, and click sets is-active on its button.
+    // Subpage-style nav (mockup port follow-up 2026-05-13): clicking a rail
+    // item hides the others and shows only the target panel.
     for (const t of tabs) {
-      const panelHidden = await page.locator(`#tab-${t}`).evaluate((el) => el.hidden);
-      expect(panelHidden, `panel #tab-${t} must always be visible in stacked layout`).toBe(false);
       await page.locator(`button.settings-tab[data-tab="${t}"]`).click();
       await page.waitForTimeout(50);
+      const panelHidden = await page.locator(`#tab-${t}`).evaluate((el) => el.hidden);
+      expect(panelHidden, `panel #tab-${t} must be visible after clicking its tab`).toBe(false);
       const isActive = await page.locator(`button.settings-tab[data-tab="${t}"]`).evaluate((el) => el.classList.contains('is-active'));
       expect(isActive, `clicked tab "${t}" must receive .is-active`).toBe(true);
     }
@@ -226,10 +225,10 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     await expect(controlTab, 'control tab anchor must survive the port').toBeAttached();
     const controlGrid = page.locator('#controlGrid');
     await expect(controlGrid, 'controlGrid mount (host of cfg_schedule_smallMarketAutomation_minSocPct) must survive the port').toBeAttached();
-    // Stacked-sections: panel is always visible. Click scrolls into view + sets active.
-    const panelHidden = await page.locator('#tab-control').evaluate((el) => el.hidden);
-    expect(panelHidden, 'control tab panel must always be visible in stacked layout').toBe(false);
+    // Subpage-style: click the control tab to switch to it before asserting.
     await controlTab.click();
+    const panelHidden = await page.locator('#tab-control').evaluate((el) => el.hidden);
+    expect(panelHidden, 'control tab panel must be visible after clicking its tab').toBe(false);
     // Soft gate: if the field generator ran (apiToken set), the
     // schedule.smallMarketAutomation.minSocPct input is emitted at
     // id="cfg_schedule_smallMarketAutomation_minSocPct" (per settings.js

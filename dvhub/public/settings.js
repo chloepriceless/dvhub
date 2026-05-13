@@ -2442,14 +2442,15 @@ function initSettingsPage() {
     }
   });
 
-  // Stacked-sections nav (mockup port · 2026-05-13).
-  // All 6 panels are visible at once. Nav-rail clicks scroll the target into
-  // view; IntersectionObserver tracks the currently-visible section to set the
-  // .is-active state. Lazy inits that used to fire on tab-click (ML, VPN,
-  // system health) now fire once at page-load since all panels render eagerly.
+  // Subpage-style nav (mockup port · 2026-05-13 follow-up).
+  // Each rail item shows ONE section ("Unterseite") at a time and hides the
+  // others — same behavior as the pre-mockup tab-switch but presented with
+  // the new left-rail sidebar + section-head + field-pattern aesthetic.
+  // Lazy inits still fire once at page-load: the panels exist in the DOM
+  // (just `hidden`), so initMlTab / initVpnTab / loadHealth can populate
+  // them eagerly without waiting for the user to click.
   const tabContainer = document.querySelector('.settings-tabs');
   if (tabContainer) {
-    // Eager-init what used to be tab-click-deferred work.
     setTimeout(function () {
       try { initMlTab(); } catch (_) {}
       try { initVpnTab(); } catch (_) {}
@@ -2470,36 +2471,20 @@ function initSettingsPage() {
       var target = tab.dataset.tab;
       document.querySelectorAll('.settings-tab').forEach(function (t) { t.classList.remove('is-active'); });
       tab.classList.add('is-active');
+      document.querySelectorAll('.settings-tab-panel').forEach(function (p) { p.hidden = true; });
       var panel = document.getElementById('tab-' + target);
-      if (panel && typeof panel.scrollIntoView === 'function') {
-        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
+      if (panel) panel.hidden = false;
+      // New "subpage" starts at the top — matches macOS System Preferences UX.
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
     });
 
-    // Active-state tracking via IntersectionObserver — picks the topmost
-    // visible panel inside the rootMargin band.
-    var tabs = Array.from(document.querySelectorAll('.settings-tab'));
-    var panels = Array.from(document.querySelectorAll('.settings-tab-panel'));
-    if ('IntersectionObserver' in window && panels.length) {
-      var io = new IntersectionObserver(function (entries) {
-        var visible = entries.filter(function (en) { return en.isIntersecting; });
-        if (!visible.length) return;
-        visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
-        var topId = visible[0].target.id.replace(/^tab-/, '');
-        tabs.forEach(function (t) { t.classList.toggle('is-active', t.dataset.tab === topId); });
-      }, { rootMargin: '-20% 0px -60% 0px', threshold: 0 });
-      panels.forEach(function (p) { io.observe(p); });
-    }
-
-    // Hash-jump on load (anchor-style)
+    // Restore tab from URL hash on load.
     var hash = location.hash.replace('#', '');
     if (hash) {
-      var panelFromHash = document.getElementById('tab-' + hash);
-      if (panelFromHash) {
-        setTimeout(function () { panelFromHash.scrollIntoView({ block: 'start' }); }, 150);
-      }
+      var tabFromHash = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
+      if (tabFromHash) tabFromHash.click();
     }
   }
 
