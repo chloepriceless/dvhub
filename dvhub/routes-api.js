@@ -698,6 +698,48 @@ export function createApiRoutes(ctx) {
   const HEALTH_CACHE_TTL_MS = 5000;
   let healthCacheEntry = null; // { payload, expiresAt }
 
+  // --- /api/history/raw 60-second LRU cache (Phase 09.2 D-14) ---
+  // Multi-key Map keyed by JSON.stringify of normalized request params (sorted
+  // sources/signals arrays). Cap 100 entries with FIFO eviction (insertion
+  // order = oldest, served by Map.keys().next().value). Cache entries are
+  // immutable payload objects; identical requests within TTL share the exact
+  // same payload (no per-request allocation). Bounded memory by both TTL and
+  // cap — cache-poisoning surface is the parameter space, gated by checkAuth
+  // (D-15: NOT in LAN_SAFE_ENDPOINTS, Bearer required from any source).
+  const RAW_CACHE_TTL_MS = 60_000;
+  const RAW_CACHE_CAP = 100;
+  const rawHistoryCache = new Map(); // insertion-ordered
+
+  // Parse an ISO-8601 timestamp string. Returns:
+  //   - null if input is falsy (param not supplied)
+  //   - false (sentinel) if input is non-empty but unparseable — the handler
+  //     uses this to return 400 instead of letting bad input reach the DB
+  //   - a normalized ISO-8601 string otherwise
+  function parseIsoOrNull(s) {
+    if (!s) return null;
+    const ts = Date.parse(s);
+    if (!Number.isFinite(ts)) return false;
+    return new Date(ts).toISOString();
+  }
+  function parseCsv(s) {
+    if (!s) return [];
+    return s.split(',').map((x) => x.trim()).filter(Boolean);
+  }
+  // Normalized cache key — sorted arrays so {sources: ['a','b']} and
+  // {sources: ['b','a']} hash identically. JSON.stringify with explicit
+  // key insertion order (object literal) keeps the key stable across
+  // engine implementations.
+  function normalizedRawCacheKey({ sources, signals, from, to, limit, cursor }) {
+    return JSON.stringify({
+      sources: [...sources].sort(),
+      signals: [...signals].sort(),
+      from: from || null,
+      to: to || null,
+      limit,
+      cursor: cursor || null,
+    });
+  }
+
   // --- Rate Limiting (in-memory, per IP) ---
   const rateLimitBuckets = new Map();
   const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -774,14 +816,38 @@ export function createApiRoutes(ctx) {
     }
   }, 300_000).unref();
 
+  // Phase 09.2 D-15 / T-09.2-AUTHZ: a small allowlist of endpoints that
+  // REQUIRE a Bearer token regardless of the LAN-trust stance. Raw-data
+  // export surfaces (rows of timeseries_samples + future CSV/Parquet
+  // streams) leak operational topology + last-sample timestamps — LAN
+  // bypass would defeat the purpose of audit logging on these reads.
+  // Every entry here is an exact-match path (handlers add `*` semantics
+  // by checking `pathname ===` or `pathname.startsWith` themselves —
+  // for the raw endpoints we intentionally keep the family explicit so
+  // misuse via path tricks like `/api/history/raw/x` falls through to
+  // 404 instead of a hidden bypass).
+  const BEARER_REQUIRED_ENDPOINTS = new Set([
+    '/api/history/raw',
+    '/api/history/raw/export.csv',
+    '/api/history/raw/export.parquet',
+  ]);
+
   function checkAuth(req, res) {
     const cfg = getCfg();
+    // Phase 09.2 D-15 hard-gate: BEARER_REQUIRED_ENDPOINTS skip the LAN
+    // bypass below. Compute pathname BEFORE the LAN check so the gate
+    // applies to every caller — LAN or external.
+    const reqPathForBearerGate = (() => {
+      try { return new URL(req.url, `http://${req.headers.host}`).pathname; }
+      catch { return req.url || ''; }
+    })();
+    const bearerOnly = BEARER_REQUIRED_ENDPOINTS.has(reqPathForBearerGate);
     // LAN-trust: any client reachable on the local subnet bypasses the token check.
     // This is the operator's explicit security stance — phones/tablets/laptops on the
     // same WLAN are trusted without having to register a token. Reverted from the
     // Phase-08-01 GET-allowlist gate. A proper user/device-registration phase is the
     // right place to tighten this further (see backlog).
-    if (isLocalNetworkRequest(req)) return true;
+    if (!bearerOnly && isLocalNetworkRequest(req)) return true;
     // Plan 08-06 Task 2 Step 3: server-side rejection of ?token= query params.
     // syncTokenFromUrl (Plan 08-03) strips ?token= on first page load — this gate
     // refuses any direct API call with a token in the URL so it cannot leak via
@@ -1772,6 +1838,132 @@ export function createApiRoutes(ctx) {
         const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
       } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- /api/history/raw — JSON pagination over timeseries_samples ---
+    // Phase 09.2 D-11..D-16. Bearer required from any source — D-15: this
+    // endpoint is NOT in LAN_SAFE_ENDPOINTS (raw telemetry exposes operational
+    // topology + last-sample timestamps; LAN-bypass would defeat the purpose).
+    // checkAuth has already run above (handleRequest line ~1390 gates every
+    // /api/* path that isn't LAN-safe). Parameterized SQL throughout — no
+    // string concat with user input. Server-side cap 10000 on limit (T-09.2-
+    // DOS-MEM). 60s LRU cache keyed by normalized params (D-14, cap 100).
+    // ORDER BY ts_utc DESC + time-range WHERE so TimescaleDB chunk-pruning
+    // bounds disk read (D-16). Cursor pagination is "go further back in time"
+    // via `s.ts_utc < $cursor` — chunk-aligned (Pitfall 5 alternative chosen).
+    if (url.pathname === '/api/history/raw' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.pool) {
+        return json(res, 503, { ok: false, error: 'db not available' });
+      }
+
+      // Parse + validate query params
+      const sources = parseCsv(url.searchParams.get('sources') || '');
+      const signals = parseCsv(url.searchParams.get('signals') || '');
+      const from = parseIsoOrNull(url.searchParams.get('from'));
+      const to = parseIsoOrNull(url.searchParams.get('to'));
+      if (from === false || to === false) {
+        return json(res, 400, { ok: false, error: 'invalid from/to timestamp (expect ISO 8601)' });
+      }
+      // Default limit when omitted is 1000. Note: `Number(null)` is 0 (not
+      // NaN), so we check the raw string presence first instead of relying on
+      // Number.isFinite to distinguish "param missing" from "param is zero".
+      const limitParamRaw = url.searchParams.get('limit');
+      const limitNum = limitParamRaw == null ? 1000 : Number(limitParamRaw);
+      const limit = Math.min(
+        10000,
+        Math.max(1, Number.isFinite(limitNum) ? Math.floor(limitNum) : 1000)
+      );
+      const cursor = parseIsoOrNull(url.searchParams.get('cursor'));
+      if (cursor === false) {
+        return json(res, 400, { ok: false, error: 'invalid cursor timestamp (expect ISO 8601)' });
+      }
+
+      // Cache check (D-14). Normalized key collapses parameter aliases
+      // (sorted arrays) so two callers with the same logical query share the
+      // same payload. LRU position refreshed on hit (delete + reinsert).
+      const cacheKey = normalizedRawCacheKey({ sources, signals, from, to, limit, cursor });
+      const now = Date.now();
+      const cached = rawHistoryCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        rawHistoryCache.delete(cacheKey);
+        rawHistoryCache.set(cacheKey, cached);
+        return json(res, 200, cached.payload);
+      }
+
+      // Build parameterized SQL — every user-controllable value bound via $N.
+      // ANY($N::text[]) for sources/signals so injection payloads land as
+      // single text array elements, never as SQL syntax. No string concat
+      // with caller input anywhere in the builder (T-09.2-INJ).
+      const params = [];
+      let p = 0;
+      const parts = [];
+      parts.push('SELECT s.ts_utc, s.series_key, s.value_num, s.unit FROM timeseries_samples s');
+      if (sources.length) {
+        parts.push('JOIN series_metadata m ON s.series_key = m.series_key');
+        parts.push(`WHERE m.source = ANY($${++p}::text[])`);
+        params.push(sources);
+      } else {
+        parts.push('WHERE 1 = 1');
+      }
+      if (signals.length) {
+        parts.push(`AND s.series_key = ANY($${++p}::text[])`);
+        params.push(signals);
+      }
+      if (from) {
+        parts.push(`AND s.ts_utc >= $${++p}::timestamptz`);
+        params.push(from);
+      }
+      if (to) {
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(to);
+      }
+      if (cursor) {
+        // Pagination cursor: walk further back in time. Strict-< guarantees
+        // no duplicate row at the page boundary (Pitfall 5 alternative —
+        // boundary timestamp belongs to exactly one page).
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(cursor);
+      }
+      // ORDER BY + LIMIT in one trailing clause so TimescaleDB chunk-pruning
+      // sees the time-range WHERE + DESC ordering and plans a chunk-bounded
+      // index scan (D-16). Without this hint the planner falls back to a
+      // full-hypertable scan on wide queries. Fetch limit+1 so we can detect
+      // whether more rows exist beyond this page (next_cursor population).
+      parts.push('ORDER BY s.ts_utc DESC');
+      parts.push(`LIMIT $${++p}`);
+      params.push(limit + 1);
+
+      const t0 = Date.now();
+      try {
+        const r = await ctx.telemetryStore.pool.query(parts.join(' '), params);
+        const hasMore = r.rows.length > limit;
+        const rawRows = hasMore ? r.rows.slice(0, limit) : r.rows;
+        const rows = rawRows.map((row) => [
+          row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
+          row.series_key,
+          row.value_num != null ? Number(row.value_num) : null,
+          row.unit || null,
+        ]);
+        const nextCursor = hasMore && rows.length ? rows[rows.length - 1][0] : null;
+        const payload = {
+          ok: true,
+          rows,
+          next_cursor: nextCursor,
+          total: rows.length,
+          query_ms: Date.now() - t0,
+        };
+        // Cache write + FIFO eviction at cap (D-14). Map.keys().next().value
+        // returns the oldest insertion since Map preserves insertion order.
+        rawHistoryCache.set(cacheKey, { payload, expiresAt: now + RAW_CACHE_TTL_MS });
+        while (rawHistoryCache.size > RAW_CACHE_CAP) {
+          const firstKey = rawHistoryCache.keys().next().value;
+          rawHistoryCache.delete(firstKey);
+        }
+        return json(res, 200, payload);
+      } catch (e) {
+        pushLog('history_raw_error', { error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
     }
