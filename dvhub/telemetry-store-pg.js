@@ -893,11 +893,15 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         AND resolution_seconds <= $${keys.length + 3}
       ORDER BY ts_utc ASC, resolution_seconds ASC
     `, [...keys, isoTimestamp(start), isoTimestamp(end), maxResolution]);
-    // Deduplicate: prefer smallest resolution per (key, 15min bucket)
+    // Deduplicate by (series_key, per-row-resolution bucket) — fine-grain rows
+    // get fine-grain buckets so granular queries (5s/10s/15s/30s/1min/5min)
+    // return all samples, not just 1-per-15min. Cap at 900s so coarse rollups
+    // (1h/day) still collapse to a 15min window.
     const seen = new Map();
     const rows = [];
     for (const row of result.rows) {
-      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, 900)}`;
+      const bucketSec = Math.min(Number(row.resolution_seconds) || 900, 900);
+      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, bucketSec)}`;
       if (!seen.has(bucket)) {
         seen.set(bucket, true);
         rows.push({

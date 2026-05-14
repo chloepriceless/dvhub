@@ -176,8 +176,13 @@ export const SECURITY_HEADERS = {
 export const MAX_GRID_SETPOINT_W = 100_000;
 export const MAX_MINSOC_PCT = 100;
 // /api/telemetry/series cap — (endMs-startMs)/stepMs * seriesCount must stay below this
-// to protect the Pi from range-explosion DoS queries.
-export const MAX_TELEMETRY_SCAN_SLOTS = 50_000;
+// to protect the Pi from range-explosion DoS queries. Raised from 50k to 1.5M so
+// granular Explorer queries up to 5s × ~17d × 5 keys (or 10s × 30d × 5 keys)
+// complete in one round-trip. Larger ranges fall back to chunked day-by-day
+// fetches on the client (CSV export path) which never exceed this per request.
+// TimescaleDB hypertable + (series_key, ts_utc) index makes 1.5M-row scans
+// sub-second on the production Pi.
+export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
 // /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
 // and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
