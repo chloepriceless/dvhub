@@ -220,8 +220,16 @@ function renderKpis(summary) {
   const dvView = String(summary?.view || '');
   const dvVisible = (dvView === 'month' || dvView === 'year')
     && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
+  // Plan 08-11 refactored the original inline style="display:none" to a
+  // .history-dv-card-hidden utility class. The pre-existing
+  // `style.display = ''` clear-pattern only removes inline values — it
+  // can't override a class rule — so we must also toggle the class to
+  // actually show the card on month/year views.
   const dvCard = document.getElementById('historyDvCard');
-  if (dvCard) dvCard.style.display = dvVisible ? '' : 'none';
+  if (dvCard) {
+    dvCard.classList.toggle('history-dv-card-hidden', !dvVisible);
+    dvCard.style.display = '';
+  }
 
   if (dvVisible) {
     // Einspeisevergütung durch Direktvermarktung (Spot + Marktprämie)
