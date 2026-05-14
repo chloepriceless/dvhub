@@ -63,6 +63,10 @@ export function createEpexFetcher(ctx) {
     const day = berlinDateString(new Date(), cfg.epex.timezone);
     const day2 = addDays(day, 1);
     const bzn = cfg.epex.bzn || 'DE-LU';
+    // Phase 09.2 D-04: outer-boundary timer for health-tracker. EPEX cadence
+    // is hours, so ms-granularity (Date.now) is more than enough. Captured
+    // here so the failure path can also report wall-clock latency.
+    const __t0 = Date.now();
     try {
       let data = null;
       try {
@@ -82,11 +86,27 @@ export function createEpexFetcher(ctx) {
         resolutionSeconds: 3600
       })));
       pushLog('epex_refresh_ok', { count: data.length });
+      // Phase 09.2 D-04: record a successful EPEX fetch sample. Optional
+      // chaining for the same boot-race reason as polling.js — initial
+      // fetchEpexDay() can fire before telemetryReady IIFE completes and
+      // assigns ctx.healthTracker.
+      ctx.healthTracker?.recordSample('epex', {
+        latencyMs: Date.now() - __t0,
+        success: true
+      });
     } catch (e) {
       state.epex.ok = false;
       state.epex.error = e.message;
       state.epex.updatedAt = Date.now();
       pushLog('epex_refresh_err', { error: e.message });
+      // Phase 09.2 D-04: record a failed EPEX fetch sample at the outer
+      // boundary so partial / fallback failures still produce one sample
+      // per attempt (matches the recordSample-per-cycle cadence used by
+      // polling.js and the mqtt publisher).
+      ctx.healthTracker?.recordSample('epex', {
+        latencyMs: Date.now() - __t0,
+        success: false
+      });
     }
     // Defensive: ctx.publishRuntimeSnapshot is wired up in server.js init order
     // AFTER createEpexFetcher() runs (it's assigned to ctx around server.js:1090).

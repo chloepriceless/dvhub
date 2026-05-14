@@ -298,6 +298,15 @@ export function createPoller(ctx) {
       try {
         const durationSec = Number(process.hrtime.bigint() - __pollStart) / 1e9;
         meterPollDurationSeconds.set(durationSec);
+        // Phase 09.2 D-04: record a successful Victron poll sample for the
+        // health tracker. Optional chaining defends against the boot-race
+        // window where pollMeter fires before ctx.healthTracker is assigned
+        // (telemetryReady IIFE in server.js); also tolerates the case where
+        // db init failed and the tracker was never wired.
+        ctx.healthTracker?.recordSample('victron', {
+          latencyMs: Math.round(durationSec * 1000),
+          success: true
+        });
       } catch { /* metrics must never break the poll cycle */ }
     } catch (e) {
       state.meter.ok = false;
@@ -310,7 +319,16 @@ export function createPoller(ctx) {
       // in the plan's must_haves.truths block.
       state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
       // Plan 09-06 (D-06): error — increment the counter.
-      try { meterPollErrorsTotal.inc(); } catch { /* metrics must never break the poll cycle */ }
+      try {
+        meterPollErrorsTotal.inc();
+        // Phase 09.2 D-04: record a failed Victron poll sample. Latency is
+        // captured from the same __pollStart so error-path timing is honest
+        // (a slow timeout shows up as elevated latency, not zero).
+        ctx.healthTracker?.recordSample('victron', {
+          latencyMs: Number(process.hrtime.bigint() - __pollStart) / 1e6,
+          success: false
+        });
+      } catch { /* metrics must never break the poll cycle */ }
     }
 
     await Promise.all([

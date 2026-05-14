@@ -44,6 +44,11 @@ export function createMqttPublisher(hub, ctx) {
    * Called every publishIntervalMs by the interval timer.
    */
   function publishOnce() {
+    // Phase 09.2 D-04: outer-boundary timer for the bridge's own publish-cycle
+    // health sample. One recordSample per publishOnce — NOT per topic — so
+    // the latencyMs ring buffer (cap 60) reflects ~5min of cycles, not
+    // ~5s of per-topic noise.
+    const __t0 = Date.now();
     const prefix = getPrefix();
     const topics = [];
 
@@ -88,6 +93,14 @@ export function createMqttPublisher(hub, ctx) {
     pub('energy/revenue_eur', state.energy?.revenueEur ?? 0);
 
     lastTopicCount = topics.length;
+    // Phase 09.2 D-04: track the bridge's own publish-cycle health.
+    // Healthy = hub is connected; per-topic samples would flood the ring-buffer.
+    // Optional chaining guards the boot-race window before the
+    // telemetryReady IIFE in server.js wires ctx.healthTracker.
+    ctx.healthTracker?.recordSample('mqtt', {
+      latencyMs: Date.now() - __t0,
+      success: hub.connected
+    });
   }
 
   async function start() {
