@@ -117,6 +117,14 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 /* D-22 — offline banner removed (08-11): LAN-only app, no SW, no offline banner */
 .msg-text-empty{color:rgba(255,255,255,0.4)}
 
+/* msg-history overlay utilities (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces inline style="..." in family.js msgHistory builders) */
+.msg-history-loading{justify-content:center;color:rgba(255,255,255,0.3)}
+.msg-history-empty{text-align:center;padding:32px 16px}
+.msg-history-empty-title{font-size:18px;font-weight:700;margin-bottom:8px}
+.msg-history-empty-sub{font-size:13px;color:rgba(255,255,255,0.4)}
+.msg-history-error{color:rgba(255,123,114,0.7)}
+
 .bot{position:absolute;bottom:0;left:0;right:0;z-index:25;padding:0 20px 16px;pointer-events:none}
 .glass{max-width:920px;margin:0 auto;background:rgba(8,10,16,.5);backdrop-filter:blur(40px) saturate(1.4);-webkit-backdrop-filter:blur(40px) saturate(1.4);border:1px solid rgba(255,255,255,.06);border-radius:20px;padding:14px 20px;animation:fadeIn .7s ease .5s backwards;pointer-events:auto;position:relative}
 .slots{display:flex;align-items:stretch;gap:0;width:100%}

@@ -83,8 +83,12 @@
     document.getElementById('p-title').style.color = d.color;
     document.getElementById('p-sub').innerHTML = d.sub;
     document.getElementById('p-summary').innerHTML = d.summary;
-    var sh = ''; d.stats.forEach(function (s) { sh += '<div class="stat-card"><div class="stat-label">' + s.label + '</div><div class="stat-val" style="color:' + d.color + '">' + s.val + '</div><div class="stat-delta ' + (s.up ? 'up' : 'down') + '">' + s.delta + '</div></div>'; });
+    var sh = ''; d.stats.forEach(function (s) { sh += '<div class="stat-card"><div class="stat-label">' + s.label + '</div><div class="stat-val">' + s.val + '</div><div class="stat-delta ' + (s.up ? 'up' : 'down') + '">' + s.delta + '</div></div>'; });
     document.getElementById('p-stats').innerHTML = sh;
+    // CSP-safe: set per-stat colors after innerHTML (style="..." in innerHTML
+    // is parsed-as-HTML and blocked by style-src without 'unsafe-inline').
+    var pStatVals = document.getElementById('p-stats').querySelectorAll('.stat-val');
+    for (var siv = 0; siv < pStatVals.length; siv++) { pStatVals[siv].style.color = d.color; }
     var dh = ''; d.details.forEach(function (r) { dh += '<div class="detail-row"><span class="detail-key">' + r[0] + '</span><span class="detail-val">' + r[1] + '</span></div>'; });
     document.getElementById('p-details').innerHTML = dh;
     var api = document.getElementById('p-api'); if (d.apiHint) { api.innerHTML = d.apiHint; api.style.display = 'block'; } else { api.style.display = 'none'; }
@@ -193,7 +197,10 @@
         el.id = 'dev-card-' + d.id;
         el.setAttribute('data-panel', cardId);
         el.style.animationDelay = (i * 0.06) + 's';
-        el.innerHTML = '<div class="dev-emoji">' + d.emoji + '</div><div class="dev-name">' + d.name + '</div><div class="dev-watts" style="color:' + col + '">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar" style="width:' + barPct + '%;background:' + col + '"></div></div>';
+        el.innerHTML = '<div class="dev-emoji">' + d.emoji + '</div><div class="dev-name">' + d.name + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>';
+        el.querySelector('.dev-watts').style.color = col;
+        el.querySelector('.dev-bar').style.width = barPct + '%';
+        el.querySelector('.dev-bar').style.background = col;
         tray.appendChild(el);
         activeDevices[d.id] = el;
       } else {
@@ -534,11 +541,18 @@
       html += '<div class="slot" data-slot="' + i + '" data-metric="' + mid + '" data-action="slot-click">';
       html += '<div class="slot-edit">\u270E</div>';
       html += '<div class="slot-icon">' + m.icon + '</div>';
-      html += '<div class="slot-val" id="sv-' + i + '" style="color:' + m.color + '">--</div>';
+      html += '<div class="slot-val" id="sv-' + i + '">--</div>';
       html += '<div class="slot-label">' + m.label + '</div>';
       html += '</div>';
     }
     container.innerHTML = html;
+    // CSP-safe: set per-slot value color via property setter post-innerHTML.
+    for (var si = 0; si < count; si++) {
+      var smid = slotConfig[si] || defaultSlots[si % defaultSlots.length];
+      var sm = allMetrics[smid];
+      var sel = document.getElementById('sv-' + si);
+      if (sel && sm) sel.style.color = sm.color;
+    }
   }
 
   function toggleEdit() {
@@ -1184,7 +1198,7 @@
     var historyEl = document.getElementById('msgHistory');
     if (!overlay || !historyEl) return;
 
-    historyEl.innerHTML = '<div class="detail-row" style="justify-content:center;color:rgba(255,255,255,0.3);">Lade...</div>';
+    historyEl.innerHTML = '<div class="detail-row msg-history-loading">Lade...</div>';
     overlay.style.display = 'flex';
 
     apiFetchCompat('/api/messages/history').then(function (res) {
@@ -1194,9 +1208,9 @@
       var msgs = data && data.messages ? data.messages : [];
       if (msgs.length === 0) {
         historyEl.innerHTML =
-          '<div style="text-align:center;padding:32px 16px;">' +
-          '<div style="font-size:18px;font-weight:700;margin-bottom:8px;">Keine Nachrichten</div>' +
-          '<div style="font-size:13px;color:rgba(255,255,255,0.4);">Nachrichten erscheinen automatisch -- stuendliche Updates und Ereignisse.</div>' +
+          '<div class="msg-history-empty">' +
+          '<div class="msg-history-empty-title">Keine Nachrichten</div>' +
+          '<div class="msg-history-empty-sub">Nachrichten erscheinen automatisch -- stuendliche Updates und Ereignisse.</div>' +
           '</div>';
         return;
       }
@@ -1209,7 +1223,7 @@
           '</div>';
       }).join('');
     }).catch(function () {
-      historyEl.innerHTML = '<div class="detail-row" style="color:rgba(255,123,114,0.7);">Nachrichten konnten nicht geladen werden.</div>';
+      historyEl.innerHTML = '<div class="detail-row msg-history-error">Nachrichten konnten nicht geladen werden.</div>';
     });
   }
 
