@@ -2068,4 +2068,33 @@ if (typeof globalThis !== 'undefined') {
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__DVHUB_HISTORY_TEST__) {
   initHistoryPage();
+
+  // Live-resize: Chart.js 4.x uses ResizeObserver internally, but a handful
+  // of our 5 chart canvases live inside grid columns whose width changes
+  // only when an @media breakpoint flips (e.g. .history-kpi-row-grid going
+  // from 6 → 3 columns at 1280px). The ResizeObserver picks up the new
+  // container width on the NEXT macrotask, but Chart.js's internal
+  // _resizeFunction has a 16ms throttle that — in our config with
+  // animation:false — sometimes misses the new dimensions until the next
+  // explicit redraw. Force a .resize() on every chart 60ms after every
+  // window resize event; debounced so dragging the window doesn't fire
+  // hundreds of redraws.
+  let resizeDebounce = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      for (const chart of Object.values(historyChartInstances)) {
+        try { chart?.resize?.(); } catch (_) { /* dead chart, ignore */ }
+      }
+    }, 60);
+  });
+  // Also handle orientationchange (mobile rotation — separate event from
+  // resize on iOS Safari).
+  window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+      for (const chart of Object.values(historyChartInstances)) {
+        try { chart?.resize?.(); } catch (_) { /* */ }
+      }
+    }, 200);
+  });
 }
