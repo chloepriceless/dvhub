@@ -700,6 +700,10 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em;
 }
 
+/* Tooltip separator (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces <span style="opacity:0.4"> in app.js tooltip builder). */
+.tooltip-separator { opacity: 0.4; }
+
 /* ─── Utility classes used in markup ─── */
 .u-hidden { display:none !important; }
 .u-mt-2 { margin-top:8px; }

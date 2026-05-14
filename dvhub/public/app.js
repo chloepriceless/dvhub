@@ -1097,7 +1097,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`PV Fc: ${Number(dp.raw).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.map(p => escapeHtml(p)).join(' <span style="opacity:0.4">|</span> ');
+            tt.innerHTML = parts.map(p => escapeHtml(p)).join(' <span class="tooltip-separator">|</span> ');
             tt.style.display = 'block';
             const rect = context.chart.canvas.getBoundingClientRect();
             const x = rect.left + tip.caretX + 14;
@@ -1820,7 +1820,10 @@ function ensureLogLevelFilterUi() {
   select = document.createElement('select');
   select.id = 'log-level-filter';
   select.className = 'level-filter';
-  select.style.cssText = 'margin-bottom:6px;padding:2px 8px;font-size:0.85em;';
+  // CSP-safe: individual property setters (cssText blocked by style-src).
+  select.style.marginBottom = '6px';
+  select.style.padding = '2px 8px';
+  select.style.fontSize = '0.85em';
   const levels = [
     ['all', 'Alle Level'],
     ['debug', 'DEBUG'],
