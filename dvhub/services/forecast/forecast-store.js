@@ -327,11 +327,15 @@ export function createForecastStore(ctx) {
       WHERE fetched_at < NOW() - INTERVAL '30 days'
     `);
 
-    // Also trim old raw telemetry (high-resolution samples)
-    const telemetryResult = await pool.query(`
-      DELETE FROM timeseries_samples
-      WHERE resolution_seconds <= 15 AND ts_utc < NOW() - INTERVAL '30 days'
-    `);
+    // Skip the timeseries_samples DELETE — migration 018 (2026-05-14)
+    // removed the 45-day Timescale retention policy because PV-Anlagen-
+    // Lebenszeit-Tracking requires granular 5s data over 25+ years. With
+    // compression at 7 days (~50 KB/week, 24,000:1 ratio) keeping data
+    // forever is practically free. Disk-pressure deletes here would race
+    // the migration intent. If real disk pressure ever hits, re-apply
+    // add_retention_policy('timeseries_samples', drop_after => INTERVAL
+    // '<X> days') from psql, or wire this DELETE behind a config flag.
+    const telemetryResult = { rowCount: 0 };
 
     const deleted = {
       weather_rows: weatherResult.rowCount,
