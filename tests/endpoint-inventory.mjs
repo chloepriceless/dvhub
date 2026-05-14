@@ -34,7 +34,14 @@ const BASELINE = join(repoRoot, 'tests', 'endpoint-baseline.json');
 // or whitespace. (Deviation Rule 3: plan-spec regex matched only raw `fetch(`,
 // but production code uses apiFetch() in ≥90% of call sites — a literal port
 // would yield a 0-URL baseline and a useless gate. See SUMMARY.md.)
-const FETCH_RE = /[Ff]etch\s*\(\s*['"`](\/(?:api|auth)\/[^'"`${}\s]+)/g;
+//
+// Phase 09.2-09 extension: also match downloadServerExport(`/api/...`) — the
+// canonical Bearer-protected file-download helper introduced in Plan 09.2-07
+// (Pattern A — apiFetch + Blob + a.click). The Plan 09.2-07/08 explorer
+// invocations use template literals with `${params.toString()}` interpolation,
+// so the captured path includes the trailing `?` (matches the existing baseline
+// pattern for /api/history/export?view= etc.).
+const FETCH_RE = /(?:[Ff]etch|downloadServerExport)\s*\(\s*['"`](\/(?:api|auth)\/[^'"`${}\s]+)/g;
 
 function extract() {
   const urls = new Set();

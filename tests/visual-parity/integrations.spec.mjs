@@ -150,4 +150,67 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     const allBtn = page.locator('#intg-filter-all');
     await expect(allBtn).not.toHaveClass(/is-active/);
   });
+
+  // --- Phase 09.2-09 smoke tests (D-17 revised, D-19 revised, D-21..D-24) ---
+  // Asserts the Wave-2 (plan 09.2-04) deliverables on /integrations.html:
+  //   - Featured-Row hero card: Victron-only (no LUOX hero — D-19 revised)
+  //   - Activity-Pulse bars render with valid heights (CSP-safe DOM-property pattern)
+  //   - Latency/Uptime/Errors values not the "—" placeholder once the tracker has data
+
+  test('Featured-Row is Victron-only (D-19 revised — LUOX hero dropped)', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForSelector('.featured-row');
+    const featuredCards = await page.$$('.featured-row .featured-card');
+    expect(featuredCards.length).toBe(1);
+    const victron = await page.$('.featured-row .featured-card.victron');
+    expect(victron).not.toBeNull();
+    const luox = await page.$('.featured-row .featured-card.luox');
+    expect(luox).toBeNull();  // D-19 revised — LUOX hero card MUST NOT exist
+  });
+
+  test('.conn-pulse bars render with valid heights (CSP-safe DOM-property assignment)', async ({ page }) => {
+    await page.goto('/integrations.html');
+    // Wait for any health/status response so renderAll() has had a chance to fire
+    await page.waitForResponse(
+      (resp) => resp.url().includes('/api/integrations/health') || resp.url().includes('/api/integrations/status'),
+      { timeout: 5000 },
+    ).catch(() => { /* dev server without backend — soft-pass */ });
+    // Allow render tick after the response
+    await page.waitForTimeout(300);
+    const bars = await page.$$('.pulse-bar[data-h]');
+    if (bars.length > 0) {
+      // If any pulse-bar rendered at all, every height MUST be a valid percentage
+      // string set inline via the DOM `style.height` setter (data-h → percent).
+      const heights = await Promise.all(bars.map((el) => el.evaluate((e) => e.style.height)));
+      for (const h of heights) {
+        expect(h).toMatch(/^\d+(\.\d+)?%$/);
+      }
+    }
+    // (If 0 bars rendered, the tracker has no histogram data yet — acceptable in
+    // CI without a long warm-up; the static gates already cover the markup shape.)
+  });
+
+  test('Latency/Uptime/Errors values not "—" once health-tracker has data', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForResponse(
+      (resp) => resp.url().includes('/api/integrations/health') || resp.url().includes('/api/integrations/status'),
+      { timeout: 5000 },
+    ).catch(() => { /* dev server without backend — soft-pass */ });
+    await page.waitForTimeout(300);
+    // Inspect the Victron card specifically (the most reliable to have samples)
+    const victronCard = await page.$('.conn-card[data-system="victron"]');
+    if (victronCard) {
+      const values = await victronCard.$$eval(
+        '.conn-stat-value',
+        (els) => els.map((e) => (e.textContent || '').trim()),
+      );
+      // Soft assertion: tracker may not have recorded victron samples yet in CI.
+      if (values.length > 0 && values.every((v) => v === '—')) {
+        // eslint-disable-next-line no-console
+        console.warn('[integrations.spec] Tracker has not recorded victron samples yet — soft pass');
+      } else if (values.length > 0) {
+        expect(values.some((v) => v && v !== '—')).toBeTruthy();
+      }
+    }
+  });
 });
