@@ -413,10 +413,11 @@
 /* DV-Einspeisevergütung card */
 .history-dv-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--flow-border);
   margin-top: 10px;
 }
+.history-dv-grid > * { min-width: 0; }
 @media (max-width: 1100px) {
   .history-dv-grid { grid-template-columns: repeat(2, 1fr); }
   .history-dv-section + .history-dv-section { border-left: none; }
@@ -561,6 +562,12 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+.history-chart-grid > * { min-width: 0; }
+/* Global overflow guard for the whole page-content area — prevents any
+   stray wide child (long unbreakable number, oversized chart canvas,
+   unwrapped <pre> in the rows table) from pushing the body wider than
+   the viewport. */
+.history-page-content { min-width: 0; overflow-x: hidden; }
 
 .history-chart-grid-aggregated { grid-template-columns: minmax(0, 1fr); }
 
@@ -570,6 +577,8 @@
 
 .history-chart-shell {
   min-height: 220px;
+  min-width: 0; /* Chart.js sets pixel-width on <canvas>; without this the
+                   grid column refuses to shrink past the chart's render width */
   display: grid;
   align-content: start;
   border-radius: 12px;
@@ -580,6 +589,15 @@
   color: var(--text-soft);
   text-align: left;
   padding: 12px;
+  overflow: hidden;
+}
+/* Chart.js mounts the <canvas> as a direct child of .history-chart-shell.
+   Force it to width:100% so it shrinks with the column instead of forcing
+   the column wider. Chart.js will still set its internal device pixels
+   based on the actual element size after responsive=true kicks in. */
+.history-chart-shell > canvas {
+  max-width: 100% !important;
+  height: auto !important;
 }
 
 .history-aggregate-mode {
@@ -1566,10 +1584,14 @@
 
 .history-kpi-row-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 10px;
 }
+/* Grid children get min-width:0 explicitly so long numbers / wide content
+   don't force the column wider than its allocated 1fr share (default
+   min-width:auto = content-driven, defeats fr units). */
+.history-kpi-row-grid > * { min-width: 0; }
 
 .history-card-kpi {
   padding: 2px 14px;
