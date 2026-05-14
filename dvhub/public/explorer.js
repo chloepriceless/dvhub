@@ -612,13 +612,36 @@ function initExplorer() {
   document.getElementById('explorerStart').value = fmtDate(addDays(new Date(), -7));
   document.getElementById('explorerEnd').value = today;
 
+  // initialFetchDone gate keeps the auto-fetch listeners below from firing
+  // during initExplorer's own auto-load (which runs at the bottom). Once the
+  // initial load completes, subsequent .value changes (from pill clicks)
+  // re-fetch automatically — so picking 5s / 10s / etc. immediately re-loads
+  // the chart instead of waiting for "Abfrage starten".
+  let initialFetchDone = false;
+  let autoFetchDebounce = null;
+  function scheduleAutoFetch() {
+    if (!initialFetchDone) return;
+    clearTimeout(autoFetchDebounce);
+    autoFetchDebounce = setTimeout(() => fetchExplorerData(), 180);
+  }
+
   rangeSelect.addEventListener('change', () => {
     const isCustom = rangeSelect.value === 'custom';
     customStart.classList.toggle('u-hidden', !isCustom);
     customEnd.classList.toggle('u-hidden', !isCustom);
+    // Custom range needs operator to fill the date pickers first; do NOT
+    // auto-fetch on the 'custom' value itself. All other range values
+    // (24h, 7d, 30d, today, yesterday) trigger an immediate reload.
+    if (!isCustom) scheduleAutoFetch();
   });
 
-  // Wire all pill-groups (range, aggregation)
+  // Aggregation change always auto-fetches — picking 5s / 1min / etc. should
+  // immediately re-query at the new resolution. Without this, the user has
+  // to click "Abfrage starten" after every pill click, which is unexpected.
+  document.getElementById('explorerAgg').addEventListener('change', scheduleAutoFetch);
+
+  // Wire all pill-groups (range, aggregation). The pill click dispatches a
+  // 'change' event on the hidden <select>, which the listeners above handle.
   document.querySelectorAll('.timerange-pills[data-pill-target]').forEach(wirePillGroup);
 
   // Wire signal-list checkboxes via event delegation (CSP-clean)
@@ -653,9 +676,13 @@ function initExplorer() {
   renderSignalList();
   renderRawTable(); // empty initial state
 
-  // Auto-load 24h on page load
+  // Auto-load 24h on page load. The initialFetchDone flag flips AFTER the
+  // initial fetch settles so the change-listeners we registered above don't
+  // fire a duplicate request during init (rangeSelect.value = '24h' below
+  // dispatches no change event since it's a programmatic assignment, but
+  // we set the flag after to be defensive).
   rangeSelect.value = '24h';
-  fetchExplorerData();
+  fetchExplorerData().finally(() => { initialFetchDone = true; });
 }
 
 if (document.readyState === 'loading') {
