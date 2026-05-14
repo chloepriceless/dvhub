@@ -14,9 +14,14 @@
 [hidden] { display: none !important; }
 
 /* ===== Page layout shell ===== */
+/* Explorer is data-heavy — chart paint quality scales with horizontal pixels,
+   so we expand the content area on wide viewports while still respecting
+   reading-line-length on narrow screens. 96vw leaves a thin breathing margin
+   (~2% per side) on wide monitors; the 1800px cap prevents pathologically
+   wide chart aspect ratios on ultrawide screens. */
 .page-content {
   padding: 16px 24px;
-  max-width: min(1400px, 100%);
+  max-width: min(1800px, 96vw);
   margin: 0 auto;
   box-sizing: border-box;
 }
@@ -330,7 +335,13 @@
 .explorer-chart-wrap {
   position: relative;
   width: 100%;
-  height: 420px;
+  height: 520px;
+}
+/* On tall viewports give the chart more vertical breathing room — wide
+   monitors typically have more horizontal than vertical density so the
+   chart aspect ratio can flatten otherwise. */
+@media (min-height: 900px) {
+  .explorer-chart-wrap { height: 600px; }
 }
 
 /* ===== Raw data section ===== */
