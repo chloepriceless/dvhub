@@ -117,6 +117,11 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 /* D-22 — offline banner removed (08-11): LAN-only app, no SW, no offline banner */
 .msg-text-empty{color:rgba(255,255,255,0.4)}
 
+/* Flow-particle dash animation — was runtime-injected by family.js as
+   <style>@keyframes fd{...}</style> before Plan 09.1-07 Task 3.
+   Moved here so CSP style-src can drop 'unsafe-inline'. */
+@keyframes fd { to { stroke-dashoffset: -50; } }
+
 /* msg-history overlay utilities (Plan 09.1-07 Task 3 — CSP cleanup,
    replaces inline style="..." in family.js msgHistory builders) */
 .msg-history-loading{justify-content:center;color:rgba(255,255,255,0.3)}

@@ -481,7 +481,8 @@
   setTimeout(repositionFlows, 500);
   setTimeout(repositionFlows, 1500);
   window.addEventListener('resize', function () { repositionFlows(); positionTray(); renderSlots(); updateSlotValues(); });
-  var sty = document.createElement('style'); sty.textContent = '@keyframes fd{to{stroke-dashoffset:-50}}'; document.head.appendChild(sty);
+  // @keyframes fd moved to family.css (Plan 09.1-07 Task 3 — runtime-injected
+  // <style> elements are blocked by style-src-elem without 'unsafe-inline').
 
   function positionTray() {
     var glass = document.querySelector('.glass');

@@ -123,9 +123,11 @@ export { metricsRegistry };
 //   - Strict-Transport-Security: 1 year, includeSubDomains (preload deferred).
 //   - script-src: pinned to swagger-ui-dist@5.11.0 and leaflet@1.9.4 paths
 //     (no more wildcard unpkg / jsdelivr reach).
-//   - style-src 'unsafe-inline' is TEMPORARILY retained until Plan 08-11
-//     removes the 399 inline `style=` attributes from the HTML pages.
-//     FLIP TO 'nonce-...' or remove entirely in 08-11.
+//   - style-src unsafe-inline token removed in Plan 09.1-07 Task 3 (wave 6).
+//     All inline style= attrs were stripped from HTML in Plan 08-11; all
+//     innerHTML/cssText-injected inline styles in JS were refactored to
+//     className-based or .style.property setters in 09.1-07 commits
+//     16f321c..0564118 (~42 sites across 7 JS files + api-docs.html).
 //   - frame-ancestors 'none', base-uri 'self', form-action 'self',
 //     object-src 'none' close CSP-level framing/form/plugin vectors.
 //
@@ -156,9 +158,13 @@ export const SECURITY_HEADERS = {
     // script-src: pinned CDN paths ONLY. swagger-ui-dist@5.11.0 for /api-docs.html,
     // leaflet@1.9.4 for the settings map overlay.
     "script-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/",
-    // style-src: 'unsafe-inline' stays until 08-11 strips the 399 inline style=
-    // attributes. After 08-11 this should become "style-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/ https://fonts.googleapis.com".
-    "style-src 'self' 'unsafe-inline' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/ https://fonts.googleapis.com",
+    // Plan 09.1-07 Task 3: unsafe-inline token removed after Aurora port stripped
+    // all inline style= attrs in HTML (Plan 08-11 phase) AND innerHTML/cssText
+    // sites in JS were refactored to className + .style.property setters
+    // (Plan 09.1-07 wave 6 commits 16f321c..0564118). Aurora design ships
+    // per-page CSS files (dvhub-app.css + family.css + history.css + ...)
+    // and one external api-docs.css — all linked, none inline.
+    "style-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/ https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://dvhub.de https://*.tile.openstreetmap.org https://unpkg.com/leaflet@1.9.4/",
     "connect-src 'self' https://api.dvhub.de",

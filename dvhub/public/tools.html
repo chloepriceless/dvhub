@@ -7,6 +7,10 @@
 </head>
 <body>
   <p>Weiterleitung nach <a href="/settings.html#system">Einstellungen / System</a>...</p>
-  <script>window.location.replace('/settings.html#system');</script>
+  <!-- 2026-05-14: redundanter inline-<script> entfernt (Plan 09.1-07 Task 3
+       CSP cleanup). Der meta http-equiv="refresh" oben übernimmt den Redirect
+       in jedem Browser — ein zusätzlicher window.location.replace() war nur
+       ein Belt-and-suspenders Fallback, der unter dem neuen script-src ohne
+       'unsafe-inline' ohnehin nicht mehr ausgeführt würde. -->
 </body>
 </html>
