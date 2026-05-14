@@ -14,7 +14,8 @@
 //  - dvhub-app.css + explorer.css ARE linked.
 //  - Mockup-fidelity layout: .explorer-grid (rail + main), .filter-card with
 //    signal-list (≥ 13 .sig-row entries — one per SERIES_DEF), pill-groups
-//    for range + agg, and raw-data-table.
+//    for range + agg. Raw-data table was removed — too much volume at
+//    5s × multi-day; CSV export now ships the full range chunked.
 //
 // Requires a dev server on http://localhost:8080.
 
@@ -167,14 +168,14 @@ test.describe('Explorer page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)',
     expect(selectVal).toBe('1h');
   });
 
-  test('raw data table scaffold present (head + body + foot)', async ({ page }) => {
+  test('status + CSV export controls live in chart head', async ({ page }) => {
     await page.goto('/explorer.html');
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('#explorerRawHead')).toBeAttached();
-    await expect(page.locator('#explorerRawBody')).toBeAttached();
-    await expect(page.locator('#explorerRawFoot')).toBeAttached();
-    const table = page.locator('#explorerRawTable.data-table');
-    await expect(table).toBeAttached();
+    await expect(page.locator('#explorerStatus')).toBeAttached();
+    await expect(page.locator('#explorerCsvBtn')).toBeAttached();
+    await expect(page.locator('#explorerResetZoomBtn')).toBeAttached();
+    // Raw-data table was removed — volume too high at 5s × multi-day.
+    await expect(page.locator('#explorerRawTable')).toHaveCount(0);
   });
 
   test('signal search input filters .sig-row entries', async ({ page }) => {

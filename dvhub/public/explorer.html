@@ -5,24 +5,25 @@
      - theme.js is the SOLE writer of localStorage['dvhub.theme']
        (AURORA-02 single-writer); explorer.js MUST NOT call setItem on
        that key.
-     - Binding contract: explorer.js binds against 12 IDs (legacy controls
-       kept as <select hidden> for explorer.js's getDateRange()/agg reads),
-       plus the new rail-driven UI:
+     - Binding contract: explorer.js binds against these IDs:
          #explorerRange (hidden <select> backing the range-pills)
          #explorerStart, #customStartWrap, #explorerEnd, #customEndWrap
          #explorerAgg (hidden <select> backing the agg-pills)
          #explorerLoadBtn  (large primary in rail)
          #explorerResetZoomBtn (in chart head)
+         #explorerCsvBtn (in chart head)
+         #explorerStatus (in chart head)
          #explorerSeriesChips  (signal-list mount in rail)
          #explorerCanvas (Chart.js mount)
-         #explorerCsvBtn (in data-section toolbar)
-         #explorerStatus (footer in data-section)
+         #explorerChartSeriesCount (count badge in chart head)
        Plus dynamic JS-injected IDs covered by extractIdsProvidedByJs():
-         #explorerRawTable, #explorerSignalSearch, #explorerSignalCount
+         #explorerSignalSearch, #explorerSignalCount
+     - Raw-data table removed (volume too high at 5s × multi-day). CSV
+       export now does its own chunked day-by-day fetch so it can ship
+       the full granular range regardless of chart state.
      - Mockup fidelity: .explorer-grid 2-col with sticky filter-rail; signal-list
        checkboxes drive explorer.js#activeSeriesIds; range/agg pills update
-       the hidden <select> values; new raw-data-table renders last N slots
-       from the existing fetch. Source-Chips (Victron/MID/LUOX/EPEX/Optim)
+       the hidden <select> values. Source-Chips (Victron/MID/LUOX/EPEX/Optim)
        are deferred to Phase 09.2 (require backend source-tagging on
        time_series rows). -->
 <html lang="de" data-theme="dark">
@@ -172,37 +173,15 @@
               <div class="chart-big-title">
                 <span class="dot dot-ok"></span>
                 <span>Verlauf · <span id="explorerChartSeriesCount">0</span> Reihen</span>
+                <span class="stat" id="explorerStatus">Bereit.</span>
               </div>
               <div class="chart-big-actions">
+                <button class="btn sm ghost" id="explorerCsvBtn" type="button">CSV Export</button>
                 <button class="btn sm ghost" id="explorerResetZoomBtn" type="button">Zoom Reset</button>
               </div>
             </div>
             <div class="explorer-chart-wrap">
               <canvas id="explorerCanvas"></canvas>
-            </div>
-          </div>
-
-          <!-- Raw data table -->
-          <div class="card data-section">
-            <div class="data-tools">
-              <span class="card-title">Rohdaten</span>
-              <span class="stat" id="explorerStatus">Bereit.</span>
-              <div class="data-tools-actions">
-                <button class="btn sm ghost" id="explorerCsvBtn" type="button">CSV Export</button>
-              </div>
-            </div>
-            <div class="scroll-tbl">
-              <table id="explorerRawTable" class="data-table">
-                <thead>
-                  <tr id="explorerRawHead">
-                    <th>Zeitpunkt</th>
-                  </tr>
-                </thead>
-                <tbody id="explorerRawBody"></tbody>
-              </table>
-            </div>
-            <div class="data-section-foot">
-              <span id="explorerRawFoot" class="u-text-muted">&mdash;</span>
             </div>
           </div>
         </section>
@@ -215,6 +194,6 @@
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/explorer.js?v=2"></script>
+  <script src="/explorer.js?v=3"></script>
 </body>
 </html>

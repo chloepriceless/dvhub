@@ -17,8 +17,6 @@ const SERIES_DEFS = [
   { id: 'selfConsKw', label: 'Eigenverbrauch',    color: '#A8F000', unit: 'kW',    axis: 'kw',  key: 'selfConsumptionKwh', toKw: true, hidden: true },
 ];
 
-const MAX_RAW_TABLE_ROWS = 500; // cap to avoid 5760-row DOM render hit; status footer reports total
-
 let explorerChart = null;
 let explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpex: null };
 const activeSeriesIds = new Set(SERIES_DEFS.filter(s => !s.hidden).map(s => s.id));
@@ -172,8 +170,7 @@ async function fetchExplorerData() {
       explorerData.rawSoc = [];
       buildGranularChartData(rows, agg);
       renderChart();
-      renderRawTable();
-      setStatus(`${rows.length} Telemetry-Punkte geladen (${agg}, ${startDate} bis ${endDate}). Granular-Modus — nur PV/Last/Batterie/SOC/Netz.`);
+      setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg}, ${startDate}…${endDate}). Nur PV/Last/Bat/SOC/Netz im Granular-Modus.`);
     } catch (e) {
       setStatus(`Fehler: ${e.message}`);
     }
@@ -219,8 +216,7 @@ async function fetchExplorerData() {
     const slots = aggregateSlots(allSlots, agg);
     buildChartData(slots, fcData, statusData?.epex?.data || [], agg, explorerData.rawSoc);
     renderChart();
-    renderRawTable();
-    setStatus(`${allSlots.length} Slots geladen (${startDate} bis ${endDate}).`);
+    setStatus(`${allSlots.length.toLocaleString('de-DE')} Slots geladen (${startDate}…${endDate}).`);
   } catch (e) {
     setStatus(`Fehler: ${e.message}`);
   }
@@ -460,110 +456,6 @@ function renderSignalList() {
   if (countEl) countEl.textContent = `${activeSeriesIds.size} / ${SERIES_DEFS.length}`;
 }
 
-// --- Raw data table — renders last MAX_RAW_TABLE_ROWS from rawSlots OR
-//     granularRows depending on mode. In granular mode the values come
-//     out of seriesData (already scaled to display units), so the same
-//     active-series filter applies. ---
-function renderRawTable() {
-  const head = document.getElementById('explorerRawHead');
-  const body = document.getElementById('explorerRawBody');
-  const foot = document.getElementById('explorerRawFoot');
-  if (!head || !body) return;
-
-  // --- Granular mode path (1min / 5min / 30s / 15s / 10s / 5s) ---
-  if (explorerData.granularMode && Array.isArray(explorerData.granularRows)) {
-    const rows = explorerData.granularRows;
-    if (!rows.length) {
-      head.innerHTML = '<th>Zeitpunkt</th>';
-      body.innerHTML = '';
-      if (foot) foot.textContent = 'Keine Telemetry-Daten im gewählten Zeitraum.';
-      return;
-    }
-    // Only the 5 granular-available series have meaningful data
-    const cols = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && GRANULAR_SERIES_MAP[d.id]);
-    let headerHtml = '<th>Zeitpunkt</th>';
-    for (const c of cols) {
-      headerHtml += `<th class="num" title="${c.label}">${c.id}<br><small>${c.unit}</small></th>`;
-    }
-    head.innerHTML = headerHtml;
-
-    const labels = explorerData.labels || [];
-    const seriesData = explorerData.seriesData || {};
-    // Newest-first: render rows from end backward, paired with labels
-    const total = rows.length;
-    const start = Math.max(0, total - MAX_RAW_TABLE_ROWS);
-    const indexes = [];
-    for (let i = total - 1; i >= start; i--) indexes.push(i);
-    const rowsHtml = indexes.map(i => {
-      const tsLabel = labels[i] || rows[i].ts;
-      let row = `<td class="mono">${tsLabel}</td>`;
-      for (const c of cols) {
-        const v = seriesData[c.id]?.[i];
-        if (v == null || !Number.isFinite(Number(v))) {
-          row += `<td class="num">&mdash;</td>`;
-        } else {
-          row += `<td class="num">${Number(v).toFixed(2)}</td>`;
-        }
-      }
-      return `<tr>${row}</tr>`;
-    }).join('');
-    body.innerHTML = rowsHtml;
-    if (foot) {
-      const aggLabel = explorerData.granularAgg || '?';
-      if (total > MAX_RAW_TABLE_ROWS) {
-        foot.textContent = `Zeige ${MAX_RAW_TABLE_ROWS} von ${total} Telemetry-Punkten · ${aggLabel} · neueste zuerst.`;
-      } else {
-        foot.textContent = `${total} Telemetry-Punkte · ${aggLabel} · neueste zuerst.`;
-      }
-    }
-    return;
-  }
-
-  // --- Legacy slot-aggregation path (15min / 1h / day) ---
-  const slots = explorerData.rawSlots || [];
-  if (!slots.length) {
-    head.innerHTML = '<th>Zeitpunkt</th>';
-    body.innerHTML = '';
-    if (foot) foot.textContent = 'Keine Daten geladen.';
-    return;
-  }
-
-  // Determine which active series have a corresponding slot key
-  const cols = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && !d.key.startsWith('_'));
-  let headerHtml = '<th>Zeitpunkt</th>';
-  for (const c of cols) {
-    headerHtml += `<th class="num" title="${c.label}">${c.id}<br><small>${c.unit}</small></th>`;
-  }
-  head.innerHTML = headerHtml;
-
-  // Render last N rows (newest first)
-  const visible = slots.slice(-MAX_RAW_TABLE_ROWS).reverse();
-  const rowsHtml = visible.map(s => {
-    const d = new Date(s.ts);
-    const tsLabel = d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    let row = `<td class="mono">${tsLabel}</td>`;
-    for (const c of cols) {
-      const raw = Number(s[c.key]);
-      if (!Number.isFinite(raw)) {
-        row += `<td class="num">&mdash;</td>`;
-      } else {
-        const display = c.toKw ? (raw * (60 / (15))) : raw; // 15min slot → kW assumption matches build path
-        row += `<td class="num">${display.toFixed(2)}</td>`;
-      }
-    }
-    return `<tr>${row}</tr>`;
-  }).join('');
-  body.innerHTML = rowsHtml;
-
-  if (foot) {
-    if (slots.length > MAX_RAW_TABLE_ROWS) {
-      foot.textContent = `Zeige ${MAX_RAW_TABLE_ROWS} von ${slots.length} Zeilen (neueste zuerst).`;
-    } else {
-      foot.textContent = `${slots.length} Zeilen (neueste zuerst).`;
-    }
-  }
-}
-
 // --- Pill button → hidden <select> sync ---
 function wirePillGroup(groupEl) {
   const targetId = groupEl.getAttribute('data-pill-target');
@@ -582,9 +474,92 @@ function wirePillGroup(groupEl) {
   });
 }
 
-// --- CSV Export (unchanged from Wave-5 Task 1) ---
-function exportCsv() {
-  if (!explorerData.labels.length) return;
+// --- CSV Export ---
+//
+// Independent of chart state: re-queries the full selected range at the
+// currently picked resolution and ships every row. For granular pills
+// (5s/10s/15s/30s/1min/5min) we chunk day-by-day so the server scan-cap
+// (1.5M slots) is never hit even on 30d × 5s × 5 keys (= 2.6M slots
+// total, but ≤86,400/day per key).
+async function exportCsv() {
+  const [startDate, endDate] = getDateRange();
+  if (!startDate || !endDate) { setStatus('Bitte Zeitbereich wählen.'); return; }
+  const agg = document.getElementById('explorerAgg').value;
+  const granular = GRANULAR_AGG_TO_SECONDS[agg];
+
+  const btn = document.getElementById('explorerCsvBtn');
+  const prevLabel = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Exportiere…'; }
+
+  try {
+    if (granular) {
+      await exportCsvGranular(startDate, endDate, agg);
+    } else {
+      await exportCsvSlots(startDate, endDate, agg);
+    }
+  } catch (e) {
+    setStatus(`CSV-Export Fehler: ${e.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'CSV Export'; }
+  }
+}
+
+// Granular export: day-by-day fetch from /api/telemetry/series, full
+// resolution, ALL active granular series. ~86,400 rows/day at 5s × 5 keys
+// is well within the per-request cap.
+async function exportCsvGranular(startDate, endDate, agg) {
+  const maxRes = GRANULAR_AGG_TO_SECONDS[agg];
+  const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && GRANULAR_SERIES_MAP[d.id]);
+  if (!activeDefs.length) { setStatus('Keine Granular-Serie ausgewählt.'); return; }
+  const tKeys = activeDefs.map(d => GRANULAR_SERIES_MAP[d.id].tKey);
+
+  // Iterate days [start..end] inclusive. Each iteration fetches exactly 24h.
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const dayCount = Math.floor((end - start) / 86400000) + 1;
+  const byTs = new Map();
+  let totalFetched = 0;
+
+  for (let i = 0; i < dayCount; i++) {
+    const d = new Date(start.getTime() + i * 86400000);
+    const dayStartIso = d.toISOString();
+    const dayEndIso = new Date(d.getTime() + 86400000).toISOString();
+    setStatus(`CSV-Export · Tag ${i + 1}/${dayCount} (${fmtDate(d)})…`);
+    const url = `/api/telemetry/series?keys=${encodeURIComponent(tKeys.join(','))}&start=${encodeURIComponent(dayStartIso)}&end=${encodeURIComponent(dayEndIso)}&maxResolution=${maxRes}`;
+    const res = await apiFetch(url);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) {
+      throw new Error(body?.error === 'scan_too_large'
+        ? `Tag ${fmtDate(d)}: zu groß für eine Range — wähle gröbere Auflösung.`
+        : (body?.error || `HTTP ${res.status}`));
+    }
+    for (const r of (body.data || [])) {
+      if (!byTs.has(r.ts)) byTs.set(r.ts, { ts: r.ts });
+      byTs.get(r.ts)[r.key] = r.value;
+    }
+    totalFetched += (body.data || []).length;
+  }
+
+  const sorted = [...byTs.values()].sort((a, b) => a.ts.localeCompare(b.ts));
+  const header = ['Zeitpunkt-ISO', ...activeDefs.map(d => `${d.label} (${d.unit})`)];
+  const rows = sorted.map(s => {
+    const cells = [s.ts];
+    for (const d of activeDefs) {
+      const map = GRANULAR_SERIES_MAP[d.id];
+      const raw = s[map.tKey];
+      const v = raw != null && Number.isFinite(Number(raw)) ? Number(raw) * map.scale : null;
+      cells.push(v != null ? Number(v).toFixed(3).replace('.', ',') : '');
+    }
+    return cells.join(';');
+  });
+  downloadCsv(`dvhub-explorer-${agg}-${startDate}_${endDate}.csv`, [header.join(';'), ...rows].join('\n'));
+  setStatus(`CSV mit ${sorted.length.toLocaleString('de-DE')} Zeilen exportiert (${totalFetched.toLocaleString('de-DE')} Telemetry-Punkte aus ${dayCount} Tag(en)).`);
+}
+
+// Slot export (15min / 1h / day) — use what's in memory, which already
+// covers the full range from fetchExplorerData's existing day-by-day loop.
+async function exportCsvSlots(startDate, endDate, agg) {
+  if (!explorerData.labels.length) { setStatus('Erst Daten laden, dann exportieren.'); return; }
   const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && explorerData.seriesData?.[d.id]);
   const header = ['Zeitpunkt', ...activeDefs.map(d => `${d.label} (${d.unit})`)];
   const rows = explorerData.labels.map((label, i) => {
@@ -593,12 +568,16 @@ function exportCsv() {
       return v != null ? Number(v).toFixed(3).replace('.', ',') : '';
     })].join(';');
   });
-  const csv = [header.join(';'), ...rows].join('\n');
+  downloadCsv(`dvhub-explorer-${agg}-${startDate}_${endDate}.csv`, [header.join(';'), ...rows].join('\n'));
+  setStatus(`CSV mit ${rows.length.toLocaleString('de-DE')} Zeilen exportiert.`);
+}
+
+function downloadCsv(filename, csv) {
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `dvhub-explorer-${getDateRange().join('_')}.csv`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -655,10 +634,7 @@ function initExplorer() {
       if (cb.checked) activeSeriesIds.add(id);
       else activeSeriesIds.delete(id);
       renderSignalList();
-      if (explorerData.labels.length) {
-        renderChart();
-        renderRawTable();
-      }
+      if (explorerData.labels.length) renderChart();
     });
   }
 
@@ -675,7 +651,6 @@ function initExplorer() {
   document.getElementById('explorerCsvBtn').addEventListener('click', exportCsv);
 
   renderSignalList();
-  renderRawTable(); // empty initial state
 
   // Auto-load 24h on page load. The initialFetchDone flag flips AFTER the
   // initial fetch settles so the change-listeners we registered above don't
