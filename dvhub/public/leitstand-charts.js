@@ -81,8 +81,15 @@
                 var hint = document.createElement('div');
                 hint.className = 'zoom-reset-hint';
                 hint.textContent = 'Ctrl+Scroll = Zoom, Doppelklick = Reset';
-                hint.style.cssText = 'position:absolute;top:4px;right:8px;font-size:9px;color:' +
-                  _aur('--chart-axis', '#5a6a8a') + ';opacity:0.7;pointer-events:none;';
+                // CSP-safe: individual property setters (cssText is blocked
+                // by style-src without 'unsafe-inline').
+                hint.style.position = 'absolute';
+                hint.style.top = '4px';
+                hint.style.right = '8px';
+                hint.style.fontSize = '9px';
+                hint.style.color = _aur('--chart-axis', '#5a6a8a');
+                hint.style.opacity = '0.7';
+                hint.style.pointerEvents = 'none';
                 card.style.position = 'relative';
                 card.appendChild(hint);
                 setTimeout(function () { hint.remove(); }, 3000);
@@ -861,7 +868,8 @@
         item.style.cursor = 'pointer';
         item.style.marginRight = '10px';
         item.style.fontSize = '0.75rem';
-        item.innerHTML = '<span style="display:inline-block;width:10px;height:2px;background:' + ds.borderColor + ';margin-right:4px;vertical-align:middle;"></span>' + ds.label;
+        item.innerHTML = '<span class="leitstand-legend-swatch"></span>' + ds.label;
+        item.querySelector('.leitstand-legend-swatch').style.background = ds.borderColor;
         item.addEventListener('click', function () {
           var meta = optimizerPlanChart.getDatasetMeta(idx);
           meta.hidden = meta.hidden === null ? !optimizerPlanChart.data.datasets[idx].hidden : !meta.hidden;
@@ -983,7 +991,8 @@
         pvParts.push('ML/Basis: ' + pvKwhRest.toFixed(1) + '/' + rawKwhRest.toFixed(1));
       }
       if (pvKwhTomorrow > 0) pvParts.push('Morgen: ' + pvKwhTomorrow.toFixed(1) + ' kWh');
-      detailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + pvParts.join(' · ') + '</span>';
+      detailEl.innerHTML = '<span class="leitstand-forecast-detail">' + pvParts.join(' · ') + '</span>';
+      detailEl.firstChild.style.color = _dimColor;
     }
 
     // Load detail: warn if flat baseload
@@ -991,13 +1000,16 @@
       var hasTotalsLoad = !!(totals && totals.today && totals.today.loadKwh > 0);
       var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
       if (allSame) {
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dangerColor + ';">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
+        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
+        loadDetailEl.firstChild.style.color = _dangerColor;
       } else if (!loadSlots.length && !hasTotalsLoad) {
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dangerColor + ';">⚠ Kein Load-Forecast für heute</span>';
+        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">⚠ Kein Load-Forecast für heute</span>';
+        loadDetailEl.firstChild.style.color = _dangerColor;
       } else {
         var loadParts = ['Rest heute: ' + loadKwhRest.toFixed(1) + ' kWh'];
         if (loadKwhTomorrow > 0) loadParts.push('Morgen: ' + loadKwhTomorrow.toFixed(1) + ' kWh');
-        loadDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + loadParts.join(' · ') + '</span>';
+        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">' + loadParts.join(' · ') + '</span>';
+        loadDetailEl.firstChild.style.color = _dimColor;
       }
     }
 
@@ -1009,7 +1021,8 @@
         var totalSign = totalAvailable >= 0 ? '+' : '';
         parts.push('Verf\u00fcgbar: ' + totalSign + totalAvailable.toFixed(1) + ' kWh');
       }
-      surplusDetailEl.innerHTML = '<span style="font-size:10px;color:' + _dimColor + ';">' + parts.join(' · ') + '</span>';
+      surplusDetailEl.innerHTML = '<span class="leitstand-forecast-detail">' + parts.join(' · ') + '</span>';
+      surplusDetailEl.firstChild.style.color = _dimColor;
     }
   }
 

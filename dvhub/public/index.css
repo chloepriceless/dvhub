@@ -854,6 +854,13 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .log-level-info { color:var(--cyan); background:rgba(52,219,255,.1); border:1px solid rgba(52,219,255,.3); }
 .log-level-debug { color:var(--text-dim); background:var(--glass); border:1px solid var(--glass-brd); }
 
+/* Leitstand chart utilities (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces inline style="..." in leitstand-charts.js). Dynamic colors
+   are still applied via .style.color setters; static properties live
+   here. */
+.leitstand-legend-swatch { display:inline-block; width:10px; height:2px; margin-right:4px; vertical-align:middle; }
+.leitstand-forecast-detail { font-size:10px; }
+
 /* Zoom reset hint (leitstand-charts.js#L60) */
 .zoom-reset-hint {
   position:absolute; top:8px; right:8px; z-index:5;
