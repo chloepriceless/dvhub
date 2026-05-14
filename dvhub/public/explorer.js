@@ -161,8 +161,9 @@ async function fetchExplorerData() {
   setStatus('Lade Daten...');
   const agg = document.getElementById('explorerAgg').value;
 
-  // Route: granular path for 1min / 5min, legacy slot path for 15min / 1h / day
-  if (agg === '1min' || agg === '5min') {
+  // Route: granular path for any agg present in GRANULAR_AGG_TO_SECONDS
+  // (5s/10s/15s/30s/1min/5min); legacy slot path for 15min / 1h / day.
+  if (GRANULAR_AGG_TO_SECONDS[agg]) {
     try {
       const rows = await fetchGranularData(startDate, endDate, agg);
       explorerData.rawSlots = []; // raw-table reads granularRows instead in this mode
