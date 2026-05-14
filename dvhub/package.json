@@ -30,6 +30,7 @@
     "epex"
   ],
   "dependencies": {
+    "@dsnp/parquetjs": "^1.8.7",
     "aedes": "^0.51.3",
     "franc": "^6.2.0",
     "highs": "^1.8.0",
