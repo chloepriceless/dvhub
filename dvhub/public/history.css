@@ -428,6 +428,15 @@
   margin: 6px 0 0;
   line-height: 1.4;
 }
+/* Sub-line under Hypothetisch-row showing rate × kWh basis. Sits flush
+   under the Euro-total row, no border-bottom, dimmed mono font. */
+.history-hyp-detail { padding-top: 0; padding-bottom: 6px; border-bottom: none; min-height: 16px; }
+.history-hyp-detail-text {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: rgba(232,234,240,0.45);
+  letter-spacing: 0.02em;
+}
 
 .history-dv-section {
   padding: 12px 16px;

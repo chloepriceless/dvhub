@@ -291,6 +291,21 @@ function renderKpis(summary) {
 
     setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
     setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
+    // Detail sub-lines: "Rate × kWh-Basis" — what the Euro total actually
+    // multiplied. negPriceEligible*Kwh is "neg-price hours excluded" per
+    // §51 EEG (no feed-in compensation paid during negative spot prices).
+    const fullRate = kpis?.hypFullFeedInCtKwh;
+    const fullKwh = kpis?.negPriceEligiblePvKwh;
+    setText('historyKpiHypFullDetail',
+      hasFiniteNumber(fullRate) && hasFiniteNumber(fullKwh)
+        ? `${fmtCt(fullRate)} × ${fmtKwh(fullKwh)}`
+        : ' ');
+    const surplusRate = kpis?.hypSurplusFeedInCtKwh;
+    const surplusKwh = kpis?.negPriceEligibleExportKwh;
+    setText('historyKpiHypSurplusDetail',
+      hasFiniteNumber(surplusRate) && hasFiniteNumber(surplusKwh)
+        ? `${fmtCt(surplusRate)} × ${fmtKwh(surplusKwh)}`
+        : ' ');
 
     // DV-Mehrerlös: grün positiv / orange negativ
     const dvExcessEl = document.getElementById('historyKpiDvExcess');
@@ -310,6 +325,8 @@ function renderKpis(summary) {
                        'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
       setText(id, '-');
     }
+    setText('historyKpiHypFullDetail', ' ');
+    setText('historyKpiHypSurplusDetail', ' ');
   }
 }
 

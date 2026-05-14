@@ -1545,7 +1545,15 @@ export function createHistoryRuntime({
         dvCostEur,
         dvNetAdvantageEur,
         awFullCtKwh: awFullCtKwh ?? null,
-        awPartialCtKwh: weightedApplicableValueCtKwh ?? null
+        awPartialCtKwh: weightedApplicableValueCtKwh ?? null,
+        // Effective EEG-Vergütung rate (AW − Pauschalabzug §50e) — the
+        // actual ct/kWh multiplied per slot. Useful for the UI to show
+        // "1.640 kWh × 7,56 ct/kWh = 124 €" instead of just the Euro total.
+        hypFullFeedInCtKwh: evFullCtKwh ?? null,
+        hypSurplusFeedInCtKwh: evPartialCtKwh ?? null
+        // kWh-basis fields (negPriceEligiblePvKwh / negPriceEligibleExportKwh)
+        // are already aggregated into kpis by the reducer above, no need to
+        // re-assign here — they come through via the kpis surface.
       });
     } else {
       Object.assign(kpis, {
@@ -1557,7 +1565,9 @@ export function createHistoryRuntime({
         dvCostEur: null,
         dvNetAdvantageEur: null,
         awFullCtKwh: null,
-        awPartialCtKwh: null
+        awPartialCtKwh: null,
+        hypFullFeedInCtKwh: null,
+        hypSurplusFeedInCtKwh: null
       });
     }
 

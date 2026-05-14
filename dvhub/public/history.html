@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/history.css?v=3" />
+  <link rel="stylesheet" href="/history.css?v=4" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -187,11 +187,25 @@
             <div class="config-row"><span class="config-row-label" id="historyKpiDvMarketValueLabel">Tats&auml;chlicher Monatsmarktwert</span><strong id="historyKpiDvMarketValue" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label">Anzulegender Wert</span><strong id="historyKpiDvApplicableValue" class="config-row-value">-</strong></div>
           </div>
-          <!-- 3: Hypothetisch (EEG-Festsatz) -->
+          <!-- 3: Hypothetisch (EEG-Festvergütung) — zeigt was du bekommen würdest
+               wenn du in EEG-Festvergütung wärst statt in der Direktvermarktung.
+               Pro Szenario: Euro-Summe + Rate × kWh-Basis als Sub-Info. -->
           <div class="history-dv-section">
-            <div class="history-dv-label">Hypothetisch (EEG-Festsatz)</div>
-            <div class="config-row"><span class="config-row-label">Volleinspeisung</span><strong id="historyKpiHypFullFeedIn" class="config-row-value">-</strong></div>
-            <div class="config-row"><span class="config-row-label">&Uuml;berschuss-Einspeisung</span><strong id="historyKpiHypSurplusFeedIn" class="config-row-value">-</strong></div>
+            <div class="history-dv-label">Hypothetisch (EEG-Festverg&uuml;tung)</div>
+            <div class="config-row">
+              <span class="config-row-label">Volleinspeisung</span>
+              <strong id="historyKpiHypFullFeedIn" class="config-row-value">-</strong>
+            </div>
+            <div class="config-row history-hyp-detail">
+              <span id="historyKpiHypFullDetail" class="history-hyp-detail-text">&nbsp;</span>
+            </div>
+            <div class="config-row">
+              <span class="config-row-label">&Uuml;berschuss-Einspeisung</span>
+              <strong id="historyKpiHypSurplusFeedIn" class="config-row-value">-</strong>
+            </div>
+            <div class="config-row history-hyp-detail">
+              <span id="historyKpiHypSurplusDetail" class="history-hyp-detail-text">&nbsp;</span>
+            </div>
           </div>
           <!-- 4: Vergleich -->
           <div class="history-dv-section">
@@ -288,6 +302,6 @@
   <script src="/chartjs-chart-sankey.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/history.js?v=3"></script>
+  <script src="/history.js?v=4"></script>
 </body>
 </html>
