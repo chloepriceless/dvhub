@@ -10,15 +10,9 @@
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css"
         integrity="sha384-+yyzNgM3K92sROwsXxYCxaiLWxWJ0G+v/9A+qIZ2rgefKgkdcmJI+L601cqPD/Ut"
         crossorigin="anonymous">
-  <style>
-    body { margin: 0; background: #fafafa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    .topbar { display: none !important; }
-    .swagger-ui .info { margin: 20px 0 16px; }
-    .swagger-ui .info .title { font-size: 1.8em; }
-    .back-link { display: block; padding: 12px 24px; background: #1d1d1f; color: #a1a1a6; font-size: 0.85em; text-decoration: none; }
-    .back-link:hover { color: #fff; }
-    .back-link span { color: #0088e8; margin-right: 8px; }
-  </style>
+  <!-- Plan 09.1-07 Task 3: inline <style> block externalised to /api-docs.css
+       so CSP style-src can drop 'unsafe-inline'. -->
+  <link rel="stylesheet" href="/api-docs.css?v=1">
 </head>
 <body>
   <a href="/" class="back-link"><span>&larr;</span> Zurück zum Dashboard</a>

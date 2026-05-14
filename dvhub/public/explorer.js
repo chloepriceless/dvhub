@@ -510,12 +510,16 @@ function renderSignalList() {
     const active = activeSeriesIds.has(def.id);
     return `<label class="sig-row${active ? ' is-active' : ''}" data-series="${def.id}">
       <input type="checkbox" data-series-cb="${def.id}"${active ? ' checked' : ''} aria-label="${def.label}">
-      <span class="sig-sw" style="background:${def.color}"></span>
+      <span class="sig-sw" data-sig-color="${def.color}"></span>
       <span class="sig-name">${def.label}</span>
       <span class="sig-unit">${def.unit}</span>
     </label>`;
   }).join('');
   container.innerHTML = rows;
+  // CSP-safe: apply per-series swatch background after innerHTML
+  // (style="background:..." in innerHTML is blocked by style-src
+  // without 'unsafe-inline'; data-attr + property setter is allowed).
+  container.querySelectorAll('[data-sig-color]').forEach((el) => { el.style.background = el.dataset.sigColor; });
 
   const countEl = document.getElementById('explorerSignalCount');
   if (countEl) countEl.textContent = `${activeSeriesIds.size} / ${SERIES_DEFS.length}`;
