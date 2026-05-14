@@ -21,7 +21,6 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import pg from 'pg';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +35,12 @@ describe('migration 020 — integration_health_snapshots', { skip: !RUN_PG_TESTS
   let pool;
 
   before(async () => {
+    // Dynamic import so the suite skips cleanly when DATABASE_URL is unset
+    // even on environments where the `pg` package is not installed (e.g.
+    // worktree CI runners). Static `import pg from 'pg'` would fail at
+    // module-load time with ERR_MODULE_NOT_FOUND before the skip flag
+    // is consulted.
+    const pg = (await import('pg')).default;
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     // Make sure schema_migrations exists — every migration self-registers
     // into it. ensurePgSchema() in production wires this up; here we
