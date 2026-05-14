@@ -216,28 +216,75 @@ function renderKpis(summary) {
   const netValue = document.getElementById('historyKpiNet');
   if (netValue) netValue.style.color = net >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
 
-  // DV-Vergleich — nur Monat/Jahr
-  const dvView = String(summary?.view || '');
-  const dvVisible = (dvView === 'month' || dvView === 'year')
+  // DV-Card: now hosts 4 columns — Marktprämie (1), Tatsächlich DV (2),
+  // Hypothetisch EEG (3), Vergleich (4). The Marktprämie column is
+  // available on week/month/year; DV-comparison columns 2-4 require
+  // month/year (DV revenue + hypothetical EEG only computed then).
+  // Card is shown if EITHER set of data exists; columns that don't
+  // apply for the current view just show '-' per the existing pattern.
+  const view = String(summary?.view || '');
+  const premiumVisible = view === 'week' || view === 'month' || view === 'year';
+  const dvVisible = (view === 'month' || view === 'year')
     && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
-  // Plan 08-11 refactored the original inline style="display:none" to a
-  // .history-dv-card-hidden utility class. The pre-existing
-  // `style.display = ''` clear-pattern only removes inline values — it
-  // can't override a class rule — so we must also toggle the class to
-  // actually show the card on month/year views.
+  const cardVisible = premiumVisible || dvVisible;
+
   const dvCard = document.getElementById('historyDvCard');
   if (dvCard) {
-    dvCard.classList.toggle('history-dv-card-hidden', !dvVisible);
+    dvCard.classList.toggle('history-dv-card-hidden', !cardVisible);
     dvCard.style.display = '';
   }
 
+  if (!cardVisible) return;
+
+  // --- Column 1: Marktprämie (Berechnungs-Komponenten) ---
+  const displaySource = String(summary?.meta?.marketPremium?.displaySource || summary?.meta?.marketPremium?.source || '');
+  let premiumScopeLabel = 'Marktprämie';
+  let marketValueLabel = 'Jahresmarktwert';
+  if (view === 'month') {
+    premiumScopeLabel = 'Marktprämie · Monat';
+    marketValueLabel = displaySource === 'official_annual' ? 'Jahresmarktwert' : 'Monatsmarktwert';
+  } else if (view === 'week') {
+    premiumScopeLabel = 'Marktprämie · Woche';
+    marketValueLabel = 'Monatsmarktwert';
+  } else if (view === 'year') {
+    premiumScopeLabel = 'Marktprämie · Jahr';
+    if (displaySource === 'configured_monthly') marketValueLabel = 'Monatsmarktwert (gewichtet)';
+  }
+  setText('historyPremiumScopeLabel', premiumScopeLabel);
+  setText('historyPremiumMarketValueLabel', marketValueLabel);
+  setText('historyPremiumRateLabel', 'Marktprämie ct/kWh');
+
+  const periodMv = summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh;
+  setText('historyKpiAnnualMarketValue',
+    hasFiniteNumber(periodMv) ? fmtCt(periodMv) : 'noch nicht verfügbar');
+  setText('historyKpiPremiumEligibleExport',
+    hasFiniteNumber(summary?.kpis?.premiumEligibleExportKwh)
+      ? fmtKwh(summary.kpis.premiumEligibleExportKwh) : 'noch nicht verfügbar');
+  setText('historyKpiMarketPremium',
+    hasFiniteNumber(summary?.kpis?.marketPremiumEur)
+      ? fmtEur(summary.kpis.marketPremiumEur) : 'noch nicht verfügbar');
+  setText('historyKpiMarketPremiumRate',
+    hasFiniteNumber(summary?.kpis?.marketPremiumCtKwh)
+      ? fmtCt(summary.kpis.marketPremiumCtKwh) : 'noch nicht verfügbar');
+
+  setHidden('historyPremiumHint', true);
+  setText('historyPremiumHint', '');
+  const premiumMeta = summary?.meta?.marketPremium || {};
+  if (view === 'year' && premiumMeta?.source === 'derived_monthly_running') {
+    const availableMonths = Number(premiumMeta?.availableMarketValueMonths || 0);
+    const monthLabel = `${availableMonths} Monatswert${availableMonths === 1 ? '' : 'e'}`;
+    setText('historyPremiumHint',
+      `Vorläufig aus verfügbaren Monatsmarktwerten berechnet. Monatswerte werden nachlaufend zu Beginn des Folgemonats veröffentlicht. Aktuell ${monthLabel} verfügbar.`);
+    setHidden('historyPremiumHint', false);
+  }
+
+  // --- Columns 2-4: DV-Vergleich (only on month/year) ---
   if (dvVisible) {
-    // Einspeisevergütung durch Direktvermarktung (Spot + Marktprämie)
     setText('historyKpiDvRevenue', fmtEur(kpis.dvRevenueEur));
     setText('historyKpiDvRevenueRate', fmtCt(kpis.dvRevenueCtKwh));
 
     const dvMarketValueCt = kpis?.periodMarketValueCtKwh ?? kpis?.annualMarketValueCtKwh;
-    const dvMarketLabel = dvView === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
+    const dvMarketLabel = view === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
     setText('historyKpiDvMarketValueLabel', dvMarketLabel);
     setText('historyKpiDvMarketValue', hasFiniteNumber(dvMarketValueCt) ? fmtCt(dvMarketValueCt) : 'noch nicht verfügbar');
     setText('historyKpiDvApplicableValue', hasFiniteNumber(kpis?.weightedApplicableValueCtKwh) ? fmtCt(kpis.weightedApplicableValueCtKwh) : '-');
@@ -245,81 +292,24 @@ function renderKpis(summary) {
     setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
     setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
 
-    // DV-Mehrerlos: gruen wenn positiv, orange wenn negativ
+    // DV-Mehrerlös: grün positiv / orange negativ
     const dvExcessEl = document.getElementById('historyKpiDvExcess');
     if (dvExcessEl) {
       dvExcessEl.textContent = fmtEur(kpis.dvExcessEur);
-      dvExcessEl.style.color = (kpis.dvExcessEur ?? 0) >= 0
-        ? 'var(--flow-green)'
-        : 'var(--flow-orange)';
+      dvExcessEl.style.color = (kpis.dvExcessEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
     }
-
     setText('historyKpiDvCost', fmtEur(kpis.dvCostEur ?? 0));
-
-    // Netto DV-Vorteil: gruen wenn positiv, orange wenn negativ
     const dvNetEl = document.getElementById('historyKpiDvNetAdvantage');
     if (dvNetEl) {
       dvNetEl.textContent = fmtEur(kpis.dvNetAdvantageEur);
-      dvNetEl.style.color = (kpis.dvNetAdvantageEur ?? 0) >= 0
-        ? 'var(--flow-green)'
-        : 'var(--flow-orange)';
+      dvNetEl.style.color = (kpis.dvNetAdvantageEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
     }
-  }
-
-  const view = String(summary?.view || '');
-  const premiumVisible = view === 'week' || view === 'month' || view === 'year';
-  const displaySource = String(summary?.meta?.marketPremium?.displaySource || summary?.meta?.marketPremium?.source || '');
-  let premiumScopeLabel = 'Jahresansicht';
-  let marketValueLabel = 'Jahresmarktwert';
-  if (view === 'month') {
-    premiumScopeLabel = 'Monatsansicht';
-    marketValueLabel = displaySource === 'official_annual' ? 'Jahresmarktwert' : 'Monatsmarktwert';
-  } else if (view === 'week') {
-    premiumScopeLabel = 'Wochenansicht';
-    marketValueLabel = 'Monatsmarktwert';
-  } else if (displaySource === 'configured_monthly') {
-    marketValueLabel = 'Monatsmarktwert (gewichtet)';
-  }
-  setHidden('historyPremiumFields', !premiumVisible);
-  setHidden('historyPremiumHint', true);
-  setText('historyPremiumHint', '');
-  setText('historyPremiumScopeLabel', premiumScopeLabel);
-  setText('historyPremiumMarketValueLabel', marketValueLabel);
-  setText('historyPremiumRateLabel', 'Marktprämie ct/kWh');
-  if (!premiumVisible) return;
-  setText(
-    'historyKpiAnnualMarketValue',
-    hasFiniteNumber(summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh)
-      ? fmtCt(summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh)
-      : 'noch nicht verfügbar'
-  );
-  setText(
-    'historyKpiPremiumEligibleExport',
-    hasFiniteNumber(summary?.kpis?.premiumEligibleExportKwh)
-      ? fmtKwh(summary?.kpis?.premiumEligibleExportKwh)
-      : 'noch nicht verfügbar'
-  );
-  setText(
-    'historyKpiMarketPremium',
-    hasFiniteNumber(summary?.kpis?.marketPremiumEur)
-      ? fmtEur(summary?.kpis?.marketPremiumEur)
-      : 'noch nicht verfügbar'
-  );
-  setText(
-    'historyKpiMarketPremiumRate',
-    hasFiniteNumber(summary?.kpis?.marketPremiumCtKwh)
-      ? fmtCt(summary?.kpis?.marketPremiumCtKwh)
-      : 'noch nicht verfügbar'
-  );
-  const premiumMeta = summary?.meta?.marketPremium || {};
-  if (view === 'year' && premiumMeta?.source === 'derived_monthly_running') {
-    const availableMonths = Number(premiumMeta?.availableMarketValueMonths || 0);
-    const monthLabel = `${availableMonths} Monatswert${availableMonths === 1 ? '' : 'e'}`;
-    setText(
-      'historyPremiumHint',
-      `Vorläufig aus verfügbaren Monatsmarktwerten berechnet. Monatswerte werden nachlaufend zu Beginn des Folgemonats veröffentlicht. Aktuell ${monthLabel} verfügbar.`
-    );
-    setHidden('historyPremiumHint', false);
+  } else {
+    // Reset DV-only columns to placeholders on week view
+    for (const id of ['historyKpiDvRevenue', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
+                       'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
+      setText(id, '-');
+    }
   }
 }
 

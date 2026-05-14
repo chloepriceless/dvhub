@@ -1,3 +1,14 @@
+/* Legacy --flow-* compat shim — these tokens were defined in styles.css
+   (deleted in 09.1-07 f5aa679). 15 history.css selectors still reference
+   them. Aliased to Aurora equivalents so cards/charts get back their
+   background, border and radius. Without this shim every .chart-span-card
+   / .config-group inner panel renders transparent on the deep-dark body. */
+:root {
+  --flow-surface: var(--bg-elev);
+  --flow-border: var(--glass-brd);
+  --flow-radius: var(--r-lg, 14px);
+}
+
 /* DVhub History page styles — Aurora additions (Plan 09.1-03 Wave 2).
    Loaded AFTER /dvhub-app.css (Aurora tokens) and /styles.css (legacy
    stylesheet — to be deleted in Plan 09.1-07). This file carries
@@ -402,9 +413,20 @@
 /* DV-Einspeisevergütung card */
 .history-dv-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid var(--flow-border);
   margin-top: 10px;
+}
+@media (max-width: 1100px) {
+  .history-dv-grid { grid-template-columns: repeat(2, 1fr); }
+  .history-dv-section + .history-dv-section { border-left: none; }
+  .history-dv-section { border-top: 1px solid var(--flow-border); }
+}
+.history-premium-hint-inline {
+  font-size: 11px;
+  color: rgba(232,234,240,0.5);
+  margin: 6px 0 0;
+  line-height: 1.4;
 }
 
 .history-dv-section {
@@ -1226,13 +1248,18 @@
 .config-grid > .config-group:only-child,
 .config-grid > .config-group--full { grid-column: 1 / -1; }
 
-/* Group card with accent left-border */
+/* Group card with accent left-border — Aurora token rewrite (2026-05-14).
+   Original rgba(16,26,42,.9) bg lacked contrast against the Aurora deep-dark
+   body (--bg-0 = #030610). Switched to --bg-elev + --glass-brd to match the
+   visible-glass-card pattern used by index/explorer/settings .card. */
 .config-group {
-  background: rgba(16,26,42,0.9);
-  border: 1px solid rgba(123,151,178,0.18);
-  border-radius: 10px;
-  border-left: 3px solid rgba(123,151,178,0.18);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  background: var(--bg-elev);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg, 14px);
+  border-left: 3px solid var(--glass-brd);
+  box-shadow: var(--shadow-sm, 0 4px 16px rgba(0,0,0,.4));
+  backdrop-filter: blur(var(--glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 14px));
   box-sizing: border-box;
   min-width: 0;
   overflow: hidden;

@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/history.css?v=2" />
+  <link rel="stylesheet" href="/history.css?v=3" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -170,6 +170,16 @@
           </div>
         </div>
         <div class="history-dv-grid">
+          <!-- 1: Marktprämie (Berechnungs-Komponenten — gehört konzeptionell vor "Tatsächlich") -->
+          <div class="history-dv-section" id="historyDvPremiumSection">
+            <div class="history-dv-label" id="historyPremiumScopeLabel">Marktpr&auml;mie</div>
+            <div id="historyKpiMarketPremium" class="history-dv-value history-color-cyan">-</div>
+            <div class="config-row"><span class="config-row-label" id="historyPremiumMarketValueLabel">Monatsmarktwert</span><strong id="historyKpiAnnualMarketValue" class="config-row-value">-</strong></div>
+            <div class="config-row"><span class="config-row-label">f&ouml;rderf&auml;hige Einspeisung</span><strong id="historyKpiPremiumEligibleExport" class="config-row-value">-</strong></div>
+            <div class="config-row"><span class="config-row-label" id="historyPremiumRateLabel">Marktpr&auml;mie ct/kWh</span><strong id="historyKpiMarketPremiumRate" class="config-row-value">-</strong></div>
+            <p id="historyPremiumHint" class="history-summary-hint history-premium-hint-inline" hidden></p>
+          </div>
+          <!-- 2: Tatsächlich (DV) -->
           <div class="history-dv-section">
             <div class="history-dv-label">Tats&auml;chlich (DV)</div>
             <div id="historyKpiDvRevenue" class="history-dv-value history-color-green">-</div>
@@ -177,11 +187,13 @@
             <div class="config-row"><span class="config-row-label" id="historyKpiDvMarketValueLabel">Tats&auml;chlicher Monatsmarktwert</span><strong id="historyKpiDvMarketValue" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label">Anzulegender Wert</span><strong id="historyKpiDvApplicableValue" class="config-row-value">-</strong></div>
           </div>
+          <!-- 3: Hypothetisch (EEG-Festsatz) -->
           <div class="history-dv-section">
             <div class="history-dv-label">Hypothetisch (EEG-Festsatz)</div>
             <div class="config-row"><span class="config-row-label">Volleinspeisung</span><strong id="historyKpiHypFullFeedIn" class="config-row-value">-</strong></div>
             <div class="config-row"><span class="config-row-label">&Uuml;berschuss-Einspeisung</span><strong id="historyKpiHypSurplusFeedIn" class="config-row-value">-</strong></div>
           </div>
+          <!-- 4: Vergleich -->
           <div class="history-dv-section">
             <div class="history-dv-label">Vergleich</div>
             <div class="config-row"><span class="config-row-label">DV-Mehrerl&ouml;s</span><strong id="historyKpiDvExcess" class="config-row-value">-</strong></div>
@@ -247,22 +259,14 @@
       </section>
 
       <!-- Detail cards -->
+      <!-- Marktprämie-Block was merged into #historyDvCard as the leftmost
+           column (commit 2026-05-14). The old #historyPremiumFields sub-card
+           is therefore gone; the IDs it carried (historyKpiAnnualMarketValue,
+           historyKpiPremiumEligibleExport, historyKpiMarketPremium,
+           historyKpiMarketPremiumRate, historyPremiumScopeLabel,
+           historyPremiumMarketValueLabel, historyPremiumRateLabel,
+           historyPremiumHint) now live inside #historyDvPremiumSection. -->
       <div class="page-grid history-page-grid-mb">
-        <!-- Marktprämie -->
-        <article id="historyPremiumFields" class="sub-card" hidden>
-          <div class="panel-head">
-            <div>
-              <p id="historyPremiumScopeLabel" class="card-kicker">Jahresansicht</p>
-              <h2 class="section-title">Marktpr&auml;mie</h2>
-            </div>
-          </div>
-          <div class="metric-row"><span id="historyPremiumMarketValueLabel">Jahresmarktwert</span><strong id="historyKpiAnnualMarketValue">-</strong></div>
-          <div class="metric-row"><span>f&ouml;rderf&auml;hige Einspeisemenge</span><strong id="historyKpiPremiumEligibleExport">-</strong></div>
-          <div class="metric-row"><span>Marktpr&auml;mie</span><strong id="historyKpiMarketPremium">-</strong></div>
-          <div class="metric-row"><span id="historyPremiumRateLabel">Marktpr&auml;mie ct/kWh</span><strong id="historyKpiMarketPremiumRate">-</strong></div>
-          <p id="historyPremiumHint" class="history-summary-hint" hidden></p>
-        </article>
-
         <!-- Details table -->
         <div class="sub-card page-grid-full">
           <div class="panel-head">
@@ -284,6 +288,6 @@
   <script src="/chartjs-chart-sankey.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/history.js?v=2"></script>
+  <script src="/history.js?v=3"></script>
 </body>
 </html>
