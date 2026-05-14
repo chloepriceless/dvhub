@@ -28,20 +28,43 @@ function fmtDate(d) {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+// datetime-local input value format (local time, no seconds).
+function fmtDateTimeLocal(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fmtRangeLabel(startISO, endISO) {
+  const opts = { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' };
+  return `${new Date(startISO).toLocaleString('de-DE', opts)} – ${new Date(endISO).toLocaleString('de-DE', opts)}`;
+}
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
+// Returns [startISO, endISO] where endISO is EXCLUSIVE (suitable for
+// /api/telemetry/series start≤ts<end). Preset ranges snap to local-midnight
+// boundaries. Custom range honours the user-picked datetime-local values
+// down to the minute.
 function getDateRange() {
   const sel = document.getElementById('explorerRange').value;
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const tomorrow = addDays(today, 1);
   switch (sel) {
-    case 'today': return [fmtDate(today), fmtDate(today)];
-    case 'yesterday': return [fmtDate(addDays(today, -1)), fmtDate(addDays(today, -1))];
-    case '24h':
-    case '7d': return [fmtDate(addDays(today, sel === '24h' ? -1 : -6)), fmtDate(today)];
-    case '30d': return [fmtDate(addDays(today, -29)), fmtDate(today)];
-    case 'custom': return [document.getElementById('explorerStart').value, document.getElementById('explorerEnd').value];
+    case 'today':     return [today.toISOString(),                 tomorrow.toISOString()];
+    case 'yesterday': return [addDays(today, -1).toISOString(),    today.toISOString()];
+    case '24h':       return [addDays(today, -1).toISOString(),    tomorrow.toISOString()];
+    case '7d':        return [addDays(today, -6).toISOString(),    tomorrow.toISOString()];
+    case '30d':       return [addDays(today, -29).toISOString(),   tomorrow.toISOString()];
+    case 'custom': {
+      const s = document.getElementById('explorerStart').value;
+      const e = document.getElementById('explorerEnd').value;
+      if (!s || !e) return [null, null];
+      // datetime-local parses as local time → toISOString() converts to UTC.
+      const startD = new Date(s);
+      const endD = new Date(e);
+      if (isNaN(startD) || isNaN(endD) || endD <= startD) return [null, null];
+      return [startD.toISOString(), endD.toISOString()];
+    }
   }
-  return [fmtDate(today), fmtDate(today)];
+  return [today.toISOString(), tomorrow.toISOString()];
 }
 
 function setStatus(msg) {
@@ -124,15 +147,12 @@ const GRANULAR_AGG_TO_SECONDS = {
   '5min': 300
 };
 
-async function fetchGranularData(startDate, endDate, agg) {
+async function fetchGranularData(startISO, endISO, agg) {
   const maxRes = GRANULAR_AGG_TO_SECONDS[agg];
   if (!maxRes) throw new Error(`unsupported granular agg: ${agg}`);
 
-  const startIso = new Date(startDate).toISOString();
-  const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
   const keys = GRANULAR_ALL_TELEMETRY_KEYS.join(',');
-
-  const url = `/api/telemetry/series?keys=${encodeURIComponent(keys)}&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&maxResolution=${maxRes}`;
+  const url = `/api/telemetry/series?keys=${encodeURIComponent(keys)}&start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}&maxResolution=${maxRes}`;
   const res = await apiFetch(url);
   const body = await res.json().catch(() => null);
   if (!res.ok || !body?.ok) {
@@ -180,26 +200,40 @@ function buildGranularChartData(rows, agg) {
   explorerData.granularAgg = agg;
 }
 
+// Returns the list of YYYY-MM-DD strings that the given ISO range touches —
+// inclusive on both ends, in chronological order. Used for slot-mode's
+// per-day /api/history/summary fetches and for CSV chunk iteration.
+function daysCovered(startISO, endISO) {
+  const startD = new Date(startISO);
+  const lastD = new Date(new Date(endISO).getTime() - 1); // exclusive end → last ms still in range
+  const dayStart = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+  const dayLast = new Date(lastD.getFullYear(), lastD.getMonth(), lastD.getDate());
+  const out = [];
+  for (let d = new Date(dayStart); d <= dayLast; d = addDays(d, 1)) out.push(fmtDate(d));
+  return out;
+}
+
 // --- Data fetching ---
 async function fetchExplorerData() {
-  const [startDate, endDate] = getDateRange();
-  if (!startDate || !endDate) { setStatus('Bitte Zeitbereich wählen.'); return; }
+  const [startISO, endISO] = getDateRange();
+  if (!startISO || !endISO) { setStatus('Bitte gültigen Zeitbereich wählen.'); return; }
 
   setStatus('Lade Daten...');
   const agg = document.getElementById('explorerAgg').value;
+  const rangeLabel = fmtRangeLabel(startISO, endISO);
 
   // Route: granular path for any agg present in GRANULAR_AGG_TO_SECONDS
   // (5s/10s/15s/30s/1min/5min); legacy slot path for 15min / 1h / day.
   if (GRANULAR_AGG_TO_SECONDS[agg]) {
     try {
-      const rows = await fetchGranularData(startDate, endDate, agg);
-      explorerData.rawSlots = []; // raw-table reads granularRows instead in this mode
+      const rows = await fetchGranularData(startISO, endISO, agg);
+      explorerData.rawSlots = [];
       explorerData.rawFc = null;
       explorerData.rawEpex = [];
       explorerData.rawSoc = [];
       buildGranularChartData(rows, agg);
       renderChart();
-      setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg}, ${startDate}…${endDate}). Nur PV/Last/Bat/SOC/Netz im Granular-Modus.`);
+      setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg} · ${rangeLabel}).`);
     } catch (e) {
       setStatus(`Fehler: ${e.message}`);
     }
@@ -210,31 +244,22 @@ async function fetchExplorerData() {
   explorerData.granularMode = false;
   explorerData.granularRows = null;
   try {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
     const allSlots = [];
-    const dayPromises = [];
-
-    for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
-      const dateStr = fmtDate(d);
-      dayPromises.push(
-        apiFetch(`/api/history/summary?view=day&date=${dateStr}`)
-          .then(r => r.json())
-          .then(data => ({ date: dateStr, slots: data.slots || [] }))
-          .catch(() => ({ date: dateStr, slots: [] }))
-      );
-    }
+    const dayPromises = daysCovered(startISO, endISO).map(dateStr =>
+      apiFetch(`/api/history/summary?view=day&date=${dateStr}`)
+        .then(r => r.json())
+        .then(data => ({ date: dateStr, slots: data.slots || [] }))
+        .catch(() => ({ date: dateStr, slots: [] }))
+    );
 
     const dayResults = await Promise.all(dayPromises);
     dayResults.sort((a, b) => a.date.localeCompare(b.date));
     for (const dr of dayResults) allSlots.push(...dr.slots);
 
-    const startIso = new Date(startDate).toISOString();
-    const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
     const [fcData, statusData, socData] = await Promise.all([
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
       apiFetch('/api/status').then(r => r.json()).catch(() => null),
-      apiFetch(`/api/telemetry/series?keys=battery_soc_pct&start=${startIso}&end=${endIso}`).then(r => r.json()).catch(() => null)
+      apiFetch(`/api/telemetry/series?keys=battery_soc_pct&start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`).then(r => r.json()).catch(() => null)
     ]);
 
     explorerData.rawSlots = allSlots;
@@ -245,7 +270,7 @@ async function fetchExplorerData() {
     const slots = aggregateSlots(allSlots, agg);
     buildChartData(slots, fcData, statusData?.epex?.data || [], agg, explorerData.rawSoc);
     renderChart();
-    setStatus(`${allSlots.length.toLocaleString('de-DE')} Slots geladen (${startDate}…${endDate}).`);
+    setStatus(`${allSlots.length.toLocaleString('de-DE')} Slots geladen (${rangeLabel}).`);
   } catch (e) {
     setStatus(`Fehler: ${e.message}`);
   }
@@ -511,8 +536,8 @@ function wirePillGroup(groupEl) {
 // (1.5M slots) is never hit even on 30d × 5s × 5 keys (= 2.6M slots
 // total, but ≤86,400/day per key).
 async function exportCsv() {
-  const [startDate, endDate] = getDateRange();
-  if (!startDate || !endDate) { setStatus('Bitte Zeitbereich wählen.'); return; }
+  const [startISO, endISO] = getDateRange();
+  if (!startISO || !endISO) { setStatus('Bitte gültigen Zeitbereich wählen.'); return; }
   const agg = document.getElementById('explorerAgg').value;
   const granular = GRANULAR_AGG_TO_SECONDS[agg];
 
@@ -522,9 +547,9 @@ async function exportCsv() {
 
   try {
     if (granular) {
-      await exportCsvGranular(startDate, endDate, agg);
+      await exportCsvGranular(startISO, endISO, agg);
     } else {
-      await exportCsvSlots(startDate, endDate, agg);
+      await exportCsvSlots(startISO, endISO, agg);
     }
   } catch (e) {
     setStatus(`CSV-Export Fehler: ${e.message}`);
@@ -533,35 +558,36 @@ async function exportCsv() {
   }
 }
 
-// Granular export: day-by-day fetch from /api/telemetry/series, full
-// resolution, ALL active granular series. ~86,400 rows/day at 5s × 5 keys
-// is well within the per-request cap.
-async function exportCsvGranular(startDate, endDate, agg) {
+// Granular export: walk the [startISO, endISO) range in ≤24h chunks anchored
+// at the start. Each chunk fetches at the user-picked maxResolution. Server
+// cap (1.5M slots) is never hit per request — at 5s × 5 keys × 86,400s/day
+// = 432,000 slots, well below cap.
+async function exportCsvGranular(startISO, endISO, agg) {
   const maxRes = GRANULAR_AGG_TO_SECONDS[agg];
   const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && GRANULAR_SERIES_MAP[d.id]);
   if (!activeDefs.length) { setStatus('Keine Granular-Serie ausgewählt.'); return; }
-  // Union of telemetry keys needed for the active series (deduplicated;
-  // gridKw + importKw share grid_import_w, autarkie shares load_power_w + self_consumption_w, etc.).
   const tKeys = [...new Set(activeDefs.flatMap(d => GRANULAR_SERIES_MAP[d.id].tKeys))];
 
-  // Iterate days [start..end] inclusive. Each iteration fetches exactly 24h.
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  const dayCount = Math.floor((end - start) / 86400000) + 1;
+  const startMs = new Date(startISO).getTime();
+  const endMs = new Date(endISO).getTime();
+  const chunkMs = 86_400_000; // 24h
+  const chunkCount = Math.max(1, Math.ceil((endMs - startMs) / chunkMs));
   const byTs = new Map();
   let totalFetched = 0;
 
-  for (let i = 0; i < dayCount; i++) {
-    const d = new Date(start.getTime() + i * 86400000);
-    const dayStartIso = d.toISOString();
-    const dayEndIso = new Date(d.getTime() + 86400000).toISOString();
-    setStatus(`CSV-Export · Tag ${i + 1}/${dayCount} (${fmtDate(d)})…`);
-    const url = `/api/telemetry/series?keys=${encodeURIComponent(tKeys.join(','))}&start=${encodeURIComponent(dayStartIso)}&end=${encodeURIComponent(dayEndIso)}&maxResolution=${maxRes}`;
+  for (let i = 0; i < chunkCount; i++) {
+    const chunkStart = startMs + i * chunkMs;
+    const chunkEnd = Math.min(chunkStart + chunkMs, endMs);
+    const chunkStartIso = new Date(chunkStart).toISOString();
+    const chunkEndIso = new Date(chunkEnd).toISOString();
+    const chunkLabel = fmtDate(new Date(chunkStart));
+    setStatus(`CSV-Export · Chunk ${i + 1}/${chunkCount} (${chunkLabel})…`);
+    const url = `/api/telemetry/series?keys=${encodeURIComponent(tKeys.join(','))}&start=${encodeURIComponent(chunkStartIso)}&end=${encodeURIComponent(chunkEndIso)}&maxResolution=${maxRes}`;
     const res = await apiFetch(url);
     const body = await res.json().catch(() => null);
     if (!res.ok || !body?.ok) {
       throw new Error(body?.error === 'scan_too_large'
-        ? `Tag ${fmtDate(d)}: zu groß für eine Range — wähle gröbere Auflösung.`
+        ? `Chunk ${chunkLabel}: zu groß für eine Range — wähle gröbere Auflösung.`
         : (body?.error || `HTTP ${res.status}`));
     }
     for (const r of (body.data || [])) {
@@ -581,13 +607,15 @@ async function exportCsvGranular(startDate, endDate, agg) {
     }
     return cells.join(';');
   });
-  downloadCsv(`dvhub-explorer-${agg}-${startDate}_${endDate}.csv`, [header.join(';'), ...rows].join('\n'));
-  setStatus(`CSV mit ${sorted.length.toLocaleString('de-DE')} Zeilen exportiert (${totalFetched.toLocaleString('de-DE')} Telemetry-Punkte aus ${dayCount} Tag(en)).`);
+  const fnameStart = fmtDate(new Date(startISO));
+  const fnameEnd = fmtDate(new Date(new Date(endISO).getTime() - 1));
+  downloadCsv(`dvhub-explorer-${agg}-${fnameStart}_${fnameEnd}.csv`, [header.join(';'), ...rows].join('\n'));
+  setStatus(`CSV mit ${sorted.length.toLocaleString('de-DE')} Zeilen exportiert (${totalFetched.toLocaleString('de-DE')} Telemetry-Punkte aus ${chunkCount} Chunk(s)).`);
 }
 
 // Slot export (15min / 1h / day) — use what's in memory, which already
 // covers the full range from fetchExplorerData's existing day-by-day loop.
-async function exportCsvSlots(startDate, endDate, agg) {
+async function exportCsvSlots(startISO, endISO, agg) {
   if (!explorerData.labels.length) { setStatus('Erst Daten laden, dann exportieren.'); return; }
   const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && explorerData.seriesData?.[d.id]);
   const header = ['Zeitpunkt', ...activeDefs.map(d => `${d.label} (${d.unit})`)];
@@ -597,7 +625,9 @@ async function exportCsvSlots(startDate, endDate, agg) {
       return v != null ? Number(v).toFixed(3).replace('.', ',') : '';
     })].join(';');
   });
-  downloadCsv(`dvhub-explorer-${agg}-${startDate}_${endDate}.csv`, [header.join(';'), ...rows].join('\n'));
+  const fnameStart = fmtDate(new Date(startISO));
+  const fnameEnd = fmtDate(new Date(new Date(endISO).getTime() - 1));
+  downloadCsv(`dvhub-explorer-${agg}-${fnameStart}_${fnameEnd}.csv`, [header.join(';'), ...rows].join('\n'));
   setStatus(`CSV mit ${rows.length.toLocaleString('de-DE')} Zeilen exportiert.`);
 }
 
@@ -616,10 +646,12 @@ function initExplorer() {
   const rangeSelect = document.getElementById('explorerRange');
   const customStart = document.getElementById('customStartWrap');
   const customEnd = document.getElementById('customEndWrap');
-  const today = fmtDate(new Date());
 
-  document.getElementById('explorerStart').value = fmtDate(addDays(new Date(), -7));
-  document.getElementById('explorerEnd').value = today;
+  // datetime-local default: last 24h, minute precision in local time.
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86_400_000);
+  document.getElementById('explorerStart').value = fmtDateTimeLocal(yesterday);
+  document.getElementById('explorerEnd').value = fmtDateTimeLocal(now);
 
   // initialFetchDone gate keeps the auto-fetch listeners below from firing
   // during initExplorer's own auto-load (which runs at the bottom). Once the
