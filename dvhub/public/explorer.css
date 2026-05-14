@@ -1,0 +1,215 @@
+/* Explorer page — Aurora port (Plan 09.1-06 Wave 5).
+   Self-contained per-page CSS. Rules harvested from styles.css with
+   legacy --flow-* tokens remapped to Aurora design tokens. theme.js
+   handles light/dark cycling on the topbar; explorer.js MUST NOT touch
+   localStorage['dvhub.theme']. */
+
+/* [hidden] normalize — Wave-3 invariant #8 (adopted by index.css, settings.css). */
+[hidden] { display: none !important; }
+
+/* ===== Page layout shell =====
+   Replaces .page-content from styles.css; standalone so removing styles.css
+   in Plan 09.1-07 does not regress paint. */
+.page-content {
+  padding: 16px 24px;
+  max-width: min(1400px, 100%);
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* ===== Page header card (Wave-4 mockup design language) ===== */
+.page-header-card {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md, 10px);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-header-card-copy h1 {
+  font-family: var(--f-brand);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.page-header-card-copy .page-kicker {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-2);
+  margin: 0 0 4px;
+}
+.page-header-card-copy .page-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  margin: 4px 0 0;
+}
+
+/* ===== Sub-page panel card ===== */
+.sub-card {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md, 10px);
+  padding: 16px;
+}
+
+/* ===== Aurora topbar — Wave 5 (mirrored from settings.css Wave 4) ===== */
+.nav-toggle {
+  display: none;
+  appearance: none; cursor: pointer;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  width: 38px; height: 38px; border-radius: 8px;
+  flex-shrink: 0; padding: 0;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 3px;
+  transition: .15s;
+}
+.nav-toggle:hover { background: var(--glass-2); border-color: var(--glass-brd-strong); }
+.nav-toggle .nav-toggle-bar {
+  display: block; width: 18px; height: 2px; border-radius: 2px;
+  background: var(--text-2); transition: .2s;
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { transform: translateY(5px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(3) { transform: translateY(-5px) rotate(-45deg); }
+
+@media (max-width: 760px) {
+  .nav-toggle { display: inline-flex; }
+  .topbar-nav {
+    position: fixed; top: 56px; left: 0; right: 0; z-index: 49;
+    display: flex; flex-direction: column; align-items: stretch;
+    flex: none;
+    background: var(--bg-1, #0a1226);
+    backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.2);
+    border-bottom: 1px solid var(--glass-brd, rgba(120,180,255,.14));
+    padding: 8px 14px 12px;
+    gap: 4px;
+    transform: translateY(-12px); opacity: 0; pointer-events: none;
+    transition: transform .2s ease, opacity .2s ease;
+    overflow-x: visible;
+  }
+  .topbar-nav.is-open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .topbar-nav a { padding: 10px 13px; }
+  .topbar-nav a.is-active::after { display: none; }
+}
+
+/* ===== Explorer controls strip (was in styles.css §Explorer) ===== */
+.explorer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+.explorer-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.explorer-control label {
+  font-size: 0.65rem;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.explorer-control input,
+.explorer-control select {
+  background: var(--glass);
+  border: 1px solid var(--glass-brd-strong);
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--f-body);
+  min-width: 140px;
+}
+.explorer-control input:focus,
+.explorer-control select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* ===== Series chip strip (explorer.js renders into #explorerSeriesChips) ===== */
+.explorer-series-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.explorer-series-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-family: var(--f-mono);
+  cursor: pointer;
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+  color: var(--text-2);
+  transition: all 0.15s;
+  user-select: none;
+}
+.explorer-series-chip:hover {
+  background: var(--glass-2);
+  border-color: var(--glass-brd-strong);
+}
+.explorer-series-chip.is-active {
+  border-color: currentColor;
+  color: var(--text);
+  background: var(--glass-2);
+}
+.explorer-series-chip .chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ===== Chart container ===== */
+.explorer-chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 480px;
+}
+
+/* ===== Bottom action strip + status text ===== */
+.explorer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.explorer-status {
+  font-size: 12px;
+  color: var(--text-2);
+  font-family: var(--f-mono);
+  margin-left: auto;
+}
+
+/* ===== Utility classes ===== */
+.u-hidden { display: none !important; }
+.u-text-muted { color: var(--text-2); }
+
+/* ===== Light theme refinements ===== */
+[data-theme="light"] .explorer-control input,
+[data-theme="light"] .explorer-control select {
+  background: var(--glass);
+  border-color: var(--glass-brd-strong);
+  color: var(--text);
+}
+[data-theme="light"] .sub-card,
+[data-theme="light"] .page-header-card {
+  background: var(--glass-2);
+  border-color: var(--glass-brd);
+}

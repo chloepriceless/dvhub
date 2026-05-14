@@ -1,5 +1,19 @@
 <!doctype html>
-<html lang="de">
+<!-- Explorer page — Aurora port (Plan 09.1-06 Wave 5).
+     - Loads Aurora design tokens (dvhub-app.css) + theme.js + page-specific
+       explorer.css (rules harvested from styles.css with --flow-* tokens
+       remapped to Aurora). styles.css is NOT loaded.
+     - theme.js is the SOLE writer of localStorage['dvhub.theme']
+       (AURORA-02 single-writer); explorer.js MUST NOT call setItem on
+       that key.
+     - Binding contract: explorer.js binds against 12 IDs:
+       explorerRange, customStartWrap, explorerStart, customEndWrap,
+       explorerEnd, explorerAgg, explorerLoadBtn, explorerResetZoomBtn,
+       explorerSeriesChips, explorerCanvas (Chart.js mount), explorerCsvBtn,
+       explorerStatus.
+     - Chart.js + chartjs-plugin-zoom + hammer.js loaded at /chart.min.js
+       etc. — same canonical paths as Wave 3 history port. -->
+<html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,7 +21,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/dvhub-app.css" />
+  <link rel="stylesheet" href="/explorer.css" />
+  <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
   <link rel="manifest" href="/manifest.json">
@@ -17,15 +33,17 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="compact-topbar">
+    <header class="topbar" data-screen-label="Topbar">
       <div class="topbar-brand">
         <img src="/assets/dvhub-wordmark.png" alt="DVhub">
+        <span class="product">Explorer</span>
       </div>
-      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
-      <label for="menuToggle" class="topbar-burger" aria-label="Menü öffnen">
-        <span></span><span></span><span></span>
-      </label>
-      <nav class="topbar-nav" aria-label="Hauptnavigation">
+      <button class="nav-toggle" id="navToggle" type="button" aria-label="Hauptnavigation umschalten" aria-expanded="false" aria-controls="topbarNav">
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+      </button>
+      <nav class="topbar-nav" id="topbarNav" aria-label="Hauptnavigation">
         <a href="/">Leitstand</a>
         <a href="/family">Familie</a>
         <a href="/integrations">Integrationen</a>
@@ -33,11 +51,14 @@
         <a class="is-active" href="/explorer.html">Explorer</a>
         <a href="/settings.html">Einstellungen</a>
       </nav>
-      <div class="topbar-right"></div>
+      <div class="topbar-right">
+        <button class="theme-toggle" type="button" aria-label="Theme umschalten">
+          <span class="theme-label">Theme</span>
+        </button>
+      </div>
     </header>
 
     <main class="page-content">
-      <!-- Page header -->
       <div class="page-header-card">
         <div class="page-header-card-copy">
           <p class="page-kicker">Explorer</p>
@@ -46,11 +67,10 @@
         </div>
       </div>
 
-      <!-- Explorer card -->
       <div class="sub-card">
         <div class="explorer-controls">
           <div class="explorer-control">
-            <label>Zeitbereich</label>
+            <label for="explorerRange">Zeitbereich</label>
             <select id="explorerRange">
               <option value="today">Heute</option>
               <option value="yesterday">Gestern</option>
@@ -60,15 +80,15 @@
             </select>
           </div>
           <div class="explorer-control u-hidden" id="customStartWrap">
-            <label>Von</label>
+            <label for="explorerStart">Von</label>
             <input type="date" id="explorerStart" />
           </div>
           <div class="explorer-control u-hidden" id="customEndWrap">
-            <label>Bis</label>
+            <label for="explorerEnd">Bis</label>
             <input type="date" id="explorerEnd" />
           </div>
           <div class="explorer-control">
-            <label>Aggregation</label>
+            <label for="explorerAgg">Aggregation</label>
             <select id="explorerAgg">
               <option value="15min" selected>15 Minuten</option>
               <option value="1h">1 Stunde</option>
@@ -76,10 +96,10 @@
             </select>
           </div>
           <div class="explorer-control">
-            <button class="btn btn-primary" id="explorerLoadBtn">Laden</button>
+            <button class="btn primary" id="explorerLoadBtn" type="button">Laden</button>
           </div>
           <div class="explorer-control">
-            <button class="btn btn-ghost" id="explorerResetZoomBtn">Zoom Reset</button>
+            <button class="btn ghost" id="explorerResetZoomBtn" type="button">Zoom Reset</button>
           </div>
         </div>
 
@@ -90,7 +110,7 @@
         </div>
 
         <div class="explorer-actions">
-          <button class="btn btn-ghost" id="explorerCsvBtn">CSV Export</button>
+          <button class="btn ghost" id="explorerCsvBtn" type="button">CSV Export</button>
           <span class="explorer-status" id="explorerStatus">Bereit.</span>
         </div>
       </div>

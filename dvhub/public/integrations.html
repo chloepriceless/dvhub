@@ -1,13 +1,26 @@
-<!DOCTYPE html>
-<html lang="de">
+<!doctype html>
+<!-- Integrations page — Aurora port (Plan 09.1-06 Wave 5).
+     - Loads Aurora design tokens (dvhub-app.css) + theme.js + page-specific
+       integrations.css (rules harvested from styles.css with --flow-* tokens
+       remapped to Aurora). styles.css is NOT loaded.
+     - theme.js is the SOLE writer of localStorage['dvhub.theme']
+       (AURORA-02 single-writer); integrations.js MUST NOT call setItem on
+       that key.
+     - Binding contract: integrations.js binds against #intg-list and
+       #intg-empty (status polling + empty-state toggle).
+     - <html data-theme="dark"> default avoids flash-of-light before
+       theme.js runs; theme.js refines based on localStorage. -->
+<html lang="de" data-theme="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DVhub -- Integrationen</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVhub Integrationen</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/dvhub-app.css" />
+  <link rel="stylesheet" href="/integrations.css" />
+  <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
   <link rel="manifest" href="/manifest.json">
@@ -17,15 +30,17 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="compact-topbar">
+    <header class="topbar" data-screen-label="Topbar">
       <div class="topbar-brand">
         <img src="/assets/dvhub-wordmark.png" alt="DVhub">
+        <span class="product">Integrationen</span>
       </div>
-      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
-      <label for="menuToggle" class="topbar-burger" aria-label="Menu oeffnen">
-        <span></span><span></span><span></span>
-      </label>
-      <nav class="topbar-nav" aria-label="Hauptnavigation">
+      <button class="nav-toggle" id="navToggle" type="button" aria-label="Hauptnavigation umschalten" aria-expanded="false" aria-controls="topbarNav">
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+      </button>
+      <nav class="topbar-nav" id="topbarNav" aria-label="Hauptnavigation">
         <a href="/">Leitstand</a>
         <a href="/family">Familie</a>
         <a class="is-active" href="/integrations">Integrationen</a>
@@ -33,43 +48,54 @@
         <a href="/explorer.html">Explorer</a>
         <a href="/settings.html">Einstellungen</a>
       </nav>
-      <div class="topbar-right"></div>
+      <div class="topbar-right">
+        <button class="theme-toggle" type="button" aria-label="Theme umschalten">
+          <span class="theme-label">Theme</span>
+        </button>
+      </div>
     </header>
 
-    <main class="intg-page">
-      <h1 class="section-title">Integrationen</h1>
-      <p class="intg-subtitle">Verbundene Systeme und Services</p>
+    <main class="page-content">
+      <div class="intg-aurora">
+        <div class="page-header-card">
+          <div class="page-header-card-copy">
+            <p class="page-kicker">Integrationen</p>
+            <h1>Verbundene Systeme</h1>
+            <p class="page-subtitle">Status und Konfiguration der angebundenen Services.</p>
+          </div>
+        </div>
 
-      <!-- VRM Backfill status banner (08-12): explain the 6-month availability window
-           so operators don't think missing pre-6-month data is a bug. The full
-           backfill UI lives in /settings.html#system (Historie config-group). -->
-      <section class="intg-row" data-integration="vrm" aria-label="VRM Backfill Status">
-        <span class="intg-row-icon">&#x2601;</span>
-        <span class="intg-row-label">VRM Backfill (Victron Cloud)</span>
-        <span class="intg-row-status u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
-      </section>
-      <div class="intg-detail">
-        <p>
-          Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
-          <strong>Verf&uuml;gbar:</strong> Backfill der letzten 6 Monate.
-        </p>
-        <p class="u-text-muted">
-          &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
-          Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
-        </p>
-      </div>
+        <!-- VRM Backfill status banner (Phase 08-12): explains the 6-month availability
+             window so operators don't think missing pre-6-month data is a bug. The full
+             backfill UI lives in /settings.html#system (Historie config-group). -->
+        <section class="intg-row" data-integration="vrm" aria-label="VRM Backfill Status">
+          <span class="intg-row-icon">&#x2601;</span>
+          <span class="intg-row-label">VRM Backfill (Victron Cloud)</span>
+          <span class="intg-row-status u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
+        </section>
+        <div class="intg-detail">
+          <p>
+            Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
+            <strong>Verf&uuml;gbar:</strong> Backfill der letzten 6 Monate.
+          </p>
+          <p class="u-text-muted">
+            &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
+            Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
+          </p>
+        </div>
 
-      <div id="intg-list">
-        <div class="intg-empty" id="intg-empty">
-          <h3>Keine Integrationen konfiguriert</h3>
-          <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
+        <div id="intg-list">
+          <div class="intg-empty" id="intg-empty">
+            <h3>Keine Integrationen konfiguriert</h3>
+            <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
+          </div>
         </div>
       </div>
     </main>
   </div>
 
-  <script src="common.js"></script>
-  <script src="dv-modal.js"></script>
-  <script src="integrations.js?v=2"></script>
+  <script src="/common.js"></script>
+  <script src="/dv-modal.js"></script>
+  <script src="/integrations.js?v=2"></script>
 </body>
 </html>
