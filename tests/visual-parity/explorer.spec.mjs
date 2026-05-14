@@ -34,6 +34,10 @@ const EXPECTED_IDS = [
   'explorerCanvas',
   'explorerCsvBtn',
   'explorerStatus',
+  // Phase 09.2-07 additions
+  'explorerSourceChips',     // D-21 Source-Chips container
+  'explorerSavedViewsBtn',   // D-23 Saved-Views dropdown trigger
+  'explorerParquetBtn',      // D-24 Parquet export button (placeholder for Plan 09.2-08)
 ];
 
 test.describe('Explorer page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)', () => {
@@ -74,7 +78,7 @@ test.describe('Explorer page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)',
     expect(hasThemeJs).toBe(true);
   });
 
-  test('all 12 bound IDs present in DOM', async ({ page }) => {
+  test('all bound IDs present in DOM (12 legacy + 3 Phase-09.2-07)', async ({ page }) => {
     await page.goto('/explorer.html');
     await page.waitForLoadState('networkidle');
     const missing = [];
@@ -208,5 +212,78 @@ test.describe('Explorer page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)',
     await page.waitForTimeout(200);
     const row = page.locator(`#explorerSeriesChips .sig-row[data-series="${seriesId}"]`);
     await expect(row).not.toHaveClass(/is-active/);
+  });
+
+  // --- Phase 09.2-07 smoke tests (D-21, D-22, D-23) ---
+
+  test('source-chips render five chips with class-driven dot colors', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForSelector('#explorerSourceChips .source-chip', { timeout: 5000 });
+    const chips = await page.$$('#explorerSourceChips .source-chip');
+    expect(chips.length).toBe(5);
+    for (const id of ['victron', 'mid', 'luox', 'epex', 'optimizer']) {
+      const chip = await page.$(`#explorerSourceChips [data-source="${id}"]`);
+      expect(chip, `chip data-source="${id}" must exist`).not.toBeNull();
+      // Chip must contain a .dot.dot-<id> sub-element (class-driven color, not inline style)
+      const dotCount = await page.locator(`#explorerSourceChips [data-source="${id}"] .dot.dot-${id}`).count();
+      expect(dotCount, `chip ${id} must have a .dot.dot-${id} child (class-driven color)`).toBe(1);
+    }
+    // All 5 must default to active
+    const active = await page.$$('#explorerSourceChips .source-chip.is-active');
+    expect(active.length).toBe(5);
+  });
+
+  test('source-chip toggle flips is-active + aria-pressed without page reload', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForSelector('#explorerSourceChips .source-chip[data-source="luox"]', { timeout: 5000 });
+    const luoxChip = page.locator('#explorerSourceChips [data-source="luox"]').first();
+    await expect(luoxChip).toHaveClass(/is-active/);
+    await expect(luoxChip).toHaveAttribute('aria-pressed', 'true');
+    await luoxChip.click();
+    // renderSourceChips() rebuilds the markup on every toggle — re-locate.
+    await page.waitForTimeout(150);
+    const after = page.locator('#explorerSourceChips [data-source="luox"]').first();
+    await expect(after).not.toHaveClass(/is-active/);
+    await expect(after).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('saved view round-trip: prepopulate localStorage → reload → menu shows view', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    await page.evaluate(() => {
+      localStorage.setItem('dvhub.explorer.savedViews', JSON.stringify([
+        {
+          name: 'Smoke-Test View',
+          signals: ['pvKw', 'soc'],
+          sources: ['victron', 'epex'],
+          timerange: '24h',
+          aggregation: '15min',
+          savedAt: new Date().toISOString()
+        }
+      ]));
+    });
+    await page.reload();
+    await page.waitForSelector('#explorerSavedViewsBtn', { timeout: 5000 });
+    await page.click('#explorerSavedViewsBtn');
+    const menu = await page.waitForSelector('#explorerSavedViewsMenu.is-open', { timeout: 2000 });
+    expect(menu).not.toBeNull();
+    // Name must render via textContent (not as raw HTML)
+    const nameText = await menu.$eval('.saved-view-name', (el) => el.textContent);
+    expect(nameText).toBe('Smoke-Test View');
+    // The save action button must exist
+    const saveBtn = await menu.$('[data-act="save"]');
+    expect(saveBtn).not.toBeNull();
+  });
+
+  test('Saved-Views uses dvhub.explorer.savedViews key (NOT dvhub.theme — AURORA-02 D-27)', async ({ page }) => {
+    await page.goto('/explorer.html');
+    const jsBody = await page.evaluate(async () => {
+      const resp = await fetch('/explorer.js');
+      return resp.text();
+    });
+    // explorer.js must reference the savedViews key
+    expect(jsBody).toMatch(/['"]dvhub\.explorer\.savedViews['"]/);
+    // explorer.js must NEVER call setItem on dvhub.theme (theme.js sole writer)
+    expect(jsBody).not.toMatch(/localStorage\.setItem\(\s*['"]dvhub\.theme['"]/);
   });
 });
