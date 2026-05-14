@@ -2288,11 +2288,11 @@ body.dv-modal-open {
   gap: 8px;
 }
 
-/* iOS-style pill toggle — rendered via background radial-gradient so it
-   works reliably on iOS Safari/WebKit (which has historical bugs with
-   ::after pseudo-elements on <input> with appearance:none).
-   Geometry: 44×20 inside pill, 14px-wide dot drawn as a gradient,
-   slides from x=10 (off, 3px from left) to x=34 (on, 3px from right). */
+/* iOS-style pill toggle — rendered via background radial-gradient
+   (reliable on iOS Safari/WebKit, no ::after pseudo on <input>).
+   Pill 44×20, dot 14×14 (gradient sized to dot, slides via position).
+   Off: position 3px 3px → dot at element (3-17, 3-17), 3px margins left/top/bottom
+   On:  position 27px 3px → dot at element (27-41, 3-17), 3px margins right/top/bottom */
 .settings-aurora .config-row input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -2302,8 +2302,8 @@ body.dv-modal-open {
   background-color: rgba(5, 10, 22, .55);
   background-image: radial-gradient(circle, rgba(232, 234, 240, .55) 7px, transparent 7.5px);
   background-repeat: no-repeat;
-  background-size: 44px 20px;
-  background-position: 10px center;
+  background-size: 14px 14px;
+  background-position: 3px 3px;
   border: 1px solid var(--sa-glass-brd-hot, rgba(120, 180, 255, .22));
   border-radius: 99px;
   cursor: pointer;
@@ -2315,7 +2315,7 @@ body.dv-modal-open {
 .settings-aurora .config-row input[type="checkbox"]:checked {
   background-color: rgba(52, 219, 255, .12);
   background-image: radial-gradient(circle, #34dbff 7px, transparent 7.5px);
-  background-position: 34px center;
+  background-position: 27px 3px;
   border-color: rgba(52, 219, 255, .55);
 }
 .settings-aurora .config-row input[type="checkbox"]:focus-visible {
