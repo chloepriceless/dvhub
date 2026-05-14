@@ -48,18 +48,28 @@ function mockStreamRes() {
       captured.status = code;
       Object.assign(captured.headers, headers || {});
     },
-    write(chunk) {
-      // Parquet writes binary buffers; preserve them.
+    write(chunk, cb) {
+      // Parquet writes binary buffers; preserve them. ParquetEnvelopeWriter (via
+      // util.oswrite) calls res.write(buf, callback) — we MUST invoke the
+      // callback or writer.close() will hang. Real http.ServerResponse honors
+      // the same contract; this mock matches it.
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       captured.chunks.push(buf);
+      if (typeof cb === 'function') cb();
       return true;
     },
-    end(payload) {
-      if (payload != null) {
+    end(payload, cb) {
+      // Two call shapes: end(cb) or end(payload, cb). The streaming exporters
+      // generally use end() with no payload; the writer-side osend uses end(cb).
+      let callback = cb;
+      if (typeof payload === 'function') {
+        callback = payload;
+      } else if (payload != null) {
         const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
         captured.chunks.push(buf);
       }
       captured.closed = true;
+      if (typeof callback === 'function') callback();
     },
     on(event, listener) {
       if (event === 'close') closeListeners.push(listener);
