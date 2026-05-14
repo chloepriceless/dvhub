@@ -691,6 +691,13 @@ export function createApiRoutes(ctx) {
     return false;
   }
 
+  // --- /api/integrations/health 5-second cache (Phase 09.2 D-18) ---
+  // Single-key closure entry — no params → no cache-poisoning surface, bounded
+  // memory by TTL. Recomputed at most once per HEALTH_CACHE_TTL_MS via the
+  // healthTracker.snapshot() read in the handler below.
+  const HEALTH_CACHE_TTL_MS = 5000;
+  let healthCacheEntry = null; // { payload, expiresAt }
+
   // --- Rate Limiting (in-memory, per IP) ---
   const rateLimitBuckets = new Map();
   const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -1622,6 +1629,46 @@ export function createApiRoutes(ctx) {
         }
       };
       return json(res, 200, payload);
+    }
+
+    // GET /api/integrations/health — all-in-one per-system health response
+    // (Phase 09.2 D-17 revised). Bearer auth required from any source — NOT
+    // in LAN_SAFE_ENDPOINTS (T-09.2-AUTHZ): per-system telemetry topology +
+    // last-sample timestamps are reconnaissance-relevant. Featured-Row is
+    // Victron-only (D-19 revised — see CONTEXT.md; we use an external direct
+    // marketer rather than direct EPEX trading). 5-second cache (D-18).
+    if (url.pathname === '/api/integrations/health' && req.method === 'GET') {
+      // checkAuth has already run (any non-LAN-safe /api/* path goes through
+      // the gate at line ~1383). Proceed straight to cache check.
+      const now = Date.now();
+      if (healthCacheEntry && healthCacheEntry.expiresAt > now) {
+        return json(res, 200, healthCacheEntry.payload);
+      }
+      try {
+        const trackerSnap = ctx.healthTracker?.snapshot?.() || {};
+        // Victron heartbeat = seconds since last sample. Null when the tracker
+        // has no Victron entry yet (boot, before first poll).
+        const victronSnap = trackerSnap.victron;
+        let heartbeatSec = null;
+        if (victronSnap && victronSnap.lastSampleAt) {
+          const ageMs = now - new Date(victronSnap.lastSampleAt).getTime();
+          if (Number.isFinite(ageMs) && ageMs >= 0) heartbeatSec = Math.round(ageMs / 1000);
+        }
+        // Featured-Row payload — Victron-only per D-19 revised.
+        // No LUOX revenue / bid-count / EEG-uplift / activation-age fields
+        // (the source table required for those metrics does not exist —
+        // see CONTEXT.md D-19 revised). Wave-0 test 5 enforces the absence.
+        const featured = {
+          victronHeartbeatSec: heartbeatSec,
+          victronEssMode: state.meter?.essMode ?? state.essMode ?? null,
+        };
+        const payload = { ...trackerSnap, featured };
+        healthCacheEntry = { payload, expiresAt: now + HEALTH_CACHE_TTL_MS };
+        return json(res, 200, payload);
+      } catch (e) {
+        pushLog('integrations_health_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // Integrations page HTML route

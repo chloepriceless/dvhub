@@ -11,9 +11,10 @@
        #intg-filter-disabled (data-status-filter delegation).
      - Mockup fidelity: .conn-grid + .conn-card layout matches
        .planning/DESIGN-2026-05-10-aurora/integrations.html .conn-card
-       shape. Per-system Latency/Uptime/Errors/Drops/Firmware metrics are
-       "—" placeholders — Phase 09.2 fills them when the backend exposes
-       the per-system health endpoint. -->
+       shape. Per-system Latency/Uptime/Errors/Sample-rate/Firmware
+       metrics are populated from /api/integrations/health (Phase 09.2).
+       LUOX continues as a regular .conn-card; Featured-Row is
+       Victron-only (D-19 revised — no LUOX hero, no dv_bids dependency). -->
 <html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -100,6 +101,24 @@
           &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
           Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
         </p>
+      </section>
+
+      <!-- Featured-Row — Victron hero card only (Phase 09.2 D-19 revised).
+           LUOX-Erloes hero dropped: source data does not exist (we use a
+           direct marketer, not direct EPEX trading). LUOX continues as a
+           regular .conn-card in #intg-list below. Values bound by
+           integrations.js#renderFeatured() via textContent (CSP-safe). -->
+      <section class="featured-row" aria-label="Live-Highlights">
+        <article class="featured-card victron" data-system="victron">
+          <header class="featured-head">
+            <span class="featured-kicker">Victron ESS &middot; Heartbeat</span>
+            <span class="featured-status" data-bind="victron.essMode">&mdash;</span>
+          </header>
+          <div class="featured-metric">
+            <span class="featured-value" data-bind="victron.heartbeatSec">&mdash;</span>
+            <span class="featured-unit">s seit letztem Sample</span>
+          </div>
+        </article>
       </section>
 
       <!-- Connection grid — integrations.js renders one .conn-card per known
