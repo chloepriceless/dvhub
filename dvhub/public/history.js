@@ -882,7 +882,9 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
     tension: 0.3
   }));
 
-  mount.innerHTML = `<div style="position:relative;height:${chartHeight}px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
+
+  mount.firstElementChild.style.height = `${chartHeight}px`;
   const canvas = document.getElementById(mountId + 'Canvas');
   if (!canvas) return;
 
@@ -998,8 +1000,8 @@ function renderRevenueCostBars(mountId, items) {
         ${items.map((item) => `
           <div class="history-bar-card">
             <div class="history-stack history-stack-compare">
-              <div class="history-bar history-bar-revenue" style="height:${stackHeight(item?.exportRevenueEur, max)}px"></div>
-              <div class="history-bar history-bar-cost" style="height:${stackHeight(baselineTotalCostEur(item), max)}px"></div>
+              <div class="history-bar history-bar-revenue" data-bar-height="${stackHeight(item?.exportRevenueEur, max)}"></div>
+              <div class="history-bar history-bar-cost" data-bar-height="${stackHeight(baselineTotalCostEur(item), max)}"></div>
             </div>
             <strong>${escapeHtml(item.label || '-')}</strong>
             <span>Export ${fmtKwh(item?.exportKwh)}</span>
@@ -1010,6 +1012,10 @@ function renderRevenueCostBars(mountId, items) {
       </div>
     </div>
   `;
+  // CSP-safe: apply data-bar-height to each .history-bar after innerHTML
+  // (inline style="height:..." in innerHTML is blocked by style-src without
+  // 'unsafe-inline'; data-attr + property setter is allowed).
+  mount.querySelectorAll('[data-bar-height]').forEach((el) => { el.style.height = el.dataset.barHeight + 'px'; });
 }
 
 function renderCombinedPeriodBars(mountId, items) {
@@ -1055,7 +1061,7 @@ function renderCombinedPeriodBars(mountId, items) {
     return `
       <div class="history-period-bar-slot" title="${escapeHtml(metric.label)} ${escapeHtml(metric.formatter(rawValue))}">
         <div class="history-period-bar-shell">
-          <div class="history-bar history-bar-slim ${metric.className}" style="height:${stackHeight(rawValue, max)}px"></div>
+          <div class="history-bar history-bar-slim ${metric.className}" data-bar-height="${stackHeight(rawValue, max)}"></div>
         </div>
         <span class="history-period-bar-label">${escapeHtml(metric.label)}</span>
       </div>
@@ -1124,6 +1130,8 @@ function renderCombinedPeriodBars(mountId, items) {
       </div>
     </div>
   `;
+  // CSP-safe bar heights (mirror of renderRevenueCostBars walk above).
+  mount.querySelectorAll('[data-bar-height]').forEach((el) => { el.style.height = el.dataset.barHeight + 'px'; });
 
   bindBarChartPointer(mount, mountId, items, () => renderCombinedPeriodBars(mountId, items));
 }
@@ -1192,7 +1200,9 @@ function renderMonthDailyStackedChart(mountId, items) {
   const exportKwh = items.map((item) => Number(item?.exportKwh || 0));
   const yieldEur = items.map((item) => Number(item?.exportRevenueEur || 0));
 
-  mount.innerHTML = `<div style="position:relative;height:280px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
+
+  mount.firstElementChild.style.height = `280px`;
   const canvas = document.getElementById(mountId + 'Canvas');
   if (!canvas) return;
 
@@ -1332,7 +1342,9 @@ function renderDayFlowStackedBars(mountId, items) {
     ...ds
   }));
 
-  mount.innerHTML = `<div style="position:relative;height:280px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
+
+  mount.firstElementChild.style.height = `280px`;
   const canvas = document.getElementById(mountId + 'Canvas');
   if (!canvas) return;
 
@@ -1413,7 +1425,9 @@ function renderPeriodGroupedBars(mountId, items) {
     return Math.max(0, Math.min(100, ((load - grid) / load) * 100));
   });
 
-  mount.innerHTML = `<div style="position:relative;height:340px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
+
+  mount.firstElementChild.style.height = `340px`;
   const canvas = document.getElementById(mountId + 'Canvas');
   if (!canvas) return;
 
@@ -1543,7 +1557,9 @@ function renderEnergyFlowSankey(mountId, items) {
   });
   const labels = { PV: 'Solar ☀', Akku: 'Akku 🔋', Netz: 'Netz ➡', NetzImp: 'Netz ⬅', Verbrauch: 'Verbrauch 🏠' };
 
-  mount.innerHTML = `<div style="position:relative;height:340px"><canvas id="${mountId}Canvas"></canvas></div>`;
+  mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
+
+  mount.firstElementChild.style.height = `340px`;
   const canvas = document.getElementById(mountId + 'Canvas');
   if (!canvas) return;
 

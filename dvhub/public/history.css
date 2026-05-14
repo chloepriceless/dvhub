@@ -697,6 +697,12 @@ main.page-content { justify-self: stretch; }
   height: auto !important;
 }
 
+/* Chart mount wrapper (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces inline style="position:relative;height:Xpx" in history.js
+   renderLineChart/renderPriceChart/etc). Height is dynamic and set
+   via .style.height setter post-innerHTML. */
+.history-chart-mount-container { position: relative; }
+
 .history-aggregate-mode {
   display: none;
   align-items: center;
