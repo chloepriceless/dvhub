@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/history.css" />
+  <link rel="stylesheet" href="/history.css?v=2" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -31,15 +31,17 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="compact-topbar">
+    <header class="topbar" data-screen-label="Topbar">
       <div class="topbar-brand">
         <img src="/assets/dvhub-wordmark.png" alt="DVhub">
+        <span class="product">Historie</span>
       </div>
-      <input type="checkbox" id="menuToggle" class="menu-toggle-cb" aria-hidden="true">
-      <label for="menuToggle" class="topbar-burger" aria-label="Menü öffnen">
-        <span></span><span></span><span></span>
-      </label>
-      <nav class="topbar-nav" aria-label="Hauptnavigation">
+      <button class="nav-toggle" id="navToggle" type="button" aria-label="Hauptnavigation umschalten" aria-expanded="false" aria-controls="topbarNav">
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+      </button>
+      <nav class="topbar-nav" id="topbarNav" aria-label="Hauptnavigation">
         <a href="/">Leitstand</a>
         <a href="/family">Familie</a>
         <a href="/integrations">Integrationen</a>
@@ -48,7 +50,9 @@
         <a href="/settings.html">Einstellungen</a>
       </nav>
       <div class="topbar-right">
-        <button class="theme-toggle" type="button" aria-label="Theme wechseln"></button>
+        <button class="theme-toggle" type="button" aria-label="Theme umschalten">
+          <span class="theme-label">Theme</span>
+        </button>
       </div>
     </header>
 
@@ -280,6 +284,6 @@
   <script src="/chartjs-chart-sankey.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/history.js"></script>
+  <script src="/history.js?v=2"></script>
 </body>
 </html>
