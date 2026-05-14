@@ -12,20 +12,25 @@
          #explorerLoadBtn  (large primary in rail)
          #explorerResetZoomBtn (in chart head)
          #explorerCsvBtn (in chart head)
+         #explorerParquetBtn (in chart head — Phase 09.2 D-24)
+         #explorerSavedViewsBtn (in chart head — Phase 09.2 D-23)
+         #explorerSourceChips (rail filter — Phase 09.2 D-21)
          #explorerStatus (in chart head)
          #explorerSeriesChips  (signal-list mount in rail)
          #explorerCanvas (Chart.js mount)
          #explorerChartSeriesCount (count badge in chart head)
        Plus dynamic JS-injected IDs covered by extractIdsProvidedByJs():
-         #explorerSignalSearch, #explorerSignalCount
+         #explorerSignalSearch, #explorerSignalCount, #explorerSavedViewsMenu
      - Raw-data table removed (volume too high at 5s × multi-day). CSV
        export now does its own chunked day-by-day fetch so it can ship
        the full granular range regardless of chart state.
      - Mockup fidelity: .explorer-grid 2-col with sticky filter-rail; signal-list
-       checkboxes drive explorer.js#activeSeriesIds; range/agg pills update
-       the hidden <select> values. Source-Chips (Victron/MID/LUOX/EPEX/Optim)
-       are deferred to Phase 09.2 (require backend source-tagging on
-       time_series rows). -->
+       checkboxes drive explorer.js#activeSeriesIds; range/agg pills update the
+       hidden <select> values. Source-Chips (Victron/MID/LUOX/EPEX/Optim) drive
+       server-side `&sources=` filter (Phase 09.2 D-21). Crosshair via Chart.js
+       native afterDraw plugin (D-22). Saved Views via localStorage key
+       `dvhub.explorer.savedViews` (D-23). CSV + Parquet download buttons
+       trigger /api/history/raw/export.{csv,parquet} (D-12, D-24 revised). -->
 <html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -114,6 +119,14 @@
           </div>
 
           <div class="filter-section">
+            <h4>Quellen</h4>
+            <div class="source-chips" id="explorerSourceChips" aria-label="Quelle filtern">
+              <!-- Populated by explorer.js#renderSourceChips() — CSP-clean (class-driven dot
+                   colors, data-source attribute, NO style= attrs, NO inline event handlers). -->
+            </div>
+          </div>
+
+          <div class="filter-section">
             <div class="filter-section-head">
               <h4>Signale</h4>
               <span id="explorerSignalCount" class="filter-count">0</span>
@@ -177,7 +190,9 @@
               </div>
               <div class="chart-big-actions">
                 <span class="u-text-muted u-text-xs" title="Klick + Ziehen auf der Zeitachse für Drill-down; Shift + Ziehen zum Pan; Rad = Zoom">Drag = Drill-down</span>
-                <button class="btn sm ghost" id="explorerCsvBtn" type="button">CSV Export</button>
+                <button class="btn sm ghost" id="explorerSavedViewsBtn" type="button" aria-haspopup="true" aria-expanded="false">⋯ Ansichten</button>
+                <button class="btn sm ghost" id="explorerCsvBtn" type="button">↓ CSV</button>
+                <button class="btn sm ghost" id="explorerParquetBtn" type="button">↓ Parquet</button>
                 <button class="btn sm ghost" id="explorerResetZoomBtn" type="button">Zoom Reset</button>
               </div>
             </div>
@@ -195,6 +210,6 @@
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/explorer.js?v=6"></script>
+  <script src="/explorer.js?v=7"></script>
 </body>
 </html>

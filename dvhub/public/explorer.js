@@ -21,6 +21,52 @@ let explorerChart = null;
 let explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpex: null };
 const activeSeriesIds = new Set(SERIES_DEFS.filter(s => !s.hidden).map(s => s.id));
 
+// --- Phase 09.2 D-21: Source-Chips ---
+// Server-side filter (sources= param) backed by series_metadata.source taxonomy
+// from migration 019. Default: all 5 sources active. Chip dot color is
+// class-driven via .source-chip .dot.dot-<id> in explorer.css — NEVER
+// style="..." in innerHTML (CSP-blocked, D-28).
+const SOURCE_DEFS = [
+  { id: 'victron',   label: 'Victron', dotClass: 'dot-victron' },
+  { id: 'mid',       label: 'MID',     dotClass: 'dot-mid' },
+  { id: 'luox',      label: 'LUOX',    dotClass: 'dot-luox' },
+  { id: 'epex',      label: 'EPEX',    dotClass: 'dot-epex' },
+  { id: 'optimizer', label: 'Optim.',  dotClass: 'dot-optimizer' }
+];
+const activeSourceChips = new Set(SOURCE_DEFS.map(d => d.id)); // all on by default
+
+// --- Phase 09.2 D-23: Saved Views localStorage key ---
+// Single-writer policy (AURORA-02 D-27): explorer.js writes ONLY to
+// `dvhub.explorer.savedViews`. theme.js retains sole writer of `dvhub.theme`
+// — DO NOT call localStorage.setItem on that key from this file.
+const SAVED_VIEWS_KEY = 'dvhub.explorer.savedViews';
+
+// --- Phase 09.2 D-22: Crosshair afterDraw plugin ---
+// Chart.js native interaction.mode='index' (already set in renderChart()) provides
+// the hit-detection; this plugin draws the vertical guide. No new NPM dep.
+// afterDraw runs after the dataset is painted, so the line layers on top.
+// Defensive early-returns guard against tt._active being empty during chart
+// resize / before first hover (T-09.2-CHART-CRASH).
+const verticalLinePlugin = {
+  id: 'dvhub-crosshair',
+  afterDraw(chart) {
+    const tt = chart && chart.tooltip;
+    if (!tt || !tt._active || !tt._active.length) return;
+    const x = tt._active[0]?.element?.x;
+    if (!Number.isFinite(x)) return;
+    const c = chart.ctx;
+    c.save();
+    c.beginPath();
+    c.moveTo(x, chart.chartArea.top);
+    c.lineTo(x, chart.chartArea.bottom);
+    c.lineWidth = 1;
+    c.strokeStyle = 'rgba(255,212,33,0.5)'; // yellow accent (mockup line 172)
+    c.setLineDash([2, 3]);
+    c.stroke();
+    c.restore();
+  }
+};
+
 // --- Helpers ---
 function fmtDate(d) {
   const y = d.getFullYear();
@@ -446,6 +492,9 @@ function renderChart() {
   explorerChart = new Chart(canvas, {
     type: 'line',
     data: { labels: explorerData.labels, datasets },
+    // Phase 09.2 D-22: register the crosshair afterDraw plugin alongside the
+    // chart so it ships per-instance (no global Chart.register side-effect).
+    plugins: [verticalLinePlugin],
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -455,10 +504,15 @@ function renderChart() {
         legend: { display: false },
         tooltip: {
           enabled: true,
-          backgroundColor: '#1a1a2eee',
-          titleColor: '#e5e7eb',
-          bodyColor: '#e5e7eb',
-          borderColor: '#334155',
+          position: 'nearest',
+          // Aurora-token tooltip styling (mockup lines 180-188): dark glass
+          // background + JetBrains Mono for crisp digit alignment.
+          backgroundColor: 'rgba(8, 14, 28, 0.94)',
+          titleColor: 'rgba(255,255,255,0.6)',
+          bodyColor: 'rgba(255,255,255,0.85)',
+          titleFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          bodyFont:  { family: "'JetBrains Mono', monospace", size: 11 },
+          borderColor: 'rgba(180,210,255,0.18)',
           borderWidth: 1,
           padding: 10,
           displayColors: true,
@@ -741,6 +795,201 @@ function pickFinerAggForWindow(windowSec) {
   return 'day';
 }
 
+// --- Phase 09.2 D-21: Source-Chips render + toggle (CSP-clean) ---
+// Renders the 5 source-filter chips into #explorerSourceChips. Dot color is
+// driven by .source-chip .dot.dot-<id> classes — we never embed style="..."
+// in the innerHTML template literal (CSP `style-src` blocks inline styles).
+// Re-rendering on every toggle is cheap (5 DOM nodes) and keeps the
+// `is-active` + `aria-pressed` attrs in lockstep without per-chip mutation.
+function renderSourceChips() {
+  const container = document.getElementById('explorerSourceChips');
+  if (!container) return;
+  container.innerHTML = SOURCE_DEFS.map(def => {
+    const active = activeSourceChips.has(def.id);
+    return `<button type="button" class="source-chip${active ? ' is-active' : ''}" data-source="${def.id}" aria-pressed="${active ? 'true' : 'false'}">
+      <span class="dot ${def.dotClass}"></span>${def.label}
+    </button>`;
+  }).join('');
+}
+
+// --- Phase 09.2 D-23: Saved Views localStorage CRUD ---
+// Single-writer policy (AURORA-02 D-27): writes ONLY to dvhub.explorer.savedViews.
+// theme.js retains sole writer of dvhub.theme — never call setItem on that key.
+// Stored payload: [{ name, signals, sources, timerange, aggregation, savedAt }, …]
+// All read paths defend against malformed JSON / non-array root and clamp to
+// 100 entries (cap against unbounded growth from a hostile script).
+function loadSavedViews() {
+  try {
+    const raw = localStorage.getItem(SAVED_VIEWS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, 100) : [];
+  } catch { return []; }
+}
+
+function saveSavedViews(views) {
+  try {
+    const arr = Array.isArray(views) ? views.slice(0, 100) : [];
+    localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(arr));
+  } catch { /* quota / private mode — silently no-op */ }
+}
+
+function captureCurrentView(name) {
+  return {
+    name: String(name || '').slice(0, 64), // T-09.2-LSXSS: clamp on save
+    signals: [...activeSeriesIds],
+    sources: [...activeSourceChips],
+    timerange: document.getElementById('explorerRange')?.value || null,
+    aggregation: document.getElementById('explorerAgg')?.value || null,
+    savedAt: new Date().toISOString()
+  };
+}
+
+// applyView mutates module-level state (activeSeriesIds, activeSourceChips) and
+// the hidden range/agg <select>s. Source IDs are validated against SOURCE_DEFS
+// before being added (T-09.2-LSXSS guard against arbitrary stored values).
+// Signal IDs are also validated against SERIES_DEFS for the same reason.
+// The caller is responsible for invoking scheduleAutoFetch + re-rendering the
+// signal-list / source-chips (the closure-scoped scheduleAutoFetch lives in
+// initExplorer, so we hand the callback in instead of importing it).
+function applyView(view, scheduleAutoFetchFn, renderSignalListFn) {
+  if (!view || typeof view !== 'object') return;
+  activeSeriesIds.clear();
+  if (Array.isArray(view.signals)) {
+    for (const id of view.signals) {
+      if (typeof id === 'string' && SERIES_DEFS.find(d => d.id === id)) activeSeriesIds.add(id);
+    }
+  }
+  activeSourceChips.clear();
+  if (Array.isArray(view.sources)) {
+    for (const s of view.sources) {
+      if (typeof s === 'string' && SOURCE_DEFS.find(d => d.id === s)) activeSourceChips.add(s);
+    }
+  }
+  const rangeEl = document.getElementById('explorerRange');
+  const aggEl = document.getElementById('explorerAgg');
+  if (rangeEl && typeof view.timerange === 'string') rangeEl.value = view.timerange;
+  if (aggEl && typeof view.aggregation === 'string') aggEl.value = view.aggregation;
+  // Sync the visible pill state to the new <select>.value (the pill click
+  // delegates flip the .is-active class, but a programmatic .value change
+  // does not auto-update them).
+  syncPillsToSelect('explorerRange');
+  syncPillsToSelect('explorerAgg');
+  if (typeof renderSignalListFn === 'function') renderSignalListFn();
+  renderSourceChips();
+  if (typeof scheduleAutoFetchFn === 'function') scheduleAutoFetchFn();
+}
+
+function syncPillsToSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const buttons = document.querySelectorAll(`.timerange-pills[data-pill-target="${selectId}"] button[data-pill-value]`);
+  buttons.forEach(b => b.classList.toggle('is-active', b.getAttribute('data-pill-value') === sel.value));
+}
+
+// renderSavedViewsMenu builds the dropdown DOM at #explorerSavedViewsMenu (created
+// on first call as a body-level child so it floats over the chart). All stored
+// values are written into the DOM via .textContent (NEVER innerHTML) per
+// T-09.2-LSXSS — even though the saved-views payload is local-origin-only,
+// the textContent path is the safe canonical pattern.
+function renderSavedViewsMenu() {
+  let menu = document.getElementById('explorerSavedViewsMenu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'explorerSavedViewsMenu';
+    menu.className = 'saved-views-menu';
+    menu.setAttribute('role', 'menu');
+    document.body.appendChild(menu);
+  }
+  const views = loadSavedViews();
+  // Markup-only structure (no stored content interpolated). Names hydrated below.
+  menu.innerHTML = `
+    <div class="saved-views-menu-actions">
+      <button type="button" class="btn sm" data-act="save">+ Aktuelle Ansicht speichern</button>
+    </div>
+    <div class="saved-views-menu-list">
+      ${views.map((_, i) => `
+        <div class="saved-view-row" data-idx="${i}">
+          <span class="saved-view-name"></span>
+          <span class="saved-view-actions">
+            <button type="button" class="btn xs ghost" data-act="apply" data-idx="${i}" title="Anwenden">→</button>
+            <button type="button" class="btn xs ghost" data-act="delete" data-idx="${i}" title="Löschen">✕</button>
+          </span>
+        </div>
+      `).join('') || '<div class="saved-views-menu-empty">Noch keine Ansichten gespeichert.</div>'}
+    </div>
+  `;
+  // T-09.2-LSXSS — hydrate names via textContent (never innerHTML)
+  menu.querySelectorAll('.saved-view-row').forEach((row) => {
+    const idx = Number(row.dataset.idx);
+    const v = views[idx];
+    const nameEl = row.querySelector('.saved-view-name');
+    if (nameEl && v) nameEl.textContent = (typeof v.name === 'string' && v.name) ? v.name : '(unbenannt)';
+  });
+  return menu;
+}
+
+// --- Phase 09.2 D-12 + D-24: Server-side export trigger helpers ---
+// The CSV / Parquet endpoints require Bearer auth (Plan 09.2-05 D-15:
+// `/api/history/raw/export.*` is in BEARER_REQUIRED_ENDPOINTS). Bearer is
+// stored in sessionStorage and only `apiFetch()` (common.js) appends it.
+// `window.location` cannot send custom headers, so we use the Blob-download
+// pattern instead (same shape as the existing client-side downloadCsv()
+// helper at the top of this file).
+//
+// Server `signals=` expects raw `series_key` strings (e.g. `pv_total_w`),
+// NOT chart display IDs (e.g. `pvKw`). We map active chart IDs through
+// GRANULAR_SERIES_MAP[id].tKeys to get the underlying telemetry-store keys,
+// dedupe across selections, and join CSV. Rule 1 fix: the planner's
+// snippet `signals: [...activeSeriesIds]` would have produced zero rows.
+function buildExportParams() {
+  const p = new URLSearchParams();
+  const [startISO, endISO] = getDateRange();
+  if (startISO) p.set('from', startISO);
+  if (endISO) p.set('to', endISO);
+  // Map active chart series → underlying series_key strings via GRANULAR_SERIES_MAP.
+  // Series with no map entry (forecasts, EPEX overlay, market price) have no
+  // raw telemetry source — they're excluded from the export, which matches
+  // the existing exportCsvGranular() behaviour (lines 580-628).
+  const tKeys = new Set();
+  for (const id of activeSeriesIds) {
+    const map = GRANULAR_SERIES_MAP[id];
+    if (map && Array.isArray(map.tKeys)) map.tKeys.forEach(k => tKeys.add(k));
+  }
+  if (tKeys.size) p.set('signals', [...tKeys].join(','));
+  // Source filter — only emit if it would constrain the result (server returns
+  // all sources by default when omitted). Keeps URLs short for the common
+  // "all chips active" case.
+  if (activeSourceChips.size && activeSourceChips.size < SOURCE_DEFS.length) {
+    p.set('sources', [...activeSourceChips].join(','));
+  }
+  return p;
+}
+
+// Fetch the export endpoint as a Blob (carrying Bearer header via apiFetch),
+// then trigger a same-shape <a download> click. Mirrors the existing
+// downloadCsv() helper; reused for both CSV and Parquet paths.
+async function downloadServerExport(endpoint, suggestedName) {
+  if (!apiFetch) throw new Error('apiFetch unavailable (common.js not loaded)');
+  const res = await apiFetch(endpoint);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+  const blob = await res.blob();
+  // Honour server-derived filename when present; fall back to caller's suggestion.
+  let filename = suggestedName;
+  const cd = res.headers.get('content-disposition') || '';
+  const match = /filename="?([^";]+)"?/i.exec(cd);
+  if (match && match[1]) filename = match[1];
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  // Defer revoke to next tick so Safari has a chance to start the download.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 // --- Init ---
 function initExplorer() {
   const rangeSelect = document.getElementById('explorerRange');
@@ -809,7 +1058,119 @@ function initExplorer() {
   document.getElementById('explorerResetZoomBtn').addEventListener('click', () => {
     if (explorerChart) explorerChart.resetZoom();
   });
-  document.getElementById('explorerCsvBtn').addEventListener('click', exportCsv);
+
+  // --- Phase 09.2 D-12: CSV export → /api/history/raw/export.csv ---
+  // Replaces the legacy chunked client-side exportCsv() (lines 553-629) that
+  // shipped a per-day fetch loop against /api/telemetry/series. The server
+  // endpoint now does the streaming directly via pg-cursor (Plan 09.2-06)
+  // and ships ts_utc/series_key/value/unit rows in raw shape — caller
+  // post-processes if a different layout is desired.
+  document.getElementById('explorerCsvBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('explorerCsvBtn');
+    const prev = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Exportiere…'; }
+    try {
+      const params = buildExportParams();
+      const today = new Date().toISOString().slice(0, 10);
+      await downloadServerExport(`/api/history/raw/export.csv?${params.toString()}`, `dvhub-export-${today}.csv`);
+      setStatus('CSV-Export abgeschlossen.');
+    } catch (e) {
+      setStatus(`CSV-Export Fehler: ${e.message}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prev || '↓ CSV'; }
+    }
+  });
+
+  // --- Phase 09.2 D-24: Parquet export placeholder (Plan 09.2-08 wires it fully) ---
+  // The endpoint /api/history/raw/export.parquet ships in Wave 5; until then we
+  // log + alert so QA can verify the button responds at the DOM level. The
+  // BEARER_REQUIRED_ENDPOINTS gate (Plan 09.2-05) already lists this path so
+  // the auth wiring will be ready when the server-side handler lands.
+  document.getElementById('explorerParquetBtn').addEventListener('click', () => {
+    console.warn('[explorer] Parquet export wired by Plan 09.2-08');
+    alert('Parquet-Export wird in Plan 09.2-08 freigeschaltet.');
+  });
+
+  // --- Phase 09.2 D-21: Source-Chips render + click handler ---
+  // Initial render + delegated click handler (chip toggle flips activeSourceChips
+  // membership and triggers a debounced re-fetch via scheduleAutoFetch — Pitfall 7
+  // honored). Re-render on each click to keep .is-active + aria-pressed in sync.
+  renderSourceChips();
+  const sourceChipsEl = document.getElementById('explorerSourceChips');
+  if (sourceChipsEl) {
+    sourceChipsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.source-chip');
+      if (!btn) return;
+      const src = btn.dataset.source;
+      if (!src || !SOURCE_DEFS.find(d => d.id === src)) return;
+      if (activeSourceChips.has(src)) activeSourceChips.delete(src);
+      else activeSourceChips.add(src);
+      renderSourceChips();
+      scheduleAutoFetch(); // Pitfall 7 — honors initialFetchDone gate
+    });
+  }
+
+  // --- Phase 09.2 D-23: Saved Views dropdown ---
+  // Click on the Saved-Views button toggles the dropdown menu (rendered into
+  // document.body on first call). A delegated body-level click handler manages
+  // save / apply / delete actions on the menu rows. Outside-click closes the
+  // menu. Position is set per click via DOM property setter (CSP-clean — no
+  // style="..." in innerHTML, no setAttribute('style', ...)).
+  function toggleSavedViewsMenu() {
+    const menuBtn = document.getElementById('explorerSavedViewsBtn');
+    const menu = renderSavedViewsMenu();
+    const open = menu.classList.toggle('is-open');
+    if (menuBtn) menuBtn.setAttribute('aria-expanded', String(open));
+    if (open && menuBtn) {
+      const rect = menuBtn.getBoundingClientRect();
+      // Inline numeric pixel values via DOM property setter — CSP-safe (the
+      // forbidden patterns are setAttribute('style',...), .style.cssText=,
+      // and innerHTML containing style="..."; per-property assignment is OK).
+      menu.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+      menu.style.left = Math.max(8, rect.right + window.scrollX - 260) + 'px';
+    }
+  }
+
+  const savedViewsBtn = document.getElementById('explorerSavedViewsBtn');
+  if (savedViewsBtn) savedViewsBtn.addEventListener('click', toggleSavedViewsMenu);
+
+  // Delegated handler for menu-row actions. Lives at document level so it
+  // catches clicks on the dynamically-inserted menu DOM.
+  document.addEventListener('click', (e) => {
+    const actBtn = e.target.closest('#explorerSavedViewsMenu [data-act]');
+    if (actBtn) {
+      const act = actBtn.dataset.act;
+      if (act === 'save') {
+        const name = prompt('View speichern als:', new Date().toLocaleString('de-DE'));
+        if (!name) return;
+        const views = loadSavedViews();
+        views.push(captureCurrentView(name));
+        saveSavedViews(views);
+        renderSavedViewsMenu();
+      } else if (act === 'apply') {
+        const idx = Number(actBtn.dataset.idx);
+        const views = loadSavedViews();
+        applyView(views[idx], scheduleAutoFetch, renderSignalList);
+        document.getElementById('explorerSavedViewsMenu')?.classList.remove('is-open');
+        document.getElementById('explorerSavedViewsBtn')?.setAttribute('aria-expanded', 'false');
+      } else if (act === 'delete') {
+        const idx = Number(actBtn.dataset.idx);
+        const views = loadSavedViews();
+        views.splice(idx, 1);
+        saveSavedViews(views);
+        renderSavedViewsMenu();
+      }
+      return;
+    }
+    // Outside-click closes the menu.
+    const menu = document.getElementById('explorerSavedViewsMenu');
+    if (menu && menu.classList.contains('is-open')) {
+      if (!menu.contains(e.target) && e.target !== savedViewsBtn && !savedViewsBtn?.contains(e.target)) {
+        menu.classList.remove('is-open');
+        savedViewsBtn?.setAttribute('aria-expanded', 'false');
+      }
+    }
+  });
 
   renderSignalList();
 

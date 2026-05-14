@@ -456,6 +456,112 @@ main.page-content {
   background: rgba(245, 247, 251, 0.95);
 }
 
+/* ===== Phase 09.2 D-21: Source-Chips ===== */
+/* Aurora-token, class-driven dot colors. NO inline styles (CSP D-28). */
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.source-chip:hover {
+  color: var(--text);
+  background: var(--glass);
+}
+.source-chip.is-active {
+  border-color: var(--violet);
+  color: var(--text);
+  background: var(--glass-2);
+}
+.source-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  display: inline-block;
+  flex-shrink: 0;
+}
+.source-chip .dot.dot-victron   { background: var(--green); }
+.source-chip .dot.dot-mid       { background: var(--cyan); }
+.source-chip .dot.dot-luox      { background: var(--violet); }
+.source-chip .dot.dot-epex      { background: var(--yellow); }
+.source-chip .dot.dot-optimizer { background: var(--text-dim); }
+
+/* ===== Phase 09.2 D-23: Saved-Views dropdown ===== */
+/* Floats over the chart from a body-level mount; positioned per click via
+   DOM property setter (CSP-safe — no style= in innerHTML). */
+.saved-views-menu {
+  position: absolute;
+  z-index: 50;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
+  border-radius: var(--r-md, 10px);
+  padding: 8px 0;
+  min-width: 260px;
+  max-width: 360px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  display: none;
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+.saved-views-menu.is-open { display: block; }
+.saved-views-menu-actions {
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.saved-views-menu-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.saved-views-menu-empty {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--f-mono);
+  text-align: center;
+}
+.saved-view-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.saved-view-row:hover { background: var(--row-hover); }
+.saved-view-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-view-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.btn.xs {
+  padding: 2px 7px;
+  font-size: 10.5px;
+  border-radius: 5px;
+}
+
 /* ===== Status dots (re-used for chart-head indicator) ===== */
 .dot {
   width: 8px;
