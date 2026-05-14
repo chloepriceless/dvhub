@@ -93,6 +93,12 @@
         <option value="custom">Benutzerdefiniert</option>
       </select>
       <select id="explorerAgg" hidden aria-hidden="true">
+        <option value="5s">5 Sekunden</option>
+        <option value="10s">10 Sekunden</option>
+        <option value="15s">15 Sekunden</option>
+        <option value="30s">30 Sekunden</option>
+        <option value="1min">1 Minute</option>
+        <option value="5min">5 Minuten</option>
         <option value="15min" selected>15 Minuten</option>
         <option value="1h">1 Stunde</option>
         <option value="day">Tag</option>
@@ -140,10 +146,17 @@
           <div class="filter-section">
             <h4>Aggregation</h4>
             <div class="timerange-pills" data-pill-target="explorerAgg" role="group" aria-label="Aggregation">
+              <button type="button" data-pill-value="5s"   title="Rohdaten · max ~12h Range">5s</button>
+              <button type="button" data-pill-value="10s"  title="Granular · max ~24h Range">10s</button>
+              <button type="button" data-pill-value="15s"  title="Granular · max ~36h Range">15s</button>
+              <button type="button" data-pill-value="30s"  title="Granular · max ~3 Tage Range">30s</button>
+              <button type="button" data-pill-value="1min" title="Granular · max ~7 Tage Range">1 min</button>
+              <button type="button" data-pill-value="5min" title="Granular · max ~30 Tage Range">5 min</button>
               <button type="button" data-pill-value="15min" class="is-active">15 min</button>
               <button type="button" data-pill-value="1h">1h</button>
               <button type="button" data-pill-value="day">Tag</button>
             </div>
+            <p class="filter-hint" id="explorerAggHint">Granular (5s&ndash;5min): nur PV / Last / Batterie / SOC / Netz.</p>
           </div>
 
           <button class="btn primary filter-query-btn" id="explorerLoadBtn" type="button">

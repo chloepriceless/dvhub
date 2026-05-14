@@ -267,6 +267,15 @@ main.page-content {
   color: var(--accent);
 }
 
+/* Caption under a pill-group — used for the granular-mode 5-series hint. */
+.filter-hint {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-family: var(--f-body);
+}
+
 /* ===== Custom date range (only shown when range="custom") ===== */
 .filter-custom-range {
   display: flex;

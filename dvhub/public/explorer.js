@@ -56,6 +56,103 @@ function setChartSeriesCount(n) {
   if (el) el.textContent = String(n);
 }
 
+// --- Granular telemetry mode (1min / 5min) ---
+//
+// In granular mode we bypass /api/history/summary (which delivers 15min energy
+// slots in kWh) and fetch directly from /api/telemetry/series at the raw 5s
+// telemetry table — but capped at the user-picked maxResolution (60s or 300s).
+// Only 5 series map to telemetry keys (PV/Load/Battery/SOC/Grid power); the
+// other 8 SERIES_DEFS entries (forecasts, prices, autarkie, energy-derived)
+// have no granular source and stay empty in this mode.
+//
+// Server enforces MAX_TELEMETRY_SCAN_SLOTS=50,000. At 1min × 5keys we max out
+// at ~24h range; 5min × 5keys allows ~7 days. Larger ranges will return
+// scan_too_large which we surface to the user.
+const GRANULAR_SERIES_MAP = {
+  // SERIES_DEFS.id  →  { telemetry key,  W→kW conversion (1/1000 for power; 1 for SOC) }
+  pvKw:      { tKey: 'pv_power_w',      scale: 1 / 1000 },
+  loadKw:    { tKey: 'load_power_w',    scale: 1 / 1000 },
+  batteryKw: { tKey: 'battery_power_w', scale: 1 / 1000 },
+  gridKw:    { tKey: 'grid_power_w',    scale: 1 / 1000 },
+  soc:       { tKey: 'battery_soc_pct', scale: 1 }
+};
+// Granularity → maxResolution in seconds. Storage backend (TimescaleDB) holds
+// raw samples at ~5s; anything smaller than that returns the same data.
+// Server scan-cap MAX_TELEMETRY_SCAN_SLOTS=50,000 limits range × keys × (1/res):
+//   - 5s:  max ~12h (5 keys × 8640 = 43,200 slots/day)
+//   - 10s: max ~24h
+//   - 15s: max ~36h
+//   - 30s: max ~3d
+//   - 1min: max ~7d (just under cap)
+//   - 5min: max ~30d
+// scan_too_large errors bubble up to the user-facing status as a hint to
+// shorten range or pick coarser resolution.
+const GRANULAR_AGG_TO_SECONDS = {
+  '5s':  5,
+  '10s': 10,
+  '15s': 15,
+  '30s': 30,
+  '1min': 60,
+  '5min': 300
+};
+
+async function fetchGranularData(startDate, endDate, agg) {
+  const maxRes = GRANULAR_AGG_TO_SECONDS[agg];
+  if (!maxRes) throw new Error(`unsupported granular agg: ${agg}`);
+
+  const startIso = new Date(startDate).toISOString();
+  const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
+  const keys = Object.values(GRANULAR_SERIES_MAP).map(m => m.tKey).join(',');
+
+  const url = `/api/telemetry/series?keys=${encodeURIComponent(keys)}&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&maxResolution=${maxRes}`;
+  const res = await apiFetch(url);
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.ok) {
+    if (body?.error === 'scan_too_large') {
+      throw new Error(`Zu viele Punkte (${body.requested?.toLocaleString?.('de-DE') || body.requested}) — Server-Limit ${body.limit?.toLocaleString?.('de-DE') || body.limit}. Kürzeren Zeitraum wählen oder höhere Aggregation.`);
+    }
+    throw new Error(body?.error || `HTTP ${res.status}`);
+  }
+  return body.data || [];
+}
+
+function buildGranularChartData(rows, agg) {
+  // Group telemetry rows by timestamp → { ts, pv_power_w, load_power_w, ... }
+  const byTs = new Map();
+  for (const r of rows) {
+    if (!byTs.has(r.ts)) byTs.set(r.ts, { ts: r.ts });
+    byTs.get(r.ts)[r.key] = r.value;
+  }
+  const sorted = [...byTs.values()].sort((a, b) => a.ts.localeCompare(b.ts));
+
+  // Time labels — granular mode shows HH:MM:SS precision
+  const labels = sorted.map(s => {
+    const d = new Date(s.ts);
+    const sameDay = sorted.length > 0 && new Date(sorted[0].ts).toDateString() === new Date(sorted[sorted.length - 1].ts).toDateString();
+    if (sameDay) {
+      return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+    return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  });
+
+  // Build seriesData: only the 5 granular-available SERIES_DEFS are populated.
+  const seriesData = {};
+  for (const def of SERIES_DEFS) {
+    const map = GRANULAR_SERIES_MAP[def.id];
+    if (!map) { seriesData[def.id] = sorted.map(() => null); continue; }
+    seriesData[def.id] = sorted.map(s => {
+      const v = s[map.tKey];
+      return v != null && Number.isFinite(Number(v)) ? Number(v) * map.scale : null;
+    });
+  }
+
+  explorerData.labels = labels;
+  explorerData.seriesData = seriesData;
+  explorerData.granularMode = true;
+  explorerData.granularRows = sorted;
+  explorerData.granularAgg = agg;
+}
+
 // --- Data fetching ---
 async function fetchExplorerData() {
   const [startDate, endDate] = getDateRange();
@@ -64,6 +161,27 @@ async function fetchExplorerData() {
   setStatus('Lade Daten...');
   const agg = document.getElementById('explorerAgg').value;
 
+  // Route: granular path for 1min / 5min, legacy slot path for 15min / 1h / day
+  if (agg === '1min' || agg === '5min') {
+    try {
+      const rows = await fetchGranularData(startDate, endDate, agg);
+      explorerData.rawSlots = []; // raw-table reads granularRows instead in this mode
+      explorerData.rawFc = null;
+      explorerData.rawEpex = [];
+      explorerData.rawSoc = [];
+      buildGranularChartData(rows, agg);
+      renderChart();
+      renderRawTable();
+      setStatus(`${rows.length} Telemetry-Punkte geladen (${agg}, ${startDate} bis ${endDate}). Granular-Modus — nur PV/Last/Batterie/SOC/Netz.`);
+    } catch (e) {
+      setStatus(`Fehler: ${e.message}`);
+    }
+    return;
+  }
+
+  // Legacy slot-aggregation path (15min / 1h / day)
+  explorerData.granularMode = false;
+  explorerData.granularRows = null;
   try {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -341,13 +459,66 @@ function renderSignalList() {
   if (countEl) countEl.textContent = `${activeSeriesIds.size} / ${SERIES_DEFS.length}`;
 }
 
-// --- Raw data table — renders last MAX_RAW_TABLE_ROWS from rawSlots ---
+// --- Raw data table — renders last MAX_RAW_TABLE_ROWS from rawSlots OR
+//     granularRows depending on mode. In granular mode the values come
+//     out of seriesData (already scaled to display units), so the same
+//     active-series filter applies. ---
 function renderRawTable() {
   const head = document.getElementById('explorerRawHead');
   const body = document.getElementById('explorerRawBody');
   const foot = document.getElementById('explorerRawFoot');
   if (!head || !body) return;
 
+  // --- Granular mode path (1min / 5min / 30s / 15s / 10s / 5s) ---
+  if (explorerData.granularMode && Array.isArray(explorerData.granularRows)) {
+    const rows = explorerData.granularRows;
+    if (!rows.length) {
+      head.innerHTML = '<th>Zeitpunkt</th>';
+      body.innerHTML = '';
+      if (foot) foot.textContent = 'Keine Telemetry-Daten im gewählten Zeitraum.';
+      return;
+    }
+    // Only the 5 granular-available series have meaningful data
+    const cols = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && GRANULAR_SERIES_MAP[d.id]);
+    let headerHtml = '<th>Zeitpunkt</th>';
+    for (const c of cols) {
+      headerHtml += `<th class="num" title="${c.label}">${c.id}<br><small>${c.unit}</small></th>`;
+    }
+    head.innerHTML = headerHtml;
+
+    const labels = explorerData.labels || [];
+    const seriesData = explorerData.seriesData || {};
+    // Newest-first: render rows from end backward, paired with labels
+    const total = rows.length;
+    const start = Math.max(0, total - MAX_RAW_TABLE_ROWS);
+    const indexes = [];
+    for (let i = total - 1; i >= start; i--) indexes.push(i);
+    const rowsHtml = indexes.map(i => {
+      const tsLabel = labels[i] || rows[i].ts;
+      let row = `<td class="mono">${tsLabel}</td>`;
+      for (const c of cols) {
+        const v = seriesData[c.id]?.[i];
+        if (v == null || !Number.isFinite(Number(v))) {
+          row += `<td class="num">&mdash;</td>`;
+        } else {
+          row += `<td class="num">${Number(v).toFixed(2)}</td>`;
+        }
+      }
+      return `<tr>${row}</tr>`;
+    }).join('');
+    body.innerHTML = rowsHtml;
+    if (foot) {
+      const aggLabel = explorerData.granularAgg || '?';
+      if (total > MAX_RAW_TABLE_ROWS) {
+        foot.textContent = `Zeige ${MAX_RAW_TABLE_ROWS} von ${total} Telemetry-Punkten · ${aggLabel} · neueste zuerst.`;
+      } else {
+        foot.textContent = `${total} Telemetry-Punkte · ${aggLabel} · neueste zuerst.`;
+      }
+    }
+    return;
+  }
+
+  // --- Legacy slot-aggregation path (15min / 1h / day) ---
   const slots = explorerData.rawSlots || [];
   if (!slots.length) {
     head.innerHTML = '<th>Zeitpunkt</th>';
