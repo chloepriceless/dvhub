@@ -1515,6 +1515,20 @@ body:has(.settings-aurora) .location-picker-footer {
 .setup-save-btn { padding: 10px 28px; font-size: 13px; font-weight: 600; }
 
 .cert-warn-row { display: none; color: var(--c-amber-600); }
+
+/* Status banner utilities (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces inline style="color:var(--ok|--err|--c-amber-600)" in tools.js) */
+.text-status-ok { color: var(--ok); }
+.text-status-err { color: var(--err); }
+.text-status-warn { color: var(--c-amber-600); }
+
+/* Tools — updates list table + changelog header (Plan 09.1-07 Task 3) */
+.tools-updates-changelog-head { padding: 4px 0; font-size: 12px; color: rgba(232,234,240,0.5); margin: 0; }
+.tools-updates-table { width: 100%; border-collapse: collapse; font-size: 0.7rem; }
+.tools-updates-table-header { opacity: 0.6; }
+.tools-updates-table-cell { padding: 2px 6px; }
+.tools-updates-table-cell-mono { padding: 2px 6px; font-family: monospace; }
+.tools-updates-table-cell-dim { opacity: 0.6; }
 .topbar-clock { font-size: 0.65rem; color: var(--flow-text-muted); font-family: var(--font-mono); }
 .vpn-card-actions { margin-top: 8px; }
 .vpn-reconnect-btn { background: var(--node-vpn); color: #fff; }

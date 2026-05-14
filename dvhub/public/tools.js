@@ -597,7 +597,7 @@ async function checkForUpdate() {
     if (data.updateAvailable) {
       const changelogDiv = document.getElementById('updateChangelog');
       if (data.changelog && data.changelog.length) {
-        changelogDiv.innerHTML = '<p style="padding:4px 0;font-size:12px;color:rgba(232,234,240,0.5);margin:0;">Änderungen:</p>' +
+        changelogDiv.innerHTML = '<p class="tools-updates-changelog-head">Änderungen:</p>' +
           data.changelog.map(line => {
             const el = document.createElement('div');
             el.className = 'config-row';
@@ -705,18 +705,18 @@ async function checkSystemUpdates() {
     const data = await r.json();
     if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
     if (data.totalCount === 0) {
-      banner.innerHTML = '<span style="color:var(--ok);">System ist aktuell — keine Updates verfügbar.</span>';
+      banner.innerHTML = '<span class="text-status-ok">System ist aktuell — keine Updates verfügbar.</span>';
       if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
       return;
     }
     const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheitsupdates)` : '';
-    banner.innerHTML = `<strong style="color:var(--c-amber-600);">${data.totalCount} Updates verfügbar${secNote}</strong>`;
+    banner.innerHTML = `<strong class="text-status-warn">${data.totalCount} Updates verfügbar${secNote}</strong>`;
     if (list && data.packages.length > 0) {
       list.style.display = '';
-      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;">';
-      html += '<tr style="opacity:0.6;"><td style="padding:2px 6px;">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
+      let html = '<table class="tools-updates-table">';
+      html += '<tr class="tools-updates-table-header"><td class="tools-updates-table-cell">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
       for (const p of data.packages) {
-        html += `<tr><td style="padding:2px 6px;font-family:monospace;">${escapeHtml(p.name)}</td><td style="opacity:0.6;">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
+        html += `<tr><td class="tools-updates-table-cell-mono">${escapeHtml(p.name)}</td><td class="tools-updates-table-cell-dim">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
       }
       html += '</table>';
       list.innerHTML = html;
@@ -734,20 +734,20 @@ async function applySystemUpdates() {
   const btn = document.getElementById('applySystemUpdatesBtn');
   if (!banner) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Updates werden installiert...'; }
-  banner.innerHTML = '<span style="color:var(--c-amber-600);">Updates werden installiert — das kann einige Minuten dauern...</span>';
+  banner.innerHTML = '<span class="text-status-warn">Updates werden installiert — das kann einige Minuten dauern...</span>';
   try {
     const r = await apiFetch('/api/admin/system/updates/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
     const data = await r.json();
     if (data.ok) {
-      banner.innerHTML = `<span style="color:var(--ok);">${data.upgraded} Pakete aktualisiert.</span>`;
+      banner.innerHTML = `<span class="text-status-ok">${data.upgraded} Pakete aktualisiert.</span>`;
       if (actions) actions.style.display = 'none';
       const list = document.getElementById('systemUpdatesList');
       if (list) list.style.display = 'none';
     } else {
-      banner.innerHTML = `<span style="color:var(--err);">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
+      banner.innerHTML = `<span class="text-status-err">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
     }
   } catch (e) {
-    banner.innerHTML = `<span style="color:var(--err);">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
+    banner.innerHTML = `<span class="text-status-err">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Alle Updates installieren'; }
   }
@@ -774,7 +774,7 @@ async function loadVpnStatus() {
     }
     if (vpn.reconnectAttempts) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
     if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-      html += ` | <span style="color:var(--c-amber-600);">Cert: ${vpn.certDaysRemaining}d</span>`;
+      html += ` | <span class="text-status-warn">Cert: ${vpn.certDaysRemaining}d</span>`;
     }
     if (vpn.lastError) html += ` | Fehler: ${vpn.lastError}`;
     banner.innerHTML = html;
