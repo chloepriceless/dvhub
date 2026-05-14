@@ -57,6 +57,9 @@ import {
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
+// Phase 09.2 D-01..D-05 — per-system health tracker (factory wired in
+// telemetry IIFE below; persistSnapshot hook lives in gracefulShutdown).
+import { createIntegrationsHealthTracker } from './services/integrations-health-tracker.js';
 import {
   createApiRoutes,
   SECURITY_HEADERS,
@@ -1087,6 +1090,22 @@ const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
   // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
+  // Phase 09.2 D-01: per-system health tracker. Pool comes from dbPool (shared
+  // pg.Pool used by telemetryStore); recordSample hooks fire from polling.js,
+  // epex-fetch.js, and services/mqtt/publisher.js. Tracker is created here so
+  // that ctx.healthTracker is available before forecast.start() / scheduler
+  // ticks reference ctx via getCfg-aware closures. Hook callers use optional
+  // chaining (`ctx.healthTracker?.recordSample(...)`) to defend against the
+  // window between poller.start() (line ~1244) and this assignment.
+  const healthTracker = createIntegrationsHealthTracker({
+    pool: dbPool,
+    getCfg: ctx.getCfg,
+    pushLog: ctx.pushLog
+  });
+  ctx.healthTracker = healthTracker;
+  // D-02: rehydrate from integration_health_snapshots. Failures are logged
+  // internally (no throw) — empty state is a safe fallback.
+  await healthTracker.loadSnapshot();
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
@@ -1379,7 +1398,11 @@ async function gracefulShutdown(signal) {
     // Close Modbus TCP connections gracefully (FIN, not RST)
     safeAsync('transport.destroy', () => transport.destroy()),
     safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
-    safeAsync('vpnManager.close', () => vpnManager.close())
+    safeAsync('vpnManager.close', () => vpnManager.close()),
+    // Phase 09.2 D-02: persist health-tracker snapshots BEFORE pool teardown.
+    // Lives inside Promise.all (section 2) so the pg.Pool used by UPSERT is
+    // still alive — telemetryStore.close() runs in section 3 below.
+    safeAsync('healthTracker.persistSnapshot', () => ctx.healthTracker?.persistSnapshot())
   ]);
 
   // 3. Sync teardown of remaining handles
