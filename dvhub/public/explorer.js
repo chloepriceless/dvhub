@@ -54,26 +54,56 @@ function setChartSeriesCount(n) {
   if (el) el.textContent = String(n);
 }
 
-// --- Granular telemetry mode (1min / 5min) ---
+// --- Granular telemetry mode (5s / 10s / 15s / 30s / 1min / 5min) ---
 //
 // In granular mode we bypass /api/history/summary (which delivers 15min energy
 // slots in kWh) and fetch directly from /api/telemetry/series at the raw 5s
-// telemetry table — but capped at the user-picked maxResolution (60s or 300s).
-// Only 5 series map to telemetry keys (PV/Load/Battery/SOC/Grid power); the
-// other 8 SERIES_DEFS entries (forecasts, prices, autarkie, energy-derived)
-// have no granular source and stay empty in this mode.
+// telemetry table — but capped at the user-picked maxResolution.
 //
-// Server enforces MAX_TELEMETRY_SCAN_SLOTS=50,000. At 1min × 5keys we max out
-// at ~24h range; 5min × 5keys allows ~7 days. Larger ranges will return
-// scan_too_large which we surface to the user.
+// 9 SERIES_DEFS map to one-or-more telemetry keys; the rest (forecasts,
+// market price, EPEX overlay) have no per-second source and stay empty.
+// gridKw uses imp − exp so its sign matches the slot-mode "Netz (Imp-Exp)"
+// convention (positive = Bezug, negative = Einspeisung) regardless of which
+// meter semantics (feed_in vs grid_import positive) the raw grid_total_w
+// uses on this install.
+//
+// Server scan-cap MAX_TELEMETRY_SCAN_SLOTS=1,500,000. Larger ranges fall
+// back to chunked day-by-day fetches in the CSV-export path. The autarkie
+// derivation guards against division-by-zero by requiring load > 1 W.
 const GRANULAR_SERIES_MAP = {
-  // SERIES_DEFS.id  →  { telemetry key,  W→kW conversion (1/1000 for power; 1 for SOC) }
-  pvKw:      { tKey: 'pv_power_w',      scale: 1 / 1000 },
-  loadKw:    { tKey: 'load_power_w',    scale: 1 / 1000 },
-  batteryKw: { tKey: 'battery_power_w', scale: 1 / 1000 },
-  gridKw:    { tKey: 'grid_power_w',    scale: 1 / 1000 },
-  soc:       { tKey: 'battery_soc_pct', scale: 1 }
+  // SERIES_DEFS.id  →  { tKeys: [series_key, ...], compute: (values) => number | null }
+  pvKw:       { tKeys: ['pv_total_w'],
+                compute: v => Number.isFinite(Number(v.pv_total_w)) ? Number(v.pv_total_w) / 1000 : null },
+  loadKw:     { tKeys: ['load_power_w'],
+                compute: v => Number.isFinite(Number(v.load_power_w)) ? Number(v.load_power_w) / 1000 : null },
+  batteryKw:  { tKeys: ['battery_power_w'],
+                compute: v => Number.isFinite(Number(v.battery_power_w)) ? Number(v.battery_power_w) / 1000 : null },
+  gridKw:     { tKeys: ['grid_import_w', 'grid_export_w'],
+                compute: v => {
+                  const i = Number(v.grid_import_w), e = Number(v.grid_export_w);
+                  if (!Number.isFinite(i) && !Number.isFinite(e)) return null;
+                  return ((Number.isFinite(i) ? i : 0) - (Number.isFinite(e) ? e : 0)) / 1000;
+                } },
+  importKw:   { tKeys: ['grid_import_w'],
+                compute: v => Number.isFinite(Number(v.grid_import_w)) ? Number(v.grid_import_w) / 1000 : null },
+  exportKw:   { tKeys: ['grid_export_w'],
+                compute: v => Number.isFinite(Number(v.grid_export_w)) ? Number(v.grid_export_w) / 1000 : null },
+  selfConsKw: { tKeys: ['self_consumption_w'],
+                compute: v => Number.isFinite(Number(v.self_consumption_w)) ? Number(v.self_consumption_w) / 1000 : null },
+  autarkie:   { tKeys: ['self_consumption_w', 'load_power_w'],
+                compute: v => {
+                  const sc = Number(v.self_consumption_w), l = Number(v.load_power_w);
+                  if (!Number.isFinite(sc) || !Number.isFinite(l) || l <= 1) return null;
+                  return Math.min(100, (sc / l) * 100);
+                } },
+  soc:        { tKeys: ['battery_soc_pct'],
+                compute: v => Number.isFinite(Number(v.battery_soc_pct)) ? Number(v.battery_soc_pct) : null }
 };
+// Flat union of every telemetry key we need across all granular series — used
+// for the /api/telemetry/series ?keys= argument (deduplicated).
+const GRANULAR_ALL_TELEMETRY_KEYS = [
+  ...new Set(Object.values(GRANULAR_SERIES_MAP).flatMap(m => m.tKeys))
+];
 // Granularity → maxResolution in seconds. Storage backend (TimescaleDB) holds
 // raw samples at ~5s; anything smaller than that returns the same data.
 // Server scan-cap MAX_TELEMETRY_SCAN_SLOTS=50,000 limits range × keys × (1/res):
@@ -100,7 +130,7 @@ async function fetchGranularData(startDate, endDate, agg) {
 
   const startIso = new Date(startDate).toISOString();
   const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
-  const keys = Object.values(GRANULAR_SERIES_MAP).map(m => m.tKey).join(',');
+  const keys = GRANULAR_ALL_TELEMETRY_KEYS.join(',');
 
   const url = `/api/telemetry/series?keys=${encodeURIComponent(keys)}&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&maxResolution=${maxRes}`;
   const res = await apiFetch(url);
@@ -133,15 +163,14 @@ function buildGranularChartData(rows, agg) {
     return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   });
 
-  // Build seriesData: only the 5 granular-available SERIES_DEFS are populated.
+  // Build seriesData via each map entry's compute() — handles 1:1 telemetry
+  // keys (pvKw, batteryKw, soc), W-scaled wrappers (load/import/export),
+  // and derived series (gridKw = imp − exp; autarkie = selfCons / load * 100).
   const seriesData = {};
   for (const def of SERIES_DEFS) {
     const map = GRANULAR_SERIES_MAP[def.id];
     if (!map) { seriesData[def.id] = sorted.map(() => null); continue; }
-    seriesData[def.id] = sorted.map(s => {
-      const v = s[map.tKey];
-      return v != null && Number.isFinite(Number(v)) ? Number(v) * map.scale : null;
-    });
+    seriesData[def.id] = sorted.map(s => map.compute(s));
   }
 
   explorerData.labels = labels;
@@ -511,7 +540,9 @@ async function exportCsvGranular(startDate, endDate, agg) {
   const maxRes = GRANULAR_AGG_TO_SECONDS[agg];
   const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && GRANULAR_SERIES_MAP[d.id]);
   if (!activeDefs.length) { setStatus('Keine Granular-Serie ausgewählt.'); return; }
-  const tKeys = activeDefs.map(d => GRANULAR_SERIES_MAP[d.id].tKey);
+  // Union of telemetry keys needed for the active series (deduplicated;
+  // gridKw + importKw share grid_import_w, autarkie shares load_power_w + self_consumption_w, etc.).
+  const tKeys = [...new Set(activeDefs.flatMap(d => GRANULAR_SERIES_MAP[d.id].tKeys))];
 
   // Iterate days [start..end] inclusive. Each iteration fetches exactly 24h.
   const start = new Date(startDate);
@@ -545,10 +576,8 @@ async function exportCsvGranular(startDate, endDate, agg) {
   const rows = sorted.map(s => {
     const cells = [s.ts];
     for (const d of activeDefs) {
-      const map = GRANULAR_SERIES_MAP[d.id];
-      const raw = s[map.tKey];
-      const v = raw != null && Number.isFinite(Number(raw)) ? Number(raw) * map.scale : null;
-      cells.push(v != null ? Number(v).toFixed(3).replace('.', ',') : '');
+      const v = GRANULAR_SERIES_MAP[d.id].compute(s);
+      cells.push(v != null && Number.isFinite(v) ? Number(v).toFixed(3).replace('.', ',') : '');
     }
     return cells.join(';');
   });
