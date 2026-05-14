@@ -1,18 +1,20 @@
 // tests/visual-parity/explorer.spec.mjs — Wave 5 gate (Plan 09.1-06 Task 1).
 //
-// Asserts the just-ported explorer page renders cleanly:
+// Asserts the explorer page (Aurora port + Option-B mockup-fidelity layout)
+// renders cleanly:
 //  - No blocking console / resource errors (benign /api/* auth-gate
 //    responses on the dev-server-without-apiToken setup are tolerated).
-//  - All 12 static IDs explorer.js binds against are present in the DOM.
+//  - All 12 legacy binding IDs explorer.js reads are present in the DOM
+//    (the visible UI is pill-based; the IDs back hidden <select>s).
 //  - theme.js IS loaded; <html data-theme> applies; clicking .theme-toggle
 //    cycles the attribute.
 //  - AURORA-02 single-writer: explorer.js never writes
 //    localStorage['dvhub.theme'] — only theme.js does.
 //  - styles.css is NOT linked (Wave-5 link migration — full port).
 //  - dvhub-app.css + explorer.css ARE linked.
-//  - Chart.js mount target #explorerCanvas exists and is a <canvas> element
-//    (chart only paints after an explicit "Laden" click + successful fetch,
-//    which we don't trigger here — auth-gated on dev without apiToken).
+//  - Mockup-fidelity layout: .explorer-grid (rail + main), .filter-card with
+//    signal-list (≥ 13 .sig-row entries — one per SERIES_DEF), pill-groups
+//    for range + agg, and raw-data-table.
 //
 // Requires a dev server on http://localhost:8080.
 
@@ -33,7 +35,7 @@ const EXPECTED_IDS = [
   'explorerStatus',
 ];
 
-test.describe('Explorer page (Aurora Wave 5, AURORA-01/02/03/05/06)', () => {
+test.describe('Explorer page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)', () => {
   test('loads with no blocking console / resource errors', async ({ page }) => {
     const errors = [];
     const failedResources = [];
@@ -123,21 +125,87 @@ test.describe('Explorer page (Aurora Wave 5, AURORA-01/02/03/05/06)', () => {
     expect(tagName.toUpperCase()).toBe('CANVAS');
   });
 
-  test('explorer page chrome paints (page-header-card, sub-card, controls)', async ({ page }) => {
+  test('Option-B layout: explorer-grid + filter-card rail + main pane present', async ({ page }) => {
     await page.goto('/explorer.html');
     await page.waitForLoadState('networkidle');
-    const header = page.locator('.page-header-card').first();
-    await expect(header).toBeAttached();
-    const headerBg = await header.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(headerBg, `.page-header-card must paint — got "${headerBg}"`).not.toBe('rgba(0, 0, 0, 0)');
-    expect(headerBg, `.page-header-card must paint — got "${headerBg}"`).not.toBe('transparent');
-    const subCard = page.locator('.sub-card').first();
-    await expect(subCard).toBeAttached();
-    const subBg = await subCard.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(subBg, `.sub-card must paint — got "${subBg}"`).not.toBe('rgba(0, 0, 0, 0)');
-    expect(subBg, `.sub-card must paint — got "${subBg}"`).not.toBe('transparent');
-    // Controls strip must render its select widgets.
-    const select = page.locator('#explorerRange');
-    await expect(select).toBeAttached();
+    const grid = page.locator('.explorer-grid');
+    await expect(grid).toBeAttached();
+    const rail = page.locator('.filter-card');
+    await expect(rail).toBeAttached();
+    const main = page.locator('.explorer-main');
+    await expect(main).toBeAttached();
+  });
+
+  test('signal-list renders ≥ 13 .sig-row entries (one per SERIES_DEF)', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    const sigRows = page.locator('#explorerSeriesChips .sig-row');
+    const count = await sigRows.count();
+    expect(count, `expected ≥ 13 .sig-row entries, got ${count}`).toBeGreaterThanOrEqual(13);
+  });
+
+  test('range pill-group: clicking a pill updates hidden <select> + activates pill', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    // Click the "7T" pill (data-pill-value="7d")
+    const pill7d = page.locator('.timerange-pills[data-pill-target="explorerRange"] button[data-pill-value="7d"]');
+    await pill7d.click();
+    await page.waitForTimeout(150);
+    await expect(pill7d).toHaveClass(/is-active/);
+    const selectVal = await page.locator('#explorerRange').evaluate((el) => el.value);
+    expect(selectVal).toBe('7d');
+  });
+
+  test('agg pill-group: clicking 1h pill updates hidden <select id="explorerAgg">', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    const pill1h = page.locator('.timerange-pills[data-pill-target="explorerAgg"] button[data-pill-value="1h"]');
+    await pill1h.click();
+    await page.waitForTimeout(150);
+    await expect(pill1h).toHaveClass(/is-active/);
+    const selectVal = await page.locator('#explorerAgg').evaluate((el) => el.value);
+    expect(selectVal).toBe('1h');
+  });
+
+  test('raw data table scaffold present (head + body + foot)', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#explorerRawHead')).toBeAttached();
+    await expect(page.locator('#explorerRawBody')).toBeAttached();
+    await expect(page.locator('#explorerRawFoot')).toBeAttached();
+    const table = page.locator('#explorerRawTable.data-table');
+    await expect(table).toBeAttached();
+  });
+
+  test('signal search input filters .sig-row entries', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    const search = page.locator('#explorerSignalSearch');
+    await expect(search).toBeAttached();
+    await search.fill('soc');
+    await page.waitForTimeout(150);
+    // After filtering by "soc", at least one row should match (Batterie SOC)
+    // and the total should be less than 13.
+    const visibleRows = await page.locator('#explorerSeriesChips .sig-row').count();
+    expect(visibleRows).toBeGreaterThan(0);
+    expect(visibleRows).toBeLessThan(13);
+  });
+
+  test('signal-list checkbox toggles .sig-row.is-active class', async ({ page }) => {
+    await page.goto('/explorer.html');
+    await page.waitForLoadState('networkidle');
+    // Capture seriesId BEFORE the click — renderSignalList() replaces innerHTML
+    // on change, detaching the original locator's element. Then we re-locate
+    // by data-series after the re-render.
+    const activeRow = page.locator('#explorerSeriesChips .sig-row.is-active').first();
+    await expect(activeRow).toBeAttached();
+    const seriesId = await activeRow.getAttribute('data-series');
+    // Force a synchronous DOM click on the checkbox via evaluate — avoids
+    // Playwright's actionability check that re-queries the (now detached)
+    // element after the change handler's innerHTML rewrite.
+    await activeRow.locator('input[type="checkbox"]').evaluate((el) => el.click());
+    await page.waitForTimeout(200);
+    const row = page.locator(`#explorerSeriesChips .sig-row[data-series="${seriesId}"]`);
+    await expect(row).not.toHaveClass(/is-active/);
   });
 });

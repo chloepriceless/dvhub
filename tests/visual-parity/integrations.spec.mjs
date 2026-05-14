@@ -1,15 +1,18 @@
 // tests/visual-parity/integrations.spec.mjs — Wave 5 gate (Plan 09.1-06 Task 1).
 //
-// Asserts the just-ported integrations page renders cleanly:
+// Asserts the integrations page (Aurora port + Option-B mockup-fidelity layout)
+// renders cleanly:
 //  - No blocking console / resource errors (benign /api/* auth-gate
 //    responses on the dev-server-without-apiToken setup are tolerated).
 //  - Both static IDs the markup must carry are present: #intg-list, #intg-empty.
 //  - theme.js IS loaded; <html data-theme> applies; clicking .theme-toggle
-//    cycles the attribute (Aurora topbar theme cycle).
+//    cycles the attribute.
 //  - AURORA-02 single-writer: integrations.js never writes
 //    localStorage['dvhub.theme'] — only theme.js does.
 //  - styles.css is NOT linked (Wave-5 link migration — full port).
 //  - dvhub-app.css + integrations.css ARE linked.
+//  - Mockup-fidelity layout present: segmented filter toolbar with the 3
+//    expected buttons, VRM Backfill notice, and conn-grid container.
 //
 // Requires a dev server on http://localhost:8080.
 
@@ -18,9 +21,12 @@ import { test, expect } from '@playwright/test';
 const EXPECTED_IDS = [
   'intg-list',
   'intg-empty',
+  'intg-filter-all',
+  'intg-filter-connected',
+  'intg-filter-disabled',
 ];
 
-test.describe('Integrations page (Aurora Wave 5, AURORA-01/02/03/05/06)', () => {
+test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/06)', () => {
   test('loads with no blocking console / resource errors', async ({ page }) => {
     const errors = [];
     const failedResources = [];
@@ -58,7 +64,7 @@ test.describe('Integrations page (Aurora Wave 5, AURORA-01/02/03/05/06)', () => 
     expect(hasThemeJs).toBe(true);
   });
 
-  test('both bound IDs present in DOM', async ({ page }) => {
+  test('all 5 bound IDs present in DOM (list, empty, 3 filter buttons)', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');
     const missing = [];
@@ -100,23 +106,48 @@ test.describe('Integrations page (Aurora Wave 5, AURORA-01/02/03/05/06)', () => 
     await toggle.click();
     await page.waitForTimeout(150);
     const after = await page.locator('html').getAttribute('data-theme');
-    // theme.js cycles dark → auto → light → dark; whichever current was, after
-    // one click it must change to one of the other states (or "auto").
     expect(after, `theme-toggle click must change data-theme — was ${before}, still ${after}`).not.toBe(before);
   });
 
-  test('integrations page chrome paints (page-header-card, intg-empty)', async ({ page }) => {
+  test('Option-B layout: filter toolbar segmented control + VRM notice + conn-grid present', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');
-    const header = page.locator('.page-header-card').first();
-    await expect(header).toBeAttached();
-    const headerBg = await header.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(headerBg, `.page-header-card must paint — got "${headerBg}"`).not.toBe('rgba(0, 0, 0, 0)');
-    expect(headerBg, `.page-header-card must paint — got "${headerBg}"`).not.toBe('transparent');
-    const empty = page.locator('#intg-empty');
-    await expect(empty).toBeAttached();
-    // Empty state is the visible default until integrations.js polls config.
-    const emptyText = await empty.locator('h3').textContent();
-    expect(emptyText).toContain('Keine Integrationen');
+    // Filter toolbar with 3-way segmented control
+    const toolbar = page.locator('.int-toolbar');
+    await expect(toolbar).toBeAttached();
+    const filterButtons = page.locator('.int-toolbar [data-status-filter]');
+    await expect(filterButtons).toHaveCount(3);
+    // "Alle" must be initially active
+    const allBtn = page.locator('#intg-filter-all');
+    await expect(allBtn).toHaveClass(/is-active/);
+    // VRM Backfill notice
+    const vrm = page.locator('.vrm-backfill-notice');
+    await expect(vrm).toBeAttached();
+    const vrmText = await vrm.textContent();
+    expect(vrmText).toContain('VRM Backfill');
+    // Connection grid
+    const grid = page.locator('#intg-list.conn-grid');
+    await expect(grid).toBeAttached();
+  });
+
+  test('filter buttons paint with segmented styling (segmented control class)', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    const segmented = page.locator('.int-toolbar .segmented').first();
+    await expect(segmented).toBeAttached();
+    const radius = await segmented.evaluate((el) => getComputedStyle(el).borderRadius);
+    // segmented pills carry 999px border-radius
+    expect(radius).not.toBe('0px');
+  });
+
+  test('clicking a filter button switches is-active state (CSP-clean delegation)', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    const disabledBtn = page.locator('#intg-filter-disabled');
+    await disabledBtn.click();
+    await page.waitForTimeout(150);
+    await expect(disabledBtn).toHaveClass(/is-active/);
+    const allBtn = page.locator('#intg-filter-all');
+    await expect(allBtn).not.toHaveClass(/is-active/);
   });
 });
