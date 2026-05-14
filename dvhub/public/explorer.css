@@ -14,14 +14,14 @@
 [hidden] { display: none !important; }
 
 /* ===== Page layout shell ===== */
-/* Explorer is data-heavy — chart paint quality scales with horizontal pixels,
-   so we expand the content area on wide viewports while still respecting
-   reading-line-length on narrow screens. 96vw leaves a thin breathing margin
-   (~2% per side) on wide monitors; the 1800px cap prevents pathologically
-   wide chart aspect ratios on ultrawide screens. */
+/* Explorer is data-heavy — chart paint quality scales with horizontal
+   pixels. Iteration 2 (per user feedback): drop the max-width cap
+   entirely and shrink side padding so the chart fills almost the full
+   viewport on any screen size. Earlier 96vw rule actually NARROWED the
+   page on laptop viewports (96% of 1366px < the previous 100% fill). */
 .page-content {
-  padding: 16px 24px;
-  max-width: min(1800px, 96vw);
+  padding: 12px 16px;
+  max-width: 100%;
   margin: 0 auto;
   box-sizing: border-box;
 }
@@ -111,7 +111,7 @@
 .explorer-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 240px 1fr;
   align-items: start;
 }
 @media (max-width: 1100px) {
