@@ -471,11 +471,22 @@ function renderChart() {
           }
         },
         zoom: {
-          pan: { enabled: true, mode: 'x' },
+          // Plain drag = brush-to-drilldown (refetch finer); Shift+drag = pan.
+          // Wheel + pinch also fire onZoomComplete and trigger the same
+          // refetch (debounced 400ms so rapid wheel ticks coalesce).
+          pan: { enabled: true, mode: 'x', modifierKey: 'shift' },
           zoom: {
             wheel: { enabled: true },
             pinch: { enabled: true },
-            mode: 'x'
+            drag: {
+              enabled: true,
+              backgroundColor: 'rgba(103, 165, 255, 0.18)',
+              borderColor: 'rgba(103, 165, 255, 0.55)',
+              borderWidth: 1,
+              threshold: 8
+            },
+            mode: 'x',
+            onZoomComplete: onChartZoomComplete
           },
           limits: { x: { minRange: 4 } }
         }
@@ -639,6 +650,91 @@ function downloadCsv(filename, csv) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// --- Brush-to-drilldown ---
+//
+// Chart.js zoom plugin fires onZoomComplete after every user-driven zoom
+// (drag rectangle, wheel, pinch). We debounce by 400ms so rapid wheel
+// ticks coalesce into a single refetch, then re-query at the finest
+// resolution the new window can carry under the server's 1.5M cap.
+// drilldownInFlight guards against feedback loops from the post-fetch
+// chart re-render.
+let drilldownInFlight = false;
+let drilldownDebounceId = null;
+
+function onChartZoomComplete({ chart }) {
+  if (drilldownInFlight) return;
+  clearTimeout(drilldownDebounceId);
+  drilldownDebounceId = setTimeout(() => applyDrilldown(chart), 400);
+}
+
+async function applyDrilldown(chart) {
+  if (!chart || !chart.scales || !chart.scales.x) return;
+  // The X-axis is a CATEGORY scale (labels are formatted strings), so
+  // scale.min/max are fractional INDICES, not timestamps. Map back to
+  // the underlying ISO ts via granularRows (granular mode) or rawSlots
+  // (slot mode).
+  const rows = explorerData.granularMode
+    ? explorerData.granularRows
+    : explorerData.rawSlots;
+  if (!Array.isArray(rows) || rows.length < 2) return;
+
+  const scale = chart.scales.x;
+  const minIdx = Math.max(0, Math.floor(scale.min));
+  const maxIdx = Math.min(rows.length - 1, Math.ceil(scale.max));
+  if (maxIdx - minIdx < 2) return; // ignore noise / tiny zooms
+
+  const startISO = rows[minIdx]?.ts;
+  const endISO = rows[maxIdx]?.ts;
+  if (!startISO || !endISO) return;
+
+  // Push the brushed range into the datetime-local inputs and the
+  // hidden <select>s so the user can see + edit + re-trigger.
+  const startD = new Date(startISO);
+  const endD = new Date(endISO);
+  document.getElementById('explorerStart').value = fmtDateTimeLocal(startD);
+  document.getElementById('explorerEnd').value = fmtDateTimeLocal(endD);
+
+  const rangeSel = document.getElementById('explorerRange');
+  rangeSel.value = 'custom';
+  document.getElementById('customStartWrap').classList.remove('u-hidden');
+  document.getElementById('customEndWrap').classList.remove('u-hidden');
+  document.querySelectorAll('.timerange-pills[data-pill-target="explorerRange"] button[data-pill-value]').forEach(b => {
+    b.classList.toggle('is-active', b.getAttribute('data-pill-value') === 'custom');
+  });
+
+  // Pick the finest pill that comfortably fits under the cap.
+  const windowSec = Math.max(1, (endD - startD) / 1000);
+  const finerPill = pickFinerAggForWindow(windowSec);
+  const aggSel = document.getElementById('explorerAgg');
+  aggSel.value = finerPill;
+  document.querySelectorAll('.timerange-pills[data-pill-target="explorerAgg"] button[data-pill-value]').forEach(b => {
+    b.classList.toggle('is-active', b.getAttribute('data-pill-value') === finerPill);
+  });
+
+  drilldownInFlight = true;
+  try {
+    await fetchExplorerData();
+  } finally {
+    drilldownInFlight = false;
+  }
+}
+
+// Pill ladder, finest first. Picks the first where the slot count stays
+// under MARGIN (half the server cap), so the user has headroom for
+// further client-side wheel zooms.
+const DRILLDOWN_AGG_LADDER = [
+  ['5s', 5], ['10s', 10], ['15s', 15], ['30s', 30],
+  ['1min', 60], ['5min', 300], ['15min', 900], ['1h', 3600], ['day', 86400]
+];
+function pickFinerAggForWindow(windowSec) {
+  const MARGIN = 750_000;
+  const activeKeys = Math.max(1, GRANULAR_ALL_TELEMETRY_KEYS.length);
+  for (const [name, sec] of DRILLDOWN_AGG_LADDER) {
+    if ((windowSec / sec) * activeKeys < MARGIN) return name;
+  }
+  return 'day';
 }
 
 // --- Init ---
