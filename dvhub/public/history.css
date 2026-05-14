@@ -9,6 +9,85 @@
   --flow-radius: var(--r-lg, 14px);
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+   PAGE-CONTENT BASE LAYOUT (2026-05-14, gap-fill from 09.1-07 port)
+
+   The legacy styles.css defined `.page-content` as the standard sub-page
+   shell (settings/explorer/history/setup) with padding, max-width and
+   center margin. The 09.1-07 port only emitted `.history-page-content`
+   (a single padding:12px rule), so `<main class="page-content
+   history-page-content">` had no proper container — content rendered
+   with no horizontal padding gutter on phones once the page-content
+   padding fell off (only history-page-content's 12px applied). Mirrors
+   the explorer/integrations `.page-content` block.
+
+   `main.page-content { justify-self:stretch }` defends against the
+   .app-shell grid having no column template (default 'auto' would
+   shrink the <main> to content width). See explorer.css for context.
+   ────────────────────────────────────────────────────────────────────── */
+.page-content {
+  padding: 12px 16px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+main.page-content { justify-self: stretch; }
+
+/* ──────────────────────────────────────────────────────────────────────
+   MOBILE HAMBURGER NAV (2026-05-14, gap-fill from 09.1-07 port)
+
+   The legacy styles.css carried the `.nav-toggle` + `@media(max-width:760px)`
+   topbar-nav drawer block. Plan 09.1-07's brace-balance Python extraction
+   missed it, so history.html's #navToggle button rendered unstyled and the
+   .topbar-nav stayed in its flex-row form at every viewport width —
+   producing a 6-item horizontally-scrollable nav on phones instead of the
+   off-canvas drawer that index/settings/explorer/integrations use.
+
+   common.js already wires the toggle (#navToggle ↔ #topbarNav.is-open),
+   so this is CSS-only. Block is byte-identical to index.css lines 32-73
+   (the canonical Aurora topbar pattern) — keep them in sync.
+   ────────────────────────────────────────────────────────────────────── */
+.nav-toggle {
+  display: none;
+  appearance: none; cursor: pointer;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  width: 38px; height: 38px; border-radius: 8px;
+  flex-shrink: 0; padding: 0;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 3px;
+  transition: .15s;
+}
+.nav-toggle:hover { background: var(--glass-2); border-color: var(--glass-brd-strong); }
+.nav-toggle .nav-toggle-bar {
+  display: block; width: 18px; height: 2px; border-radius: 2px;
+  background: var(--text-2); transition: .2s;
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { transform: translateY(5px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(3) { transform: translateY(-5px) rotate(-45deg); }
+
+@media (max-width: 760px) {
+  .nav-toggle { display: inline-flex; }
+  .topbar-nav {
+    position: fixed; top: 56px; left: 0; right: 0; z-index: 49;
+    display: flex; flex-direction: column; align-items: stretch;
+    flex: none;
+    background: var(--header-bg);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+    border-bottom: 1px solid var(--glass-brd);
+    padding: 8px 14px 12px;
+    gap: 4px;
+    transform: translateY(-12px); opacity: 0; pointer-events: none;
+    transition: transform .2s ease, opacity .2s ease;
+    overflow-x: visible;
+  }
+  .topbar-nav.is-open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .topbar-nav a { padding: 10px 13px; }
+  .topbar-nav a.is-active::after { display: none; }
+}
+
 /* DVhub History page styles — Aurora additions (Plan 09.1-03 Wave 2).
    Loaded AFTER /dvhub-app.css (Aurora tokens) and /styles.css (legacy
    stylesheet — to be deleted in Plan 09.1-07). This file carries
@@ -565,6 +644,22 @@
   gap: 12px;
 }
 .history-chart-grid > * { min-width: 0; }
+
+/* History chart grid — override the 3-col grid to stack full-width
+   when nested in .page-content (which is always, since history.html
+   wraps everything in <main class="page-content history-page-content">).
+   Ported from legacy styles.css §HISTORY full-width chart grid override
+   (2026-05-14 gap-fill from 09.1-07 port). Without this override the
+   4 chart panels (Financial/MonthDaily/Energy/Price) squeeze into 3
+   columns at 900-1400px viewports — cramped and hard to read.
+   Stacking vertically was the legacy behavior the user is used to. */
+.page-content .history-chart-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.page-content .history-chart-grid article { width: 100%; }
+
 /* Global overflow guard for the whole page-content area — prevents any
    stray wide child (long unbreakable number, oversized chart canvas,
    unwrapped <pre> in the rows table) from pushing the body wider than
@@ -1563,7 +1658,9 @@
 .metric-row-amber { display: none; color: var(--c-amber-600); }
 
 /* History page utility classes */
-.history-page-content { padding: 12px; max-width: 100%; }
+/* .history-page-content padding/max-width now live on the .page-content
+   base rule near the top of the file (2026-05-14 gap-fill). Only
+   history-specific bits (overflow guard at line ~572) stay scoped. */
 
 .history-section-title-lg { font-size: 1.4rem; }
 
