@@ -18,6 +18,29 @@ import { createDefaultConfig } from './config-model.js';
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
 import promClient from 'prom-client';
+// Plan 09.2-06 (D-12): pg-cursor for the streaming /api/history/raw/export.csv
+// endpoint. NOTE: `pg.Cursor` does NOT exist on the default `pg` export — the
+// canonical pattern (per node-postgres docs) is to install `pg-cursor` as a
+// peer package and import it directly. This is a single-purpose, ~3 KB add
+// maintained by the pg team itself; the QUAL-03 "no new npm deps" guideline
+// admits an exception here because the alternatives (a) buffer the entire
+// result set in memory, defeating T-09.2-DOS-MEM, or (b) re-implement keyset
+// pagination with multiple round-trips, hurting throughput.
+import Cursor from 'pg-cursor';
+
+// Phase 09.2 D-12 — minimal CSV-cell escape. Quotes the cell when it contains
+// the separator (`;`), a double-quote, or a newline; embedded quotes are
+// doubled per RFC 4180. Numerics are formatted via Number().toFixed() at the
+// call-site to bypass locale-dependent toString quirks. Module-scope so future
+// streaming exporters (parquet preview, devtools dumps) can reuse it.
+export function csvCell(v) {
+  if (v == null) return '';
+  const s = String(v);
+  if (/[;"\r\n]/.test(s)) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -1966,6 +1989,162 @@ export function createApiRoutes(ctx) {
         pushLog('history_raw_error', { error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
+    }
+
+    // --- /api/history/raw/export.csv — streaming CSV export (Phase 09.2 D-12) ---
+    // Bearer required from any source — D-15: NOT in LAN_SAFE_ENDPOINTS;
+    // /api/history/raw/export.csv is in BEARER_REQUIRED_ENDPOINTS so checkAuth
+    // (already invoked above) enforces the gate even on LAN.
+    //
+    // Streams a UTF-8-BOM CSV with semicolon separator (German Excel locale)
+    // over Transfer-Encoding: chunked. Reuses the same parameterized SQL
+    // shape as /api/history/raw above, MINUS the cache (streaming responses
+    // aren't cacheable) and MINUS the LIMIT cap (export the full range).
+    //
+    // Memory bound: pg.Cursor reads pages of 500 rows; we never materialise
+    // the full result set. Connection bound: req.on('close') and res.on('close')
+    // both abort the cursor and release the pool client (T-09.2-DOS-CONN).
+    if (url.pathname === '/api/history/raw/export.csv' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.pool) {
+        return json(res, 503, { ok: false, error: 'db not available' });
+      }
+
+      // Re-use the same parsers as /api/history/raw above.
+      const sources = parseCsv(url.searchParams.get('sources') || '');
+      const signals = parseCsv(url.searchParams.get('signals') || '');
+      const from = parseIsoOrNull(url.searchParams.get('from'));
+      const to = parseIsoOrNull(url.searchParams.get('to'));
+      if (from === false || to === false) {
+        return json(res, 400, { ok: false, error: 'invalid from/to timestamp (expect ISO 8601)' });
+      }
+      const cursorParam = parseIsoOrNull(url.searchParams.get('cursor'));
+      if (cursorParam === false) {
+        return json(res, 400, { ok: false, error: 'invalid cursor timestamp (expect ISO 8601)' });
+      }
+
+      // Build parameterized SQL — same shape as /api/history/raw above, no LIMIT.
+      // Every user-controllable value bound via $N. ANY($N::text[]) for arrays
+      // so injection payloads land as text-array elements, never as SQL syntax
+      // (T-09.2-INJ).
+      const params = [];
+      let p = 0;
+      const parts = [];
+      parts.push('SELECT s.ts_utc, s.series_key, s.value_num, s.unit FROM timeseries_samples s');
+      if (sources.length) {
+        parts.push('JOIN series_metadata m ON s.series_key = m.series_key');
+        parts.push(`WHERE m.source = ANY($${++p}::text[])`);
+        params.push(sources);
+      } else {
+        parts.push('WHERE 1 = 1');
+      }
+      if (signals.length) {
+        parts.push(`AND s.series_key = ANY($${++p}::text[])`);
+        params.push(signals);
+      }
+      if (from) {
+        parts.push(`AND s.ts_utc >= $${++p}::timestamptz`);
+        params.push(from);
+      }
+      if (to) {
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(to);
+      }
+      if (cursorParam) {
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(cursorParam);
+      }
+      // ORDER BY ts_utc DESC keeps TimescaleDB chunk-pruning efficient even
+      // without an explicit LIMIT (D-16). The time-range WHERE bounds disk read.
+      parts.push('ORDER BY s.ts_utc DESC');
+      const sql = parts.join(' ');
+
+      // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
+      // FILENAME-INJ). The `?filename=...` query param is intentionally not
+      // read anywhere in this handler.
+      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.csv`;
+
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
+      // and renders the German umlauts + the semicolon separator natively.
+      res.write('﻿');
+      res.write('ts_utc;series_key;value;unit\n');
+
+      let dbClient = null;
+      let pgCursor = null;
+      let aborted = false;
+      let cleaned = false;
+
+      function cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        if (pgCursor && typeof pgCursor.close === 'function') {
+          try { pgCursor.close(() => {}); } catch { /* swallow — already closing */ }
+        }
+        if (dbClient && typeof dbClient.release === 'function') {
+          try { dbClient.release(); } catch { /* swallow — already released */ }
+        }
+      }
+
+      // Both req.on('close') and res.on('close') — different runtimes emit
+      // close on different sockets; we register both for defence-in-depth.
+      // A single cleanup() is idempotent.
+      req.on('close', () => { aborted = true; cleanup(); });
+      res.on('close', () => { aborted = true; cleanup(); });
+
+      try {
+        dbClient = await ctx.telemetryStore.pool.connect();
+        pgCursor = dbClient.query(new Cursor(sql, params));
+
+        function readNext() {
+          if (aborted) {
+            cleanup();
+            return;
+          }
+          pgCursor.read(500, (err, rows) => {
+            if (err) {
+              pushLog('history_raw_csv_error', { error: err.message });
+              cleanup();
+              try { res.end(); } catch { /* res already ended */ }
+              return;
+            }
+            if (!rows.length) {
+              cleanup();
+              try { res.end(); } catch { /* res already ended */ }
+              return;
+            }
+            for (const row of rows) {
+              if (aborted) break;
+              const cells = [
+                row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
+                csvCell(row.series_key),
+                row.value_num != null ? Number(row.value_num).toFixed(6) : '',
+                csvCell(row.unit || ''),
+              ];
+              res.write(cells.join(';') + '\n');
+            }
+            if (aborted) {
+              cleanup();
+              return;
+            }
+            // Schedule the next read so we don't blow the call stack on
+            // very large exports (5000+ rows = 10+ recursive callbacks).
+            setImmediate(readNext);
+          });
+        }
+
+        readNext();
+      } catch (e) {
+        pushLog('history_raw_csv_error', { error: e.message });
+        cleanup();
+        try { res.end(); } catch { /* res already ended */ }
+      }
+      return;
     }
 
     // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---

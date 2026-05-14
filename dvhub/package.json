@@ -37,6 +37,7 @@
     "multicast-dns": "^7.2.5",
     "p-retry": "^8.0.0",
     "pg": "^8.13.0",
+    "pg-cursor": "^2.19.0",
     "prom-client": "^15.1.0"
   },
   "devDependencies": {
