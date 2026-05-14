@@ -209,6 +209,7 @@ function mockCtx({ pool = makeMockPoolWithCursor() } = {}) {
       close: () => {},
     },
     telemetryStore: { pool },
+    db: pool,
   };
 }
 

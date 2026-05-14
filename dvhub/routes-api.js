@@ -1900,7 +1900,7 @@ export function createApiRoutes(ctx) {
     // bounds disk read (D-16). Cursor pagination is "go further back in time"
     // via `s.ts_utc < $cursor` — chunk-aligned (Pitfall 5 alternative chosen).
     if (url.pathname === '/api/history/raw' && req.method === 'GET') {
-      if (!ctx.telemetryStore?.pool) {
+      if (!ctx.db) {
         return json(res, 503, { ok: false, error: 'db not available' });
       }
 
@@ -1983,7 +1983,7 @@ export function createApiRoutes(ctx) {
 
       const t0 = Date.now();
       try {
-        const r = await ctx.telemetryStore.pool.query(parts.join(' '), params);
+        const r = await ctx.db.query(parts.join(' '), params);
         const hasMore = r.rows.length > limit;
         const rawRows = hasMore ? r.rows.slice(0, limit) : r.rows;
         const rows = rawRows.map((row) => [
@@ -2028,7 +2028,7 @@ export function createApiRoutes(ctx) {
     // the full result set. Connection bound: req.on('close') and res.on('close')
     // both abort the cursor and release the pool client (T-09.2-DOS-CONN).
     if (url.pathname === '/api/history/raw/export.csv' && req.method === 'GET') {
-      if (!ctx.telemetryStore?.pool) {
+      if (!ctx.db) {
         return json(res, 503, { ok: false, error: 'db not available' });
       }
 
@@ -2121,7 +2121,7 @@ export function createApiRoutes(ctx) {
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.telemetryStore.pool.connect();
+        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
 
         function readNext() {
@@ -2188,7 +2188,7 @@ export function createApiRoutes(ctx) {
     // writer.close() writes the Parquet footer and closes the response stream
     // (osend internally calls res.end).
     if (url.pathname === '/api/history/raw/export.parquet' && req.method === 'GET') {
-      if (!ctx.telemetryStore?.pool) {
+      if (!ctx.db) {
         return json(res, 503, { ok: false, error: 'db not available' });
       }
 
@@ -2280,7 +2280,7 @@ export function createApiRoutes(ctx) {
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.telemetryStore.pool.connect();
+        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
         writer = await parquet.ParquetWriter.openStream(PARQUET_SCHEMA, res);
 

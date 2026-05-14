@@ -150,6 +150,7 @@ function mockCtx({ pool = makeMockPool() } = {}) {
       close: () => {},
     },
     telemetryStore: { pool },
+    db: pool,
   };
 }
 
