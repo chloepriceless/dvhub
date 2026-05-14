@@ -350,6 +350,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Phase 09.2 D-09: defensive metadata upsert. Any series_key the codebase
+      // writes for the first time lands in series_metadata with source='unknown',
+      // so the Explorer source-chip JOIN never has orphaned rows. Manual
+      // reclassification (UPDATE series_metadata SET source='X' WHERE …) happens
+      // out-of-band when an operator notices a grey chip in the UI. Inside the
+      // existing transaction so a rollback on the timeseries INSERT also rolls
+      // back the metadata row (no leak). $1 placeholder, no string concat
+      // (T-09.2-INJ mitigation). ON CONFLICT DO NOTHING means re-writes of
+      // known keys are a no-op (cheap, no UPDATE).
+      for (const row of rows) {
+        await client.query(`
+          INSERT INTO series_metadata (series_key, source)
+          VALUES ($1, 'unknown')
+          ON CONFLICT (series_key) DO NOTHING
+        `, [row.seriesKey]);
+      }
       for (const row of rows) {
         await client.query(`
           INSERT INTO timeseries_samples
