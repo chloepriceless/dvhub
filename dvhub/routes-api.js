@@ -27,6 +27,29 @@ import promClient from 'prom-client';
 // result set in memory, defeating T-09.2-DOS-MEM, or (b) re-implement keyset
 // pagination with multiple round-trips, hurting throughput.
 import Cursor from 'pg-cursor';
+// Plan 09.2-08 (D-13/D-24 revised): @dsnp/parquetjs is the pure-JS Parquet
+// writer for the streaming /api/history/raw/export.parquet endpoint. The
+// originally-planned `apache-arrow` JS package does NOT support Parquet write
+// (RESEARCH O-1 — Arrow JS only writes IPC/Feather, not Parquet). @dsnp/parquetjs
+// is a maintained fork (LibertyDSNP) of the original parquetjs, has no native
+// dependencies, and works on every platform Node runs on (verified on dev x86_64
+// + prod x86_64 LXC). The QUAL-03 "no new npm deps" guideline admits an
+// exception here for the same reason as pg-cursor (Plan 09.2-06): the
+// alternatives are either (a) hand-rolling the Parquet binary format, or
+// (b) buffering full result sets and shipping CSV/JSON instead — both worse.
+import parquet from '@dsnp/parquetjs';
+
+// Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
+// streaming Parquet export. Schema is locked to four columns: ts_utc UTF8,
+// series_key UTF8, value DOUBLE optional, unit UTF8 optional. Future column
+// additions need a schema bump + version-aware reader; readers must tolerate
+// missing optional columns (e.g. `unit`).
+const PARQUET_SCHEMA = new parquet.ParquetSchema({
+  ts_utc:     { type: 'UTF8' },
+  series_key: { type: 'UTF8' },
+  value:      { type: 'DOUBLE', optional: true },
+  unit:       { type: 'UTF8', optional: true },
+});
 
 // Phase 09.2 D-12 — minimal CSV-cell escape. Quotes the cell when it contains
 // the separator (`;`), a double-quote, or a newline; embedded quotes are
@@ -2143,6 +2166,161 @@ export function createApiRoutes(ctx) {
         pushLog('history_raw_csv_error', { error: e.message });
         cleanup();
         try { res.end(); } catch { /* res already ended */ }
+      }
+      return;
+    }
+
+    // --- /api/history/raw/export.parquet — streaming Parquet export (Phase 09.2 D-13/D-24 revised) ---
+    // Bearer required from any source — D-15: NOT in LAN_SAFE_ENDPOINTS;
+    // /api/history/raw/export.parquet is in BEARER_REQUIRED_ENDPOINTS so checkAuth
+    // (already invoked above) enforces the gate even on LAN.
+    //
+    // Streams a Parquet binary file over Transfer-Encoding: chunked. Reuses the
+    // same parameterized SQL builder shape as /api/history/raw and the CSV
+    // export above, MINUS the cache (binary streaming is not cacheable) and
+    // MINUS the LIMIT cap (export the full range). The PARQUET_SCHEMA is locked
+    // at module scope (4 columns: ts_utc, series_key, value, unit).
+    //
+    // Memory bound: pg.Cursor reads pages of 500 rows; ParquetWriter.appendRow
+    // writes each row immediately; we never materialise the full result set.
+    // Connection bound: req.on('close') and res.on('close') both abort the
+    // cursor and release the pool client (T-09.2-DOS-CONN). On the happy path,
+    // writer.close() writes the Parquet footer and closes the response stream
+    // (osend internally calls res.end).
+    if (url.pathname === '/api/history/raw/export.parquet' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.pool) {
+        return json(res, 503, { ok: false, error: 'db not available' });
+      }
+
+      // Re-use the same parsers as /api/history/raw and the CSV export above.
+      const sources = parseCsv(url.searchParams.get('sources') || '');
+      const signals = parseCsv(url.searchParams.get('signals') || '');
+      const from = parseIsoOrNull(url.searchParams.get('from'));
+      const to = parseIsoOrNull(url.searchParams.get('to'));
+      if (from === false || to === false) {
+        return json(res, 400, { ok: false, error: 'invalid from/to timestamp (expect ISO 8601)' });
+      }
+      const cursorParam = parseIsoOrNull(url.searchParams.get('cursor'));
+      if (cursorParam === false) {
+        return json(res, 400, { ok: false, error: 'invalid cursor timestamp (expect ISO 8601)' });
+      }
+
+      // Build parameterized SQL — same shape as the CSV export, no LIMIT.
+      // Every user-controllable value bound via $N. ANY($N::text[]) for arrays
+      // so injection payloads land as text-array elements, never as SQL syntax
+      // (T-09.2-INJ).
+      const params = [];
+      let p = 0;
+      const parts = [];
+      parts.push('SELECT s.ts_utc, s.series_key, s.value_num, s.unit FROM timeseries_samples s');
+      if (sources.length) {
+        parts.push('JOIN series_metadata m ON s.series_key = m.series_key');
+        parts.push(`WHERE m.source = ANY($${++p}::text[])`);
+        params.push(sources);
+      } else {
+        parts.push('WHERE 1 = 1');
+      }
+      if (signals.length) {
+        parts.push(`AND s.series_key = ANY($${++p}::text[])`);
+        params.push(signals);
+      }
+      if (from) {
+        parts.push(`AND s.ts_utc >= $${++p}::timestamptz`);
+        params.push(from);
+      }
+      if (to) {
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(to);
+      }
+      if (cursorParam) {
+        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        params.push(cursorParam);
+      }
+      // ORDER BY ts_utc DESC keeps TimescaleDB chunk-pruning efficient even
+      // without an explicit LIMIT (D-16). The time-range WHERE bounds disk read.
+      parts.push('ORDER BY s.ts_utc DESC');
+      const sql = parts.join(' ');
+
+      // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
+      // FILENAME-INJ). The `?filename=...` query param is intentionally not
+      // read anywhere in this handler.
+      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.parquet`;
+
+      // Headers MUST be flushed BEFORE ParquetWriter.openStream begins writing
+      // (the writer immediately writes the Parquet magic bytes "PAR1" via the
+      // first oswrite call inside openStream).
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+
+      let dbClient = null;
+      let pgCursor = null;
+      let writer = null;
+      let aborted = false;
+      let cleaned = false;
+
+      function cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        if (pgCursor && typeof pgCursor.close === 'function') {
+          try { pgCursor.close(() => {}); } catch { /* swallow — already closing */ }
+        }
+        if (dbClient && typeof dbClient.release === 'function') {
+          try { dbClient.release(); } catch { /* swallow — already released */ }
+        }
+      }
+
+      // Both req.on('close') and res.on('close') — different runtimes emit
+      // close on different sockets; defence-in-depth (idempotent cleanup).
+      req.on('close', () => { aborted = true; cleanup(); });
+      res.on('close', () => { aborted = true; cleanup(); });
+
+      try {
+        dbClient = await ctx.telemetryStore.pool.connect();
+        pgCursor = dbClient.query(new Cursor(sql, params));
+        writer = await parquet.ParquetWriter.openStream(PARQUET_SCHEMA, res);
+
+        // Drain the cursor in 500-row pages. We use an awaited promise per page
+        // (vs the CSV handler's setImmediate-callback style) because each
+        // appendRow is awaited — the natural async/await loop already yields to
+        // the event loop between pages without growing the call stack.
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          if (aborted) break;
+          const batch = await new Promise((resolve, reject) => {
+            pgCursor.read(500, (err, rows) => (err ? reject(err) : resolve(rows)));
+          });
+          if (!batch || batch.length === 0) break;
+          for (const row of batch) {
+            if (aborted) break;
+            await writer.appendRow({
+              ts_utc: row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
+              series_key: row.series_key,
+              value: row.value_num != null ? Number(row.value_num) : null,
+              unit: row.unit || null,
+            });
+          }
+          if (aborted) break;
+        }
+
+        if (!aborted) {
+          // writer.close() writes the Parquet footer + magic-bytes-tail and
+          // calls res.end() internally via util.osend. Do NOT call res.end()
+          // again afterwards — it would double-end the response.
+          await writer.close();
+        }
+      } catch (e) {
+        pushLog('history_raw_parquet_error', { error: e.message });
+        // On error, the writer may have partially written bytes. Best we can do
+        // is end the response (truncated file is the correct error signal to
+        // clients — Parquet readers will fail to find the footer magic).
+        try { res.end(); } catch { /* res already ended */ }
+      } finally {
+        cleanup();
       }
       return;
     }

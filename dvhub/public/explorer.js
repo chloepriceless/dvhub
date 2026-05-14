@@ -1081,14 +1081,27 @@ function initExplorer() {
     }
   });
 
-  // --- Phase 09.2 D-24: Parquet export placeholder (Plan 09.2-08 wires it fully) ---
-  // The endpoint /api/history/raw/export.parquet ships in Wave 5; until then we
-  // log + alert so QA can verify the button responds at the DOM level. The
-  // BEARER_REQUIRED_ENDPOINTS gate (Plan 09.2-05) already lists this path so
-  // the auth wiring will be ready when the server-side handler lands.
-  document.getElementById('explorerParquetBtn').addEventListener('click', () => {
-    console.warn('[explorer] Parquet export wired by Plan 09.2-08');
-    alert('Parquet-Export wird in Plan 09.2-08 freigeschaltet.');
+  // --- Phase 09.2 D-13/D-24: Parquet export → /api/history/raw/export.parquet ---
+  // Server-side @dsnp/parquetjs streams a binary Parquet file the user can load
+  // directly into DuckDB / pandas / Polars. Same Bearer-auth path as the CSV
+  // button (apiFetch + Blob — window.location cannot send the Authorization
+  // header that BEARER_REQUIRED_ENDPOINTS demands). Same buildExportParams()
+  // produces the URL: from, to, signals (mapped via GRANULAR_SERIES_MAP.tKeys),
+  // sources (only when constraining).
+  document.getElementById('explorerParquetBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('explorerParquetBtn');
+    const prev = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Exportiere…'; }
+    try {
+      const params = buildExportParams();
+      const today = new Date().toISOString().slice(0, 10);
+      await downloadServerExport(`/api/history/raw/export.parquet?${params.toString()}`, `dvhub-export-${today}.parquet`);
+      setStatus('Parquet-Export abgeschlossen.');
+    } catch (e) {
+      setStatus(`Parquet-Export Fehler: ${e.message}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prev || '↓ Parquet'; }
+    }
   });
 
   // --- Phase 09.2 D-21: Source-Chips render + click handler ---
