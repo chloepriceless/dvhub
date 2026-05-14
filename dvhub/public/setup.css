@@ -2028,3 +2028,11 @@ body.dv-modal-open {
   .topbar-nav a { padding: 10px 13px; }
   .topbar-nav a.is-active::after { display: none; }
 }
+
+/* Wizard discovery actions + hint (Plan 09.1-07 Task 3 — CSP cleanup,
+   replaces inline cssText/style= in setup.js). */
+.setup-discovery-actions { padding: 8px 14px 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.setup-discovery-btn { padding: 8px 18px; font-size: 13px; font-weight: 600; border-radius: 8px; }
+.setup-discovery-pick-btn { padding: 6px 14px; font-size: 12px; border: 1px solid rgba(76,227,108,0.3); border-radius: 6px; }
+.setup-hint-footer { text-align: center; font-size: 12px; color: rgba(232,234,240,0.35); margin-top: 20px; }
+.setup-hint-footer-link { color: var(--flow-green, #4CE36C); text-decoration: none; }
