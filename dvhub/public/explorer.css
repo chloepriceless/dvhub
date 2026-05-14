@@ -1,15 +1,19 @@
-/* Explorer page — Aurora port (Plan 09.1-06 Wave 5).
-   Self-contained per-page CSS. Rules harvested from styles.css with
-   legacy --flow-* tokens remapped to Aurora design tokens. theme.js
-   handles light/dark cycling on the topbar; explorer.js MUST NOT touch
-   localStorage['dvhub.theme']. */
+/* Explorer page — Aurora port + Mockup-Fidelity Option B (Plan 09.1-06 Wave 5).
+   Self-contained per-page CSS. Rules harvested from styles.css with legacy
+   --flow-* tokens remapped to Aurora design tokens. theme.js handles light/dark
+   cycling on the topbar; explorer.js MUST NOT touch localStorage['dvhub.theme'].
 
-/* [hidden] normalize — Wave-3 invariant #8 (adopted by index.css, settings.css). */
+   Mockup-fidelity layout: .explorer-grid 2-col grid with sticky filter-rail
+   (left, 280px) hosting search + signal-list + range/agg pill-groups, and
+   main pane (right) hosting chart-card + raw-data-section. Mirrors
+   .planning/DESIGN-2026-05-10-aurora/explorer.html shape; source-chips
+   (Victron/MID/LUOX/EPEX/Optim) deferred to Phase 09.2 because they
+   require backend source-tagging on time_series rows. */
+
+/* [hidden] normalize — Wave-3 invariant #8. */
 [hidden] { display: none !important; }
 
-/* ===== Page layout shell =====
-   Replaces .page-content from styles.css; standalone so removing styles.css
-   in Plan 09.1-07 does not regress paint. */
+/* ===== Page layout shell ===== */
 .page-content {
   padding: 16px 24px;
   max-width: min(1400px, 100%);
@@ -50,15 +54,14 @@
   margin: 4px 0 0;
 }
 
-/* ===== Sub-page panel card ===== */
-.sub-card {
+/* ===== Generic card ===== */
+.card {
   background: var(--glass-2);
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-md, 10px);
-  padding: 16px;
 }
 
-/* ===== Aurora topbar — Wave 5 (mirrored from settings.css Wave 4) ===== */
+/* ===== Aurora topbar (mirrored from settings.css Wave 4) ===== */
 .nav-toggle {
   display: none;
   appearance: none; cursor: pointer;
@@ -99,13 +102,157 @@
   .topbar-nav a.is-active::after { display: none; }
 }
 
-/* ===== Explorer controls strip (was in styles.css §Explorer) ===== */
-.explorer-controls {
+/* ===== 2-col grid: rail + main ===== */
+.explorer-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 280px 1fr;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .explorer-grid { grid-template-columns: 1fr; }
+}
+
+/* ===== Filter rail (sticky on desktop) ===== */
+.filter-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 72px;
+  max-height: calc(100vh - 88px);
+  overflow-y: auto;
+}
+@media (max-width: 1100px) {
+  .filter-card { position: static; max-height: none; }
+}
+.filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filter-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.filter-section h4 {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin: 0;
+  font-weight: 600;
+}
+.filter-count {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.filter-search {
+  background: var(--glass);
+  border: 1px solid var(--glass-brd-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.filter-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* ===== Signal list (sig-rows with checkbox + color swatch + name) ===== */
+.signal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.sig-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+  transition: background .12s;
+}
+.sig-row:hover { background: var(--glass); }
+.sig-row.is-active { background: var(--glass-2); }
+.sig-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.sig-row .sig-sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.sig-row .sig-name {
+  font-family: var(--f-mono);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.sig-row:not(.is-active) .sig-name { color: var(--text-2); }
+.sig-row .sig-unit {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* ===== Time-range / aggregation pills ===== */
+.timerange-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-end;
-  margin-bottom: 16px;
+  gap: 4px;
+}
+.timerange-pills button {
+  appearance: none;
+  background: var(--glass);
+  border: 1px solid var(--glass-brd);
+  color: var(--text-2);
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.timerange-pills button:hover {
+  background: var(--glass-2);
+  color: var(--text);
+  border-color: var(--glass-brd-strong);
+}
+.timerange-pills button.is-active {
+  background: var(--accent-soft, rgba(52,219,255,.15));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ===== Custom date range (only shown when range="custom") ===== */
+.filter-custom-range {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .explorer-control {
   display: flex;
@@ -113,103 +260,193 @@
   gap: 4px;
 }
 .explorer-control label {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   color: var(--text-2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 600;
 }
-.explorer-control input,
-.explorer-control select {
+.explorer-control input {
   background: var(--glass);
   border: 1px solid var(--glass-brd-strong);
   color: var(--text);
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
   font-family: var(--f-body);
-  min-width: 140px;
+  width: 100%;
+  box-sizing: border-box;
 }
-.explorer-control input:focus,
-.explorer-control select:focus {
+.explorer-control input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* ===== Series chip strip (explorer.js renders into #explorerSeriesChips) ===== */
-.explorer-series-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-.explorer-series-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-family: var(--f-mono);
-  cursor: pointer;
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-  color: var(--text-2);
-  transition: all 0.15s;
-  user-select: none;
-}
-.explorer-series-chip:hover {
-  background: var(--glass-2);
-  border-color: var(--glass-brd-strong);
-}
-.explorer-series-chip.is-active {
-  border-color: currentColor;
-  color: var(--text);
-  background: var(--glass-2);
-}
-.explorer-series-chip .chip-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
+/* ===== Big Query button at bottom of rail ===== */
+.filter-query-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-/* ===== Chart container ===== */
+/* ===== Main pane ===== */
+.explorer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0; /* prevent overflow from raw-data-table */
+}
+
+/* ===== Chart card ===== */
+.chart-big {
+  padding: 16px;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chart-big-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chart-big-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--f-base);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chart-big-actions {
+  display: flex;
+  gap: 6px;
+}
 .explorer-chart-wrap {
   position: relative;
   width: 100%;
-  height: 480px;
+  height: 420px;
 }
 
-/* ===== Bottom action strip + status text ===== */
-.explorer-actions {
+/* ===== Raw data section ===== */
+.data-section {
+  padding: 0;
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  flex-direction: column;
+}
+.data-tools {
+  padding: 10px 14px;
+  display: flex;
+  gap: 12px;
   align-items: center;
+  border-bottom: 1px solid var(--hairline);
   flex-wrap: wrap;
 }
-.explorer-status {
-  font-size: 12px;
-  color: var(--text-2);
-  font-family: var(--f-mono);
-  margin-left: auto;
+.data-tools .card-title {
+  font-family: var(--f-base);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
 }
+.data-tools .stat {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.data-tools-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.scroll-tbl {
+  max-height: 420px;
+  overflow: auto;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+}
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  background: rgba(8, 14, 28, 0.95);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 1;
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10.5px;
+  color: var(--text-2);
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--glass-brd-strong);
+}
+.data-table thead th small {
+  font-weight: 400;
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.data-table thead th.num,
+.data-table tbody td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.data-table tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+}
+.data-table tbody tr:hover td {
+  background: var(--row-hover);
+}
+.data-table td.mono {
+  color: var(--text-2);
+  font-size: 10.5px;
+}
+.data-section-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+[data-theme="light"] .data-table thead th {
+  background: rgba(245, 247, 251, 0.95);
+}
+
+/* ===== Status dots (re-used for chart-head indicator) ===== */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.dot-ok { background: var(--ok, #3ee0a0); box-shadow: 0 0 6px rgba(62,224,160,.5); }
 
 /* ===== Utility classes ===== */
 .u-hidden { display: none !important; }
 .u-text-muted { color: var(--text-2); }
 
 /* ===== Light theme refinements ===== */
-[data-theme="light"] .explorer-control input,
-[data-theme="light"] .explorer-control select {
-  background: var(--glass);
-  border-color: var(--glass-brd-strong);
-  color: var(--text);
-}
-[data-theme="light"] .sub-card,
-[data-theme="light"] .page-header-card {
+[data-theme="light"] .chart-big,
+[data-theme="light"] .data-section,
+[data-theme="light"] .filter-card,
+[data-theme="light"] .page-header-card,
+[data-theme="light"] .card {
   background: var(--glass-2);
   border-color: var(--glass-brd);
+}
+[data-theme="light"] .filter-search,
+[data-theme="light"] .explorer-control input {
+  background: var(--glass);
+  border-color: var(--glass-brd-strong);
 }

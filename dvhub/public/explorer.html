@@ -1,18 +1,30 @@
 <!doctype html>
-<!-- Explorer page — Aurora port (Plan 09.1-06 Wave 5).
+<!-- Explorer page — Aurora port + Mockup-Fidelity Option B (Plan 09.1-06 Wave 5).
      - Loads Aurora design tokens (dvhub-app.css) + theme.js + page-specific
-       explorer.css (rules harvested from styles.css with --flow-* tokens
-       remapped to Aurora). styles.css is NOT loaded.
+       explorer.css. styles.css is NOT loaded.
      - theme.js is the SOLE writer of localStorage['dvhub.theme']
        (AURORA-02 single-writer); explorer.js MUST NOT call setItem on
        that key.
-     - Binding contract: explorer.js binds against 12 IDs:
-       explorerRange, customStartWrap, explorerStart, customEndWrap,
-       explorerEnd, explorerAgg, explorerLoadBtn, explorerResetZoomBtn,
-       explorerSeriesChips, explorerCanvas (Chart.js mount), explorerCsvBtn,
-       explorerStatus.
-     - Chart.js + chartjs-plugin-zoom + hammer.js loaded at /chart.min.js
-       etc. — same canonical paths as Wave 3 history port. -->
+     - Binding contract: explorer.js binds against 12 IDs (legacy controls
+       kept as <select hidden> for explorer.js's getDateRange()/agg reads),
+       plus the new rail-driven UI:
+         #explorerRange (hidden <select> backing the range-pills)
+         #explorerStart, #customStartWrap, #explorerEnd, #customEndWrap
+         #explorerAgg (hidden <select> backing the agg-pills)
+         #explorerLoadBtn  (large primary in rail)
+         #explorerResetZoomBtn (in chart head)
+         #explorerSeriesChips  (signal-list mount in rail)
+         #explorerCanvas (Chart.js mount)
+         #explorerCsvBtn (in data-section toolbar)
+         #explorerStatus (footer in data-section)
+       Plus dynamic JS-injected IDs covered by extractIdsProvidedByJs():
+         #explorerRawTable, #explorerSignalSearch, #explorerSignalCount
+     - Mockup fidelity: .explorer-grid 2-col with sticky filter-rail; signal-list
+       checkboxes drive explorer.js#activeSeriesIds; range/agg pills update
+       the hidden <select> values; new raw-data-table renders last N slots
+       from the existing fetch. Source-Chips (Victron/MID/LUOX/EPEX/Optim)
+       are deferred to Phase 09.2 (require backend source-tagging on
+       time_series rows). -->
 <html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -63,56 +75,124 @@
         <div class="page-header-card-copy">
           <p class="page-kicker">Explorer</p>
           <h1>Daten-Explorer</h1>
-          <p class="page-subtitle">Alle Messwerte frei kombinierbar mit Zoom, Pan und CSV-Export.</p>
+          <p class="page-subtitle">Alle Messwerte frei kombinierbar mit Zoom, Pan, CSV-Export und Rohdaten-Tabelle.</p>
         </div>
       </div>
 
-      <div class="sub-card">
-        <div class="explorer-controls">
-          <div class="explorer-control">
-            <label for="explorerRange">Zeitbereich</label>
-            <select id="explorerRange">
-              <option value="today">Heute</option>
-              <option value="yesterday">Gestern</option>
-              <option value="7d" selected>Letzte 7 Tage</option>
-              <option value="30d">Letzte 30 Tage</option>
-              <option value="custom">Benutzerdefiniert</option>
-            </select>
-          </div>
-          <div class="explorer-control u-hidden" id="customStartWrap">
-            <label for="explorerStart">Von</label>
-            <input type="date" id="explorerStart" />
-          </div>
-          <div class="explorer-control u-hidden" id="customEndWrap">
-            <label for="explorerEnd">Bis</label>
-            <input type="date" id="explorerEnd" />
-          </div>
-          <div class="explorer-control">
-            <label for="explorerAgg">Aggregation</label>
-            <select id="explorerAgg">
-              <option value="15min" selected>15 Minuten</option>
-              <option value="1h">1 Stunde</option>
-              <option value="day">Tag</option>
-            </select>
-          </div>
-          <div class="explorer-control">
-            <button class="btn primary" id="explorerLoadBtn" type="button">Laden</button>
-          </div>
-          <div class="explorer-control">
-            <button class="btn ghost" id="explorerResetZoomBtn" type="button">Zoom Reset</button>
-          </div>
-        </div>
+      <!-- Hidden <select>s that explorer.js#getDateRange() and the agg read
+           reads from. The visible UI is driven by pill buttons that mirror
+           their values into these selects before triggering a load. Keeping
+           the selects in the DOM preserves the existing 12-ID binding
+           contract without forcing an explorer.js rewrite. -->
+      <select id="explorerRange" hidden aria-hidden="true">
+        <option value="today">Heute</option>
+        <option value="yesterday">Gestern</option>
+        <option value="24h" selected>Letzte 24h</option>
+        <option value="7d">Letzte 7 Tage</option>
+        <option value="30d">Letzte 30 Tage</option>
+        <option value="custom">Benutzerdefiniert</option>
+      </select>
+      <select id="explorerAgg" hidden aria-hidden="true">
+        <option value="15min" selected>15 Minuten</option>
+        <option value="1h">1 Stunde</option>
+        <option value="day">Tag</option>
+      </select>
 
-        <div id="explorerSeriesChips" class="explorer-series-grid"></div>
+      <div class="explorer-grid">
+        <!-- Filter rail (sticky on desktop) -->
+        <aside class="card filter-card" aria-label="Filter">
+          <div class="filter-section">
+            <h4>Suche</h4>
+            <input id="explorerSignalSearch" class="filter-search" type="text" placeholder="z.B. battery.soc" autocomplete="off" />
+          </div>
 
-        <div class="explorer-chart-wrap">
-          <canvas id="explorerCanvas"></canvas>
-        </div>
+          <div class="filter-section">
+            <div class="filter-section-head">
+              <h4>Signale</h4>
+              <span id="explorerSignalCount" class="filter-count">0</span>
+            </div>
+            <!-- explorer.js renders .sig-row entries into this container -->
+            <div id="explorerSeriesChips" class="signal-list" role="group" aria-label="Signal-Auswahl"></div>
+          </div>
 
-        <div class="explorer-actions">
-          <button class="btn ghost" id="explorerCsvBtn" type="button">CSV Export</button>
-          <span class="explorer-status" id="explorerStatus">Bereit.</span>
-        </div>
+          <div class="filter-section">
+            <h4>Zeitraum</h4>
+            <div class="timerange-pills" data-pill-target="explorerRange" role="group" aria-label="Zeitbereich">
+              <button type="button" data-pill-value="today">Heute</button>
+              <button type="button" data-pill-value="yesterday">Gestern</button>
+              <button type="button" data-pill-value="24h" class="is-active">24h</button>
+              <button type="button" data-pill-value="7d">7T</button>
+              <button type="button" data-pill-value="30d">30T</button>
+              <button type="button" data-pill-value="custom">Custom</button>
+            </div>
+            <div class="filter-custom-range">
+              <div class="explorer-control u-hidden" id="customStartWrap">
+                <label for="explorerStart">Von</label>
+                <input type="date" id="explorerStart" />
+              </div>
+              <div class="explorer-control u-hidden" id="customEndWrap">
+                <label for="explorerEnd">Bis</label>
+                <input type="date" id="explorerEnd" />
+              </div>
+            </div>
+          </div>
+
+          <div class="filter-section">
+            <h4>Aggregation</h4>
+            <div class="timerange-pills" data-pill-target="explorerAgg" role="group" aria-label="Aggregation">
+              <button type="button" data-pill-value="15min" class="is-active">15 min</button>
+              <button type="button" data-pill-value="1h">1h</button>
+              <button type="button" data-pill-value="day">Tag</button>
+            </div>
+          </div>
+
+          <button class="btn primary filter-query-btn" id="explorerLoadBtn" type="button">
+            <span>Abfrage starten</span>
+          </button>
+        </aside>
+
+        <!-- Main pane: chart + raw-data-table -->
+        <section class="explorer-main">
+          <!-- Chart card -->
+          <div class="card chart-big">
+            <div class="chart-big-head">
+              <div class="chart-big-title">
+                <span class="dot dot-ok"></span>
+                <span>Verlauf · <span id="explorerChartSeriesCount">0</span> Reihen</span>
+              </div>
+              <div class="chart-big-actions">
+                <button class="btn sm ghost" id="explorerResetZoomBtn" type="button">Zoom Reset</button>
+              </div>
+            </div>
+            <div class="explorer-chart-wrap">
+              <canvas id="explorerCanvas"></canvas>
+            </div>
+          </div>
+
+          <!-- Raw data table -->
+          <div class="card data-section">
+            <div class="data-tools">
+              <span class="card-title">Rohdaten</span>
+              <span class="stat" id="explorerStatus">Bereit.</span>
+              <div class="data-tools-actions">
+                <button class="btn sm ghost" id="explorerCsvBtn" type="button">CSV Export</button>
+              </div>
+            </div>
+            <div class="scroll-tbl">
+              <table id="explorerRawTable" class="data-table">
+                <thead>
+                  <tr id="explorerRawHead">
+                    <th>Zeitpunkt</th>
+                  </tr>
+                </thead>
+                <tbody id="explorerRawBody"></tbody>
+              </table>
+            </div>
+            <div class="data-section-foot">
+              <span id="explorerRawFoot" class="u-text-muted">&mdash;</span>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -122,6 +202,6 @@
   <script src="/chartjs-plugin-zoom.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/explorer.js"></script>
+  <script src="/explorer.js?v=2"></script>
 </body>
 </html>

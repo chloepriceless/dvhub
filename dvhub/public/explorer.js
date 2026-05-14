@@ -17,6 +17,8 @@ const SERIES_DEFS = [
   { id: 'selfConsKw', label: 'Eigenverbrauch',    color: '#A8F000', unit: 'kW',    axis: 'kw',  key: 'selfConsumptionKwh', toKw: true, hidden: true },
 ];
 
+const MAX_RAW_TABLE_ROWS = 500; // cap to avoid 5760-row DOM render hit; status footer reports total
+
 let explorerChart = null;
 let explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpex: null };
 const activeSeriesIds = new Set(SERIES_DEFS.filter(s => !s.hidden).map(s => s.id));
@@ -36,18 +38,12 @@ function getDateRange() {
   switch (sel) {
     case 'today': return [fmtDate(today), fmtDate(today)];
     case 'yesterday': return [fmtDate(addDays(today, -1)), fmtDate(addDays(today, -1))];
-    case '7d': return [fmtDate(addDays(today, -6)), fmtDate(today)];
+    case '24h':
+    case '7d': return [fmtDate(addDays(today, sel === '24h' ? -1 : -6)), fmtDate(today)];
     case '30d': return [fmtDate(addDays(today, -29)), fmtDate(today)];
     case 'custom': return [document.getElementById('explorerStart').value, document.getElementById('explorerEnd').value];
   }
   return [fmtDate(today), fmtDate(today)];
-}
-
-function viewForRange(start, end) {
-  const days = (new Date(end) - new Date(start)) / 86400000;
-  if (days <= 1) return 'day';
-  if (days <= 31) return 'week';
-  return 'month';
 }
 
 function setStatus(msg) {
@@ -55,16 +51,20 @@ function setStatus(msg) {
   if (el) el.textContent = msg;
 }
 
+function setChartSeriesCount(n) {
+  const el = document.getElementById('explorerChartSeriesCount');
+  if (el) el.textContent = String(n);
+}
+
 // --- Data fetching ---
 async function fetchExplorerData() {
   const [startDate, endDate] = getDateRange();
-  if (!startDate || !endDate) { setStatus('Bitte Zeitbereich waehlen.'); return; }
+  if (!startDate || !endDate) { setStatus('Bitte Zeitbereich wählen.'); return; }
 
   setStatus('Lade Daten...');
   const agg = document.getElementById('explorerAgg').value;
 
   try {
-    // Fetch day-by-day summaries for the range
     const start = new Date(startDate);
     const end = new Date(endDate);
     const allSlots = [];
@@ -84,7 +84,6 @@ async function fetchExplorerData() {
     dayResults.sort((a, b) => a.date.localeCompare(b.date));
     for (const dr of dayResults) allSlots.push(...dr.slots);
 
-    // Fetch forecast + EPEX prices + SOC telemetry
     const startIso = new Date(startDate).toISOString();
     const endIso = new Date(new Date(endDate).getTime() + 86400000).toISOString();
     const [fcData, statusData, socData] = await Promise.all([
@@ -98,12 +97,10 @@ async function fetchExplorerData() {
     explorerData.rawEpex = statusData?.epex?.data || [];
     explorerData.rawSoc = socData?.data || [];
 
-    // Aggregate if needed
     const slots = aggregateSlots(allSlots, agg);
-
-    // Build chart data
     buildChartData(slots, fcData, statusData?.epex?.data || [], agg, explorerData.rawSoc);
     renderChart();
+    renderRawTable();
     setStatus(`${allSlots.length} Slots geladen (${startDate} bis ${endDate}).`);
   } catch (e) {
     setStatus(`Fehler: ${e.message}`);
@@ -112,21 +109,15 @@ async function fetchExplorerData() {
 
 function aggregateSlots(slots, agg) {
   if (agg === '15min') return slots;
-
   const buckets = new Map();
   for (const slot of slots) {
     const d = new Date(slot.ts);
     let key;
-    if (agg === '1h') {
-      d.setMinutes(0, 0, 0);
-      key = d.toISOString();
-    } else { // day
-      key = d.toISOString().slice(0, 10);
-    }
+    if (agg === '1h') { d.setMinutes(0, 0, 0); key = d.toISOString(); }
+    else { key = d.toISOString().slice(0, 10); }
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(slot);
   }
-
   const result = [];
   for (const [key, group] of buckets) {
     const bucket = { ts: key };
@@ -134,13 +125,10 @@ function aggregateSlots(slots, agg) {
     for (const k of numKeys) {
       bucket[k] = group.reduce((sum, s) => sum + (Number(s[k]) || 0), 0);
     }
-    // SOC: take last value
     const lastWithSoc = [...group].reverse().find(s => s.soc != null);
     if (lastWithSoc) bucket.soc = lastWithSoc.soc;
-    // Market price: average
     const prices = group.map(s => Number(s.marketPriceCtKwh)).filter(v => Number.isFinite(v));
     if (prices.length) bucket.marketPriceCtKwh = prices.reduce((a, b) => a + b, 0) / prices.length;
-    // User import price: average
     const uPrices = group.map(s => Number(s.userImportPriceCtKwh)).filter(v => Number.isFinite(v));
     if (uPrices.length) bucket.userImportPriceCtKwh = uPrices.reduce((a, b) => a + b, 0) / uPrices.length;
     result.push(bucket);
@@ -150,23 +138,20 @@ function aggregateSlots(slots, agg) {
 
 function buildChartData(slots, fcData, epexData, agg, socSamples = []) {
   const slotMinutes = agg === '15min' ? 15 : agg === '1h' ? 60 : 1440;
-  const kwFactor = 60 / slotMinutes; // kWh → kW conversion
+  const kwFactor = 60 / slotMinutes;
 
-  // Labels
   const labels = slots.map(s => {
     const d = new Date(s.ts);
     if (agg === 'day') return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
     return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   });
 
-  // Build sorted arrays for forecast + EPEX + SOC for interpolation
   const fcSolarArr = (fcData?.solar || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
   const fcConsArr = (fcData?.consumption || []).map(p => ({ ts: new Date(p.ts).getTime(), v: p.w / 1000 })).sort((a, b) => a.ts - b.ts);
   const socArr = (socSamples || []).map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.value) })).filter(p => Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
   const epexMap = new Map();
   if (epexData) epexData.forEach(p => epexMap.set(Number(p.ts), Number(p.ct_kwh)));
 
-  // Interpolate value from sorted array of {ts, v}
   function interpol(arr, ts) {
     if (!arr.length) return null;
     if (ts <= arr[0].ts) return arr[0].v;
@@ -179,17 +164,13 @@ function buildChartData(slots, fcData, epexData, agg, socSamples = []) {
     }
     return null;
   }
-
-  // Find nearest EPEX price within 15 min tolerance
   function findEpex(ts) {
     const direct = epexMap.get(ts);
     if (direct != null) return direct;
-    // Round to nearest 15min and try
     const rounded = Math.round(ts / 900000) * 900000;
     return epexMap.get(rounded) ?? null;
   }
 
-  // Build dataset values
   const seriesData = {};
   for (const def of SERIES_DEFS) {
     seriesData[def.id] = slots.map(s => {
@@ -203,7 +184,6 @@ function buildChartData(slots, fcData, epexData, agg, socSamples = []) {
       if (def.key === '_pvFc') return interpol(fcSolarArr, ts);
       if (def.key === '_consFc') return interpol(fcConsArr, ts);
       if (def.key === '_marketCt') {
-        // Prefer slot data, fallback to EPEX overlay
         const slotPrice = Number(s.marketPriceCtKwh);
         return Number.isFinite(slotPrice) ? slotPrice : findEpex(ts);
       }
@@ -231,7 +211,6 @@ function buildDatasets() {
     if (!activeSeriesIds.has(def.id)) continue;
     const data = explorerData.seriesData?.[def.id];
     if (!data || !data.some(v => v != null)) continue;
-
     datasets.push({
       label: def.label,
       data: data,
@@ -250,7 +229,6 @@ function buildDatasets() {
   return datasets;
 }
 
-// --- Chart rendering ---
 function renderChart() {
   const canvas = document.getElementById('explorerCanvas');
   if (!canvas || typeof Chart === 'undefined') return;
@@ -258,11 +236,10 @@ function renderChart() {
   if (explorerChart) { explorerChart.destroy(); explorerChart = null; }
 
   const datasets = buildDatasets();
+  setChartSeriesCount(datasets.length);
   if (!datasets.length) { setStatus('Keine Daten für die ausgewählten Serien.'); return; }
 
-  // Determine which axes are needed
   const usedAxes = new Set(datasets.map(d => d.yAxisID));
-
   const scales = {
     x: {
       ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 20 },
@@ -306,9 +283,7 @@ function renderChart() {
       animation: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: {
-          display: false // we use custom chips
-        },
+        legend: { display: false },
         tooltip: {
           enabled: true,
           backgroundColor: '#1a1a2eee',
@@ -341,29 +316,101 @@ function renderChart() {
   });
 }
 
-// --- Series chips UI ---
-function renderSeriesChips() {
+// --- Signal list (rail) — replaces legacy .explorer-series-chip strip ---
+function renderSignalList() {
   const container = document.getElementById('explorerSeriesChips');
   if (!container) return;
-  container.innerHTML = SERIES_DEFS.map(def => `
-    <div class="explorer-series-chip ${activeSeriesIds.has(def.id) ? 'is-active' : ''}" data-series="${def.id}" style="${activeSeriesIds.has(def.id) ? `color:${def.color};border-color:${def.color}` : ''}">
-      <span class="chip-dot" style="background:${def.color}"></span>
-      ${def.label} <small style="opacity:0.6">(${def.unit})</small>
-    </div>
-  `).join('');
+  const searchVal = (document.getElementById('explorerSignalSearch')?.value || '').toLowerCase();
+  const filtered = SERIES_DEFS.filter(def => {
+    if (!searchVal) return true;
+    return def.id.toLowerCase().includes(searchVal) ||
+           def.label.toLowerCase().includes(searchVal);
+  });
+  const rows = filtered.map(def => {
+    const active = activeSeriesIds.has(def.id);
+    return `<label class="sig-row${active ? ' is-active' : ''}" data-series="${def.id}">
+      <input type="checkbox" data-series-cb="${def.id}"${active ? ' checked' : ''} aria-label="${def.label}">
+      <span class="sig-sw" style="background:${def.color}"></span>
+      <span class="sig-name">${def.label}</span>
+      <span class="sig-unit">${def.unit}</span>
+    </label>`;
+  }).join('');
+  container.innerHTML = rows;
 
-  container.querySelectorAll('.explorer-series-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const id = chip.dataset.series;
-      if (activeSeriesIds.has(id)) activeSeriesIds.delete(id);
-      else activeSeriesIds.add(id);
-      renderSeriesChips();
-      if (explorerData.labels.length) renderChart();
-    });
+  const countEl = document.getElementById('explorerSignalCount');
+  if (countEl) countEl.textContent = `${activeSeriesIds.size} / ${SERIES_DEFS.length}`;
+}
+
+// --- Raw data table — renders last MAX_RAW_TABLE_ROWS from rawSlots ---
+function renderRawTable() {
+  const head = document.getElementById('explorerRawHead');
+  const body = document.getElementById('explorerRawBody');
+  const foot = document.getElementById('explorerRawFoot');
+  if (!head || !body) return;
+
+  const slots = explorerData.rawSlots || [];
+  if (!slots.length) {
+    head.innerHTML = '<th>Zeitpunkt</th>';
+    body.innerHTML = '';
+    if (foot) foot.textContent = 'Keine Daten geladen.';
+    return;
+  }
+
+  // Determine which active series have a corresponding slot key
+  const cols = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && !d.key.startsWith('_'));
+  let headerHtml = '<th>Zeitpunkt</th>';
+  for (const c of cols) {
+    headerHtml += `<th class="num" title="${c.label}">${c.id}<br><small>${c.unit}</small></th>`;
+  }
+  head.innerHTML = headerHtml;
+
+  // Render last N rows (newest first)
+  const visible = slots.slice(-MAX_RAW_TABLE_ROWS).reverse();
+  const rowsHtml = visible.map(s => {
+    const d = new Date(s.ts);
+    const tsLabel = d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    let row = `<td class="mono">${tsLabel}</td>`;
+    for (const c of cols) {
+      const raw = Number(s[c.key]);
+      if (!Number.isFinite(raw)) {
+        row += `<td class="num">&mdash;</td>`;
+      } else {
+        const display = c.toKw ? (raw * (60 / (15))) : raw; // 15min slot → kW assumption matches build path
+        row += `<td class="num">${display.toFixed(2)}</td>`;
+      }
+    }
+    return `<tr>${row}</tr>`;
+  }).join('');
+  body.innerHTML = rowsHtml;
+
+  if (foot) {
+    if (slots.length > MAX_RAW_TABLE_ROWS) {
+      foot.textContent = `Zeige ${MAX_RAW_TABLE_ROWS} von ${slots.length} Zeilen (neueste zuerst).`;
+    } else {
+      foot.textContent = `${slots.length} Zeilen (neueste zuerst).`;
+    }
+  }
+}
+
+// --- Pill button → hidden <select> sync ---
+function wirePillGroup(groupEl) {
+  const targetId = groupEl.getAttribute('data-pill-target');
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  groupEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pill-value]');
+    if (!btn) return;
+    const val = btn.getAttribute('data-pill-value');
+    target.value = val;
+    // Activate clicked, deactivate siblings
+    const siblings = groupEl.querySelectorAll('button[data-pill-value]');
+    siblings.forEach(s => s.classList.toggle('is-active', s === btn));
+    // Fire change so existing handlers (range custom-toggle) react
+    target.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
 
-// --- CSV Export ---
+// --- CSV Export (unchanged from Wave-5 Task 1) ---
 function exportCsv() {
   if (!explorerData.labels.length) return;
   const activeDefs = SERIES_DEFS.filter(d => activeSeriesIds.has(d.id) && explorerData.seriesData?.[d.id]);
@@ -375,7 +422,7 @@ function exportCsv() {
     })].join(';');
   });
   const csv = [header.join(';'), ...rows].join('\n');
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -396,9 +443,35 @@ function initExplorer() {
 
   rangeSelect.addEventListener('change', () => {
     const isCustom = rangeSelect.value === 'custom';
-    customStart.style.display = isCustom ? '' : 'none';
-    customEnd.style.display = isCustom ? '' : 'none';
+    customStart.classList.toggle('u-hidden', !isCustom);
+    customEnd.classList.toggle('u-hidden', !isCustom);
   });
+
+  // Wire all pill-groups (range, aggregation)
+  document.querySelectorAll('.timerange-pills[data-pill-target]').forEach(wirePillGroup);
+
+  // Wire signal-list checkboxes via event delegation (CSP-clean)
+  const sigList = document.getElementById('explorerSeriesChips');
+  if (sigList) {
+    sigList.addEventListener('change', (e) => {
+      const cb = e.target.closest('input[data-series-cb]');
+      if (!cb) return;
+      const id = cb.getAttribute('data-series-cb');
+      if (cb.checked) activeSeriesIds.add(id);
+      else activeSeriesIds.delete(id);
+      renderSignalList();
+      if (explorerData.labels.length) {
+        renderChart();
+        renderRawTable();
+      }
+    });
+  }
+
+  // Signal search filter
+  const search = document.getElementById('explorerSignalSearch');
+  if (search) {
+    search.addEventListener('input', () => renderSignalList());
+  }
 
   document.getElementById('explorerLoadBtn').addEventListener('click', fetchExplorerData);
   document.getElementById('explorerResetZoomBtn').addEventListener('click', () => {
@@ -406,10 +479,11 @@ function initExplorer() {
   });
   document.getElementById('explorerCsvBtn').addEventListener('click', exportCsv);
 
-  renderSeriesChips();
+  renderSignalList();
+  renderRawTable(); // empty initial state
 
-  // Auto-load today
-  document.getElementById('explorerRange').value = 'today';
+  // Auto-load 24h on page load
+  rangeSelect.value = '24h';
   fetchExplorerData();
 }
 

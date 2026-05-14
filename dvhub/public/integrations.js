@@ -4,16 +4,56 @@
   var POLL_INTERVAL_MS = 10000;
   var STALE_THRESHOLD_MS = 60000;
 
+  // System catalogue — drives card render order + per-system summary
+  // shape. Phase 09.2 will extend each entry with health-endpoint fields
+  // (latencyMs, uptimeSec, errors24h, sampleIntervalMs, firmware).
   var SYSTEMS = [
-    { key: 'mqtt', label: 'MQTT Hub', icon: '\u{1F4E1}' },
-    { key: 'tesla', label: 'TeslaMate', icon: '\u{1F697}' },
-    { key: 'homeAssistant', label: 'Home Assistant', icon: '\u{1F3E0}' },
-    { key: 'loxone', label: 'Loxone', icon: '\u{1F50C}' },
-    { key: 'devices', label: 'Smart Plugs', icon: '\u{1F50B}' },
-    { key: 'notifications', label: 'Notifications', icon: '\u{1F514}' }
+    {
+      key: 'mqtt',
+      label: 'MQTT Hub',
+      category: 'Broker · TCP',
+      logo: 'M',
+      accent: 'cyan'
+    },
+    {
+      key: 'tesla',
+      label: 'TeslaMate',
+      category: 'Fahrzeug · API',
+      logo: 'T',
+      accent: 'red'
+    },
+    {
+      key: 'homeAssistant',
+      label: 'Home Assistant',
+      category: 'Smarthome · MQTT',
+      logo: 'HA',
+      accent: 'cyan'
+    },
+    {
+      key: 'loxone',
+      label: 'Loxone',
+      category: 'Smarthome · Miniserver',
+      logo: 'Lx',
+      accent: 'violet'
+    },
+    {
+      key: 'devices',
+      label: 'Smart Plugs',
+      category: 'Energie · Devices',
+      logo: 'SP',
+      accent: 'yellow'
+    },
+    {
+      key: 'notifications',
+      label: 'Notifications',
+      category: 'Push · Provider',
+      logo: 'No',
+      accent: 'green'
+    }
   ];
 
   var lastData = null;
+  var currentFilter = 'all';
 
   function apiFetch(path, opts) {
     var common = window.DVhubCommon;
@@ -30,47 +70,21 @@
     } catch (e) { /* keep showing last data */ }
   }
 
-  function renderAll(data) {
-    var list = document.getElementById('intg-list');
-    var empty = document.getElementById('intg-empty');
-    if (!list) return;
+  function esc(str) {
+    if (typeof window.escapeHtml === 'function') return window.escapeHtml(String(str));
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
 
-    var hasAny = data.mqtt?.connected || data.tesla?.enabled ||
-                 data.homeAssistant?.haDiscovery || data.loxone?.configured ||
-                 data.devices?.total > 0 || data.notifications?.enabled;
-
-    if (empty) empty.style.display = hasAny ? 'none' : '';
-
-    if (!hasAny) return;
-
-    // Track which rows are expanded before re-render
-    var expanded = new Set();
-    list.querySelectorAll('.intg-row[aria-expanded="true"]').forEach(function (el) {
-      expanded.add(el.dataset.system);
-    });
-
-    // Build rows
-    var html = '';
-    for (var i = 0; i < SYSTEMS.length; i++) {
-      var sys = SYSTEMS[i];
-      var sysData = data[sys.key];
-      if (!sysData) continue;
-      var status = getSystemStatus(sys.key, sysData);
-      html += buildRow(sys, sysData, status);
-    }
-    list.innerHTML = html;
-
-    // Restore expanded state
-    expanded.forEach(function (key) {
-      var row = list.querySelector('.intg-row[data-system="' + key + '"]');
-      if (row) {
-        row.setAttribute('aria-expanded', 'true');
-        var detail = row.nextElementSibling;
-        if (detail && detail.classList.contains('intg-detail')) {
-          detail.removeAttribute('hidden');
-        }
-      }
-    });
+  function fmtRel(ts) {
+    if (!ts) return '—'; // em-dash
+    var ms = typeof ts === 'string' ? new Date(ts).getTime() : Number(ts);
+    if (!Number.isFinite(ms)) return '—';
+    var delta = Date.now() - ms;
+    if (delta < 0) return 'gerade';
+    if (delta < 60000) return Math.floor(delta / 1000) + 's';
+    if (delta < 3600000) return Math.floor(delta / 60000) + 'min';
+    if (delta < 86400000) return Math.floor(delta / 3600000) + 'h';
+    return Math.floor(delta / 86400000) + 'd';
   }
 
   function getSystemStatus(key, data) {
@@ -89,77 +103,193 @@
     }
   }
 
-  function esc(str) {
-    if (typeof window.escapeHtml === 'function') return window.escapeHtml(String(str));
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  function statusLabel(status) {
+    return status === 'online' ? 'Online'
+         : status === 'stale' ? 'Veraltet'
+         : status === 'offline' ? 'Offline'
+         : 'Inaktiv';
   }
 
-  function buildRow(sys, data, status) {
-    var dotClass = status === 'online' ? 'dot-ok' :
-                   status === 'stale' ? 'dot-warn' :
-                   status === 'offline' ? 'dot-danger' : '';
-    var statusText = status === 'online' ? 'Online' :
-                     status === 'stale' ? 'Veraltet' :
-                     status === 'offline' ? 'Offline' : 'Deaktiviert';
-    var summary = buildSummary(sys.key, data);
-
-    // NO inline onclick -- event delegation below handles clicks
-    return '<div class="intg-row" data-system="' + esc(sys.key) + '" aria-expanded="false" tabindex="0">' +
-      '<span class="intg-row-icon">' + sys.icon + '</span>' +
-      '<span class="intg-row-label">' + esc(sys.label) + '</span>' +
-      '<span class="intg-row-status">' +
-        (dotClass ? '<span class="dot ' + dotClass + '"></span>' : '') +
-        esc(statusText) +
-      '</span>' +
-    '</div>' +
-    '<div class="intg-detail" hidden>' + summary + '</div>';
+  function statusDotClass(status) {
+    return status === 'online' ? 'dot-ok'
+         : status === 'stale' ? 'dot-warn'
+         : status === 'offline' ? 'dot-danger'
+         : 'dot-muted';
   }
 
-  function buildSummary(key, data) {
+  // Build the 4 stat tiles per system. Phase 09.2 will fill the EM-DASH
+  // placeholders with real metrics; until then we render "—" for
+  // metrics the backend doesn't expose so the layout stays mockup-faithful
+  // without lying about numbers.
+  function buildStats(key, data) {
     switch (key) {
       case 'mqtt':
-        return '<div class="metric-row"><span>Broker</span><span>' + esc(data.broker || 'embedded') + '</span></div>' +
-               '<div class="metric-row"><span>Topics</span><span>' + esc(data.topicCount || 0) + '</span></div>';
+        return [
+          { label: 'Broker', value: data.broker || 'embedded' },
+          { label: 'Topics', value: data.topicCount != null ? String(data.topicCount) : '—' },
+          { label: 'Errors · 24h', value: '—' },
+          { label: 'Last data', value: '—' }
+        ];
       case 'tesla':
-        if (!data.state) return '<p>Keine Daten</p>';
-        return '<div class="metric-row"><span>SOC</span><span>' + esc(data.state.batteryLevel ?? '-') + '%</span></div>' +
-               '<div class="metric-row"><span>Status</span><span>' + esc(data.state.state || '-') + '</span></div>' +
-               '<div class="metric-row"><span>Geofence</span><span>' + esc(data.state.geofence || '-') + '</span></div>';
+        var s = data.state || {};
+        return [
+          { label: 'SOC', value: s.batteryLevel != null ? (s.batteryLevel + '%') : '—' },
+          { label: 'Status', value: s.state || '—' },
+          { label: 'Geofence', value: s.geofence || '—' },
+          { label: 'Last seen', value: fmtRel(data.lastUpdate) }
+        ];
+      case 'homeAssistant':
+        return [
+          { label: 'Discovery', value: data.haDiscovery ? 'auto' : 'aus' },
+          { label: 'Entitäten', value: '—' },
+          { label: 'Topics', value: '—' },
+          { label: 'Last sync', value: '—' }
+        ];
+      case 'loxone':
+        return [
+          { label: 'Miniserver', value: data.configured ? 'konfiguriert' : 'aus' },
+          { label: 'Sensoren', value: '—' },
+          { label: 'Aktoren', value: '—' },
+          { label: 'Last sync', value: '—' }
+        ];
       case 'devices':
-        return '<div class="metric-row"><span>Gesamt</span><span>' + esc(data.total || 0) + '</span></div>' +
-               '<div class="metric-row"><span>Online</span><span>' + esc(data.online || 0) + '</span></div>';
+        return [
+          { label: 'Gesamt', value: data.total != null ? String(data.total) : '0' },
+          { label: 'Online', value: data.online != null ? String(data.online) : '0' },
+          { label: 'Errors · 24h', value: '—' },
+          { label: 'Sample', value: '—' }
+        ];
       case 'notifications':
-        return '<div class="metric-row"><span>Provider</span><span>' + esc(data.providers?.join(', ') || 'keine') + '</span></div>';
+        var providers = Array.isArray(data.providers) ? data.providers : [];
+        return [
+          { label: 'Provider', value: providers.length ? providers.join(', ') : '—' },
+          { label: 'Sent · 24h', value: '—' },
+          { label: 'Failed · 24h', value: '—' },
+          { label: 'Last send', value: '—' }
+        ];
       default:
-        return '<p>Konfiguration siehe config.json</p>';
+        return [
+          { label: '—', value: '—' },
+          { label: '—', value: '—' },
+          { label: '—', value: '—' },
+          { label: '—', value: '—' }
+        ];
     }
   }
 
-  // EVENT DELEGATION -- CSP compliant, no inline handlers
-  // Addresses review HIGH concern: "inline onclick in generated HTML incompatible with CSP"
-  document.addEventListener('click', function (e) {
-    var row = e.target.closest('.intg-row');
-    if (!row) return;
-    var detail = row.nextElementSibling;
-    if (!detail || !detail.classList.contains('intg-detail')) return;
-    var isExpanded = row.getAttribute('aria-expanded') === 'true';
-    row.setAttribute('aria-expanded', isExpanded ? 'false' : 'true');
-    if (isExpanded) {
-      detail.setAttribute('hidden', '');
-    } else {
-      detail.removeAttribute('hidden');
-    }
-  });
+  // Filter bucket — segmented control state classification.
+  //  - "connected": online OR stale (system is up, even if slow)
+  //  - "disabled" : disabled OR offline (system needs operator attention OR isn't configured)
+  function filterBucket(status) {
+    if (status === 'online' || status === 'stale') return 'connected';
+    return 'disabled';
+  }
 
-  // Keyboard accessibility for rows
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      var row = e.target.closest('.intg-row');
-      if (row) {
-        e.preventDefault();
-        row.click();
-      }
+  function buildCard(sys, data, status) {
+    var stats = buildStats(sys.key, data);
+    var dotClass = statusDotClass(status);
+    var label = statusLabel(status);
+    var cardClass = 'conn-card status-' + status + ' accent-' + sys.accent;
+    var statsHtml = '';
+    for (var i = 0; i < stats.length; i++) {
+      var stat = stats[i];
+      statsHtml += '<div class="conn-stat">'
+        + '<span class="conn-stat-label">' + esc(stat.label) + '</span>'
+        + '<span class="conn-stat-value">' + esc(stat.value) + '</span>'
+        + '</div>';
     }
+    var actions = '';
+    if (sys.key === 'mqtt' || sys.key === 'tesla' || sys.key === 'homeAssistant' || sys.key === 'loxone' || sys.key === 'devices' || sys.key === 'notifications') {
+      actions = '<div class="conn-actions">'
+        + '<a class="btn sm ghost" href="/settings.html#system">Logs</a>'
+        + '<a class="btn sm" href="/settings.html">Konfig.</a>'
+        + '</div>';
+    }
+    return '<article class="' + cardClass + '" data-system="' + esc(sys.key) + '" data-status="' + esc(status) + '" data-filter="' + filterBucket(status) + '">'
+      + '<header class="conn-head">'
+        + '<div class="conn-logo">' + esc(sys.logo) + '</div>'
+        + '<div class="conn-meta">'
+          + '<div class="conn-name">' + esc(sys.label) + '</div>'
+          + '<div class="conn-cat">' + esc(sys.category) + '</div>'
+        + '</div>'
+        + '<span class="conn-status-chip"><span class="dot ' + dotClass + '"></span>' + esc(label) + '</span>'
+      + '</header>'
+      + '<div class="conn-stats">' + statsHtml + '</div>'
+      + actions
+    + '</article>';
+  }
+
+  function renderAll(data) {
+    var list = document.getElementById('intg-list');
+    var empty = document.getElementById('intg-empty');
+    if (!list) return;
+    if (!data) return;
+
+    // Build cards for every system present in the response payload
+    var cards = [];
+    var counts = { all: 0, connected: 0, disabled: 0 };
+    var anyData = false;
+    for (var i = 0; i < SYSTEMS.length; i++) {
+      var sys = SYSTEMS[i];
+      var sysData = data[sys.key];
+      if (!sysData) continue;
+      anyData = true;
+      var status = getSystemStatus(sys.key, sysData);
+      counts.all++;
+      counts[filterBucket(status)]++;
+      cards.push(buildCard(sys, sysData, status));
+    }
+
+    // Always preserve #intg-empty in the DOM as the list's first child —
+    // hidden when we have data, visible when we don't. Keeps the
+    // Wave-5 binding contract (#intg-empty always present) stable across
+    // poll states. Playwright + binding-contract.mjs both check static IDs.
+    list.innerHTML = '';
+    if (empty) {
+      empty.hidden = anyData;
+      list.appendChild(empty);
+    }
+    if (!anyData) {
+      updateFilterCounts({ all: 0, connected: 0, disabled: 0 });
+      return;
+    }
+    for (var k = 0; k < cards.length; k++) {
+      list.insertAdjacentHTML('beforeend', cards[k]);
+    }
+    updateFilterCounts(counts);
+    applyFilter(currentFilter);
+  }
+
+  function updateFilterCounts(counts) {
+    var nodes = document.querySelectorAll('[data-count]');
+    for (var i = 0; i < nodes.length; i++) {
+      var key = nodes[i].getAttribute('data-count');
+      nodes[i].textContent = String(counts[key] != null ? counts[key] : 0);
+    }
+  }
+
+  function applyFilter(filter) {
+    currentFilter = filter;
+    var cards = document.querySelectorAll('#intg-list .conn-card');
+    for (var i = 0; i < cards.length; i++) {
+      var bucket = cards[i].getAttribute('data-filter');
+      var show = filter === 'all' || bucket === filter;
+      cards[i].hidden = !show;
+    }
+    // Update segmented active state
+    var btns = document.querySelectorAll('[data-status-filter]');
+    for (var j = 0; j < btns.length; j++) {
+      var isActive = btns[j].getAttribute('data-status-filter') === filter;
+      btns[j].classList.toggle('is-active', isActive);
+      btns[j].setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
+  }
+
+  // Event delegation — segmented filter clicks (CSP-clean, no inline handlers).
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-status-filter]');
+    if (!btn) return;
+    applyFilter(btn.getAttribute('data-status-filter'));
   });
 
   // Start polling

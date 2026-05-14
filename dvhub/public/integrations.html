@@ -1,15 +1,19 @@
 <!doctype html>
-<!-- Integrations page — Aurora port (Plan 09.1-06 Wave 5).
+<!-- Integrations page — Aurora port + Mockup-Fidelity Option B (Plan 09.1-06 Wave 5).
      - Loads Aurora design tokens (dvhub-app.css) + theme.js + page-specific
-       integrations.css (rules harvested from styles.css with --flow-* tokens
-       remapped to Aurora). styles.css is NOT loaded.
+       integrations.css. styles.css is NOT loaded.
      - theme.js is the SOLE writer of localStorage['dvhub.theme']
        (AURORA-02 single-writer); integrations.js MUST NOT call setItem on
        that key.
-     - Binding contract: integrations.js binds against #intg-list and
-       #intg-empty (status polling + empty-state toggle).
-     - <html data-theme="dark"> default avoids flash-of-light before
-       theme.js runs; theme.js refines based on localStorage. -->
+     - Binding contract: integrations.js binds against #intg-list, #intg-empty,
+       and dynamically renders .conn-card entries inside #intg-list. Status
+       segmented filter uses #intg-filter-all / #intg-filter-connected /
+       #intg-filter-disabled (data-status-filter delegation).
+     - Mockup fidelity: .conn-grid + .conn-card layout matches
+       .planning/DESIGN-2026-05-10-aurora/integrations.html .conn-card
+       shape. Per-system Latency/Uptime/Errors/Drops/Firmware metrics are
+       "—" placeholders — Phase 09.2 fills them when the backend exposes
+       the per-system health endpoint. -->
 <html lang="de" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -56,46 +60,62 @@
     </header>
 
     <main class="page-content">
-      <div class="intg-aurora">
-        <div class="page-header-card">
-          <div class="page-header-card-copy">
-            <p class="page-kicker">Integrationen</p>
-            <h1>Verbundene Systeme</h1>
-            <p class="page-subtitle">Status und Konfiguration der angebundenen Services.</p>
-          </div>
-        </div>
-
-        <!-- VRM Backfill status banner (Phase 08-12): explains the 6-month availability
-             window so operators don't think missing pre-6-month data is a bug. The full
-             backfill UI lives in /settings.html#system (Historie config-group). -->
-        <section class="intg-row" data-integration="vrm" aria-label="VRM Backfill Status">
-          <span class="intg-row-icon">&#x2601;</span>
-          <span class="intg-row-label">VRM Backfill (Victron Cloud)</span>
-          <span class="intg-row-status u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
-        </section>
-        <div class="intg-detail">
-          <p>
-            Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
-            <strong>Verf&uuml;gbar:</strong> Backfill der letzten 6 Monate.
-          </p>
-          <p class="u-text-muted">
-            &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
-            Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
-          </p>
-        </div>
-
-        <div id="intg-list">
-          <div class="intg-empty" id="intg-empty">
-            <h3>Keine Integrationen konfiguriert</h3>
-            <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
-          </div>
+      <div class="page-header-card">
+        <div class="page-header-card-copy">
+          <p class="page-kicker">Integrationen</p>
+          <h1>Verbundene Systeme</h1>
+          <p class="page-subtitle">Status und Konfiguration der angebundenen Services.</p>
         </div>
       </div>
+
+      <!-- Filter toolbar — segmented control filters .conn-card by data-status.
+           Counts are filled by integrations.js after the status poll. -->
+      <section class="card int-toolbar" aria-label="Filter">
+        <div class="segmented" role="tablist" aria-label="Status-Filter">
+          <button id="intg-filter-all" class="is-active" type="button" data-status-filter="all" role="tab" aria-selected="true">
+            Alle &middot; <span data-count="all">0</span>
+          </button>
+          <button id="intg-filter-connected" type="button" data-status-filter="connected" role="tab" aria-selected="false">
+            Verbunden &middot; <span data-count="connected">0</span>
+          </button>
+          <button id="intg-filter-disabled" type="button" data-status-filter="disabled" role="tab" aria-selected="false">
+            Inaktiv &middot; <span data-count="disabled">0</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- VRM Backfill notice (Phase 08-12): real info — explains the 6-month
+           availability window so operators don't think missing pre-6-month data
+           is a bug. -->
+      <section class="card vrm-backfill-notice" aria-label="VRM Backfill Status">
+        <div class="vrm-backfill-head">
+          <span class="vrm-backfill-icon" aria-hidden="true">&#x2601;</span>
+          <div class="vrm-backfill-copy">
+            <strong>VRM Backfill (Victron Cloud)</strong>
+            <span class="u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
+          </div>
+        </div>
+        <p class="vrm-backfill-body">
+          Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
+          &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
+          Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
+        </p>
+      </section>
+
+      <!-- Connection grid — integrations.js renders one .conn-card per known
+           system. #intg-empty is the empty state shown when no integration
+           reports any state at all. -->
+      <section id="intg-list" class="conn-grid" aria-label="Verbundene Systeme">
+        <div class="conn-card is-empty" id="intg-empty">
+          <h3>Keine Integrationen konfiguriert</h3>
+          <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
+        </div>
+      </section>
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=2"></script>
+  <script src="/integrations.js?v=3"></script>
 </body>
 </html>
