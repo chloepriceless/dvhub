@@ -179,20 +179,22 @@ function buildSeed(count, { startIso = '2026-05-14T12:00:00.000Z', stepSec = 60 
 }
 
 describe('GET /api/history/raw', () => {
-  it('LAN non-authenticated request returns 401 — D-15 enforcement', async () => {
-    // NOT in LAN_SAFE_ENDPOINTS — even from a private LAN address, missing
-    // Bearer token MUST result in 401 (or 503 if api_token unset). 200 is a
-    // bug. We send from a LAN IP WITHOUT the Bearer header so this test fails
-    // if a future commit accidentally adds /api/history/raw to LAN_SAFE_ENDPOINTS.
+  it('LAN non-authenticated request bypasses Bearer (D-15 reverted 2026-05-15)', async () => {
+    // IS in LAN_SAFE_ENDPOINTS — D-15's original Bearer-only-on-LAN gate
+    // broke browser-driven Explorer downloads (no token UI in browser, no
+    // user system on the appliance). Reverted 2026-05-15: standard LAN
+    // bypass + external Bearer requirement applies, matching siblings
+    // /api/telemetry/series, /api/forecast, /api/history/summary.
+    // LAN: no Bearer → 200 (request reaches the handler)
     const ctx = mockCtx();
     const req = makeReq('/api/history/raw', { token: null, ip: LAN_IP });
     const captured = await dispatch(ctx, req);
-    assert.notEqual(
+    assert.equal(
       captured.status,
       200,
-      `LAN request without Bearer MUST NOT receive 200 (D-15). got status=${captured.status} body=${captured.body}`
+      `LAN request without Bearer expected 200 (LAN_SAFE_ENDPOINTS). got status=${captured.status} body=${captured.body}`
     );
-    // From an external IP the same request must hit 401 specifically (api_token IS configured).
+    // External: no Bearer → 401 (gate still active for off-LAN callers)
     const reqExt = makeReq('/api/history/raw', { token: null, ip: REMOTE_IP });
     const capturedExt = await dispatch(mockCtx(), reqExt);
     assert.equal(

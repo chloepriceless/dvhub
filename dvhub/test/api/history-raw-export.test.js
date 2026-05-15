@@ -254,18 +254,19 @@ function buildSeed(count, { startIso = '2026-05-14T12:00:00.000Z', stepSec = 60 
 const BOM = '﻿'; // UTF-8 BOM, U+FEFF ZERO WIDTH NO-BREAK SPACE
 
 describe('GET /api/history/raw/export.csv', () => {
-  it('LAN non-authenticated request returns 401 — D-15 enforcement (NOT in LAN_SAFE_ENDPOINTS)', async () => {
-    // /api/history/raw/export.csv is in BEARER_REQUIRED_ENDPOINTS (Plan 05).
-    // Even from a private LAN IP, missing Bearer MUST yield 401, not 200.
-    const ctx = mockCtx();
+  it('LAN non-authenticated request bypasses Bearer (D-15 reverted 2026-05-15)', async () => {
+    // IS in LAN_SAFE_ENDPOINTS — D-15's original Bearer-only-on-LAN gate
+    // broke browser-driven Explorer downloads. Reverted: standard appliance
+    // pattern (LAN bypass + external Bearer).
+    const ctx = mockCtx({ pool: makeMockPoolWithCursor(buildSeed(2)) });
     const req = makeReq('/api/history/raw/export.csv', { token: null, ip: LAN_IP });
     const res = await dispatch(ctx, req);
-    assert.notEqual(
+    assert.equal(
       res._captured.status,
       200,
-      `LAN request without Bearer MUST NOT receive 200 (D-15). got status=${res._captured.status} body=${res._captured.body}`
+      `LAN request without Bearer expected 200 (LAN_SAFE_ENDPOINTS). got status=${res._captured.status}`
     );
-    // External IP must hit 401 specifically (api_token IS configured).
+    // External: still 401.
     const ctxExt = mockCtx();
     const reqExt = makeReq('/api/history/raw/export.csv', { token: null, ip: REMOTE_IP });
     const resExt = await dispatch(ctxExt, reqExt);

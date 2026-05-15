@@ -413,15 +413,19 @@
     // bound to fixed elements (no innerHTML rebuild on each poll).
     renderFeatured(data);
 
-    // Build cards for every system present in the response payload
+    // Build cards for EVERY system in the SYSTEMS catalogue. If the tracker
+    // has no entry for a system yet, render the card with `{}` so the
+    // defensive accessors below fall back to "—" placeholders. This matches
+    // Phase 09.1's "honest gaps" intent: cards always present, missing
+    // metrics show as dashes (and 09.2 fills them in as the tracker warms up).
+    // Skipping based on `data[key]` presence (the original 09.2-04 behaviour)
+    // hid configured systems that simply hadn't ticked yet — broken UX.
     var cards = [];
     var counts = { all: 0, connected: 0, disabled: 0 };
-    var anyData = false;
+    var anyData = SYSTEMS.length > 0;
     for (var i = 0; i < SYSTEMS.length; i++) {
       var sys = SYSTEMS[i];
-      var sysData = data[sys.key];
-      if (!sysData) continue;
-      anyData = true;
+      var sysData = data[sys.key] || {};
       var status = getSystemStatus(sys.key, sysData);
       counts.all++;
       counts[filterBucket(status)]++;

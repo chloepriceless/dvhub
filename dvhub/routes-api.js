@@ -725,6 +725,17 @@ export function createApiRoutes(ctx) {
     '/api/devices',                // Phase 04 — device list (INTG-05)
     '/api/messages',               // Phase 05 — LLM messages (family tablet)
     '/api/messages/history',       // Phase 05 — message history (family tablet)
+    // Phase 09.2 — history exports + integrations health are appliance reads
+    // consumed by the LAN browser (Explorer page chart + downloads + Integrations
+    // page polling). D-15's Bearer-only gate was wrong for this deployment:
+    // there's no user system, no place for the user to store a token in the
+    // browser, so requiring Bearer makes the Explorer downloads unusable.
+    // Standard appliance pattern (cf. /api/telemetry/series, /api/forecast,
+    // /api/history/summary): GET-only LAN bypass; external callers still need Bearer.
+    '/api/integrations/health',
+    '/api/history/raw',
+    '/api/history/raw/export.csv',
+    '/api/history/raw/export.parquet',
   ]);
 
   function isLanSafeRequest(req) {
@@ -872,16 +883,21 @@ export function createApiRoutes(ctx) {
   // for the raw endpoints we intentionally keep the family explicit so
   // misuse via path tricks like `/api/history/raw/x` falls through to
   // 404 instead of a hidden bypass).
-  const BEARER_REQUIRED_ENDPOINTS = new Set([
-    '/api/history/raw',
-    '/api/history/raw/export.csv',
-    '/api/history/raw/export.parquet',
-  ]);
+  // Phase 09.2 D-15 was reverted (2026-05-15): the original "Bearer required
+  // even on LAN for /api/history/raw*" gate broke browser-driven Explorer
+  // downloads, because the appliance has no user system, no token UI in the
+  // browser, and operators store tokens externally only for off-LAN scripted
+  // calls. The 4 history + integrations endpoints are now standard
+  // LAN_SAFE_ENDPOINTS reads — bypass on LAN, Bearer required externally,
+  // matching /api/telemetry/series, /api/forecast, /api/history/summary.
+  // Set kept empty as the explicit override mechanism for any future endpoint
+  // that genuinely needs Bearer-only-from-anywhere.
+  const BEARER_REQUIRED_ENDPOINTS = new Set([]);
 
   function checkAuth(req, res) {
     const cfg = getCfg();
-    // Phase 09.2 D-15 hard-gate: BEARER_REQUIRED_ENDPOINTS skip the LAN
-    // bypass below. Compute pathname BEFORE the LAN check so the gate
+    // BEARER_REQUIRED_ENDPOINTS (currently empty — see set definition above)
+    // skip the LAN bypass. Compute pathname BEFORE the LAN check so the gate
     // applies to every caller — LAN or external.
     const reqPathForBearerGate = (() => {
       try { return new URL(req.url, `http://${req.headers.host}`).pathname; }
@@ -2015,7 +2031,7 @@ export function createApiRoutes(ctx) {
     }
 
     // --- /api/history/raw/export.csv — streaming CSV export (Phase 09.2 D-12) ---
-    // Bearer required from any source — D-15: NOT in LAN_SAFE_ENDPOINTS;
+    // LAN-safe (D-15 reverted 2026-05-15: appliance has no token UI in browser);
     // /api/history/raw/export.csv is in BEARER_REQUIRED_ENDPOINTS so checkAuth
     // (already invoked above) enforces the gate even on LAN.
     //
@@ -2171,7 +2187,7 @@ export function createApiRoutes(ctx) {
     }
 
     // --- /api/history/raw/export.parquet — streaming Parquet export (Phase 09.2 D-13/D-24 revised) ---
-    // Bearer required from any source — D-15: NOT in LAN_SAFE_ENDPOINTS;
+    // LAN-safe (D-15 reverted 2026-05-15: appliance has no token UI in browser);
     // /api/history/raw/export.parquet is in BEARER_REQUIRED_ENDPOINTS so checkAuth
     // (already invoked above) enforces the gate even on LAN.
     //
