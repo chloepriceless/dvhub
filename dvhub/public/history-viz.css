@@ -158,3 +158,74 @@
 /* No-op safety: guarantees grid children can shrink even when the parent
    class is `.day-only-grid` (alias used by some sections in the mockup). */
 .viz-grid-2.day-only-grid > * { min-width: 0; }
+
+/* -----------------------------------------------------------------------
+   Plan 09.3-03 Wave 3 — Autarkie-Kalender grid + 24h-Ring center + Duration.
+   D-22 strict: zero inline style attrs — all geometry/color is class-driven.
+   D-24 grid invariant: .autark-cal uses repeat(6, minmax(0, 1fr)) + min-width:0.
+   ----------------------------------------------------------------------- */
+.autark-cal {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px;
+  min-height: 200px;
+}
+.autark-cal > * { min-width: 0; }
+
+.autark-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--f-mono, monospace);
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+  padding-top: 8px;
+}
+.autark-grad {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(62, 224, 160, 0.05), #3ee0a0);
+}
+
+/* .ring-wrap already carries aspect-ratio above — add positioning context so
+   the .ring-center overlay can be absolutely placed over the doughnut. */
+.ring-wrap { position: relative; }
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  pointer-events: none;
+}
+.ring-center .lbl {
+  font-size: 10px;
+  color: var(--text-dim, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.ring-center .v {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--green, #3ee0a0);
+}
+.ring-center .sub {
+  font-size: 11px;
+  color: var(--text-soft, #cbd5e1);
+}
+
+/* Ring legend + Duration footer reuse .viz-foot tokens; legend-row is the
+   mockup's class name for the same swatch row. */
+.legend-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  font-family: var(--f-mono, monospace);
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+}
+.legend-row .l { display: inline-flex; align-items: center; gap: 6px; }
+.legend-row .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }

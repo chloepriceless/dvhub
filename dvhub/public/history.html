@@ -367,6 +367,60 @@
         <div id="hm" class="heatmap viz-chart-shell"></div>
       </section>
 
+      <!-- ═══ Phase 09.3-03 Wave 3 — Autarkie-Kalender + 24h-Ring + Preis-Duration-Curve ═══
+           data-show-view (D-15) toggles .viz-hidden-by-view per active view;
+           the 24h-Ring is day-only (separate data-show-view from its parent
+           grid-2). data-viz-card pairs each section with the buildDispatch
+           slug (D-14). NO inline style attrs (D-22) — all .dot/.sw classes. -->
+
+      <!-- Autarkie-Kalender + 24h-Ring (grid-2; ring is day-only) -->
+      <section class="grid-2" data-show-view="day week month year">
+        <article class="card chart-panel" data-show-view="day week month year" data-viz-card="autarky-calendar">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-green"></span>Autarkie-Map</span>
+            <p class="card-sub">Eigenversorgungsquote pro Tag</p>
+          </div></div>
+          <div id="autarkCal" class="autark-cal viz-chart-shell"></div>
+          <div class="autark-legend">
+            <span>0 %</span><div class="autark-grad"></div><span>100 %</span>
+          </div>
+        </article>
+        <article class="card chart-panel" data-show-view="day" data-viz-card="ring">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-cyan"></span>Tages-Klock · 24 h</span>
+            <p class="card-sub">PV · Verbrauch · Spotpreis im Rundlauf</p>
+          </div></div>
+          <div class="ring-wrap viz-chart-shell">
+            <div id="ringSvg"></div>
+            <div class="ring-center">
+              <div class="lbl">Autarkie heute</div>
+              <div class="v" id="ringPctValue">— %</div>
+              <div class="sub" id="ringTotalsLabel">— kWh PV · — kWh Last</div>
+            </div>
+          </div>
+          <div class="legend-row">
+            <span class="l"><span class="sw sw-yellow"></span>PV-Erzeugung</span>
+            <span class="l"><span class="sw sw-cyan"></span>Hauslast</span>
+            <span class="l"><span class="sw sw-violet"></span>Spotpreis-Band</span>
+          </div>
+        </article>
+      </section>
+
+      <!-- Preis-Duration-Curve (alle Views) -->
+      <section class="card chart-panel" data-show-view="day week month year" data-viz-card="duration">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-cyan"></span>Preis-Duration · sortierte Slots</span>
+          <p class="card-sub">Spot-Preise sortiert teuer → billig · mit Schwellen</p>
+        </div></div>
+        <div id="vDuration" class="viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-cyan"></span>Spot ct/kWh</span>
+          <span class="l"><span class="sw sw-green"></span>Lade-Schwelle</span>
+          <span class="l"><span class="sw sw-yellow"></span>Verkaufs-Schwelle</span>
+          <span id="vDurationStats"></span>
+        </div>
+      </section>
+
     </main>
   </div>
 

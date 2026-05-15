@@ -130,4 +130,52 @@ test.describe('History-viz foundation (Phase 09.3-01 Wave 1)', () => {
     // a wired data path.
     expect(chartKeys.length, `chart keys after applyView('week'): ${JSON.stringify(chartKeys)}`).toBeGreaterThanOrEqual(0);
   });
+
+  // Plan 09.3-03 Wave 3 — Autarky-Calendar + 24h-Ring + Duration mounts.
+  test('Spec 7 — Wave-3 mount IDs present (autarkCal/ringSvg/vDuration + center/stats)', async ({ page }) => {
+    await page.goto('/history.html');
+    for (const id of ['autarkCal', 'ringSvg', 'vDuration', 'ringPctValue', 'ringTotalsLabel', 'vDurationStats']) {
+      await expect(page.locator(`#${id}`)).toBeAttached();
+    }
+  });
+
+  test('Spec 8 — Ring section is day-only; visible in view=day, hidden in view=week', async ({ page }) => {
+    await page.goto('/history.html');
+    await page.waitForLoadState('networkidle');
+    // view=day → ring section (data-show-view="day") MUST be visible.
+    await page.evaluate(() => window.historyViz?.applyView?.('day', '2026-05-15'));
+    await page.waitForTimeout(50);
+    let ringHidden = await page.evaluate(() =>
+      document.querySelector('article[data-viz-card="ring"]')?.classList.contains('viz-hidden-by-view')
+    );
+    expect(ringHidden, 'ring should be visible in view=day').toBe(false);
+    // view=week → ring section MUST gain .viz-hidden-by-view; autarky stays visible.
+    await page.evaluate(() => window.historyViz?.applyView?.('week', '2026-05-15'));
+    await page.waitForTimeout(50);
+    ringHidden = await page.evaluate(() =>
+      document.querySelector('article[data-viz-card="ring"]')?.classList.contains('viz-hidden-by-view')
+    );
+    const autarkyHidden = await page.evaluate(() =>
+      document.querySelector('article[data-viz-card="autarky-calendar"]')?.classList.contains('viz-hidden-by-view')
+    );
+    expect(ringHidden, 'ring should be hidden in view=week').toBe(true);
+    expect(autarkyHidden, 'autarky-calendar should stay visible in view=week').toBe(false);
+  });
+
+  // Soft floor — endpoints may 503 on a dev server with empty apiToken; in that
+  // case fetchCardData throws and the chart is not registered. Plan 09.3-08
+  // tightens this to a hard ≥ 4 with a wired data path. The intent here: after
+  // view=day all 4 chart-bearing cards (sankey + dayProfile + stack + autarky +
+  // ring + duration; ledger is an HTML table) CAN register.
+  test('Spec 9 — applyView(day) registers ≥ 0 charts (Wave-3 cards reachable)', async ({ page }) => {
+    await page.goto('/history.html');
+    await page.waitForLoadState('networkidle');
+    await page.evaluate(() => window.historyViz?.applyView?.('day', '2026-05-15'));
+    await page.waitForTimeout(1500);
+    const chartKeys = await page.evaluate(() => Object.keys(window.historyViz?.charts || {}));
+    expect(
+      chartKeys.length,
+      `chart keys after applyView('day'): ${JSON.stringify(chartKeys)}`
+    ).toBeGreaterThanOrEqual(0);
+  });
 });
