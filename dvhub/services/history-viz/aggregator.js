@@ -221,6 +221,47 @@ export function createHistoryVizAggregator(ctx) {
     return buckets.map(round3);
   }
 
+  // -------------------------------------------------------------------------
+  // RC-1 — SQL-side downsampling.
+  //
+  // The shared telemetryStore.querySeries pulls every raw 5-10 s sample for the
+  // whole window and dedups in JS — a month/year query returns millions of rows
+  // and saturates the PG pool. The history-viz builders now fetch via
+  // telemetryStore.queryBucketedSeries, which pushes a TimescaleDB time_bucket
+  // GROUP BY into SQL so a year returns ~hundreds-thousands of rows.
+  //
+  // bucketIntervalForView — picks the SQL bucket width so the resulting bucket
+  // rows are sub-multiples of the JS buckets that bucketSeriesKwh /
+  // bucketSeriesByHour / per-day aggregations already expect:
+  //   day   → 15 minutes  (downstream buckets into 24 hours-of-day)
+  //   week  → 1 hour      (downstream buckets into 7 day-of-week)
+  //   month → 1 hour      (downstream buckets into 30 days)
+  //   year  → 1 day       (downstream buckets into 12 months)
+  function bucketIntervalForView(view) {
+    if (view === 'day') return '15 minutes';
+    if (view === 'year') return '1 day';
+    return '1 hour'; // week + month
+  }
+
+  // Fetch downsampled telemetry for the history-viz aggregator. Energy-type
+  // series (power in W) keep `value` as the energy-equivalent average power so
+  // `value × resolution / 3_600_000` stays the exact integrated bucket kWh.
+  // Ratio/percentage series (e.g. battery_soc_pct) must use the plain
+  // per-bucket mean — pass `meanSeries` so those rows carry value_avg in value.
+  async function fetchBucketed({ seriesKeys, start, end, view, meanSeries = [] }) {
+    const bucketInterval = bucketIntervalForView(view);
+    const rows = await telemetryStore.queryBucketedSeries({
+      seriesKeys, start, end, bucketInterval,
+    });
+    if (!meanSeries.length) return rows;
+    const meanSet = new Set(meanSeries);
+    return rows.map((r) => (
+      meanSet.has(r.key)
+        ? { ...r, value: (r.value_avg == null ? r.value : r.value_avg) }
+        : r
+    ));
+  }
+
   // German short labels per view (matches mockup expectations from D-15).
   const DOW_DE_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
   const MONTH_DE_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
@@ -317,12 +358,12 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: [
           'pv_total_w', 'grid_import_w', 'grid_export_w',
           'load_power_w', 'battery_charge_w', 'battery_discharge_w',
         ],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
       const pvKwh = sumSeriesKwh(rows, 'pv_total_w');
       const gridImportKwh = sumSeriesKwh(rows, 'grid_import_w');
@@ -376,9 +417,9 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: ['pv_total_w', 'load_power_w'],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
       const pv = bucketSeriesByHour(rows, 'pv_total_w');
       const load = bucketSeriesByHour(rows, 'load_power_w');
@@ -409,39 +450,25 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: ['pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w'],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
-      // PV-direct ≈ min(pv, load). The plan notes "or fallback: min(pv_total_w,
-      // load_power_w)" — we always fall back since `pv_direct_w` is not in the
-      // canonical series catalogue (verified against telemetry-store-pg.js:24).
-      // Compute per-row min, then bucket-integrate as kWh.
-      const pvDirectRows = [];
-      const byTs = new Map();
-      for (const r of rows) {
-        const t = r.ts;
-        if (!byTs.has(t)) byTs.set(t, {});
-        byTs.get(t)[r.key] = r;
-      }
-      for (const [ts, group] of byTs.entries()) {
-        const pvR = group.pv_total_w;
-        const loadR = group.load_power_w;
-        if (!pvR || !loadR) continue;
-        const minW = Math.min(Number(pvR.value) || 0, Number(loadR.value) || 0);
-        pvDirectRows.push({
-          key: 'pv_direct_w',
-          ts,
-          value: minW,
-          resolution: pvR.resolution,
-          unit: 'W',
-        });
-      }
-      const allRows = rows.concat(pvDirectRows);
-      const pvDirectKwh = bucketSeriesKwh(allRows, 'pv_direct_w', view, start);
+      // RC-E fix — PV-direct ≈ min(pv, load) per TIME BUCKET, not per exact
+      // timestamp. The old code joined raw PV + load samples on the exact `ts`
+      // string; PV and load are sampled at different ts_utc, so the join almost
+      // never matched and pvDirectKwh collapsed to all-zeros.
+      //
+      // Here PV and load are first bucket-integrated to kWh independently (the
+      // same bucketSeriesKwh the other series use), then PV-direct is the
+      // per-bucket min of those two energy arrays. min(pvBucketKwh,
+      // loadBucketKwh) is the share of PV that the load could consume directly
+      // within that bucket — the PV-self-consumption proxy.
+      const pvKwh = bucketSeriesKwh(rows, 'pv_total_w', view, start);
       const batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
       const gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
       const loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
+      const pvDirectKwh = pvKwh.map((pvB, i) => round3(Math.min(pvB, loadKwh[i] || 0)));
       const bucketLabels = bucketLabelsForView(view, start);
       const buckets = bucketLabels.length;
       const payload = {
@@ -477,9 +504,9 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: ['pv_total_w'],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
       let xLabels;
       let yLabels;
@@ -515,7 +542,10 @@ export function createHistoryVizAggregator(ctx) {
           for (let y = 0; y < 24; y++) {
             const v = round3(cells.get(`${x}:${y}`) || 0);
             if (v > domainMax) domainMax = v;
-            matrix.push({ x, y, v });
+            // RC-2 — cell coords MUST be the exact label strings the
+            // type:'category' Chart.js scale matches by `===`. yLabels[y] is the
+            // zero-padded hour string ("00".."23"); x is already a date string.
+            matrix.push({ x, y: yLabels[y], v });
           }
         }
       } else { // view === 'year'
@@ -546,7 +576,9 @@ export function createHistoryVizAggregator(ctx) {
           for (let d = 1; d <= 31; d++) {
             const v = round3(cells.get(`${m}:${d}`) || 0);
             if (v > domainMax) domainMax = v;
-            matrix.push({ x: xLabel, y: d, v });
+            // RC-2 — emit cell y as the exact yLabels string (zero-padded
+            // day-of-month "01".."31"); yLabels[d - 1] aligns with day d.
+            matrix.push({ x: xLabel, y: yLabels[d - 1], v });
           }
         }
       }
@@ -720,9 +752,9 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: ['load_power_w', 'grid_import_w'],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
       // Bucket per UTC day, integrate W×Δt → kWh, compute
       //   autarky% = (load - grid_import) / load * 100, clamped [0,100].
@@ -751,7 +783,9 @@ export function createHistoryVizAggregator(ctx) {
         // labels are Mo=0..So=6, so shift by +6 mod 7.
         const jsDow = new Date(`${d}T12:00:00Z`).getUTCDay();
         const dowIdx = (jsDow + 6) % 7;
-        matrix.push({ x: d, y: dowIdx, v: round1(pct) });
+        // RC-2 — emit cell y as the German DOW label string the
+        // type:'category' scale matches; DOW_DE_SHORT[dowIdx] === yLabels[dowIdx].
+        matrix.push({ x: d, y: DOW_DE_SHORT[dowIdx], v: round1(pct) });
       }
       const payload = {
         ok: true,
@@ -784,9 +818,9 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      const rows = await fetchBucketed({
         seriesKeys: ['pv_total_w', 'load_power_w'],
-        start, end, maxResolution: 900,
+        start, end, view,
       });
       // Per-hour kWh (integrate each row's W×Δt) and per-hour average spot price.
       const pvKwhByHour = new Array(24).fill(0);
@@ -1009,10 +1043,15 @@ export function createHistoryVizAggregator(ctx) {
         grid[dowIdx][hr] = round3(v);
         if (v > domainMax) domainMax = v;
       }
+      // RC-2 — cell x/y MUST be the exact label strings the type:'category'
+      // Chart.js scale matches by `===`. xLabels = zero-padded hour strings,
+      // yLabels = German DOW labels.
+      const xLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+      const yLabels = DOW_DE_SHORT.slice();
       const matrix = [];
       for (let y = 0; y < 7; y++) {
         for (let x = 0; x < 24; x++) {
-          matrix.push({ x, y, v: grid[y][x] });
+          matrix.push({ x: xLabels[x], y: yLabels[y], v: grid[y][x] });
         }
       }
       const payload = {
@@ -1022,8 +1061,8 @@ export function createHistoryVizAggregator(ctx) {
         date,
         generatedAt: new Date().toISOString(),
         cached: false,
-        xLabels: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0')),
-        yLabels: DOW_DE_SHORT.slice(),
+        xLabels,
+        yLabels,
         matrix,
         domain: { min: 0, max: round3(domainMax), unit: 'ct/kWh' },
       };
@@ -1046,11 +1085,14 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      // RESEARCH §Pitfall 5 — ONE querySeries call for the full range; group
-      // in JS by date. maxResolution=900 caps the row count (T-09.3-17).
-      const rows = await telemetryStore.querySeries({
+      // RESEARCH §Pitfall 5 — ONE bucketed query for the full range; group in
+      // JS by date. battery_soc_pct is a percentage series, so it is fetched as
+      // the per-bucket MEAN (meanSeries) — an energy integral is meaningless
+      // for a ratio. SQL-side time_bucket caps the row count (RC-1).
+      const rows = await fetchBucketed({
         seriesKeys: ['battery_soc_pct'],
-        start, end, maxResolution: 900,
+        start, end, view,
+        meanSeries: ['battery_soc_pct'],
       });
       // Group rows by UTC date; per-day bucket into 24 hourly slots (avg SOC).
       const byDate = new Map(); // dateKey → { sums:[24], counts:[24] }
@@ -1111,9 +1153,13 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await telemetryStore.querySeries({
+      // battery_soc_pct is a percentage — fetch the per-bucket MEAN (meanSeries),
+      // not an energy integral. SQL-side time_bucket caps the row count (RC-1);
+      // the cycle counter then walks the downsampled SOC series.
+      const rows = await fetchBucketed({
         seriesKeys: ['battery_soc_pct'],
-        start, end, maxResolution: 900,
+        start, end, view,
+        meanSeries: ['battery_soc_pct'],
       });
       // Sort SOC samples by ts, then group by German DOW (Mo=0..So=6).
       const socRows = rows
@@ -1339,7 +1385,10 @@ export function createHistoryVizAggregator(ctx) {
         const v = round3(Number(row.net_eur) || 0);
         if (v < minVal) minVal = v;
         if (v > maxVal) maxVal = v;
-        matrix.push({ x: xLabels[monthIdx], y: dayIdx, v });
+        // RC-2 — emit cell y as the exact yLabels string ("1".."31"); the
+        // type:'category' scale matches xLabels/yLabels by `===`. yLabels[dayIdx]
+        // is the day-of-month label for dayIdx (0-based).
+        matrix.push({ x: xLabels[monthIdx], y: yLabels[dayIdx], v });
       }
       // Force 0 into the domain so the diverging palette has a true midpoint
       // (red below 0, faded at 0, green above 0). domain straddles 0 even when

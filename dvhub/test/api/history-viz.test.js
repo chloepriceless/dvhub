@@ -301,9 +301,72 @@ function makeFlatSeriesRows({ start, end, key, watts, stepSec = SLOT_RES_SEC }) 
   return rows;
 }
 
+// queryBucketedSeries mock — RC-1 (Phase 09.3) moved history-viz downsampling
+// into SQL via TimescaleDB time_bucket(). The aggregator builders now call
+// telemetryStore.queryBucketedSeries instead of querySeries. This adapter
+// reproduces the production contract on top of a plain querySeries mock:
+// it groups the raw rows into time buckets and emits one row per bucket with
+//   value      = SUM(v × resolution) / bucketSeconds  (energy-equivalent avg W
+//                — so value × resolution / 3_600_000 = exact bucket kWh)
+//   value_avg  = AVG(v)                               (plain mean — for ratio
+//                series like battery_soc_pct)
+//   resolution = bucketSeconds
+// matching the real telemetry-store-pg.js queryBucketedSeries return shape.
+const BUCKET_INTERVAL_SECONDS = {
+  '5 minutes': 300,
+  '10 minutes': 600,
+  '15 minutes': 900,
+  '30 minutes': 1800,
+  '1 hour': 3600,
+  '1 day': 86400,
+};
+
+function bucketRawRows(rawRows, bucketSec) {
+  // group key = `${series_key}|${bucketStartMs}`
+  const groups = new Map();
+  for (const r of rawRows) {
+    const tsMs = Date.parse(r.ts);
+    if (!Number.isFinite(tsMs)) continue;
+    const bucketMs = Math.floor(tsMs / (bucketSec * 1000)) * bucketSec * 1000;
+    const gk = `${r.key}|${bucketMs}`;
+    if (!groups.has(gk)) {
+      groups.set(gk, { key: r.key, bucketMs, energyWs: 0, sum: 0, count: 0, unit: r.unit });
+    }
+    const g = groups.get(gk);
+    const v = Number(r.value);
+    const res = Number(r.resolution || 0);
+    if (Number.isFinite(v)) {
+      g.energyWs += v * (Number.isFinite(res) ? res : 0);
+      g.sum += v;
+      g.count += 1;
+    }
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    out.push({
+      key: g.key,
+      ts: new Date(g.bucketMs).toISOString(),
+      value: g.energyWs / bucketSec,
+      value_avg: g.count > 0 ? g.sum / g.count : 0,
+      unit: g.unit,
+      resolution: bucketSec,
+    });
+  }
+  out.sort((a, b) => (a.ts === b.ts ? a.key.localeCompare(b.key) : a.ts.localeCompare(b.ts)));
+  return out;
+}
+
 function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async () => ({ rows: [] }) } = {}) {
   const ctx = mockCtx();
-  ctx.telemetryStore = { querySeries: querySeriesFn };
+  // queryBucketedSeries adapter — runs querySeriesFn to get raw rows, then
+  // buckets them per the requested interval (mirrors the SQL GROUP BY).
+  const queryBucketedSeriesFn = async ({ seriesKeys, start, end, bucketInterval }) => {
+    const bucketSec = BUCKET_INTERVAL_SECONDS[bucketInterval];
+    assert.ok(bucketSec, `mock queryBucketedSeries: unknown bucketInterval '${bucketInterval}'`);
+    const rawRows = await querySeriesFn({ seriesKeys, start, end, maxResolution: 900 });
+    return bucketRawRows(rawRows, bucketSec);
+  };
+  ctx.telemetryStore = { querySeries: querySeriesFn, queryBucketedSeries: queryBucketedSeriesFn };
   ctx.db = { query: dbQueryFn };
   // Re-create the aggregator with the populated stores (the original mockCtx
   // wired a no-store factory).
@@ -450,6 +513,45 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.equal(yr.body.buckets, 12);
   });
 
+  it('Test W2-4b (RC-E — Stack PV-Direkt bucket-join): pvDirectKwh non-zero even when PV and load sample at different timestamps', async () => {
+    // RC-E — the old getStack joined PV and load on the EXACT ts string; PV and
+    // load are sampled at different ts_utc so the join almost never matched and
+    // pvDirectKwh collapsed to all-zeros. The fix bucket-integrates PV and load
+    // separately, then takes min() per bucket. Here PV rows are offset by 5 min
+    // from load rows — under the old exact-ts join pvDirect would be all-zeros;
+    // under the bucket-join it is min(pvBucketKwh, loadBucketKwh).
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key === 'pv_total_w') {
+          // PV 2000W, samples on the 5-min grid (offset 0).
+          all.push(...makeFlatSeriesRows({ start, end, key, watts: 2000, stepSec: 300 }));
+        } else if (key === 'load_power_w') {
+          // load 1200W, samples offset by 150 s so they never share a ts with PV.
+          const rows = makeFlatSeriesRows({ start, end, key, watts: 1200, stepSec: 300 });
+          all.push(...rows.map((r) => ({ ...r, ts: new Date(Date.parse(r.ts) + 150_000).toISOString() })));
+        }
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    assert.equal(b.pvDirectKwh.length, 24);
+    const totalPvDirect = b.pvDirectKwh.reduce((s, x) => s + x, 0);
+    assert.ok(totalPvDirect > 0, `RC-E: pvDirectKwh should be non-zero, got total ${totalPvDirect}`);
+    // PV-direct per bucket = min(pv, load). PV (2000W) > load (1200W) every
+    // bucket → pvDirect tracks loadKwh. Check the per-bucket identity holds.
+    for (let i = 0; i < 24; i++) {
+      assert.ok(
+        Math.abs(b.pvDirectKwh[i] - Math.min(b.pvDirectKwh[i], b.loadKwh[i])) < 1e-9,
+        `pvDirectKwh[${i}] (${b.pvDirectKwh[i]}) must be <= loadKwh[${i}] (${b.loadKwh[i]})`
+      );
+      assert.ok(b.pvDirectKwh[i] <= b.loadKwh[i] + 1e-9, `pvDirectKwh[${i}] should not exceed loadKwh[${i}]`);
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Heatmap (T5 — shape; T6 — payload size)
   // -------------------------------------------------------------------------
@@ -470,9 +572,13 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.equal(b.xLabels.length, 7, `week xLabels=7, got ${b.xLabels.length}`);
     assert.equal(b.yLabels.length, 24, `week yLabels=24, got ${b.yLabels.length}`);
     assert.equal(b.matrix.length, 168, `week matrix.length=168, got ${b.matrix.length}`);
+    // RC-2 — matrix cell coords MUST be the exact label strings the Chart.js
+    // type:'category' scale matches by `===`. x = date string, y = hour string.
     for (const c of b.matrix.slice(0, 3)) {
       assert.equal(typeof c.x, 'string');
-      assert.equal(typeof c.y, 'number');
+      assert.equal(typeof c.y, 'string');
+      assert.ok(b.xLabels.includes(c.x), `cell.x '${c.x}' should be a member of xLabels`);
+      assert.ok(b.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
       assert.equal(typeof c.v, 'number');
     }
   });
@@ -641,10 +747,13 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
     const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'week', date: ANCHOR_DATE });
     assert.equal(r.status, 200);
+    // RC-2 — cell.y is the German DOW label string (member of yLabels), not a
+    // numeric index, so the Chart.js type:'category' scale can match it.
     for (const cell of r.body.matrix) {
       assert.ok(cell.v >= 0 && cell.v <= 100, `cell v out of range: ${cell.v}`);
       assert.ok(typeof cell.x === 'string', 'cell.x should be a date string');
-      assert.ok(typeof cell.y === 'number' && cell.y >= 0 && cell.y <= 6, `cell.y should be 0..6, got ${cell.y}`);
+      assert.ok(typeof cell.y === 'string', `cell.y should be a DOW label string, got ${typeof cell.y}`);
+      assert.ok(r.body.yLabels.includes(cell.y), `cell.y '${cell.y}' should be a member of yLabels`);
     }
   });
 
@@ -855,9 +964,13 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 24, `xLabels=24 expected, got ${b.xLabels?.length}`);
     assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 7, `yLabels=7 expected, got ${b.yLabels?.length}`);
     assert.ok(Array.isArray(b.matrix) && b.matrix.length === 168, `matrix.length=168 expected, got ${b.matrix?.length}`);
+    // RC-2 — pheat is a matrix card: both cell.x (hour label) and cell.y (DOW
+    // label) MUST be the exact label strings the type:'category' scale matches.
     for (const c of b.matrix) {
-      assert.equal(typeof c.x, 'number', 'cell.x should be hour index');
-      assert.equal(typeof c.y, 'number', 'cell.y should be dow index');
+      assert.equal(typeof c.x, 'string', 'cell.x should be an hour label string');
+      assert.equal(typeof c.y, 'string', 'cell.y should be a DOW label string');
+      assert.ok(b.xLabels.includes(c.x), `cell.x '${c.x}' should be a member of xLabels`);
+      assert.ok(b.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
       assert.ok(c.v >= 0, `cell.v should be >= 0, got ${c.v}`);
     }
     assert.ok(b.domain && b.domain.unit === 'ct/kWh', `domain.unit should be 'ct/kWh', got ${b.domain?.unit}`);
@@ -1156,9 +1269,13 @@ describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
     assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 12, `xLabels=12 expected, got ${b.xLabels?.length}`);
     assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 31, `yLabels=31 expected, got ${b.yLabels?.length}`);
     assert.ok(Array.isArray(b.matrix) && b.matrix.length > 0, 'matrix should be a non-empty array');
+    // RC-2 — cell.x (month label) and cell.y (day-of-month label) MUST both be
+    // the exact label strings the type:'category' scale matches by `===`.
     for (const c of b.matrix.slice(0, 5)) {
       assert.equal(typeof c.x, 'string', 'cell.x should be a month label');
-      assert.equal(typeof c.y, 'number', 'cell.y should be a day index');
+      assert.equal(typeof c.y, 'string', 'cell.y should be a day-of-month label string');
+      assert.ok(b.xLabels.includes(c.x), `cell.x '${c.x}' should be a member of xLabels`);
+      assert.ok(b.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
       assert.equal(typeof c.v, 'number', 'cell.v should be signed net-€');
     }
     assert.ok(b.domain, 'domain object missing');

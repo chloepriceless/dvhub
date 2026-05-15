@@ -896,6 +896,72 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     };
   }
 
+  // Allowed PG interval literals for queryBucketedSeries. The bucket interval
+  // is interpolated straight into the SQL string (time_bucket cannot take it as
+  // a bind parameter alongside a timestamptz column in all PG versions), so it
+  // MUST be an exact match against this allow-list — never user input.
+  const BUCKET_INTERVALS = new Set([
+    '5 minutes', '10 minutes', '15 minutes', '30 minutes',
+    '1 hour', '1 day',
+  ]);
+
+  // queryBucketedSeries — SQL-side downsampled telemetry query.
+  //
+  // RC-1 fix (Phase 09.3): the history-viz aggregator used to pull every raw
+  // 5-10 s sample for a whole month/year window and dedup/bucket in JS, which
+  // saturated the PG pool. This pushes the downsampling into SQL via
+  // TimescaleDB `time_bucket()`, so a year returns ~hundreds-thousands of rows
+  // instead of millions.
+  //
+  // Each returned row is ONE bucket with:
+  //   key        — series_key
+  //   ts         — bucket start (ISO)
+  //   value      — energy-equivalent average power over the bucket, in W
+  //                (= SUM(value_num × resolution_seconds) / bucketSeconds).
+  //                Downstream `value × resolution / 3_600_000` therefore equals
+  //                the EXACT integrated bucket energy in kWh; for an avg-power
+  //                consumer (bucketSeriesByHour) it is the mean power.
+  //   value_avg  — plain AVG(value_num) over the bucket (mean of the samples,
+  //                ignores Δt weighting) — used by ratio/percentage series
+  //                (e.g. battery_soc_pct) where an energy integral is wrong.
+  //   resolution — the bucket width in seconds (so the energy identity holds).
+  //   unit       — unit of the series.
+  //
+  // The shared querySeries (raw, per-sample) is UNCHANGED — only the
+  // history-viz aggregator switches to this bucketed variant.
+  async function queryBucketedSeries({ seriesKeys, start, end, bucketInterval = '1 hour' }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    if (!keys.length) return [];
+    if (!BUCKET_INTERVALS.has(bucketInterval)) {
+      throw new Error(`queryBucketedSeries: unsupported bucketInterval '${bucketInterval}'`);
+    }
+    const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+    // bucketInterval is allow-list-checked above → safe to interpolate.
+    const result = await pool.query(`
+      SELECT
+        series_key,
+        time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+        EXTRACT(EPOCH FROM '${bucketInterval}'::interval)::bigint AS bucket_seconds,
+        SUM(value_num * COALESCE(resolution_seconds, 0))
+          / NULLIF(EXTRACT(EPOCH FROM '${bucketInterval}'::interval), 0) AS energy_power_w,
+        AVG(value_num) AS mean_value,
+        MAX(unit) AS unit
+      FROM timeseries_samples
+      WHERE series_key IN (${placeholders})
+        AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
+      GROUP BY series_key, bucket_ts
+      ORDER BY bucket_ts ASC, series_key ASC
+    `, [...keys, isoTimestamp(start), isoTimestamp(end)]);
+    return result.rows.map((row) => ({
+      key: row.series_key,
+      ts: row.bucket_ts instanceof Date ? row.bucket_ts.toISOString() : row.bucket_ts,
+      value: row.energy_power_w == null ? 0 : Number(row.energy_power_w),
+      value_avg: row.mean_value == null ? 0 : Number(row.mean_value),
+      unit: row.unit,
+      resolution: Number(row.bucket_seconds),
+    }));
+  }
+
   // Query arbitrary telemetry series (e.g. battery_soc_pct)
   async function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
     const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
@@ -935,6 +1001,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   return {
     dbPath: 'postgresql',
     querySeries,
+    queryBucketedSeries,
     async listTables() {
       const result = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);
       return result.rows.map((row) => row.name);
