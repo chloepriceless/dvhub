@@ -28,6 +28,9 @@ import {
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
+// Phase 09.3-01: history-viz aggregator factory (per-card endpoints under
+// /api/history/viz/*). Wired into ctx after telemetryStore + db are available.
+import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { REDACTED_PATHS, restoreRedacted, redactUrlCreds } from './config-redaction.js';
@@ -1147,6 +1150,11 @@ const telemetryReady = (async () => {
     getSolarMarketValueSummary: ({ year }) => energyChartsMarketValueService.getSolarMarketValueSummary({ year })
   });
   ctx.historyApi = historyApi;
+  // Phase 09.3-01: history-viz aggregator (per-card endpoints under
+  // /api/history/viz/*). Read-only PG aggregation with 5min in-process cache.
+  // Factory is synchronous (no schema bootstrap per D-10) — reads ctx.db /
+  // ctx.telemetryStore lazily on first request, by which time both are wired.
+  ctx.historyVizApi = createHistoryVizAggregator(ctx);
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
     applicableValueService.refresh().catch((error) => {

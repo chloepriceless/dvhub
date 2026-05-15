@@ -1,0 +1,113 @@
+/* history-viz.css — Phase 09.3 Aurora History-Viz Cards (per-page styles).
+   Plan 09.3-01 Wave 1 ships the scaffold (grid invariants + visibility class
+   + chart-shell + per-card mounts). Waves 2-5 add card-specific tuning.
+
+   Implements:
+   - D-15 (view-conditional rendering — JS toggles .viz-hidden-by-view)
+   - D-22 (no inline style attrs — all styling lives here)
+   - D-23 (per-page CSS file — keeps history.css unchanged for non-viz cards)
+   - D-24 (grid invariant — repeat(N, minmax(0, 1fr)) + > * { min-width: 0 };
+           bare 1fr enforced-banned by tests/aurora-grid-lint.mjs)
+   - D-25 (visibility via classList.toggle, NEVER el.style.display = '')
+*/
+
+/* D-25 — visibility-toggling via classList only. !important is intentional:
+   beats any inline display value an upstream framework might inject. */
+.viz-hidden-by-view { display: none !important; }
+
+/* D-24 — grid invariant. minmax(0, 1fr) lets a track shrink past content
+   width; bare 1fr does NOT (long German compound labels spill out and push
+   the row past the viewport). The `> * { min-width: 0 }` rule complements
+   minmax — without it the grid item itself enforces a content-width floor. */
+.viz-grid-2 {
+  display: grid;
+  gap: var(--gap-3, 12px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.viz-grid-2 > * { min-width: 0; }
+
+.viz-grid-3 {
+  display: grid;
+  gap: var(--gap-3, 12px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.viz-grid-3 > * { min-width: 0; }
+
+/* The mockup uses `.grid-2` as a class on viz sections; defining it here
+   (scoped to the per-page file) keeps the dvhub-app.css `.grid-2` legacy
+   rule untouched while ensuring viz cards always inherit the invariant. */
+.viz-section .grid-2 {
+  display: grid;
+  gap: var(--gap-3, 12px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.viz-section .grid-2 > * { min-width: 0; }
+
+@media (max-width: 1100px) {
+  .viz-grid-2,
+  .viz-grid-3,
+  .viz-section .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Per-card mount shell — Waves 2-5 will add card-specific min-heights / aspect
+   ratios on top of this base. */
+.viz-chart-shell {
+  min-height: 180px;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  border-radius: 12px;
+  border: 1px dashed rgba(141, 180, 221, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
+    rgba(6, 16, 28, 0.44);
+  color: var(--text-soft, #cbd5e1);
+  padding: 12px;
+  overflow: hidden;
+}
+.viz-chart-shell > canvas {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+/* Card-specific shell sizing. Waves 2-5 will mount the actual Chart.js into
+   these — defining the geometry now stops the page from jumping when the
+   first card paints. */
+.heatmap     { aspect-ratio: 30 / 24; min-height: 220px; }
+.ring-wrap   { aspect-ratio: 1 / 1; max-width: 320px; margin-inline: auto; }
+.sankey-wrap { min-height: 280px; }
+.top10       { min-height: 240px; }
+.cal-year    { min-height: 260px; }
+.pheat       { min-height: 220px; }
+
+/* Spot-Ledger is the one card that ships as an HTML <table>, not a chart —
+   per CONTEXT D-12 ("Spot-Ledger HTML-Tabelle, kein Chart"). */
+.ledger-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--f-mono, monospace);
+  font-size: 12px;
+}
+.ledger-tbl th,
+.ledger-tbl td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hairline, rgba(141, 180, 221, 0.18));
+}
+.ledger-tbl .num { text-align: right; }
+
+/* Card foot / legend row — re-uses Aurora tokens (no inline style needed). */
+.viz-foot {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid var(--hairline, rgba(141, 180, 221, 0.18));
+  font-family: var(--f-mono, monospace);
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+}
+.viz-foot .l { display: inline-flex; align-items: center; gap: 6px; }
+.viz-foot .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }

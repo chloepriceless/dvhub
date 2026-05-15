@@ -745,6 +745,11 @@ export function createApiRoutes(ctx) {
     if (LAN_SAFE_ENDPOINTS.has(url.pathname)) return true;
     // Dynamic segments for device endpoints (INTG-05)
     if (url.pathname.startsWith('/api/devices/')) return true;
+    // Phase 09.3-01: per-card history viz endpoints (read-only aggregations).
+    // GET-only (the outer guard already enforces method === 'GET'). Same posture
+    // as /api/devices/ — appliance LAN-trust model. Non-LAN callers still hit
+    // checkAuth (Bearer required, 503 if token unset). T-09.3-05 in threat model.
+    if (url.pathname.startsWith('/api/history/viz/')) return true;
     return false;
   }
 
@@ -2458,6 +2463,28 @@ export function createApiRoutes(ctx) {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
       const result = await ctx.historyApi.getSummary({
+        view: url.searchParams.get('view'),
+        date: url.searchParams.get('date')
+      });
+      return json(res, result.status, result.body);
+    }
+
+    // Phase 09.3-01: per-card history viz dispatch. Mirrors the /api/history/summary
+    // shape — delegates to ctx.historyVizApi which returns { status, body }.
+    // Slug → method-name map: kebab-case → camelCase prepended with 'get'
+    // (e.g. 'day-profile' → 'getDayProfile'). Unknown slugs → 404.
+    // LAN-bypass active for the whole prefix (isLanSafeRequest above).
+    if (url.pathname.startsWith('/api/history/viz/') && req.method === 'GET') {
+      if (!ctx.historyVizApi) {
+        return json(res, 503, { ok: false, error: 'history-viz aggregator not initialized' });
+      }
+      const card = url.pathname.slice('/api/history/viz/'.length);
+      const handlerName = 'get' + card.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+      const handler = ctx.historyVizApi[handlerName];
+      if (typeof handler !== 'function') {
+        return json(res, 404, { ok: false, error: `unknown viz card: ${card}` });
+      }
+      const result = await handler({
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date')
       });

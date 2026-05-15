@@ -34,7 +34,7 @@ const publicDir = path.join(repoRoot, 'dvhub', 'public');
 const PAGES = {
   index:        { html: 'index.html',        js: ['app.js', 'leitstand-charts.js'] },
   family:       { html: 'family.html',       js: ['family.js'] },
-  history:      { html: 'history.html',      js: ['history.js'] },
+  history:      { html: 'history.html',      js: ['history.js', 'history-viz.js'] },
   settings:     { html: 'settings.html',     js: ['settings.js'] },
   setup:        { html: 'setup.html',        js: ['setup.js'] },
   integrations: { html: 'integrations.html', js: ['integrations.js'] },
