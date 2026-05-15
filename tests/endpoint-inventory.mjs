@@ -43,12 +43,30 @@ const BASELINE = join(repoRoot, 'tests', 'endpoint-baseline.json');
 // pattern for /api/history/export?view= etc.).
 const FETCH_RE = /(?:[Ff]etch|downloadServerExport)\s*\(\s*['"`](\/(?:api|auth)\/[^'"`${}\s]+)/g;
 
+// Phase 09.3 extension: the 14 history-viz cards all fetch through a single
+// helper — `fetchCardData(slug, view, date)` in history-viz.js — whose URL is
+// an interpolated template literal: `/api/history/viz/${slug}?view=…&date=…`.
+// The static FETCH_RE above truncates that literal at the `${` interpolation,
+// so the 14 concrete endpoints are invisible to the generic extractor and the
+// regression gate would never see a dropped viz card. To keep the gate REAL
+// (not a hardcoded list), when a file contains the `/api/history/viz/${…}`
+// template we enumerate the concrete `fetchCardData('<slug>', …)` call sites
+// in that same file and emit one `/api/history/viz/<slug>` URL per slug. A
+// future card removal drops its `fetchCardData('<slug>', …)` call → the slug
+// vanishes from `current` → `--verify` reports the drop. (Plan 09.3-08 Step 3.)
+const VIZ_TEMPLATE_RE = /['"`]\/api\/history\/viz\/\$\{/;
+const VIZ_SLUG_RE = /fetchCardData\s*\(\s*['"`]([a-z0-9-]+)['"`]/g;
+
 function extract() {
   const urls = new Set();
   for (const f of readdirSync(PUBLIC_DIR)) {
     if (!f.endsWith('.js')) continue;
     const src = readFileSync(join(PUBLIC_DIR, f), 'utf8');
     for (const m of src.matchAll(FETCH_RE)) urls.add(m[1]);
+    // Phase 09.3 viz-card endpoint enumeration (see comment above).
+    if (VIZ_TEMPLATE_RE.test(src)) {
+      for (const m of src.matchAll(VIZ_SLUG_RE)) urls.add(`/api/history/viz/${m[1]}`);
+    }
   }
   return [...urls].sort();
 }
