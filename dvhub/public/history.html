@@ -421,6 +421,51 @@
         </div>
       </section>
 
+      <!-- ═══ Phase 09.3-04 Wave 4 — Preis-Heatmap dow×hour + SOC-Spaghetti + Zyklen-Histogramm ═══
+           data-show-view (D-15) toggles .viz-hidden-by-view per active view;
+           Spaghetti + Zyklen are week|month|year only (need ≥ 2 days of SOC
+           history). data-viz-card pairs each section with the buildDispatch
+           slug (D-14). NO inline style attrs (D-22) — all .dot/.sw classes. -->
+
+      <section class="viz-grid-2" data-show-view="day week month year">
+        <article class="card chart-panel" data-show-view="day week month year" data-viz-card="pheat">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-violet"></span>Preis-Muster · Stunde × Wochentag</span>
+            <p class="card-sub">Ø Spot-Preis je Wochentag · ct/kWh</p>
+          </div></div>
+          <div id="vPHeat" class="pheat viz-chart-shell"></div>
+          <div class="viz-foot">
+            <span>billig</span>
+            <span class="sw-grad-pheat" aria-hidden="true"></span>
+            <span>teuer</span>
+          </div>
+        </article>
+        <article class="card chart-panel" data-show-view="week month year" data-viz-card="spaghetti">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-green"></span>SOC-Spaghetti · 30 Tage</span>
+            <p class="card-sub">SOC-Verlauf 24 h · eine Linie pro Tag</p>
+          </div></div>
+          <div id="vSpag" class="viz-chart-shell"></div>
+          <div class="viz-foot">
+            <span class="l"><span class="sw sw-green"></span>30 Tageskurven</span>
+            <span class="l"><span class="sw sw-white"></span>Heute</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="card chart-panel" data-show-view="week month year" data-viz-card="cycles">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-green"></span>Akku-Zyklen · Wochentage</span>
+          <p class="card-sub">Lade-/Entladeenergie + Cycle-Count</p>
+        </div></div>
+        <div id="vCycles" class="viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-green"></span>Geladen kWh</span>
+          <span class="l"><span class="sw sw-pink"></span>Entladen kWh</span>
+          <span class="l"><span class="sw sw-violet"></span>Zyklen</span>
+        </div>
+      </section>
+
     </main>
   </div>
 

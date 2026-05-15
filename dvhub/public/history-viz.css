@@ -229,3 +229,18 @@
 }
 .legend-row .l { display: inline-flex; align-items: center; gap: 6px; }
 .legend-row .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
+/* Plan 09.3-04 Wave 4 — Preis-Heatmap / SOC-Spaghetti / Zyklen-Histogramm.
+   .sw-white is the "Heute" swatch for the spaghetti legend; .sw-grad-pheat is
+   the billig→teuer gradient bar in the Pheat footer (mirrors the matrix
+   green→cyan→yellow→red 4-stop scale). .pheat fixes the 24×7 aspect-ratio so
+   the dow×hour cells stay square-ish at any width. */
+.sw-white { background: #ffffff; }
+.sw-grad-pheat {
+  display: inline-block;
+  flex: 0 0 90px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #3ee0a0, #34dbff, #ffd421, #ff5d5d);
+}
+.pheat { aspect-ratio: 24 / 7; min-height: 180px; }

@@ -54,6 +54,48 @@
     return v;
   }
 
+  // --- 4-stop gradient interpolation (Plan 09.3-04 Wave 4, RESEARCH §670-697).
+  // mixColors parses rgba()/hex, interpolates per-channel; interpolateGradient
+  // walks a [{at, color}] stop list. Used by buildPheat for the theme-aware
+  // green→cyan→yellow→red price scale (stops resolve via cssVar at paint time).
+
+  function mixColors(c1, c2, t) {
+    function parse(c) {
+      if (typeof c === 'string' && c.startsWith('#')) {
+        let h = c.slice(1);
+        if (h.length === 3) h = h.split('').map((x) => x + x).join('');
+        return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1];
+      }
+      const m = typeof c === 'string' ? c.match(/rgba?\(([^)]+)\)/) : null;
+      if (m) {
+        const p = m[1].split(',').map(Number);
+        return [p[0] || 0, p[1] || 0, p[2] || 0, p.length > 3 ? p[3] : 1];
+      }
+      return [0, 0, 0, 1];
+    }
+    const a = parse(c1);
+    const b = parse(c2);
+    return 'rgba(' +
+      Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+      Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+      Math.round(a[2] + (b[2] - a[2]) * t) + ',' +
+      (a[3] + (b[3] - a[3]) * t) + ')';
+  }
+
+  function interpolateGradient(stops, t) {
+    if (!Array.isArray(stops) || stops.length === 0) return '#000';
+    if (t <= stops[0].at) return stops[0].color;
+    if (t >= stops[stops.length - 1].at) return stops[stops.length - 1].color;
+    for (let i = 1; i < stops.length; i++) {
+      if (t <= stops[i].at) {
+        const span = stops[i].at - stops[i - 1].at;
+        const local = span > 0 ? (t - stops[i - 1].at) / span : 0;
+        return mixColors(stops[i - 1].color, stops[i].color, local);
+      }
+    }
+    return stops[stops.length - 1].color;
+  }
+
   // --- Aggregator-fetch helper. Each builder calls fetchCardData(slug, view, date).
 
   async function fetchCardData(slug, view, date) {
@@ -610,9 +652,221 @@
     }
   }
 
-  async function buildPheat(view, date)             { console.warn('history-viz: buildPheat not implemented'); }
-  async function buildSpaghetti(view, date)         { console.warn('history-viz: buildSpaghetti not implemented'); }
-  async function buildCycles(view, date)            { console.warn('history-viz: buildCycles not implemented'); }
+  // -------------------------------------------------------------------------
+  // Plan 09.3-04 Wave 4 — 3 LIVE frontend builders.
+  // Preis-Heatmap (Chart.js matrix, 4-stop interpolated price scale),
+  // SOC-Spaghetti (Chart.js line × up-to-30 day-curves, "Heute" highlighted),
+  // Zyklen-Histogramm (Chart.js mixed bar+line, stacked kWh + cycles line on a
+  // 2nd y-axis). Same canvas-swap pattern as Waves 2-3.
+  // -------------------------------------------------------------------------
+
+  async function buildPheat(view, date) {
+    const mount = document.getElementById('vPHeat');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('pheat', view, date);
+      if (historyVizCharts.pheat) {
+        try { historyVizCharts.pheat.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.pheat;
+      }
+      const canvas = mountCanvas(mount, 'vPHeatCanvas');
+      const xLabels = data.xLabels || [];
+      const yLabels = data.yLabels || [];
+      const matrix = data.matrix || [];
+      const domainMax = (data.domain && Number.isFinite(data.domain.max)) ? data.domain.max : 0;
+      historyVizCharts.pheat = new Chart(canvas.getContext('2d'), {
+        type: 'matrix',
+        data: { datasets: [{
+          label: 'Ø Spot ct/kWh',
+          data: matrix,
+          backgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const v = cell && Number.isFinite(cell.v) ? cell.v : 0;
+            const t = domainMax > 0 ? Math.min(1, Math.max(0, v / domainMax)) : 0;
+            // 4-stop gradient; stops resolve via cssVar at paint time so the
+            // scale is theme-aware (RESEARCH §Pitfall 7).
+            return interpolateGradient([
+              { at: 0,    color: cssVar('--green',  '#3ee0a0') },
+              { at: 0.33, color: cssVar('--cyan',   '#34dbff') },
+              { at: 0.67, color: cssVar('--yellow', '#ffd421') },
+              { at: 1,    color: cssVar('--red',    '#ff5d5d') },
+            ], t);
+          },
+          borderWidth: 0,
+          // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout.
+          width(c) {
+            const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
+            return Math.max(1, (w / Math.max(1, xLabels.length)) - 1);
+          },
+          height(c) {
+            const h = (c.chart && c.chart.chartArea && c.chart.chartArea.height) || 0;
+            return Math.max(1, (h / Math.max(1, yLabels.length)) - 1);
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title() { return ''; },
+              label(c) {
+                const d = c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                const dow = yLabels[d.y] || '';
+                const hr = xLabels[d.x] || String(d.x);
+                const v = Number(d.v) || 0;
+                return `${dow} ${hr}h: ${v.toFixed(1)} ct/kWh`;
+              },
+            } },
+          },
+          scales: {
+            x: { type: 'category', labels: xLabels, ticks: { autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+            y: { type: 'category', labels: yLabels, offset: true, reverse: true, grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.pheat && historyVizCharts.pheat.resize && historyVizCharts.pheat.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildPheat failed', e);
+      showFriendlyError(mount, 'Preis-Heatmap');
+    }
+  }
+
+  async function buildSpaghetti(view, date) {
+    const mount = document.getElementById('vSpag');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('spaghetti', view, date);
+      if (historyVizCharts.spaghetti) {
+        try { historyVizCharts.spaghetti.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.spaghetti;
+      }
+      const canvas = mountCanvas(mount, 'vSpagCanvas');
+      const seriesIn = Array.isArray(data.series) ? data.series : [];
+      // One line dataset per day. All days green-alpha; the "Heute" day
+      // overrides to white + thicker border and is drawn on top (order 0).
+      const datasets = seriesIn.map((s) => ({
+        label: s.date,
+        data: (s.points || []).map((p) => ({ x: p.h, y: p.soc })),
+        borderColor: s.isToday ? '#ffffff' : cssVarAlpha('--green', 0.5, '#3ee0a0'),
+        borderWidth: s.isToday ? 2 : 1,
+        pointRadius: 0,
+        tension: 0.2,
+        fill: false,
+        order: s.isToday ? 0 : 1,
+      }));
+      historyVizCharts.spaghetti = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          parsing: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title(items) { return items && items[0] ? `${items[0].raw.x}:00 Uhr` : ''; },
+              label(c) { return `${c.dataset.label}: ${Number(c.raw.y).toFixed(0)} %`; },
+            } },
+          },
+          scales: {
+            x: {
+              type: 'linear', min: 0, max: 23,
+              title: { display: true, text: 'Stunde' },
+              grid: { display: false },
+              ticks: { stepSize: 3, autoSkip: true, maxRotation: 0 },
+            },
+            y: {
+              min: 0, max: 100,
+              title: { display: true, text: 'SOC %' },
+              grid: { color: 'rgba(141,180,221,0.1)' },
+            },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.spaghetti && historyVizCharts.spaghetti.resize && historyVizCharts.spaghetti.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildSpaghetti failed', e);
+      showFriendlyError(mount, 'SOC-Spaghetti');
+    }
+  }
+
+  async function buildCycles(view, date) {
+    const mount = document.getElementById('vCycles');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('cycles', view, date);
+      if (historyVizCharts.cycles) {
+        try { historyVizCharts.cycles.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.cycles;
+      }
+      const canvas = mountCanvas(mount, 'vCyclesCanvas');
+      const perDow = Array.isArray(data.perDow) ? data.perDow : [];
+      historyVizCharts.cycles = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: perDow.map((d) => d.label),
+          datasets: [
+            {
+              label: 'Geladen kWh',
+              data: perDow.map((d) => d.chargedKwh),
+              backgroundColor: cssVar('--green', '#3ee0a0'),
+              stack: 'kwh', yAxisID: 'y',
+            },
+            {
+              label: 'Entladen kWh',
+              data: perDow.map((d) => -d.dischargedKwh),
+              backgroundColor: '#ff7eb6',
+              stack: 'kwh', yAxisID: 'y',
+            },
+            {
+              label: 'Zyklen', type: 'line',
+              data: perDow.map((d) => d.cycles),
+              borderColor: cssVar('--violet', '#a78bfa'),
+              backgroundColor: 'transparent',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.3,
+              yAxisID: 'y1',
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { stacked: true, grid: { display: false } },
+            y: {
+              stacked: true, position: 'left',
+              title: { display: true, text: 'kWh' },
+              grid: { color: 'rgba(141,180,221,0.1)' },
+            },
+            y1: {
+              position: 'right',
+              title: { display: true, text: 'Zyklen' },
+              grid: { drawOnChartArea: false },
+            },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.cycles && historyVizCharts.cycles.resize && historyVizCharts.cycles.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildCycles failed', e);
+      showFriendlyError(mount, 'Akku-Zyklen');
+    }
+  }
+
   async function buildTop10(view, date)             { console.warn('history-viz: buildTop10 not implemented'); }
   async function buildCalYear(view, date)           { console.warn('history-viz: buildCalYear not implemented'); }
   async function buildScatter(view, date)           { console.warn('history-viz: buildScatter not implemented'); }
