@@ -1875,15 +1875,10 @@ function renderSummary(summary) {
   renderKpis(summary);
   renderLayout(summary);
   renderCharts(summary);
-  renderRows(summary);
   renderDetailsSection();
   renderSummaryStatus(summary);
   const versionLabel = summary?.app?.versionLabel ? ` · ${summary.app.versionLabel}` : '';
   setText('historyMeta', `${String(summary?.view || '').toUpperCase()} · ${summary?.date || currentDateValue()}${versionLabel}`);
-  bindHistoryToggle('historyDetailsToggle', () => {
-    historyState.detailsExpanded = !historyState.detailsExpanded;
-    renderDetailsSection();
-  });
   bindHistoryToggle('historyStatusInfoToggle', () => {
     historyState.statusInfoExpanded = !historyState.statusInfoExpanded;
     renderStatusInfo();
