@@ -466,6 +466,49 @@
         </div>
       </section>
 
+      <!-- ═══ Phase 09.3-05 Wave 5 — Top-10-Slots + Cal-Heatmap-12-Monat + Wetter×Erlös-Scatter ═══
+           Final 3 of 14 viz cards. Top-10 + Scatter are week|month|year (a
+           period roll-up needs ≥ 2 days); Cal-Year is year-only. data-viz-card
+           pairs each section with its buildDispatch slug (D-14). NO inline
+           style attrs (D-22) — #vScatterStats carries no style attribute; its
+           layout lives in history-viz.css. -->
+
+      <section class="viz-grid-2" data-show-view="week month year">
+        <article class="card chart-panel" data-show-view="week month year" data-viz-card="top10">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-green"></span>Top-10-Slots</span>
+            <p class="card-sub">Beste Verkaufs-Slots der Periode</p>
+          </div></div>
+          <div id="vTop10" class="top10 viz-chart-shell"></div>
+        </article>
+        <article class="card chart-panel" data-show-view="year" data-viz-card="cal-year">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-cyan"></span>Netto-Kalender · 12 Monate</span>
+            <p class="card-sub">Eine Kachel pro Tag · Farbe = Netto-€</p>
+          </div></div>
+          <div id="vCalYear" class="cal-year viz-chart-shell"></div>
+          <div class="viz-foot">
+            <span>−€</span>
+            <span class="sw-grad-cal" aria-hidden="true"></span>
+            <span>+€</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="card chart-panel" data-show-view="week month year" data-viz-card="scatter">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-yellow"></span>Wetter × Erlös</span>
+          <p class="card-sub">Globalstrahlung vs Tages-Netto · Farbe = Autarkie</p>
+        </div></div>
+        <div id="vScatter" class="viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-red"></span>0 % Autarkie</span>
+          <span class="l"><span class="sw sw-yellow"></span>50 %</span>
+          <span class="l"><span class="sw sw-green"></span>100 %</span>
+          <span id="vScatterStats"></span>
+        </div>
+      </section>
+
     </main>
   </div>
 

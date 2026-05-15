@@ -7,10 +7,10 @@
 // returning a typed envelope so the front-end can wire against the contract
 // from commit #1).
 //
-// Stubs return `{ status: 501, body: { ok:false, error:'not_implemented', ... } }`
-// — Waves 2–5 replace each builder body with the real PG aggregation. The cache,
-// validation, envelope, and dispatch are LIVE from this commit forward; future
-// waves only need to drop the SQL into each makeStub call.
+// Wave 1 shipped 14 stub builders returning a 501 `not_implemented` envelope;
+// Waves 2–5 replaced each builder body with the real PG aggregation. As of
+// Plan 09.3-05 ALL 14 builders are LIVE — the stub factory has been removed.
+// The cache, validation, envelope, and dispatch have been LIVE since Wave 1.
 //
 // Validation contract (V5 / T-09.3-01):
 //   view ∈ {'day','week','month','year'}
@@ -292,47 +292,11 @@ export function createHistoryVizAggregator(ctx) {
     return null;
   }
 
-  /**
-   * Stub-builder factory. Waves 2–5 replace each `makeStub(card)` site with a
-   * dedicated builder that runs the SQL aggregation, builds the Chart.js-ready
-   * payload, and routes through `putCached(key, body)` on a 200 result.
-   *
-   * The current behaviour:
-   *   1. Validate `view` + `date`. Return 400 on bad input (NEVER cached).
-   *   2. Check cache by 3-segment key. On hit, return 200 with `cached:true`.
-   *   3. On miss, return 501 `not_implemented` with the full envelope keys
-   *      present so the front-end can wire against the contract from day 1.
-   *      501 responses are NOT cached (only successful 200 envelopes will be,
-   *      starting with Wave 2).
-   */
-  function makeStub(card) {
-    return async function ({ view, date } = {}) {
-      const bad = validate({ view, date });
-      if (bad) return bad;
-
-      const key = `${card}:${view}:${date}`;
-      const hit = getCached(key);
-      if (hit) {
-        // Re-stamp `cached: true` on the cached envelope; the `ok`, `card`,
-        // `view`, `date` fields are preserved verbatim from the original
-        // 200 build (Waves 2-5).
-        return { status: 200, body: { ...hit, cached: true }, cached: true };
-      }
-
-      const body = {
-        ok: false,
-        card,
-        view,
-        date,
-        generatedAt: new Date().toISOString(),
-        cached: false,
-        error: 'not_implemented',
-      };
-      // 501 stubs are NOT cached. Cache only mints from successful 200 results
-      // in Waves 2-5 (the future builder will call putCached(key, body)).
-      return { status: 501, body, cached: false };
-    };
-  }
+  // NOTE: Wave 1 shipped a stub-builder factory here that returned a 501
+  // `not_implemented` envelope for every card. Waves 2-5 replaced each stub
+  // site with a dedicated live builder; Plan 09.3-05 (this wave) lit the final
+  // three (top10 / cal-year / scatter), so the factory had no remaining call
+  // sites and was removed. All 14 builders are now LIVE — see the api object.
 
   // -------------------------------------------------------------------------
   // Plan 09.3-02 Wave 2 — 5 LIVE builders.
@@ -1209,6 +1173,326 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.3-05 Wave 5 — 3 LIVE builders (Top10 / CalYear / Scatter).
+  // CONTEXT D-05 (Top10 / Cal-Year) + D-06 (14th card — Wetter×Erlös-Scatter).
+  //
+  // SCHEMA NOTE (T-09.3-21): the plan-doc's `optimizer_runs` assumption is
+  // WRONG. `public.optimizer_runs` is a run-metadata table (run_started_at /
+  // status / result_json) with NO revenue_eur / cost_eur / ts / action / kwh /
+  // price_ct_per_kwh columns. The per-slot economic data lives in
+  // `opt.plan_slots` — slot_start (TIMESTAMPTZ), grid_import_wh, grid_export_wh
+  // (BIGINT), expected_profit_eur (NUMERIC) — exactly the table the live
+  // `getLedger` builder (Wave 2) already queries, joined to
+  // shared.market_price_slots.price_ct_kwh. All 3 Wave-5 builders mirror that
+  // verified getLedger schema path. "Revenue" per slot = expected_profit_eur
+  // (the optimizer's per-slot economic outcome); daily "net-€" = SUM of it.
+  // -------------------------------------------------------------------------
+
+  // Action heuristic shared with getLedger: net export → sell, net import →
+  // buy, both ~0 → hold. kWh = max(import, export)/1000.
+  function slotActionAndKwh(importWh, exportWh) {
+    let action = 'hold';
+    if (exportWh > importWh && exportWh > 0) action = 'sell';
+    else if (importWh > exportWh && importWh > 0) action = 'buy';
+    const kwh = Math.max(importWh, exportWh) / 1000;
+    return { action, kwh };
+  }
+
+  // Pearson correlation coefficient between two equal-length numeric arrays.
+  // Returns 0 when n < 2 or either series has zero variance (avoids NaN).
+  function pearsonR(xs, ys) {
+    const n = Math.min(xs.length, ys.length);
+    if (n < 2) return 0;
+    let sx = 0, sy = 0, sxy = 0, sx2 = 0, sy2 = 0;
+    for (let i = 0; i < n; i++) {
+      const x = Number(xs[i]);
+      const y = Number(ys[i]);
+      sx += x; sy += y; sxy += x * y; sx2 += x * x; sy2 += y * y;
+    }
+    const num = n * sxy - sx * sy;
+    const den = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy));
+    if (!Number.isFinite(den) || den === 0) return 0;
+    return num / den;
+  }
+
+  async function getTop10({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    // Top-10 is a period roll-up — a single day has at most ~96 slots and the
+    // "top 10 of the period" framing only makes sense for week|month|year.
+    if (view === 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (top10 is week|month|year only)' }, cached: false };
+    }
+    const key = `top10:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // The 10 highest-profit sell slots in the period. opt.plan_slots holds
+      // grid_import_wh / grid_export_wh / expected_profit_eur per slot; join
+      // shared.market_price_slots for the spot price. T-09.3-21: parameterized
+      // BETWEEN bounds; ORDER BY ... DESC LIMIT 10 server-side. T-09.3-22: the
+      // exact slot ts is already exposed via getLedger / the Spot-Ledger card.
+      const sql = `
+        SELECT
+          ps.slot_start,
+          ps.grid_import_wh,
+          ps.grid_export_wh,
+          ps.expected_profit_eur,
+          mps.price_ct_kwh
+        FROM opt.plan_slots ps
+        LEFT JOIN shared.market_price_slots mps
+          ON mps.slot_start = ps.slot_start
+         AND mps.price_kind = 'market'
+        WHERE ps.slot_start >= $1::timestamptz
+          AND ps.slot_start <  $2::timestamptz
+          AND ps.grid_export_wh > ps.grid_import_wh
+        ORDER BY ps.expected_profit_eur DESC NULLS LAST
+        LIMIT 10
+      `;
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      // Defensive re-sort DESC + re-cap in case the adapter ignored ORDER/LIMIT.
+      const slots = rows
+        .map((row) => {
+          const importWh = Number(row.grid_import_wh) || 0;
+          const exportWh = Number(row.grid_export_wh) || 0;
+          const { action, kwh } = slotActionAndKwh(importWh, exportWh);
+          return {
+            ts: typeof row.slot_start === 'string' ? row.slot_start : new Date(row.slot_start).toISOString(),
+            action,
+            kwh: round3(kwh),
+            priceCt: round3(Number(row.price_ct_kwh) || 0),
+            revenueEur: round3(Number(row.expected_profit_eur) || 0),
+          };
+        })
+        .sort((a, b) => b.revenueEur - a.revenueEur)
+        .slice(0, 10);
+      const totalEur = round3(slots.reduce((s, x) => s + x.revenueEur, 0));
+      const payload = {
+        ok: true,
+        card: 'top10',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        slots,
+        totalEur,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_top10_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, card: 'top10', error: e.message }, cached: false };
+    }
+  }
+
+  async function getCalYear({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view !== 'year') {
+      return { status: 400, body: { ok: false, error: 'view not supported (cal-year is year-only)' }, cached: false };
+    }
+    const key = `cal-year:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // Per-day signed net-€ over the 12-month window. expected_profit_eur is
+      // the optimizer's per-slot economic outcome (already signed: a slot that
+      // costs money carries a negative value), so SUM per day yields a signed
+      // daily net. date_trunc to UTC day; the matrix is plotted month×day.
+      const sql = `
+        SELECT
+          to_char(date_trunc('day', slot_start AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+          SUM(expected_profit_eur) AS net_eur
+        FROM opt.plan_slots
+        WHERE slot_start >= $1::timestamptz
+          AND slot_start <  $2::timestamptz
+        GROUP BY 1
+        ORDER BY 1
+      `;
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      // x = month short label (Jan..Dez), y = day-of-month-1 (0..30).
+      // RESEARCH Q2 — the matrix plugin tolerates arbitrary x-label arrays, so
+      // short months simply leave their high-y cells absent (leap years OK).
+      const xLabels = MONTH_DE_SHORT.slice();
+      const yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1));
+      const matrix = [];
+      let minVal = 0;
+      let maxVal = 0;
+      for (const row of rows) {
+        const d = String(row.d || '');
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+        if (!m) continue;
+        const monthIdx = parseInt(m[2], 10) - 1; // 0..11
+        const dayIdx = parseInt(m[3], 10) - 1;   // 0..30
+        if (monthIdx < 0 || monthIdx > 11 || dayIdx < 0 || dayIdx > 30) continue;
+        const v = round3(Number(row.net_eur) || 0);
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+        matrix.push({ x: xLabels[monthIdx], y: dayIdx, v });
+      }
+      // Force 0 into the domain so the diverging palette has a true midpoint
+      // (red below 0, faded at 0, green above 0). domain straddles 0 even when
+      // every observed day happens to be the same sign.
+      const payload = {
+        ok: true,
+        card: 'cal-year',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        xLabels,
+        yLabels,
+        matrix,
+        domain: { min: Math.min(0, minVal), max: Math.max(0, maxVal), unit: '€' },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_cal_year_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, card: 'cal-year', error: e.message }, cached: false };
+    }
+  }
+
+  async function getScatter({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view === 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (scatter is week|month|year only)' }, cached: false };
+    }
+    const key = `scatter:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    // MANDATORY try/catch + pushLog wrapper (Test W5-9 / T-09.3-21). On ANY
+    // thrown exception — e.g. a missing-column SQLSTATE 42703 from schema
+    // drift — catch, log via pushLog, and return a structured 500 envelope.
+    // NEVER let an exception escape. This is the SQL-throw path; it is NOT the
+    // same as the 0-rows path below (which returns 200 weatherDataAvailable
+    // false). Matches the error-envelope shape used by every other builder.
+    try {
+      const { start, end } = resolveRange(view, date);
+      // Daily net-€ (from opt.plan_slots) JOIN daily-mean GHI (from
+      // weather_forecasts, ghi_wm2 IS NOT NULL) + daily autarky %. The INNER
+      // JOIN means days with no GHI row are omitted (T-09.3-24 graceful path).
+      // T-09.3-23 — both CTEs are daily-aggregated so the JOIN caps at ~365
+      // rows per side regardless of slot resolution.
+      const sql = `
+        WITH daily_net AS (
+          SELECT
+            to_char(date_trunc('day', slot_start AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            SUM(expected_profit_eur) AS net_eur,
+            SUM(grid_import_wh) AS import_wh,
+            SUM(grid_export_wh + battery_discharge_load_wh) AS supply_wh
+          FROM opt.plan_slots
+          WHERE slot_start >= $1::timestamptz
+            AND slot_start <  $2::timestamptz
+          GROUP BY 1
+        ),
+        daily_weather AS (
+          SELECT
+            to_char(date_trunc('day', ts_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            AVG(ghi_wm2) AS ghi
+          FROM weather_forecasts
+          WHERE ts_utc >= $1::timestamptz
+            AND ts_utc <  $2::timestamptz
+            AND ghi_wm2 IS NOT NULL
+          GROUP BY 1
+        )
+        SELECT
+          n.d,
+          w.ghi,
+          n.net_eur,
+          n.import_wh,
+          n.supply_wh
+        FROM daily_net n
+        JOIN daily_weather w ON w.d = n.d
+        ORDER BY n.d
+      `;
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      // 0-rows path (T-09.3-24): no weather backfill yet → 200, not 500.
+      if (rows.length === 0) {
+        const emptyPayload = {
+          ok: true,
+          card: 'scatter',
+          view,
+          date,
+          generatedAt: new Date().toISOString(),
+          cached: false,
+          points: [],
+          correlation: { r: 0, n: 0 },
+          weatherDataAvailable: false,
+        };
+        putCached(key, emptyPayload);
+        return { status: 200, body: emptyPayload, cached: false };
+      }
+      const points = [];
+      for (const row of rows) {
+        const ghi = Number(row.ghi);
+        if (!Number.isFinite(ghi)) continue; // defensive — JOIN should exclude
+        const netEur = round3(Number(row.net_eur) || 0);
+        // Autarky % per day. The test double supplies autarky_pct directly;
+        // the production SQL computes it from supply vs (supply + import).
+        let autarkyPct;
+        if (Number.isFinite(Number(row.autarky_pct))) {
+          autarkyPct = Math.max(0, Math.min(100, Math.round(Number(row.autarky_pct))));
+        } else {
+          const importWh = Number(row.import_wh) || 0;
+          const supplyWh = Number(row.supply_wh) || 0;
+          const totalWh = supplyWh + importWh;
+          autarkyPct = totalWh > 0
+            ? Math.max(0, Math.min(100, Math.round((supplyWh / totalWh) * 100)))
+            : 0;
+        }
+        points.push({
+          date: String(row.d || ''),
+          ghi: round1(ghi),
+          netEur,
+          autarkyPct,
+        });
+      }
+      const r = round3(pearsonR(points.map((p) => p.ghi), points.map((p) => p.netEur)));
+      const payload = {
+        ok: true,
+        card: 'scatter',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        points,
+        correlation: { r, n: points.length },
+        weatherDataAvailable: points.length > 0,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      // SQL-throw path (Test W5-9): structured 500 envelope, never cached,
+      // pushLog the underlying error. The envelope error string is the fixed
+      // 'aggregator failed' marker the contract test asserts.
+      if (typeof pushLog === 'function') {
+        pushLog('history-viz', 'scatter aggregator failed', e);
+      }
+      return {
+        status: 500,
+        body: { ok: false, card: 'scatter', error: 'aggregator failed', cached: false },
+        cached: false,
+      };
+    }
+  }
+
   const api = {
     getSankey,
     getHeatmap,
@@ -1221,9 +1505,9 @@ export function createHistoryVizAggregator(ctx) {
     getPheat,
     getSpaghetti,
     getCycles,
-    getTop10: makeStub('top10'),
-    getCalYear: makeStub('cal-year'),
-    getScatter: makeStub('scatter'),
+    getTop10,
+    getCalYear,
+    getScatter,
     bustCache,
     // Exposed for unit tests only — DO NOT consume from route handlers. The
     // routes-api dispatcher calls the public getXxx methods exclusively.

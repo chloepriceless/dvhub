@@ -141,19 +141,24 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
   // Wave 2 (Plan 09.3-02) lit 5 live builders (sankey, day-profile, stack,
   // heatmap, ledger); Wave 3 (Plan 09.3-03) lit 3 more (autarky-calendar,
   // ring, duration); Wave 4 (Plan 09.3-04) lit 3 more (pheat, spaghetti,
-  // cycles). Only 3 stay 501 stubs until Wave 5 (top10, cal-year, scatter).
-  // Test 1 asserts the stub envelope shape ONLY for the still-stubbed cards;
-  // the live builders have dedicated contract tests in the wave suites below.
+  // cycles); Wave 5 (Plan 09.3-05) lit the FINAL 3 (top10, cal-year, scatter).
+  // All 14 builders are now live → STUB_SLUGS is empty. Test 1 keeps the
+  // 0-stub assertion as a regression guard; the live builders have dedicated
+  // contract tests in the wave suites below.
   const LIVE_SLUGS = [
     'sankey', 'day-profile', 'stack', 'heatmap', 'ledger',
     'autarky-calendar', 'ring', 'duration',
     'pheat', 'spaghetti', 'cycles',
+    'top10', 'cal-year', 'scatter',
   ];
   const STUB_SLUGS = SLUGS.filter((s) => !LIVE_SLUGS.includes(s));
 
-  it('Test 1 (envelope shape): each of 3 remaining stubs returns a 501 envelope with required keys', async () => {
+  it('Test 1 (envelope shape): each remaining stub returns a 501 envelope with required keys', async () => {
     const api = createHistoryVizAggregator(mockCtx());
-    assert.equal(STUB_SLUGS.length, 3, `expected 3 remaining stubs after Wave 4, got ${STUB_SLUGS.length}`);
+    // Wave 5 (Plan 09.3-05) lights the final 3 builders (top10, cal-year,
+    // scatter). After this plan ALL 14 builders are live → STUB_SLUGS is empty
+    // and this loop is a no-op (the contract still asserts the count).
+    assert.equal(STUB_SLUGS.length, 0, `expected 0 remaining stubs after Wave 5, got ${STUB_SLUGS.length}`);
     for (const slug of STUB_SLUGS) {
       const result = await api[SLUG_TO_METHOD[slug]]({ view: 'day', date: '2026-05-15' });
       assert.equal(result.status, 501, `${slug} expected status 501, got ${result.status}`);
@@ -200,25 +205,27 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(api.__test_internals.cache.size, 0, 'invalid input must NOT populate cache');
   });
 
-  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → stub; REMOTE IP without Bearer → 401/503', async () => {
-    // Use a still-stubbed card (`top10`) so the auth-gate posture is exercised
-    // without depending on a wired telemetryStore. Waves 2-4 lit sankey/ring/
-    // pheat/etc up, so the bare mockCtx (no telemetryStore) would 500 with a
-    // builder error instead of returning the documented 501 stub — that's a
-    // separate code path. The LAN-bypass invariant only cares about the auth
-    // gate sitting BEFORE the dispatcher, which is what this test asserts.
+  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → reaches dispatcher; REMOTE IP without Bearer → 401/503', async () => {
+    // After Wave 5 ALL 14 builders are live, so there is no longer a 501-stub
+    // slug to point this at. The LAN-bypass invariant only cares that the auth
+    // gate sits BEFORE the dispatcher: a LAN IP without Bearer must REACH the
+    // builder (any non-401/403 status proves the gate was bypassed — here the
+    // bare mockCtx has no `db`, so `getTop10` runs its query path against a
+    // null db and returns a 200 with empty slots); a REMOTE IP without Bearer
+    // must still be rejected by the gate (401 if token configured, 503 if not).
+    // Use view=week — getTop10 rejects view=day (period roll-up), and a 400
+    // validation envelope would not exercise the builder body.
     const ctx = mockCtx();
-    const lanReq = makeReq('/api/history/viz/top10?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
+    const lanReq = makeReq('/api/history/viz/top10?view=week&date=2026-05-15', { token: null, ip: LAN_IP });
     const lanRes = await dispatch(ctx, lanReq);
-    assert.equal(
-      lanRes.status, 501,
-      `LAN IP (${LAN_IP}) without Bearer should bypass auth and hit stub (got ${lanRes.status} ${lanRes.body})`
+    assert.ok(
+      lanRes.status !== 401 && lanRes.status !== 403,
+      `LAN IP (${LAN_IP}) without Bearer should bypass auth and reach the dispatcher (got ${lanRes.status} ${lanRes.body})`
     );
     const lanBody = JSON.parse(lanRes.body);
-    assert.equal(lanBody.card, 'top10');
-    assert.equal(lanBody.error, 'not_implemented');
+    assert.equal(lanBody.card, 'top10', 'LAN response should come from the top10 builder');
 
-    const remReq = makeReq('/api/history/viz/top10?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
+    const remReq = makeReq('/api/history/viz/top10?view=week&date=2026-05-15', { token: null, ip: REMOTE_IP });
     const remRes = await dispatch(ctx, remReq);
     assert.ok(
       remRes.status === 401 || remRes.status === 503,
@@ -1018,5 +1025,289 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.equal(c1.cached, false, 'first cycles call cached:false');
     assert.equal(c2.cached, true, 'second cycles call cached:true');
     assert.equal(c2.body.cached, true, 'second cycles body.cached:true');
+  });
+});
+
+// =============================================================================
+// Plan 09.3-05 Wave 5 — Top-10-Slots / Cal-Heatmap-12-Monat / Wetter×Erlös-
+// Scatter. CONTEXT D-05 (Top10/CalYear) + D-06 (14th card = weather scatter).
+//
+//   - top10:    the 10 highest-revenue sell slots in the period, sorted DESC.
+//   - cal-year: 12-month × 31-day matrix of signed daily net-€ (diverging
+//               palette on the frontend — domain straddles 0).
+//   - scatter:  per-day GHI vs net-€ point cloud, point colour = autarky %.
+//
+// SCHEMA REALITY (T-09.3-21 — the plan-doc's `optimizer_runs` assumption is
+// wrong): there is NO `optimizer_runs` table with revenue_eur/cost_eur/ts/
+// action/kwh/price_ct_per_kwh columns. `public.optimizer_runs` is a run-
+// metadata table (run_started_at/status/result_json). The per-slot economic
+// data lives in `opt.plan_slots` — slot_start (TIMESTAMPTZ), grid_import_wh,
+// grid_export_wh, expected_profit_eur (NUMERIC) — exactly the table the live
+// `getLedger` builder (Wave 2) already queries. All three Wave-5 builders use
+// opt.plan_slots joined to shared.market_price_slots, mirroring getLedger. The
+// daily net-€ proxy is SUM(expected_profit_eur) per day; revenue per slot is
+// expected_profit_eur (the optimizer's per-slot economic outcome).
+//
+// Weather: `weather_forecasts` — ts_utc (TIMESTAMPTZ), ghi_wm2 (DOUBLE
+// PRECISION, NULLABLE) — see forecast-store.js SCHEMA_SQL. getScatter joins
+// daily-mean GHI (ghi_wm2 IS NOT NULL) to daily net-€; days with no GHI row
+// are omitted.
+//
+// Test 9 (SQL-throw path) uses a hand-rolled throwing stub for ctx.db.query
+// (node:test has no mock library wired in this project — the existing Wave
+// 2-4 tests all use plain async function doubles); the assertion wraps the
+// builder call in try/catch and fails if any exception escapes.
+// =============================================================================
+
+// Build opt.plan_slots-like rows for a given UTC day range. Each "slot" is a
+// 15-min interval; export-heavy slots (sell) carry a positive expected_profit.
+function makePlanSlotRows({ start, end, profitEur = 0.25, exportWh = 1400, importWh = 0, priceCt = 18.2, stepSec = SLOT_RES_SEC }) {
+  const rows = [];
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  for (let t = startMs; t < endMs; t += stepSec * 1000) {
+    rows.push({
+      slot_start: new Date(t).toISOString(),
+      grid_import_wh: importWh,
+      grid_export_wh: exportWh,
+      expected_profit_eur: profitEur,
+      price_ct_kwh: priceCt,
+    });
+  }
+  return rows;
+}
+
+describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
+  // -------------------------------------------------------------------------
+  // Top10 (W5-1 sort + cap, W5-2 view rejection)
+  // -------------------------------------------------------------------------
+  it('Test W5-1 (Top10 sort + cap): slots.length ≤ 10, sorted DESC by revenueEur', async () => {
+    // 20 slots with varied profit so the LIMIT 10 + DESC sort are exercised.
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getTop10 MUST use parameterized SQL');
+      const rows = [];
+      for (let i = 0; i < 20; i++) {
+        rows.push({
+          slot_start: new Date(`${ANCHOR_DATE}T${String(i % 24).padStart(2, '0')}:00:00Z`).toISOString(),
+          grid_import_wh: 0,
+          grid_export_wh: 1000 + i * 50,
+          expected_profit_eur: (i * 0.07),  // ascending profit
+          price_ct_kwh: 20 + i,
+        });
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getTop10({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'top10');
+    assert.ok(Array.isArray(b.slots), 'slots should be an array');
+    assert.ok(b.slots.length <= 10, `slots.length should be <= 10, got ${b.slots.length}`);
+    for (let i = 1; i < b.slots.length; i++) {
+      assert.ok(
+        b.slots[i - 1].revenueEur >= b.slots[i].revenueEur,
+        `slots not DESC by revenueEur at index ${i}: ${b.slots[i - 1].revenueEur} < ${b.slots[i].revenueEur}`
+      );
+    }
+    for (const s of b.slots) {
+      assert.equal(typeof s.ts, 'string');
+      assert.equal(typeof s.kwh, 'number');
+      assert.equal(typeof s.priceCt, 'number');
+      assert.equal(typeof s.revenueEur, 'number');
+      assert.ok(['sell', 'buy', 'hold'].includes(s.action), `bad action: ${s.action}`);
+    }
+    assert.equal(typeof b.totalEur, 'number', 'totalEur should be a number');
+  });
+
+  it('Test W5-2 (Top10 view rejection): view=day → 400', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getTop10({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='day', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // CalYear (W5-3 signed-domain shape, W5-4 view rejection)
+  // -------------------------------------------------------------------------
+  it('Test W5-3 (CalYear shape): year view → matrix straddles 0, domain.min<0 && domain.max>0', async () => {
+    // Mixed-sign daily net-€: half the days profit, half lose money.
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getCalYear MUST use parameterized SQL');
+      // Aggregate-per-day style rows: {d: 'YYYY-MM-DD', net_eur: signed}.
+      const rows = [];
+      for (let m = 0; m < 12; m++) {
+        for (let day = 1; day <= 5; day++) {
+          // alternate sign per day so the diverging palette has a real midpoint
+          const signed = ((m + day) % 2 === 0) ? (1.5 + m * 0.1) : -(2.0 + day * 0.1);
+          rows.push({
+            d: `2026-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+            net_eur: signed,
+          });
+        }
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getCalYear({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'cal-year');
+    assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 12, `xLabels=12 expected, got ${b.xLabels?.length}`);
+    assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 31, `yLabels=31 expected, got ${b.yLabels?.length}`);
+    assert.ok(Array.isArray(b.matrix) && b.matrix.length > 0, 'matrix should be a non-empty array');
+    for (const c of b.matrix.slice(0, 5)) {
+      assert.equal(typeof c.x, 'string', 'cell.x should be a month label');
+      assert.equal(typeof c.y, 'number', 'cell.y should be a day index');
+      assert.equal(typeof c.v, 'number', 'cell.v should be signed net-€');
+    }
+    assert.ok(b.domain, 'domain object missing');
+    assert.ok(b.domain.min < 0, `domain.min should be < 0 for signed data, got ${b.domain.min}`);
+    assert.ok(b.domain.max > 0, `domain.max should be > 0 for signed data, got ${b.domain.max}`);
+    assert.equal(b.domain.unit, '€', `domain.unit should be '€', got ${b.domain.unit}`);
+  });
+
+  it('Test W5-4 (CalYear view rejection): view=month → 400', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getCalYear({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='month', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scatter (W5-5 NULL-GHI handling, W5-6 empty fallback, W5-7 view rejection,
+  // W5-9 SQL-throw path)
+  // -------------------------------------------------------------------------
+  it('Test W5-5 (Scatter NULL handling): days with NULL ghi excluded from points', async () => {
+    // The builder JOINs daily-net-€ to daily-mean-GHI; the SQL filters
+    // ghi_wm2 IS NOT NULL, so a day whose only GHI row is NULL has no GHI row
+    // to join and is dropped. Simulate that by returning a join result that
+    // already excludes the NULL-GHI day (mirrors the WHERE clause behaviour).
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getScatter MUST use parameterized SQL');
+      // 3 days have GHI, 1 day (2026-04-18) had only NULL ghi → not in the join.
+      return { rows: [
+        { d: '2026-04-16', ghi: 4250, net_eur: 2.3, autarky_pct: 78 },
+        { d: '2026-04-17', ghi: 3100, net_eur: 1.1, autarky_pct: 64 },
+        { d: '2026-04-19', ghi: 5400, net_eur: 3.0, autarky_pct: 88 },
+      ] };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getScatter({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'scatter');
+    assert.equal(b.weatherDataAvailable, true, 'weatherDataAvailable should be true with 3 GHI days');
+    assert.ok(Array.isArray(b.points) && b.points.length === 3, `expected 3 points, got ${b.points?.length}`);
+    assert.ok(!b.points.some((p) => p.date === '2026-04-18'), 'NULL-GHI day must be excluded');
+    for (const p of b.points) {
+      assert.equal(typeof p.date, 'string');
+      assert.equal(typeof p.ghi, 'number');
+      assert.ok(Number.isFinite(p.ghi), `ghi should be finite, got ${p.ghi}`);
+      assert.equal(typeof p.netEur, 'number');
+      assert.equal(typeof p.autarkyPct, 'number');
+    }
+    assert.ok(b.correlation && typeof b.correlation.r === 'number', 'correlation.r should be a number');
+    assert.equal(b.correlation.n, 3, `correlation.n should be 3, got ${b.correlation?.n}`);
+  });
+
+  it('Test W5-6 (Scatter empty fallback): 0 weather rows → 200 with weatherDataAvailable:false', async () => {
+    // No joined rows at all (no weather data backfilled yet — RESEARCH A2).
+    const ctx = mockCtxWithStores({ dbQueryFn: async () => ({ rows: [] }) });
+    const r = await ctx.historyVizApi.getScatter({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `0-rows path MUST be 200 (NOT 500), got ${r.status}`);
+    const b = r.body;
+    assert.equal(b.card, 'scatter');
+    assert.equal(b.weatherDataAvailable, false, 'weatherDataAvailable should be false with 0 rows');
+    assert.ok(Array.isArray(b.points) && b.points.length === 0, 'points should be an empty array');
+    assert.ok(b.correlation && b.correlation.r === 0 && b.correlation.n === 0, 'correlation should be {r:0,n:0}');
+  });
+
+  it('Test W5-7 (Scatter view rejection): view=day → 400', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getScatter({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='day', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cache (W5-8 — each Wave-5 card serves cached on the 2nd call)
+  // -------------------------------------------------------------------------
+  it('Test W5-8 (cache hit): top10/cal-year/scatter each serve cached on the 2nd call', async () => {
+    let top10Calls = 0;
+    let calYearCalls = 0;
+    let scatterCalls = 0;
+    const dbQuery = async (sql) => {
+      if (/LIMIT\s+10/i.test(sql)) {
+        top10Calls++;
+        return { rows: makePlanSlotRows({
+          start: '2026-05-01T00:00:00Z', end: '2026-05-02T00:00:00Z',
+        }) };
+      }
+      if (/ghi/i.test(sql)) {
+        scatterCalls++;
+        return { rows: [{ d: '2026-05-10', ghi: 4000, net_eur: 2.0, autarky_pct: 70 }] };
+      }
+      calYearCalls++;
+      return { rows: [{ d: '2026-05-10', net_eur: 1.5 }] };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+
+    const t1 = await ctx.historyVizApi.getTop10({ view: 'month', date: ANCHOR_DATE });
+    const t2 = await ctx.historyVizApi.getTop10({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(t1.cached, false, 'first top10 call cached:false');
+    assert.equal(t2.cached, true, 'second top10 call cached:true');
+    assert.equal(t2.body.cached, true, 'second top10 body.cached:true');
+    assert.equal(top10Calls, 1, `top10 db.query should run once for two cached calls; ran ${top10Calls}`);
+
+    const y1 = await ctx.historyVizApi.getCalYear({ view: 'year', date: ANCHOR_DATE });
+    const y2 = await ctx.historyVizApi.getCalYear({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(y1.cached, false, 'first cal-year call cached:false');
+    assert.equal(y2.cached, true, 'second cal-year call cached:true');
+    assert.equal(calYearCalls, 1, `cal-year db.query should run once for two cached calls; ran ${calYearCalls}`);
+
+    const s1 = await ctx.historyVizApi.getScatter({ view: 'month', date: ANCHOR_DATE });
+    const s2 = await ctx.historyVizApi.getScatter({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(s1.cached, false, 'first scatter call cached:false');
+    assert.equal(s2.cached, true, 'second scatter call cached:true');
+    assert.equal(s2.body.cached, true, 'second scatter body.cached:true');
+    assert.equal(scatterCalls, 1, `scatter db.query should run once for two cached calls; ran ${scatterCalls}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scatter SQL-throw path (W5-9 — structured 500 envelope, no uncaught)
+  // -------------------------------------------------------------------------
+  it('Test W5-9 (Scatter SQL-throw path): db.query throws → structured 500 envelope, no uncaught exception', async () => {
+    // Simulate a missing-column failure (PG SQLSTATE 42703 — e.g. a column
+    // rename drift). The builder MUST catch it, pushLog the underlying error,
+    // and return a structured 500 envelope — never let the exception escape.
+    const queryError = new Error('column "expected_profit_eur" does not exist');
+    queryError.code = '42703';
+    const throwingDbQuery = async () => { throw queryError; };
+
+    // Capture pushLog invocations to assert the error was logged.
+    const ctx = mockCtx();
+    const pushLogCalls = [];
+    ctx.pushLog = (...args) => { pushLogCalls.push(args); };
+    ctx.telemetryStore = { querySeries: async () => [] };
+    ctx.db = { query: throwingDbQuery };
+    ctx.historyVizApi = createHistoryVizAggregator(ctx);
+
+    let result;
+    try {
+      result = await ctx.historyVizApi.getScatter({ view: 'month', date: ANCHOR_DATE });
+    } catch (e) {
+      assert.fail(`getScatter let an exception escape (must catch + return 500 envelope): ${e.message}`);
+    }
+    assert.equal(result.status, 500, `SQL-throw path should return status 500, got ${result.status}`);
+    const b = result.body;
+    assert.equal(b.ok, false, 'error envelope ok should be false');
+    assert.equal(b.card, 'scatter', 'error envelope card should be scatter');
+    assert.match(String(b.error || ''), /aggregator failed/i, `error envelope should say 'aggregator failed', got ${b.error}`);
+    assert.equal(result.cached, false, 'error envelope must not be cached');
+    // pushLog must have been invoked with the underlying error.
+    assert.ok(pushLogCalls.length >= 1, 'pushLog should be invoked on the SQL-throw path');
+    const logged = JSON.stringify(pushLogCalls);
+    assert.match(logged, /scatter/i, 'pushLog payload should reference the scatter aggregator');
   });
 });

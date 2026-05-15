@@ -867,12 +867,224 @@
     }
   }
 
-  async function buildTop10(view, date)             { console.warn('history-viz: buildTop10 not implemented'); }
-  async function buildCalYear(view, date)           { console.warn('history-viz: buildCalYear not implemented'); }
-  async function buildScatter(view, date)           { console.warn('history-viz: buildScatter not implemented'); }
+  // -------------------------------------------------------------------------
+  // Plan 09.3-05 Wave 5 — 3 LIVE frontend builders (the FINAL 3 of 14).
+  // Top-10-Slots (Chart.js horizontal bar, indexAxis 'y'), Cal-Heatmap-12-
+  // Monat (Chart.js matrix, DIVERGING red→faded→green palette keyed on signed
+  // net-€), Wetter×Erlös-Scatter (Chart.js scatter, point colour = autarky %).
+  // Same canvas-swap pattern as Waves 2-4. CONTEXT discretion item 4: Cal-Year
+  // uses a diverging palette because daily net-€ is SIGNED — normalisation is
+  // (v - domain.min)/(domain.max - domain.min), NOT |v|/max, so the midpoint
+  // (0 €) lands on the faded stop.
+  // -------------------------------------------------------------------------
+
+  async function buildTop10(view, date) {
+    const mount = document.getElementById('vTop10');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('top10', view, date);
+      if (historyVizCharts.top10) {
+        try { historyVizCharts.top10.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.top10;
+      }
+      const canvas = mountCanvas(mount, 'vTop10Canvas');
+      const slots = Array.isArray(data.slots) ? data.slots : [];
+      const labels = slots.map((s) => {
+        const d = new Date(s.ts);
+        if (Number.isNaN(d.getTime())) return String(s.ts || '');
+        return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })
+          + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      });
+      historyVizCharts.top10 = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{
+          label: 'Erlös €',
+          data: slots.map((s) => s.revenueEur),
+          backgroundColor: cssVar('--green', '#3ee0a0'),
+          borderWidth: 0,
+        }] },
+        options: {
+          indexAxis: 'y',
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              label(c) {
+                const s = slots[c.dataIndex];
+                if (!s) return '';
+                return `${Number(s.kwh).toFixed(2)} kWh @ ${Number(s.priceCt).toFixed(2)} ct = € ${Number(s.revenueEur).toFixed(2)}`;
+              },
+            } },
+          },
+          scales: {
+            x: { title: { display: true, text: '€' }, beginAtZero: true, grid: { color: 'rgba(141,180,221,0.1)' } },
+            y: { grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.top10 && historyVizCharts.top10.resize && historyVizCharts.top10.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildTop10 failed', e);
+      showFriendlyError(mount, 'Top-10-Slots');
+    }
+  }
+
+  async function buildCalYear(view, date) {
+    const mount = document.getElementById('vCalYear');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('cal-year', view, date);
+      if (historyVizCharts.calYear) {
+        try { historyVizCharts.calYear.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.calYear;
+      }
+      const canvas = mountCanvas(mount, 'vCalYearCanvas');
+      const xLabels = data.xLabels || [];
+      const yLabels = data.yLabels || [];
+      const matrix = data.matrix || [];
+      const domain = data.domain || { min: 0, max: 0 };
+      const range = domain.max - domain.min;
+      historyVizCharts.calYear = new Chart(canvas.getContext('2d'), {
+        type: 'matrix',
+        data: { datasets: [{
+          label: 'Netto €/Tag',
+          data: matrix,
+          backgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const v = cell && Number.isFinite(cell.v) ? cell.v : 0;
+            // DIVERGING palette — normalise across the full signed range so
+            // 0 € lands on the faded midpoint stop (NOT |v|/max).
+            const t = range > 0 ? (v - domain.min) / range : 0.5;
+            return interpolateGradient([
+              { at: 0,   color: '#ff5d5d' },
+              { at: 0.5, color: 'rgba(120,180,255,0.10)' },
+              { at: 1,   color: '#3ee0a0' },
+            ], Math.max(0, Math.min(1, t)));
+          },
+          borderWidth: 0,
+          // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout.
+          width(c) {
+            const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
+            return Math.max(1, (w / Math.max(1, xLabels.length)) - 1);
+          },
+          height(c) {
+            const h = (c.chart && c.chart.chartArea && c.chart.chartArea.height) || 0;
+            return Math.max(1, (h / Math.max(1, yLabels.length)) - 1);
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title() { return ''; },
+              label(c) {
+                const d = c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                return `${d.x} ${Number(d.y) + 1}: € ${Number(d.v).toFixed(2)}`;
+              },
+            } },
+          },
+          scales: {
+            x: { type: 'category', labels: xLabels, ticks: { autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+            y: { type: 'category', labels: yLabels, offset: true, reverse: true, grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.calYear && historyVizCharts.calYear.resize && historyVizCharts.calYear.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildCalYear failed', e);
+      showFriendlyError(mount, 'Netto-Kalender');
+    }
+  }
+
+  async function buildScatter(view, date) {
+    const mount = document.getElementById('vScatter');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('scatter', view, date);
+      // Empty / no-weather-data path — render a placeholder instead of an
+      // empty chart. textContent only (D-22 / T-09.3-10 — never innerHTML).
+      if (!data.weatherDataAvailable || !Array.isArray(data.points) || data.points.length === 0) {
+        mount.replaceChildren();
+        const msg = document.createElement('div');
+        msg.className = 'viz-error-msg';
+        msg.textContent = 'Wetterdaten werden gesammelt (mind. 7 Tage erforderlich für Korrelation).';
+        mount.appendChild(msg);
+        const statsEmpty = document.getElementById('vScatterStats');
+        if (statsEmpty) statsEmpty.textContent = '';
+        return;
+      }
+      if (historyVizCharts.scatter) {
+        try { historyVizCharts.scatter.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.scatter;
+      }
+      const canvas = mountCanvas(mount, 'vScatterCanvas');
+      const points = data.points;
+      historyVizCharts.scatter = new Chart(canvas.getContext('2d'), {
+        type: 'scatter',
+        data: { datasets: [{
+          label: 'Tag',
+          data: points.map((p) => ({ x: p.ghi, y: p.netEur, _autarky: p.autarkyPct })),
+          pointBackgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const a = cell && Number.isFinite(cell._autarky) ? cell._autarky / 100 : 0;
+            // 3-stop autarky scale: red 0 % → yellow 50 % → green 100 %.
+            return interpolateGradient([
+              { at: 0,   color: '#ff5d5d' },
+              { at: 0.5, color: '#ffd421' },
+              { at: 1,   color: '#3ee0a0' },
+            ], Math.max(0, Math.min(1, a)));
+          },
+          pointBorderColor: 'transparent',
+          pointRadius: 5,
+          pointHoverRadius: 7,
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              label(c) {
+                const p = points[c.dataIndex];
+                if (!p) return '';
+                return `${p.date}: GHI ${Number(p.ghi).toFixed(0)} W/m² · € ${Number(p.netEur).toFixed(2)} · ${p.autarkyPct} %`;
+              },
+            } },
+          },
+          scales: {
+            x: { title: { display: true, text: 'GHI W/m²' }, grid: { color: 'rgba(141,180,221,0.1)' } },
+            y: { title: { display: true, text: 'Netto €/Tag' }, grid: { color: 'rgba(141,180,221,0.1)' } },
+          },
+        },
+      });
+      // Correlation footer — textContent only (T-09.3-16 XSS guard).
+      const stats = document.getElementById('vScatterStats');
+      if (stats) {
+        const corr = data.correlation || { r: 0, n: points.length };
+        stats.textContent = `${points.length} Tage · r = ${Number(corr.r || 0).toFixed(2)}`;
+      }
+      setTimeout(() => {
+        try { historyVizCharts.scatter && historyVizCharts.scatter.resize && historyVizCharts.scatter.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildScatter failed', e);
+      showFriendlyError(mount, 'Wetter×Erlös');
+    }
+  }
 
   // Slug → builder map. Keys MUST match the 14 backend slugs (aggregator.js
-  // makeStub('…')) and the kebab-case suffix of /api/history/viz/{slug}.
+  // getXxx methods) and the kebab-case suffix of /api/history/viz/{slug}.
   const buildDispatch = {
     sankey: buildSankey,
     heatmap: buildHeatmap,

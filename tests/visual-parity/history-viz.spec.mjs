@@ -207,4 +207,40 @@ test.describe('History-viz foundation (Phase 09.3-01 Wave 1)', () => {
     expect(await hidden('spaghetti'), 'spaghetti should be hidden in view=day').toBe(true);
     expect(await hidden('cycles'), 'cycles should be hidden in view=day').toBe(true);
   });
+
+  // Plan 09.3-05 Wave 5 — Top-10-Slots + Cal-Heatmap-12-Monat + Wetter×Erlös-
+  // Scatter (the final 3 of 14 viz cards).
+  test('Spec 12 — Wave-5 mount IDs present (vTop10/vCalYear/vScatter/vScatterStats)', async ({ page }) => {
+    await page.goto('/history.html');
+    for (const id of ['vTop10', 'vCalYear', 'vScatter', 'vScatterStats']) {
+      await expect(page.locator(`#${id}`)).toBeAttached();
+    }
+  });
+
+  test('Spec 13 — Wave-5 view gating: year → all 3 visible; week → CalYear hidden; day → all 3 hidden', async ({ page }) => {
+    await page.goto('/history.html');
+    await page.waitForLoadState('networkidle');
+    const hidden = (card) => page.evaluate(
+      (c) => document.querySelector(`[data-viz-card="${c}"]`)?.classList.contains('viz-hidden-by-view'),
+      card
+    );
+    // view=year → top10 + cal-year + scatter all visible.
+    await page.evaluate(() => window.historyViz?.applyView?.('year', '2026-05-15'));
+    await page.waitForTimeout(50);
+    expect(await hidden('top10'), 'top10 should be visible in view=year').toBe(false);
+    expect(await hidden('cal-year'), 'cal-year should be visible in view=year').toBe(false);
+    expect(await hidden('scatter'), 'scatter should be visible in view=year').toBe(false);
+    // view=week → cal-year (year-only) hidden; top10 + scatter stay visible.
+    await page.evaluate(() => window.historyViz?.applyView?.('week', '2026-05-15'));
+    await page.waitForTimeout(50);
+    expect(await hidden('cal-year'), 'cal-year should be hidden in view=week').toBe(true);
+    expect(await hidden('top10'), 'top10 should stay visible in view=week').toBe(false);
+    expect(await hidden('scatter'), 'scatter should stay visible in view=week').toBe(false);
+    // view=day → all 3 hidden (Top10 + Scatter need ≥ 2 days; CalYear is year-only).
+    await page.evaluate(() => window.historyViz?.applyView?.('day', '2026-05-15'));
+    await page.waitForTimeout(50);
+    expect(await hidden('top10'), 'top10 should be hidden in view=day').toBe(true);
+    expect(await hidden('cal-year'), 'cal-year should be hidden in view=day').toBe(true);
+    expect(await hidden('scatter'), 'scatter should be hidden in view=day').toBe(true);
+  });
 });
