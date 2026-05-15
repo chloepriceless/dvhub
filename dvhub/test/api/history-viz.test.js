@@ -138,15 +138,20 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(typeof api.bustCache, 'function', 'expected api.bustCache to be a function');
   });
 
-  // Wave 2 (Plan 09.3-02) lit up 5 live builders (sankey, day-profile, stack,
-  // heatmap, ledger). The remaining 9 stay 501 stubs until Waves 3-5. Test 1
+  // Wave 2 (Plan 09.3-02) lit 5 live builders (sankey, day-profile, stack,
+  // heatmap, ledger); Wave 3 (Plan 09.3-03) lit 3 more (autarky-calendar,
+  // ring, duration). The remaining 6 stay 501 stubs until Waves 4-5. Test 1
   // asserts the stub envelope shape ONLY for the still-stubbed cards; the live
-  // builders have dedicated contract tests in the Wave 2 suite below.
-  const STUB_SLUGS = SLUGS.filter((s) => !['sankey', 'day-profile', 'stack', 'heatmap', 'ledger'].includes(s));
+  // builders have dedicated contract tests in the Wave 2 / Wave 3 suites below.
+  const LIVE_SLUGS = [
+    'sankey', 'day-profile', 'stack', 'heatmap', 'ledger',
+    'autarky-calendar', 'ring', 'duration',
+  ];
+  const STUB_SLUGS = SLUGS.filter((s) => !LIVE_SLUGS.includes(s));
 
-  it('Test 1 (envelope shape): each of 9 remaining stubs returns a 501 envelope with required keys', async () => {
+  it('Test 1 (envelope shape): each of 6 remaining stubs returns a 501 envelope with required keys', async () => {
     const api = createHistoryVizAggregator(mockCtx());
-    assert.equal(STUB_SLUGS.length, 9, `expected 9 remaining stubs after Wave 2, got ${STUB_SLUGS.length}`);
+    assert.equal(STUB_SLUGS.length, 6, `expected 6 remaining stubs after Wave 3, got ${STUB_SLUGS.length}`);
     for (const slug of STUB_SLUGS) {
       const result = await api[SLUG_TO_METHOD[slug]]({ view: 'day', date: '2026-05-15' });
       assert.equal(result.status, 501, `${slug} expected status 501, got ${result.status}`);
@@ -194,24 +199,24 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
   });
 
   it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → stub; REMOTE IP without Bearer → 401/503', async () => {
-    // Use a still-stubbed card (`ring`) so the auth-gate posture is exercised
-    // without depending on a wired telemetryStore. Wave 2 lit `sankey` up so
-    // the bare mockCtx (no telemetryStore) would 500 with a builder error
+    // Use a still-stubbed card (`pheat`) so the auth-gate posture is exercised
+    // without depending on a wired telemetryStore. Waves 2-3 lit sankey/ring/etc
+    // up, so the bare mockCtx (no telemetryStore) would 500 with a builder error
     // instead of returning the documented 501 stub — that's a separate code
     // path. The LAN-bypass invariant only cares about the auth gate sitting
     // BEFORE the dispatcher, which is what this test asserts.
     const ctx = mockCtx();
-    const lanReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
+    const lanReq = makeReq('/api/history/viz/pheat?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
     const lanRes = await dispatch(ctx, lanReq);
     assert.equal(
       lanRes.status, 501,
       `LAN IP (${LAN_IP}) without Bearer should bypass auth and hit stub (got ${lanRes.status} ${lanRes.body})`
     );
     const lanBody = JSON.parse(lanRes.body);
-    assert.equal(lanBody.card, 'ring');
+    assert.equal(lanBody.card, 'pheat');
     assert.equal(lanBody.error, 'not_implemented');
 
-    const remReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
+    const remReq = makeReq('/api/history/viz/pheat?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
     const remRes = await dispatch(ctx, remReq);
     assert.ok(
       remRes.status === 401 || remRes.status === 503,
@@ -565,5 +570,216 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.equal(r2.cached, true, 'second call should be cached:true at top level');
     assert.equal(r2.body.cached, true, 'second call body.cached should be true (envelope mirror)');
     assert.equal(calls, 1, `querySeries should run once for two cached calls; ran ${calls}`);
+  });
+});
+
+// =============================================================================
+// Plan 09.3-03 Wave 3 — Autarky-Calendar / 24h-Ring / Preis-Duration-Curve.
+//
+// These three cards (CONTEXT D-04 Gruppe B Tier-1) are simpler aggregations:
+//   - autarky-calendar: per-day self-sufficiency % over a date range
+//   - ring: day-only 24-hour PV + load + spot-price summary
+//   - duration: price-sorted-descending slot curve with 2 thresholds
+//
+// Series-key naming continues the project-canonical set from Wave 2:
+// load_power_w + grid_import_w (for autarky), pv_total_w + load_power_w
+// (for ring). Spot price comes from shared.market_price_slots — verified
+// column names: slot_start (TIMESTAMPTZ), price_kind ('market'), price_ct_kwh
+// (NUMERIC). The plan-doc assumed `ts_utc` + `price_ct_per_kwh`; the real
+// schema (009-shared-tables.sql:253-269) uses slot_start + price_ct_kwh.
+// =============================================================================
+
+describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () => {
+  // -------------------------------------------------------------------------
+  // AutarkyCalendar (W3-1 envelope shape, W3-2 values bounded)
+  // -------------------------------------------------------------------------
+  it('Test W3-1 (Autarky envelope shape): month view → xLabels span the range, matrix length = xLabels × yLabels', async () => {
+    // Flat 800W load, 300W grid_import for a 30-day month window.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = { load_power_w: 800, grid_import_w: 300 };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'autarky-calendar');
+    assert.ok(Array.isArray(b.xLabels), 'xLabels should be an array');
+    // 30-day rolling window → 28..31 dates with data
+    assert.ok(b.xLabels.length >= 28 && b.xLabels.length <= 31, `xLabels length 28-31 expected, got ${b.xLabels.length}`);
+    assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 7, `yLabels should be 7 day-of-week labels, got ${b.yLabels?.length}`);
+    assert.ok(Array.isArray(b.matrix), 'matrix should be an array');
+    // One cell per actual date (each day maps to exactly one dow row).
+    assert.equal(b.matrix.length, b.xLabels.length, `matrix.length (${b.matrix.length}) should equal xLabels.length (${b.xLabels.length})`);
+    assert.ok(b.domain && b.domain.min === 0 && b.domain.max === 100, 'domain should be {min:0,max:100}');
+  });
+
+  it('Test W3-2 (Autarky values bounded): every matrix cell v ∈ [0, 100]', async () => {
+    // grid_import > load on some rows to force the clamp at 0; grid_import = 0
+    // on others to push toward 100. Builder must clamp regardless of input.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        // load_power_w 1000W flat; grid_import_w alternates 0 / 1500 (1500 > 1000
+        // would yield negative autarky → must clamp to 0).
+        const w = key === 'load_power_w' ? 1000 : (key === 'grid_import_w' ? 1500 : 0);
+        all.push(...makeFlatSeriesRows({ start, end, key, watts: w }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    for (const cell of r.body.matrix) {
+      assert.ok(cell.v >= 0 && cell.v <= 100, `cell v out of range: ${cell.v}`);
+      assert.ok(typeof cell.x === 'string', 'cell.x should be a date string');
+      assert.ok(typeof cell.y === 'number' && cell.y >= 0 && cell.y <= 6, `cell.y should be 0..6, got ${cell.y}`);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Ring (W3-3 view restriction, W3-4 totals consistency)
+  // -------------------------------------------------------------------------
+  it('Test W3-3 (Ring view restriction): view=week → 400; view=day → 200 with hourly.length=24', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = { pv_total_w: 1200, load_power_w: 700 };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const wk = await ctx.historyVizApi.getRing({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(wk.status, 400, `expected 400 for view=week, got ${wk.status}`);
+    assert.match(wk.body.error || '', /view/i);
+    const day = await ctx.historyVizApi.getRing({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(day.status, 200, `expected 200 for view=day, got ${day.status} (body=${JSON.stringify(day.body).slice(0, 200)})`);
+    assert.equal(day.body.card, 'ring');
+    assert.ok(Array.isArray(day.body.hourly) && day.body.hourly.length === 24, `hourly should be 24 entries, got ${day.body.hourly?.length}`);
+    for (let h = 0; h < 24; h++) {
+      assert.equal(day.body.hourly[h].h, h, `hourly[${h}].h mismatch`);
+      assert.equal(typeof day.body.hourly[h].pvKwh, 'number');
+      assert.equal(typeof day.body.hourly[h].loadKwh, 'number');
+      assert.equal(typeof day.body.hourly[h].spotCt, 'number');
+    }
+  });
+
+  it('Test W3-4 (Ring totals consistency): totals.autarkyPct matches the per-hour deficit formula ± 1', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      // PV 1500W, load 1000W — PV exceeds load every hour → autarky should be 100.
+      const map = { pv_total_w: 1500, load_power_w: 1000 };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    // No market-price rows — spot prices come back as 0; ring still builds.
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries, dbQueryFn: async () => ({ rows: [] }) });
+    const r = await ctx.historyVizApi.getRing({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    assert.ok(b.totals && typeof b.totals.pvKwh === 'number', 'totals.pvKwh missing');
+    assert.ok(typeof b.totals.loadKwh === 'number', 'totals.loadKwh missing');
+    assert.ok(typeof b.totals.autarkyPct === 'number', 'totals.autarkyPct missing');
+    // Recompute autarkyPct from hourly deficit and compare ± 1.
+    const deficit = b.hourly.reduce((s, h) => s + Math.max(0, h.loadKwh - h.pvKwh), 0);
+    const expected = b.totals.loadKwh > 0
+      ? Math.round((b.totals.loadKwh - deficit) / b.totals.loadKwh * 100)
+      : 0;
+    assert.ok(
+      Math.abs(b.totals.autarkyPct - expected) <= 1,
+      `autarkyPct (${b.totals.autarkyPct}) should match deficit formula (${expected}) ± 1`
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Duration (W3-5 sorted DESC + rank, W3-6 thresholds source)
+  // -------------------------------------------------------------------------
+  it('Test W3-5 (Duration sorted): slots descending by priceCt, rank = index + 1', async () => {
+    // Return prices in scrambled order; builder MUST sort DESC and re-rank.
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getDuration MUST use parameterized SQL');
+      assert.match(sql, /market_price_slots/i, 'getDuration SQL should query market_price_slots');
+      return { rows: [
+        { price_ct_kwh: 8.2 }, { price_ct_kwh: 32.1 }, { price_ct_kwh: -2.4 },
+        { price_ct_kwh: 38.4 }, { price_ct_kwh: 5.0 }, { price_ct_kwh: 15.5 },
+      ] };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getDuration({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'duration');
+    assert.ok(Array.isArray(b.slots) && b.slots.length === 6, `expected 6 slots, got ${b.slots?.length}`);
+    // Descending
+    assert.ok(b.slots[0].priceCt >= b.slots[b.slots.length - 1].priceCt, 'slots should be DESC by priceCt');
+    for (let i = 1; i < b.slots.length; i++) {
+      assert.ok(b.slots[i - 1].priceCt >= b.slots[i].priceCt, `slots not DESC at index ${i}`);
+    }
+    // rank = index + 1
+    for (let i = 0; i < b.slots.length; i++) {
+      assert.equal(b.slots[i].rank, i + 1, `slot[${i}].rank should be ${i + 1}, got ${b.slots[i].rank}`);
+    }
+    assert.equal(b.slots[0].priceCt, 38.4, 'highest price should be first');
+  });
+
+  it('Test W3-6 (Duration thresholds + stats): thresholds resolved with cfg fallback, stats computed', async () => {
+    const dbQuery = async () => ({ rows: [
+      { price_ct_kwh: 3.0 }, { price_ct_kwh: 4.0 }, { price_ct_kwh: 14.0 },
+      { price_ct_kwh: 16.0 }, { price_ct_kwh: 8.0 },
+    ] });
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getDuration({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    assert.ok(b.thresholds, 'thresholds object missing');
+    // mockCtx cfg.optimizer has no chargeBelowCt/sellAboveCt → fallback {5, 12}.
+    assert.equal(b.thresholds.chargeBelowCt, 5, 'chargeBelowCt fallback should be 5');
+    assert.equal(b.thresholds.sellAboveCt, 12, 'sellAboveCt fallback should be 12');
+    assert.ok(b.stats, 'stats object missing');
+    assert.equal(typeof b.stats.meanCt, 'number', 'stats.meanCt should be a number');
+    // mean of [3,4,14,16,8] = 9.0
+    assert.ok(Math.abs(b.stats.meanCt - 9.0) < 0.01, `meanCt ~9.0 expected, got ${b.stats.meanCt}`);
+    // hoursBelowChargeThreshold: prices < 5 → {3, 4} → count 2
+    assert.equal(b.stats.hoursBelowChargeThreshold, 2, `hoursBelowChargeThreshold should be 2, got ${b.stats.hoursBelowChargeThreshold}`);
+    // hoursAboveSellThreshold: prices > 12 → {14, 16} → count 2
+    assert.equal(b.stats.hoursAboveSellThreshold, 2, `hoursAboveSellThreshold should be 2, got ${b.stats.hoursAboveSellThreshold}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cache (W3-7 — hit + per-(view,date) isolation across the 3 new cards)
+  // -------------------------------------------------------------------------
+  it('Test W3-7 (cache hit + isolation): each Wave-3 card caches; (view,date) keys never collide', async () => {
+    let durationCalls = 0;
+    const dbQuery = async () => { durationCalls++; return { rows: [{ price_ct_kwh: 10 }, { price_ct_kwh: 20 }] }; };
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: 600 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries, dbQueryFn: dbQuery });
+
+    // Duration cache hit on 2nd identical call.
+    const d1 = await ctx.historyVizApi.getDuration({ view: 'day', date: ANCHOR_DATE });
+    const d2 = await ctx.historyVizApi.getDuration({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(d1.cached, false, 'first duration call cached:false');
+    assert.equal(d2.cached, true, 'second duration call cached:true');
+    assert.equal(d2.body.cached, true, 'second duration body.cached:true');
+    assert.equal(durationCalls, 1, `duration db.query should run once across two cached calls; ran ${durationCalls}`);
+
+    // Isolation: (view=week) is a separate cache entry from (view=day).
+    const dWeek = await ctx.historyVizApi.getDuration({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(dWeek.cached, false, 'view=week is a distinct cache key — must not be a hit');
+    assert.equal(durationCalls, 2, 'view=week should trigger a fresh db.query');
+
+    // Autarky + Ring also cache on 2nd call.
+    const a1 = await ctx.historyVizApi.getAutarkyCalendar({ view: 'month', date: ANCHOR_DATE });
+    const a2 = await ctx.historyVizApi.getAutarkyCalendar({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(a1.cached, false);
+    assert.equal(a2.cached, true, 'autarky-calendar should cache on 2nd call');
+    const ri1 = await ctx.historyVizApi.getRing({ view: 'day', date: ANCHOR_DATE });
+    const ri2 = await ctx.historyVizApi.getRing({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(ri1.cached, false);
+    assert.equal(ri2.cached, true, 'ring should cache on 2nd call');
   });
 });

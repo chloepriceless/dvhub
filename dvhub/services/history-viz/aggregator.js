@@ -705,15 +705,273 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.3-03 Wave 3 — 3 LIVE builders (Autarky-Calendar / Ring / Duration).
+  // CONTEXT D-04 Gruppe B Tier-1 — simpler per-day / per-hour aggregations.
+  // Same 6-step template as Wave 2 (validate → guard → cache → fetch → build →
+  // putCached). Spot prices for ring + duration come from
+  // shared.market_price_slots: verified column names are slot_start
+  // (TIMESTAMPTZ), price_kind ('market'), price_ct_kwh (NUMERIC) — see
+  // db/migrations/009-shared-tables.sql:253-269. The plan-doc assumed
+  // `ts_utc` + `price_ct_per_kwh`; both are corrected to the real schema.
+  // -------------------------------------------------------------------------
+
+  function round1(n) {
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 10) / 10;
+  }
+
+  // Resolve the optimizer price thresholds (charge-below / sell-above ct/kWh).
+  // The project's config-model.js `optimizer` section (verified) carries
+  // enabled / allowGridCharge / batteryCapacityWh / maxChargeW / minSocPct etc.
+  // but NO chargeBelowCt / sellAboveCt keys — so the plan's documented fallback
+  // {chargeBelowCt: 5, sellAboveCt: 12} is used. A one-time pushLog records
+  // that the default was applied (so an operator can wire real keys later).
+  let __durationThresholdsDefaultLogged = false;
+  function resolveDurationThresholds() {
+    let opt = {};
+    try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
+    const charge = Number.isFinite(Number(opt.chargeBelowCt)) ? Number(opt.chargeBelowCt) : null;
+    const sell = Number.isFinite(Number(opt.sellAboveCt)) ? Number(opt.sellAboveCt) : null;
+    if (charge === null || sell === null) {
+      if (!__durationThresholdsDefaultLogged && typeof pushLog === 'function') {
+        pushLog('history_viz_duration_thresholds_default', {
+          reason: 'optimizer.chargeBelowCt/sellAboveCt not configured',
+          fallback: { chargeBelowCt: 5, sellAboveCt: 12 },
+        });
+        __durationThresholdsDefaultLogged = true;
+      }
+    }
+    return {
+      chargeBelowCt: charge !== null ? charge : 5,
+      sellAboveCt: sell !== null ? sell : 12,
+    };
+  }
+
+  async function getAutarkyCalendar({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `autarky-calendar:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['load_power_w', 'grid_import_w'],
+        start, end, maxResolution: 900,
+      });
+      // Bucket per UTC day, integrate W×Δt → kWh, compute
+      //   autarky% = (load - grid_import) / load * 100, clamped [0,100].
+      const dailyLoad = {};      // YYYY-MM-DD → kWh
+      const dailyGridImp = {};
+      for (const r of rows) {
+        const w = Number(r.value);
+        const dt = Number(r.resolution || 0);
+        if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+        const dk = new Date(r.ts).toISOString().slice(0, 10);
+        const kwh = (w * dt) / 3_600_000;
+        if (r.key === 'load_power_w') dailyLoad[dk] = (dailyLoad[dk] || 0) + kwh;
+        else if (r.key === 'grid_import_w') dailyGridImp[dk] = (dailyGridImp[dk] || 0) + kwh;
+      }
+      // Union of day keys so a day with grid-import but no load row still shows.
+      const dateSet = new Set([...Object.keys(dailyLoad), ...Object.keys(dailyGridImp)]);
+      const dates = [...dateSet].sort();
+      const matrix = [];
+      for (const d of dates) {
+        const load = dailyLoad[d] || 0;
+        const imp = dailyGridImp[d] || 0;
+        // T-09.3-13 — clamp regardless of row anomalies; load>0 guard prevents
+        // div-by-zero (a day with zero recorded load yields 0% autarky).
+        const pct = load > 0 ? Math.max(0, Math.min(100, ((load - imp) / load) * 100)) : 0;
+        // dow mapping: JS getUTCDay() is 0=Sunday..6=Saturday; the y-axis
+        // labels are Mo=0..So=6, so shift by +6 mod 7.
+        const jsDow = new Date(`${d}T12:00:00Z`).getUTCDay();
+        const dowIdx = (jsDow + 6) % 7;
+        matrix.push({ x: d, y: dowIdx, v: round1(pct) });
+      }
+      const payload = {
+        ok: true,
+        card: 'autarky-calendar',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        xLabels: dates,
+        yLabels: DOW_DE_SHORT.slice(),
+        matrix,
+        domain: { min: 0, max: 100, unit: '%' },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_autarky_calendar_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getRing({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view !== 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (ring is day-only)' }, cached: false };
+    }
+    const key = `ring:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['pv_total_w', 'load_power_w'],
+        start, end, maxResolution: 900,
+      });
+      // Per-hour kWh (integrate each row's W×Δt) and per-hour average spot price.
+      const pvKwhByHour = new Array(24).fill(0);
+      const loadKwhByHour = new Array(24).fill(0);
+      for (const r of rows) {
+        const w = Number(r.value);
+        const dt = Number(r.resolution || 0);
+        if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+        const h = new Date(r.ts).getUTCHours();
+        const kwh = (w * dt) / 3_600_000;
+        if (r.key === 'pv_total_w') pvKwhByHour[h] += kwh;
+        else if (r.key === 'load_power_w') loadKwhByHour[h] += kwh;
+      }
+      // Spot price per hour from shared.market_price_slots (parameterized).
+      // Aggregate to hour-of-day average; missing hours fall back to 0.
+      const spotByHour = new Array(24).fill(0);
+      try {
+        const priceSql = `
+          SELECT EXTRACT(HOUR FROM slot_start) AS h, AVG(price_ct_kwh) AS avg_ct
+          FROM shared.market_price_slots
+          WHERE price_kind = 'market'
+            AND slot_start >= $1::timestamptz
+            AND slot_start <  $2::timestamptz
+          GROUP BY 1
+          ORDER BY 1
+        `;
+        if (db && typeof db.query === 'function') {
+          const pr = await db.query(priceSql, [start, end]);
+          for (const row of (pr && Array.isArray(pr.rows) ? pr.rows : [])) {
+            const h = Math.trunc(Number(row.h));
+            if (h >= 0 && h < 24) spotByHour[h] = round3(Number(row.avg_ct) || 0);
+          }
+        }
+      } catch (priceErr) {
+        // Spot price is a non-critical overlay — log and continue with zeros.
+        if (typeof pushLog === 'function') pushLog('history_viz_ring_price_error', { error: priceErr.message, view, date });
+      }
+      const hourly = [];
+      for (let h = 0; h < 24; h++) {
+        hourly.push({
+          h,
+          pvKwh: round3(pvKwhByHour[h]),
+          loadKwh: round3(loadKwhByHour[h]),
+          spotCt: spotByHour[h],
+        });
+      }
+      const pvTotal = pvKwhByHour.reduce((s, x) => s + x, 0);
+      const loadTotal = loadKwhByHour.reduce((s, x) => s + x, 0);
+      // Autarky = share of load NOT met by grid. Per-hour deficit = max(0, load - pv).
+      const deficit = hourly.reduce((s, hr) => s + Math.max(0, hr.loadKwh - hr.pvKwh), 0);
+      const autarkyPct = loadTotal > 0
+        ? Math.max(0, Math.min(100, Math.round(((loadTotal - deficit) / loadTotal) * 100)))
+        : 0;
+      const payload = {
+        ok: true,
+        card: 'ring',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        hourly,
+        totals: {
+          pvKwh: round3(pvTotal),
+          loadKwh: round3(loadTotal),
+          autarkyPct,
+        },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_ring_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getDuration({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `duration:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // T-09.3-14 — parameterized; ORDER BY DESC server-side. The payload only
+      // ships {rank, priceCt} per slot; a year window (~8760 slots) stays well
+      // under 50KB (~8760 × ~25B ≈ 220KB raw → but per-rank objects are small;
+      // realistically week/month dominate the UI — year is gated by the 5-min
+      // cache which prevents storms, T-09.3-15).
+      const sql = `
+        SELECT price_ct_kwh
+        FROM shared.market_price_slots
+        WHERE price_kind = 'market'
+          AND slot_start >= $1::timestamptz
+          AND slot_start <  $2::timestamptz
+        ORDER BY price_ct_kwh DESC
+      `;
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      // Defensive re-sort DESC in case the adapter ignored ORDER BY.
+      const prices = rows
+        .map((r) => Number(r.price_ct_kwh))
+        .filter((n) => Number.isFinite(n))
+        .sort((a, b) => b - a);
+      const slots = prices.map((p, i) => ({ rank: i + 1, priceCt: round3(p) }));
+      const thresholds = resolveDurationThresholds();
+      // stats: meanCt + hour-equivalent counts above/below the thresholds.
+      // We count SLOTS (not hour-weighted) — documented choice: the duration
+      // curve x-axis is rank, and the consumer (Aurora card) labels the stat
+      // "N h" loosely; for view='day' a slot is 15min so the label is an
+      // upper-ish proxy. A future plan can hour-weight if precision matters.
+      const meanCt = prices.length > 0
+        ? round3(prices.reduce((s, p) => s + p, 0) / prices.length)
+        : 0;
+      const stats = {
+        meanCt,
+        hoursBelowChargeThreshold: prices.filter((p) => p < thresholds.chargeBelowCt).length,
+        hoursAboveSellThreshold: prices.filter((p) => p > thresholds.sellAboveCt).length,
+      };
+      const payload = {
+        ok: true,
+        card: 'duration',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        slots,
+        thresholds,
+        stats,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_duration_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
   const api = {
     getSankey,
     getHeatmap,
     getLedger,
     getDayProfile,
     getStack,
-    getAutarkyCalendar: makeStub('autarky-calendar'),
-    getRing: makeStub('ring'),
-    getDuration: makeStub('duration'),
+    getAutarkyCalendar,
+    getRing,
+    getDuration,
     getPheat: makeStub('pheat'),
     getSpaghetti: makeStub('spaghetti'),
     getCycles: makeStub('cycles'),

@@ -378,9 +378,238 @@
     }
   }
 
-  async function buildAutarkyCalendar(view, date)   { console.warn('history-viz: buildAutarkyCalendar not implemented'); }
-  async function buildRing(view, date)              { console.warn('history-viz: buildRing not implemented'); }
-  async function buildDuration(view, date)          { console.warn('history-viz: buildDuration not implemented'); }
+  // -------------------------------------------------------------------------
+  // Plan 09.3-03 Wave 3 — 3 LIVE frontend builders.
+  // Autarky-Calendar (Chart.js matrix, green-alpha cells), 24h-Ring (Chart.js
+  // doughnut), Preis-Duration-Curve (Chart.js line, sorted DESC, 2 threshold
+  // lines via flat-line datasets). Same canvas-swap pattern as Wave 2.
+  // -------------------------------------------------------------------------
+
+  async function buildAutarkyCalendar(view, date) {
+    const mount = document.getElementById('autarkCal');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('autarky-calendar', view, date);
+      if (historyVizCharts.autarkyCalendar) {
+        try { historyVizCharts.autarkyCalendar.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.autarkyCalendar;
+      }
+      const canvas = mountCanvas(mount, 'autarkCalCanvas');
+      const xLabels = data.xLabels || [];
+      const yLabels = data.yLabels || [];
+      const matrix = data.matrix || [];
+      historyVizCharts.autarkyCalendar = new Chart(canvas.getContext('2d'), {
+        type: 'matrix',
+        data: { datasets: [{
+          label: 'Autarkie %',
+          data: matrix,
+          backgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const v = cell && Number.isFinite(cell.v) ? cell.v : 0;
+            // Single-hue green alpha scale 0..100% → 0.05..1.0 (RESEARCH §651).
+            return cssVarAlpha('--green', Math.max(0.05, Math.min(1, v / 100)), '#3ee0a0');
+          },
+          borderWidth: 0,
+          // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout.
+          width(c) {
+            const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
+            return Math.max(1, (w / Math.max(1, xLabels.length)) - 1);
+          },
+          height(c) {
+            const h = (c.chart && c.chart.chartArea && c.chart.chartArea.height) || 0;
+            return Math.max(1, (h / Math.max(1, yLabels.length)) - 1);
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title() { return ''; },
+              label(c) {
+                const d = c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                const dow = yLabels[d.y] || '';
+                return `${d.x} (${dow}): ${d.v}%`;
+              },
+            } },
+          },
+          scales: {
+            x: { type: 'category', labels: xLabels, ticks: { autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+            y: { type: 'category', labels: yLabels, offset: true, reverse: true, grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.autarkyCalendar && historyVizCharts.autarkyCalendar.resize && historyVizCharts.autarkyCalendar.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildAutarkyCalendar failed', e);
+      showFriendlyError(mount, 'Autarkie-Kalender');
+    }
+  }
+
+  async function buildRing(view, date) {
+    const mount = document.getElementById('ringSvg');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('ring', view, date);
+      if (historyVizCharts.ring) {
+        try { historyVizCharts.ring.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.ring;
+      }
+      const canvas = mountCanvas(mount, 'ringCanvas');
+      const hourly = Array.isArray(data.hourly) ? data.hourly : [];
+      const hourLabels = hourly.map((h) => String(h.h).padStart(2, '0'));
+      // 3 nested doughnut datasets — Chart.js renders multiple datasets as
+      // concentric rings. Outer = PV, middle = Hauslast, inner = Spotpreis-Band.
+      // Each ring is 24 segments (one per hour). Alpha varies by magnitude so
+      // the "Rundlauf" reads as a 24h clock.
+      const maxPv = Math.max(0.001, ...hourly.map((h) => h.pvKwh || 0));
+      const maxLoad = Math.max(0.001, ...hourly.map((h) => h.loadKwh || 0));
+      const maxSpot = Math.max(0.001, ...hourly.map((h) => Math.abs(h.spotCt || 0)));
+      const pvColors = hourly.map((h) => cssVarAlpha('--yellow', Math.max(0.12, Math.min(1, (h.pvKwh || 0) / maxPv)), '#ffd421'));
+      const loadColors = hourly.map((h) => cssVarAlpha('--cyan', Math.max(0.12, Math.min(1, (h.loadKwh || 0) / maxLoad)), '#34dbff'));
+      const spotColors = hourly.map((h) => cssVarAlpha('--violet', Math.max(0.12, Math.min(1, Math.abs(h.spotCt || 0) / maxSpot)), '#a78bfa'));
+      const ones = new Array(hourly.length || 24).fill(1);
+      historyVizCharts.ring = new Chart(canvas.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+          labels: hourLabels,
+          datasets: [
+            { label: 'PV-Erzeugung', data: ones.slice(), backgroundColor: pvColors, borderWidth: 0, weight: 1 },
+            { label: 'Hauslast', data: ones.slice(), backgroundColor: loadColors, borderWidth: 0, weight: 1 },
+            { label: 'Spotpreis-Band', data: ones.slice(), backgroundColor: spotColors, borderWidth: 0, weight: 1 },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          cutout: '42%',
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              label(c) {
+                const hr = hourly[c.dataIndex];
+                if (!hr) return '';
+                if (c.datasetIndex === 0) return `${hourLabels[c.dataIndex]} Uhr · PV ${(hr.pvKwh || 0).toFixed(2)} kWh`;
+                if (c.datasetIndex === 1) return `${hourLabels[c.dataIndex]} Uhr · Last ${(hr.loadKwh || 0).toFixed(2)} kWh`;
+                return `${hourLabels[c.dataIndex]} Uhr · Spot ${(hr.spotCt || 0).toFixed(1)} ct`;
+              },
+            } },
+          },
+        },
+      });
+      // Center-label DOM update — textContent only (T-09.3-16 XSS guard).
+      const totals = data.totals || {};
+      const pctEl = document.getElementById('ringPctValue');
+      if (pctEl) pctEl.textContent = `${Number(totals.autarkyPct || 0)} %`;
+      const totEl = document.getElementById('ringTotalsLabel');
+      if (totEl) {
+        totEl.textContent = `${Number(totals.pvKwh || 0).toFixed(1)} kWh PV · ${Number(totals.loadKwh || 0).toFixed(1)} kWh Last`;
+      }
+      setTimeout(() => {
+        try { historyVizCharts.ring && historyVizCharts.ring.resize && historyVizCharts.ring.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildRing failed', e);
+      showFriendlyError(mount, '24h-Ring');
+    }
+  }
+
+  async function buildDuration(view, date) {
+    const mount = document.getElementById('vDuration');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('duration', view, date);
+      if (historyVizCharts.duration) {
+        try { historyVizCharts.duration.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.duration;
+      }
+      const canvas = mountCanvas(mount, 'vDurationCanvas');
+      const slots = Array.isArray(data.slots) ? data.slots : [];
+      const thresholds = data.thresholds || { chargeBelowCt: 5, sellAboveCt: 12 };
+      const curve = slots.map((s) => ({ x: s.rank, y: s.priceCt }));
+      const n = slots.length || 1;
+      // 2 horizontal threshold lines as flat 2-point datasets. The
+      // chartjs-plugin-annotation asset is self-hosted but NOT script-tagged
+      // into history.html — the flat-dataset fallback avoids a new asset load.
+      const chargeLine = [{ x: 1, y: thresholds.chargeBelowCt }, { x: n, y: thresholds.chargeBelowCt }];
+      const sellLine = [{ x: 1, y: thresholds.sellAboveCt }, { x: n, y: thresholds.sellAboveCt }];
+      historyVizCharts.duration = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              label: 'Spot ct/kWh',
+              data: curve,
+              borderColor: cssVar('--cyan', '#34dbff'),
+              backgroundColor: cssVarAlpha('--cyan', 0.16, '#34dbff'),
+              fill: true,
+              tension: 0,
+              borderWidth: 2,
+              pointRadius: 0,
+            },
+            {
+              label: 'Lade-Schwelle',
+              data: chargeLine,
+              borderColor: cssVar('--green', '#3ee0a0'),
+              backgroundColor: 'transparent',
+              borderWidth: 1.5,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              fill: false,
+            },
+            {
+              label: 'Verkaufs-Schwelle',
+              data: sellLine,
+              borderColor: cssVar('--yellow', '#ffd421'),
+              backgroundColor: 'transparent',
+              borderWidth: 1.5,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          parsing: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {
+              type: 'linear',
+              title: { display: true, text: 'Rang (teuer → billig)' },
+              grid: { display: false },
+              ticks: { autoSkip: true, maxRotation: 0 },
+            },
+            y: { title: { display: true, text: 'ct/kWh' }, grid: { color: 'rgba(141,180,221,0.1)' } },
+          },
+        },
+      });
+      // Stats footer — textContent only (T-09.3-16 XSS guard).
+      const stats = data.stats || {};
+      const statsEl = document.getElementById('vDurationStats');
+      if (statsEl) {
+        const mean = Number(stats.meanCt || 0).toFixed(1);
+        statsEl.textContent =
+          `Ø ${mean} ct · ${Number(stats.hoursBelowChargeThreshold || 0)} h < ${Number(thresholds.chargeBelowCt)} ct · `
+          + `${Number(stats.hoursAboveSellThreshold || 0)} h > ${Number(thresholds.sellAboveCt)} ct`;
+      }
+      setTimeout(() => {
+        try { historyVizCharts.duration && historyVizCharts.duration.resize && historyVizCharts.duration.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildDuration failed', e);
+      showFriendlyError(mount, 'Preis-Duration');
+    }
+  }
+
   async function buildPheat(view, date)             { console.warn('history-viz: buildPheat not implemented'); }
   async function buildSpaghetti(view, date)         { console.warn('history-viz: buildSpaghetti not implemented'); }
   async function buildCycles(view, date)            { console.warn('history-viz: buildCycles not implemented'); }
