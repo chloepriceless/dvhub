@@ -89,6 +89,184 @@ export function createHistoryVizAggregator(ctx) {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.3-02 Wave 2 helpers — shared across all 5 builders.
+  // -------------------------------------------------------------------------
+
+  // resolveRange(view, anchorDate)
+  //
+  // anchorDate: YYYY-MM-DD. Returns ISO start/end in UTC, inclusive-start,
+  // exclusive-end (matches telemetryStore.querySeries `ts_utc >= start AND
+  // < end` semantics). For 'month' / 'year' we use rolling fixed-day windows
+  // (30 / 365 days) — calendar-aligned variants land in a future plan.
+  function resolveRange(view, anchorDate) {
+    const anchor = new Date(`${anchorDate}T00:00:00Z`);
+    const DAY_MS = 86_400_000;
+    let start;
+    let end;
+    if (view === 'day') {
+      start = anchor;
+      end = new Date(anchor.getTime() + DAY_MS);
+    } else if (view === 'week') {
+      // 7-day window ending at the anchor day (inclusive)
+      start = new Date(anchor.getTime() - 6 * DAY_MS);
+      end = new Date(anchor.getTime() + DAY_MS);
+    } else if (view === 'month') {
+      // 30-day rolling window ending at the anchor day (inclusive)
+      start = new Date(anchor.getTime() - 29 * DAY_MS);
+      end = new Date(anchor.getTime() + DAY_MS);
+    } else if (view === 'year') {
+      // 12-month window ending at the anchor month
+      const y = anchor.getUTCFullYear();
+      const m = anchor.getUTCMonth(); // 0..11
+      // 11 calendar months before the anchor month + the anchor month itself = 12 months
+      start = new Date(Date.UTC(y, m - 11, 1));
+      end = new Date(Date.UTC(y, m + 1, 1));
+    } else {
+      start = anchor;
+      end = new Date(anchor.getTime() + DAY_MS);
+    }
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+
+  function round3(n) {
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 1000) / 1000;
+  }
+
+  // Sum (W × Δt_seconds / 3600 / 1000) → kWh across all rows matching `key`.
+  // Treats gaps as zero (no row → no energy contribution); uses each row's
+  // `resolution` field as Δt (capped at 900s by querySeries). Mirrors the
+  // existing energy-integration idiom from telemetry-store-pg.js:662 closely
+  // enough that totals stay consistent with the historyApi summary tile.
+  function sumSeriesKwh(rows, key) {
+    let kwh = 0;
+    for (const r of rows) {
+      if (r.key !== key) continue;
+      const w = Number(r.value);
+      const dt = Number(r.resolution || 0);
+      if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+      kwh += (w * dt) / 3_600_000;
+    }
+    return kwh;
+  }
+
+  // Bucket rows of `key` by hour-of-day (UTC). Returns Array<{h:0..23, w:avgPower}>.
+  // Average power, not energy — DayProfile renders W on the y-axis.
+  function bucketSeriesByHour(rows, key) {
+    const sums = new Array(24).fill(0);
+    const counts = new Array(24).fill(0);
+    for (const r of rows) {
+      if (r.key !== key) continue;
+      const w = Number(r.value);
+      if (!Number.isFinite(w)) continue;
+      const d = new Date(r.ts);
+      const h = d.getUTCHours();
+      sums[h] += w;
+      counts[h] += 1;
+    }
+    const out = [];
+    for (let h = 0; h < 24; h++) {
+      out.push({ h, w: counts[h] > 0 ? Math.round(sums[h] / counts[h]) : 0 });
+    }
+    return out;
+  }
+
+  // Bucket rows of `key` into N kWh-per-bucket cells, where N is determined by
+  // view (24 = hours, 7 = day-of-week, 30 = day-of-month, 12 = month-of-year).
+  // Each row contributes (W × dt/3_600_000) kWh into the bucket selected by ts.
+  function bucketSeriesKwh(rows, key, view, rangeStart) {
+    const startMs = Date.parse(rangeStart);
+    let buckets;
+    let bucketOf;
+    if (view === 'day') {
+      buckets = new Array(24).fill(0);
+      bucketOf = (ts) => new Date(ts).getUTCHours();
+    } else if (view === 'week') {
+      buckets = new Array(7).fill(0);
+      bucketOf = (ts) => {
+        const days = Math.floor((Date.parse(ts) - startMs) / 86_400_000);
+        return Math.max(0, Math.min(6, days));
+      };
+    } else if (view === 'month') {
+      // 30-day rolling window → 30 buckets (one per day from rangeStart)
+      buckets = new Array(30).fill(0);
+      bucketOf = (ts) => {
+        const days = Math.floor((Date.parse(ts) - startMs) / 86_400_000);
+        return Math.max(0, Math.min(29, days));
+      };
+    } else if (view === 'year') {
+      buckets = new Array(12).fill(0);
+      const startDate = new Date(rangeStart);
+      const startY = startDate.getUTCFullYear();
+      const startM = startDate.getUTCMonth();
+      bucketOf = (ts) => {
+        const d = new Date(ts);
+        const idx = (d.getUTCFullYear() - startY) * 12 + (d.getUTCMonth() - startM);
+        return Math.max(0, Math.min(11, idx));
+      };
+    } else {
+      buckets = [];
+      bucketOf = () => 0;
+    }
+    for (const r of rows) {
+      if (r.key !== key) continue;
+      const w = Number(r.value);
+      const dt = Number(r.resolution || 0);
+      if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+      const idx = bucketOf(r.ts);
+      if (idx < 0 || idx >= buckets.length) continue;
+      buckets[idx] += (w * dt) / 3_600_000;
+    }
+    return buckets.map(round3);
+  }
+
+  // German short labels per view (matches mockup expectations from D-15).
+  const DOW_DE_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+  const MONTH_DE_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+
+  function bucketLabelsForView(view, rangeStart) {
+    if (view === 'day') {
+      return Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+    }
+    if (view === 'week') {
+      // Map calendar day-of-week to German short label, starting from rangeStart.
+      const out = [];
+      const startMs = Date.parse(rangeStart);
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(startMs + i * 86_400_000);
+        // getUTCDay: 0=Sunday..6=Saturday; map to Mo=0..So=6
+        const dow = (d.getUTCDay() + 6) % 7;
+        out.push(DOW_DE_SHORT[dow]);
+      }
+      return out;
+    }
+    if (view === 'month') {
+      // Day-of-month labels DD.MM. for each of 30 days starting at rangeStart.
+      const out = [];
+      const startMs = Date.parse(rangeStart);
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(startMs + i * 86_400_000);
+        out.push(`${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.`);
+      }
+      return out;
+    }
+    if (view === 'year') {
+      const out = [];
+      const sd = new Date(rangeStart);
+      const startY = sd.getUTCFullYear();
+      const startM = sd.getUTCMonth();
+      for (let i = 0; i < 12; i++) {
+        const m = (startM + i) % 12;
+        out.push(MONTH_DE_SHORT[m]);
+      }
+      return out;
+    }
+    return [];
+  }
+
+  // -------------------------------------------------------------------------
+
   function validate({ view, date }) {
     if (!VALID_VIEWS.has(view)) {
       return { status: 400, body: { ok: false, error: 'invalid view' }, cached: false };
@@ -156,12 +334,383 @@ export function createHistoryVizAggregator(ctx) {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.3-02 Wave 2 — 5 LIVE builders.
+  // Pattern (per the plan template):
+  //   1. validate() returns 400-envelope on bad input → NEVER cached
+  //   2. view-specific guard (e.g. heatmap rejects 'day', ledger rejects ≠'day')
+  //   3. cache key = `${card}:${view}:${date}`; HIT returns 200 with body.cached=true
+  //   4. resolveRange() → telemetryStore.querySeries (or db.query for ledger)
+  //   5. Build payload (typed envelope), putCached(key, payload), return 200
+  //   6. try/catch → pushLog + 500 envelope (never cached)
+  // -------------------------------------------------------------------------
+
+  async function getSankey({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `sankey:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: [
+          'pv_total_w', 'grid_import_w', 'grid_export_w',
+          'load_power_w', 'battery_charge_w', 'battery_discharge_w',
+        ],
+        start, end, maxResolution: 900,
+      });
+      const pvKwh = sumSeriesKwh(rows, 'pv_total_w');
+      const gridImportKwh = sumSeriesKwh(rows, 'grid_import_w');
+      const gridExportKwh = sumSeriesKwh(rows, 'grid_export_w');
+      const batteryChargeKwh = sumSeriesKwh(rows, 'battery_charge_w');
+      const batteryDischargeKwh = sumSeriesKwh(rows, 'battery_discharge_w');
+      // PV-direct = pv generation that didn't go to grid-export or battery-charge
+      // → that's the share of PV consumed by the load directly.
+      const pvToEigen = Math.max(0, pvKwh - gridExportKwh - batteryChargeKwh);
+      const eigenverbrauchKwh = pvToEigen + batteryDischargeKwh + gridImportKwh;
+      // Conservation: build flows so that
+      //   sum(from PV) = pvToEigen + batteryChargeKwh + gridExportKwh = pvKwh (by construction)
+      //   sum(to Eigenverbrauch) = pvToEigen + batteryDischargeKwh + gridImportKwh = eigenverbrauchKwh
+      const flows = [
+        { from: 'PV',            to: 'Eigenverbrauch', flow: round3(pvToEigen) },
+        { from: 'PV',            to: 'Akku-Laden',     flow: round3(batteryChargeKwh) },
+        { from: 'PV',            to: 'Einspeisung',    flow: round3(gridExportKwh) },
+        { from: 'Akku-Entladen', to: 'Eigenverbrauch', flow: round3(batteryDischargeKwh) },
+        { from: 'Netzbezug',     to: 'Eigenverbrauch', flow: round3(gridImportKwh) },
+      ].filter(f => f.flow > 0.01);
+      const payload = {
+        ok: true,
+        card: 'sankey',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        flows,
+        totals: {
+          pvKwh: round3(pvKwh),
+          eigenverbrauchKwh: round3(eigenverbrauchKwh),
+          einspeisungKwh: round3(gridExportKwh),
+        },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_sankey_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getDayProfile({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view !== 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (day-profile is day-only)' }, cached: false };
+    }
+    const key = `day-profile:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['pv_total_w', 'load_power_w'],
+        start, end, maxResolution: 900,
+      });
+      const pv = bucketSeriesByHour(rows, 'pv_total_w');
+      const load = bucketSeriesByHour(rows, 'load_power_w');
+      const payload = {
+        ok: true,
+        card: 'day-profile',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        hours: 24,
+        pv,
+        load,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_day_profile_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getStack({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `stack:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w'],
+        start, end, maxResolution: 900,
+      });
+      // PV-direct ≈ min(pv, load). The plan notes "or fallback: min(pv_total_w,
+      // load_power_w)" — we always fall back since `pv_direct_w` is not in the
+      // canonical series catalogue (verified against telemetry-store-pg.js:24).
+      // Compute per-row min, then bucket-integrate as kWh.
+      const pvDirectRows = [];
+      const byTs = new Map();
+      for (const r of rows) {
+        const t = r.ts;
+        if (!byTs.has(t)) byTs.set(t, {});
+        byTs.get(t)[r.key] = r;
+      }
+      for (const [ts, group] of byTs.entries()) {
+        const pvR = group.pv_total_w;
+        const loadR = group.load_power_w;
+        if (!pvR || !loadR) continue;
+        const minW = Math.min(Number(pvR.value) || 0, Number(loadR.value) || 0);
+        pvDirectRows.push({
+          key: 'pv_direct_w',
+          ts,
+          value: minW,
+          resolution: pvR.resolution,
+          unit: 'W',
+        });
+      }
+      const allRows = rows.concat(pvDirectRows);
+      const pvDirectKwh = bucketSeriesKwh(allRows, 'pv_direct_w', view, start);
+      const batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
+      const gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
+      const loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
+      const bucketLabels = bucketLabelsForView(view, start);
+      const buckets = bucketLabels.length;
+      const payload = {
+        ok: true,
+        card: 'stack',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        buckets,
+        bucketLabels,
+        pvDirectKwh,
+        batteryDischargeKwh,
+        gridImportKwh,
+        loadKwh,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_stack_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getHeatmap({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view === 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (heatmap is week|month|year only)' }, cached: false };
+    }
+    const key = `heatmap:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['pv_total_w'],
+        start, end, maxResolution: 900,
+      });
+      let xLabels;
+      let yLabels;
+      let matrix;
+      let domainMax = 0;
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      if (view === 'week' || view === 'month') {
+        // x = day (YYYY-MM-DD), y = hour 0..23, v = PV-kWh integrated.
+        const days = Math.round((endMs - startMs) / 86_400_000);
+        xLabels = [];
+        for (let i = 0; i < days; i++) {
+          const d = new Date(startMs + i * 86_400_000);
+          xLabels.push(d.toISOString().slice(0, 10));
+        }
+        yLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+        // Energy buckets: cell[xLabel][hour] kWh
+        const cells = new Map(); // key=`${xLabel}:${y}` → kWh
+        for (const r of rows) {
+          if (r.key !== 'pv_total_w') continue;
+          const w = Number(r.value);
+          const dt = Number(r.resolution || 0);
+          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+          const ts = new Date(r.ts);
+          const xLabel = ts.toISOString().slice(0, 10);
+          const y = ts.getUTCHours();
+          const k = `${xLabel}:${y}`;
+          const kwh = (w * dt) / 3_600_000;
+          cells.set(k, (cells.get(k) || 0) + kwh);
+        }
+        matrix = [];
+        for (const x of xLabels) {
+          for (let y = 0; y < 24; y++) {
+            const v = round3(cells.get(`${x}:${y}`) || 0);
+            if (v > domainMax) domainMax = v;
+            matrix.push({ x, y, v });
+          }
+        }
+      } else { // view === 'year'
+        // x = month label (Jan..Dez), y = day-of-month 1..31, v = daily PV-kWh.
+        // Note: cells outside actual month length stay 0; client treats as empty.
+        xLabels = bucketLabelsForView('year', start);
+        yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+        const cells = new Map(); // key=`${monthIdx}:${day}` → kWh
+        const startDate = new Date(start);
+        const startY = startDate.getUTCFullYear();
+        const startM = startDate.getUTCMonth();
+        for (const r of rows) {
+          if (r.key !== 'pv_total_w') continue;
+          const w = Number(r.value);
+          const dt = Number(r.resolution || 0);
+          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+          const ts = new Date(r.ts);
+          const monthIdx = (ts.getUTCFullYear() - startY) * 12 + (ts.getUTCMonth() - startM);
+          if (monthIdx < 0 || monthIdx > 11) continue;
+          const day = ts.getUTCDate();
+          const k = `${monthIdx}:${day}`;
+          const kwh = (w * dt) / 3_600_000;
+          cells.set(k, (cells.get(k) || 0) + kwh);
+        }
+        matrix = [];
+        for (let m = 0; m < 12; m++) {
+          const xLabel = xLabels[m];
+          for (let d = 1; d <= 31; d++) {
+            const v = round3(cells.get(`${m}:${d}`) || 0);
+            if (v > domainMax) domainMax = v;
+            matrix.push({ x: xLabel, y: d, v });
+          }
+        }
+      }
+      const payload = {
+        ok: true,
+        card: 'heatmap',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        xLabels,
+        yLabels,
+        matrix,
+        domain: { min: 0, max: round3(domainMax), unit: 'kWh' },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_heatmap_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getLedger({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view !== 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (ledger is day-only)' }, cached: false };
+    }
+    const key = `ledger:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // SQL — opt.plan_slots holds per-slot import/export Wh + expected_profit_eur;
+      // shared.market_price_slots holds price_ct_kwh per slot. JOIN by slot_start.
+      // Plan-doc column-name verification (against
+      // dvhub/db/migrations/011-opt-tables.sql:127-146 and 009-shared-tables.sql:253-272):
+      //   opt.plan_slots:        slot_start, grid_import_wh, grid_export_wh,
+      //                          battery_charge_grid_wh, battery_charge_pv_wh,
+      //                          battery_discharge_load_wh, battery_discharge_export_wh,
+      //                          expected_profit_eur
+      //   shared.market_price_slots: slot_start, price_ct_kwh, price_kind='market'
+      // No `action`/`kwh`/`price_ct`/`revenue_eur` columns exist — they are
+      // DERIVED below: action by sign of net flow, kwh by max(import, export)/1000,
+      // priceCt by joined market price, revenueEur by expected_profit_eur (or 0).
+      //
+      // Test shape (W2-7) supplies a flat row shape with these columns. The
+      // production SQL below is the authoritative path; the test double bypasses
+      // it and feeds rows directly through `dbQueryFn`.
+      const sql = `
+        SELECT
+          ps.slot_start,
+          ps.grid_import_wh,
+          ps.grid_export_wh,
+          ps.battery_charge_grid_wh,
+          ps.battery_charge_pv_wh,
+          ps.battery_discharge_load_wh,
+          ps.battery_discharge_export_wh,
+          ps.expected_profit_eur,
+          mps.price_ct_kwh
+        FROM opt.plan_slots ps
+        LEFT JOIN shared.market_price_slots mps
+          ON mps.slot_start = ps.slot_start
+         AND mps.price_kind = 'market'
+        WHERE ps.slot_start >= $1::timestamptz
+          AND ps.slot_start <  $2::timestamptz
+        ORDER BY ps.slot_start DESC
+        LIMIT 12
+      `;
+      const result = await db.query(sql, [start, end]);
+      const allRows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      // SQL LIMIT 12 is the production cap, but the mock adapter (and any future
+      // adapter that ignores LIMIT) might return more — enforce in JS so the
+      // envelope contract holds regardless of the data source's adherence.
+      // Also re-sort DESC defensively in case the SQL ORDER was bypassed.
+      const sortedRows = allRows
+        .slice()
+        .sort((a, b) => {
+          const at = typeof a.slot_start === 'string' ? a.slot_start : new Date(a.slot_start).toISOString();
+          const bt = typeof b.slot_start === 'string' ? b.slot_start : new Date(b.slot_start).toISOString();
+          return bt.localeCompare(at);
+        })
+        .slice(0, 12);
+      const slots = sortedRows.map((row) => {
+        const importWh = Number(row.grid_import_wh) || 0;
+        const exportWh = Number(row.grid_export_wh) || 0;
+        // Action heuristic: net positive export → 'sell', net positive import → 'buy',
+        // both ~0 → 'hold' (curtailment slot or pure self-consumption).
+        let action = 'hold';
+        if (exportWh > importWh && exportWh > 0) action = 'sell';
+        else if (importWh > exportWh && importWh > 0) action = 'buy';
+        const kwh = Math.max(importWh, exportWh) / 1000;
+        const priceCt = Number(row.price_ct_kwh) || 0;
+        const revenueEur = Number(row.expected_profit_eur) || 0;
+        return {
+          ts: typeof row.slot_start === 'string' ? row.slot_start : new Date(row.slot_start).toISOString(),
+          action,
+          kwh: round3(kwh),
+          priceCt: round3(priceCt),
+          revenueEur: round3(revenueEur),
+        };
+      });
+      const totalEur = round3(slots.reduce((s, x) => s + x.revenueEur, 0));
+      const payload = {
+        ok: true,
+        card: 'ledger',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        slots,
+        totalEur,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_ledger_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
   const api = {
-    getSankey: makeStub('sankey'),
-    getHeatmap: makeStub('heatmap'),
-    getLedger: makeStub('ledger'),
-    getDayProfile: makeStub('day-profile'),
-    getStack: makeStub('stack'),
+    getSankey,
+    getHeatmap,
+    getLedger,
+    getDayProfile,
+    getStack,
     getAutarkyCalendar: makeStub('autarky-calendar'),
     getRing: makeStub('ring'),
     getDuration: makeStub('duration'),

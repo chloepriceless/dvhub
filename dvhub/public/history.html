@@ -296,6 +296,77 @@
           </div>
         </div>
       </div>
+
+      <!-- ═══ Phase 09.3-02 Wave 2 — Sankey + Tag-Profil + Stundenprofil-Stack + PV-Heatmap + Spot-Ledger ═══
+           Each section uses [data-show-view] (D-15) so history-viz.js can
+           toggle .viz-hidden-by-view per active view. data-viz-card pairs each
+           section with the buildDispatch slug (D-14). NO inline style attrs
+           anywhere — all geometry/color is class-driven (D-22). -->
+
+      <!-- Sankey · Energiefluss (alle Views) -->
+      <section class="card chart-panel" data-show-view="day week month year" data-viz-card="sankey">
+        <div class="card-head">
+          <div>
+            <span class="card-title"><span class="dot dot-violet"></span>Energiefluss · Sankey</span>
+            <p class="card-sub">Wohin geht die kWh — Quellen → Senken</p>
+          </div>
+        </div>
+        <div class="sankey-wrap viz-chart-shell"><div id="sankeySvg"></div></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-yellow"></span>PV-Erzeugung</span>
+          <span class="l"><span class="sw sw-green"></span>Eigenverbrauch</span>
+          <span class="l"><span class="sw sw-violet"></span>Einspeisung</span>
+        </div>
+      </section>
+
+      <!-- Tag-Stunden-Profil + Spot-Ledger (day only) -->
+      <section class="grid-2" data-show-view="day">
+        <article class="card chart-panel" data-show-view="day" data-viz-card="day-profile">
+          <div class="card-head"><div>
+            <span class="card-title"><span class="dot dot-yellow"></span>Stunden-Profil</span>
+            <p class="card-sub">PV · Verbrauch · 24 h</p>
+          </div></div>
+          <div id="dayProfileMount" class="viz-chart-shell"></div>
+          <div class="viz-foot">
+            <span class="l"><span class="sw sw-yellow"></span>PV-Erzeugung</span>
+            <span class="l"><span class="sw sw-cyan"></span>Hauslast</span>
+          </div>
+        </article>
+        <article class="card chart-panel" data-show-view="day" data-viz-card="ledger">
+          <div class="card-head">
+            <span class="card-title"><span class="dot dot-green"></span>Spot-Ledger · letzte 12</span>
+          </div>
+          <table class="data-table ledger-tbl">
+            <thead><tr><th>Zeit</th><th>Aktion</th><th class="num">kWh</th><th class="num">ct/kWh</th><th class="num">€</th></tr></thead>
+            <tbody id="ledgerBody"></tbody>
+          </table>
+        </article>
+      </section>
+
+      <!-- Stundenprofil-Stack (alle Views) -->
+      <section class="card chart-panel" data-show-view="day week month year" data-viz-card="stack">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-yellow"></span>Stundenprofil · Stack</span>
+          <p class="card-sub">PV-Direkt + Akku + Netz · Last als Linie</p>
+        </div></div>
+        <div id="vStack" class="viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-yellow"></span>PV direkt</span>
+          <span class="l"><span class="sw sw-green"></span>Akku-Entladung</span>
+          <span class="l"><span class="sw sw-pink"></span>Netzbezug</span>
+          <span class="l"><span class="sw sw-cyan"></span>Hauslast</span>
+        </div>
+      </section>
+
+      <!-- PV-Heatmap (week/month/year only) -->
+      <section class="card chart-panel" data-show-view="week month year" data-viz-card="heatmap">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-yellow"></span>PV-Heatmap · Stunde × Tag</span>
+          <p class="card-sub">PV-Erzeugung kWh pro Stunde</p>
+        </div></div>
+        <div id="hm" class="heatmap viz-chart-shell"></div>
+      </section>
+
     </main>
   </div>
 

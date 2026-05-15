@@ -138,9 +138,16 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(typeof api.bustCache, 'function', 'expected api.bustCache to be a function');
   });
 
-  it('Test 1 (envelope shape): each of 14 stubs returns a 501 envelope with required keys', async () => {
+  // Wave 2 (Plan 09.3-02) lit up 5 live builders (sankey, day-profile, stack,
+  // heatmap, ledger). The remaining 9 stay 501 stubs until Waves 3-5. Test 1
+  // asserts the stub envelope shape ONLY for the still-stubbed cards; the live
+  // builders have dedicated contract tests in the Wave 2 suite below.
+  const STUB_SLUGS = SLUGS.filter((s) => !['sankey', 'day-profile', 'stack', 'heatmap', 'ledger'].includes(s));
+
+  it('Test 1 (envelope shape): each of 9 remaining stubs returns a 501 envelope with required keys', async () => {
     const api = createHistoryVizAggregator(mockCtx());
-    for (const slug of SLUGS) {
+    assert.equal(STUB_SLUGS.length, 9, `expected 9 remaining stubs after Wave 2, got ${STUB_SLUGS.length}`);
+    for (const slug of STUB_SLUGS) {
       const result = await api[SLUG_TO_METHOD[slug]]({ view: 'day', date: '2026-05-15' });
       assert.equal(result.status, 501, `${slug} expected status 501, got ${result.status}`);
       const b = result.body;
@@ -186,19 +193,25 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(api.__test_internals.cache.size, 0, 'invalid input must NOT populate cache');
   });
 
-  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → 501 stub; REMOTE IP without Bearer → 401/503', async () => {
+  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → stub; REMOTE IP without Bearer → 401/503', async () => {
+    // Use a still-stubbed card (`ring`) so the auth-gate posture is exercised
+    // without depending on a wired telemetryStore. Wave 2 lit `sankey` up so
+    // the bare mockCtx (no telemetryStore) would 500 with a builder error
+    // instead of returning the documented 501 stub — that's a separate code
+    // path. The LAN-bypass invariant only cares about the auth gate sitting
+    // BEFORE the dispatcher, which is what this test asserts.
     const ctx = mockCtx();
-    const lanReq = makeReq('/api/history/viz/sankey?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
+    const lanReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
     const lanRes = await dispatch(ctx, lanReq);
     assert.equal(
       lanRes.status, 501,
       `LAN IP (${LAN_IP}) without Bearer should bypass auth and hit stub (got ${lanRes.status} ${lanRes.body})`
     );
     const lanBody = JSON.parse(lanRes.body);
-    assert.equal(lanBody.card, 'sankey');
+    assert.equal(lanBody.card, 'ring');
     assert.equal(lanBody.error, 'not_implemented');
 
-    const remReq = makeReq('/api/history/viz/sankey?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
+    const remReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
     const remRes = await dispatch(ctx, remReq);
     assert.ok(
       remRes.status === 401 || remRes.status === 503,
@@ -239,5 +252,318 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     await api.getSankey({ view: 'BAD', date: '2026-05-15' });
     await api.getSankey({ view: 'BAD', date: '2026-05-15' });
     assert.equal(api.__test_internals.cache.size, 0, '4xx responses must never be cached');
+  });
+});
+
+// =============================================================================
+// Plan 09.3-02 Wave 2 — Card-specific builder contracts (Sankey, DayProfile,
+// Stack, Heatmap, Ledger). Each test wires a mock telemetryStore.querySeries
+// and ctx.db.query so the builders run against deterministic rows; the
+// builders themselves remain the SUT.
+//
+// Series-key naming is the project canonical set (verified against
+// dvhub/telemetry-store-pg.js:24-27): grid_import_w, grid_export_w,
+// pv_total_w, battery_charge_w, battery_discharge_w, load_power_w.
+// =============================================================================
+
+const ANCHOR_DATE = '2026-05-14'; // a yesterday-stable choice
+const SLOT_RES_SEC = 900;          // 15-min buckets, matches querySeries cap
+
+function makeFlatSeriesRows({ start, end, key, watts, stepSec = SLOT_RES_SEC }) {
+  // Generate one row per stepSec from start..end. ts as ISO string (matches
+  // telemetry-store-pg.js querySeries return shape).
+  const rows = [];
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  for (let t = startMs; t < endMs; t += stepSec * 1000) {
+    rows.push({
+      key,
+      ts: new Date(t).toISOString(),
+      value: watts,
+      unit: 'W',
+      resolution: stepSec,
+    });
+  }
+  return rows;
+}
+
+function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async () => ({ rows: [] }) } = {}) {
+  const ctx = mockCtx();
+  ctx.telemetryStore = { querySeries: querySeriesFn };
+  ctx.db = { query: dbQueryFn };
+  // Re-create the aggregator with the populated stores (the original mockCtx
+  // wired a no-store factory).
+  ctx.historyVizApi = createHistoryVizAggregator(ctx);
+  return ctx;
+}
+
+describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builders', () => {
+  // -------------------------------------------------------------------------
+  // Sankey (T1 + T2 — envelope + conservation)
+  // -------------------------------------------------------------------------
+  it('Test W2-1 (Sankey envelope): returns flows + totals with the documented keys', async () => {
+    // Flat 2000W PV for the whole day, 1500W load, 200W grid_export, 300W battery_charge.
+    // Day is 24h × 3600s × W/3600 → kWh; check the totals roughly add up.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        const w = (
+          key === 'pv_total_w' ? 2000 :
+          key === 'grid_export_w' ? 200 :
+          key === 'grid_import_w' ? 100 :
+          key === 'battery_charge_w' ? 300 :
+          key === 'battery_discharge_w' ? 0 :
+          key === 'load_power_w' ? 1500 :
+          0
+        );
+        all.push(...makeFlatSeriesRows({ start, end, key, watts: w }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body)})`);
+    const b = r.body;
+    assert.equal(b.ok, true);
+    assert.equal(b.card, 'sankey');
+    assert.equal(b.view, 'day');
+    assert.equal(b.date, ANCHOR_DATE);
+    assert.ok(Array.isArray(b.flows), 'flows should be an array');
+    assert.ok(b.flows.length >= 3, `expected at least 3 flows, got ${b.flows.length}`);
+    for (const f of b.flows) {
+      assert.equal(typeof f.from, 'string');
+      assert.equal(typeof f.to, 'string');
+      assert.equal(typeof f.flow, 'number');
+    }
+    assert.ok(b.totals && typeof b.totals.pvKwh === 'number', 'totals.pvKwh missing');
+    assert.ok(typeof b.totals.eigenverbrauchKwh === 'number', 'totals.eigenverbrauchKwh missing');
+    assert.ok(typeof b.totals.einspeisungKwh === 'number', 'totals.einspeisungKwh missing');
+    // 2000W × 24h = 48 kWh
+    assert.ok(b.totals.pvKwh > 40 && b.totals.pvKwh < 55, `pvKwh ~48 expected, got ${b.totals.pvKwh}`);
+  });
+
+  it('Test W2-2 (Sankey conservation): sum-from-PV ≈ totals.pvKwh ± 1%; sum-to-Eigenverbrauch ≈ totals.eigenverbrauchKwh ± 1%', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 3000, grid_export_w: 500, grid_import_w: 100,
+        battery_charge_w: 400, battery_discharge_w: 200, load_power_w: 2000,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
+    const sumToEigen = b.flows.filter(f => f.to === 'Eigenverbrauch').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      Math.abs(sumFromPv - b.totals.pvKwh) / Math.max(1e-6, b.totals.pvKwh) <= 0.01,
+      `sum-from-PV (${sumFromPv}) should match totals.pvKwh (${b.totals.pvKwh}) within 1%`
+    );
+    assert.ok(
+      Math.abs(sumToEigen - b.totals.eigenverbrauchKwh) / Math.max(1e-6, b.totals.eigenverbrauchKwh) <= 0.01,
+      `sum-to-Eigenverbrauch (${sumToEigen}) should match totals.eigenverbrauchKwh (${b.totals.eigenverbrauchKwh}) within 1%`
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // DayProfile (T3 — shape)
+  // -------------------------------------------------------------------------
+  it('Test W2-3 (DayProfile shape): 24 entries each in pv[] and load[], h ∈ 0..23', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = { pv_total_w: 1500, load_power_w: 800 };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getDayProfile({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body)})`);
+    const b = r.body;
+    assert.equal(b.card, 'day-profile');
+    assert.equal(b.hours, 24);
+    assert.ok(Array.isArray(b.pv) && b.pv.length === 24, `pv len 24 expected, got ${b.pv?.length}`);
+    assert.ok(Array.isArray(b.load) && b.load.length === 24, `load len 24 expected, got ${b.load?.length}`);
+    for (let i = 0; i < 24; i++) {
+      assert.equal(b.pv[i].h, i, `pv[${i}].h mismatch`);
+      assert.equal(typeof b.pv[i].w, 'number');
+      assert.equal(b.load[i].h, i);
+      assert.equal(typeof b.load[i].w, 'number');
+    }
+  });
+
+  it('Test W2-3b (DayProfile rejects non-day views)', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getDayProfile({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='week', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Stack (T4 — bucket counts across views)
+  // -------------------------------------------------------------------------
+  it('Test W2-4 (Stack across views): bucket counts 24/7/30-31/12', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 1000, battery_discharge_w: 200, grid_import_w: 100, load_power_w: 800,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+
+    const day = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(day.status, 200);
+    assert.equal(day.body.buckets, 24, `day buckets=24 expected, got ${day.body.buckets}`);
+    assert.equal(day.body.bucketLabels.length, 24);
+    assert.equal(day.body.pvDirectKwh.length, 24);
+    assert.equal(day.body.loadKwh.length, 24);
+
+    const wk = await ctx.historyVizApi.getStack({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(wk.status, 200);
+    assert.equal(wk.body.buckets, 7);
+    assert.equal(wk.body.bucketLabels.length, 7);
+
+    const mo = await ctx.historyVizApi.getStack({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(mo.status, 200);
+    assert.ok(mo.body.buckets === 30 || mo.body.buckets === 31, `month buckets 30|31 expected, got ${mo.body.buckets}`);
+
+    const yr = await ctx.historyVizApi.getStack({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(yr.status, 200);
+    assert.equal(yr.body.buckets, 12);
+  });
+
+  // -------------------------------------------------------------------------
+  // Heatmap (T5 — shape; T6 — payload size)
+  // -------------------------------------------------------------------------
+  it('Test W2-5 (Heatmap shape week): xLabels.length=7, yLabels.length=24, matrix.length=168', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key !== 'pv_total_w') continue;
+        all.push(...makeFlatSeriesRows({ start, end, key, watts: 1500 }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getHeatmap({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'heatmap');
+    assert.equal(b.xLabels.length, 7, `week xLabels=7, got ${b.xLabels.length}`);
+    assert.equal(b.yLabels.length, 24, `week yLabels=24, got ${b.yLabels.length}`);
+    assert.equal(b.matrix.length, 168, `week matrix.length=168, got ${b.matrix.length}`);
+    for (const c of b.matrix.slice(0, 3)) {
+      assert.equal(typeof c.x, 'string');
+      assert.equal(typeof c.y, 'number');
+      assert.equal(typeof c.v, 'number');
+    }
+  });
+
+  it('Test W2-5b (Heatmap rejects view=day): 400', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getHeatmap({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='day', got ${r.status}`);
+  });
+
+  it('Test W2-6 (Heatmap payload size month ≤ 50_000 bytes)', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key !== 'pv_total_w') continue;
+        all.push(...makeFlatSeriesRows({ start, end, key, watts: 2000 }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getHeatmap({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const bytes = Buffer.byteLength(JSON.stringify(r.body), 'utf8');
+    assert.ok(bytes <= 50_000, `month payload should be <= 50KB, got ${bytes} bytes`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Ledger (T7 — shape + sort)
+  // -------------------------------------------------------------------------
+  it('Test W2-7 (Ledger shape + sort): slots ≤ 12, sorted by ts DESC, every entry shape', async () => {
+    // Build 15 fake rows so the LIMIT 12 is exercised. Row shape mirrors what
+    // the SQL adapter produces (column-name-mapped), all columns the live
+    // builder needs are present.
+    const dbQuery = async (sql, params) => {
+      // Verify the builder used parameterized SQL
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getLedger MUST use parameterized SQL');
+      // Generate 15 plan_slot-like rows in reverse-time order so the builder
+      // can either rely on SQL ORDER or sort itself; either way the response
+      // must come back DESC.
+      const rows = [];
+      for (let i = 14; i >= 0; i--) {
+        const ts = new Date(`${ANCHOR_DATE}T${String(i).padStart(2, '0')}:00:00Z`).toISOString();
+        rows.push({
+          slot_start: ts,
+          // Mix actions: even = sell (export), odd = buy (import)
+          grid_import_wh: i % 2 === 0 ? 0 : 1400,
+          grid_export_wh: i % 2 === 0 ? 1400 : 0,
+          battery_charge_grid_wh: 0,
+          battery_charge_pv_wh: 0,
+          battery_discharge_load_wh: 0,
+          battery_discharge_export_wh: 0,
+          expected_profit_eur: 0.255,
+          price_ct_kwh: 18.2,
+        });
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getLedger({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'ledger');
+    assert.ok(Array.isArray(b.slots), 'slots should be array');
+    assert.ok(b.slots.length <= 12, `slots.length should be <= 12, got ${b.slots.length}`);
+    // Sorted DESC by ts
+    for (let i = 1; i < b.slots.length; i++) {
+      assert.ok(b.slots[i - 1].ts >= b.slots[i].ts, `slots not DESC at ${i}: ${b.slots[i - 1].ts} < ${b.slots[i].ts}`);
+    }
+    // Per-entry shape
+    for (const s of b.slots) {
+      assert.equal(typeof s.ts, 'string');
+      assert.ok(['sell', 'buy', 'hold'].includes(s.action), `bad action: ${s.action}`);
+      assert.equal(typeof s.kwh, 'number');
+      assert.equal(typeof s.priceCt, 'number');
+      assert.equal(typeof s.revenueEur, 'number');
+    }
+    assert.equal(typeof b.totalEur, 'number');
+  });
+
+  it('Test W2-7b (Ledger rejects non-day views)', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getLedger({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='week', got ${r.status}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cache hit envelope (T8 — second call mirrors top-level flag)
+  // -------------------------------------------------------------------------
+  it('Test W2-8 (cache hit envelope): second getSankey call returns cached:true at envelope AND top level', async () => {
+    let calls = 0;
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      calls++;
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: 1000 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r1 = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    const r2 = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal(r1.cached, false, 'first call should be cached:false');
+    assert.equal(r1.body.cached, false, 'first call body.cached should be false');
+    assert.equal(r2.cached, true, 'second call should be cached:true at top level');
+    assert.equal(r2.body.cached, true, 'second call body.cached should be true (envelope mirror)');
+    assert.equal(calls, 1, `querySeries should run once for two cached calls; ran ${calls}`);
   });
 });
