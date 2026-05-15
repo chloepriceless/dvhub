@@ -85,18 +85,29 @@
 
   async function fetchStatus() {
     try {
-      // Phase 09.2: NEW endpoint — health-tracker provides per-system metrics
-      // (latency / uptime / errors / sample-rate / firmware) + Featured-Row
-      // data. Fall back to /api/integrations/status (D-20 unchanged) so a
-      // phased rollout, or a server that hasn't been restarted yet, still
-      // renders the page (the legacy shape lacks the new fields → values
-      // remain "—" via defensive accessors below, no crash).
-      var res = await apiFetch('/api/integrations/health');
-      if (!res.ok) {
-        res = await apiFetch('/api/integrations/status');
+      // Phase 09.2 (revised 2026-05-15): merge BOTH endpoints. /health gives
+      // per-system tracker metrics (latency/uptime/errors/sample-rate/firmware
+      // + Featured-Row) for systems that have a tracker hook; /status gives
+      // the rich legacy state (Tesla SOC, MQTT broker/topicCount, HA discovery,
+      // notifications providers, devices list). Originally Wave 4 only fell
+      // back to /status on HTTP error from /health, but /health returns 200
+      // with sparse data → the legacy fields never reached the renderer →
+      // Tesla/HA/Loxone/devices/notifications cards rendered with "—".
+      var hres = await apiFetch('/api/integrations/health');
+      var sres = await apiFetch('/api/integrations/status');
+      var hdata = hres.ok ? await hres.json() : {};
+      var sdata = sres.ok ? await sres.json() : {};
+      // Per-system shallow merge: tracker fields (hdata[key]) override legacy
+      // fields (sdata[key]) for the same property names, so newer metrics win.
+      // Featured-Row only lives on /health (hdata.featured) so it carries over
+      // intact. Unknown extra keys on either side pass through.
+      lastData = Object.assign({}, sdata, hdata);
+      for (var key in sdata) {
+        if (!Object.prototype.hasOwnProperty.call(sdata, key)) continue;
+        if (sdata[key] && typeof sdata[key] === 'object' && hdata[key] && typeof hdata[key] === 'object') {
+          lastData[key] = Object.assign({}, sdata[key], hdata[key]);
+        }
       }
-      if (!res.ok) throw new Error('Fetch failed');
-      lastData = await res.json();
       renderAll(lastData);
     } catch (e) { /* keep showing last data */ }
   }
@@ -195,6 +206,17 @@
   function buildStats(key, data) {
     var hasTrackerShape = data && (data.latencyMs != null || data.uptimeSec != null
                                 || data.firmware !== undefined || data.sampleIntervalHistogramMs);
+    // Tracker-fed systems (no legacy /status entry; ALL stats from health-tracker).
+    // 09.2-04 added victron/mid/luox to SYSTEMS but forgot the buildStats cases →
+    // those cards rendered 4 dashes via the default branch. Fixed 2026-05-15.
+    if (key === 'victron' || key === 'mid' || key === 'luox') {
+      return [
+        { label: 'Latency', value: fmtLatency(data.latencyMs) },
+        { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
+        { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+        { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
+      ];
+    }
     switch (key) {
       case 'mqtt':
         if (hasTrackerShape) {
