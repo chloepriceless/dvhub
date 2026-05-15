@@ -244,3 +244,20 @@
   background: linear-gradient(90deg, #3ee0a0, #34dbff, #ffd421, #ff5d5d);
 }
 .pheat { aspect-ratio: 24 / 7; min-height: 180px; }
+
+/* Plan 09.3-05 Wave 5 — Top-10-Slots / Cal-Heatmap-12-Monat / Wetter×Erlös-
+   Scatter. .sw-grad-cal is the DIVERGING −€→0→+€ gradient bar in the Cal-Year
+   footer (mirrors the matrix red→faded→green palette). .top10 gives the
+   horizontal-bar shell a fixed min-height; .cal-year fixes the 12×31
+   aspect-ratio so the month×day cells stay square-ish. #vScatterStats carries
+   NO inline style attr (D-22) — its layout token lives here. */
+.sw-grad-cal {
+  display: inline-block;
+  flex: 0 0 90px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #ff5d5d, rgba(120, 180, 255, 0.1), #3ee0a0);
+}
+.top10 { min-height: 280px; }
+.cal-year { min-height: 320px; aspect-ratio: 12 / 31; }
+#vScatterStats { margin-left: auto; }
