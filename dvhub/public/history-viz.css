@@ -33,20 +33,9 @@
 }
 .viz-grid-3 > * { min-width: 0; }
 
-/* The mockup uses `.grid-2` as a class on viz sections; defining it here
-   (scoped to the per-page file) keeps the dvhub-app.css `.grid-2` legacy
-   rule untouched while ensuring viz cards always inherit the invariant. */
-.viz-section .grid-2 {
-  display: grid;
-  gap: var(--gap-3, 12px);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.viz-section .grid-2 > * { min-width: 0; }
-
 @media (max-width: 1100px) {
   .viz-grid-2,
-  .viz-grid-3,
-  .viz-section .grid-2 {
+  .viz-grid-3 {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -78,24 +67,13 @@
 .heatmap     { aspect-ratio: 30 / 24; min-height: 220px; }
 .ring-wrap   { aspect-ratio: 1 / 1; max-width: 320px; margin-inline: auto; }
 .sankey-wrap { min-height: 280px; }
+/* RC-F — #sankeySvg is the bare inner div the Chart.js sankey mounts on.
+   Without an explicit height it collapses and Chart.js falls back to its
+   150px default canvas. Fill the .sankey-wrap shell instead. */
+#sankeySvg { height: 100%; min-height: 280px; }
 .top10       { min-height: 240px; }
 .cal-year    { min-height: 260px; }
 .pheat       { min-height: 220px; }
-
-/* Spot-Ledger is the one card that ships as an HTML <table>, not a chart —
-   per CONTEXT D-12 ("Spot-Ledger HTML-Tabelle, kein Chart"). */
-.ledger-tbl {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--f-mono, monospace);
-  font-size: 12px;
-}
-.ledger-tbl th,
-.ledger-tbl td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--hairline, rgba(141, 180, 221, 0.18));
-}
-.ledger-tbl .num { text-align: right; }
 
 /* Card foot / legend row — re-uses Aurora tokens (no inline style needed). */
 .viz-foot {
@@ -149,10 +127,19 @@
   text-align: center;
 }
 
-.ledger-tbl .ledger-error {
-  text-align: center;
+/* Empty-data placeholder — shown when a card's backing table is still empty
+   on prod (duration / pheat / top10). Subtle muted text, centered in the
+   .viz-chart-shell (which is display:grid). Mirrors the scatter card's
+   no-weather-data .viz-error-msg pattern but reads as informational, not an
+   error, so it sits on its own class with the Aurora --text-dim token. */
+.viz-empty-msg {
+  font-family: var(--f-mono, monospace);
+  font-size: 12px;
   color: var(--text-dim, #94a3b8);
-  padding: 12px 0;
+  letter-spacing: 0.3px;
+  padding: 24px 8px;
+  text-align: center;
+  place-self: center;
 }
 
 /* No-op safety: guarantees grid children can shrink even when the parent
@@ -160,19 +147,17 @@
 .viz-grid-2.day-only-grid > * { min-width: 0; }
 
 /* -----------------------------------------------------------------------
-   Plan 09.3-03 Wave 3 — Autarkie-Kalender grid + 24h-Ring center + Duration.
+   Plan 09.3-03 Wave 3 — Autarkie-Kalender + 24h-Ring center + Duration.
    D-22 strict: zero inline style attrs — all geometry/color is class-driven.
-   D-24 grid invariant: .autark-cal uses repeat(6, minmax(0, 1fr)) + min-width:0.
-   ----------------------------------------------------------------------- */
-.autark-cal {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  padding: 4px;
-  min-height: 200px;
-}
-.autark-cal > * { min-width: 0; }
 
+   RC-3 — the Autarkie-Map card was redesigned from a CSS-grid-of-day-cells
+   into a Chart.js matrix canvas. The old `.autark-cal` `display:grid` rule
+   squeezed that single <canvas> into one tiny grid cell, so the class was
+   removed from #autarkCal in history.html and the grid rule deleted here.
+   #autarkCal now relies solely on `.viz-chart-shell` for its geometry.
+   `.autark-legend` / `.autark-grad` (the separate legend below the canvas)
+   are intentionally retained.
+   ----------------------------------------------------------------------- */
 .autark-legend {
   display: flex;
   align-items: center;

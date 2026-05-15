@@ -105,8 +105,9 @@
     return r.json();
   }
 
-  // --- 14 stub builders. Waves 2-5 replace each body with the actual Chart.js
+  // --- Card builders. Waves 2-5 replace each body with the actual Chart.js
   // mount. The signature is fixed so the dispatcher can remain stable.
+  // (The Spot-Ledger card was removed by design — 13 builders remain.)
 
   // -------------------------------------------------------------------------
   // Plan 09.3-02 Wave 2 — 5 LIVE frontend builders.
@@ -144,6 +145,26 @@
     mount.appendChild(msg);
   }
 
+  // RC-F / design — empty-data placeholder. Cards whose backing tables are
+  // still empty on prod (duration, pheat, top10) render a friendly centered
+  // message inside the .viz-chart-shell instead of a blank/all-uniform chart.
+  // Same DOM-build idiom as the scatter card's no-weather-data path
+  // (textContent only — D-22 / T-09.3-10, never innerHTML).
+  function showEmptyData(mount) {
+    if (!mount) return;
+    mount.replaceChildren();
+    const msg = document.createElement('div');
+    msg.className = 'viz-empty-msg';
+    msg.textContent = 'Daten werden noch gesammelt';
+    mount.appendChild(msg);
+  }
+
+  // RC-4 — shared Chart.js interaction defaults so tooltips fire on point-less
+  // lines and surface every series at a datapoint. 'index' for cartesian
+  // charts; 'nearest' for scatter / doughnut where an index has no meaning.
+  const INTERACTION_INDEX = { mode: 'index', intersect: false };
+  const INTERACTION_NEAREST = { mode: 'nearest', intersect: false };
+
   async function buildSankey(view, date) {
     const mount = document.getElementById('sankeySvg');
     if (!mount) return;
@@ -162,8 +183,15 @@
           colorFrom: cssVar('--cyan', '#34dbff'),
           colorTo:   cssVar('--green', '#3ee0a0'),
           colorMode: 'gradient',
+          // RC-E — node labels otherwise paint in Chart.defaults dark grey and
+          // vanish on the dark Aurora theme. Force a light token + readable font.
+          color: cssVar('--text-soft', '#cbd5e1'),
+          font: { size: 12, weight: '600' },
         }] },
-        options: { responsive: true, maintainAspectRatio: false, animation: false },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
+        },
       });
       setTimeout(() => {
         try { historyVizCharts.sankey && historyVizCharts.sankey.resize && historyVizCharts.sankey.resize(); }
@@ -218,6 +246,7 @@
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_INDEX,
           plugins: { legend: { display: false } },
           scales: {
             x: { grid: { display: false }, ticks: { autoSkip: true, maxRotation: 0 } },
@@ -283,6 +312,7 @@
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_INDEX,
           plugins: { legend: { display: false } },
           scales: {
             x: { stacked: true, grid: { display: false } },
@@ -339,16 +369,18 @@
         }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
               title() { return ''; },
               label(c) {
+                // RC-2 — backend emits cell x/y as the exact category label
+                // STRING; pass d.x/d.y straight through (no number coercion).
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
-                const yLabel = (typeof d.y === 'number') ? String(d.y).padStart(2, '0') : String(d.y);
                 const v = Number(d.v) || 0;
-                return `${d.x} · ${yLabel}: ${v.toFixed(2)} kWh`;
+                return `${d.x} · ${d.y}: ${v.toFixed(2)} kWh`;
               },
             } },
           },
@@ -365,58 +397,6 @@
     } catch (e) {
       console.error('history-viz: buildHeatmap failed', e);
       showFriendlyError(mount, 'PV-Heatmap');
-    }
-  }
-
-  async function buildLedger(view, date) {
-    const tbody = document.getElementById('ledgerBody');
-    if (!tbody) return;
-    try {
-      const data = await fetchCardData('ledger', view, date);
-      // T-09.3-10 — DOM-build via createElement+textContent ONLY. Server values
-      // (action label, formatted numbers) are never injected as HTML.
-      tbody.replaceChildren();
-      const slots = Array.isArray(data.slots) ? data.slots : [];
-      // Mark the registry so window.historyViz.charts shows the ledger built
-      // (the leak guard counts charts; the ledger has no Chart.js but it still
-      // owns a slot in the per-view memo and we want presence in the registry).
-      historyVizCharts.ledger = { _kind: 'table', destroy() { /* no chart, noop */ }, resize() { /* noop */ } };
-      for (const slot of slots) {
-        const tr = document.createElement('tr');
-        const ts = slot.ts ? new Date(slot.ts) : null;
-        const tsText = (ts && !Number.isNaN(ts.getTime()))
-          ? ts.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
-          : String(slot.ts || '');
-        const kwh = Number(slot.kwh);
-        const priceCt = Number(slot.priceCt);
-        const revenueEur = Number(slot.revenueEur);
-        const cells = [
-          tsText,
-          String(slot.action || 'hold'),
-          Number.isFinite(kwh) ? kwh.toFixed(2) : '0,00',
-          Number.isFinite(priceCt) ? priceCt.toFixed(2) : '0,00',
-          Number.isFinite(revenueEur)
-            ? (revenueEur >= 0 ? `+${revenueEur.toFixed(2)}` : revenueEur.toFixed(2))
-            : '0,00',
-        ];
-        for (let i = 0; i < cells.length; i++) {
-          const td = document.createElement('td');
-          if (i >= 2) td.className = 'num';
-          td.textContent = cells[i];
-          tr.appendChild(td);
-        }
-        tbody.appendChild(tr);
-      }
-    } catch (e) {
-      console.error('history-viz: buildLedger failed', e);
-      tbody.replaceChildren();
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 5;
-      td.className = 'ledger-error';
-      td.textContent = 'Ledger: Daten aktuell nicht verfügbar';
-      tr.appendChild(td);
-      tbody.appendChild(tr);
     }
   }
 
@@ -465,15 +445,16 @@
         }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
               title() { return ''; },
               label(c) {
+                // RC-2 — d.y is the German DOW label STRING; use it directly.
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
-                const dow = yLabels[d.y] || '';
-                return `${d.x} (${dow}): ${d.v}%`;
+                return `${d.x} (${d.y}): ${d.v}%`;
               },
             } },
           },
@@ -530,6 +511,7 @@
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           cutout: '42%',
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
@@ -572,8 +554,16 @@
         try { historyVizCharts.duration.destroy(); } catch (_) { /* dead */ }
         delete historyVizCharts.duration;
       }
-      const canvas = mountCanvas(mount, 'vDurationCanvas');
       const slots = Array.isArray(data.slots) ? data.slots : [];
+      // Empty-data path — the market-price table is still empty on prod.
+      // Render the friendly placeholder instead of a flat 1-point line.
+      if (slots.length === 0) {
+        showEmptyData(mount);
+        const statsEmpty = document.getElementById('vDurationStats');
+        if (statsEmpty) statsEmpty.textContent = '';
+        return;
+      }
+      const canvas = mountCanvas(mount, 'vDurationCanvas');
       const thresholds = data.thresholds || { chargeBelowCt: 5, sellAboveCt: 12 };
       const curve = slots.map((s) => ({ x: s.rank, y: s.priceCt }));
       const n = slots.length || 1;
@@ -621,6 +611,7 @@
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           parsing: false,
+          interaction: INTERACTION_INDEX,
           plugins: { legend: { display: false } },
           scales: {
             x: {
@@ -670,11 +661,18 @@
         try { historyVizCharts.pheat.destroy(); } catch (_) { /* dead */ }
         delete historyVizCharts.pheat;
       }
-      const canvas = mountCanvas(mount, 'vPHeatCanvas');
       const xLabels = data.xLabels || [];
       const yLabels = data.yLabels || [];
       const matrix = data.matrix || [];
       const domainMax = (data.domain && Number.isFinite(data.domain.max)) ? data.domain.max : 0;
+      // Empty-data path — the matrix is always 168 cells but all-zero when the
+      // market-price table is empty on prod. Render the friendly placeholder
+      // instead of a uniform single-color grid.
+      if (domainMax <= 0 || matrix.length === 0) {
+        showEmptyData(mount);
+        return;
+      }
+      const canvas = mountCanvas(mount, 'vPHeatCanvas');
       historyVizCharts.pheat = new Chart(canvas.getContext('2d'), {
         type: 'matrix',
         data: { datasets: [{
@@ -706,17 +704,18 @@
         }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
               title() { return ''; },
               label(c) {
+                // RC-2 — d.x / d.y are the exact category label STRINGS
+                // ("00".."23" hour, "Mo".."So" DOW); use them directly.
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
-                const dow = yLabels[d.y] || '';
-                const hr = xLabels[d.x] || String(d.x);
                 const v = Number(d.v) || 0;
-                return `${dow} ${hr}h: ${v.toFixed(1)} ct/kWh`;
+                return `${d.y} ${d.x}h: ${v.toFixed(1)} ct/kWh`;
               },
             } },
           },
@@ -766,6 +765,7 @@
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           parsing: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
@@ -820,12 +820,16 @@
               data: perDow.map((d) => d.chargedKwh),
               backgroundColor: cssVar('--green', '#3ee0a0'),
               stack: 'kwh', yAxisID: 'y',
+              // RC-E — higher order draws first/underneath; the line (order:0)
+              // must paint on top of the bars (order:1) or it stays hidden.
+              order: 1,
             },
             {
               label: 'Entladen kWh',
               data: perDow.map((d) => -d.dischargedKwh),
               backgroundColor: '#ff7eb6',
               stack: 'kwh', yAxisID: 'y',
+              order: 1,
             },
             {
               label: 'Zyklen', type: 'line',
@@ -836,11 +840,13 @@
               pointRadius: 0,
               tension: 0.3,
               yAxisID: 'y1',
+              order: 0,
             },
           ],
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_INDEX,
           plugins: { legend: { display: false } },
           scales: {
             x: { stacked: true, grid: { display: false } },
@@ -888,8 +894,14 @@
         try { historyVizCharts.top10.destroy(); } catch (_) { /* dead */ }
         delete historyVizCharts.top10;
       }
-      const canvas = mountCanvas(mount, 'vTop10Canvas');
       const slots = Array.isArray(data.slots) ? data.slots : [];
+      // Empty-data path — no priced dispatch slots on prod yet. Render the
+      // friendly placeholder instead of an empty horizontal-bar chart.
+      if (slots.length === 0) {
+        showEmptyData(mount);
+        return;
+      }
+      const canvas = mountCanvas(mount, 'vTop10Canvas');
       const labels = slots.map((s) => {
         const d = new Date(s.ts);
         if (Number.isNaN(d.getTime())) return String(s.ts || '');
@@ -907,6 +919,7 @@
         options: {
           indexAxis: 'y',
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_INDEX,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
@@ -979,14 +992,17 @@
         }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
               title() { return ''; },
               label(c) {
+                // RC-2 — d.x is the month label, d.y is the day-of-month
+                // label STRING ("1".."31"); use both directly.
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
-                return `${d.x} ${Number(d.y) + 1}: € ${Number(d.v).toFixed(2)}`;
+                return `${d.x} ${d.y}: € ${Number(d.v).toFixed(2)}`;
               },
             } },
           },
@@ -1051,6 +1067,7 @@
         }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
@@ -1083,12 +1100,14 @@
     }
   }
 
-  // Slug → builder map. Keys MUST match the 14 backend slugs (aggregator.js
+  // Slug → builder map. Keys MUST match the backend slugs (aggregator.js
   // getXxx methods) and the kebab-case suffix of /api/history/viz/{slug}.
+  // The `ledger` slug is intentionally absent — the Spot-Ledger card was
+  // removed by design, so its endpoint is never fetched (backend getLedger
+  // stays in aggregator.js, harmless).
   const buildDispatch = {
     sankey: buildSankey,
     heatmap: buildHeatmap,
-    ledger: buildLedger,
     'day-profile': buildDayProfile,
     stack: buildStack,
     'autarky-calendar': buildAutarkyCalendar,

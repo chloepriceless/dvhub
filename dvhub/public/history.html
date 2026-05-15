@@ -320,28 +320,18 @@
         </div>
       </section>
 
-      <!-- Tag-Stunden-Profil + Spot-Ledger (day only) -->
-      <section class="grid-2" data-show-view="day">
-        <article class="card chart-panel" data-show-view="day" data-viz-card="day-profile">
-          <div class="card-head"><div>
-            <span class="card-title"><span class="dot dot-yellow"></span>Stunden-Profil</span>
-            <p class="card-sub">PV · Verbrauch · 24 h</p>
-          </div></div>
-          <div id="dayProfileMount" class="viz-chart-shell"></div>
-          <div class="viz-foot">
-            <span class="l"><span class="sw sw-yellow"></span>PV-Erzeugung</span>
-            <span class="l"><span class="sw sw-cyan"></span>Hauslast</span>
-          </div>
-        </article>
-        <article class="card chart-panel" data-show-view="day" data-viz-card="ledger">
-          <div class="card-head">
-            <span class="card-title"><span class="dot dot-green"></span>Spot-Ledger · letzte 12</span>
-          </div>
-          <table class="data-table ledger-tbl">
-            <thead><tr><th>Zeit</th><th>Aktion</th><th class="num">kWh</th><th class="num">ct/kWh</th><th class="num">€</th></tr></thead>
-            <tbody id="ledgerBody"></tbody>
-          </table>
-        </article>
+      <!-- Tag-Stunden-Profil (day only). The Spot-Ledger card was removed by
+           design — Stunden-Profil is now a single full-width card. -->
+      <section class="card chart-panel" data-show-view="day" data-viz-card="day-profile">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-yellow"></span>Stunden-Profil</span>
+          <p class="card-sub">PV · Verbrauch · 24 h</p>
+        </div></div>
+        <div id="dayProfileMount" class="viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span class="l"><span class="sw sw-yellow"></span>PV-Erzeugung</span>
+          <span class="l"><span class="sw sw-cyan"></span>Hauslast</span>
+        </div>
       </section>
 
       <!-- Stundenprofil-Stack (alle Views) -->
@@ -375,13 +365,13 @@
            slug (D-14). NO inline style attrs (D-22) — all .dot/.sw classes. -->
 
       <!-- Autarkie-Kalender + 24h-Ring (grid-2; ring is day-only) -->
-      <section class="grid-2" data-show-view="day week month year">
+      <section class="grid grid-2" data-show-view="day week month year">
         <article class="card chart-panel" data-show-view="day week month year" data-viz-card="autarky-calendar">
           <div class="card-head"><div>
             <span class="card-title"><span class="dot dot-green"></span>Autarkie-Map</span>
             <p class="card-sub">Eigenversorgungsquote pro Tag</p>
           </div></div>
-          <div id="autarkCal" class="autark-cal viz-chart-shell"></div>
+          <div id="autarkCal" class="viz-chart-shell"></div>
           <div class="autark-legend">
             <span>0 %</span><div class="autark-grad"></div><span>100 %</span>
           </div>
@@ -428,8 +418,8 @@
            history). data-viz-card pairs each section with the buildDispatch
            slug (D-14). NO inline style attrs (D-22) — all .dot/.sw classes. -->
 
-      <section class="viz-grid-2" data-show-view="day week month year">
-        <article class="card chart-panel" data-show-view="day week month year" data-viz-card="pheat">
+      <section class="viz-grid-2" data-show-view="week month year">
+        <article class="card chart-panel" data-show-view="week month year" data-viz-card="pheat">
           <div class="card-head"><div>
             <span class="card-title"><span class="dot dot-violet"></span>Preis-Muster · Stunde × Wochentag</span>
             <p class="card-sub">Ø Spot-Preis je Wochentag · ct/kWh</p>
