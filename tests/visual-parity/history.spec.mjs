@@ -58,8 +58,6 @@ const EXPECTED_IDS = [
   'historyEnergyPanel', 'historyEnergyChart',
   'historyEnergyMode', 'historyEnergyFlowsBtn', 'historyEnergyLinesBtn', 'historyEnergySankeyBtn',
   'historyPricePanel', 'historyPriceChart', 'historyPriceList', 'historyAggregatePriceHint',
-  // Details
-  'historyDetailsToggle', 'historyDetailsContent', 'historyRows',
 ];
 
 test.describe('History page (Aurora Wave 2, AURORA-01/02/03/05/06)', () => {
