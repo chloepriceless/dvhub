@@ -138,9 +138,16 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(typeof api.bustCache, 'function', 'expected api.bustCache to be a function');
   });
 
-  it('Test 1 (envelope shape): each of 14 stubs returns a 501 envelope with required keys', async () => {
+  // Wave 2 (Plan 09.3-02) lit up 5 live builders (sankey, day-profile, stack,
+  // heatmap, ledger). The remaining 9 stay 501 stubs until Waves 3-5. Test 1
+  // asserts the stub envelope shape ONLY for the still-stubbed cards; the live
+  // builders have dedicated contract tests in the Wave 2 suite below.
+  const STUB_SLUGS = SLUGS.filter((s) => !['sankey', 'day-profile', 'stack', 'heatmap', 'ledger'].includes(s));
+
+  it('Test 1 (envelope shape): each of 9 remaining stubs returns a 501 envelope with required keys', async () => {
     const api = createHistoryVizAggregator(mockCtx());
-    for (const slug of SLUGS) {
+    assert.equal(STUB_SLUGS.length, 9, `expected 9 remaining stubs after Wave 2, got ${STUB_SLUGS.length}`);
+    for (const slug of STUB_SLUGS) {
       const result = await api[SLUG_TO_METHOD[slug]]({ view: 'day', date: '2026-05-15' });
       assert.equal(result.status, 501, `${slug} expected status 501, got ${result.status}`);
       const b = result.body;
@@ -186,19 +193,25 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     assert.equal(api.__test_internals.cache.size, 0, 'invalid input must NOT populate cache');
   });
 
-  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → 501 stub; REMOTE IP without Bearer → 401/503', async () => {
+  it('Test 4 (LAN-bypass prefix gate): LAN IP without Bearer → stub; REMOTE IP without Bearer → 401/503', async () => {
+    // Use a still-stubbed card (`ring`) so the auth-gate posture is exercised
+    // without depending on a wired telemetryStore. Wave 2 lit `sankey` up so
+    // the bare mockCtx (no telemetryStore) would 500 with a builder error
+    // instead of returning the documented 501 stub — that's a separate code
+    // path. The LAN-bypass invariant only cares about the auth gate sitting
+    // BEFORE the dispatcher, which is what this test asserts.
     const ctx = mockCtx();
-    const lanReq = makeReq('/api/history/viz/sankey?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
+    const lanReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
     const lanRes = await dispatch(ctx, lanReq);
     assert.equal(
       lanRes.status, 501,
       `LAN IP (${LAN_IP}) without Bearer should bypass auth and hit stub (got ${lanRes.status} ${lanRes.body})`
     );
     const lanBody = JSON.parse(lanRes.body);
-    assert.equal(lanBody.card, 'sankey');
+    assert.equal(lanBody.card, 'ring');
     assert.equal(lanBody.error, 'not_implemented');
 
-    const remReq = makeReq('/api/history/viz/sankey?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
+    const remReq = makeReq('/api/history/viz/ring?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
     const remRes = await dispatch(ctx, remReq);
     assert.ok(
       remRes.status === 401 || remRes.status === 503,
