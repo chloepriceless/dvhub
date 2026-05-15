@@ -66,11 +66,318 @@
   // --- 14 stub builders. Waves 2-5 replace each body with the actual Chart.js
   // mount. The signature is fixed so the dispatcher can remain stable.
 
-  async function buildSankey(view, date)            { console.warn('history-viz: buildSankey not implemented'); }
-  async function buildHeatmap(view, date)           { console.warn('history-viz: buildHeatmap not implemented'); }
-  async function buildLedger(view, date)            { console.warn('history-viz: buildLedger not implemented'); }
-  async function buildDayProfile(view, date)        { console.warn('history-viz: buildDayProfile not implemented'); }
-  async function buildStack(view, date)             { console.warn('history-viz: buildStack not implemented'); }
+  // -------------------------------------------------------------------------
+  // Plan 09.3-02 Wave 2 — 5 LIVE frontend builders.
+  //
+  // Pattern (per RESEARCH §Pattern 1 + 3, history.js:859 canvas-swap idiom):
+  //   1. Resolve mount element; bail if missing OR if Chart.js not loaded.
+  //   2. Fetch payload via fetchCardData(slug, view, date).
+  //   3. Destroy any prior Chart.js instance from historyVizCharts[card].
+  //   4. Replace mount innerHTML with a fresh <canvas> (no style="" attrs;
+  //      D-22 keeps all geometry in CSS via .viz-chart-shell).
+  //   5. Construct new Chart(canvas.getContext('2d'), {...}); store in registry.
+  //   6. setTimeout(() => chart.resize(), 0) for first-paint correction
+  //      (RESEARCH §Pitfall 3 chartArea-may-be-empty defensive guard).
+  //   7. On error: mount.textContent = friendly DE error; never innerHTML
+  //      (D-22 + T-09.3-10 XSS guard for ledger user-supplied strings).
+  // -------------------------------------------------------------------------
+
+  function mountCanvas(mount, canvasId) {
+    // D-22 — replace mount contents WITHOUT inline style attrs. Geometry
+    // belongs to .viz-chart-shell + per-card CSS rules.
+    mount.replaceChildren();
+    const canvas = document.createElement('canvas');
+    canvas.id = canvasId;
+    mount.appendChild(canvas);
+    return canvas;
+  }
+
+  function showFriendlyError(mount, label) {
+    // T-09.3-10 — never use innerHTML with potentially-untrusted text.
+    if (!mount) return;
+    mount.replaceChildren();
+    const msg = document.createElement('div');
+    msg.className = 'viz-error-msg';
+    msg.textContent = `${label}: Daten aktuell nicht verfügbar`;
+    mount.appendChild(msg);
+  }
+
+  async function buildSankey(view, date) {
+    const mount = document.getElementById('sankeySvg');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('sankey', view, date);
+      if (historyVizCharts.sankey) {
+        try { historyVizCharts.sankey.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.sankey;
+      }
+      const canvas = mountCanvas(mount, 'sankeyCanvas');
+      historyVizCharts.sankey = new Chart(canvas.getContext('2d'), {
+        type: 'sankey',
+        data: { datasets: [{
+          data: (data.flows || []).map((f) => ({ from: f.from, to: f.to, flow: f.flow })),
+          colorFrom: cssVar('--cyan', '#34dbff'),
+          colorTo:   cssVar('--green', '#3ee0a0'),
+          colorMode: 'gradient',
+        }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.sankey && historyVizCharts.sankey.resize && historyVizCharts.sankey.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildSankey failed', e);
+      showFriendlyError(mount, 'Sankey');
+    }
+  }
+
+  async function buildDayProfile(view, date) {
+    const mount = document.getElementById('dayProfileMount');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('day-profile', view, date);
+      if (historyVizCharts.dayProfile) {
+        try { historyVizCharts.dayProfile.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.dayProfile;
+      }
+      const canvas = mountCanvas(mount, 'dayProfileCanvas');
+      const labels = (data.pv || []).map((p) => String(p.h).padStart(2, '0'));
+      const pvData = (data.pv || []).map((p) => p.w);
+      const loadData = (data.load || []).map((p) => p.w);
+      historyVizCharts.dayProfile = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'PV-Erzeugung',
+              data: pvData,
+              borderColor: cssVar('--yellow', '#ffd421'),
+              backgroundColor: cssVarAlpha('--yellow', 0.25, '#ffd421'),
+              fill: true,
+              tension: 0.3,
+              borderWidth: 2,
+              pointRadius: 0,
+            },
+            {
+              label: 'Hauslast',
+              data: loadData,
+              borderColor: cssVar('--cyan', '#34dbff'),
+              backgroundColor: cssVarAlpha('--cyan', 0.18, '#34dbff'),
+              fill: true,
+              tension: 0.3,
+              borderWidth: 2,
+              pointRadius: 0,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { autoSkip: true, maxRotation: 0 } },
+            y: { beginAtZero: true, grid: { color: 'rgba(141,180,221,0.1)' } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.dayProfile && historyVizCharts.dayProfile.resize && historyVizCharts.dayProfile.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildDayProfile failed', e);
+      showFriendlyError(mount, 'Stunden-Profil');
+    }
+  }
+
+  async function buildStack(view, date) {
+    const mount = document.getElementById('vStack');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('stack', view, date);
+      if (historyVizCharts.stack) {
+        try { historyVizCharts.stack.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.stack;
+      }
+      const canvas = mountCanvas(mount, 'vStackCanvas');
+      historyVizCharts.stack = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: data.bucketLabels || [],
+          datasets: [
+            {
+              label: 'PV direkt', type: 'bar',
+              data: data.pvDirectKwh || [],
+              backgroundColor: cssVarAlpha('--yellow', 0.85, '#ffd421'),
+              stack: 'energy',
+            },
+            {
+              label: 'Akku-Entladung', type: 'bar',
+              data: data.batteryDischargeKwh || [],
+              backgroundColor: cssVarAlpha('--green', 0.85, '#3ee0a0'),
+              stack: 'energy',
+            },
+            {
+              label: 'Netzbezug', type: 'bar',
+              data: data.gridImportKwh || [],
+              backgroundColor: cssVarAlpha('--pink', 0.85, '#ff7eb6'),
+              stack: 'energy',
+            },
+            {
+              label: 'Hauslast', type: 'line',
+              data: data.loadKwh || [],
+              borderColor: cssVar('--cyan', '#34dbff'),
+              backgroundColor: 'transparent',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.25,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { stacked: true, grid: { display: false } },
+            y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(141,180,221,0.1)' } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.stack && historyVizCharts.stack.resize && historyVizCharts.stack.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildStack failed', e);
+      showFriendlyError(mount, 'Stundenprofil-Stack');
+    }
+  }
+
+  async function buildHeatmap(view, date) {
+    const mount = document.getElementById('hm');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('heatmap', view, date);
+      if (historyVizCharts.heatmap) {
+        try { historyVizCharts.heatmap.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.heatmap;
+      }
+      const canvas = mountCanvas(mount, 'hmCanvas');
+      const xLabels = data.xLabels || [];
+      const yLabels = data.yLabels || [];
+      const matrix = data.matrix || [];
+      const maxV = (data.domain && Number.isFinite(data.domain.max)) ? data.domain.max : 1;
+      historyVizCharts.heatmap = new Chart(canvas.getContext('2d'), {
+        type: 'matrix',
+        data: { datasets: [{
+          label: 'PV-Erzeugung kWh',
+          data: matrix,
+          backgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const v = cell && Number.isFinite(cell.v) ? cell.v : 0;
+            const alpha = maxV > 0 ? Math.min(1, v / maxV) : 0;
+            return cssVarAlpha('--yellow', alpha, '#ffd421');
+          },
+          borderWidth: 0,
+          // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout pass.
+          width(c) {
+            const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
+            return Math.max(1, (w / Math.max(1, xLabels.length)) - 1);
+          },
+          height(c) {
+            const h = (c.chart && c.chart.chartArea && c.chart.chartArea.height) || 0;
+            return Math.max(1, (h / Math.max(1, yLabels.length)) - 1);
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title() { return ''; },
+              label(c) {
+                const d = c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                const yLabel = (typeof d.y === 'number') ? String(d.y).padStart(2, '0') : String(d.y);
+                const v = Number(d.v) || 0;
+                return `${d.x} · ${yLabel}: ${v.toFixed(2)} kWh`;
+              },
+            } },
+          },
+          scales: {
+            x: { type: 'category', labels: xLabels, ticks: { autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+            y: { type: 'category', labels: yLabels, offset: true, reverse: true, grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.heatmap && historyVizCharts.heatmap.resize && historyVizCharts.heatmap.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildHeatmap failed', e);
+      showFriendlyError(mount, 'PV-Heatmap');
+    }
+  }
+
+  async function buildLedger(view, date) {
+    const tbody = document.getElementById('ledgerBody');
+    if (!tbody) return;
+    try {
+      const data = await fetchCardData('ledger', view, date);
+      // T-09.3-10 — DOM-build via createElement+textContent ONLY. Server values
+      // (action label, formatted numbers) are never injected as HTML.
+      tbody.replaceChildren();
+      const slots = Array.isArray(data.slots) ? data.slots : [];
+      // Mark the registry so window.historyViz.charts shows the ledger built
+      // (the leak guard counts charts; the ledger has no Chart.js but it still
+      // owns a slot in the per-view memo and we want presence in the registry).
+      historyVizCharts.ledger = { _kind: 'table', destroy() { /* no chart, noop */ }, resize() { /* noop */ } };
+      for (const slot of slots) {
+        const tr = document.createElement('tr');
+        const ts = slot.ts ? new Date(slot.ts) : null;
+        const tsText = (ts && !Number.isNaN(ts.getTime()))
+          ? ts.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+          : String(slot.ts || '');
+        const kwh = Number(slot.kwh);
+        const priceCt = Number(slot.priceCt);
+        const revenueEur = Number(slot.revenueEur);
+        const cells = [
+          tsText,
+          String(slot.action || 'hold'),
+          Number.isFinite(kwh) ? kwh.toFixed(2) : '0,00',
+          Number.isFinite(priceCt) ? priceCt.toFixed(2) : '0,00',
+          Number.isFinite(revenueEur)
+            ? (revenueEur >= 0 ? `+${revenueEur.toFixed(2)}` : revenueEur.toFixed(2))
+            : '0,00',
+        ];
+        for (let i = 0; i < cells.length; i++) {
+          const td = document.createElement('td');
+          if (i >= 2) td.className = 'num';
+          td.textContent = cells[i];
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    } catch (e) {
+      console.error('history-viz: buildLedger failed', e);
+      tbody.replaceChildren();
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'ledger-error';
+      td.textContent = 'Ledger: Daten aktuell nicht verfügbar';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  }
+
   async function buildAutarkyCalendar(view, date)   { console.warn('history-viz: buildAutarkyCalendar not implemented'); }
   async function buildRing(view, date)              { console.warn('history-viz: buildRing not implemented'); }
   async function buildDuration(view, date)          { console.warn('history-viz: buildDuration not implemented'); }

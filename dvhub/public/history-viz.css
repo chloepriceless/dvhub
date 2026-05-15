@@ -111,3 +111,50 @@
 }
 .viz-foot .l { display: inline-flex; align-items: center; gap: 6px; }
 .viz-foot .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
+/* -----------------------------------------------------------------------
+   Plan 09.3-02 Wave 2 — semantic color swatches.
+   Replace mockup inline `style="background:#…"` swatches (D-22) with
+   class variants. Each .sw-COLOR maps to an Aurora token; the variants
+   are required wherever a card-head dot or legend square needs color.
+   ----------------------------------------------------------------------- */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dot.dot-yellow { background: var(--yellow, #ffd421); box-shadow: 0 0 6px var(--yellow, #ffd421); }
+.dot.dot-cyan   { background: var(--cyan,   #34dbff); box-shadow: 0 0 6px var(--cyan,   #34dbff); }
+.dot.dot-green  { background: var(--green,  #3ee0a0); box-shadow: 0 0 6px var(--green,  #3ee0a0); }
+.dot.dot-violet { background: var(--violet, #a78bfa); box-shadow: 0 0 6px var(--violet, #a78bfa); }
+.dot.dot-pink   { background: var(--pink,   #ff7eb6); box-shadow: 0 0 6px var(--pink,   #ff7eb6); }
+.dot.dot-red    { background: var(--red,    #ff5d5d); box-shadow: 0 0 6px var(--red,    #ff5d5d); }
+
+.sw-yellow { background: var(--yellow, #ffd421); }
+.sw-cyan   { background: var(--cyan,   #34dbff); }
+.sw-green  { background: var(--green,  #3ee0a0); }
+.sw-violet { background: var(--violet, #a78bfa); }
+.sw-pink   { background: var(--pink,   #ff7eb6); }
+.sw-red    { background: var(--red,    #ff5d5d); }
+
+/* Friendly error-message inside a viz mount (D-22 — no inline style). */
+.viz-error-msg {
+  font-family: var(--f-mono, monospace);
+  font-size: 12px;
+  color: var(--text-dim, #94a3b8);
+  padding: 18px 8px;
+  text-align: center;
+}
+
+.ledger-tbl .ledger-error {
+  text-align: center;
+  color: var(--text-dim, #94a3b8);
+  padding: 12px 0;
+}
+
+/* No-op safety: guarantees grid children can shrink even when the parent
+   class is `.day-only-grid` (alias used by some sections in the mockup). */
+.viz-grid-2.day-only-grid > * { min-width: 0; }
