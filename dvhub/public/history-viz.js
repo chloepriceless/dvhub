@@ -1111,36 +1111,65 @@
   // D-25: visibility via classList.toggle (the JS visibility-clear
   //       anti-pattern is enforced-banned by tests/csp-lint.mjs scoped to
   //       this file — see the lint rule for details).
-  // D-16: lazy-build memo prevents re-rendering an already-built card when
-  // the same (card, view) pair is shown again within the same page session.
-  // RESEARCH §Pitfall 4: stagger build*() calls via setTimeout(0) so a 9-card
-  // burst doesn't slam the rate-limiter.
+  // D-16: lazy-build memo prevents re-rendering an already-built card. Plan
+  //       09.3-06 Wave 6 widens the memo key from `card:view` to the 3-segment
+  //       `card:view:date` (RESEARCH §Pitfall 6) — so a date change while the
+  //       view stays equal busts the memo and triggers a rebuild. The memo
+  //       entry is added in the build's `.then()` SUCCESS branch only, so a
+  //       failed build (network error) re-attempts on the next applyView
+  //       (T-09.3-27 build-retry).
+  // RESEARCH §Pitfall 4: stagger build*() calls via a setTimeout chain with
+  //       1ms increments so a 9-card view='year' burst serialises across the
+  //       next ~9 frames instead of slamming the rate-limiter (T-09.3-26).
+  //
+  // Wave-6 note on first render: if #historyDate is empty on initial load the
+  // date falls back to today's date in YYYY-MM-DD via
+  // `new Date().toISOString().slice(0,10)` — keeping the memo key well-formed
+  // and matching the date history.js's loadHistorySummary defaults to.
+
+  let currentView = 'day';
 
   function applyView(view, date) {
     const viewSel = document.getElementById('historyView');
     const dateInp = document.getElementById('historyDate');
-    const v = view || (viewSel ? viewSel.value : null) || 'day';
-    const d = date || (dateInp ? dateInp.value : '') || '';
-    const sections = document.querySelectorAll('[data-show-view]');
-    sections.forEach((section) => {
+    currentView = view || (viewSel ? viewSel.value : null) || 'day';
+    const d = date || (dateInp ? dateInp.value : '') || new Date().toISOString().slice(0, 10);
+    const buildQueue = [];
+    document.querySelectorAll('[data-show-view]').forEach((section) => {
       const showViews = (section.dataset.showView || '').split(/\s+/).filter(Boolean);
-      const visible = showViews.includes(v);
+      const visible = showViews.includes(currentView);
       // D-25 — class toggle (no inline visibility writes)
       section.classList.toggle('viz-hidden-by-view', !visible);
       if (!visible) return;
       const card = section.dataset.vizCard;
+      // Defensive — a section may be a non-viz card (the original DV-card) or
+      // carry an unknown card name; skip silently, never throw (T-09.3-28).
       if (!card || !buildDispatch[card]) return;
-      const memoKey = `${card}:${v}`;
+      // 3-segment memo key — date is part of the identity so a date-change
+      // rebuild fires even when the view is unchanged (RESEARCH §Pitfall 6).
+      const memoKey = `${card}:${currentView}:${d}`;
       if (built.has(memoKey)) return;
-      built.add(memoKey);
-      // RESEARCH §Pitfall 4 — stagger via setTimeout(0) so a 9-card burst
-      // serialises across frames instead of slamming the rate-limiter.
-      setTimeout(() => {
-        Promise.resolve()
-          .then(() => buildDispatch[card](v, d))
-          .catch((e) => console.error('history-viz build failed', card, e));
-      }, 0);
+      buildQueue.push({ card, memoKey });
     });
+    // RESEARCH §Pitfall 4 — stagger via a setTimeout chain so a 9-card burst
+    // serialises across frames instead of slamming the rate-limiter. 1ms
+    // increments spread 9 cards over ~9ms — well below the user-perceptible
+    // threshold yet enough to break the single-microtask fetch burst.
+    let delay = 0;
+    for (const { card, memoKey } of buildQueue) {
+      setTimeout(() => {
+        // Re-check visibility at execution time — the user may have toggled
+        // the view again mid-stagger; don't build a now-hidden card.
+        const stillRelevant = (document.querySelector(`[data-viz-card="${card}"]`)
+          ?.dataset.showView || '').split(/\s+/).includes(currentView);
+        if (!stillRelevant) return;
+        Promise.resolve()
+          .then(() => buildDispatch[card](currentView, d))
+          .then(() => { built.add(memoKey); })   // memo on SUCCESS only — T-09.3-27 retry
+          .catch((e) => console.error('history-viz build failed', card, e));
+      }, delay);
+      delay += 1;
+    }
   }
 
   function destroyAll() {
@@ -1157,6 +1186,10 @@
     __historyVizBound = true;
     const viewSel = document.getElementById('historyView');
     const dateInp = document.getElementById('historyDate');
+    // Wave-6 — destroyAll() runs on BOTH view-change AND date-change. A
+    // date-change keeps the view equal but the 3-segment memo key
+    // (card:view:date) busts, so a full destroy + rebuild keeps the chart
+    // registry clean and avoids stale instances from a prior date.
     if (viewSel) {
       viewSel.addEventListener('change', () => {
         destroyAll();
@@ -1169,10 +1202,14 @@
         applyView(viewSel ? viewSel.value : 'day', dateInp.value);
       });
     }
-    // Initial dispatch — at this point Wave 1 has no [data-show-view] sections,
-    // so the loop is a no-op. Waves 2-5 add sections; once a section ships,
-    // applyView() will lazy-build it on first render.
-    applyView(viewSel ? viewSel.value : 'day', dateInp ? dateInp.value : '');
+    // First-render dispatch — co-listens to the same #historyView / #historyDate
+    // DOM as history.js's loadHistorySummary (D-13: history.js stays untouched).
+    // If #historyDate is empty on initial load, fall back to today's date in
+    // YYYY-MM-DD so the memo key is well-formed (applyView itself also coalesces).
+    applyView(
+      viewSel ? viewSel.value : 'day',
+      (dateInp && dateInp.value) || new Date().toISOString().slice(0, 10)
+    );
 
     // --- Resize hook (RESEARCH §Pitfall 1): Chart.js 4 ResizeObserver throttles
     // around 60ms; an explicit debounced resize prevents stale aspect-ratio
@@ -1196,8 +1233,8 @@
 
     // --- Theme-toggle hook (RESEARCH §Pitfall 7) — D-21 READ-only.
     // theme.js writes <html data-theme="…"> on cycle; we observe the attribute
-    // change and call chart.update('none') so colors picked from CSS vars
-    // refresh without a full re-render.
+    // change and trigger a no-animation Chart.js repaint so colors picked from
+    // CSS vars refresh WITHOUT a destroy + re-create (the cheap repaint path).
     try {
       const themeObs = new MutationObserver(() => {
         for (const c of Object.values(historyVizCharts)) {

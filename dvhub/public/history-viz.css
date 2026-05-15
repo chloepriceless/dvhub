@@ -261,3 +261,19 @@
 .top10 { min-height: 280px; }
 .cal-year { min-height: 320px; aspect-ratio: 12 / 31; }
 #vScatterStats { margin-left: auto; }
+
+/* -----------------------------------------------------------------------
+   Plan 09.3-06 Wave 6 — view-state-machine refinement.
+   The staggered lazy-build (1ms-increment setTimeout chain) means a mount
+   shell can sit empty for a few frames before its Chart.js canvas paints.
+   This pure-CSS :empty placeholder gives the empty shell a subtle diagonal
+   hatch so the page doesn't read as "broken" mid-stagger — no inline style,
+   no innerHTML, no runtime <style> block (D-22).
+   ----------------------------------------------------------------------- */
+.viz-chart-shell:empty::before {
+  content: '';
+  display: block;
+  height: 100%;
+  opacity: 0.3;
+  background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(141, 180, 221, 0.05) 8px 16px);
+}
