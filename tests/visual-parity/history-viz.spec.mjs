@@ -243,4 +243,35 @@ test.describe('History-viz foundation (Phase 09.3-01 Wave 1)', () => {
     expect(await hidden('cal-year'), 'cal-year should be hidden in view=day').toBe(true);
     expect(await hidden('scatter'), 'scatter should be hidden in view=day').toBe(true);
   });
+
+  // Plan 09.3-06 Wave 6 — the memo key is now 3-segment (card:view:date), so a
+  // date-change with an unchanged view busts the memo and re-fetches. This spec
+  // accumulates outbound requests and asserts that applyView('week', dateA)
+  // followed by applyView('week', dateB) issues TWO sankey fetches with
+  // DIFFERENT date= params (a 2-segment card:view memo would skip the second).
+  test('Spec 14 — date-change rebuilds cards (3-segment memo key card:view:date)', async ({ page }) => {
+    const sankeyRequests = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      if (/\/api\/history\/viz\/sankey\b/.test(url)) sankeyRequests.push(url);
+    });
+    await page.goto('/history.html');
+    await page.waitForLoadState('networkidle');
+    // First build — view=week, date A.
+    await page.evaluate(() => window.historyViz?.applyView?.('week', '2026-01-15'));
+    await page.waitForTimeout(1500);
+    // Second build — SAME view, DIFFERENT date. The 3-segment memo key must
+    // not short-circuit this; a fresh fetch with date=2026-02-15 must fire.
+    await page.evaluate(() => window.historyViz?.applyView?.('week', '2026-02-15'));
+    await page.waitForTimeout(1500);
+    // Two sankey fetches total — one per (view, date) tuple.
+    expect(
+      sankeyRequests.length,
+      `expected ≥ 2 sankey fetches across two date values, got ${sankeyRequests.length}: ${JSON.stringify(sankeyRequests)}`
+    ).toBeGreaterThanOrEqual(2);
+    const hasDateA = sankeyRequests.some((u) => /date=2026-01-15/.test(u));
+    const hasDateB = sankeyRequests.some((u) => /date=2026-02-15/.test(u));
+    expect(hasDateA, 'a sankey fetch with date=2026-01-15 should have fired').toBe(true);
+    expect(hasDateB, 'a sankey fetch with date=2026-02-15 should have fired (date-change rebuild)').toBe(true);
+  });
 });
