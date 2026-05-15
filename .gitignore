@@ -24,6 +24,10 @@ docs/plans/
 tmp/
 *.tmp
 
+# Playwright e2e artifacts (test-results/ holds traces/screenshots per run)
+test-results/
+playwright-report/
+
 # Secrets (Plan 08-05 Task 3 — REPOLENS security/secrets/002-003)
 # Keep operator-local config and key material out of git under any path.
 config.json

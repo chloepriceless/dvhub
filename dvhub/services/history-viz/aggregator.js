@@ -963,6 +963,252 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.3-04 Wave 4 — 3 LIVE builders (Pheat / Spaghetti / Cycles).
+  // CONTEXT D-04 Gruppe B Tier-2 + D-05 (cycle-counter). Same 6-step template
+  // as Waves 2-3. Spot-price columns use the verified real schema names:
+  // shared.market_price_slots → slot_start (TIMESTAMPTZ), price_kind ('market'),
+  // price_ct_kwh (NUMERIC) — see 009-shared-tables.sql:253-269. The plan-doc
+  // assumed ts_utc + price_ct_per_kwh.
+  // -------------------------------------------------------------------------
+
+  // Battery nominal capacity (kWh) for the cycles charged/discharged kWh axis.
+  // The project's canonical key is `optimizer.batteryCapacityWh` (verified in
+  // config-model.js:858 + history-runtime.js batteryNominalCapacityKwh() uses
+  // exactly this path). Fallback 10 kWh (typical home battery) when unset.
+  function batteryNominalKwh() {
+    let opt = {};
+    try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
+    const wh = Number(opt.batteryCapacityWh);
+    if (Number.isFinite(wh) && wh > 0) return wh / 1000;
+    return 10;
+  }
+
+  // Cumulative |ΔSOC| / 200 — the project-canonical "Vollzyklen" formula
+  // (RESEARCH §Cycle-Counter Algorithm). One full cycle = 200% absolute SOC
+  // change (100% discharge + 100% charge); /100 converts pct→fraction. This is
+  // equivalent to the discharge-energy/capacity formula `computeCycles()` used
+  // by the existing kpis.cycles tile in history-runtime.js — both produce a
+  // full-cycle count; this one operates directly on the SOC series.
+  function countCyclesFromSocSeries(socSeries) {
+    if (!Array.isArray(socSeries) || socSeries.length < 2) return 0;
+    let cumDelta = 0;
+    for (let i = 1; i < socSeries.length; i++) {
+      const a = Number(socSeries[i - 1].value);
+      const b = Number(socSeries[i].value);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+      cumDelta += Math.abs(b - a);
+    }
+    return cumDelta / 200;
+  }
+
+  async function getPheat({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `pheat:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // dow×hour average spot price. Bucket server-side via EXTRACT in the
+      // Europe/Berlin zone (a SQL literal, not user input — T-09.3-19); the
+      // BETWEEN bounds are parameterized. PG-DOW: 0=Sunday..6=Saturday.
+      const sql = `
+        SELECT
+          EXTRACT(DOW  FROM slot_start AT TIME ZONE 'Europe/Berlin') AS dow,
+          EXTRACT(HOUR FROM slot_start AT TIME ZONE 'Europe/Berlin') AS hr,
+          AVG(price_ct_kwh) AS avg_ct
+        FROM shared.market_price_slots
+        WHERE price_kind = 'market'
+          AND slot_start >= $1::timestamptz
+          AND slot_start <  $2::timestamptz
+        GROUP BY dow, hr
+        ORDER BY dow, hr
+      `;
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      // Build a full 7×24 grid (matrix is always 168 cells, gaps → 0).
+      const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+      let domainMax = 0;
+      for (const r of rows) {
+        const pgDow = Math.trunc(Number(r.dow));
+        const hr = Math.trunc(Number(r.hr));
+        const avg = Number(r.avg_ct);
+        if (!Number.isFinite(pgDow) || !Number.isFinite(hr) || hr < 0 || hr > 23) continue;
+        // PG-DOW 0=Sun..6=Sat → German Mo=0..So=6.
+        const dowIdx = (pgDow + 6) % 7;
+        if (dowIdx < 0 || dowIdx > 6) continue;
+        const v = Number.isFinite(avg) ? Math.max(0, avg) : 0;
+        grid[dowIdx][hr] = round3(v);
+        if (v > domainMax) domainMax = v;
+      }
+      const matrix = [];
+      for (let y = 0; y < 7; y++) {
+        for (let x = 0; x < 24; x++) {
+          matrix.push({ x, y, v: grid[y][x] });
+        }
+      }
+      const payload = {
+        ok: true,
+        card: 'pheat',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        xLabels: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0')),
+        yLabels: DOW_DE_SHORT.slice(),
+        matrix,
+        domain: { min: 0, max: round3(domainMax), unit: 'ct/kWh' },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_pheat_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getSpaghetti({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view === 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (spaghetti is week|month|year only)' }, cached: false };
+    }
+    const key = `spaghetti:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // RESEARCH §Pitfall 5 — ONE querySeries call for the full range; group
+      // in JS by date. maxResolution=900 caps the row count (T-09.3-17).
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['battery_soc_pct'],
+        start, end, maxResolution: 900,
+      });
+      // Group rows by UTC date; per-day bucket into 24 hourly slots (avg SOC).
+      const byDate = new Map(); // dateKey → { sums:[24], counts:[24] }
+      for (const r of rows) {
+        if (r.key !== 'battery_soc_pct') continue;
+        const v = Number(r.value);
+        if (!Number.isFinite(v)) continue;
+        const d = new Date(r.ts);
+        const dateKey = d.toISOString().slice(0, 10);
+        const h = d.getUTCHours();
+        if (!byDate.has(dateKey)) {
+          byDate.set(dateKey, { sums: new Array(24).fill(0), counts: new Array(24).fill(0) });
+        }
+        const bucket = byDate.get(dateKey);
+        bucket.sums[h] += v;
+        bucket.counts[h] += 1;
+      }
+      // Most-recent 30 days, sorted ascending by date.
+      const allDates = [...byDate.keys()].sort();
+      const recentDates = allDates.slice(-30);
+      // todayDate: the anchor `date` (the day the user is "viewing now").
+      const todayDate = date;
+      const series = recentDates.map((dateKey) => {
+        const bucket = byDate.get(dateKey);
+        const points = [];
+        for (let h = 0; h < 24; h++) {
+          const soc = bucket.counts[h] > 0 ? round1(bucket.sums[h] / bucket.counts[h]) : 0;
+          points.push({ h, soc });
+        }
+        return { date: dateKey, isToday: dateKey === todayDate, points };
+      });
+      const payload = {
+        ok: true,
+        card: 'spaghetti',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        series,
+        todayDate,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_spaghetti_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
+  async function getCycles({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view === 'day') {
+      return { status: 400, body: { ok: false, error: 'view not supported (cycles is week|month|year only)' }, cached: false };
+    }
+    const key = `cycles:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      const rows = await telemetryStore.querySeries({
+        seriesKeys: ['battery_soc_pct'],
+        start, end, maxResolution: 900,
+      });
+      // Sort SOC samples by ts, then group by German DOW (Mo=0..So=6).
+      const socRows = rows
+        .filter((r) => r.key === 'battery_soc_pct' && Number.isFinite(Number(r.value)))
+        .map((r) => ({ ts: r.ts, tsMs: Date.parse(r.ts), value: Number(r.value) }))
+        .filter((r) => Number.isFinite(r.tsMs))
+        .sort((a, b) => a.tsMs - b.tsMs);
+      const capKwh = batteryNominalKwh();
+      // Per-DOW SOC sub-series. A cycle/energy delta belongs to the DOW of the
+      // LATER sample in each consecutive pair (the delta "completes" on that
+      // day). Iterate the global sorted series so transitions across midnight
+      // are still counted; attribute each ΔSOC to the receiving sample's DOW.
+      const perDowCycles = new Array(7).fill(0);
+      const perDowCharged = new Array(7).fill(0);   // kWh (positive ΔSOC)
+      const perDowDischarged = new Array(7).fill(0); // kWh (abs of negative ΔSOC)
+      for (let i = 1; i < socRows.length; i++) {
+        const prev = socRows[i - 1];
+        const cur = socRows[i];
+        const dSoc = cur.value - prev.value; // +ve = charge, -ve = discharge
+        const jsDow = new Date(cur.tsMs).getUTCDay(); // 0=Sun..6=Sat
+        const dowIdx = (jsDow + 6) % 7;               // Mo=0..So=6
+        perDowCycles[dowIdx] += Math.abs(dSoc) / 200; // cumulative |ΔSOC|/200
+        const kwh = (Math.abs(dSoc) / 100) * capKwh;  // ΔSOC fraction × capacity
+        if (dSoc >= 0) perDowCharged[dowIdx] += kwh;
+        else perDowDischarged[dowIdx] += kwh;
+      }
+      const perDow = [];
+      for (let d = 0; d < 7; d++) {
+        perDow.push({
+          dow: d,
+          label: DOW_DE_SHORT[d],
+          chargedKwh: round3(perDowCharged[d]),
+          dischargedKwh: round3(perDowDischarged[d]),
+          cycles: round3(perDowCycles[d]),
+        });
+      }
+      const totals = {
+        chargedKwh: round3(perDow.reduce((s, x) => s + x.chargedKwh, 0)),
+        dischargedKwh: round3(perDow.reduce((s, x) => s + x.dischargedKwh, 0)),
+        cycles: round3(perDow.reduce((s, x) => s + x.cycles, 0)),
+      };
+      const payload = {
+        ok: true,
+        card: 'cycles',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        perDow,
+        totals,
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_cycles_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
   const api = {
     getSankey,
     getHeatmap,
@@ -972,9 +1218,9 @@ export function createHistoryVizAggregator(ctx) {
     getAutarkyCalendar,
     getRing,
     getDuration,
-    getPheat: makeStub('pheat'),
-    getSpaghetti: makeStub('spaghetti'),
-    getCycles: makeStub('cycles'),
+    getPheat,
+    getSpaghetti,
+    getCycles,
     getTop10: makeStub('top10'),
     getCalYear: makeStub('cal-year'),
     getScatter: makeStub('scatter'),

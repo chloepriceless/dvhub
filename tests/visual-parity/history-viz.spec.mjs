@@ -178,4 +178,33 @@ test.describe('History-viz foundation (Phase 09.3-01 Wave 1)', () => {
       `chart keys after applyView('day'): ${JSON.stringify(chartKeys)}`
     ).toBeGreaterThanOrEqual(0);
   });
+
+  // Plan 09.3-04 Wave 4 — Preis-Heatmap + SOC-Spaghetti + Zyklen-Histogramm.
+  test('Spec 10 — Wave-4 mount IDs present (vPHeat/vSpag/vCycles)', async ({ page }) => {
+    await page.goto('/history.html');
+    for (const id of ['vPHeat', 'vSpag', 'vCycles']) {
+      await expect(page.locator(`#${id}`)).toBeAttached();
+    }
+  });
+
+  test('Spec 11 — Wave-4 view gating: view=week all 3 visible; view=day hides Spaghetti+Zyklen', async ({ page }) => {
+    await page.goto('/history.html');
+    await page.waitForLoadState('networkidle');
+    const hidden = (card) => page.evaluate(
+      (c) => document.querySelector(`[data-viz-card="${c}"]`)?.classList.contains('viz-hidden-by-view'),
+      card
+    );
+    // view=week → pheat + spaghetti + cycles all visible.
+    await page.evaluate(() => window.historyViz?.applyView?.('week', '2026-05-15'));
+    await page.waitForTimeout(50);
+    expect(await hidden('pheat'), 'pheat should be visible in view=week').toBe(false);
+    expect(await hidden('spaghetti'), 'spaghetti should be visible in view=week').toBe(false);
+    expect(await hidden('cycles'), 'cycles should be visible in view=week').toBe(false);
+    // view=day → pheat stays visible; spaghetti + cycles gain .viz-hidden-by-view.
+    await page.evaluate(() => window.historyViz?.applyView?.('day', '2026-05-15'));
+    await page.waitForTimeout(50);
+    expect(await hidden('pheat'), 'pheat should stay visible in view=day').toBe(false);
+    expect(await hidden('spaghetti'), 'spaghetti should be hidden in view=day').toBe(true);
+    expect(await hidden('cycles'), 'cycles should be hidden in view=day').toBe(true);
+  });
 });
