@@ -210,11 +210,13 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     // slug to point this at. The LAN-bypass invariant only cares that the auth
     // gate sits BEFORE the dispatcher: a LAN IP without Bearer must REACH the
     // builder (any non-401/403 status proves the gate was bypassed — here the
-    // bare mockCtx has no `db`, so `getTop10` catches the error and returns a
-    // 500 envelope with card:'top10'); a REMOTE IP without Bearer must still be
-    // rejected by the gate (401 if token configured, 503 if not).
+    // bare mockCtx has no `db`, so `getTop10` runs its query path against a
+    // null db and returns a 200 with empty slots); a REMOTE IP without Bearer
+    // must still be rejected by the gate (401 if token configured, 503 if not).
+    // Use view=week — getTop10 rejects view=day (period roll-up), and a 400
+    // validation envelope would not exercise the builder body.
     const ctx = mockCtx();
-    const lanReq = makeReq('/api/history/viz/top10?view=day&date=2026-05-15', { token: null, ip: LAN_IP });
+    const lanReq = makeReq('/api/history/viz/top10?view=week&date=2026-05-15', { token: null, ip: LAN_IP });
     const lanRes = await dispatch(ctx, lanReq);
     assert.ok(
       lanRes.status !== 401 && lanRes.status !== 403,
@@ -223,7 +225,7 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     const lanBody = JSON.parse(lanRes.body);
     assert.equal(lanBody.card, 'top10', 'LAN response should come from the top10 builder');
 
-    const remReq = makeReq('/api/history/viz/top10?view=day&date=2026-05-15', { token: null, ip: REMOTE_IP });
+    const remReq = makeReq('/api/history/viz/top10?view=week&date=2026-05-15', { token: null, ip: REMOTE_IP });
     const remRes = await dispatch(ctx, remReq);
     assert.ok(
       remRes.status === 401 || remRes.status === 503,
