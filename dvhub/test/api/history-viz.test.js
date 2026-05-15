@@ -783,3 +783,238 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     assert.equal(ri2.cached, true, 'ring should cache on 2nd call');
   });
 });
+
+// =============================================================================
+// Plan 09.3-04 Wave 4 — Preis-Heatmap (dow×hour) / SOC-Spaghetti / Zyklen-
+// Histogramm. CONTEXT D-04 Gruppe B Tier-2 + D-05 cycle-counter.
+//
+//   - pheat:     7 dow × 24 hour avg-spot-price matrix from
+//                shared.market_price_slots (4-stop interpolated color scale).
+//   - spaghetti: up to 30 day-line datasets of 24h hourly SOC, "Heute"
+//                highlighted; single querySeries call (RESEARCH §Pitfall 5).
+//   - cycles:    7-dow bars (geladen/entladen kWh stacked) + cycles line; the
+//                cycle-counter uses cumulative |ΔSOC|/200 (RESEARCH §Cycle-
+//                Counter Algorithm), equivalent to the existing kpis.cycles
+//                discharge-energy/capacity formula in history-runtime.js.
+//
+// Spot price uses the real schema column names slot_start (TIMESTAMPTZ),
+// price_kind ('market'), price_ct_kwh (NUMERIC) — same correction Waves 2-3
+// applied (009-shared-tables.sql:253-269). The plan-doc assumed ts_utc +
+// price_ct_per_kwh.
+// =============================================================================
+
+// Build battery_soc_pct querySeries rows from a flat list of SOC percentages,
+// evenly spaced from `start` across `stepSec`. Used by the cycle-counter +
+// spaghetti tests so the builder runs against deterministic SOC series.
+function makeSocRows({ start, values, stepSec = SLOT_RES_SEC }) {
+  const rows = [];
+  const startMs = Date.parse(start);
+  for (let i = 0; i < values.length; i++) {
+    rows.push({
+      key: 'battery_soc_pct',
+      ts: new Date(startMs + i * stepSec * 1000).toISOString(),
+      value: values[i],
+      unit: '%',
+      resolution: stepSec,
+    });
+  }
+  return rows;
+}
+
+describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
+  // -------------------------------------------------------------------------
+  // Pheat (W4-1 — 7×24 matrix shape)
+  // -------------------------------------------------------------------------
+  it('Test W4-1 (Pheat shape): month view → 168-cell matrix, every v ≥ 0, domain.unit ct/kWh', async () => {
+    // db.query returns dow×hour rows; build a deterministic full grid.
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getPheat MUST use parameterized SQL');
+      assert.match(sql, /market_price_slots/i, 'getPheat SQL should query market_price_slots');
+      const rows = [];
+      for (let dow = 0; dow < 7; dow++) {
+        for (let hr = 0; hr < 24; hr++) {
+          rows.push({ dow, hr, avg_ct: 5 + hr * 0.5 });
+        }
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getPheat({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'pheat');
+    assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 24, `xLabels=24 expected, got ${b.xLabels?.length}`);
+    assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 7, `yLabels=7 expected, got ${b.yLabels?.length}`);
+    assert.ok(Array.isArray(b.matrix) && b.matrix.length === 168, `matrix.length=168 expected, got ${b.matrix?.length}`);
+    for (const c of b.matrix) {
+      assert.equal(typeof c.x, 'number', 'cell.x should be hour index');
+      assert.equal(typeof c.y, 'number', 'cell.y should be dow index');
+      assert.ok(c.v >= 0, `cell.v should be >= 0, got ${c.v}`);
+    }
+    assert.ok(b.domain && b.domain.unit === 'ct/kWh', `domain.unit should be 'ct/kWh', got ${b.domain?.unit}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Spaghetti (W4-2 shape + isToday, W4-3 payload size, W4-4 view rejection)
+  // -------------------------------------------------------------------------
+  it('Test W4-2 (Spaghetti shape + isToday): ≤30 series, exactly one isToday matching todayDate, 24 points each', async () => {
+    // 30 days of SOC samples (1 per hour) ending at ANCHOR_DATE.
+    const querySeries = async ({ seriesKeys, start }) => {
+      assert.ok(seriesKeys.includes('battery_soc_pct'), 'getSpaghetti should query battery_soc_pct');
+      const startMs = Date.parse(start);
+      const rows = [];
+      // hourly samples for 30 days
+      for (let h = 0; h < 30 * 24; h++) {
+        rows.push({
+          key: 'battery_soc_pct',
+          ts: new Date(startMs + h * 3600 * 1000).toISOString(),
+          value: 40 + (h % 24) * 2,
+          unit: '%',
+          resolution: 900,
+        });
+      }
+      return rows;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSpaghetti({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'spaghetti');
+    assert.ok(Array.isArray(b.series), 'series should be an array');
+    assert.ok(b.series.length <= 30, `series.length should be <= 30, got ${b.series.length}`);
+    const todayEntries = b.series.filter((s) => s.isToday === true);
+    assert.equal(todayEntries.length, 1, `exactly one isToday entry expected, got ${todayEntries.length}`);
+    assert.equal(todayEntries[0].date, b.todayDate, 'isToday entry date should equal todayDate');
+    for (const s of b.series) {
+      assert.ok(Array.isArray(s.points) && s.points.length === 24, `every series should have 24 points, ${s.date} has ${s.points?.length}`);
+    }
+  });
+
+  it('Test W4-3 (Spaghetti payload size): JSON ≤ 50_000 bytes', async () => {
+    const querySeries = async ({ seriesKeys, start }) => {
+      const startMs = Date.parse(start);
+      const rows = [];
+      for (let h = 0; h < 30 * 24; h++) {
+        rows.push({
+          key: 'battery_soc_pct',
+          ts: new Date(startMs + h * 3600 * 1000).toISOString(),
+          value: 55.5 + (h % 24),
+          unit: '%',
+          resolution: 900,
+        });
+      }
+      return rows;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSpaghetti({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const bytes = Buffer.byteLength(JSON.stringify(r.body), 'utf8');
+    assert.ok(bytes <= 50_000, `spaghetti payload should be <= 50KB, got ${bytes} bytes`);
+  });
+
+  it('Test W4-4 (Spaghetti view rejection): view=day → 400 with error', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getSpaghetti({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='day', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cycles (W4-5 view rejection, W4-6 formula sanity, W4-7 dow distribution)
+  // -------------------------------------------------------------------------
+  it('Test W4-5 (Cycles view rejection): view=day → 400', async () => {
+    const ctx = mockCtxWithStores();
+    const r = await ctx.historyVizApi.getCycles({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 400, `expected 400 for view='day', got ${r.status}`);
+    assert.match(r.body.error || '', /view/i);
+  });
+
+  it('Test W4-6 (Cycles formula sanity): SOC [0,100,0,100,0] → cumulative cycles 2.0', async () => {
+    // 4 transitions of 100% absolute change = 400 cumulative → 400/200 = 2.0.
+    // All 5 samples land on the SAME day so the per-DOW sum collapses to one DOW.
+    const querySeries = async ({ seriesKeys, start }) => {
+      assert.ok(seriesKeys.includes('battery_soc_pct'), 'getCycles should query battery_soc_pct');
+      // 5 samples 1h apart, all within the same UTC day (start..start+4h).
+      return makeSocRows({ start, values: [0, 100, 0, 100, 0], stepSec: 3600 });
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getCycles({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'cycles');
+    assert.ok(Array.isArray(b.perDow) && b.perDow.length === 7, `perDow should be 7 entries, got ${b.perDow?.length}`);
+    const totalCycles = b.perDow.reduce((s, d) => s + d.cycles, 0);
+    assert.ok(Math.abs(totalCycles - 2.0) < 0.001, `cumulative cycles should be 2.0, got ${totalCycles}`);
+    assert.ok(b.totals && Math.abs(b.totals.cycles - 2.0) < 0.001, `totals.cycles should be 2.0, got ${b.totals?.cycles}`);
+  });
+
+  it('Test W4-7 (Cycles dow distribution): cycles only on Wednesday → perDow[2] > 0, perDow[0] === 0', async () => {
+    // ANCHOR_DATE 2026-05-14 is a Thursday; the rolling-week window starting
+    // 6 days earlier covers Fri 05-08 .. Thu 05-14. 2026-05-13 is a Wednesday.
+    // Put SOC swings ONLY on 2026-05-13; all other days get a flat SOC.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const rows = [];
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      for (let t = startMs; t < endMs; t += 3600 * 1000) {
+        const d = new Date(t);
+        const dateKey = d.toISOString().slice(0, 10);
+        // Wednesday 2026-05-13 → alternating 0/100; everything else flat 50.
+        const isWed = dateKey === '2026-05-13';
+        const hr = d.getUTCHours();
+        rows.push({
+          key: 'battery_soc_pct',
+          ts: d.toISOString(),
+          value: isWed ? (hr % 2 === 0 ? 0 : 100) : 50,
+          unit: '%',
+          resolution: 3600,
+        });
+      }
+      return rows;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getCycles({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status}`);
+    const perDow = r.body.perDow;
+    // Mo=0..So=6 → Mittwoch index = 2.
+    assert.ok(perDow[2].cycles > 0, `Mittwoch (perDow[2]) cycles should be > 0, got ${perDow[2].cycles}`);
+    assert.equal(perDow[0].cycles, 0, `Montag (perDow[0]) cycles should be 0, got ${perDow[0].cycles}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cache (W4-8 — each Wave-4 card serves cached on 2nd call)
+  // -------------------------------------------------------------------------
+  it('Test W4-8 (cache hit): pheat/spaghetti/cycles each serve cached on the 2nd call', async () => {
+    let pheatCalls = 0;
+    let socCalls = 0;
+    const dbQuery = async () => {
+      pheatCalls++;
+      const rows = [];
+      for (let dow = 0; dow < 7; dow++) for (let hr = 0; hr < 24; hr++) rows.push({ dow, hr, avg_ct: 10 });
+      return { rows };
+    };
+    const querySeries = async ({ start }) => {
+      socCalls++;
+      return makeSocRows({ start, values: [10, 50, 90, 50, 10], stepSec: 3600 });
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries, dbQueryFn: dbQuery });
+
+    const p1 = await ctx.historyVizApi.getPheat({ view: 'month', date: ANCHOR_DATE });
+    const p2 = await ctx.historyVizApi.getPheat({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(p1.cached, false, 'first pheat call cached:false');
+    assert.equal(p2.cached, true, 'second pheat call cached:true');
+    assert.equal(p2.body.cached, true, 'second pheat body.cached:true');
+    assert.equal(pheatCalls, 1, `pheat db.query should run once for two cached calls; ran ${pheatCalls}`);
+
+    const s1 = await ctx.historyVizApi.getSpaghetti({ view: 'week', date: ANCHOR_DATE });
+    const s2 = await ctx.historyVizApi.getSpaghetti({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(s1.cached, false, 'first spaghetti call cached:false');
+    assert.equal(s2.cached, true, 'second spaghetti call cached:true');
+
+    const c1 = await ctx.historyVizApi.getCycles({ view: 'week', date: ANCHOR_DATE });
+    const c2 = await ctx.historyVizApi.getCycles({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(c1.cached, false, 'first cycles call cached:false');
+    assert.equal(c2.cached, true, 'second cycles call cached:true');
+    assert.equal(c2.body.cached, true, 'second cycles body.cached:true');
+  });
+});
