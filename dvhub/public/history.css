@@ -1,52 +1,34 @@
-/* Legacy --flow-* compat shim — these tokens were defined in styles.css
-   (deleted in 09.1-07 f5aa679). 15 history.css selectors still reference
-   them. Aliased to Aurora equivalents so cards/charts get back their
-   background, border and radius. Without this shim every .chart-span-card
-   / .config-group inner panel renders transparent on the deep-dark body. */
-:root {
-  --flow-surface: var(--bg-elev);
-  --flow-border: var(--glass-brd);
-  --flow-radius: var(--r-lg, 14px);
-}
+/* ════════════════════════════════════════════════════════════
+   DVhub History page — Aurora chrome (Plan 09.3 chrome port).
+
+   Loaded AFTER /dvhub-app.css (Aurora tokens + .card / .btn / .chip /
+   .segmented / .page / .page-head) and BEFORE /history-viz.css
+   (which owns ALL .viz-* / .heatmap / .autark-* / .ring-* / .grid-2 /
+   .sankey-wrap / .pheat / .top10 / .cal-year / .legend-row / .viz-foot
+   styling for the 14 Phase-09.3 viz cards).
+
+   This file carries:
+     1. Mobile hamburger nav (.nav-toggle + drawer) — canonical Aurora
+        topbar pattern, byte-identical to index.css.
+     2. Page chrome ported from .planning/DESIGN-2026-05-10-aurora/
+        history.html: .hist-toolbar, .hist-banner, the 6 .calc-card
+        KPI/breakdown cards, the .dv-grid Direktvermarktung card, and
+        the .chart-panel padding / .chart-mode segmented controls.
+     3. Chart-internal render styling for the 4 Chart.js panels
+        (#historyFinancialPanel etc.) — every .history-* class that
+        history.js emits at runtime into .history-chart-shell.
+
+   The legacy .config-group / .chart-span-card / .page-header-card /
+   .panel-head markup was removed in the 09.3 port; the matching CSS
+   was deleted with it. All geometry uses Aurora -- tokens; CSS grids
+   use minmax(0,1fr) so German compound labels can never push a track
+   past the viewport (D-24).
+   ════════════════════════════════════════════════════════════ */
 
 /* ──────────────────────────────────────────────────────────────────────
-   PAGE-CONTENT BASE LAYOUT (2026-05-14, gap-fill from 09.1-07 port)
-
-   The legacy styles.css defined `.page-content` as the standard sub-page
-   shell (settings/explorer/history/setup) with padding, max-width and
-   center margin. The 09.1-07 port only emitted `.history-page-content`
-   (a single padding:12px rule), so `<main class="page-content
-   history-page-content">` had no proper container — content rendered
-   with no horizontal padding gutter on phones once the page-content
-   padding fell off (only history-page-content's 12px applied). Mirrors
-   the explorer/integrations `.page-content` block.
-
-   `main.page-content { justify-self:stretch }` defends against the
-   .app-shell grid having no column template (default 'auto' would
-   shrink the <main> to content width). See explorer.css for context.
-   ────────────────────────────────────────────────────────────────────── */
-.page-content {
-  padding: 12px 16px;
-  width: 100%;
-  max-width: 100%;
-  margin: 0 auto;
-  box-sizing: border-box;
-}
-main.page-content { justify-self: stretch; }
-
-/* ──────────────────────────────────────────────────────────────────────
-   MOBILE HAMBURGER NAV (2026-05-14, gap-fill from 09.1-07 port)
-
-   The legacy styles.css carried the `.nav-toggle` + `@media(max-width:760px)`
-   topbar-nav drawer block. Plan 09.1-07's brace-balance Python extraction
-   missed it, so history.html's #navToggle button rendered unstyled and the
-   .topbar-nav stayed in its flex-row form at every viewport width —
-   producing a 6-item horizontally-scrollable nav on phones instead of the
-   off-canvas drawer that index/settings/explorer/integrations use.
-
-   common.js already wires the toggle (#navToggle ↔ #topbarNav.is-open),
-   so this is CSS-only. Block is byte-identical to index.css lines 32-73
-   (the canonical Aurora topbar pattern) — keep them in sync.
+   MOBILE HAMBURGER NAV — canonical Aurora topbar pattern.
+   common.js wires the toggle (#navToggle ↔ #topbarNav.is-open), so this
+   is CSS-only. Block is byte-identical to index.css — keep in sync.
    ────────────────────────────────────────────────────────────────────── */
 .nav-toggle {
   display: none;
@@ -88,857 +70,447 @@ main.page-content { justify-self: stretch; }
   .topbar-nav a.is-active::after { display: none; }
 }
 
-/* DVhub History page styles — Aurora additions (Plan 09.1-03 Wave 2).
-   Loaded AFTER /dvhub-app.css (Aurora tokens) and /styles.css (legacy
-   stylesheet — to be deleted in Plan 09.1-07). This file carries
-   page-specific Aurora tweaks that bridge the legacy markup classes
-   (.compact-topbar, .config-group, .history-*) into the Aurora token
-   surface (var(--cyan), var(--accent), etc.).
+/* Global overflow guard — last-resort viewport clipping so a
+   pathologically wide child can never produce a horizontal scrollbar. */
+html, body { max-width: 100%; overflow-x: hidden; }
 
-   Cascade contract:
-     /dvhub-app.css  — :root Aurora tokens + chart-token compat shim
-                       + .topbar / .theme-toggle / .status-pill / .btn
-                       (note: Aurora .btn uses `.btn.primary/.ghost/.sm`,
-                        not `.btn-primary/-ghost/-small` — legacy classes
-                        keep their styles.css definitions until Plan 09.1-07)
-     /styles.css     — Legacy stylesheet (unchanged from Wave 1 baseline)
-     /history.css    — THIS FILE: theme-toggle wiring + topbar Aurora paint
-                       hooks specific to the history page.
+/* ══════════════════════════════════════════════════════════════════════
+   PAGE HEAD
+   ══════════════════════════════════════════════════════════════════════ */
+.page-head-meta {
+  font-family: var(--f-mono); font-size: 11px;
+  color: var(--text-dim); letter-spacing: .04em; margin-top: 4px;
+}
+.page-head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-   Why this file is minimal: history.html does not have an embedded
-   <style> block (unlike family.html which had a 220-line one). Every
-   visual class history.html references already has a definition in
-   /styles.css — those rules carry through unchanged. The Aurora upgrade
-   for history.html v1.0 is delivered via:
-     1. Aurora token block in dvhub-app.css (provides --cyan/--green/...
-        that history.js's cssVar() chart-color reads pick up via the
-        chart-token compat shim)
-     2. theme.js attached, with a .theme-toggle button mounted in the
-        topbar — toggles <html data-theme="dark|auto|light">
-     3. <html data-theme="dark"> default applied in markup so first paint
-        already sees the Aurora dark palette (avoids flash-of-legacy
-        before theme.js runs)
-   Plan 09.1-07 deletes /styles.css and folds the page-required legacy
-   rules either into /dvhub-app.css (cross-page utilities) or into per-
-   page CSS files (page-specific shells). At that point this file may
-   grow to absorb history-* rules currently in styles.css. */
+/* ══════════════════════════════════════════════════════════════════════
+   TOOLBAR — period-nav controls in an Aurora .card
+   ══════════════════════════════════════════════════════════════════════ */
+.hist-toolbar {
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  padding: 14px 16px;
+}
+.hist-toolbar-group { display: flex; gap: 8px; align-items: center; }
+.hist-toolbar-lbl {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.hist-toolbar-select,
+.hist-toolbar-date {
+  background: var(--glass); border: 1px solid var(--glass-brd-strong);
+  border-radius: 8px; padding: 7px 10px; color: var(--text);
+  font-family: var(--f-mono); font-size: 11.5px;
+  transition: .15s;
+}
+.hist-toolbar-select:focus,
+.hist-toolbar-date:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.iconbtn {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  color: var(--text-2); font-family: var(--f-mono);
+  cursor: pointer; transition: .15s;
+}
+.iconbtn:hover {
+  color: var(--accent); border-color: var(--glass-brd-strong);
+  background: var(--glass-2);
+}
 
-/* ── Aurora theme-toggle button: hook the legacy .topbar-right slot. ───
-   The dvhub-app.css :root + light-theme blocks define .theme-toggle. We
-   only need to ensure the button is visible and inherits the Aurora
-   token palette. */
-.compact-topbar .theme-toggle {
-  /* Lift the Aurora .theme-toggle styles into the compact-topbar slot.
-     dvhub-app.css already defines the base button (border, padding, hover).
-     This rule is the bridge so the button does not collide with
-     compact-topbar's flex layout. */
-  margin-left: 6px;
+/* ══════════════════════════════════════════════════════════════════════
+   BANNER — #historyBanner status strip
+   ══════════════════════════════════════════════════════════════════════ */
+.hist-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 16px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--blue) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 18%, transparent);
+  border-radius: var(--r-lg);
+}
+.hist-banner-main { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+.hist-banner-ico {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: color-mix(in srgb, var(--cyan) 16%, transparent);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--cyan); font-family: var(--f-mono); font-size: 12px;
   flex-shrink: 0;
 }
-
-/* ── Topbar Aurora paint: light theme support. ────────────────────────
-   When theme.js sets <html data-theme="light">, the legacy
-   /styles.css compact-topbar uses fixed dark colors. Override here so
-   the topbar respects the user's theme preference. */
-[data-theme="light"] .compact-topbar {
-  background: var(--bg-1);
-  color: var(--text);
-  border-bottom: 1px solid var(--hairline);
+.hist-banner-txt { font-size: 12px; color: var(--text-2); }
+.hist-banner-info {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  width: 100%; margin-top: 4px; padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-dim); font-size: 11px;
+}
+/* Status variants (history.js toggles these on #historyBanner) */
+.hist-banner.success {
+  background: color-mix(in srgb, var(--green) 6%, transparent);
+  border-color: color-mix(in srgb, var(--green) 28%, transparent);
+}
+.hist-banner.warn {
+  background: color-mix(in srgb, var(--yellow) 6%, transparent);
+  border-color: color-mix(in srgb, var(--yellow) 28%, transparent);
+}
+.hist-banner.error {
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
-[data-theme="light"] .compact-topbar .topbar-nav a {
-  color: var(--text-2);
-}
-
-[data-theme="light"] .compact-topbar .topbar-nav a:hover {
-  color: var(--accent);
-}
-
-[data-theme="light"] .compact-topbar .topbar-nav a.is-active {
-  color: var(--accent);
-}
-
-/* ── Chart palette: the chart-token compat shim in dvhub-app.css aliases
-   --chart-positive → var(--cyan), --chart-negative → var(--red), etc.
-   No history.css overrides needed. history.js's cssVar() reads pick up
-   the Aurora palette automatically once dvhub-app.css is loaded. */
-
-/* ──────────────────────────────────────────────────────────────────────
-   PORTED FROM styles.css (Plan 09.1-07 cleanup, 2026-05-14):
-   299 selectors covering history.html's KPI cards (.config-group/.config-row),
-   chart panels (.chart-span-card / .history-chart-shell / .history-panel-mb),
-   DV section (.history-dv-*), banner (.history-status-*), and topbar
-   (.compact-topbar / .topbar-burger). These were previously inherited
-   from /styles.css; with that file deleted, this is the new home.
-   ────────────────────────────────────────────────────────────────────── */
-/* Chart spanning left+center columns */
-.chart-span-card {
-  background: var(--flow-surface);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 12px;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.rail-card[data-accent="pv"] {
-  border-color: rgba(227, 179, 65, 0.3);
-}
-
-.rail-card[data-accent="bat"] {
-  border-color: rgba(63, 185, 80, 0.3);
-}
-
-.rail-card[data-accent="dv"] {
-  border-color: rgba(188, 140, 255, 0.3);
-}
-
-.rail-card[data-accent="market"] {
-  border-color: rgba(240, 136, 62, 0.3);
-}
-
-.rail-card[data-accent="cost"] {
-  border-color: rgba(240, 136, 62, 0.2);
-}
-
-.rail-card[data-accent="auto"] {
-  border-color: rgba(188, 140, 255, 0.2);
-}
-
-.rail-card[data-accent="ctrl"] {
-  border-color: rgba(88, 166, 255, 0.3);
-}
-
-.section-title {
-  font-family: var(--font-brand);
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--flow-text);
-}
-
-/* --- Panel head --- */
-.panel-head {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-/* --- Metric rows --- */
-.metric-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.85rem;
-  padding: 3px 0;
-}
-
-.metric-row span:first-child {
-  color: var(--flow-text-muted);
-}
-
-.metric-row span:last-child,
-.metric-row strong {
-  color: var(--flow-text);
-  font-weight: 500;
-}
-
-.metric-row-action {
-  cursor: pointer;
-  transition: background 0.15s;
-  border-radius: 4px;
-  padding: 2px 4px;
-  margin: -2px -4px;
-}
-
-.metric-row-action:hover {
-  background: rgba(63, 185, 80, 0.08);
-}
-
-.metric-row-hint {
-  font-size: 0.55rem;
-  color: var(--flow-text-dim);
-  margin-left: 4px;
-}
-
-.btn-primary {
-  background: var(--chart-positive);
-  color: #ffffff;
-}
-
-.btn-primary:hover {
-  background: var(--chart-positive-highlight);
-}
-
-.btn-ghost {
-  background: rgba(255,255,255,0.04);
-  color: rgba(232,234,240,0.7);
-  border: 1px solid rgba(123,151,178,0.25);
-}
-
-.btn-ghost:hover {
-  background: rgba(255,255,255,0.08);
-  border-color: rgba(123,151,178,0.45);
-  color: var(--flow-text);
-}
-
-.btn-small {
-  padding: 3px 8px;
-  font-size: 0.65rem;
-}
-
-.status-banner {
-  font-size: 0.65rem;
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: rgba(99, 130, 246, 0.06);
-  color: var(--flow-text-muted);
-}
-
-/* --- Hamburger menu (hidden checkbox + label, no JS needed) --- */
-.menu-toggle-cb {
-  display: none;
-}
-
-.topbar-burger {
-  display: none;
-  cursor: pointer;
-  padding: 12px;
-  flex-direction: column;
-  gap: 5px;
-  z-index: 11;
-  min-width: 44px;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  -webkit-tap-highlight-color: rgba(255,255,255,0.1);
-}
-
-.topbar-burger span {
-  display: block;
-  width: 22px;
-  height: 2px;
-  background: var(--flow-text);
-  border-radius: 1px;
-  transition: transform 0.2s, opacity 0.2s;
-}
-
-.page-topbar-copy,
-.compact-topbar-copy {
+/* ══════════════════════════════════════════════════════════════════════
+   CALC CARDS — the 6 KPI/breakdown cards
+   ══════════════════════════════════════════════════════════════════════ */
+.calc-row {
   display: grid;
-  gap: 4px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--gap-3);
 }
+.calc-row > * { min-width: 0; }
 
-.compact-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  border-color: rgba(0, 168, 255, 0.28);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 24%),
-    linear-gradient(145deg, rgba(12, 37, 69, 0.96), rgba(9, 27, 49, 0.92));
+.calc-card {
+  padding: 16px 16px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  position: relative;
 }
+.calc-card::after {
+  content: ''; position: absolute; left: 14px; right: 14px; top: 0;
+  height: 1.5px; background: var(--accent); opacity: .45; border-radius: 2px;
+}
+/* Accent map — mockup scheme + the green/orange values history.js sets
+   dynamically on #historyKpiBilanzCard via dataset.accent. */
+.calc-card[data-accent="cost"]    { --accent: var(--red); }
+.calc-card[data-accent="revenue"] { --accent: var(--green); }
+.calc-card[data-accent="net"]     { --accent: var(--blue); }
+.calc-card[data-accent="avoided"] { --accent: var(--cyan); }
+.calc-card[data-accent="energy"]  { --accent: var(--violet); }
+.calc-card[data-accent="bilanz"]  { --accent: var(--green); }
+.calc-card[data-accent="green"]   { --accent: var(--green); }
+.calc-card[data-accent="orange"]  { --accent: var(--orange); }
 
-.compact-topbar-meta {
-  display: grid;
+.calc-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
   gap: 6px;
-  margin-top: 4px;
 }
+.calc-kicker {
+  font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--accent); font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.calc-total {
+  font-family: var(--f-brand); font-size: 26px; font-weight: 600;
+  line-height: 1; letter-spacing: -.02em; color: var(--accent);
+  font-variant-numeric: tabular-nums; margin-top: 2px;
+}
+.calc-rows {
+  display: grid; gap: 5px; padding-top: 6px; margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+.calc-rows[hidden] { display: none; }
+/* Energiebilanz: no big total — rows sit flush with the head */
+.calc-rows-flush { border-top: 0; padding-top: 0; margin-top: 0; gap: 6px; }
+.calc-row-line {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; font-size: 11.5px; line-height: 1.3;
+}
+.calc-row-line span {
+  color: var(--text-dim); font-family: var(--f-mono);
+  font-size: 10.5px; letter-spacing: .04em;
+  overflow-wrap: anywhere; min-width: 0;
+}
+.calc-row-line strong {
+  color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums;
+  font-family: var(--f-brand); font-size: 13px;
+}
+.calc-row-line strong.acc  { color: var(--accent); }
+.calc-row-line strong.warn { color: var(--red); }
+.calc-row-line strong.ok   { color: var(--green); }
+.calc-row-line.sep {
+  padding-top: 5px; margin-top: 1px;
+  border-top: 1px dashed var(--hairline); font-weight: 600;
+}
+.calc-row-line.sep span,
+.calc-row-line.sep strong { font-size: 11.5px; }
 
-.shell-layout .section-title {
-  margin: 2px 0 0;
-  font-family: var(--font-title);
-  font-size: 1.5rem;
-  letter-spacing: 0.02em;
+.calc-toggle {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
+  background: transparent; border: 1px solid var(--glass-brd);
+  border-radius: 6px; color: var(--text-dim); cursor: pointer;
+  transition: .15s;
+  font-family: var(--f-mono); font-size: 9px; letter-spacing: .12em;
   text-transform: uppercase;
 }
-
-.shell-layout .metric-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 8px;
-  font-size: 0.92rem;
+.calc-toggle.is-active,
+.calc-toggle:hover {
+  color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--cyan) 8%, transparent);
 }
 
-.shell-layout .metric-row span {
-  color: var(--text-muted);
-}
+/* ══════════════════════════════════════════════════════════════════════
+   DV CARD — Direktvermarktung breakdown grid
+   ══════════════════════════════════════════════════════════════════════ */
+.history-dv-card-hidden { display: none; }
 
-.shell-layout .metric-row strong {
-  text-align: right;
-}
-
-.shell-layout .metric-row-action {
-  align-items: center;
-  min-height: 48px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 168, 255, 0.26);
-  background:
-    linear-gradient(135deg, rgba(0, 168, 255, 0.08), rgba(57, 224, 111, 0.03)),
-    rgba(7, 18, 30, 0.3);
-  cursor: pointer;
-  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-}
-
-.shell-layout .metric-row-action:hover {
-  border-color: rgba(0, 168, 255, 0.58);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
-  transform: translateY(-1px);
-}
-
-.shell-layout .metric-row-action:focus-visible {
-  outline: 2px solid rgba(168, 240, 0, 0.9);
-  outline-offset: 2px;
-}
-
-.shell-layout .metric-row-action span {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.shell-layout .metric-row-hint {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 168, 255, 0.14);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.shell-layout .btn-primary {
-  color: #ffffff;
-  border-color: rgba(0, 168, 255, 0.44);
-  background: rgba(0, 119, 255, 0.92);
-  box-shadow: 0 10px 24px rgba(0, 119, 255, 0.22);
-}
-
-.shell-layout .btn-ghost {
-  color: var(--text-main);
-  border-color: var(--line);
-  background: rgba(12, 37, 69, 0.82);
-}
-
-/* --- Legacy panel-head (scoped) --- */
-.shell-layout .panel-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-/* --- Legacy status (scoped) --- */
-.shell-layout .status-banner {
-  margin-top: 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(137, 166, 195, 0.35);
-  background: rgba(10, 24, 38, 0.82);
-  padding: 8px 10px;
-  color: var(--text-main);
-  font-size: 0.84rem;
-  line-height: 1.35;
-}
-
-.status-banner.success {
-  border-color: rgba(76, 227, 108, 0.45);
-  background: rgba(8, 36, 18, 0.72);
-}
-
-.status-banner.warn {
-  border-color: rgba(255, 152, 0, 0.5);
-  background: rgba(61, 32, 3, 0.82);
-}
-
-.status-banner.error {
-  border-color: rgba(255, 104, 104, 0.5);
-  background: rgba(53, 11, 11, 0.8);
-}
-
-/* --- History page styles --- */
-.history-layout { grid-template-columns: minmax(0, 1fr); }
-
-.history-actions { align-items: end; }
-
-.history-nav-buttons { display: flex; gap: 8px; }
-
-/* Legacy fallback KPI strip — kept for any history.html variant that
-   uses .history-kpi-row WITHOUT .history-kpi-row-grid. The grid variant
-   (current production markup) wins via later cascade. Switched to
-   display:grid here too so combining both classes can't enable
-   horizontal scroll on phones — the previous overflow-x:auto would
-   create a scrollbar at narrow widths even when .history-kpi-row-grid
-   intended 2-col wrap. */
-.history-kpi-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-  padding-bottom: 2px;
-}
-
-.history-kpi-row > * { min-width: 0; }
-
-/* DV-Einspeisevergütung card */
-.history-dv-grid {
+.dv-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-top: 1px solid var(--flow-border);
-  margin-top: 10px;
+  gap: 0; padding: 0 4px;
 }
-.history-dv-grid > * { min-width: 0; }
-@media (max-width: 1100px) {
-  .history-dv-grid { grid-template-columns: repeat(2, 1fr); }
-  .history-dv-section + .history-dv-section { border-left: none; }
-  .history-dv-section { border-top: 1px solid var(--flow-border); }
+.dv-grid > * { min-width: 0; }
+.dv-section { padding: 14px 18px; }
+.dv-section + .dv-section { border-left: 1px solid var(--hairline); }
+.dv-label {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px;
 }
-.history-premium-hint-inline {
-  font-size: 11px;
-  color: rgba(232,234,240,0.5);
-  margin: 6px 0 0;
-  line-height: 1.4;
+.dv-value {
+  font-family: var(--f-brand); font-size: 22px; font-weight: 600;
+  color: var(--green); line-height: 1; margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
 }
-/* Sub-line under Hypothetisch-row showing rate × kWh basis. Sits flush
-   under the Euro-total row, no border-bottom, dimmed mono font. */
-.history-hyp-detail { padding-top: 0; padding-bottom: 6px; border-bottom: none; min-height: 16px; }
-.history-hyp-detail-text {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: 11px;
-  color: rgba(232,234,240,0.45);
-  letter-spacing: 0.02em;
+.dv-hint {
+  font-family: var(--f-mono); font-size: 10.5px; color: var(--text-dim);
+  letter-spacing: .04em; line-height: 1.4; margin-top: 8px;
 }
-
-.history-dv-section {
-  padding: 12px 16px;
+.dv-detail { padding-top: 0; min-height: 16px; }
+.dv-detail-text {
+  font-family: var(--f-mono); font-size: 10.5px; color: var(--text-dim);
+  letter-spacing: .02em;
 }
 
-.history-dv-section + .history-dv-section {
-  border-left: 1px solid var(--flow-border);
+@media (max-width: 900px) {
+  .dv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dv-section + .dv-section { border-left: 0; }
+}
+@media (max-width: 560px) {
+  .dv-grid { grid-template-columns: minmax(0, 1fr); }
+  .dv-section + .dv-section { border-top: 1px solid var(--hairline); }
 }
 
-.history-dv-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
+/* ══════════════════════════════════════════════════════════════════════
+   CHART PANELS — the 4 Chart.js panels (#historyFinancialPanel etc.)
 
-.history-dv-value {
-  font-size: 1.3rem;
-  font-weight: 700;
-  margin-bottom: 6px;
-}
+   history.js renderLayout() overwrites #historyFinancialPanel's
+   className with `panel history-chart-panel ...`, so the chart-panel
+   look must also attach to .history-chart-panel — the .card / .chart-panel
+   classes set in the static HTML get stripped on first render.
+   ══════════════════════════════════════════════════════════════════════ */
+.chart-panel { padding: 18px; }
 
-.history-arrow-btn {
-  min-width: 48px;
-  min-height: 48px;
-  padding: 0;
-  font-size: 1.2rem;
-}
-
-.history-control {
-  display: grid;
-  gap: 6px;
-  min-width: 140px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.history-control span { font-family: var(--font-title); }
-
-.history-control-wide { min-width: 220px; }
-
-.history-control input[type="range"] { width: 100%; accent-color: #f5c451; }
-
-.history-summary-card {
-  padding: 14px;
-  border-color: rgba(0, 168, 255, 0.3);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 28%),
-    linear-gradient(145deg, rgba(12, 37, 69, 0.96), rgba(9, 27, 49, 0.94));
-}
-
-.history-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.history-summary-block {
-  display: grid;
-  gap: 12px;
+.history-chart-panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  padding: 18px;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-sm);
+  position: relative;
   min-width: 0;
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
-    rgba(7, 18, 30, 0.38);
 }
+.history-chart-panel-wide { width: 100%; }
 
-.history-summary-block-head {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 10px;
+/* chart-mode segmented control (aggregate / energy mode buttons) */
+.chart-mode {
+  display: inline-flex; gap: 0;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  border-radius: 8px; padding: 2px;
 }
-
-.history-summary-block .card-title { font-size: 0.68rem; letter-spacing: 0.08em; }
-
-.history-summary-block .section-title { font-size: 1.05rem; }
-
-.history-summary-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 10px 12px;
+.chart-mode[hidden] { display: none; }
+.chart-mode button {
+  background: transparent; border: 0; padding: 5px 11px; border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; transition: .15s;
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase;
 }
-
-.history-summary-item { display: grid; gap: 4px; align-content: start; min-width: 0; }
-
-.history-summary-item span { color: var(--text-muted); font-size: 0.74rem; letter-spacing: 0.05em; text-transform: uppercase; }
-
-.history-summary-item strong { color: var(--text-main); font-size: 1rem; line-height: 1.1; }
-
-.history-summary-item.is-key strong {
-  font-family: var(--font-title);
-  font-size: 1.55rem;
-  letter-spacing: 0.02em;
+.chart-mode button.is-active {
+  background: var(--glass-2); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--glass-brd);
 }
+.chart-mode button:not(.is-active):hover { color: var(--text-2); }
 
-.history-summary-breakdown { grid-template-columns: repeat(auto-fit, minmax(116px, 1fr)); }
-
-.history-summary-premium {
-  grid-column: 1 / -1;
-  border-style: dashed;
-  background:
-    linear-gradient(90deg, rgba(0, 168, 255, 0.08), rgba(168, 240, 0, 0.04)),
-    rgba(7, 18, 30, 0.34);
+/* The aggregate/energy mode wrappers carry .history-aggregate-mode too,
+   so history.js can toggle .is-visible. Style them as a .chart-mode. */
+.history-aggregate-mode { display: none; }
+.history-aggregate-mode.is-visible {
+  display: inline-flex; gap: 0;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  border-radius: 8px; padding: 2px;
 }
-
-.history-summary-hint {
-  margin: 12px 0 0;
-  color: var(--text-soft);
-  font-size: 0.82rem;
-  line-height: 1.45;
+.history-aggregate-mode-btn {
+  background: transparent; border: 0; padding: 5px 11px; border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; transition: .15s;
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase;
 }
+.history-aggregate-mode-btn.is-active {
+  background: var(--glass-2); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--glass-brd);
+}
+.history-aggregate-mode-btn:not(.is-active):hover { color: var(--text-2); }
 
+/* ══════════════════════════════════════════════════════════════════════
+   CHART GRID — full-width stacked layout for the 4 chart panels.
+   history.js renderLayout() sets `history-chart-grid reveal
+   history-chart-grid-day|aggregated` on #historyChartGrid.
+   ══════════════════════════════════════════════════════════════════════ */
 .history-chart-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  display: flex; flex-direction: column; gap: var(--gap-3);
 }
-.history-chart-grid > * { min-width: 0; }
+.history-chart-grid > * { min-width: 0; width: 100%; }
+.history-chart-grid-aggregated,
+.history-chart-grid-day { /* both stack full-width */ }
 
-/* History chart grid — override the 3-col grid to stack full-width
-   when nested in .page-content (which is always, since history.html
-   wraps everything in <main class="page-content history-page-content">).
-   Ported from legacy styles.css §HISTORY full-width chart grid override
-   (2026-05-14 gap-fill from 09.1-07 port). Without this override the
-   4 chart panels (Financial/MonthDaily/Energy/Price) squeeze into 3
-   columns at 900-1400px viewports — cramped and hard to read.
-   Stacking vertically was the legacy behavior the user is used to. */
-.page-content .history-chart-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.page-content .history-chart-grid article { width: 100%; }
-
-/* Global overflow guard for the whole page-content area — prevents any
-   stray wide child (long unbreakable number, oversized chart canvas,
-   unwrapped <pre> in the rows table) from pushing the body wider than
-   the viewport. */
-.history-page-content { min-width: 0; overflow-x: hidden; }
-
-.history-chart-grid-aggregated { grid-template-columns: minmax(0, 1fr); }
-
-.history-chart-panel { min-width: 0; }
-
-.history-chart-panel-wide { grid-column: 1 / -1; }
-
+/* Chart mount shell — Chart.js mounts <canvas> as a direct child. */
 .history-chart-shell {
-  min-height: 220px;
-  min-width: 0; /* Chart.js sets pixel-width on <canvas>; without this the
-                   grid column refuses to shrink past the chart's render width */
-  display: grid;
-  align-content: start;
-  border-radius: 12px;
-  border: 1px dashed rgba(141, 180, 221, 0.28);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
-    rgba(6, 16, 28, 0.44);
-  color: var(--text-soft);
+  min-height: 280px;
+  min-width: 0;
+  display: grid; align-content: start;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  color: var(--text-2);
   text-align: left;
   padding: 12px;
   overflow: hidden;
 }
-/* Chart.js mounts the <canvas> as a direct child of .history-chart-shell.
-   Force it to width:100% so it shrinks with the column instead of forcing
-   the column wider. Chart.js will still set its internal device pixels
-   based on the actual element size after responsive=true kicks in. */
 .history-chart-shell > canvas {
   max-width: 100% !important;
   height: auto !important;
 }
-
-/* Chart mount wrapper (Plan 09.1-07 Task 3 — CSP cleanup,
-   replaces inline style="position:relative;height:Xpx" in history.js
-   renderLineChart/renderPriceChart/etc). Height is dynamic and set
-   via .style.height setter post-innerHTML. */
+/* Chart mount wrapper — replaces inline style on the dynamically created
+   chart container; height is set via .style.height post-innerHTML. */
 .history-chart-mount-container { position: relative; }
 
-.history-aggregate-mode {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  padding: 4px;
-  border-radius: 999px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background: rgba(7, 18, 30, 0.44);
-}
-
-.history-aggregate-mode.is-visible { display: inline-flex; }
-
-.history-aggregate-mode-btn {
-  min-height: 34px;
-  min-width: 112px;
-  border-radius: 999px;
-}
-
-.history-aggregate-mode-btn.is-active {
-  border-color: rgba(0, 168, 255, 0.85);
-  background: rgba(0, 119, 255, 0.28);
-  color: var(--text-main);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-}
-
+/* ══════════════════════════════════════════════════════════════════════
+   CHART-INTERNAL RENDER STYLING — every .history-* class history.js
+   emits at runtime into .history-chart-shell (bars, lines, period
+   cards, legends, tables, axes). Kept verbatim from the pre-port file
+   (chart internals, not page chrome).
+   ══════════════════════════════════════════════════════════════════════ */
 .history-rows { display: grid; gap: 10px; }
 
 .history-chart-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 10px;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-}
-
-.history-row-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background: rgba(7, 18, 30, 0.46);
-}
-
-.history-row-head,
-.history-row-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  align-items: center;
-  justify-content: space-between;
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+  color: var(--text-dim); font-size: 12px;
 }
 
 .history-bars {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
-  gap: 10px;
-  align-items: end;
-  min-height: 168px;
+  gap: 10px; align-items: end; min-height: 168px;
 }
 
 .history-chart-empty {
-  display: grid;
-  place-items: center;
-  min-height: 168px;
-  color: var(--text-soft);
-  text-align: center;
+  display: grid; place-items: center; min-height: 168px;
+  color: var(--text-2); text-align: center;
 }
 
 .history-bar-card {
-  display: grid;
-  gap: 8px;
-  justify-items: center;
-  padding: 10px 8px;
-  border-radius: 12px;
-  background: rgba(7, 18, 30, 0.38);
+  display: grid; gap: 8px; justify-items: center;
+  padding: 10px 8px; border-radius: var(--r-md);
+  background: var(--glass);
 }
 
 .history-bar {
-  width: 100%;
-  max-width: 30px;
+  width: 100%; max-width: 30px;
   border-radius: 999px 999px 6px 6px;
-  background: rgba(141, 180, 221, 0.5);
+  background: var(--text-dim);
 }
 
 .history-stack {
-  display: flex;
-  align-items: end;
-  gap: 4px;
-  min-height: 132px;
-  width: 100%;
-  justify-content: center;
+  display: flex; align-items: end; gap: 4px;
+  min-height: 132px; width: 100%; justify-content: center;
 }
 
-.history-bar-net { background: linear-gradient(180deg, rgba(57, 224, 111, 0.9), rgba(0, 168, 255, 0.72)); }
-
-.history-bar-revenue { background: linear-gradient(180deg, rgba(57, 224, 111, 0.95), rgba(42, 142, 92, 0.88)); }
-
-.history-bar-cost { background: linear-gradient(180deg, rgba(255, 107, 107, 0.95), rgba(208, 69, 69, 0.84)); }
-
-.history-bar-avoided { background: linear-gradient(180deg, rgba(245, 196, 81, 0.96), rgba(227, 152, 38, 0.84)); }
-
-.history-bar-grid { background: linear-gradient(180deg, rgba(0, 168, 255, 0.96), rgba(0, 119, 255, 0.78)); }
-
-.history-bar-pv { background: linear-gradient(180deg, rgba(168, 240, 0, 0.95), rgba(86, 166, 0, 0.82)); }
-
-.history-bar-battery { background: linear-gradient(180deg, rgba(255, 152, 0, 0.95), rgba(191, 100, 0, 0.84)); }
-
-.history-bar-energy { background: linear-gradient(180deg, rgba(0, 168, 255, 0.92), rgba(0, 119, 255, 0.7)); }
-
-.history-bar-export { background: linear-gradient(180deg, rgba(57, 224, 111, 0.92), rgba(20, 126, 84, 0.78)); }
+.history-bar-net      { background: linear-gradient(180deg, var(--green), var(--blue)); }
+.history-bar-revenue  { background: linear-gradient(180deg, var(--green), color-mix(in srgb, var(--green) 70%, #000)); }
+.history-bar-cost     { background: linear-gradient(180deg, var(--red), color-mix(in srgb, var(--red) 70%, #000)); }
+.history-bar-avoided  { background: linear-gradient(180deg, var(--yellow), var(--orange)); }
+.history-bar-grid     { background: linear-gradient(180deg, var(--cyan), var(--blue)); }
+.history-bar-pv       { background: linear-gradient(180deg, var(--yellow), var(--orange)); }
+.history-bar-battery  { background: linear-gradient(180deg, var(--orange), color-mix(in srgb, var(--orange) 70%, #000)); }
+.history-bar-energy   { background: linear-gradient(180deg, var(--cyan), var(--blue)); }
+.history-bar-export   { background: linear-gradient(180deg, var(--green), color-mix(in srgb, var(--green) 60%, #000)); }
 
 .history-line-chart,
 .history-stack-chart { display: grid; gap: 12px; width: 100%; }
-
 .history-line-chart-detail { gap: 14px; }
-
 .history-aggregate-overview { display: grid; gap: 14px; }
 
 .history-summary-table,
 .history-aggregate-breakdown-table {
-  width: 100%;
-  border-collapse: collapse;
-  border-radius: 14px;
-  overflow: hidden;
-  background: rgba(7, 18, 30, 0.34);
+  width: 100%; border-collapse: collapse;
+  border-radius: var(--r-lg); overflow: hidden;
+  background: var(--glass);
 }
-
 .history-summary-table th,
 .history-summary-table td,
 .history-aggregate-breakdown-table th,
 .history-aggregate-breakdown-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(31, 76, 122, 0.42);
-  text-align: left;
-  white-space: nowrap;
+  padding: 10px 12px; border-bottom: 1px solid var(--hairline);
+  text-align: left; white-space: nowrap;
 }
-
 .history-summary-table thead th,
 .history-aggregate-breakdown-table thead th {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  color: var(--text-dim); font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase;
 }
-
 .history-summary-table tbody tr:last-child th,
 .history-summary-table tbody tr:last-child td,
 .history-aggregate-breakdown-table tbody tr:last-child th,
-.history-aggregate-breakdown-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
+.history-aggregate-breakdown-table tbody tr:last-child td { border-bottom: none; }
 .history-summary-table tbody th,
 .history-aggregate-breakdown-table tbody th {
-  color: var(--text-main);
-  font-family: var(--font-title);
-  font-size: 0.92rem;
+  color: var(--text); font-family: var(--f-brand); font-size: 13px;
 }
-
 .history-summary-table tbody td,
 .history-aggregate-breakdown-table tbody td {
-  color: var(--text-main);
-  font-size: 0.84rem;
+  color: var(--text); font-size: 12px;
 }
-
 .history-aggregate-breakdown-table { display: block; overflow-x: auto; }
-
-.history-aggregate-summary-row { background: rgba(0, 168, 255, 0.08); }
+.history-aggregate-summary-row { background: var(--glass-2); }
 
 .history-aggregate-trend {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background: rgba(7, 18, 30, 0.34);
+  display: grid; gap: 10px; padding: 12px;
+  border-radius: var(--r-lg); border: 1px solid var(--glass-brd);
+  background: var(--glass);
 }
 
 .history-chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  color: var(--text-dim); font-size: 11px;
 }
-
-.history-chart-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
+.history-chart-legend span { display: inline-flex; align-items: center; gap: 8px; }
 
 .history-legend-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  display: inline-block;
-  background: rgba(141, 180, 221, 0.5);
+  width: 10px; height: 10px; border-radius: 999px;
+  display: inline-block; background: var(--text-dim);
 }
 
 .history-line-svg { width: 100%; height: 160px; overflow: visible; }
-
 .history-line-svg-detail { height: 220px; }
 
 .history-chart-interaction { position: relative; }
-
 .history-chart-interaction > .history-chart-hover-surface {
-  position: absolute;
-  inset: 0;
-  cursor: crosshair;
+  position: absolute; inset: 0; cursor: crosshair;
 }
 
-.history-grid-line { fill: none; stroke: rgba(141, 180, 221, 0.2); stroke-width: 1; }
+.history-grid-line { fill: none; stroke: var(--hairline); stroke-width: 1; }
 
 .history-axis-caption {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--text-dim); font-size: 11px;
+  letter-spacing: .04em; text-transform: uppercase;
 }
-
-.history-axis-label { fill: rgba(222, 235, 249, 0.7); font-size: 11px; }
-
+.history-axis-label { fill: var(--text-2); font-size: 11px; }
 .history-x-axis-label { text-anchor: middle; }
-
-.history-axis-baseline { fill: none; stroke: rgba(141, 180, 221, 0.35); stroke-width: 1; }
+.history-axis-baseline { fill: none; stroke: var(--glass-brd-strong); stroke-width: 1; }
 
 .history-series-line {
-  fill: none;
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  fill: none; stroke-width: 3;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-
 .history-series-cost,
 .history-series-import,
 .history-series-market,
@@ -946,65 +518,47 @@ main.page-content { justify-self: stretch; }
 .history-legend-swatch.history-series-cost,
 .history-legend-swatch.history-series-import,
 .history-legend-swatch.history-series-market,
-.history-legend-swatch.history-series-user {
-  stroke: var(--dvhub-electric);
-  background: var(--dvhub-electric);
-}
+.history-legend-swatch.history-series-user { stroke: var(--cyan); background: var(--cyan); }
 
 .history-series-revenue,
 .history-series-export,
 .history-legend-swatch.history-series-revenue,
-.history-legend-swatch.history-series-export {
-  stroke: var(--dvhub-green);
-  background: var(--dvhub-green);
-}
+.history-legend-swatch.history-series-export { stroke: var(--green); background: var(--green); }
 
 .history-series-net,
-.history-legend-swatch.history-series-net { stroke: var(--dvhub-lime); }
+.history-legend-swatch.history-series-net { stroke: var(--green); }
 
 .history-series-load,
-.history-legend-swatch.history-series-load {
-  stroke: rgba(191, 199, 210, 0.92);
-  background: rgba(191, 199, 210, 0.92);
-}
+.history-legend-swatch.history-series-load { stroke: var(--text-2); background: var(--text-2); }
 
 .history-series-pv,
-.history-legend-swatch.history-series-pv { stroke: #f5c451; background: #f5c451; }
+.history-legend-swatch.history-series-pv { stroke: var(--yellow); background: var(--yellow); }
 
 .history-series-pv-ac,
-.history-legend-swatch.history-series-pv-ac { stroke: #ff9f43; background: #ff9f43; }
+.history-legend-swatch.history-series-pv-ac { stroke: var(--orange); background: var(--orange); }
 
 .history-series-import-red,
-.history-legend-swatch.history-series-import-red { stroke: #ff6b6b; background: #ff6b6b; }
+.history-legend-swatch.history-series-import-red { stroke: var(--red); background: var(--red); }
 
 .history-series-battery,
-.history-legend-swatch.history-series-battery { stroke: #67a5ff; background: #67a5ff; }
+.history-legend-swatch.history-series-battery { stroke: var(--blue); background: var(--blue); }
 
 .history-series-load-gray,
-.history-legend-swatch.history-series-load-gray { stroke: #a8b2bf; background: #a8b2bf; }
+.history-legend-swatch.history-series-load-gray { stroke: var(--text-2); background: var(--text-2); }
 
 .history-cursor-line {
-  fill: none;
-  stroke: rgba(245, 196, 81, 0.9);
-  stroke-width: 2;
-  stroke-dasharray: 5 4;
+  fill: none; stroke: var(--yellow); stroke-width: 2; stroke-dasharray: 5 4;
 }
 
 .history-chart-inspector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background: rgba(7, 18, 30, 0.38);
-  font-size: 0.85rem;
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  padding: 10px 12px; border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd); background: var(--glass);
+  font-size: 12px;
 }
-
-.history-chart-cursor { width: 100%; accent-color: #f5c451; }
+.history-chart-cursor { width: 100%; accent-color: var(--yellow); }
 
 .history-stack-compare { gap: 10px; }
-
 .history-stack-chart-combined { gap: 14px; }
 
 .history-bars-combined {
@@ -1019,816 +573,166 @@ main.page-content { justify-self: stretch; }
 }
 
 .history-period-card {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(31, 76, 122, 0.72);
-  background: rgba(7, 18, 30, 0.42);
-  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  display: grid; gap: 12px; padding: 12px;
+  border-radius: var(--r-lg); border: 1px solid var(--glass-brd);
+  background: var(--glass);
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
 }
-
 .history-period-card.is-active,
 .history-period-card:hover {
-  border-color: rgba(0, 168, 255, 0.62);
-  background: rgba(10, 29, 52, 0.58);
-  box-shadow: inset 0 0 0 1px rgba(0, 168, 255, 0.12);
+  border-color: var(--glass-brd-strong);
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--glass-brd);
 }
 
 .history-period-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-family: var(--font-title);
-  font-size: 1rem;
-  letter-spacing: 0.04em;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; font-family: var(--f-brand); font-size: 14px; letter-spacing: .02em;
 }
-
 .history-period-bar-group { display: grid; gap: 8px; }
-
 .history-period-section-title {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-dim); font-size: 11px;
+  letter-spacing: .08em; text-transform: uppercase;
 }
-
 .history-period-bars {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  align-items: end;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px; align-items: end;
 }
-
 .history-period-bar-slot {
-  display: grid;
-  gap: 6px;
-  justify-items: center;
-  align-items: end;
+  display: grid; gap: 6px; justify-items: center; align-items: end;
   min-width: 0;
 }
-
 .history-period-bar-shell {
-  display: flex;
-  align-items: end;
-  justify-content: center;
-  width: 100%;
-  min-height: 112px;
-  padding-top: 6px;
+  display: flex; align-items: end; justify-content: center;
+  width: 100%; min-height: 112px; padding-top: 6px;
 }
-
 .history-period-bar-label {
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  line-height: 1.15;
-  text-align: center;
-  text-wrap: balance;
+  color: var(--text-dim); font-size: 11px; line-height: 1.15;
+  text-align: center; text-wrap: balance;
 }
-
 .history-period-value-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 10px;
-  margin: 0;
-  padding: 0;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px; margin: 0; padding: 0;
 }
-
 .history-period-value-item { display: grid; gap: 2px; min-width: 0; }
-
 .history-period-value-item dt {
-  color: var(--text-muted);
-  font-size: 0.66rem;
-  line-height: 1.1;
+  color: var(--text-dim); font-size: 10.5px; line-height: 1.1;
   text-wrap: balance;
 }
-
 .history-period-value-item dd {
-  margin: 0;
-  color: var(--text-main);
-  font-size: 0.76rem;
-  line-height: 1.15;
-  font-weight: 700;
+  margin: 0; color: var(--text); font-size: 12px;
+  line-height: 1.15; font-weight: 700;
 }
 
 .history-bar-card-combined { align-items: stretch; justify-items: stretch; }
-
-.history-stack-energy, .history-stack-finance { justify-content: center; }
+.history-stack-energy,
+.history-stack-finance { justify-content: center; }
 
 .history-comparison-chart { display: grid; gap: 12px; }
-
 .history-comparison-section { display: grid; gap: 8px; }
-
 .history-comparison-frame {
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
+  display: grid; grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px; align-items: stretch;
 }
-
 .history-comparison-frame .history-axis-y {
-  display: grid;
-  gap: 6px;
-  justify-items: end;
-  padding: 4px 0 8px;
+  display: grid; gap: 6px; justify-items: end; padding: 4px 0 8px;
 }
-
 .history-comparison-frame .history-axis-y .history-axis-label {
-  fill: none;
-  color: rgba(222, 235, 249, 0.72);
-  font-size: 0.72rem;
-  line-height: 1;
+  fill: none; color: var(--text-2); font-size: 11px; line-height: 1;
 }
-
 .history-comparison-plot { position: relative; display: grid; gap: 8px; }
-
 .history-bar-guides {
-  position: absolute;
-  inset: 0 0 24px;
-  display: grid;
-  grid-template-rows: repeat(4, 1fr);
+  position: absolute; inset: 0 0 24px;
+  display: grid; grid-template-rows: repeat(4, minmax(0, 1fr));
   pointer-events: none;
 }
-
 .history-grid-line-block {
-  display: block;
-  width: 100%;
-  border-top: 1px solid rgba(141, 180, 221, 0.2);
+  display: block; width: 100%;
+  border-top: 1px solid var(--hairline);
 }
-
 .history-bars-compressed { min-height: 138px; }
-
 .history-bar-group {
-  display: grid;
-  align-items: end;
-  min-width: 0;
-  padding: 4px 2px 0;
-  border-radius: 10px;
-  transition: background 0.18s ease, box-shadow 0.18s ease;
+  display: grid; align-items: end; min-width: 0;
+  padding: 4px 2px 0; border-radius: var(--r-md);
+  transition: background .18s ease, box-shadow .18s ease;
 }
-
 .history-bar-group.history-chart-hover-surface { position: static; cursor: pointer; }
-
 .history-bar-group.history-chart-hover-surface:hover {
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(0, 168, 255, 0.16);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--glass-brd);
 }
-
 .history-bar-slim { max-width: 18px; }
-
 .history-comparison-chart .history-axis-x {
   display: grid;
   grid-template-columns: repeat(var(--history-x-label-count, 1), minmax(0, 1fr));
-  align-items: start;
-  gap: 8px;
+  align-items: start; gap: 8px;
   --history-x-label-count: 1;
   margin-left: 94px;
 }
-
 .history-comparison-chart .history-axis-x .history-axis-label {
-  fill: none;
-  color: rgba(222, 235, 249, 0.72);
-  font-size: 0.72rem;
-  line-height: 1.15;
-  text-align: center;
+  fill: none; color: var(--text-2); font-size: 11px;
+  line-height: 1.15; text-align: center;
 }
 
-.history-data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-
+.history-data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .history-data-table th,
 .history-data-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(31, 76, 122, 0.48);
+  padding: 10px 12px; border-bottom: 1px solid var(--hairline);
   text-align: left;
 }
-
 .history-data-table th {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  color: var(--text-dim); font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase;
 }
-
 .history-data-table tbody tr:last-child td { border-bottom: none; }
 
 .history-point-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 22px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 168, 255, 0.18);
-  color: var(--text-main);
-  font-size: 0.74rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 22px; padding: 2px 8px; border-radius: 999px;
+  background: var(--glass-2); color: var(--text); font-size: 11px;
 }
+.history-point-badge-warn { background: color-mix(in srgb, var(--yellow) 18%, transparent); }
 
-.history-point-badge-warn { background: rgba(255, 152, 0, 0.18); }
-
-.history-legend-swatch.history-bar-revenue { background: rgba(57, 224, 111, 0.95); }
-
-.history-legend-swatch.history-bar-cost { background: rgba(255, 107, 107, 0.95); }
-
-.history-legend-swatch.history-bar-avoided { background: rgba(245, 196, 81, 0.96); }
-
-.history-legend-swatch.history-bar-grid { background: rgba(0, 168, 255, 0.96); }
-
-.history-legend-swatch.history-bar-pv { background: rgba(168, 240, 0, 0.95); }
-
-.history-legend-swatch.history-bar-battery { background: rgba(255, 152, 0, 0.95); }
+.history-legend-swatch.history-bar-revenue { background: var(--green); }
+.history-legend-swatch.history-bar-cost    { background: var(--red); }
+.history-legend-swatch.history-bar-avoided { background: var(--yellow); }
+.history-legend-swatch.history-bar-grid    { background: var(--cyan); }
+.history-legend-swatch.history-bar-pv      { background: var(--yellow); }
+.history-legend-swatch.history-bar-battery { background: var(--orange); }
 
 .history-price-list { display: grid; gap: 10px; }
-
 .history-price-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(3, auto);
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(7, 18, 30, 0.38);
+  gap: 10px; padding: 10px 12px;
+  border-radius: var(--r-md); background: var(--glass);
 }
 
-.history-inspector-emphasis { color: #f5c451; font-weight: 700; }
+.history-inspector-emphasis { color: var(--yellow); font-weight: 700; }
 
 .history-solar-summary { display: grid; gap: 10px; }
-
 .history-solar-summary-card {
-  display: grid;
-  gap: 4px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(7, 18, 30, 0.38);
-  border: 1px solid rgba(31, 76, 122, 0.72);
-}
-
-.history-status-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.history-status-info {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-top: 8px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.history-full-backfill-advanced { display: grid; gap: 10px; }
-
-.history-full-backfill-lookback { max-width: 320px; }
-
-.page-header-card {
-  background: var(--flow-surface);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 16px 20px;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.page-header-card-copy h1 {
-  font-family: var(--font-brand);
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--flow-text);
-}
-
-.page-header-card-copy .page-kicker {
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--flow-text-muted);
-  margin-bottom: 4px;
-}
-
-.page-header-card-copy .page-subtitle {
-  font-size: 0.72rem;
-  color: var(--flow-text-muted);
-  margin-top: 4px;
-}
-
-.page-header-card-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.page-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-.page-grid-full {
-  grid-column: 1 / -1;
-}
-
-/* Sub-page panel card */
-.sub-card {
-  background: var(--flow-surface);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 16px;
-}
-
-/* History summary grid */
-.history-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.system-tab-content .page-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-/* ============================================================
-   HISTORY — full-width chart grid override
-   ============================================================ */
-/* History chart grid — override legacy 3-col to stack full-width */
-.page-content .history-chart-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.page-content .history-chart-grid article {
-  width: 100%;
-}
-
-.page-content .history-chart-shell {
-  min-height: 280px;
-  background: rgba(8,12,24,0.3);
-  border: 1px solid var(--flow-border);
-  border-radius: var(--flow-radius);
-  padding: 12px;
-}
-
-.config-grid > .config-group:only-child,
-.config-grid > .config-group--full { grid-column: 1 / -1; }
-
-/* Group card with accent left-border — Aurora token rewrite (2026-05-14).
-   Original rgba(16,26,42,.9) bg lacked contrast against the Aurora deep-dark
-   body (--bg-0 = #030610). Switched to --bg-elev + --glass-brd to match the
-   visible-glass-card pattern used by index/explorer/settings .card. */
-.config-group {
-  background: var(--bg-elev);
+  display: grid; gap: 4px; padding: 12px;
+  border-radius: var(--r-md); background: var(--glass);
   border: 1px solid var(--glass-brd);
-  border-radius: var(--r-lg, 14px);
-  border-left: 3px solid var(--glass-brd);
-  box-shadow: var(--shadow-sm, 0 4px 16px rgba(0,0,0,.4));
-  backdrop-filter: blur(var(--glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 14px));
-  box-sizing: border-box;
-  min-width: 0;
-  overflow: hidden;
-  overflow-wrap: break-word;
 }
 
-.config-group[data-accent="green"] { border-left-color: var(--flow-green, #4CE36C); }
-
-.config-group[data-accent="yellow"] { border-left-color: var(--flow-yellow, #FFD32E); }
-
-.config-group[data-accent="blue"] { border-left-color: var(--flow-blue, #00A8FF); }
-
-.config-group[data-accent="cyan"] { border-left-color: var(--flow-cyan, #22D3EE); }
-
-.config-group[data-accent="purple"] { border-left-color: var(--flow-purple, #A78BFA); }
-
-.config-group[data-accent="orange"] { border-left-color: var(--flow-orange, #FF9F43); }
-
-/* 2-column row grid inside cards */
-.config-row-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+/* ══════════════════════════════════════════════════════════════════════
+   RESPONSIVE BREAKPOINTS — KPI calc-row collapses 6 → 3 → 2 → 1.
+   ══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 1500px) {
+  .calc-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 780px) {
+  .calc-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .hist-toolbar { gap: 10px; }
+  .hist-toolbar-group { flex: 1 1 auto; }
 }
 
-/* Group kicker label */
-.config-group-kicker {
-  font-family: var(--font-title, 'Space Grotesk', sans-serif);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 12px 16px 4px;
-}
-
-/* Key-value row */
-.config-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 11px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 14px;
-  min-width: 0;
-  gap: 8px;
-}
-
-.config-row:last-child { border-bottom: none; }
-
-.config-row-grid .config-row:nth-child(odd) { border-right: 1px solid rgba(255,255,255,0.04); }
-
-.config-row-label { color: rgba(232,234,240,0.55); white-space: normal; word-break: break-word; min-width: 0; flex-shrink: 1; }
-
-.config-row-label .config-required { color: var(--flow-green, #4CE36C); margin-left: 3px; }
-
-.config-row-value { font-weight: 500; font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-
-.savings-breakdown .metric-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  padding: 2px 0;
-}
-
-.forecast-optimizer-section .chart-span-card canvas {
-  width: 100% !important;
-  height: 200px !important;
-}
-
-.intg-detail .metric-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 2px 0;
-}
-
-/* Glass override for config-group cards */
-.settings-aurora .config-group {
-  background: var(--sa-glass);
-  border: 1px solid var(--sa-glass-brd);
-  border-left: 3px solid rgba(123, 151, 178, 0.18);
-  -webkit-backdrop-filter: blur(18px) saturate(1.1);
-  backdrop-filter: blur(18px) saturate(1.1);
-  border-radius: var(--sa-r);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
-}
-
-.settings-aurora .config-group[data-accent="green"] { border-left-color: var(--sa-green); }
-
-.settings-aurora .config-group[data-accent="blue"] { border-left-color: var(--sa-blue); }
-
-.settings-aurora .config-group[data-accent="cyan"] { border-left-color: var(--sa-cyan); }
-
-.settings-aurora .config-group-kicker {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--sa-text-dim);
-  letter-spacing: .22em;
-  text-transform: uppercase;
-  padding: 12px 16px 6px;
-}
-
-/* Row + dashed divider in mockup style */
-.settings-aurora .config-row {
-  border-bottom: 1px dashed var(--sa-glass-brd);
-}
-
-.settings-aurora .config-row:last-child { border-bottom: 0; }
-
-.settings-aurora .config-row-label {
-  color: var(--sa-text-dim);
-  font-size: 12px;
-}
-
-.settings-aurora .config-row-value {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  color: var(--sa-text);
-  font-size: 12px;
-}
-
-/* Buttons inside aurora — only tint primary */
-.settings-aurora .btn-primary,
-.settings-aurora .btn.btn-primary {
-  background: linear-gradient(180deg, var(--sa-blue), #0f4fb9);
-  border-color: rgba(52, 219, 255, .4);
-  box-shadow: 0 0 20px rgba(31, 141, 255, .25), 0 1px 0 rgba(255, 255, 255, .1) inset;
-}
-
-.settings-aurora .btn-primary:hover,
-.settings-aurora .btn.btn-primary:hover {
-  box-shadow: 0 0 28px rgba(31, 141, 255, .45), 0 1px 0 rgba(255, 255, 255, .1) inset;
-}
-
-/* Subtle card hover lift */
-.settings-aurora .config-group {
-  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
-}
-
-.settings-aurora .config-group:hover {
-  transform: translateY(-1px);
-  border-color: rgba(120, 210, 255, 0.22);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, .35);
-}
-
-/* Labels in rows: a touch lighter weight to match mockup */
-.settings-aurora .config-row-label {
-  font-weight: 400;
-}
-
-/* Ghost button slight Aurora tint */
-.settings-aurora .btn-ghost,
-.settings-aurora .btn.btn-ghost {
-  background: rgba(120, 180, 255, .04);
-  border: 1px solid var(--sa-glass-brd);
-  color: var(--sa-text);
-  transition: background .18s ease, border-color .18s ease;
-}
-
-.settings-aurora .btn-ghost:hover,
-.settings-aurora .btn.btn-ghost:hover {
-  background: rgba(120, 180, 255, .10);
-  border-color: var(--sa-glass-brd-hot);
-}
-
-/* Inline anchors inside config-row should pick up cyan */
-.settings-aurora .config-row a {
-  color: var(--sa-cyan);
-  text-decoration: none;
-  border-bottom: 1px dashed transparent;
-  transition: border-color .2s;
-}
-
-.settings-aurora .config-row a:hover {
-  border-bottom-color: var(--sa-cyan);
-}
-
-/* Config-row-grid with inline flex (Modbus scan inputs row) */
-.settings-aurora .config-row-grid label {
-  font-size: 11px;
-  color: var(--sa-text-dim);
-}
-
-/* Action button rows: small horizontal gap between primary/ghost */
-.settings-aurora .config-group [style*="display:flex"] .btn {
-  font-size: 11px;
-}
-
-/* History full-backfill advanced fieldset gets a subtle frame */
-.settings-aurora .history-full-backfill-advanced {
-  margin: 4px 14px 0;
-  padding: 8px 10px;
-  border: 1px dashed var(--sa-glass-brd);
-  border-radius: 8px;
-  background: rgba(5, 10, 22, .25);
-}
-
-.settings-aurora .history-full-backfill-lookback {
-  margin-top: 4px;
-}
-
-/* ============================================================
-   SETTINGS · AURORA · LAYER 5 (Source-of-Truth migration)
-   Replaces inline-style overrides previously set by settings.js
-   and settings.html. Once an accent is set on a .config-group
-   via [data-accent], all visual properties (border, kicker
-   color) come from CSS — design language lives entirely here.
-   ============================================================ */
-
-/* Border-left accent map (covers all GROUP_ACCENTS values) */
-.settings-aurora .config-group[data-accent="green"] { border-left-color: var(--sa-green); }
-
-.settings-aurora .config-group[data-accent="yellow"] { border-left-color: var(--sa-yellow); }
-
-.settings-aurora .config-group[data-accent="orange"] { border-left-color: var(--sa-orange); }
-
-.settings-aurora .config-group[data-accent="purple"] { border-left-color: var(--sa-purple); }
-
-.settings-aurora .config-group[data-accent="red"] { border-left-color: var(--sa-red); }
-
-/* Kicker color follows the same accent (replaces inline style="color:..."
-   that used to live on every kicker, both in settings.js and settings.html).
-   Two trigger points: (a) data-accent on the parent .config-group, or
-   (b) data-accent set directly on a kicker (used for sub-kickers like
-   Marktprämie that need their own accent). */
-.settings-aurora .config-group .config-group-kicker { color: var(--sa-text-dim); }
-
-.settings-aurora .config-group[data-accent="green"]  > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="green"] { color: var(--sa-green); }
-
-.settings-aurora .config-group[data-accent="blue"]   > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="blue"] { color: var(--sa-blue); }
-
-.settings-aurora .config-group[data-accent="cyan"]   > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="cyan"] { color: var(--sa-cyan); }
-
-.settings-aurora .config-group[data-accent="yellow"] > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="yellow"] { color: var(--sa-yellow); }
-
-.settings-aurora .config-group[data-accent="orange"] > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="orange"] { color: var(--sa-orange); }
-
-.settings-aurora .config-group[data-accent="purple"] > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="purple"] { color: var(--sa-purple); }
-
-.settings-aurora .config-group[data-accent="red"]    > .config-group-kicker,
-.settings-aurora .config-group-kicker[data-accent="red"] { color: var(--sa-red); }
-
-/* Right-aligned controls in a row */
-.settings-aurora .config-row > .config-input,
-.settings-aurora .config-row > .config-select,
-.settings-aurora .config-row > .config-checkbox,
-.settings-aurora .config-row > input,
-.settings-aurora .config-row > select {
-  margin-left: auto;
-}
-
-.config-row-tight { padding: 8px 14px; display: flex; gap: 8px; flex-wrap: wrap; }
-
-.config-row-tight-center { padding: 8px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
-.config-row-grid-mt { margin-top: 6px; }
-
-.config-row-actions-h { padding: 8px 14px; display: flex; gap: 8px; flex-wrap: wrap; }
-
-.config-row-grid-md { display: none; margin: 6px 14px 0; }
-
-.config-row-grid-actions { display: none; padding: 8px 14px; }
-
-.section-title-flex-end { margin: 0 0 0 auto; font-size: 0.95rem; }
-
-.history-card-text { padding: 4px 14px; font-size: 12px; color: rgba(232,234,240,0.4); margin: 0; }
-
-.metric-row-amber { display: none; color: var(--c-amber-600); }
-
-/* History page utility classes */
-/* .history-page-content padding/max-width now live on the .page-content
-   base rule near the top of the file (2026-05-14 gap-fill). Only
-   history-specific bits (overflow guard at line ~572) stay scoped. */
-
-.history-section-title-lg { font-size: 1.4rem; }
-
-.history-meta-mt { margin-top: 4px; }
-
-.history-controls-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-
-.history-nav-buttons-row { display: flex; gap: 4px; }
-
-.history-select-input {
-  background: var(--flow-surface);
-  border: 1px solid var(--flow-border);
-  color: var(--flow-text);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-}
-
-.history-banner-mb { margin-bottom: 10px; }
-
-.history-kpi-row-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-/* Grid children get min-width:0 explicitly so long numbers / wide content
-   don't force the column wider than its allocated 1fr share (default
-   min-width:auto = content-driven, defeats fr units). */
-.history-kpi-row-grid > * { min-width: 0; }
-
-.history-card-kpi {
-  padding: 2px 14px;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.history-color-orange { color: var(--flow-orange); }
-
-.history-color-green { color: var(--flow-green); }
-
-.history-color-blue { color: var(--flow-blue); }
-
-.history-color-cyan { color: var(--flow-cyan); }
-
-.history-color-purple { color: var(--flow-purple); }
-
-.history-avoided-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 14px 0;
-}
-
-.history-kicker-flat { padding: 0; }
-
-.history-toggle-mini { font-size: 9px; padding: 2px 6px; opacity: 0.6; }
-
-.history-dv-card-hidden { display: none; margin-bottom: 10px; }
-
-.history-row-mt { margin-top: 6px; }
-
-/* ──────────────────────────────────────────────────────────────────────
-   RESPONSIVE BREAKPOINTS (2026-05-14)
-
-   The initial styles.css extraction only pulled top-level rule blocks,
-   leaving all @media queries behind. Ported here so history.html re-adapts
-   to viewport size: KPI grid (6→3→2→1 cols), DV grid (4→2→1 cols), chart
-   grid (2→1 cols), page-grid (2→1 cols), controls row (wraps).
-
-   Breakpoints chosen to match old styles.css behaviour:
-     1280px — KPI 6→3 (was 1180px in legacy; bumped because Aurora's
-              card padding is larger)
-     1100px — DV 4→2 (matches the inline rule I already added)
-     900px  — config-row-grid 2→1
-     834px  — chart-grid 2→1
-     768px  — page-grid 2→1; config-group overflow guard
-     640px  — KPI 3→2, DV 2→1, controls-row wrap
-     440px  — KPI 2→1 (small phone, portrait)
-   ────────────────────────────────────────────────────────────────────── */
-
-@media (max-width: 1280px) {
-  .history-kpi-row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
-@media (max-width: 900px) {
-  .config-row-grid { grid-template-columns: minmax(0, 1fr); }
-}
-
-@media (max-width: 834px) {
-  .history-chart-grid { grid-template-columns: minmax(0, 1fr); }
-  .history-controls-row { flex-wrap: wrap; gap: 6px; }
-  .history-controls-row > * { flex: 0 1 auto; }
-}
-
-@media (max-width: 768px) {
-  .page-grid { grid-template-columns: minmax(0, 1fr); }
-  .page-grid-full { grid-column: 1; }
-  /* Settings-page hand-me-downs: prevent horizontal overflow on phones */
-  .config-group { max-width: 100%; overflow-x: hidden; box-sizing: border-box; }
-  .config-row { max-width: 100%; overflow: hidden; }
-  /* Page header layout adapts */
-  .panel-head { flex-direction: column; align-items: flex-start; gap: 10px; }
-}
-
-@media (max-width: 640px) {
-  .history-kpi-row-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .history-dv-grid { grid-template-columns: minmax(0, 1fr); }
-  .history-dv-section + .history-dv-section {
-    border-left: none;
-    border-top: 1px solid var(--flow-border);
-  }
-  /* History header controls: tighter on phones */
-  .history-controls-row { width: 100%; }
-  .history-select-input { flex: 1 1 calc(50% - 6px); min-width: 0; }
-  /* Section-titles smaller on phones */
-  .history-section-title-lg { font-size: 1.4rem; }
-  .section-title { font-size: 1.1rem; }
-  /* Long kicker labels (ENERGIEEINNAHMEN, VERMIEDENE KOSTEN, GESAMTBILANZ)
-     must wrap inside the narrow column instead of expanding it. With
-     letter-spacing the words can exceed 160px on phone widths. */
-  .config-group-kicker { overflow-wrap: anywhere; word-break: break-word; }
-}
-
-@media (max-width: 440px) {
-  .history-kpi-row-grid { grid-template-columns: minmax(0, 1fr); }
-  .history-section-title-lg { font-size: 1.2rem; }
-  .card-value { font-size: 1.4rem; }
-  .history-card-kpi { font-size: 1.2rem; }
-}
-
-/* Landscape phones (Pixel/iPhone Querformat ~915×412) — keep KPI 3 cols
-   so the row is one-line-scrollable, since 2-col layout wastes vertical
-   space when the screen is short. */
+/* Landscape phones — keep KPI 3 cols so the row stays compact when the
+   screen is short. */
 @media (max-width: 932px) and (max-height: 480px) and (orientation: landscape) {
-  .history-kpi-row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .history-chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .calc-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-
-/* Global overflow guard on body + html — last-resort viewport clipping
-   so a pathologically wide child (third-party canvas, unbreakable URL,
-   etc.) can never produce a horizontal scrollbar on the whole page. */
-html, body { max-width: 100%; overflow-x: hidden; }
-
-.history-row-strong { font-weight: 600; }
-
-.history-row-strong-700 { font-weight: 700; }
-
-.history-chart-grid-mb { margin-bottom: 10px; }
-
-.history-panel-mb { margin-bottom: 10px; }
-
-.history-page-grid-mb { margin-bottom: 10px; }
-
-.config-row-align-start { align-items: flex-start; padding-top: 10px; }
-
-.config-row-align-start-only { align-items: flex-start; }
-
-.config-row-stack { display: flex; flex-direction: column; gap: 4px; }
-
-.config-row-stack-small { font-size: 11px; color: rgba(232,234,240,0.35); }
-
-.history-result-row { margin: 0 14px 8px; }
-
-.config-group-full { grid-column: 1 / -1; }

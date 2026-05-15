@@ -208,7 +208,7 @@ function renderKpis(summary) {
     bilanzCard.dataset.accent = isPositive ? 'green' : 'orange';
     const bilanzValue = document.getElementById('historyKpiGrossReturn');
     if (bilanzValue) bilanzValue.style.color = isPositive ? 'var(--flow-green)' : 'var(--flow-orange)';
-    const bilanzKicker = bilanzCard.querySelector('.config-group-kicker');
+    const bilanzKicker = bilanzCard.querySelector('.calc-kicker');
     if (bilanzKicker) bilanzKicker.style.color = isPositive ? 'var(--flow-green)' : 'var(--flow-orange)';
   }
 
@@ -2054,7 +2054,7 @@ function initHistoryPage() {
           bilanzCard.dataset.accent = pos ? 'green' : 'orange';
           const bv = byId('historyKpiGrossReturn');
           if (bv) bv.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
-          const bk = bilanzCard.querySelector('.config-group-kicker');
+          const bk = bilanzCard.querySelector('.calc-kicker');
           if (bk) bk.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
         }
       }
