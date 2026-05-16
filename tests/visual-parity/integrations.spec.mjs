@@ -213,4 +213,111 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
       }
     }
   });
+
+  // --- Phase 09.4-07 (Wave 5) — MQTT Inspector drawer (D-03/D-04) + hybrid
+  // card-stats (D-01) coverage. The drawer chrome (#mqtt-drawer + backdrop +
+  // close button + topics body) is fully static markup in integrations.html, so
+  // its presence and the open/close behaviour are HARD assertions regardless of
+  // backend state. The MQTT .conn-card itself only renders when the backend
+  // reports an MQTT system, so card-driven open/close is guarded with a soft
+  // skip on the no-apiToken CI dev server (benign /api/* 503 — see top-of-file).
+
+  test('MQTT drawer markup is present and hidden on load', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    // Static drawer chrome — must exist regardless of backend state.
+    for (const id of ['mqtt-drawer', 'mqtt-drawer-backdrop', 'mqtt-drawer-close', 'mqtt-drawer-topics']) {
+      await expect(page.locator(`[id="${id}"]`), `#${id} must exist in the DOM`).toHaveCount(1);
+    }
+    // The drawer carries the hidden attribute until openMqttDrawer() removes it.
+    await expect(page.locator('#mqtt-drawer')).toHaveAttribute('hidden', '');
+    await expect(page.locator('#mqtt-drawer')).not.toHaveClass(/is-open/);
+  });
+
+  test('clicking the MQTT card opens the drawer', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
+    const card = page.locator('.conn-card[data-system="mqtt"]');
+    if ((await card.count()) > 0) {
+      await card.first().click();
+      await page.waitForTimeout(300);
+      await expect(page.locator('#mqtt-drawer')).toHaveClass(/is-open/);
+      // openMqttDrawer() removes the hidden attribute before adding .is-open.
+      await expect(page.locator('#mqtt-drawer')).not.toHaveAttribute('hidden', '');
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip drawer-open');
+    }
+  });
+
+  test('drawer closes on the close button and on Escape', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
+    const card = page.locator('.conn-card[data-system="mqtt"]');
+    if ((await card.count()) === 0) {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip drawer-close');
+      return;
+    }
+    const drawer = page.locator('#mqtt-drawer');
+    // Close path 1 — the ✕ button.
+    await card.first().click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toHaveClass(/is-open/);
+    await page.locator('#mqtt-drawer-close').click();
+    await page.waitForTimeout(300);
+    await expect(drawer).not.toHaveClass(/is-open/);
+    // Close path 2 — the Escape key.
+    await card.first().click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toHaveClass(/is-open/);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    await expect(drawer).not.toHaveClass(/is-open/);
+  });
+
+  test('hybrid card-stats: each conn-card has exactly 4 tracker tiles', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
+    // D-01 — the tracker-tile count is invariant: every populated card carries
+    // exactly 4 .conn-stat tiles (the #intg-empty .is-empty placeholder is
+    // excluded — it has no .conn-stats). On the no-apiToken dev server the grid
+    // may be empty; soft-skip in that case.
+    const cards = page.locator('#intg-list .conn-card:not(.is-empty)');
+    const count = await cards.count();
+    if (count === 0) {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No populated conn-cards on the dev server — soft-skip 4-tile invariant');
+      return;
+    }
+    for (let i = 0; i < count; i++) {
+      await expect(cards.nth(i).locator('.conn-stat')).toHaveCount(4);
+    }
+  });
+
+  test('identity line and provider badges render without [object Object]', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
+    // .conn-identity is backend-dependent (D-02 graceful degrade — omitted when
+    // there is no identity data), so its presence is a soft check.
+    const identityCount = await page.locator('#intg-list .conn-identity').count();
+    if (identityCount === 0) {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No .conn-identity lines on the dev server — soft pass');
+    }
+    // D-06 regression guard — the notifications card must NEVER render the
+    // literal "[object Object]" string from a raw provider object.
+    const notifCard = page.locator('.conn-card[data-system="notifications"]');
+    if ((await notifCard.count()) > 0) {
+      const text = (await notifCard.first().textContent()) || '';
+      expect(text).not.toContain('[object Object]');
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No notifications card on the dev server — soft-skip [object Object] guard');
+    }
+  });
 });
