@@ -458,12 +458,12 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
   });
 
   it('Test W2-2b (Sankey default — NO grid→battery): allowGridCharge OFF → battery PV-charged, ALL grid import → Eigenverbrauch, conserves', async () => {
-    // Plan 09.4 — DEFAULT (optimizer.allowGridCharge OFF): the battery is
-    // charged ONLY from PV and ALL grid import serves self-consumption. There
-    // must be NO Netzbezug→Akku-Laden flow even when the period-total battery
-    // charge exceeds what PV could have supplied. PV 1000W, load 800W,
-    // export 600W, charge 900W → the period-total PV-priority decomposition
-    // conserves and attributes battery charge to PV.
+    // Plan 09.4 — DEFAULT (optimizer.allowGridCharge OFF): the per-bucket
+    // decomposition runs, the per-bucket residual charge (charge PV did not
+    // cover) is DROPPED — there must be NO Netzbezug→Akku-Laden flow even
+    // when battery charge exceeds what PV could supply. PV 1000W, load 800W,
+    // export 600W, charge 900W → per-bucket decomposition conserves the PV
+    // and load nodes exactly and attributes the covered battery charge to PV.
     const querySeries = async ({ seriesKeys, start, end }) => {
       const map = {
         pv_total_w: 1000, grid_export_w: 600, grid_import_w: 700,
@@ -502,10 +502,10 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
 
   it('Test W2-2b2 (Sankey grid-charge ON): allowGridCharge true → Netzbezug→Akku-Laden flow may appear, still conserves', async () => {
     // Plan 09.4 — flat-rate / Pauschal tariff: optimizer.allowGridCharge ON.
-    // A grid-arbitrage battery charges from the grid in cheap hours, so the
-    // period totals batteryCharge + gridExport can exceed PV. The per-bucket
-    // decomposition surfaces the grid→battery residual AND still conserves —
-    // PV-out flows must not overshoot total PV.
+    // A grid-arbitrage battery charges from the grid, so per bucket the
+    // batteryCharge can exceed what PV supplies. With the flag ON the
+    // per-bucket residual charge becomes a Netzbezug→Akku-Laden flow AND the
+    // decomposition still conserves — PV-out flows must not overshoot total PV.
     const querySeries = async ({ seriesKeys, start, end }) => {
       const map = {
         pv_total_w: 1000, grid_export_w: 600, grid_import_w: 700,
@@ -527,6 +527,71 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     // Grid→Akku flow IS legitimate here — battery charges beyond what PV covers.
     const gridToBattery = b.flows.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden');
     assert.ok(gridToBattery && gridToBattery.flow > 0, 'grid-charge ON: grid-arbitrage charging should yield a Netzbezug→Akku-Laden flow');
+  });
+
+  it('Test W2-2d (Sankey per-bucket — night base load → battery, NOT erased by period-total): default flag, time-varying day', async () => {
+    // Plan 09.4 regression guard — 0c94609 wrongly switched the default case
+    // to a PERIOD-TOTAL decomposition, which lost the time dimension: it
+    // assumed all daytime PV could serve the night base load, over-attributing
+    // PV-direct consumption and ERASING the Akku-Entladen→Eigenverbrauch flow.
+    //
+    // Time-varying day: first 12h is night (PV 0W, load 900W base load served
+    // by battery discharge 900W); last 12h is day (PV 4000W, load 900W,
+    // battery charges 3000W). Per-bucket decomposition MUST attribute the
+    // night load to the battery; a period-total decomposition would not.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const midMs = Date.parse(start) + (Date.parse(end) - Date.parse(start)) / 2;
+      const mid = new Date(midMs).toISOString();
+      const night = { // first 12h — PV is 0, battery covers the base load
+        pv_total_w: 0, load_power_w: 900, battery_charge_w: 0,
+        battery_discharge_w: 900, grid_import_w: 0, grid_export_w: 0,
+      };
+      const day = { // last 12h — PV covers load + charges the battery
+        pv_total_w: 4000, load_power_w: 900, battery_charge_w: 3000,
+        battery_discharge_w: 0, grid_import_w: 0, grid_export_w: 100,
+      };
+      const all = [];
+      for (const key of seriesKeys) {
+        all.push(...makeFlatSeriesRows({ start, end: mid, key, watts: night[key] || 0 }));
+        all.push(...makeFlatSeriesRows({ start: mid, end, key, watts: day[key] || 0 }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries }); // allowGridCharge OFF
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    // The battery MUST cover the night base load — Akku-Entladen→Eigenverbrauch
+    // is NON-ZERO. (A period-total decomposition would erase this flow.)
+    const battToLoad = b.flows.find(f => f.from === 'Akku-Entladen' && f.to === 'Eigenverbrauch');
+    assert.ok(
+      battToLoad && battToLoad.flow > 5,
+      `per-bucket: night base load MUST be attributed to the battery (Akku-Entladen→Eigenverbrauch ~10.8 kWh), got ${battToLoad ? battToLoad.flow : 'no flow'}`
+    );
+    // Default flag — NO Netzbezug→Akku-Laden flow.
+    assert.ok(
+      !b.flows.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden'),
+      'default (allowGridCharge OFF) must NOT contain a Netzbezug→Akku-Laden flow'
+    );
+    // CONSERVATION — per-bucket makes PV-out exactly total PV and
+    // into-Eigenverbrauch exactly total load.
+    const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05,
+      `PV-out flows (${sumFromPv}) MUST conserve to total PV (${b.totals.pvKwh})`
+    );
+    const sumToEigen = b.flows.filter(f => f.to === 'Eigenverbrauch').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      Math.abs(sumToEigen - b.totals.eigenverbrauchKwh) <= 0.05,
+      `into-Eigenverbrauch (${sumToEigen}) MUST conserve to total load (${b.totals.eigenverbrauchKwh})`
+    );
+    // PV does NOT directly serve the whole load — it only covers the daytime
+    // 900W, not the night base load. (Period-total would over-attribute here.)
+    const pvToLoad = b.flows.find(f => f.from === 'PV' && f.to === 'Eigenverbrauch');
+    assert.ok(
+      pvToLoad && pvToLoad.flow < b.totals.eigenverbrauchKwh - 5,
+      `PV-direct (${pvToLoad ? pvToLoad.flow : 0}) MUST be well below total load (${b.totals.eigenverbrauchKwh}) — night load is the battery's`
+    );
   });
 
   it('Test W2-2c (Sankey flow types): from/to use the 7 documented edge types', async () => {

@@ -332,27 +332,31 @@ export function createHistoryVizAggregator(ctx) {
   // -------------------------------------------------------------------------
   // Plan 09.3 / 09.4 — energy-flow decomposition.
   //
-  // The Sankey / Autarky-day builders must conserve energy. Two attribution
-  // modes, selected by `gridChargeAllowed`:
+  // The Sankey / Autarky-day builders must conserve energy. We ALWAYS use a
+  // PER-BUCKET decomposition — it preserves the time dimension, so night-time
+  // base load is correctly attributed to the battery (PV is 0 at night). A
+  // period-total decomposition wrongly assumes all PV can serve all load
+  // regardless of time, over-attributing PV-direct consumption and erasing the
+  // battery→load flow.
+  //
+  // Per bucket, with PV-priority: PV → load, then battery, then export;
+  // battery → load, then export; grid → load. `residualCharge` is the
+  // per-bucket `batteryCharge − pvToBattery` left over after PV is exhausted.
   //
   //  A) gridChargeAllowed === false (DEFAULT):
-  //     The battery is charged ONLY from PV and ALL grid import serves self-
-  //     consumption — there is NO Netzbezug→Akku-Laden flow. We use a single
-  //     PERIOD-TOTAL decomposition with PV-priority (PV → load, then battery,
-  //     then export; battery → load, then export; grid → load only). This
-  //     conserves cleanly and avoids the per-bucket `batteryCharge − pvToBattery`
-  //     residual that the per-bucket path mislabels as grid→battery.
+  //     `gridToBattery = 0`. `residualCharge` is a 15-min-bucketing artifact
+  //     (PV dipped within the bucket while the battery kept charging) — it is
+  //     NOT grid energy, so it is dropped (emitted as no flow). Conservation
+  //     still holds exactly for the PV and load nodes; only the battery node's
+  //     in-total is under-counted by Σ residualCharge (acceptable — the
+  //     battery node never balances within a day anyway, due to SOC change).
   //
   //  B) gridChargeAllowed === true (flat-rate / Pauschal tariff):
-  //     Grid→battery charging is legitimate. We keep the per-bucket
-  //     decomposition: with a grid-arbitrage battery `batteryCharge +
-  //     gridExport` can exceed `pv` over a PERIOD total, so a period-level
-  //     `pvToEigen = pv − export − charge` clamps to 0 and overshoots total
-  //     PV. Per-bucket decomposition cannot overshoot — within a bucket
-  //     PV-out = pv, into-load = load — and surfaces the grid→battery residual.
+  //     Grid→battery charging is legitimate, so `gridToBattery = residualCharge`
+  //     and is emitted as a Netzbezug→Akku-Laden flow.
   //
-  // Both modes return the same 7-flow shape + totals; only the attribution of
-  // battery charging and grid import changes.
+  // Both modes return the same 7-flow shape + totals; the flag only toggles
+  // whether the per-bucket residual charge becomes a grid→battery flow.
   //
   // `rows` is the fetchBucketed output for the 6 energy series; this groups
   // them by bucket ts, integrates W×Δt → kWh per bucket, then decomposes.
@@ -383,49 +387,12 @@ export function createHistoryVizAggregator(ctx) {
     // Guard tiny negatives from floating-point rounding.
     const clamp0 = (n) => (n > 0 ? n : 0);
 
-    if (!gridChargeAllowed) {
-      // --- DEFAULT: period-total PV-priority decomposition ------------------
-      // No Netzbezug→Akku-Laden flow. Battery charge is attributed to PV; all
-      // grid import serves the household load (Netzbezug→Eigenverbrauch).
-      let totalPv = 0;
-      let totalLoad = 0;
-      let totalCharge = 0;
-      let totalDischarge = 0;
-      for (const b of buckets.values()) {
-        totalPv += b.pv;
-        totalLoad += b.load;
-        totalCharge += b.batteryCharge;
-        totalDischarge += b.batteryDischarge;
-      }
-      totalPv = clamp0(totalPv);
-      totalLoad = clamp0(totalLoad);
-      totalCharge = clamp0(totalCharge);
-      totalDischarge = clamp0(totalDischarge);
-      // PV-priority: PV → load, then battery, then export.
-      const pvToLoad = Math.min(totalPv, totalLoad);
-      const pvAfterLoad = totalPv - pvToLoad;
-      const pvToBattery = Math.min(pvAfterLoad, totalCharge);
-      const pvToExport = pvAfterLoad - pvToBattery;
-      // Battery → load, then export.
-      const loadAfterPv = totalLoad - pvToLoad;
-      const batteryToLoad = Math.min(totalDischarge, loadAfterPv);
-      const batteryToExport = totalDischarge - batteryToLoad;
-      // Grid covers the remaining load only — never the battery.
-      const gridToLoad = loadAfterPv - batteryToLoad;
-      return {
-        pvToLoad: clamp0(pvToLoad),
-        pvToBattery: clamp0(pvToBattery),
-        pvToExport: clamp0(pvToExport),
-        gridToBattery: 0,
-        batteryToLoad: clamp0(batteryToLoad),
-        batteryToExport: clamp0(batteryToExport),
-        gridToLoad: clamp0(gridToLoad),
-        totalPv,
-        totalLoad,
-      };
-    }
-
-    // --- gridChargeAllowed: per-bucket decomposition (grid→battery legit) ---
+    // --- Per-bucket PV-priority decomposition (both modes) ------------------
+    // Per bucket: PV → load → battery → export; battery → load → export;
+    // grid → load. `residualCharge` (batteryCharge − pvToBattery) is the
+    // charge PV did not cover within this bucket. When grid charging is
+    // disallowed it is a bucketing artifact and is dropped; when allowed it
+    // is the legitimate Netzbezug→Akku-Laden flow.
     let pvToLoad = 0;
     let pvToBattery = 0;
     let pvToExport = 0;
@@ -444,7 +411,7 @@ export function createHistoryVizAggregator(ctx) {
       const pvRem1 = pv - pvL;
       const pvB = Math.min(pvRem1, batteryCharge);
       const pvE = pvRem1 - pvB;
-      const gridB = batteryCharge - pvB;
+      const residualCharge = batteryCharge - pvB;
       const battL = Math.min(batteryDischarge, loadRem1);
       const loadRem2 = loadRem1 - battL;
       const battE = batteryDischarge - battL;
@@ -452,7 +419,9 @@ export function createHistoryVizAggregator(ctx) {
       pvToLoad += pvL;
       pvToBattery += pvB;
       pvToExport += pvE;
-      gridToBattery += gridB;
+      // gridChargeAllowed toggles whether the per-bucket residual charge
+      // becomes a Netzbezug→Akku-Laden flow (true) or is dropped (false).
+      if (gridChargeAllowed) gridToBattery += residualCharge;
       batteryToLoad += battL;
       batteryToExport += battE;
       gridToLoad += gridL;
@@ -574,11 +543,11 @@ export function createHistoryVizAggregator(ctx) {
         start, end, view,
       });
       // Plan 09.4 — energy-flow attribution depends on optimizer.allowGridCharge.
-      // DEFAULT (flag OFF): the battery is charged from PV only and ALL grid
-      // import serves self-consumption — NO Netzbezug→Akku-Laden flow. A
-      // period-total PV-priority decomposition conserves cleanly here.
-      // Flag ON (flat-rate / Pauschal tariff): grid→battery charging is
-      // legitimate — the per-bucket decomposition surfaces that residual.
+      // The per-bucket decomposition runs either way (it preserves the time
+      // dimension, so night base load is attributed to the battery). DEFAULT
+      // (flag OFF): the per-bucket residual charge is dropped — NO
+      // Netzbezug→Akku-Laden flow. Flag ON (flat-rate / Pauschal tariff):
+      // grid→battery charging is legitimate — the residual becomes that flow.
       // Either way the Sankey self-conserves (it does not use the meter's
       // grid_import/grid_export for flows — the meter is its own measurement).
       const gridChargeAllowed = isGridChargeAllowed();
