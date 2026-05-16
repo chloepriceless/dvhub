@@ -315,20 +315,48 @@ export function createHistoryVizAggregator(ctx) {
   }
 
   // -------------------------------------------------------------------------
-  // Plan 09.3 round-2 — per-bucket energy-flow decomposition.
+  // Resolve the optimizer's "charge battery from grid" permission. This is the
+  // EEG/§14a-relevant `optimizer.allowGridCharge` flag (a flat-rate / Pauschal-
+  // tariff feature). Default OFF — matches schedule-eval.js:
+  // `cfg.optimizer?.allowGridCharge ?? false`.
   //
-  // The Sankey / Autarky-day builders must conserve energy: with a grid-
-  // arbitrage battery `batteryCharge + gridExport` can exceed `pv` over a
-  // PERIOD total, so the old period-level `pvToEigen = pv − export − charge`
-  // clamps to 0 and the PV-out flows overshoot total PV. The fix decomposes
-  // each TIME BUCKET independently (where conservation holds by construction)
-  // then sums. Returns 7 accumulated flows + per-bucket-derived totals.
+  // It governs energy-flow ATTRIBUTION in the Sankey / Autarky-donut: when the
+  // setting is OFF, the battery is charged from PV only and ALL grid import
+  // serves self-consumption — there is no Netzbezug→Akku-Laden flow.
+  function isGridChargeAllowed() {
+    let opt = {};
+    try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
+    return opt.allowGridCharge === true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Plan 09.3 / 09.4 — energy-flow decomposition.
+  //
+  // The Sankey / Autarky-day builders must conserve energy. Two attribution
+  // modes, selected by `gridChargeAllowed`:
+  //
+  //  A) gridChargeAllowed === false (DEFAULT):
+  //     The battery is charged ONLY from PV and ALL grid import serves self-
+  //     consumption — there is NO Netzbezug→Akku-Laden flow. We use a single
+  //     PERIOD-TOTAL decomposition with PV-priority (PV → load, then battery,
+  //     then export; battery → load, then export; grid → load only). This
+  //     conserves cleanly and avoids the per-bucket `batteryCharge − pvToBattery`
+  //     residual that the per-bucket path mislabels as grid→battery.
+  //
+  //  B) gridChargeAllowed === true (flat-rate / Pauschal tariff):
+  //     Grid→battery charging is legitimate. We keep the per-bucket
+  //     decomposition: with a grid-arbitrage battery `batteryCharge +
+  //     gridExport` can exceed `pv` over a PERIOD total, so a period-level
+  //     `pvToEigen = pv − export − charge` clamps to 0 and overshoots total
+  //     PV. Per-bucket decomposition cannot overshoot — within a bucket
+  //     PV-out = pv, into-load = load — and surfaces the grid→battery residual.
+  //
+  // Both modes return the same 7-flow shape + totals; only the attribution of
+  // battery charging and grid import changes.
   //
   // `rows` is the fetchBucketed output for the 6 energy series; this groups
-  // them by bucket ts, integrates W×Δt → kWh per bucket, and runs the
-  // priority decomposition (PV → load, then PV → battery, then PV → export;
-  // battery → load, then battery → export; grid covers the rest).
-  function decomposeEnergyFlows(rows) {
+  // them by bucket ts, integrates W×Δt → kWh per bucket, then decomposes.
+  function decomposeEnergyFlows(rows, gridChargeAllowed = false) {
     // bucket ts → { pv, load, gridImport, gridExport, batteryCharge, batteryDischarge } in kWh
     const buckets = new Map();
     const KEY_FIELD = {
@@ -352,6 +380,52 @@ export function createHistoryVizAggregator(ctx) {
       }
       b[field] += (w * dt) / 3_600_000;
     }
+    // Guard tiny negatives from floating-point rounding.
+    const clamp0 = (n) => (n > 0 ? n : 0);
+
+    if (!gridChargeAllowed) {
+      // --- DEFAULT: period-total PV-priority decomposition ------------------
+      // No Netzbezug→Akku-Laden flow. Battery charge is attributed to PV; all
+      // grid import serves the household load (Netzbezug→Eigenverbrauch).
+      let totalPv = 0;
+      let totalLoad = 0;
+      let totalCharge = 0;
+      let totalDischarge = 0;
+      for (const b of buckets.values()) {
+        totalPv += b.pv;
+        totalLoad += b.load;
+        totalCharge += b.batteryCharge;
+        totalDischarge += b.batteryDischarge;
+      }
+      totalPv = clamp0(totalPv);
+      totalLoad = clamp0(totalLoad);
+      totalCharge = clamp0(totalCharge);
+      totalDischarge = clamp0(totalDischarge);
+      // PV-priority: PV → load, then battery, then export.
+      const pvToLoad = Math.min(totalPv, totalLoad);
+      const pvAfterLoad = totalPv - pvToLoad;
+      const pvToBattery = Math.min(pvAfterLoad, totalCharge);
+      const pvToExport = pvAfterLoad - pvToBattery;
+      // Battery → load, then export.
+      const loadAfterPv = totalLoad - pvToLoad;
+      const batteryToLoad = Math.min(totalDischarge, loadAfterPv);
+      const batteryToExport = totalDischarge - batteryToLoad;
+      // Grid covers the remaining load only — never the battery.
+      const gridToLoad = loadAfterPv - batteryToLoad;
+      return {
+        pvToLoad: clamp0(pvToLoad),
+        pvToBattery: clamp0(pvToBattery),
+        pvToExport: clamp0(pvToExport),
+        gridToBattery: 0,
+        batteryToLoad: clamp0(batteryToLoad),
+        batteryToExport: clamp0(batteryToExport),
+        gridToLoad: clamp0(gridToLoad),
+        totalPv,
+        totalLoad,
+      };
+    }
+
+    // --- gridChargeAllowed: per-bucket decomposition (grid→battery legit) ---
     let pvToLoad = 0;
     let pvToBattery = 0;
     let pvToExport = 0;
@@ -383,8 +457,6 @@ export function createHistoryVizAggregator(ctx) {
       batteryToExport += battE;
       gridToLoad += gridL;
     }
-    // Guard tiny negatives from floating-point rounding.
-    const clamp0 = (n) => (n > 0 ? n : 0);
     return {
       pvToLoad: clamp0(pvToLoad),
       pvToBattery: clamp0(pvToBattery),
@@ -501,16 +573,16 @@ export function createHistoryVizAggregator(ctx) {
         ],
         start, end, view,
       });
-      // Round-2 fix — decompose energy flows PER TIME BUCKET, then sum. This
-      // conserves by construction: for a grid-arbitrage battery the period
-      // totals `batteryCharge + gridExport` can exceed `pv`, so the old
-      // period-level `pvToEigen = pv − export − charge` clamps to 0 and the
-      // PV-out flows overshoot total PV. Per-bucket decomposition cannot
-      // overshoot — within a bucket PV-out = pv, into-load = load, etc.
-      // The 'grid' flows here are DERIVED (charge − pvCharge, load remainder),
-      // independent of the meter's grid_import/grid_export — that is correct:
-      // the meter is its own measurement, the Sankey must self-conserve.
-      const f = decomposeEnergyFlows(rows);
+      // Plan 09.4 — energy-flow attribution depends on optimizer.allowGridCharge.
+      // DEFAULT (flag OFF): the battery is charged from PV only and ALL grid
+      // import serves self-consumption — NO Netzbezug→Akku-Laden flow. A
+      // period-total PV-priority decomposition conserves cleanly here.
+      // Flag ON (flat-rate / Pauschal tariff): grid→battery charging is
+      // legitimate — the per-bucket decomposition surfaces that residual.
+      // Either way the Sankey self-conserves (it does not use the meter's
+      // grid_import/grid_export for flows — the meter is its own measurement).
+      const gridChargeAllowed = isGridChargeAllowed();
+      const f = decomposeEnergyFlows(rows, gridChargeAllowed);
       const pvKwh = f.totalPv;
       const eigenverbrauchKwh = f.pvToLoad + f.batteryToLoad + f.gridToLoad;
       const einspeisungKwh = f.pvToExport + f.batteryToExport;
@@ -968,7 +1040,7 @@ export function createHistoryVizAggregator(ctx) {
     try {
       const { start, end } = resolveRange(view, date);
       // Round-2 fix — fetch all 6 energy series so the autarky split uses the
-      // SAME per-bucket decomposition as the Sankey (pvToLoad / batteryToLoad /
+      // SAME decomposition as the Sankey (pvToLoad / batteryToLoad /
       // gridToLoad). Day-Autarky and day-Sankey therefore agree by construction.
       const rows = await fetchBucketed({
         seriesKeys: [
@@ -977,9 +1049,14 @@ export function createHistoryVizAggregator(ctx) {
         ],
         start, end, view,
       });
+      // Plan 09.4 — the autarky donut follows the SAME grid-charge rule as the
+      // Sankey: with optimizer.allowGridCharge OFF (default) ALL grid import is
+      // a load source (grid share), the battery is PV-charged, and autarky =
+      // (pvDirect + battery) / load. Pass the flag so both agree.
+      const gridChargeAllowed = isGridChargeAllowed();
       // --- day view → donut payload --------------------------------------
       if (view === 'day') {
-        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rows));
+        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rows, gridChargeAllowed));
         const payload = {
           ok: true,
           card: 'autarky-calendar',
@@ -1005,7 +1082,7 @@ export function createHistoryVizAggregator(ctx) {
       const dates = [...rowsByDay.keys()].sort();
       const matrix = [];
       for (const d of dates) {
-        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rowsByDay.get(d)));
+        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rowsByDay.get(d), gridChargeAllowed));
         // dow mapping: JS getUTCDay() is 0=Sunday..6=Saturday; the y-axis
         // labels are Mo=0..So=6, so shift by +6 mod 7.
         const jsDow = new Date(`${d}T12:00:00Z`).getUTCDay();
@@ -1013,7 +1090,7 @@ export function createHistoryVizAggregator(ctx) {
         matrix.push({ x: d, y: DOW_DE_SHORT[dowIdx], v: round1(donut.autarkyPct) });
       }
       // periodTotal — decompose the WHOLE range's buckets in one pass.
-      const periodDonut = autarkyDonutFromFlows(decomposeEnergyFlows(rows));
+      const periodDonut = autarkyDonutFromFlows(decomposeEnergyFlows(rows, gridChargeAllowed));
       const payload = {
         ok: true,
         card: 'autarky-calendar',

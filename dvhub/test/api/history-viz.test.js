@@ -63,11 +63,14 @@ function makeReq(pathname, { method = 'GET', token = API_TOKEN, ip = REMOTE_IP }
   return { method, url: pathname, headers, socket: { remoteAddress: ip } };
 }
 
-function mockCtx() {
+function mockCtx({ optimizer = {} } = {}) {
   const cfg = {
     apiToken: API_TOKEN,
     epex: { enabled: false, timezone: 'Europe/Berlin' },
-    optimizer: { enabled: false },
+    // optimizer.allowGridCharge (default false / OFF) governs Sankey + autarky
+    // energy-flow attribution — see aggregator.isGridChargeAllowed(). Tests can
+    // flip it on via mockCtx({ optimizer: { allowGridCharge: true } }).
+    optimizer: { enabled: false, ...optimizer },
     schedule: { timezone: 'Europe/Berlin' },
     telemetry: { enabled: false },
     family: {},
@@ -356,8 +359,8 @@ function bucketRawRows(rawRows, bucketSec) {
   return out;
 }
 
-function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async () => ({ rows: [] }) } = {}) {
-  const ctx = mockCtx();
+function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async () => ({ rows: [] }), optimizer = {} } = {}) {
+  const ctx = mockCtx({ optimizer });
   // queryBucketedSeries adapter — runs querySeriesFn to get raw rows, then
   // buckets them per the requested interval (mirrors the SQL GROUP BY).
   const queryBucketedSeriesFn = async ({ seriesKeys, start, end, bucketInterval }) => {
@@ -454,11 +457,13 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     );
   });
 
-  it('Test W2-2b (Sankey grid-arbitrage conservation): charge+export > PV must NOT make PV-out flows overshoot total PV', async () => {
-    // Round-2 bug repro — a grid-arbitrage battery charges from the grid in
-    // cheap hours, so over the period batteryCharge + gridExport can exceed PV.
-    // PV 1000W, load 800W, export 600W, charge 900W → charge+export=1500 > 1000.
-    // The old period-level decomposition overshot PV; per-bucket cannot.
+  it('Test W2-2b (Sankey default — NO grid→battery): allowGridCharge OFF → battery PV-charged, ALL grid import → Eigenverbrauch, conserves', async () => {
+    // Plan 09.4 — DEFAULT (optimizer.allowGridCharge OFF): the battery is
+    // charged ONLY from PV and ALL grid import serves self-consumption. There
+    // must be NO Netzbezug→Akku-Laden flow even when the period-total battery
+    // charge exceeds what PV could have supplied. PV 1000W, load 800W,
+    // export 600W, charge 900W → the period-total PV-priority decomposition
+    // conserves and attributes battery charge to PV.
     const querySeries = async ({ seriesKeys, start, end }) => {
       const map = {
         pv_total_w: 1000, grid_export_w: 600, grid_import_w: 700,
@@ -468,10 +473,17 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
       for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
       return all;
     };
-    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries }); // allowGridCharge defaults OFF
     const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
     assert.equal(r.status, 200);
     const b = r.body;
+    // RULE — no Netzbezug→Akku-Laden flow by default.
+    const gridToBattery = b.flows.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden');
+    assert.ok(!gridToBattery, 'default (allowGridCharge OFF) must NOT contain a Netzbezug→Akku-Laden flow');
+    // Battery charge is attributed to PV — a PV→Akku-Laden flow exists.
+    const pvToBattery = b.flows.find(f => f.from === 'PV' && f.to === 'Akku-Laden');
+    assert.ok(pvToBattery && pvToBattery.flow > 0, 'battery charge must be attributed to PV (PV→Akku-Laden)');
+    // CONSERVATION — sum-from-PV == total PV, sum-to-Eigenverbrauch == total load.
     const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
     assert.ok(
       sumFromPv <= b.totals.pvKwh + 0.05,
@@ -481,9 +493,40 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
       Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05,
       `PV-out flows (${sumFromPv}) MUST conserve to total PV (${b.totals.pvKwh})`
     );
-    // Grid→Akku flow must appear when the battery charges beyond what PV covers.
+    const sumToEigen = b.flows.filter(f => f.to === 'Eigenverbrauch').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      Math.abs(sumToEigen - b.totals.eigenverbrauchKwh) <= 0.05,
+      `sum-to-Eigenverbrauch (${sumToEigen}) MUST equal totals.eigenverbrauchKwh (${b.totals.eigenverbrauchKwh})`
+    );
+  });
+
+  it('Test W2-2b2 (Sankey grid-charge ON): allowGridCharge true → Netzbezug→Akku-Laden flow may appear, still conserves', async () => {
+    // Plan 09.4 — flat-rate / Pauschal tariff: optimizer.allowGridCharge ON.
+    // A grid-arbitrage battery charges from the grid in cheap hours, so the
+    // period totals batteryCharge + gridExport can exceed PV. The per-bucket
+    // decomposition surfaces the grid→battery residual AND still conserves —
+    // PV-out flows must not overshoot total PV.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 1000, grid_export_w: 600, grid_import_w: 700,
+        battery_charge_w: 900, battery_discharge_w: 100, load_power_w: 800,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries, optimizer: { allowGridCharge: true } });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05,
+      `PV-out flows (${sumFromPv}) MUST conserve to total PV (${b.totals.pvKwh})`
+    );
+    // Grid→Akku flow IS legitimate here — battery charges beyond what PV covers.
     const gridToBattery = b.flows.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden');
-    assert.ok(gridToBattery && gridToBattery.flow > 0, 'grid-arbitrage charging should yield a Netzbezug→Akku-Laden flow');
+    assert.ok(gridToBattery && gridToBattery.flow > 0, 'grid-charge ON: grid-arbitrage charging should yield a Netzbezug→Akku-Laden flow');
   });
 
   it('Test W2-2c (Sankey flow types): from/to use the 7 documented edge types', async () => {
@@ -947,6 +990,50 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     assert.ok(
       Math.abs(b.shares.pvDirect - (pvToLoad ? pvToLoad.flow : 0)) <= 0.05,
       'autarky day shares.pvDirect must equal the Sankey PV→Eigenverbrauch flow'
+    );
+  });
+
+  it('Test W3-1c (Autarky donut grid-charge rule): default → grid share = grid-to-load, follows Sankey; ON keeps per-bucket parity', async () => {
+    // Plan 09.4 — the day-Autarky donut follows the SAME grid-charge rule as
+    // the Sankey. Scenario: PV 600W < load 1000W, battery_charge 800W,
+    // battery_discharge 200W. Default (allowGridCharge OFF):
+    //   pvToLoad   = min(PV, load)            = 600W-equiv
+    //   batteryToLoad = min(discharge, loadAfterPv=400W) = 200W-equiv
+    //   gridToLoad = 1000 − 600 − 200         = 200W-equiv
+    // autarky = (pvDirect + battery)/load = (600+200)/1000 = 80%.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 600, load_power_w: 1000, battery_charge_w: 800,
+        battery_discharge_w: 200, grid_import_w: 400, grid_export_w: 0,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries }); // allowGridCharge OFF
+    const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    assert.equal(b.mode, 'donut');
+    // grid share = grid-to-load; pvDirect + battery is the autark portion.
+    const totalShares = b.shares.pvDirect + b.shares.battery + b.shares.grid;
+    assert.ok(totalShares > 0, 'shares should sum to the household load');
+    const expectedPct = ((b.shares.pvDirect + b.shares.battery) / totalShares) * 100;
+    assert.ok(
+      Math.abs(b.autarkyPct - expectedPct) <= 0.2,
+      `autarkyPct (${b.autarkyPct}) must equal (pvDirect+battery)/load (${expectedPct})`
+    );
+    assert.ok(Math.abs(b.autarkyPct - 80) <= 1, `expected ~80% autarky, got ${b.autarkyPct}`);
+    assert.ok(b.shares.grid > 0, 'grid share must carry the grid-to-load portion');
+    // Donut must agree with the Sankey decomposition (same rule, same flag).
+    const sankey = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    const sk = sankey.body.flows;
+    const gridToLoad = sk.find(f => f.from === 'Netzbezug' && f.to === 'Eigenverbrauch');
+    assert.ok(!sk.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden'),
+      'default: Sankey must have no Netzbezug→Akku-Laden flow');
+    assert.ok(
+      Math.abs(b.shares.grid - (gridToLoad ? gridToLoad.flow : 0)) <= 0.05,
+      'autarky donut grid share must equal the Sankey Netzbezug→Eigenverbrauch flow'
     );
   });
 
