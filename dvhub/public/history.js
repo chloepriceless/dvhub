@@ -175,10 +175,15 @@ function renderKpis(summary) {
   setText('historyKpiAvoidedBatMarket', fmtEur(round2(avoidedBat - oppCostBat)));
   setText('historyKpiOppCost', fmtEur(-Math.abs(oppCost)));
 
-  // Karte 5: Energiebilanz
+  // Karte 5: Energiebilanz — Verbrauch (Hauslast) nach Quelle aufgeschlüsselt.
+  // selfConsumptionKwh ist die versorgte Hauslast; pvShareKwh/batteryShareKwh/
+  // gridShareKwh sind die proportional auf die Last verteilten Anteile aus
+  // PV-direkt, Akku und Netzbezug — sie summieren sich exakt zu Verbrauch.
   setText('historyKpiPv', fmtKwh(kpis?.pvKwh));
-  setText('historyKpiSelfCons', fmtKwh(kpis?.selfConsumptionKwh));
-  setText('historyKpiImport', fmtKwh(kpis?.importKwh));
+  setText('historyKpiConsumption', fmtKwh(kpis?.selfConsumptionKwh));
+  setText('historyKpiConsPv', fmtKwh(kpis?.pvShareKwh));
+  setText('historyKpiConsBattery', fmtKwh(kpis?.batteryShareKwh));
+  setText('historyKpiConsGrid', fmtKwh(kpis?.gridShareKwh));
   setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
   setText('historyKpiVbh', hasFiniteNumber(kpis?.pvFullLoadHours) ? fmtHours(kpis?.pvFullLoadHours) : '-');
   const cyclesEl = byId('historyKpiCycles');
@@ -479,6 +484,7 @@ function startOfWeekDateOnly(value) {
 }
 
 const aggregateTableColumns = [
+  { key: 'pvKwh', label: 'PV-Erzeugung', formatter: fmtKwh },
   { key: 'importKwh', label: 'Import', formatter: fmtKwh },
   { key: 'loadKwh', label: 'Verbrauch', formatter: fmtKwh },
   { key: 'pvShareKwh', label: 'Eigenverbrauch PV', formatter: fmtKwh },
@@ -494,6 +500,7 @@ const aggregateTableColumns = [
 ];
 
 const aggregateMetricKeys = [
+  'pvKwh',
   'importKwh',
   'loadKwh',
   'pvShareKwh',
@@ -544,6 +551,7 @@ function buildAggregateSummaryRow(summary) {
   const kpis = summary?.kpis || {};
   return {
     label: aggregateSummaryLabel(view),
+    pvKwh: Number(kpis.pvKwh || 0),
     importKwh: Number(kpis.importKwh || 0),
     loadKwh: Number(kpis.loadKwh || 0),
     pvShareKwh: Number(kpis.selfConsumptionKwh || 0) ? Number(kpis.selfConsumptionKwh || 0) - Number(kpis.importKwh || 0) - Number(kpis.batteryShareKwh || 0) : Number(kpis.pvShareKwh || 0),
@@ -607,13 +615,13 @@ function buildAggregateDisplayRows(summary) {
 function renderAggregateSummaryTable(summary) {
   const summaryRow = buildAggregateSummaryRow(summary);
   const summaryColumns = [
-    aggregateTableColumns[5],
     aggregateTableColumns[6],
     aggregateTableColumns[7],
     aggregateTableColumns[8],
     aggregateTableColumns[9],
     aggregateTableColumns[10],
-    aggregateTableColumns[11]
+    aggregateTableColumns[11],
+    aggregateTableColumns[12]
   ];
 
   return `

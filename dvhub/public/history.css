@@ -231,6 +231,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .calc-row-line.sep span,
 .calc-row-line.sep strong { font-size: 11.5px; }
+/* Energiebilanz: indented "davon …" sub-rows under Verbrauch */
+.calc-row-line.is-sub { padding-left: 12px; }
+.calc-row-line.is-sub span { font-size: 9.5px; opacity: .75; }
+.calc-row-line.is-sub strong { font-size: 11.5px; font-weight: 400; }
 
 .calc-toggle {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
