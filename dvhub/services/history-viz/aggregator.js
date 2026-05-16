@@ -284,6 +284,37 @@ export function createHistoryVizAggregator(ctx) {
   }
 
   // -------------------------------------------------------------------------
+  // Plan 09.4-A — EPEX spot price source.
+  //
+  // The Phase-08.1 `shared.market_price_slots` table is 0 rows on prod —
+  // nothing ever populated it (no `INSERT INTO shared.market_price` anywhere
+  // in the codebase). The live EPEX prices land in `public.timeseries_samples`
+  // via epex-fetch.js → buildPriceTelemetrySamples → telemetryStore.writeSamples
+  // as `series_key='price_ct_kwh'` (forecast scope) + the price_backfill job
+  // (history scope) — ~25k rows / 359 days. `price_ct_kwh` is a ratio series
+  // (ct/kWh), NOT energy, so consumers take the per-slot value / AVG directly —
+  // never a W×Δt integral.
+  //
+  // priceRowsSql() — parameterized SELECT mirroring the old market_price_slots
+  // query 1:1: `slot_start`→`ts_utc`, `price_ct_kwh` is the row column name
+  // `value_num` aliased back to `price_ct_kwh` so callers' row handling is
+  // unchanged. No `price_kind` filter — `series_key='price_ct_kwh'` is the
+  // selector. Both scopes (forecast + history) are included so the full
+  // 359-day window is covered.
+  const PRICE_SERIES_KEY = 'price_ct_kwh';
+  function priceRowsSql() {
+    return `
+      SELECT value_num AS price_ct_kwh
+      FROM timeseries_samples
+      WHERE series_key = '${PRICE_SERIES_KEY}'
+        AND value_num IS NOT NULL
+        AND ts_utc >= $1::timestamptz
+        AND ts_utc <  $2::timestamptz
+      ORDER BY value_num DESC
+    `;
+  }
+
+  // -------------------------------------------------------------------------
   // Plan 09.3 round-2 — per-bucket energy-flow decomposition.
   //
   // The Sankey / Autarky-day builders must conserve energy: with a grid-
@@ -742,18 +773,15 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      // SQL — opt.plan_slots holds per-slot import/export Wh + expected_profit_eur;
-      // shared.market_price_slots holds price_ct_kwh per slot. JOIN by slot_start.
-      // Plan-doc column-name verification (against
-      // dvhub/db/migrations/011-opt-tables.sql:127-146 and 009-shared-tables.sql:253-272):
-      //   opt.plan_slots:        slot_start, grid_import_wh, grid_export_wh,
-      //                          battery_charge_grid_wh, battery_charge_pv_wh,
-      //                          battery_discharge_load_wh, battery_discharge_export_wh,
-      //                          expected_profit_eur
-      //   shared.market_price_slots: slot_start, price_ct_kwh, price_kind='market'
-      // No `action`/`kwh`/`price_ct`/`revenue_eur` columns exist — they are
-      // DERIVED below: action by sign of net flow, kwh by max(import, export)/1000,
-      // priceCt by joined market price, revenueEur by expected_profit_eur (or 0).
+      // NOTE (Plan 09.4): the Spot-Ledger card was removed from the frontend
+      // (public/history-viz.js — the `ledger` slug is intentionally absent), so
+      // this builder is dead code on the request path and was NOT re-pointed in
+      // 09.4. Its SQL still references the Phase-08.1 multi-schema tables
+      // `opt.plan_slots` / `shared.market_price_slots`, which are 0 rows on prod
+      // — nothing ever populated them. The earlier "verified column names"
+      // claims against migrations 011/009 were schema-shape checks only; the
+      // tables were never written to. If the Ledger card is ever revived,
+      // re-point it the same way as getTop10 (dispatchSlotsCte()).
       //
       // Test shape (W2-7) supplies a flat row shape with these columns. The
       // production SQL below is the authoritative path; the test double bypasses
@@ -834,11 +862,11 @@ export function createHistoryVizAggregator(ctx) {
   // Plan 09.3-03 Wave 3 — 3 LIVE builders (Autarky-Calendar / Ring / Duration).
   // CONTEXT D-04 Gruppe B Tier-1 — simpler per-day / per-hour aggregations.
   // Same 6-step template as Wave 2 (validate → guard → cache → fetch → build →
-  // putCached). Spot prices for ring + duration come from
-  // shared.market_price_slots: verified column names are slot_start
-  // (TIMESTAMPTZ), price_kind ('market'), price_ct_kwh (NUMERIC) — see
-  // db/migrations/009-shared-tables.sql:253-269. The plan-doc assumed
-  // `ts_utc` + `price_ct_per_kwh`; both are corrected to the real schema.
+  // putCached). Plan 09.4-A — spot prices for ring + duration come from
+  // `public.timeseries_samples` (series_key='price_ct_kwh', columns ts_utc +
+  // value_num) via priceRowsSql(). The earlier `shared.market_price_slots`
+  // source was never populated on prod (0 rows); the multi-schema table was
+  // created additively and its cutover deferred.
   // -------------------------------------------------------------------------
 
   function round1(n) {
@@ -1003,16 +1031,18 @@ export function createHistoryVizAggregator(ctx) {
         if (r.key === 'pv_total_w') pvKwhByHour[h] += kwh;
         else if (r.key === 'load_power_w') loadKwhByHour[h] += kwh;
       }
-      // Spot price per hour from shared.market_price_slots (parameterized).
-      // Aggregate to hour-of-day average; missing hours fall back to 0.
+      // Spot price per hour from timeseries_samples price_ct_kwh (Plan 09.4-A,
+      // parameterized). price_ct_kwh is a ratio series → take the per-hour MEAN
+      // (AVG of value_num), never a W×Δt integral. Missing hours fall back to 0.
       const spotByHour = new Array(24).fill(0);
       try {
         const priceSql = `
-          SELECT EXTRACT(HOUR FROM slot_start) AS h, AVG(price_ct_kwh) AS avg_ct
-          FROM shared.market_price_slots
-          WHERE price_kind = 'market'
-            AND slot_start >= $1::timestamptz
-            AND slot_start <  $2::timestamptz
+          SELECT EXTRACT(HOUR FROM ts_utc) AS h, AVG(value_num) AS avg_ct
+          FROM timeseries_samples
+          WHERE series_key = '${PRICE_SERIES_KEY}'
+            AND value_num IS NOT NULL
+            AND ts_utc >= $1::timestamptz
+            AND ts_utc <  $2::timestamptz
           GROUP BY 1
           ORDER BY 1
         `;
@@ -1078,14 +1108,10 @@ export function createHistoryVizAggregator(ctx) {
       // under 50KB (~8760 × ~25B ≈ 220KB raw → but per-rank objects are small;
       // realistically week/month dominate the UI — year is gated by the 5-min
       // cache which prevents storms, T-09.3-15).
-      const sql = `
-        SELECT price_ct_kwh
-        FROM shared.market_price_slots
-        WHERE price_kind = 'market'
-          AND slot_start >= $1::timestamptz
-          AND slot_start <  $2::timestamptz
-        ORDER BY price_ct_kwh DESC
-      `;
+      // Plan 09.4-A — EPEX spot prices are sourced from timeseries_samples
+      // (series_key='price_ct_kwh'); the row column is aliased back to
+      // `price_ct_kwh` so the downstream sort/map is unchanged.
+      const sql = priceRowsSql();
       let rows = [];
       if (db && typeof db.query === 'function') {
         const result = await db.query(sql, [start, end]);
@@ -1133,10 +1159,10 @@ export function createHistoryVizAggregator(ctx) {
   // -------------------------------------------------------------------------
   // Plan 09.3-04 Wave 4 — 3 LIVE builders (Pheat / Spaghetti / Cycles).
   // CONTEXT D-04 Gruppe B Tier-2 + D-05 (cycle-counter). Same 6-step template
-  // as Waves 2-3. Spot-price columns use the verified real schema names:
-  // shared.market_price_slots → slot_start (TIMESTAMPTZ), price_kind ('market'),
-  // price_ct_kwh (NUMERIC) — see 009-shared-tables.sql:253-269. The plan-doc
-  // assumed ts_utc + price_ct_per_kwh.
+  // as Waves 2-3. Plan 09.4-A — Pheat's spot-price source is
+  // `public.timeseries_samples` (series_key='price_ct_kwh', columns ts_utc +
+  // value_num). The earlier `shared.market_price_slots` source was never
+  // populated on prod (0 rows).
   // -------------------------------------------------------------------------
 
   // Battery nominal capacity (kWh) for the cycles charged/discharged kWh axis.
@@ -1180,15 +1206,19 @@ export function createHistoryVizAggregator(ctx) {
       // dow×hour average spot price. Bucket server-side via EXTRACT in the
       // Europe/Berlin zone (a SQL literal, not user input — T-09.3-19); the
       // BETWEEN bounds are parameterized. PG-DOW: 0=Sunday..6=Saturday.
+      // Plan 09.4-A — EPEX spot prices are sourced from timeseries_samples
+      // (series_key='price_ct_kwh'). price_ct_kwh is a ratio series → the
+      // per-cell aggregate is the MEAN (AVG of value_num), never an integral.
       const sql = `
         SELECT
-          EXTRACT(DOW  FROM slot_start AT TIME ZONE 'Europe/Berlin') AS dow,
-          EXTRACT(HOUR FROM slot_start AT TIME ZONE 'Europe/Berlin') AS hr,
-          AVG(price_ct_kwh) AS avg_ct
-        FROM shared.market_price_slots
-        WHERE price_kind = 'market'
-          AND slot_start >= $1::timestamptz
-          AND slot_start <  $2::timestamptz
+          EXTRACT(DOW  FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS dow,
+          EXTRACT(HOUR FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS hr,
+          AVG(value_num) AS avg_ct
+        FROM timeseries_samples
+        WHERE series_key = '${PRICE_SERIES_KEY}'
+          AND value_num IS NOT NULL
+          AND ts_utc >= $1::timestamptz
+          AND ts_utc <  $2::timestamptz
         GROUP BY dow, hr
         ORDER BY dow, hr
       `;
@@ -1426,26 +1456,81 @@ export function createHistoryVizAggregator(ctx) {
   // Plan 09.3-05 Wave 5 — 3 LIVE builders (Top10 / CalYear / Scatter).
   // CONTEXT D-05 (Top10 / Cal-Year) + D-06 (14th card — Wetter×Erlös-Scatter).
   //
-  // SCHEMA NOTE (T-09.3-21): the plan-doc's `optimizer_runs` assumption is
-  // WRONG. `public.optimizer_runs` is a run-metadata table (run_started_at /
-  // status / result_json) with NO revenue_eur / cost_eur / ts / action / kwh /
-  // price_ct_per_kwh columns. The per-slot economic data lives in
-  // `opt.plan_slots` — slot_start (TIMESTAMPTZ), grid_import_wh, grid_export_wh
-  // (BIGINT), expected_profit_eur (NUMERIC) — exactly the table the live
-  // `getLedger` builder (Wave 2) already queries, joined to
-  // shared.market_price_slots.price_ct_kwh. All 3 Wave-5 builders mirror that
-  // verified getLedger schema path. "Revenue" per slot = expected_profit_eur
-  // (the optimizer's per-slot economic outcome); daily "net-€" = SUM of it.
+  // SCHEMA NOTE (Plan 09.4-B): the Phase-08.1 `opt.plan_slots` table is 0 rows
+  // on prod — no `INSERT INTO opt.` writer exists anywhere; the multi-schema
+  // cutover was deferred. There is NO `expected_profit_eur` column anywhere in
+  // the legacy schema. The realized per-slot economics are reconstructed from
+  // `public.energy_slots_15m` — an EAV table keyed by (slot_start_utc,
+  // series_key, source_kind) where `value_num` already holds the per-15-min
+  // ENERGY in kWh (despite the `_w` suffix on the series_key; `unit='kWh'`).
+  // The dispatch cards read the `grid_import_w` / `grid_export_w` series and
+  // join the EPEX price (`timeseries_samples` series_key='price_ct_kwh').
+  //
+  // Per-slot net € is DERIVED — there is no stored profit column. Consistent
+  // with the legacy net-€ in history-runtime.js:1332-1333
+  //   exportRevenueEur = exportKwh × marketPriceCtKwh / 100
+  //   netEur           = exportRevenueEur − selfConsumptionCostEur
+  // the dispatch cards value export at the EPEX price and import cost at the
+  // same EPEX price (the per-slot market price is the only price the
+  // aggregator's DI ctx exposes — the full pricingConfig LCOE breakdown lives
+  // in history-runtime, out of scope here):
+  //   netEur = (exportKwh − importKwh) × price_ct_kwh / 100
+  // This is a signed market-value cashflow per slot; SUM per day = daily net.
   // -------------------------------------------------------------------------
 
-  // Action heuristic shared with getLedger: net export → sell, net import →
-  // buy, both ~0 → hold. kWh = max(import, export)/1000.
-  function slotActionAndKwh(importWh, exportWh) {
+  // Action heuristic: net export → sell, net import → buy, both ~0 → hold.
+  // kWh = max(import, export) — energy_slots_15m value_num is already in kWh.
+  function slotActionAndKwh(importKwh, exportKwh) {
     let action = 'hold';
-    if (exportWh > importWh && exportWh > 0) action = 'sell';
-    else if (importWh > exportWh && importWh > 0) action = 'buy';
-    const kwh = Math.max(importWh, exportWh) / 1000;
+    if (exportKwh > importKwh && exportKwh > 0) action = 'sell';
+    else if (importKwh > exportKwh && importKwh > 0) action = 'buy';
+    const kwh = Math.max(importKwh, exportKwh);
     return { action, kwh };
+  }
+
+  // SQL for the realized-dispatch source. energy_slots_15m is EAV, so the
+  // per-slot import/export kWh are pivoted with FILTER aggregates and joined to
+  // the 15-min EPEX price from timeseries_samples. source_kind IN
+  // ('vrm_import','local_live') = the realized telemetry tiers; `unit='kWh'`
+  // excludes the legacy pre-Sept-2025 `unit='W'` rows so the energy stays
+  // consistent. Derived per-slot net € = (export−import)×price/100.
+  function dispatchSlotsCte() {
+    return `
+      WITH slot_flows AS (
+        SELECT
+          slot_start_utc AS ts,
+          SUM(value_num) FILTER (WHERE series_key = 'grid_import_w') AS import_kwh,
+          SUM(value_num) FILTER (WHERE series_key = 'grid_export_w') AS export_kwh
+        FROM energy_slots_15m
+        WHERE series_key IN ('grid_import_w', 'grid_export_w')
+          AND source_kind IN ('vrm_import', 'local_live')
+          AND unit = 'kWh'
+          AND slot_start_utc >= $1::timestamptz
+          AND slot_start_utc <  $2::timestamptz
+        GROUP BY slot_start_utc
+      ),
+      slot_price AS (
+        SELECT
+          time_bucket('15 minutes', ts_utc) AS ts,
+          AVG(value_num) AS price_ct_kwh
+        FROM timeseries_samples
+        WHERE series_key = '${PRICE_SERIES_KEY}'
+          AND value_num IS NOT NULL
+          AND ts_utc >= $1::timestamptz
+          AND ts_utc <  $2::timestamptz
+        GROUP BY 1
+      ),
+      slot_net AS (
+        SELECT
+          f.ts,
+          COALESCE(f.import_kwh, 0) AS import_kwh,
+          COALESCE(f.export_kwh, 0) AS export_kwh,
+          COALESCE(p.price_ct_kwh, 0) AS price_ct_kwh,
+          (COALESCE(f.export_kwh, 0) - COALESCE(f.import_kwh, 0))
+            * COALESCE(p.price_ct_kwh, 0) / 100.0 AS net_eur
+        FROM slot_flows f
+        LEFT JOIN slot_price p ON p.ts = f.ts
+      )`;
   }
 
   // Pearson correlation coefficient between two equal-length numeric arrays.
@@ -1478,26 +1563,17 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      // The 10 highest-profit sell slots in the period. opt.plan_slots holds
-      // grid_import_wh / grid_export_wh / expected_profit_eur per slot; join
-      // shared.market_price_slots for the spot price. T-09.3-21: parameterized
-      // BETWEEN bounds; ORDER BY ... DESC LIMIT 10 server-side. T-09.3-22: the
-      // exact slot ts is already exposed via getLedger / the Spot-Ledger card.
+      // The 10 highest-revenue sell slots in the period. Plan 09.4-B — realized
+      // per-slot import/export kWh come from energy_slots_15m, joined to the
+      // 15-min EPEX price; per-slot net € is DERIVED (no stored profit column).
+      // Parameterized BETWEEN bounds; ORDER BY net_eur DESC LIMIT 10 server-side.
+      // The export>import filter keeps this a "best SELLING slots" ranking.
       const sql = `
-        SELECT
-          ps.slot_start,
-          ps.grid_import_wh,
-          ps.grid_export_wh,
-          ps.expected_profit_eur,
-          mps.price_ct_kwh
-        FROM opt.plan_slots ps
-        LEFT JOIN shared.market_price_slots mps
-          ON mps.slot_start = ps.slot_start
-         AND mps.price_kind = 'market'
-        WHERE ps.slot_start >= $1::timestamptz
-          AND ps.slot_start <  $2::timestamptz
-          AND ps.grid_export_wh > ps.grid_import_wh
-        ORDER BY ps.expected_profit_eur DESC NULLS LAST
+        ${dispatchSlotsCte()}
+        SELECT ts, import_kwh, export_kwh, price_ct_kwh, net_eur
+        FROM slot_net
+        WHERE export_kwh > import_kwh
+        ORDER BY net_eur DESC NULLS LAST
         LIMIT 10
       `;
       let rows = [];
@@ -1508,15 +1584,15 @@ export function createHistoryVizAggregator(ctx) {
       // Defensive re-sort DESC + re-cap in case the adapter ignored ORDER/LIMIT.
       const slots = rows
         .map((row) => {
-          const importWh = Number(row.grid_import_wh) || 0;
-          const exportWh = Number(row.grid_export_wh) || 0;
-          const { action, kwh } = slotActionAndKwh(importWh, exportWh);
+          const importKwh = Number(row.import_kwh) || 0;
+          const exportKwh = Number(row.export_kwh) || 0;
+          const { action, kwh } = slotActionAndKwh(importKwh, exportKwh);
           return {
-            ts: typeof row.slot_start === 'string' ? row.slot_start : new Date(row.slot_start).toISOString(),
+            ts: typeof row.ts === 'string' ? row.ts : new Date(row.ts).toISOString(),
             action,
             kwh: round3(kwh),
             priceCt: round3(Number(row.price_ct_kwh) || 0),
-            revenueEur: round3(Number(row.expected_profit_eur) || 0),
+            revenueEur: round3(Number(row.net_eur) || 0),
           };
         })
         .sort((a, b) => b.revenueEur - a.revenueEur)
@@ -1551,17 +1627,16 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      // Per-day signed net-€ over the 12-month window. expected_profit_eur is
-      // the optimizer's per-slot economic outcome (already signed: a slot that
-      // costs money carries a negative value), so SUM per day yields a signed
-      // daily net. date_trunc to UTC day; the matrix is plotted month×day.
+      // Per-day signed net-€ over the 12-month window. Plan 09.4-B — the
+      // per-slot net € is DERIVED ((export−import)×price/100, signed: a slot
+      // that nets a cost carries a negative value), so SUM per day yields a
+      // signed daily net. date_trunc to UTC day; the matrix is plotted month×day.
       const sql = `
+        ${dispatchSlotsCte()}
         SELECT
-          to_char(date_trunc('day', slot_start AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
-          SUM(expected_profit_eur) AS net_eur
-        FROM opt.plan_slots
-        WHERE slot_start >= $1::timestamptz
-          AND slot_start <  $2::timestamptz
+          to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+          SUM(net_eur) AS net_eur
+        FROM slot_net
         GROUP BY 1
         ORDER BY 1
       `;
@@ -1633,21 +1708,21 @@ export function createHistoryVizAggregator(ctx) {
     // false). Matches the error-envelope shape used by every other builder.
     try {
       const { start, end } = resolveRange(view, date);
-      // Daily net-€ (from opt.plan_slots) JOIN daily-mean GHI (from
-      // weather_forecasts, ghi_wm2 IS NOT NULL) + daily autarky %. The INNER
-      // JOIN means days with no GHI row are omitted (T-09.3-24 graceful path).
-      // T-09.3-23 — both CTEs are daily-aggregated so the JOIN caps at ~365
-      // rows per side regardless of slot resolution.
+      // Daily net-€ (Plan 09.4-B: derived from energy_slots_15m realized flows
+      // × EPEX price) JOIN daily-mean GHI (from weather_forecasts, ghi_wm2 IS
+      // NOT NULL — the open_meteo_archive provider holds a full year of
+      // historical GHI). The INNER JOIN means days with no GHI row are omitted
+      // (T-09.3-24 graceful path). Both daily aggregates cap the JOIN at ~365
+      // rows per side. import_kwh/export_kwh drive the daily autarky %.
       const sql = `
-        WITH daily_net AS (
+        ${dispatchSlotsCte()},
+        daily_net AS (
           SELECT
-            to_char(date_trunc('day', slot_start AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
-            SUM(expected_profit_eur) AS net_eur,
-            SUM(grid_import_wh) AS import_wh,
-            SUM(grid_export_wh + battery_discharge_load_wh) AS supply_wh
-          FROM opt.plan_slots
-          WHERE slot_start >= $1::timestamptz
-            AND slot_start <  $2::timestamptz
+            to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            SUM(net_eur) AS net_eur,
+            SUM(import_kwh) AS import_kwh,
+            SUM(export_kwh) AS export_kwh
+          FROM slot_net
           GROUP BY 1
         ),
         daily_weather AS (
@@ -1664,8 +1739,8 @@ export function createHistoryVizAggregator(ctx) {
           n.d,
           w.ghi,
           n.net_eur,
-          n.import_wh,
-          n.supply_wh
+          n.import_kwh,
+          n.export_kwh
         FROM daily_net n
         JOIN daily_weather w ON w.d = n.d
         ORDER BY n.d
@@ -1697,16 +1772,18 @@ export function createHistoryVizAggregator(ctx) {
         if (!Number.isFinite(ghi)) continue; // defensive — JOIN should exclude
         const netEur = round3(Number(row.net_eur) || 0);
         // Autarky % per day. The test double supplies autarky_pct directly;
-        // the production SQL computes it from supply vs (supply + import).
+        // the production SQL computes it from realized export vs (export +
+        // import) kWh — a grid-flow self-sufficiency proxy (Plan 09.4-B; the
+        // energy_slots_15m value_num is already kWh).
         let autarkyPct;
         if (Number.isFinite(Number(row.autarky_pct))) {
           autarkyPct = Math.max(0, Math.min(100, Math.round(Number(row.autarky_pct))));
         } else {
-          const importWh = Number(row.import_wh) || 0;
-          const supplyWh = Number(row.supply_wh) || 0;
-          const totalWh = supplyWh + importWh;
-          autarkyPct = totalWh > 0
-            ? Math.max(0, Math.min(100, Math.round((supplyWh / totalWh) * 100)))
+          const importKwh = Number(row.import_kwh) || 0;
+          const exportKwh = Number(row.export_kwh) || 0;
+          const totalKwh = exportKwh + importKwh;
+          autarkyPct = totalKwh > 0
+            ? Math.max(0, Math.min(100, Math.round((exportKwh / totalKwh) * 100)))
             : 0;
         }
         points.push({

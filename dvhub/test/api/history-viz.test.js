@@ -800,10 +800,9 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
 //
 // Series-key naming continues the project-canonical set from Wave 2:
 // load_power_w + grid_import_w (for autarky), pv_total_w + load_power_w
-// (for ring). Spot price comes from shared.market_price_slots — verified
-// column names: slot_start (TIMESTAMPTZ), price_kind ('market'), price_ct_kwh
-// (NUMERIC). The plan-doc assumed `ts_utc` + `price_ct_per_kwh`; the real
-// schema (009-shared-tables.sql:253-269) uses slot_start + price_ct_kwh.
+// (for ring). Plan 09.4-A — spot price comes from public.timeseries_samples
+// (series_key='price_ct_kwh', columns ts_utc + value_num). The earlier
+// shared.market_price_slots source was never populated on prod (0 rows).
 // =============================================================================
 
 describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () => {
@@ -969,7 +968,8 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     // Return prices in scrambled order; builder MUST sort DESC and re-rank.
     const dbQuery = async (sql, params) => {
       assert.ok(Array.isArray(params) && params.length >= 1, 'getDuration MUST use parameterized SQL');
-      assert.match(sql, /market_price_slots/i, 'getDuration SQL should query market_price_slots');
+      assert.match(sql, /timeseries_samples/i, 'getDuration SQL should query timeseries_samples (Plan 09.4-A)');
+      assert.match(sql, /price_ct_kwh/i, "getDuration SQL should select the 'price_ct_kwh' series");
       return { rows: [
         { price_ct_kwh: 8.2 }, { price_ct_kwh: 32.1 }, { price_ct_kwh: -2.4 },
         { price_ct_kwh: 38.4 }, { price_ct_kwh: 5.0 }, { price_ct_kwh: 15.5 },
@@ -1059,7 +1059,7 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
 // Histogramm. CONTEXT D-04 Gruppe B Tier-2 + D-05 cycle-counter.
 //
 //   - pheat:     7 dow × 24 hour avg-spot-price matrix from
-//                shared.market_price_slots (4-stop interpolated color scale).
+//                public.timeseries_samples (4-stop interpolated color scale).
 //   - spaghetti: up to 30 day-line datasets of 24h hourly SOC, "Heute"
 //                highlighted; single querySeries call (RESEARCH §Pitfall 5).
 //   - cycles:    7-dow bars (geladen/entladen kWh stacked) + cycles line; the
@@ -1067,10 +1067,9 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
 //                Counter Algorithm), equivalent to the existing kpis.cycles
 //                discharge-energy/capacity formula in history-runtime.js.
 //
-// Spot price uses the real schema column names slot_start (TIMESTAMPTZ),
-// price_kind ('market'), price_ct_kwh (NUMERIC) — same correction Waves 2-3
-// applied (009-shared-tables.sql:253-269). The plan-doc assumed ts_utc +
-// price_ct_per_kwh.
+// Plan 09.4-A — Pheat's spot price comes from public.timeseries_samples
+// (series_key='price_ct_kwh', columns ts_utc + value_num). The earlier
+// shared.market_price_slots source was never populated on prod (0 rows).
 // =============================================================================
 
 // Build battery_soc_pct querySeries rows from a flat list of SOC percentages,
@@ -1099,7 +1098,8 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     // db.query returns dow×hour rows; build a deterministic full grid.
     const dbQuery = async (sql, params) => {
       assert.ok(Array.isArray(params) && params.length >= 1, 'getPheat MUST use parameterized SQL');
-      assert.match(sql, /market_price_slots/i, 'getPheat SQL should query market_price_slots');
+      assert.match(sql, /timeseries_samples/i, 'getPheat SQL should query timeseries_samples (Plan 09.4-A)');
+      assert.match(sql, /price_ct_kwh/i, "getPheat SQL should select the 'price_ct_kwh' series");
       const rows = [];
       for (let dow = 0; dow < 7; dow++) {
         for (let hr = 0; hr < 24; hr++) {
@@ -1358,21 +1358,22 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
 //               palette on the frontend — domain straddles 0).
 //   - scatter:  per-day GHI vs net-€ point cloud, point colour = autarky %.
 //
-// SCHEMA REALITY (T-09.3-21 — the plan-doc's `optimizer_runs` assumption is
-// wrong): there is NO `optimizer_runs` table with revenue_eur/cost_eur/ts/
-// action/kwh/price_ct_per_kwh columns. `public.optimizer_runs` is a run-
-// metadata table (run_started_at/status/result_json). The per-slot economic
-// data lives in `opt.plan_slots` — slot_start (TIMESTAMPTZ), grid_import_wh,
-// grid_export_wh, expected_profit_eur (NUMERIC) — exactly the table the live
-// `getLedger` builder (Wave 2) already queries. All three Wave-5 builders use
-// opt.plan_slots joined to shared.market_price_slots, mirroring getLedger. The
-// daily net-€ proxy is SUM(expected_profit_eur) per day; revenue per slot is
-// expected_profit_eur (the optimizer's per-slot economic outcome).
+// SCHEMA REALITY (Plan 09.4-B): the Phase-08.1 `opt.plan_slots` table is 0
+// rows on prod — nothing populates it, and there is NO `expected_profit_eur`
+// column anywhere in the legacy schema. The Wave-5 dispatch builders are
+// re-pointed at `public.energy_slots_15m` — an EAV table (slot_start_utc,
+// series_key, source_kind, value_num) where value_num is the per-15-min ENERGY
+// in kWh. The builders pivot the `grid_import_w` / `grid_export_w` series and
+// join the EPEX price (`timeseries_samples` series_key='price_ct_kwh'). The
+// per-slot net € is DERIVED — (export_kwh − import_kwh) × price_ct_kwh / 100 —
+// since no stored profit column exists; daily net-€ = SUM of it. The aggregator
+// SQL exposes a `slot_net` CTE with columns ts/import_kwh/export_kwh/
+// price_ct_kwh/net_eur, so the test doubles below feed rows in that shape.
 //
 // Weather: `weather_forecasts` — ts_utc (TIMESTAMPTZ), ghi_wm2 (DOUBLE
-// PRECISION, NULLABLE) — see forecast-store.js SCHEMA_SQL. getScatter joins
-// daily-mean GHI (ghi_wm2 IS NOT NULL) to daily net-€; days with no GHI row
-// are omitted.
+// PRECISION, NULLABLE). The open_meteo_archive provider holds a full year of
+// historical GHI. getScatter joins daily-mean GHI (ghi_wm2 IS NOT NULL) to
+// daily net-€; days with no GHI row are omitted.
 //
 // Test 9 (SQL-throw path) uses a hand-rolled throwing stub for ctx.db.query
 // (node:test has no mock library wired in this project — the existing Wave
@@ -1380,19 +1381,21 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
 // builder call in try/catch and fails if any exception escapes.
 // =============================================================================
 
-// Build opt.plan_slots-like rows for a given UTC day range. Each "slot" is a
-// 15-min interval; export-heavy slots (sell) carry a positive expected_profit.
-function makePlanSlotRows({ start, end, profitEur = 0.25, exportWh = 1400, importWh = 0, priceCt = 18.2, stepSec = SLOT_RES_SEC }) {
+// Plan 09.4-B — build slot_net-CTE-shaped rows for a given UTC day range. Each
+// "slot" is a 15-min interval sourced from energy_slots_15m (realized flows in
+// kWh) joined to the EPEX price; net_eur is the DERIVED per-slot cashflow
+// (export−import)×price/100. Export-heavy slots (sell) carry a positive net.
+function makeDispatchSlotRows({ start, end, exportKwh = 1.4, importKwh = 0, priceCt = 18.2, stepSec = SLOT_RES_SEC }) {
   const rows = [];
   const startMs = Date.parse(start);
   const endMs = Date.parse(end);
   for (let t = startMs; t < endMs; t += stepSec * 1000) {
     rows.push({
-      slot_start: new Date(t).toISOString(),
-      grid_import_wh: importWh,
-      grid_export_wh: exportWh,
-      expected_profit_eur: profitEur,
+      ts: new Date(t).toISOString(),
+      import_kwh: importKwh,
+      export_kwh: exportKwh,
       price_ct_kwh: priceCt,
+      net_eur: ((exportKwh - importKwh) * priceCt) / 100,
     });
   }
   return rows;
@@ -1406,14 +1409,15 @@ describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
     // 20 slots with varied profit so the LIMIT 10 + DESC sort are exercised.
     const dbQuery = async (sql, params) => {
       assert.ok(Array.isArray(params) && params.length >= 1, 'getTop10 MUST use parameterized SQL');
+      assert.match(sql, /energy_slots_15m/i, 'getTop10 SQL should query energy_slots_15m (Plan 09.4-B)');
       const rows = [];
       for (let i = 0; i < 20; i++) {
         rows.push({
-          slot_start: new Date(`${ANCHOR_DATE}T${String(i % 24).padStart(2, '0')}:00:00Z`).toISOString(),
-          grid_import_wh: 0,
-          grid_export_wh: 1000 + i * 50,
-          expected_profit_eur: (i * 0.07),  // ascending profit
+          ts: new Date(`${ANCHOR_DATE}T${String(i % 24).padStart(2, '0')}:00:00Z`).toISOString(),
+          import_kwh: 0,
+          export_kwh: 1.0 + i * 0.05,
           price_ct_kwh: 20 + i,
+          net_eur: (i * 0.07),  // ascending net
         });
       }
       return { rows };
@@ -1565,7 +1569,7 @@ describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
     const dbQuery = async (sql) => {
       if (/LIMIT\s+10/i.test(sql)) {
         top10Calls++;
-        return { rows: makePlanSlotRows({
+        return { rows: makeDispatchSlotRows({
           start: '2026-05-01T00:00:00Z', end: '2026-05-02T00:00:00Z',
         }) };
       }
@@ -1606,7 +1610,7 @@ describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
     // Simulate a missing-column failure (PG SQLSTATE 42703 — e.g. a column
     // rename drift). The builder MUST catch it, pushLog the underlying error,
     // and return a structured 500 envelope — never let the exception escape.
-    const queryError = new Error('column "expected_profit_eur" does not exist');
+    const queryError = new Error('column "value_num" does not exist');
     queryError.code = '42703';
     const throwingDbQuery = async () => { throw queryError; };
 
