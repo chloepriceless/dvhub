@@ -1,12 +1,20 @@
-/* Notification-Provider config editor (Phase 09.4-06).
+/* Notification-Provider config editor (Phase 09.4-06; gap-closure).
  *
- * Loads + saves the ntfy.sh + Uptime Kuma provider config via the dedicated
- * server-side-merge endpoint /api/integrations/notification-providers.
+ * Loads + saves the ntfy.sh provider AND the Uptime Kuma monitoring heartbeat
+ * via the dedicated server-side-merge endpoint
+ * /api/integrations/notification-providers.
+ *
+ * Gap-closure: the Uptime Kuma section edits the `monitoring` block
+ * (monitoring.pushUrl + monitoring.pushIntervalSec) — the SINGLE Kuma
+ * integration — pre-filled from the live config. The old duplicate
+ * notifications.providers.uptime-kuma provider was removed. The endpoint still
+ * exposes the Kuma fields under the 'uptime-kuma' JSON key for shape stability.
  *
  * CRITICAL — config-save hazard: this MUST NOT POST a partial config to
  * /api/config. saveAndApplyConfig REPLACES config.json verbatim; a partial-root
  * POST wipes apiToken/optimizer/mqtt and crash-loops the appliance. The
- * dedicated endpoint merges ONLY notifications.providers server-side.
+ * dedicated endpoint merges ONLY notifications.providers.ntfy + monitoring.*
+ * server-side.
  *
  * Secret handling — the GET emits '***' for a stored ntfy token / Kuma pushUrl.
  * The password fields are left EMPTY (with a "leer lassen = unverändert"
@@ -53,10 +61,14 @@
       // explains "leer lassen = unverändert").
       $('np-ntfy-token').value = (ntfy.token && ntfy.token !== '***') ? ntfy.token : '';
 
+      // Gap-closure: the Uptime Kuma section reflects the `monitoring` block.
+      // The GET returns it under the 'uptime-kuma' key for backward shape
+      // compatibility, with pushIntervalSec (NOT heartbeatIntervalSec) and an
+      // enabled flag derived from whether monitoring.pushUrl is set.
       $('np-kuma-enabled').checked = !!kuma.enabled;
       // Redacted pushUrl arrives as '***' — keep the field empty.
       $('np-kuma-pushUrl').value = (kuma.pushUrl && kuma.pushUrl !== '***') ? kuma.pushUrl : '';
-      $('np-kuma-hb').value = kuma.heartbeatIntervalSec || 60;
+      $('np-kuma-hb').value = kuma.pushIntervalSec || 240;
     } catch (e) {
       setStatus('Konfiguration konnte nicht geladen werden.', 'err');
     }
@@ -67,17 +79,19 @@
   function collect() {
     var token = $('np-ntfy-token').value;
     var pushUrl = $('np-kuma-pushUrl').value;
-    var hb = Number($('np-kuma-hb').value) || 60;
+    var hb = Number($('np-kuma-hb').value) || 240;
     return {
       ntfy: {
         enabled: $('np-ntfy-enabled').checked,
         topicUrl: $('np-ntfy-topicUrl').value.trim(),
         token: token ? token.trim() : '***'   // empty → '***' keep-existing sentinel
       },
+      // Gap-closure: the 'uptime-kuma' key maps to the `monitoring` block
+      // server-side. pushIntervalSec (not heartbeatIntervalSec) → monitoring.
       'uptime-kuma': {
         enabled: $('np-kuma-enabled').checked,
         pushUrl: pushUrl ? pushUrl.trim() : '***',  // empty → '***' keep-existing sentinel
-        heartbeatIntervalSec: hb
+        pushIntervalSec: hb
       }
     };
   }

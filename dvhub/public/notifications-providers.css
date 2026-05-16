@@ -1,0 +1,225 @@
+/* Notification-Provider editor page — Aurora chrome (Phase 09.4 gap-closure).
+   notifications-providers.html previously linked only dvhub-app.css (Aurora
+   design TOKENS + topbar/btn) but NONE of the page-level layout primitives
+   (.page-content / .page-header-card / .card / nav-toggle / .np-* editor
+   styles) — so it rendered unstyled. This file supplies that page chrome,
+   mirroring the pattern in integrations.css. theme.js owns the light/dark
+   cycle; this stylesheet must never touch localStorage['dvhub.theme'].
+   CSP-clean: linked stylesheet only, no inline styles anywhere. */
+
+/* [hidden] normalize — Wave-3 invariant #8 (adopted by index.css, settings.css). */
+[hidden] { display: none !important; }
+
+/* ===== Page layout shell (mirrors integrations.css) ===== */
+.page-content {
+  padding: 16px 24px;
+  max-width: min(900px, 100%);
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* ===== Page header card ===== */
+.page-header-card {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md, 10px);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-header-card-copy h1 {
+  font-family: var(--f-brand);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.page-header-card-copy .page-kicker {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-2);
+  margin: 0 0 4px;
+}
+.page-header-card-copy .page-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  margin: 4px 0 0;
+}
+
+/* ===== Card ===== */
+.card {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md, 10px);
+}
+
+/* ===== Aurora topbar nav-toggle (mirrored from integrations.css) ===== */
+.nav-toggle {
+  display: none;
+  appearance: none; cursor: pointer;
+  background: var(--glass); border: 1px solid var(--glass-brd);
+  width: 38px; height: 38px; border-radius: 8px;
+  flex-shrink: 0; padding: 0;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 3px;
+  transition: .15s;
+}
+.nav-toggle:hover { background: var(--glass-2); border-color: var(--glass-brd-strong); }
+.nav-toggle .nav-toggle-bar {
+  display: block; width: 18px; height: 2px; border-radius: 2px;
+  background: var(--text-2); transition: .2s;
+}
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { transform: translateY(5px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(3) { transform: translateY(-5px) rotate(-45deg); }
+
+@media (max-width: 760px) {
+  .nav-toggle { display: inline-flex; }
+  .topbar-nav {
+    position: fixed; top: 56px; left: 0; right: 0; z-index: 49;
+    display: flex; flex-direction: column; align-items: stretch;
+    flex: none;
+    background: var(--bg-1, #0a1226);
+    backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.2);
+    border-bottom: 1px solid var(--glass-brd, rgba(120,180,255,.14));
+    padding: 8px 14px 12px;
+    gap: 4px;
+    transform: translateY(-12px); opacity: 0; pointer-events: none;
+    transition: transform .2s ease, opacity .2s ease;
+    overflow-x: visible;
+  }
+  .topbar-nav.is-open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .topbar-nav a { padding: 10px 13px; }
+  .topbar-nav a.is-active::after { display: none; }
+}
+
+/* ===== Utility classes ===== */
+.u-text-muted { color: var(--text-2); }
+
+/* ===== Notification-Provider editor (#np-editor) ===== */
+#np-editor {
+  padding: 18px 20px 20px;
+}
+#np-editor > h2 {
+  font-family: var(--f-brand);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+#np-editor > p.u-text-muted {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+#np-editor code {
+  font-family: var(--f-mono);
+  font-size: 0.78rem;
+  background: var(--glass);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-sm, 6px);
+  padding: 1px 5px;
+  color: var(--text);
+}
+
+/* Each provider group is a glass fieldset */
+.np-group {
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md, 10px);
+  background: var(--glass);
+  padding: 14px 16px 16px;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.np-group legend {
+  font-family: var(--f-brand);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 6px;
+}
+
+/* Labels stack their caption above the control */
+.np-group label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+/* The "Aktiviert" checkbox label stays inline */
+.np-group label:has(> input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.np-group input[type="text"],
+.np-group input[type="password"],
+.np-group input[type="number"] {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-sm, 8px);
+  color: var(--text);
+  font-family: var(--f-body);
+  font-size: 0.85rem;
+  padding: 8px 10px;
+}
+.np-group input[type="text"]:focus,
+.np-group input[type="password"]:focus,
+.np-group input[type="number"]:focus {
+  outline: none;
+  border-color: var(--glass-brd-strong);
+  background: var(--glass);
+}
+.np-group input::placeholder { color: var(--text-2); opacity: 0.7; }
+.np-group input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.np-hint {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  margin: 2px 0 0;
+}
+
+.np-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.np-status { font-size: 0.8rem; color: var(--text-2); }
+.np-status.is-ok { color: var(--green, #45e0a0); }
+.np-status.is-err { color: var(--danger, #ff6b6b); }
+
+/* ===== Light theme refinements ===== */
+[data-theme="light"] .card,
+[data-theme="light"] .page-header-card,
+[data-theme="light"] .np-group {
+  background: var(--glass-2);
+  border-color: var(--glass-brd);
+}
+
+/* ===== Mobile responsive ===== */
+@media (max-width: 640px) {
+  .page-content { padding: 12px 14px; }
+  #np-editor { padding: 14px; }
+  .np-group { padding: 12px 12px 14px; }
+}
