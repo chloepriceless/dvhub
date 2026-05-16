@@ -117,6 +117,11 @@ function fmtHours(value) {
   return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
 }
 
+function fmtPct(value) {
+  if (!Number.isFinite(Number(value))) return '-';
+  return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -188,6 +193,23 @@ function renderKpis(summary) {
   setText('historyKpiConsBattery', fmtKwh(kpis?.batteryShareKwh));
   setText('historyKpiConsGrid', fmtKwh(kpis?.gridShareKwh));
   setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
+  // Energieverluste:
+  //  - Akku-Verlust = geladen − entladen (Round-Trip-Verlust des Akkus)
+  //  - Akku-Wirkungsgrad = entladen / geladen
+  //  - Gesamtverlust = (PV + Bezug) − (Verbrauch + Einspeisung) — die
+  //    Energie-Bilanz-Differenz: alles was rein ging und nicht als Nutz-
+  //    energie wieder raus kam (Akku-Round-Trip + Wechselrichter + Standby).
+  const batChargeKwh = Number(kpis?.batteryChargeKwh || 0);
+  const batDischargeKwh = Number(kpis?.batteryDischargeKwh || 0);
+  const batteryLoss = round2(batChargeKwh - batDischargeKwh);
+  const batteryEff = batChargeKwh > 0 ? round2((batDischargeKwh / batChargeKwh) * 100) : null;
+  const totalLoss = round2(
+    (Number(kpis?.pvKwh || 0) + Number(kpis?.importKwh || 0))
+    - (Number(kpis?.loadKwh || 0) + Number(kpis?.exportKwh || 0))
+  );
+  setText('historyKpiBatteryLoss', fmtKwh(batteryLoss));
+  setText('historyKpiBatteryEff', batteryEff != null ? fmtPct(batteryEff) : '-');
+  setText('historyKpiTotalLoss', fmtKwh(totalLoss));
   setText('historyKpiVbh', hasFiniteNumber(kpis?.pvFullLoadHours) ? fmtHours(kpis?.pvFullLoadHours) : '-');
   const cyclesEl = byId('historyKpiCycles');
   const cyclesLabelEl = byId('historyKpiCyclesLabel');
@@ -1149,32 +1171,6 @@ function renderCombinedPeriodBars(mountId, items) {
   bindBarChartPointer(mount, mountId, items, () => renderCombinedPeriodBars(mountId, items));
 }
 
-function renderSolarSummary(mountId, summary) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  const solar = summary?.meta?.solarMarketValue;
-  if (!solar) {
-    mount.innerHTML = '<div class="history-chart-empty">Kein Marktwert Solar für diesen Zeitraum verfügbar.</div>';
-    return;
-  }
-  mount.innerHTML = `
-    <div class="history-solar-summary">
-      <div class="history-solar-summary-card">
-        <strong>Jahres-Marktwert Solar</strong>
-        <span>${fmtCt(solar.annualCtKwh)}</span>
-      </div>
-      <div class="history-solar-summary-card">
-        <strong>Ausgleich auf Einspeisung</strong>
-        <span>${fmtEur(summary?.kpis?.solarCompensationEur)}</span>
-      </div>
-      <div class="history-solar-summary-card">
-        <strong>Status</strong>
-        <span>${solar.source === 'official_annual' ? 'offiziell' : 'vorlaeufig berechnet'}</span>
-      </div>
-    </div>
-  `;
-}
-
 function renderPriceList(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -1677,10 +1673,10 @@ function renderCharts(summary) {
   setHtml('historyPriceChart', '');
   setHtml('historyPriceList', '');
   renderAggregatePriceHint('historyAggregatePriceHint');
-  if (view === 'year') {
-    renderSolarSummary('historySolarSummary', summary);
-    return;
-  }
+  // Plan 09.4 — the three Solar-Marktwert cards under the year table
+  // (Jahres-Marktwert Solar / Ausgleich auf Einspeisung / Status) were
+  // removed: the market value + premium already live in the
+  // Direktvermarktung card, so the cards were a duplicate.
   setHtml('historySolarSummary', '');
 }
 
