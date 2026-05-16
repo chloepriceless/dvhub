@@ -224,7 +224,7 @@ function renderKpis(summary) {
   // apply for the current view just show '-' per the existing pattern.
   const view = String(summary?.view || '');
   const premiumVisible = view === 'week' || view === 'month' || view === 'year';
-  const dvVisible = (view === 'month' || view === 'year')
+  const dvVisible = (view === 'week' || view === 'month' || view === 'year')
     && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
   const cardVisible = premiumVisible || dvVisible;
 
@@ -320,7 +320,8 @@ function renderKpis(summary) {
       dvNetEl.style.color = (kpis.dvNetAdvantageEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
     }
   } else {
-    // Reset DV-only columns to placeholders on week view
+    // Reset DV-only columns to placeholders when DV data is unavailable
+    // (premium columns shown, but no dvRevenue/hypFeedIn for this period)
     for (const id of ['historyKpiDvRevenue', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
                        'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
       setText(id, '-');

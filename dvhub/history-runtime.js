@@ -1519,8 +1519,9 @@ export function createHistoryRuntime({
       hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null
     }));
 
-    // DV comparison KPIs: only for month and year views, null otherwise
-    if (view === 'month' || view === 'year') {
+    // DV comparison KPIs: week, month and year views (data exists from the
+    // week view onward); null for day / all.
+    if (view === 'week' || view === 'month' || view === 'year') {
       const hypFullFeedInEur = kpis.hypFullFeedInCtTotal != null
         ? round2(kpis.hypFullFeedInCtTotal / 100)
         : null;
@@ -1537,6 +1538,23 @@ export function createHistoryRuntime({
       if (Number.isFinite(dvCostMonthlyEurVal)) {
         if (view === 'month') {
           dvCostEur = round2(dvCostMonthlyEurVal);
+        } else if (view === 'week') {
+          // The DV provider fee is billed monthly — for the week view we
+          // prorate it per day: daily rate = monthly fee / days in that
+          // day's month, summed over the week's days up to (and including)
+          // today. A fully elapsed week → 7 daily rates; the current week
+          // → only the days already elapsed; a cross-month week uses each
+          // day's own month length.
+          const today = currentBerlinDate();
+          let cost = 0;
+          let cursor = range.startDate;
+          while (cursor < range.endDateExclusive && cursor <= today) {
+            const p = parseDateOnly(cursor);
+            const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate();
+            cost += dvCostMonthlyEurVal / daysInMonth;
+            cursor = addDays(cursor, 1);
+          }
+          dvCostEur = round2(cost);
         } else {
           // Year view: count distinct months with export > 0
           const activeMonthSet = new Set(
