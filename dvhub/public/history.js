@@ -534,6 +534,7 @@ function buildAggregateRow(label, rows) {
 function aggregateSummaryLabel(view) {
   if (view === 'month') return 'Gesamt Monat';
   if (view === 'year') return 'Gesamt Jahr';
+  if (view === 'all') return 'Gesamt';
   return 'Gesamt Woche';
 }
 
@@ -567,7 +568,7 @@ function buildAggregateDisplayRows(summary) {
   const view = String(summary?.view || '');
   const rows = Array.isArray(summary?.rows) ? summary.rows.slice() : [];
   if (!rows.length) return [];
-  if (view === 'week' || view === 'year') {
+  if (view === 'week' || view === 'year' || view === 'all') {
     return rows.map((row) => ({
       ...row,
       label: row.label || row.key || '-'
@@ -686,7 +687,7 @@ function renderAggregateBreakdownTable(summary) {
   if (!rows.length) {
     return '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
   }
-  const includeSummary = view === 'month' || view === 'year';
+  const includeSummary = view === 'month' || view === 'year' || view === 'all';
   const summaryRow = buildAggregateSummaryRow(summary);
   const displayRows = includeSummary ? [summaryRow, ...rows] : rows;
 

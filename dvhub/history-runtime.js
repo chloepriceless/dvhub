@@ -2,7 +2,7 @@ import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
-const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year']);
+const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year', 'all']);
 const SLOT_BUCKET_SECONDS = 900;
 const AGGREGATE_SUM_FIELDS = [
   'importKwh',
@@ -171,6 +171,11 @@ function localMonthString(value, timeZone = BERLIN_TIME_ZONE) {
   return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}`;
 }
 
+function localYearString(value, timeZone = BERLIN_TIME_ZONE) {
+  const parts = getLocalParts(new Date(value), timeZone);
+  return String(parts.year).padStart(4, '0');
+}
+
 function localTimeLabel(value, timeZone = BERLIN_TIME_ZONE) {
   const parts = getLocalParts(new Date(value), timeZone);
   return `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
@@ -209,6 +214,17 @@ function normalizeViewRange(view, date) {
       ? `${parts.year + 1}-01-01`
       : `${String(parts.year).padStart(4, '0')}-${String(parts.month + 1).padStart(2, '0')}-01`;
     return { startDate, endDateExclusive: nextMonth };
+  }
+  if (view === 'all') {
+    // "Alle" — the whole history. Buckets are per calendar year (years are to
+    // 'all' what months are to 'year'). The window floors at a fixed early
+    // bound (no DVhub appliance data predates 2015) and ends at the start of
+    // next year, so it always covers the full history regardless of the
+    // anchor date. summarizeRows groups by year, so only years that actually
+    // carry data produce a row — empty floor years never appear.
+    const nowYear = parseDateOnly(currentBerlinDate())?.year
+      ?? parseDateOnly(date)?.year;
+    return { startDate: '2015-01-01', endDateExclusive: `${nowYear + 1}-01-01` };
   }
   const startDate = startOfYear(date);
   const parts = parseDateOnly(startDate);
@@ -316,6 +332,10 @@ function summarizeRows(slots, view) {
     }
     if (view === 'year') {
       key = localMonthString(slot.ts);
+      label = key;
+    }
+    if (view === 'all') {
+      key = localYearString(slot.ts);
       label = key;
     }
     const row = groups.get(key) || buildRowAccumulator(key, label);
@@ -1003,7 +1023,7 @@ function getCurrentDateValue(value) {
 }
 
 function buildSummarySeries(view, slots) {
-  if (view === 'year') {
+  if (view === 'year' || view === 'all') {
     return {
       financial: [],
       energy: [],
@@ -1651,7 +1671,7 @@ export function createHistoryRuntime({
       series: buildSummarySeries(view, slots),
       charts,
       rows,
-      slots: view === 'year' ? [] : slots,
+      slots: (view === 'year' || view === 'all') ? [] : slots,
       meta: {
         ...periodPremiumApplied.meta,
         sourceSummary
@@ -1680,7 +1700,7 @@ export function createHistoryApiHandlers({
       const view = String(query.view || 'day');
       const date = String(query.date || '');
       if (!SUPPORTED_VIEWS.has(view)) {
-        return { status: 400, body: { ok: false, error: 'view must be one of day, week, month, year' } };
+        return { status: 400, body: { ok: false, error: 'view must be one of day, week, month, year, all' } };
       }
       if (!isDateOnly(date)) {
         return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
@@ -1710,7 +1730,7 @@ export function createHistoryApiHandlers({
       const view = String(query.view || 'day');
       const date = String(query.date || '');
       if (!SUPPORTED_VIEWS.has(view)) {
-        return { status: 400, body: { ok: false, error: 'view must be one of day, week, month, year' } };
+        return { status: 400, body: { ok: false, error: 'view must be one of day, week, month, year, all' } };
       }
       if (!isDateOnly(date)) {
         return { status: 400, body: { ok: false, error: 'date must use YYYY-MM-DD' } };
