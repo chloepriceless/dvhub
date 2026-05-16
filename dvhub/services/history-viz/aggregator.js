@@ -13,7 +13,7 @@
 // The cache, validation, envelope, and dispatch have been LIVE since Wave 1.
 //
 // Validation contract (V5 / T-09.3-01):
-//   view ∈ {'day','week','month','year'}
+//   view ∈ {'day','week','month','year','all'}
 //   date matches /^\d{4}-\d{2}-\d{2}$/
 //   invalid → { status: 400, body: { ok:false, error:'invalid view'|'invalid date' } }
 //   400s NEVER hit the cache (Pitfall §cache-poisoning + Test 7).
@@ -40,7 +40,7 @@ export function createHistoryVizAggregator(ctx) {
 
   const CACHE_TTL_MS = 5 * 60 * 1000;
   const CACHE_CAP = 200;
-  const VALID_VIEWS = new Set(['day', 'week', 'month', 'year']);
+  const VALID_VIEWS = new Set(['day', 'week', 'month', 'year', 'all']);
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   // Map preserves insertion order — that gives us FIFO eviction without a
@@ -122,6 +122,15 @@ export function createHistoryVizAggregator(ctx) {
       // 11 calendar months before the anchor month + the anchor month itself = 12 months
       start = new Date(Date.UTC(y, m - 11, 1));
       end = new Date(Date.UTC(y, m + 1, 1));
+    } else if (view === 'all') {
+      // "Alle" — full history. Buckets are per calendar year (years are to
+      // 'all' what months are to 'year'). Floor at a fixed early bound (no
+      // appliance data predates 2015), end at the start of next year. The
+      // SQL builders GROUP BY, and getStack derives the year set from the
+      // fetched rows — so the empty floor years never surface as buckets.
+      const y = anchor.getUTCFullYear();
+      start = new Date(Date.UTC(2015, 0, 1));
+      end = new Date(Date.UTC(y + 1, 0, 1));
     } else {
       start = anchor;
       end = new Date(anchor.getTime() + DAY_MS);
@@ -256,7 +265,7 @@ export function createHistoryVizAggregator(ctx) {
   //   year  → 1 day       (downstream buckets into 12 months)
   function bucketIntervalForView(view) {
     if (view === 'day') return '15 minutes';
-    if (view === 'year') return '1 day';
+    if (view === 'year' || view === 'all') return '1 day';
     return '1 hour'; // week + month
   }
 
@@ -646,12 +655,45 @@ export function createHistoryVizAggregator(ctx) {
       // per-bucket min of those two energy arrays. min(pvBucketKwh,
       // loadBucketKwh) is the share of PV that the load could consume directly
       // within that bucket — the PV-self-consumption proxy.
-      const pvKwh = bucketSeriesKwh(rows, 'pv_total_w', view, start);
-      const batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
-      const gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
-      const loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
+      let pvKwh;
+      let batteryDischargeKwh;
+      let gridImportKwh;
+      let loadKwh;
+      let bucketLabels;
+      if (view === 'all') {
+        // "Alle" — one bucket per calendar year. The year set is derived
+        // from the fetched rows so empty floor years never appear (years
+        // are to 'all' what months are to 'year').
+        const years = [...new Set(rows.map((r) => new Date(r.ts).getUTCFullYear()))]
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b);
+        const idxOf = new Map(years.map((y, i) => [y, i]));
+        const sumByYear = (k) => {
+          const out = new Array(years.length).fill(0);
+          for (const r of rows) {
+            if (r.key !== k) continue;
+            const w = Number(r.value);
+            const dt = Number(r.resolution || 0);
+            if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+            const i = idxOf.get(new Date(r.ts).getUTCFullYear());
+            if (i == null) continue;
+            out[i] += (w * dt) / 3_600_000;
+          }
+          return out.map(round3);
+        };
+        pvKwh = sumByYear('pv_total_w');
+        batteryDischargeKwh = sumByYear('battery_discharge_w');
+        gridImportKwh = sumByYear('grid_import_w');
+        loadKwh = sumByYear('load_power_w');
+        bucketLabels = years.map(String);
+      } else {
+        pvKwh = bucketSeriesKwh(rows, 'pv_total_w', view, start);
+        batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
+        gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
+        loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
+        bucketLabels = bucketLabelsForView(view, start);
+      }
       const pvDirectKwh = pvKwh.map((pvB, i) => round3(Math.min(pvB, loadKwh[i] || 0)));
-      const bucketLabels = bucketLabelsForView(view, start);
       const buckets = bucketLabels.length;
       const payload = {
         ok: true,
@@ -678,7 +720,7 @@ export function createHistoryVizAggregator(ctx) {
   async function getHeatmap({ view, date, granularity } = {}) {
     const bad = validate({ view, date });
     if (bad) return bad;
-    if (view === 'day') {
+    if (view === 'day' || view === 'all') {
       return { status: 400, body: { ok: false, error: 'view not supported (heatmap is week|month|year only)' }, cached: false };
     }
     // Round-2 — optional value-axis granularity. '1h' (default) keeps the
@@ -1515,7 +1557,7 @@ export function createHistoryVizAggregator(ctx) {
   async function getSpaghetti({ view, date } = {}) {
     const bad = validate({ view, date });
     if (bad) return bad;
-    if (view === 'day') {
+    if (view === 'day' || view === 'all') {
       return { status: 400, body: { ok: false, error: 'view not supported (spaghetti is week|month|year only)' }, cached: false };
     }
     const key = `spaghetti:${view}:${date}`;
