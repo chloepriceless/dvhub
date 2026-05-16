@@ -74,6 +74,83 @@ describe('family routes file integration (static checks)', () => {
   });
 });
 
+// --- Plan 11-03: per-tile icon/color allowlist (D-01/D-03) ---------------
+// The POST /api/family/mqtt-tiles normaliser must accept + allowlist-clip a
+// per-tile `icon` (28-emoji curated grid) and `color` (8-hex swatch palette).
+// Keys are ADDITIVE OPTIONAL — written only when present AND on-allowlist, so
+// an unset/off-allowlist value leaves the key absent and the client
+// auto-derives (D-02/D-04). See 11-UI-SPEC.md for the fixed value sets.
+
+describe('mqtt-tiles POST normaliser — icon/color allowlists (D-01/D-03)', () => {
+  const ICONS = [
+    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
+    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
+    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
+    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾',
+  ];
+  const COLORS = [
+    '#F7B731', '#26de81', '#4b7bec', '#22d3ee',
+    '#a55eea', '#fd9644', '#ff6b6b', '#78909c',
+  ];
+
+  it('declares FAMILY_TILE_ICON_ALLOWLIST (declaration + use)', () => {
+    const src = readFile(ROUTES_API_PATH);
+    const count = (src.match(/FAMILY_TILE_ICON_ALLOWLIST/g) || []).length;
+    assert.ok(count >= 2, `FAMILY_TILE_ICON_ALLOWLIST must appear >=2 times (got ${count})`);
+  });
+
+  it('declares FAMILY_TILE_COLOR_ALLOWLIST (declaration + use)', () => {
+    const src = readFile(ROUTES_API_PATH);
+    const count = (src.match(/FAMILY_TILE_COLOR_ALLOWLIST/g) || []).length;
+    assert.ok(count >= 2, `FAMILY_TILE_COLOR_ALLOWLIST must appear >=2 times (got ${count})`);
+  });
+
+  it('contains all 28 curated emoji from 11-UI-SPEC', () => {
+    const src = readFile(ROUTES_API_PATH);
+    for (const ic of ICONS) {
+      assert.ok(src.includes(ic), `routes-api.js must contain icon ${ic}`);
+    }
+  });
+
+  it('contains all 8 curated colour hexes from 11-UI-SPEC (case-exact)', () => {
+    const src = readFile(ROUTES_API_PATH);
+    for (const col of COLORS) {
+      assert.ok(src.includes(col), `routes-api.js must contain colour ${col}`);
+    }
+  });
+
+  it('assigns tile.icon only when guarded by an ICON_ALLOWLIST membership check', () => {
+    const src = readFile(ROUTES_API_PATH);
+    // The additive idiom: `if (icon && FAMILY_TILE_ICON_ALLOWLIST.has(icon)) tile.icon = icon;`
+    assert.match(
+      src,
+      /if\s*\(\s*icon\s*&&\s*FAMILY_TILE_ICON_ALLOWLIST\.has\(icon\)\s*\)\s*tile\.icon\s*=\s*icon/,
+      'tile.icon must be conditionally assigned behind an allowlist .has() guard',
+    );
+  });
+
+  it('assigns tile.color only when guarded by a COLOR_ALLOWLIST membership check', () => {
+    const src = readFile(ROUTES_API_PATH);
+    assert.match(
+      src,
+      /if\s*\(\s*color\s*&&\s*FAMILY_TILE_COLOR_ALLOWLIST\.has\(color\)\s*\)\s*tile\.color\s*=\s*color/,
+      'tile.color must be conditionally assigned behind an allowlist .has() guard',
+    );
+  });
+
+  it('does NOT introduce a partial POST /api/config in the mqtt-tiles handler', () => {
+    const src = readFile(ROUTES_API_PATH);
+    // The mqtt-tiles POST handler section must persist via saveAndApplyConfig,
+    // not via a /api/config POST. Slice the handler region and assert.
+    const start = src.indexOf("'/api/family/mqtt-tiles' && req.method === 'POST'");
+    assert.ok(start > 0, 'mqtt-tiles POST handler must exist');
+    const region = src.slice(start, start + 2000);
+    assert.ok(!/url\.pathname\s*===\s*['"]\/api\/config['"]/.test(region),
+      'mqtt-tiles handler must not POST to /api/config');
+    assert.match(region, /saveAndApplyConfig/, 'must persist via saveAndApplyConfig');
+  });
+});
+
 describe('family service wiring in server.js', () => {
   it('imports createFamilyService from services/family', () => {
     const src = readFile(SERVER_PATH);
