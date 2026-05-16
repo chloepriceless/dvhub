@@ -106,6 +106,7 @@ import { createMqttHub } from './services/mqtt/index.js';
 import { createMqttPublisher } from './services/mqtt/publisher.js';
 import { publishHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
 import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
+import { createFamilyMqttTiles } from './services/mqtt/family-tiles.js';
 import { createDeviceService } from './services/devices/index.js';
 import { createNotificationService } from './services/notifications/index.js';
 import { createMlService } from './services/ml/index.js';
@@ -875,6 +876,8 @@ const mqttPublisher = createMqttPublisher(mqttHub, ctx);
 ctx.mqttPublisher = mqttPublisher;
 const teslamateService = createTeslamateSubscriber(mqttHub, ctx);
 ctx.teslamateService = teslamateService;
+const familyMqttTiles = createFamilyMqttTiles(mqttHub, ctx);
+ctx.familyMqttTiles = familyMqttTiles;
 const deviceService = createDeviceService(ctx, mqttHub);
 ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
@@ -1211,6 +1214,7 @@ if (IS_RUNTIME_PROCESS) {
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
     teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
+    familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
     try {
       publishHaDiscoveryTopics(mqttHub, ctx.getCfg);
     } catch (err) {
@@ -1401,6 +1405,7 @@ async function gracefulShutdown(signal) {
     safeAsync('notificationService.close', () => notificationService.close()),
     safeAsync('deviceService.close', () => deviceService.close()),
     safeAsync('teslamateService.close', () => teslamateService.close()),
+    safeAsync('familyMqttTiles.close', () => familyMqttTiles.close()),
     safeAsync('mqttPublisher.close', () => mqttPublisher.close()),
     safeAsync('mqttHub.close', () => mqttHub.close()),
     // Close Modbus TCP connections gracefully (FIN, not RST)

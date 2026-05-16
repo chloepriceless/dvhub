@@ -272,6 +272,66 @@ export function createFamilyService(ctx) {
   }
 
   /**
+   * MQTT tiles section. Operator-configured generic MQTT topics (Wallbox,
+   * any other consumer, a sensor reading) — each { id, label, topic, unit,
+   * value, online, lastSeen }. Empty array when the service is unavailable
+   * or no tiles are configured. The Family Dashboard renders one card per
+   * tile that has a value.
+   */
+  function deriveMqttTilesSection() {
+    const svc = ctx.familyMqttTiles;
+    if (!svc || typeof svc.getTiles !== 'function') return [];
+    try {
+      return svc.getTiles();
+    } catch (err) {
+      pushLog?.('family_mqtt_tiles_error', { error: err.message });
+      return [];
+    }
+  }
+
+  /**
+   * Tesla section. Surfaces the full TeslaMate snapshot (range, battery,
+   * charging, climate, location) for the Family Dashboard. Returns
+   * { enabled: false } when the integration is disabled or the subscriber
+   * is unavailable (D-22 null-safe).
+   */
+  function deriveTeslaSection() {
+    const teslaCfg = (getCfg?.() || {}).integrations?.tesla || {};
+    if (!teslaCfg.enabled) return { enabled: false };
+    const svc = ctx.teslamateService;
+    if (!svc || typeof svc.getState !== 'function') return { enabled: false };
+
+    let s;
+    try {
+      s = svc.getState();
+    } catch (err) {
+      pushLog?.('family_tesla_error', { error: err.message });
+      return { enabled: false };
+    }
+
+    const lastUpdateAt = svc.lastUpdateAt
+      ? new Date(svc.lastUpdateAt).getTime()
+      : null;
+
+    return {
+      enabled: true,
+      name: s.displayName || teslaCfg.name || 'Tesla',
+      state: s.state || null,                       // asleep|online|offline|charging|driving
+      batteryLevel: s.batteryLevel ?? null,         // %
+      usableBatteryLevel: s.usableBatteryLevel ?? null,
+      rangeKm: s.estRangeKm ?? null,                // estimated range
+      ratedRangeKm: s.ratedRangeKm ?? null,
+      chargingState: s.chargingState || null,       // Charging|Complete|Disconnected|...
+      pluggedIn: s.pluggedIn ?? null,
+      chargeLimitSoc: s.chargeLimitSoc ?? null,
+      chargerPowerKw: s.chargerPower ?? null,
+      insideTempC: s.insideTemp ?? null,
+      geofence: s.geofence || null,
+      lastUpdateAt
+    };
+  }
+
+  /**
    * Forecast section. Reshapes forecastService response into dashboard-friendly
    * today/tomorrow/next48h aggregates. Returns null if service unavailable (D-22).
    */
@@ -524,6 +584,8 @@ export function createFamilyService(ctx) {
     const battery = deriveBatterySection(victron, cfg);
     const ev = deriveEvSection(victron, cfg);
     const devices = deriveDevicesSection();
+    const mqttTiles = deriveMqttTilesSection();
+    const tesla = deriveTeslaSection();
     const forecast = deriveForecastSection(forecastResponse);
     const price = derivePriceSection(epexNN, epexState, costs);
     const optimizer = deriveOptimizerSection(optimizerStatus);
@@ -556,6 +618,8 @@ export function createFamilyService(ctx) {
       battery,
       ev,
       devices,
+      mqttTiles,
+      tesla,
       forecast,
       today,
       price,
