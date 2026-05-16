@@ -465,7 +465,7 @@
 .mte-table-head,
 .mte-row {
   display: grid;
-  grid-template-columns: 1.4fr 1.8fr 1.1fr 0.7fr 32px;
+  grid-template-columns: 1.4fr 1.8fr 1.1fr 0.7fr 44px 36px 32px;
   gap: 8px;
   align-items: center;
 }
@@ -524,6 +524,86 @@
 .mte-status { font-size: 0.8rem; color: var(--text-2); }
 .mte-status.is-ok { color: var(--green, #45e0a0); }
 .mte-status.is-err { color: var(--danger, #ff6b6b); }
+
+/* ===== MQTT-tiles editor: Symbol (emoji) + Farbe (swatch) pickers =====
+   Phase 11-04 (D-01/D-03). CSP-clean: visibility is class-toggle (.is-open),
+   never a JS style.display write; per-element swatch fill is set via
+   element.style.background in integrations.js, never as a style= attribute. */
+
+/* The per-row picker cell — relatively positioned so the grid popover
+   anchors to it without reflowing the row. */
+.mte-symbol-cell,
+.mte-color-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Trigger buttons — open the grid popover. */
+.mte-emoji-trigger,
+.mte-color-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-sm, 8px);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color .15s, background .15s;
+}
+.mte-emoji-trigger { width: 40px; height: 40px; font-size: 20px; line-height: 1; }
+.mte-color-trigger { width: 32px; height: 32px; }
+.mte-emoji-trigger:hover,
+.mte-color-trigger:hover { border-color: var(--glass-brd-strong); background: var(--glass-2); }
+.mte-emoji-trigger:focus,
+.mte-color-trigger:focus { outline: none; border-color: var(--accent); }
+/* The colour trigger shows a filled circle (its fill set in JS). */
+.mte-color-trigger { border-radius: 50%; }
+/* An unpicked (auto) trigger reads at reduced emphasis. */
+.mte-emoji-trigger.is-auto,
+.mte-color-trigger.is-auto { opacity: 0.62; }
+
+/* Grid popovers — hidden by default, shown by the .is-open class. */
+.emoji-grid,
+.swatch-grid {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  background: var(--glass-2, var(--glass));
+  border: 1px solid var(--glass-brd-strong, var(--glass-brd));
+  border-radius: var(--r-sm, 8px);
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.emoji-grid.is-open { display: grid; grid-template-columns: repeat(7, 40px); gap: 8px; }
+.swatch-grid.is-open { display: grid; grid-template-columns: repeat(4, 32px); gap: 8px; }
+
+/* Grid cells. */
+.emoji-cell,
+.swatch-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-sm, 8px);
+  cursor: pointer;
+  padding: 0;
+}
+.emoji-cell { width: 40px; height: 40px; font-size: 20px; line-height: 1; }
+.swatch-cell { width: 32px; height: 32px; border-radius: 50%; }
+.emoji-cell:hover,
+.swatch-cell:hover { border-color: var(--glass-brd-strong); }
+.emoji-cell:focus,
+.swatch-cell:focus { outline: none; }
+/* Selected cell — 2px accent ring (box-shadow, never an inline style). */
+.emoji-cell.is-selected,
+.swatch-cell.is-selected { box-shadow: 0 0 0 2px var(--accent); }
 
 /* ===== MQTT Inspector drawer (Phase 09.4 D-03/D-04) ===== */
 /* Slide-over panel anchored to the right edge. Visibility is driven entirely
@@ -700,12 +780,15 @@
     grid-template-areas:
       "label label del"
       "topic topic topic"
-      "field unit unit";
+      "field unit unit"
+      "symbol color color";
     gap: 6px;
   }
   .mte-row .mte-in[data-k="label"] { grid-area: label; }
   .mte-row .mte-in[data-k="topic"] { grid-area: topic; }
   .mte-row .mte-in[data-k="field"] { grid-area: field; }
   .mte-row .mte-in[data-k="unit"]  { grid-area: unit; }
+  .mte-row .mte-symbol-cell { grid-area: symbol; }
+  .mte-row .mte-color-cell  { grid-area: color; }
   .mte-row .mte-del { grid-area: del; }
 }
