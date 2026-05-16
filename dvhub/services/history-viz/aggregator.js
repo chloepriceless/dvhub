@@ -134,6 +134,23 @@ export function createHistoryVizAggregator(ctx) {
     return Math.round(n * 1000) / 1000;
   }
 
+  // ISO-8601 week number + ISO week-year for a Date (UTC). Week 1 is the week
+  // containing the first Thursday; weeks start on Monday. The week-year can
+  // differ from the calendar year for the first/last days of a year — we
+  // return both so the spaghetti grouping key never collides across years.
+  function isoWeek(date) {
+    // Copy at UTC midnight so getUTCDay is stable.
+    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    // ISO day-of-week: Mon=1..Sun=7.
+    const dayNum = d.getUTCDay() === 0 ? 7 : d.getUTCDay();
+    // Shift to the Thursday of this week — its calendar year is the ISO year.
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const year = d.getUTCFullYear();
+    const yearStart = Date.UTC(year, 0, 1);
+    const week = Math.ceil(((d.getTime() - yearStart) / 86_400_000 + 1) / 7);
+    return { year, week };
+  }
+
   // Sum (W × Δt_seconds / 3600 / 1000) → kWh across all rows matching `key`.
   // Treats gaps as zero (no row → no energy contribution); uses each row's
   // `resolution` field as Δt (capped at 900s by querySeries). Mirrors the
@@ -248,8 +265,12 @@ export function createHistoryVizAggregator(ctx) {
   // `value × resolution / 3_600_000` stays the exact integrated bucket kWh.
   // Ratio/percentage series (e.g. battery_soc_pct) must use the plain
   // per-bucket mean — pass `meanSeries` so those rows carry value_avg in value.
-  async function fetchBucketed({ seriesKeys, start, end, view, meanSeries = [] }) {
-    const bucketInterval = bucketIntervalForView(view);
+  async function fetchBucketed({ seriesKeys, start, end, view, meanSeries = [], intervalOverride = null }) {
+    // intervalOverride lets a builder request a finer SQL bucket than the
+    // view default (e.g. the heatmap 15-min granularity option on week/month,
+    // where the view default is '1 hour'). Must be an allow-listed literal —
+    // queryBucketedSeries rejects anything else.
+    const bucketInterval = intervalOverride || bucketIntervalForView(view);
     const rows = await telemetryStore.queryBucketedSeries({
       seriesKeys, start, end, bucketInterval,
     });
@@ -260,6 +281,90 @@ export function createHistoryVizAggregator(ctx) {
         ? { ...r, value: (r.value_avg == null ? r.value : r.value_avg) }
         : r
     ));
+  }
+
+  // -------------------------------------------------------------------------
+  // Plan 09.3 round-2 — per-bucket energy-flow decomposition.
+  //
+  // The Sankey / Autarky-day builders must conserve energy: with a grid-
+  // arbitrage battery `batteryCharge + gridExport` can exceed `pv` over a
+  // PERIOD total, so the old period-level `pvToEigen = pv − export − charge`
+  // clamps to 0 and the PV-out flows overshoot total PV. The fix decomposes
+  // each TIME BUCKET independently (where conservation holds by construction)
+  // then sums. Returns 7 accumulated flows + per-bucket-derived totals.
+  //
+  // `rows` is the fetchBucketed output for the 6 energy series; this groups
+  // them by bucket ts, integrates W×Δt → kWh per bucket, and runs the
+  // priority decomposition (PV → load, then PV → battery, then PV → export;
+  // battery → load, then battery → export; grid covers the rest).
+  function decomposeEnergyFlows(rows) {
+    // bucket ts → { pv, load, gridImport, gridExport, batteryCharge, batteryDischarge } in kWh
+    const buckets = new Map();
+    const KEY_FIELD = {
+      pv_total_w: 'pv',
+      load_power_w: 'load',
+      grid_import_w: 'gridImport',
+      grid_export_w: 'gridExport',
+      battery_charge_w: 'batteryCharge',
+      battery_discharge_w: 'batteryDischarge',
+    };
+    for (const r of rows) {
+      const field = KEY_FIELD[r.key];
+      if (!field) continue;
+      const w = Number(r.value);
+      const dt = Number(r.resolution || 0);
+      if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+      let b = buckets.get(r.ts);
+      if (!b) {
+        b = { pv: 0, load: 0, gridImport: 0, gridExport: 0, batteryCharge: 0, batteryDischarge: 0 };
+        buckets.set(r.ts, b);
+      }
+      b[field] += (w * dt) / 3_600_000;
+    }
+    let pvToLoad = 0;
+    let pvToBattery = 0;
+    let pvToExport = 0;
+    let gridToBattery = 0;
+    let batteryToLoad = 0;
+    let batteryToExport = 0;
+    let gridToLoad = 0;
+    let totalPv = 0;
+    let totalLoad = 0;
+    for (const b of buckets.values()) {
+      const { pv, load, batteryCharge, batteryDischarge } = b;
+      totalPv += pv;
+      totalLoad += load;
+      const pvL = Math.min(pv, load);
+      const loadRem1 = load - pvL;
+      const pvRem1 = pv - pvL;
+      const pvB = Math.min(pvRem1, batteryCharge);
+      const pvE = pvRem1 - pvB;
+      const gridB = batteryCharge - pvB;
+      const battL = Math.min(batteryDischarge, loadRem1);
+      const loadRem2 = loadRem1 - battL;
+      const battE = batteryDischarge - battL;
+      const gridL = loadRem2;
+      pvToLoad += pvL;
+      pvToBattery += pvB;
+      pvToExport += pvE;
+      gridToBattery += gridB;
+      batteryToLoad += battL;
+      batteryToExport += battE;
+      gridToLoad += gridL;
+    }
+    // Guard tiny negatives from floating-point rounding.
+    const clamp0 = (n) => (n > 0 ? n : 0);
+    return {
+      pvToLoad: clamp0(pvToLoad),
+      pvToBattery: clamp0(pvToBattery),
+      pvToExport: clamp0(pvToExport),
+      gridToBattery: clamp0(gridToBattery),
+      batteryToLoad: clamp0(batteryToLoad),
+      batteryToExport: clamp0(batteryToExport),
+      gridToLoad: clamp0(gridToLoad),
+      totalPv: clamp0(totalPv),
+      totalLoad: clamp0(totalLoad),
+    };
   }
 
   // German short labels per view (matches mockup expectations from D-15).
@@ -365,25 +470,30 @@ export function createHistoryVizAggregator(ctx) {
         ],
         start, end, view,
       });
-      const pvKwh = sumSeriesKwh(rows, 'pv_total_w');
-      const gridImportKwh = sumSeriesKwh(rows, 'grid_import_w');
-      const gridExportKwh = sumSeriesKwh(rows, 'grid_export_w');
-      const batteryChargeKwh = sumSeriesKwh(rows, 'battery_charge_w');
-      const batteryDischargeKwh = sumSeriesKwh(rows, 'battery_discharge_w');
-      // PV-direct = pv generation that didn't go to grid-export or battery-charge
-      // → that's the share of PV consumed by the load directly.
-      const pvToEigen = Math.max(0, pvKwh - gridExportKwh - batteryChargeKwh);
-      const eigenverbrauchKwh = pvToEigen + batteryDischargeKwh + gridImportKwh;
-      // Conservation: build flows so that
-      //   sum(from PV) = pvToEigen + batteryChargeKwh + gridExportKwh = pvKwh (by construction)
-      //   sum(to Eigenverbrauch) = pvToEigen + batteryDischargeKwh + gridImportKwh = eigenverbrauchKwh
+      // Round-2 fix — decompose energy flows PER TIME BUCKET, then sum. This
+      // conserves by construction: for a grid-arbitrage battery the period
+      // totals `batteryCharge + gridExport` can exceed `pv`, so the old
+      // period-level `pvToEigen = pv − export − charge` clamps to 0 and the
+      // PV-out flows overshoot total PV. Per-bucket decomposition cannot
+      // overshoot — within a bucket PV-out = pv, into-load = load, etc.
+      // The 'grid' flows here are DERIVED (charge − pvCharge, load remainder),
+      // independent of the meter's grid_import/grid_export — that is correct:
+      // the meter is its own measurement, the Sankey must self-conserve.
+      const f = decomposeEnergyFlows(rows);
+      const pvKwh = f.totalPv;
+      const eigenverbrauchKwh = f.pvToLoad + f.batteryToLoad + f.gridToLoad;
+      const einspeisungKwh = f.pvToExport + f.batteryToExport;
+      // 7 flow types — conserves: sum(from PV) = totalPv,
+      // sum(to Eigenverbrauch) = eigenverbrauchKwh (= totalLoad), by construction.
       const flows = [
-        { from: 'PV',            to: 'Eigenverbrauch', flow: round3(pvToEigen) },
-        { from: 'PV',            to: 'Akku-Laden',     flow: round3(batteryChargeKwh) },
-        { from: 'PV',            to: 'Einspeisung',    flow: round3(gridExportKwh) },
-        { from: 'Akku-Entladen', to: 'Eigenverbrauch', flow: round3(batteryDischargeKwh) },
-        { from: 'Netzbezug',     to: 'Eigenverbrauch', flow: round3(gridImportKwh) },
-      ].filter(f => f.flow > 0.01);
+        { from: 'PV',            to: 'Eigenverbrauch', flow: round3(f.pvToLoad) },
+        { from: 'PV',            to: 'Akku-Laden',     flow: round3(f.pvToBattery) },
+        { from: 'PV',            to: 'Einspeisung',    flow: round3(f.pvToExport) },
+        { from: 'Netzbezug',     to: 'Eigenverbrauch', flow: round3(f.gridToLoad) },
+        { from: 'Netzbezug',     to: 'Akku-Laden',     flow: round3(f.gridToBattery) },
+        { from: 'Akku-Entladen', to: 'Eigenverbrauch', flow: round3(f.batteryToLoad) },
+        { from: 'Akku-Entladen', to: 'Einspeisung',    flow: round3(f.batteryToExport) },
+      ].filter(fl => fl.flow > 0.01);
       const payload = {
         ok: true,
         card: 'sankey',
@@ -395,7 +505,7 @@ export function createHistoryVizAggregator(ctx) {
         totals: {
           pvKwh: round3(pvKwh),
           eigenverbrauchKwh: round3(eigenverbrauchKwh),
-          einspeisungKwh: round3(gridExportKwh),
+          einspeisungKwh: round3(einspeisungKwh),
         },
       };
       putCached(key, payload);
@@ -493,20 +603,29 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
-  async function getHeatmap({ view, date } = {}) {
+  async function getHeatmap({ view, date, granularity } = {}) {
     const bad = validate({ view, date });
     if (bad) return bad;
     if (view === 'day') {
       return { status: 400, body: { ok: false, error: 'view not supported (heatmap is week|month|year only)' }, cached: false };
     }
-    const key = `heatmap:${view}:${date}`;
+    // Round-2 — optional value-axis granularity. '1h' (default) keeps the
+    // hourly rows; '15min' subdivides the day axis into 96 fifteen-minute
+    // slots (week/month only — year rows are day-of-month, granularity n/a).
+    const gran = granularity === '15min' ? '15min' : '1h';
+    // Cache key MUST include granularity so 1h and 15min payloads never collide.
+    const key = `heatmap:${view}:${date}:${gran}`;
     const hit = getCached(key);
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
+      // For 15-min week/month rows, fetch at a 15-minute SQL bucket so each
+      // slot maps to one cell (the view default for week/month is '1 hour').
+      const fineGran = gran === '15min' && (view === 'week' || view === 'month');
       const rows = await fetchBucketed({
         seriesKeys: ['pv_total_w'],
         start, end, view,
+        intervalOverride: fineGran ? '15 minutes' : null,
       });
       let xLabels;
       let yLabels;
@@ -515,15 +634,25 @@ export function createHistoryVizAggregator(ctx) {
       const startMs = Date.parse(start);
       const endMs = Date.parse(end);
       if (view === 'week' || view === 'month') {
-        // x = day (YYYY-MM-DD), y = hour 0..23, v = PV-kWh integrated.
+        // x = day (YYYY-MM-DD); y = hour 0..23 ('1h') OR 15-min slot 0..95
+        // ('15min', labelled HH:MM); v = PV-kWh integrated.
         const days = Math.round((endMs - startMs) / 86_400_000);
         xLabels = [];
         for (let i = 0; i < days; i++) {
           const d = new Date(startMs + i * 86_400_000);
           xLabels.push(d.toISOString().slice(0, 10));
         }
-        yLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
-        // Energy buckets: cell[xLabel][hour] kWh
+        const slots = gran === '15min' ? 96 : 24;
+        // slotOf(ts) → 0..(slots-1) row index for a timestamp.
+        const slotOf = gran === '15min'
+          ? (ts) => ts.getUTCHours() * 4 + Math.floor(ts.getUTCMinutes() / 15)
+          : (ts) => ts.getUTCHours();
+        yLabels = gran === '15min'
+          ? Array.from({ length: 96 }, (_, i) => (
+            `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`
+          ))
+          : Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+        // Energy buckets: cell[xLabel][slot] kWh
         const cells = new Map(); // key=`${xLabel}:${y}` → kWh
         for (const r of rows) {
           if (r.key !== 'pv_total_w') continue;
@@ -532,19 +661,18 @@ export function createHistoryVizAggregator(ctx) {
           if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
           const ts = new Date(r.ts);
           const xLabel = ts.toISOString().slice(0, 10);
-          const y = ts.getUTCHours();
+          const y = slotOf(ts);
           const k = `${xLabel}:${y}`;
           const kwh = (w * dt) / 3_600_000;
           cells.set(k, (cells.get(k) || 0) + kwh);
         }
         matrix = [];
         for (const x of xLabels) {
-          for (let y = 0; y < 24; y++) {
+          for (let y = 0; y < slots; y++) {
             const v = round3(cells.get(`${x}:${y}`) || 0);
             if (v > domainMax) domainMax = v;
             // RC-2 — cell coords MUST be the exact label strings the
-            // type:'category' Chart.js scale matches by `===`. yLabels[y] is the
-            // zero-padded hour string ("00".."23"); x is already a date string.
+            // type:'category' Chart.js scale matches by `===`.
             matrix.push({ x, y: yLabels[y], v });
           }
         }
@@ -589,6 +717,7 @@ export function createHistoryVizAggregator(ctx) {
         date,
         generatedAt: new Date().toISOString(),
         cached: false,
+        granularity: gran,
         xLabels,
         yLabels,
         matrix,
@@ -744,6 +873,29 @@ export function createHistoryVizAggregator(ctx) {
     };
   }
 
+  // Build the donut summary { autarkyPct, shares: { pvDirect, battery, grid } }
+  // from a decomposed-energy-flow result (decomposeEnergyFlows output). The
+  // three shares are the kWh of household load covered by each source; they
+  // sum to totalLoad. autarkyPct = (pvDirect + battery) / totalLoad × 100.
+  // Day-Autarky and day-Sankey agree because both run decomposeEnergyFlows.
+  function autarkyDonutFromFlows(f) {
+    const pvDirect = f.pvToLoad;
+    const battery = f.batteryToLoad;
+    const grid = f.gridToLoad;
+    const totalLoad = pvDirect + battery + grid;
+    const autarkyPct = totalLoad > 0
+      ? Math.max(0, Math.min(100, ((pvDirect + battery) / totalLoad) * 100))
+      : 0;
+    return {
+      autarkyPct: round1(autarkyPct),
+      shares: {
+        pvDirect: round3(pvDirect),
+        battery: round3(battery),
+        grid: round3(grid),
+      },
+    };
+  }
+
   async function getAutarkyCalendar({ view, date } = {}) {
     const bad = validate({ view, date });
     if (bad) return bad;
@@ -752,41 +904,53 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
+      // Round-2 fix — fetch all 6 energy series so the autarky split uses the
+      // SAME per-bucket decomposition as the Sankey (pvToLoad / batteryToLoad /
+      // gridToLoad). Day-Autarky and day-Sankey therefore agree by construction.
       const rows = await fetchBucketed({
-        seriesKeys: ['load_power_w', 'grid_import_w'],
+        seriesKeys: [
+          'pv_total_w', 'grid_import_w', 'grid_export_w',
+          'load_power_w', 'battery_charge_w', 'battery_discharge_w',
+        ],
         start, end, view,
       });
-      // Bucket per UTC day, integrate W×Δt → kWh, compute
-      //   autarky% = (load - grid_import) / load * 100, clamped [0,100].
-      const dailyLoad = {};      // YYYY-MM-DD → kWh
-      const dailyGridImp = {};
-      for (const r of rows) {
-        const w = Number(r.value);
-        const dt = Number(r.resolution || 0);
-        if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
-        const dk = new Date(r.ts).toISOString().slice(0, 10);
-        const kwh = (w * dt) / 3_600_000;
-        if (r.key === 'load_power_w') dailyLoad[dk] = (dailyLoad[dk] || 0) + kwh;
-        else if (r.key === 'grid_import_w') dailyGridImp[dk] = (dailyGridImp[dk] || 0) + kwh;
+      // --- day view → donut payload --------------------------------------
+      if (view === 'day') {
+        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rows));
+        const payload = {
+          ok: true,
+          card: 'autarky-calendar',
+          view,
+          date,
+          generatedAt: new Date().toISOString(),
+          cached: false,
+          mode: 'donut',
+          autarkyPct: donut.autarkyPct,
+          shares: donut.shares,
+        };
+        putCached(key, payload);
+        return { status: 200, body: payload, cached: false };
       }
-      // Union of day keys so a day with grid-import but no load row still shows.
-      const dateSet = new Set([...Object.keys(dailyLoad), ...Object.keys(dailyGridImp)]);
-      const dates = [...dateSet].sort();
+      // --- week / month / year → per-day calendar matrix + periodTotal ---
+      // Group rows by UTC day, then decompose each day's buckets independently.
+      const rowsByDay = new Map(); // YYYY-MM-DD → rows[]
+      for (const r of rows) {
+        const dk = new Date(r.ts).toISOString().slice(0, 10);
+        if (!rowsByDay.has(dk)) rowsByDay.set(dk, []);
+        rowsByDay.get(dk).push(r);
+      }
+      const dates = [...rowsByDay.keys()].sort();
       const matrix = [];
       for (const d of dates) {
-        const load = dailyLoad[d] || 0;
-        const imp = dailyGridImp[d] || 0;
-        // T-09.3-13 — clamp regardless of row anomalies; load>0 guard prevents
-        // div-by-zero (a day with zero recorded load yields 0% autarky).
-        const pct = load > 0 ? Math.max(0, Math.min(100, ((load - imp) / load) * 100)) : 0;
+        const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rowsByDay.get(d)));
         // dow mapping: JS getUTCDay() is 0=Sunday..6=Saturday; the y-axis
         // labels are Mo=0..So=6, so shift by +6 mod 7.
         const jsDow = new Date(`${d}T12:00:00Z`).getUTCDay();
         const dowIdx = (jsDow + 6) % 7;
-        // RC-2 — emit cell y as the German DOW label string the
-        // type:'category' scale matches; DOW_DE_SHORT[dowIdx] === yLabels[dowIdx].
-        matrix.push({ x: d, y: DOW_DE_SHORT[dowIdx], v: round1(pct) });
+        matrix.push({ x: d, y: DOW_DE_SHORT[dowIdx], v: round1(donut.autarkyPct) });
       }
+      // periodTotal — decompose the WHOLE range's buckets in one pass.
+      const periodDonut = autarkyDonutFromFlows(decomposeEnergyFlows(rows));
       const payload = {
         ok: true,
         card: 'autarky-calendar',
@@ -794,10 +958,15 @@ export function createHistoryVizAggregator(ctx) {
         date,
         generatedAt: new Date().toISOString(),
         cached: false,
+        mode: 'calendar',
         xLabels: dates,
         yLabels: DOW_DE_SHORT.slice(),
         matrix,
         domain: { min: 0, max: 100, unit: '%' },
+        periodTotal: {
+          autarkyPct: periodDonut.autarkyPct,
+          shares: periodDonut.shares,
+        },
       };
       putCached(key, payload);
       return { status: 200, body: payload, cached: false };
@@ -1094,36 +1263,70 @@ export function createHistoryVizAggregator(ctx) {
         start, end, view,
         meanSeries: ['battery_soc_pct'],
       });
-      // Group rows by UTC date; per-day bucket into 24 hourly slots (avg SOC).
-      const byDate = new Map(); // dateKey → { sums:[24], counts:[24] }
-      for (const r of rows) {
-        if (r.key !== 'battery_soc_pct') continue;
-        const v = Number(r.value);
-        if (!Number.isFinite(v)) continue;
-        const d = new Date(r.ts);
-        const dateKey = d.toISOString().slice(0, 10);
-        const h = d.getUTCHours();
-        if (!byDate.has(dateKey)) {
-          byDate.set(dateKey, { sums: new Array(24).fill(0), counts: new Array(24).fill(0) });
-        }
-        const bucket = byDate.get(dateKey);
-        bucket.sums[h] += v;
-        bucket.counts[h] += 1;
-      }
-      // Most-recent 30 days, sorted ascending by date.
-      const allDates = [...byDate.keys()].sort();
-      const recentDates = allDates.slice(-30);
       // todayDate: the anchor `date` (the day the user is "viewing now").
       const todayDate = date;
-      const series = recentDates.map((dateKey) => {
-        const bucket = byDate.get(dateKey);
-        const points = [];
-        for (let h = 0; h < 24; h++) {
-          const soc = bucket.counts[h] > 0 ? round1(bucket.sums[h] / bucket.counts[h]) : 0;
-          points.push({ h, soc });
+      let series;
+      if (view === 'year') {
+        // Round-2 fix — year view aggregates SOC to ISO calendar week. One day
+        // per line over a year is hundreds of sparse lines; instead emit ~52
+        // lines, each = the average 24h SOC profile across that week's days.
+        // groupKey = ISO `${year}-W${week}` so weeks never collide year-over-year.
+        const byWeek = new Map(); // isoKey → { week, sums:[24], counts:[24] }
+        for (const r of rows) {
+          if (r.key !== 'battery_soc_pct') continue;
+          const v = Number(r.value);
+          if (!Number.isFinite(v)) continue;
+          const d = new Date(r.ts);
+          const { year, week } = isoWeek(d);
+          const isoKey = `${year}-W${String(week).padStart(2, '0')}`;
+          const h = d.getUTCHours();
+          if (!byWeek.has(isoKey)) {
+            byWeek.set(isoKey, { week, sums: new Array(24).fill(0), counts: new Array(24).fill(0) });
+          }
+          const bucket = byWeek.get(isoKey);
+          bucket.sums[h] += v;
+          bucket.counts[h] += 1;
         }
-        return { date: dateKey, isToday: dateKey === todayDate, points };
-      });
+        const weekKeys = [...byWeek.keys()].sort();
+        series = weekKeys.map((isoKey) => {
+          const bucket = byWeek.get(isoKey);
+          const points = [];
+          for (let h = 0; h < 24; h++) {
+            const soc = bucket.counts[h] > 0 ? round1(bucket.sums[h] / bucket.counts[h]) : 0;
+            points.push({ h, soc });
+          }
+          return { date: isoKey, label: `KW ${bucket.week}`, isToday: false, points };
+        });
+      } else {
+        // week / month → one line per UTC day; per-day bucket into 24 hourly slots.
+        const byDate = new Map(); // dateKey → { sums:[24], counts:[24] }
+        for (const r of rows) {
+          if (r.key !== 'battery_soc_pct') continue;
+          const v = Number(r.value);
+          if (!Number.isFinite(v)) continue;
+          const d = new Date(r.ts);
+          const dateKey = d.toISOString().slice(0, 10);
+          const h = d.getUTCHours();
+          if (!byDate.has(dateKey)) {
+            byDate.set(dateKey, { sums: new Array(24).fill(0), counts: new Array(24).fill(0) });
+          }
+          const bucket = byDate.get(dateKey);
+          bucket.sums[h] += v;
+          bucket.counts[h] += 1;
+        }
+        // Most-recent 30 days, sorted ascending by date.
+        const allDates = [...byDate.keys()].sort();
+        const recentDates = allDates.slice(-30);
+        series = recentDates.map((dateKey) => {
+          const bucket = byDate.get(dateKey);
+          const points = [];
+          for (let h = 0; h < 24; h++) {
+            const soc = bucket.counts[h] > 0 ? round1(bucket.sums[h] / bucket.counts[h]) : 0;
+            points.push({ h, soc });
+          }
+          return { date: dateKey, isToday: dateKey === todayDate, points };
+        });
+      }
       const payload = {
         ok: true,
         card: 'spaghetti',

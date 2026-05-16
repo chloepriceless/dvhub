@@ -419,7 +419,7 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.ok(b.totals.pvKwh > 40 && b.totals.pvKwh < 55, `pvKwh ~48 expected, got ${b.totals.pvKwh}`);
   });
 
-  it('Test W2-2 (Sankey conservation): sum-from-PV ≈ totals.pvKwh ± 1%; sum-to-Eigenverbrauch ≈ totals.eigenverbrauchKwh ± 1%', async () => {
+  it('Test W2-2 (Sankey conservation): per-bucket decomposition — sum-from-PV == total PV, sum-to-Eigenverbrauch == total load', async () => {
     const querySeries = async ({ seriesKeys, start, end }) => {
       const map = {
         pv_total_w: 3000, grid_export_w: 500, grid_import_w: 100,
@@ -435,14 +435,76 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     const b = r.body;
     const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
     const sumToEigen = b.flows.filter(f => f.to === 'Eigenverbrauch').reduce((s, f) => s + f.flow, 0);
+    const sumToEinspeisung = b.flows.filter(f => f.to === 'Einspeisung').reduce((s, f) => s + f.flow, 0);
+    // CONSERVATION — the per-bucket decomposition makes sum-from-PV exactly
+    // equal total PV (no overshoot from grid-arbitrage charging).
     assert.ok(
-      Math.abs(sumFromPv - b.totals.pvKwh) / Math.max(1e-6, b.totals.pvKwh) <= 0.01,
-      `sum-from-PV (${sumFromPv}) should match totals.pvKwh (${b.totals.pvKwh}) within 1%`
+      Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05,
+      `sum-from-PV (${sumFromPv}) MUST equal totals.pvKwh (${b.totals.pvKwh}) ± rounding`
+    );
+    // sum-to-Eigenverbrauch == total household load == totals.eigenverbrauchKwh.
+    assert.ok(
+      Math.abs(sumToEigen - b.totals.eigenverbrauchKwh) <= 0.05,
+      `sum-to-Eigenverbrauch (${sumToEigen}) MUST equal totals.eigenverbrauchKwh (${b.totals.eigenverbrauchKwh}) ± rounding`
+    );
+    // einspeisung total = sum of flows into Einspeisung (PV + battery).
+    assert.ok(
+      Math.abs(sumToEinspeisung - b.totals.einspeisungKwh) <= 0.05,
+      `sum-to-Einspeisung (${sumToEinspeisung}) MUST equal totals.einspeisungKwh (${b.totals.einspeisungKwh}) ± rounding`
+    );
+  });
+
+  it('Test W2-2b (Sankey grid-arbitrage conservation): charge+export > PV must NOT make PV-out flows overshoot total PV', async () => {
+    // Round-2 bug repro — a grid-arbitrage battery charges from the grid in
+    // cheap hours, so over the period batteryCharge + gridExport can exceed PV.
+    // PV 1000W, load 800W, export 600W, charge 900W → charge+export=1500 > 1000.
+    // The old period-level decomposition overshot PV; per-bucket cannot.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 1000, grid_export_w: 600, grid_import_w: 700,
+        battery_charge_w: 900, battery_discharge_w: 100, load_power_w: 800,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    const sumFromPv = b.flows.filter(f => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
+    assert.ok(
+      sumFromPv <= b.totals.pvKwh + 0.05,
+      `PV-out flows (${sumFromPv}) MUST NOT exceed total PV (${b.totals.pvKwh})`
     );
     assert.ok(
-      Math.abs(sumToEigen - b.totals.eigenverbrauchKwh) / Math.max(1e-6, b.totals.eigenverbrauchKwh) <= 0.01,
-      `sum-to-Eigenverbrauch (${sumToEigen}) should match totals.eigenverbrauchKwh (${b.totals.eigenverbrauchKwh}) within 1%`
+      Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05,
+      `PV-out flows (${sumFromPv}) MUST conserve to total PV (${b.totals.pvKwh})`
     );
+    // Grid→Akku flow must appear when the battery charges beyond what PV covers.
+    const gridToBattery = b.flows.find(f => f.from === 'Netzbezug' && f.to === 'Akku-Laden');
+    assert.ok(gridToBattery && gridToBattery.flow > 0, 'grid-arbitrage charging should yield a Netzbezug→Akku-Laden flow');
+  });
+
+  it('Test W2-2c (Sankey flow types): from/to use the 7 documented edge types', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 2000, grid_export_w: 300, grid_import_w: 400,
+        battery_charge_w: 600, battery_discharge_w: 500, load_power_w: 1500,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const ALLOWED_FROM = new Set(['PV', 'Netzbezug', 'Akku-Entladen']);
+    const ALLOWED_TO = new Set(['Eigenverbrauch', 'Akku-Laden', 'Einspeisung']);
+    for (const f of r.body.flows) {
+      assert.ok(ALLOWED_FROM.has(f.from), `unexpected flow.from '${f.from}'`);
+      assert.ok(ALLOWED_TO.has(f.to), `unexpected flow.to '${f.to}'`);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -605,6 +667,46 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.ok(bytes <= 50_000, `month payload should be <= 50KB, got ${bytes} bytes`);
   });
 
+  it('Test W2-6b (Heatmap granularity param): 1h default = 24 y-rows; 15min = 96 y-rows; cache keys do not collide', async () => {
+    // makeFlatSeriesRows emits 15-min samples → both 1h and 15min granularity
+    // have data. PV 2000W flat for a week.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key !== 'pv_total_w') continue;
+        all.push(...makeFlatSeriesRows({ start, end, key, watts: 2000 }));
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+
+    // Default (no param) → 1h granularity, 24 hourly rows.
+    const def = await ctx.historyVizApi.getHeatmap({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(def.status, 200);
+    assert.equal(def.body.granularity, '1h', 'default granularity should be 1h');
+    assert.equal(def.body.yLabels.length, 24, `1h heatmap → 24 y-rows, got ${def.body.yLabels.length}`);
+    assert.equal(def.body.matrix.length, def.body.xLabels.length * 24);
+
+    // Explicit 15min → 96 fifteen-minute rows.
+    const fine = await ctx.historyVizApi.getHeatmap({ view: 'week', date: ANCHOR_DATE, granularity: '15min' });
+    assert.equal(fine.status, 200);
+    assert.equal(fine.body.granularity, '15min', 'explicit 15min granularity should round-trip');
+    assert.equal(fine.body.yLabels.length, 96, `15min heatmap → 96 y-rows, got ${fine.body.yLabels.length}`);
+    assert.equal(fine.body.matrix.length, fine.body.xLabels.length * 96);
+    // y-labels are HH:MM strings; cells match them by ===.
+    assert.match(fine.body.yLabels[0], /^00:00$/);
+    assert.match(fine.body.yLabels[95], /^23:45$/);
+    for (const c of fine.body.matrix.slice(0, 3)) {
+      assert.ok(fine.body.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
+    }
+
+    // Cache isolation — the 15min call must NOT serve the 1h cached payload.
+    assert.equal(fine.cached, false, '15min granularity is a distinct cache key — must not be a 1h hit');
+    const fine2 = await ctx.historyVizApi.getHeatmap({ view: 'week', date: ANCHOR_DATE, granularity: '15min' });
+    assert.equal(fine2.cached, true, '2nd 15min call should hit cache');
+    assert.equal(fine2.body.yLabels.length, 96, 'cached 15min payload keeps 96 rows');
+  });
+
   // -------------------------------------------------------------------------
   // Ledger (T7 — shape + sort)
   // -------------------------------------------------------------------------
@@ -708,8 +810,10 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
   // -------------------------------------------------------------------------
   // AutarkyCalendar (W3-1 envelope shape, W3-2 values bounded)
   // -------------------------------------------------------------------------
-  it('Test W3-1 (Autarky envelope shape): month view → xLabels span the range, matrix length = xLabels × yLabels', async () => {
-    // Flat 800W load, 300W grid_import for a 30-day month window.
+  it('Test W3-1 (Autarky calendar shape): month view → mode:calendar, xLabels span the range, periodTotal donut', async () => {
+    // Flat 800W load, 300W grid_import for a 30-day month window. With the
+    // round-2 per-bucket decomposition, grid covers load directly (no PV/
+    // battery rows) → autarky 0%, periodTotal.shares.grid == total load.
     const querySeries = async ({ seriesKeys, start, end }) => {
       const map = { load_power_w: 800, grid_import_w: 300 };
       const all = [];
@@ -721,6 +825,7 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
     const b = r.body;
     assert.equal(b.card, 'autarky-calendar');
+    assert.equal(b.mode, 'calendar', 'month view should be mode:calendar');
     assert.ok(Array.isArray(b.xLabels), 'xLabels should be an array');
     // 30-day rolling window → 28..31 dates with data
     assert.ok(b.xLabels.length >= 28 && b.xLabels.length <= 31, `xLabels length 28-31 expected, got ${b.xLabels.length}`);
@@ -729,6 +834,53 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     // One cell per actual date (each day maps to exactly one dow row).
     assert.equal(b.matrix.length, b.xLabels.length, `matrix.length (${b.matrix.length}) should equal xLabels.length (${b.xLabels.length})`);
     assert.ok(b.domain && b.domain.min === 0 && b.domain.max === 100, 'domain should be {min:0,max:100}');
+    // periodTotal — overall-autarky summary alongside the calendar.
+    assert.ok(b.periodTotal, 'month view should add a periodTotal summary');
+    assert.equal(typeof b.periodTotal.autarkyPct, 'number');
+    assert.ok(b.periodTotal.shares
+      && typeof b.periodTotal.shares.pvDirect === 'number'
+      && typeof b.periodTotal.shares.battery === 'number'
+      && typeof b.periodTotal.shares.grid === 'number',
+    'periodTotal.shares should carry pvDirect/battery/grid');
+    // No PV/battery → autarky 0, grid carries the whole household load.
+    assert.equal(b.periodTotal.autarkyPct, 0, 'grid-only month should be 0% autarky');
+    assert.ok(b.periodTotal.shares.grid > 0, 'periodTotal.shares.grid should be the whole load');
+  });
+
+  it('Test W3-1b (Autarky day view → donut): mode:donut, autarkyPct + shares, agrees with Sankey decomposition', async () => {
+    // pv 2000W, load 1500W, charge 300W, discharge 400W, export 200W, import 100W.
+    // Per bucket: pvToLoad=min(2000,1500)=1500, batteryToLoad=min(400,0)=0,
+    // gridToLoad=0 → autarky 100% (load fully covered by PV directly).
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const map = {
+        pv_total_w: 2000, load_power_w: 1500, battery_charge_w: 300,
+        battery_discharge_w: 400, grid_export_w: 200, grid_import_w: 100,
+      };
+      const all = [];
+      for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'autarky-calendar');
+    assert.equal(b.mode, 'donut', 'day view should be mode:donut');
+    assert.equal(typeof b.autarkyPct, 'number', 'donut payload should carry autarkyPct');
+    assert.ok(b.shares
+      && typeof b.shares.pvDirect === 'number'
+      && typeof b.shares.battery === 'number'
+      && typeof b.shares.grid === 'number',
+    'donut payload should carry shares.{pvDirect,battery,grid}');
+    assert.equal(b.autarkyPct, 100, 'PV fully covers load → 100% autarky');
+    assert.ok(b.shares.grid < 0.05, 'no grid-to-load when PV covers the whole load');
+    // Day-Autarky must agree with day-Sankey (same per-bucket decomposition).
+    const sankey = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    const pvToLoad = sankey.body.flows.find(f => f.from === 'PV' && f.to === 'Eigenverbrauch');
+    assert.ok(
+      Math.abs(b.shares.pvDirect - (pvToLoad ? pvToLoad.flow : 0)) <= 0.05,
+      'autarky day shares.pvDirect must equal the Sankey PV→Eigenverbrauch flow'
+    );
   });
 
   it('Test W3-2 (Autarky values bounded): every matrix cell v ∈ [0, 100]', async () => {
@@ -1032,6 +1184,62 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.equal(r.status, 200);
     const bytes = Buffer.byteLength(JSON.stringify(r.body), 'utf8');
     assert.ok(bytes <= 50_000, `spaghetti payload should be <= 50KB, got ${bytes} bytes`);
+  });
+
+  it('Test W4-3b (Spaghetti year → ISO-week lines): year view aggregates SOC to ~52 weekly lines labelled "KW NN"', async () => {
+    // A full year of hourly SOC samples → year view must collapse to ISO
+    // calendar weeks (~52 lines), NOT one line per day (~365).
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      const rows = [];
+      let i = 0;
+      for (let t = startMs; t < endMs; t += 3600 * 1000) {
+        rows.push({
+          key: 'battery_soc_pct',
+          ts: new Date(t).toISOString(),
+          value: 40 + ((i++) % 24) * 2,
+          unit: '%',
+          resolution: 3600,
+        });
+      }
+      return rows;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSpaghetti({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status}`);
+    const b = r.body;
+    assert.ok(Array.isArray(b.series), 'series should be an array');
+    // A 12-month window spans 52-54 ISO weeks.
+    assert.ok(b.series.length >= 50 && b.series.length <= 54,
+      `year view should produce ~52 weekly lines, got ${b.series.length}`);
+    for (const s of b.series) {
+      assert.match(s.label || '', /^KW \d+$/, `year-view line label should be "KW NN", got ${s.label}`);
+      assert.ok(Array.isArray(s.points) && s.points.length === 24, `weekly line should still have 24 points, got ${s.points?.length}`);
+    }
+  });
+
+  it('Test W4-3c (Spaghetti week unchanged): week view still emits one line per day', async () => {
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const startMs = Date.parse(start);
+      const endMs = Date.parse(end);
+      const rows = [];
+      for (let t = startMs; t < endMs; t += 3600 * 1000) {
+        rows.push({
+          key: 'battery_soc_pct', ts: new Date(t).toISOString(),
+          value: 50, unit: '%', resolution: 3600,
+        });
+      }
+      return rows;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getSpaghetti({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    // 7-day window → 7 per-day lines, each keyed by a YYYY-MM-DD date string.
+    assert.equal(r.body.series.length, 7, `week view should emit 7 day-lines, got ${r.body.series.length}`);
+    for (const s of r.body.series) {
+      assert.match(s.date || '', /^\d{4}-\d{2}-\d{2}$/, `week-view line should key by date, got ${s.date}`);
+    }
   });
 
   it('Test W4-4 (Spaghetti view rejection): view=day → 400 with error', async () => {

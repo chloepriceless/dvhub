@@ -2484,9 +2484,13 @@ export function createApiRoutes(ctx) {
       if (typeof handler !== 'function') {
         return json(res, 404, { ok: false, error: `unknown viz card: ${card}` });
       }
+      // `granularity` is only consumed by the heatmap builder ('1h' | '15min');
+      // other builders ignore the extra key. Passed through unconditionally so
+      // the dispatcher stays slug-agnostic.
       const result = await handler({
         view: url.searchParams.get('view'),
-        date: url.searchParams.get('date')
+        date: url.searchParams.get('date'),
+        granularity: url.searchParams.get('granularity')
       });
       return json(res, result.status, result.body);
     }
