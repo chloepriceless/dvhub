@@ -1688,6 +1688,67 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true });
     }
 
+    // Family-Dashboard MQTT tiles — operator-managed list of generic MQTT
+    // topics surfaced as cards on the family page (config.family.mqttTiles).
+    // The Integrations-page editor reads via GET and saves via POST. POST
+    // merges ONLY family.mqttTiles into the full config SERVER-SIDE — the
+    // client never round-trips the whole config object (which would, with a
+    // partial body, replace it: saveAndApplyConfig overwrites, never merges).
+    if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {
+      const fam = ctx.getRawCfg?.()?.family;
+      const tiles = (fam && Array.isArray(fam.mqttTiles)) ? fam.mqttTiles : [];
+      return json(res, 200, { ok: true, tiles });
+    }
+
+    if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'POST') {
+      let body;
+      try {
+        body = await parseBody(req);
+      } catch (e) {
+        return json(res, 400, { ok: false, error: 'invalid json' });
+      }
+      if (!body || !Array.isArray(body.tiles)) {
+        return json(res, 400, { ok: false, error: 'tiles array required' });
+      }
+      if (body.tiles.length > 50) {
+        return json(res, 400, { ok: false, error: 'too_many_tiles' });
+      }
+      // Normalize + validate. A topic is mandatory; id/label/field/unit are
+      // length-clipped strings so a malformed payload cannot bloat config.json.
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const tiles = [];
+      const seenIds = new Set();
+      for (const raw of body.tiles) {
+        if (!raw || typeof raw !== 'object') continue;
+        const topic = clip(raw.topic, 256).trim();
+        if (!topic) continue; // a tile without a topic is incomplete — drop it
+        let id = clip(raw.id, 64).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!id || seenIds.has(id)) id = 't' + Date.now().toString(36) + tiles.length;
+        seenIds.add(id);
+        const tile = { id, label: clip(raw.label, 80).trim() || topic, topic };
+        const field = clip(raw.field, 80).trim();
+        const unit = clip(raw.unit, 16).trim();
+        if (field) tile.field = field;
+        if (unit) tile.unit = unit;
+        if (raw.enabled === false) tile.enabled = false;
+        tiles.push(tile);
+      }
+      // Merge into the full raw config server-side — getRawCfg() is the
+      // unredacted config, so saveAndApplyConfig (via restoreRedacted, a no-op
+      // here) persists the COMPLETE config with only family.mqttTiles changed.
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.family = (next.family && typeof next.family === 'object') ? next.family : {};
+      next.family.mqttTiles = tiles;
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('family_mqtt_tiles_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('family_mqtt_tiles_saved', { count: tiles.length }, actorContext(req));
+      return json(res, 200, { ok: true, tiles });
+    }
+
     // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
     // Served via servePage so the filename 'family.html' stays inside publicDir.
     if (url.pathname === '/family' && req.method === 'GET') {

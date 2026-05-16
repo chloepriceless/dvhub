@@ -512,10 +512,9 @@
 
   /* ===================== FAMILY MQTT TILES EDITOR ===================== */
   // Operator-managed list of generic MQTT topics surfaced on the family page.
-  // Persisted into config.family.mqttTiles via POST /api/config. The rest of
-  // the `family` config object is read on load and merged back on save so a
-  // partial-root replace never drops sibling family settings.
-  var familyConfigCache = {}; // last-known config.family minus mqttTiles
+  // Persisted into config.family.mqttTiles via the dedicated
+  // /api/family/mqtt-tiles endpoint, which merges server-side. (A partial
+  // POST /api/config would destructively REPLACE the whole config.)
 
   function mteSlugId() {
     return 't' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
@@ -575,16 +574,10 @@
     var rows = document.getElementById('mteRows');
     if (!rows) return; // editor not present on this page
     try {
-      var res = await apiFetch('/api/config');
+      var res = await apiFetch('/api/family/mqtt-tiles');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
-      var cfg = (data && data.config) || {};
-      var fam = (cfg.family && typeof cfg.family === 'object') ? cfg.family : {};
-      familyConfigCache = {};
-      Object.keys(fam).forEach(function (k) {
-        if (k !== 'mqttTiles') familyConfigCache[k] = fam[k];
-      });
-      mteRenderRows(Array.isArray(fam.mqttTiles) ? fam.mqttTiles : []);
+      mteRenderRows(Array.isArray(data.tiles) ? data.tiles : []);
     } catch (e) {
       mteSetStatus('Konfiguration konnte nicht geladen werden.', 'err');
     }
@@ -623,15 +616,16 @@
     mteSetStatus('Speichern …', '');
     if (btn) btn.disabled = true;
     try {
-      var family = Object.assign({}, familyConfigCache, { mqttTiles: tiles });
-      var res = await apiFetch('/api/config', {
+      var res = await apiFetch('/api/family/mqtt-tiles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: { family: family } })
+        body: JSON.stringify({ tiles: tiles })
       });
       var data = await res.json().catch(function () { return {}; });
       if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
-      mteSetStatus(tiles.length + ' Kachel(n) gespeichert — erscheinen auf der Familienseite ✓', 'ok');
+      var saved = Array.isArray(data.tiles) ? data.tiles : tiles;
+      mteRenderRows(saved); // reflect server-normalised ids/labels
+      mteSetStatus(saved.length + ' Kachel(n) gespeichert — erscheinen auf der Familienseite ✓', 'ok');
     } catch (e) {
       mteSetStatus('Fehler beim Speichern: ' + e.message, 'err');
     } finally {
