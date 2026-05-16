@@ -293,6 +293,75 @@ export function createHistoryVizAggregator(ctx) {
   }
 
   // -------------------------------------------------------------------------
+  // Plan 09.4 — energy series from the 15-min aggregate table.
+  //
+  // The viz energy cards used to read raw power samples from
+  // `timeseries_samples` (pv_total_w etc.) — but on prod those samples only
+  // retain ~7 weeks (ingestion started 2026-03-26), so a 'year'/'all' view
+  // showed almost no history. The full history lives in
+  // `public.energy_slots_15m` — the VRM-imported 15-minute aggregates,
+  // `value_num` already in kWh, back to 2025-05. Reading that table instead
+  // makes the energy cards show data from the very beginning, and it is far
+  // lighter than scanning the high-frequency sample table.
+  //
+  // energy_slots_15m is EAV keyed by (slot_start_utc, series_key,
+  // source_kind). Recent slots carry BOTH a `vrm_import` and a `local_live`
+  // row — summing both double-counts, so we DISTINCT ON (slot, series)
+  // preferring `vrm_import` (the authoritative VRM backfill) and fall back to
+  // `local_live`. `unit='kWh'` excludes the legacy pre-Sept-2025 `unit='W'`
+  // grid rows — grid metering started later, so early buckets simply have no
+  // grid energy (the decomposition treats that as zero, as intended).
+  //
+  // Returns the SAME row shape as fetchBucketed — { key, ts, value,
+  // resolution } — where `value` is the energy-equivalent average power so
+  // the downstream `value × resolution / 3_600_000` integration still yields
+  // the exact bucket kWh.
+  const BUCKET_SECONDS = { '15 minutes': 900, '1 hour': 3600, '1 day': 86400 };
+  async function fetchBucketedEnergySlots({ seriesKeys, start, end, view, intervalOverride = null }) {
+    const bucket = intervalOverride || bucketIntervalForView(view);
+    const bucketSeconds = BUCKET_SECONDS[bucket] || 900;
+    // `bucket` is one of three fixed literals (bucketIntervalForView /
+    // intervalOverride) — never user input — so it is safe to inline.
+    const sql = `
+      WITH dedup AS (
+        SELECT DISTINCT ON (slot_start_utc, series_key)
+          slot_start_utc, series_key, value_num
+        FROM energy_slots_15m
+        WHERE series_key = ANY($1)
+          AND unit = 'kWh'
+          AND value_num IS NOT NULL
+          AND slot_start_utc >= $2::timestamptz
+          AND slot_start_utc <  $3::timestamptz
+        ORDER BY slot_start_utc, series_key,
+          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+      )
+      SELECT series_key AS key,
+             time_bucket('${bucket}', slot_start_utc) AS bucket_ts,
+             SUM(value_num) AS kwh
+      FROM dedup
+      GROUP BY series_key, bucket_ts
+      ORDER BY bucket_ts
+    `;
+    let rows = [];
+    if (db && typeof db.query === 'function') {
+      const result = await db.query(sql, [seriesKeys, start, end]);
+      rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+    }
+    return rows.map((r) => {
+      const kwh = Number(r.kwh) || 0;
+      const ts = (r.bucket_ts instanceof Date)
+        ? r.bucket_ts.toISOString()
+        : String(r.bucket_ts);
+      return {
+        key: r.key,
+        ts,
+        value: (kwh * 3_600_000) / bucketSeconds,
+        resolution: bucketSeconds,
+      };
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Plan 09.4-A — EPEX spot price source.
   //
   // The Phase-08.1 `shared.market_price_slots` table is 0 rows on prod —
@@ -544,7 +613,7 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await fetchBucketed({
+      const rows = await fetchBucketedEnergySlots({
         seriesKeys: [
           'pv_total_w', 'grid_import_w', 'grid_export_w',
           'load_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -608,7 +677,7 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await fetchBucketed({
+      const rows = await fetchBucketedEnergySlots({
         seriesKeys: ['pv_total_w', 'load_power_w'],
         start, end, view,
       });
@@ -641,7 +710,7 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await fetchBucketed({
+      const rows = await fetchBucketedEnergySlots({
         seriesKeys: ['pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w'],
         start, end, view,
       });
@@ -740,12 +809,22 @@ export function createHistoryVizAggregator(ctx) {
       // query so the per-bucket mean price is aligned 1:1 with the PV buckets
       // (same bucketInterval). `price_ct_kwh` is a ratio series → meanSeries, so
       // its `value` carries the plain per-bucket AVG, not an energy integral.
-      const rows = await fetchBucketed({
-        seriesKeys: ['pv_total_w', PRICE_SERIES_KEY],
+      // Plan 09.4 — PV comes from the 15-min aggregate table (full history);
+      // the EPEX spot price stays in timeseries_samples (price has its own
+      // long backfill). Both use the SAME bucket width so the cells align.
+      const heatmapInterval = fineGran ? '15 minutes' : null;
+      const pvRows = await fetchBucketedEnergySlots({
+        seriesKeys: ['pv_total_w'],
+        start, end, view,
+        intervalOverride: heatmapInterval,
+      });
+      const priceRows = await fetchBucketed({
+        seriesKeys: [PRICE_SERIES_KEY],
         start, end, view,
         meanSeries: [PRICE_SERIES_KEY],
-        intervalOverride: fineGran ? '15 minutes' : null,
+        intervalOverride: heatmapInterval,
       });
+      const rows = pvRows.concat(priceRows);
       let xLabels;
       let yLabels;
       let matrix;
@@ -1053,7 +1132,7 @@ export function createHistoryVizAggregator(ctx) {
       // Round-2 fix — fetch all 6 energy series so the autarky split uses the
       // SAME decomposition as the Sankey (pvToLoad / batteryToLoad /
       // gridToLoad). Day-Autarky and day-Sankey therefore agree by construction.
-      const rows = await fetchBucketed({
+      const rows = await fetchBucketedEnergySlots({
         seriesKeys: [
           'pv_total_w', 'grid_import_w', 'grid_export_w',
           'load_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -1138,7 +1217,7 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      const rows = await fetchBucketed({
+      const rows = await fetchBucketedEnergySlots({
         seriesKeys: ['pv_total_w', 'load_power_w'],
         start, end, view,
       });
@@ -1667,39 +1746,34 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
-      // battery_soc_pct is a percentage — fetch the per-bucket MEAN (meanSeries),
-      // not an energy integral. SQL-side time_bucket caps the row count (RC-1);
-      // the cycle counter then walks the downsampled SOC series.
-      const rows = await fetchBucketed({
-        seriesKeys: ['battery_soc_pct'],
+      // Plan 09.4 — cycles are sourced from the 15-min aggregate table's
+      // realized battery_charge_w / battery_discharge_w energy (kWh per slot),
+      // which has the full VRM-imported history. The earlier SOC-delta walk
+      // read battery_soc_pct from timeseries_samples, which only retains
+      // ~7 weeks on prod. Equivalent-full-cycles = discharged kWh / nominal
+      // capacity — the project-canonical computeCycles() formula.
+      const rows = await fetchBucketedEnergySlots({
+        seriesKeys: ['battery_charge_w', 'battery_discharge_w'],
         start, end, view,
-        meanSeries: ['battery_soc_pct'],
       });
-      // Sort SOC samples by ts, then group by German DOW (Mo=0..So=6).
-      const socRows = rows
-        .filter((r) => r.key === 'battery_soc_pct' && Number.isFinite(Number(r.value)))
-        .map((r) => ({ ts: r.ts, tsMs: Date.parse(r.ts), value: Number(r.value) }))
-        .filter((r) => Number.isFinite(r.tsMs))
-        .sort((a, b) => a.tsMs - b.tsMs);
       const capKwh = batteryNominalKwh();
-      // Per-DOW SOC sub-series. A cycle/energy delta belongs to the DOW of the
-      // LATER sample in each consecutive pair (the delta "completes" on that
-      // day). Iterate the global sorted series so transitions across midnight
-      // are still counted; attribute each ΔSOC to the receiving sample's DOW.
-      const perDowCycles = new Array(7).fill(0);
-      const perDowCharged = new Array(7).fill(0);   // kWh (positive ΔSOC)
-      const perDowDischarged = new Array(7).fill(0); // kWh (abs of negative ΔSOC)
-      for (let i = 1; i < socRows.length; i++) {
-        const prev = socRows[i - 1];
-        const cur = socRows[i];
-        const dSoc = cur.value - prev.value; // +ve = charge, -ve = discharge
-        const jsDow = new Date(cur.tsMs).getUTCDay(); // 0=Sun..6=Sat
-        const dowIdx = (jsDow + 6) % 7;               // Mo=0..So=6
-        perDowCycles[dowIdx] += Math.abs(dSoc) / 200; // cumulative |ΔSOC|/200
-        const kwh = (Math.abs(dSoc) / 100) * capKwh;  // ΔSOC fraction × capacity
-        if (dSoc >= 0) perDowCharged[dowIdx] += kwh;
-        else perDowDischarged[dowIdx] += kwh;
+      // Per-DOW charge / discharge energy, attributed to the bucket's DOW
+      // (Mo=0..So=6). Each row's value×resolution integrates back to the
+      // bucket kWh (fetchBucketedEnergySlots expresses kWh as equiv. power).
+      const perDowCharged = new Array(7).fill(0);    // kWh charged
+      const perDowDischarged = new Array(7).fill(0); // kWh discharged
+      for (const r of rows) {
+        const w = Number(r.value);
+        const dt = Number(r.resolution || 0);
+        if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
+        const kwh = (w * dt) / 3_600_000;
+        const jsDow = new Date(r.ts).getUTCDay(); // 0=Sun..6=Sat
+        const dowIdx = (jsDow + 6) % 7;            // Mo=0..So=6
+        if (r.key === 'battery_charge_w') perDowCharged[dowIdx] += kwh;
+        else if (r.key === 'battery_discharge_w') perDowDischarged[dowIdx] += kwh;
       }
+      // Equivalent full cycles per DOW = discharged kWh / nominal capacity.
+      const perDowCycles = perDowDischarged.map((kwh) => (capKwh > 0 ? kwh / capKwh : 0));
       const perDow = [];
       for (let d = 0; d < 7; d++) {
         perDow.push({
@@ -1777,17 +1851,27 @@ export function createHistoryVizAggregator(ctx) {
   // consistent. Derived per-slot net € = (export−import)×price/100.
   function dispatchSlotsCte() {
     return `
-      WITH slot_flows AS (
+      WITH slot_src AS (
+        -- Recent slots carry BOTH a vrm_import and a local_live row — sum
+        -- those and the per-slot energy doubles. DISTINCT ON keeps one row
+        -- per (slot, series), preferring the authoritative vrm_import.
+        SELECT DISTINCT ON (slot_start_utc, series_key)
+          slot_start_utc, series_key, value_num
+        FROM energy_slots_15m
+        WHERE series_key IN ('grid_import_w', 'grid_export_w')
+          AND unit = 'kWh'
+          AND value_num IS NOT NULL
+          AND slot_start_utc >= $1::timestamptz
+          AND slot_start_utc <  $2::timestamptz
+        ORDER BY slot_start_utc, series_key,
+          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+      ),
+      slot_flows AS (
         SELECT
           slot_start_utc AS ts,
           SUM(value_num) FILTER (WHERE series_key = 'grid_import_w') AS import_kwh,
           SUM(value_num) FILTER (WHERE series_key = 'grid_export_w') AS export_kwh
-        FROM energy_slots_15m
-        WHERE series_key IN ('grid_import_w', 'grid_export_w')
-          AND source_kind IN ('vrm_import', 'local_live')
-          AND unit = 'kWh'
-          AND slot_start_utc >= $1::timestamptz
-          AND slot_start_utc <  $2::timestamptz
+        FROM slot_src
         GROUP BY slot_start_utc
       ),
       slot_price AS (

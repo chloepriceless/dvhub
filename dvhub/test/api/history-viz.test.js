@@ -369,8 +369,31 @@ function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async (
     const rawRows = await querySeriesFn({ seriesKeys, start, end, maxResolution: 900 });
     return bucketRawRows(rawRows, bucketSec);
   };
+  // db.query adapter — Plan 09.4 re-pointed the energy cards to
+  // fetchBucketedEnergySlots(), which reads the 15-min aggregate table via
+  // db.query. Reproduce that path on top of the same querySeriesFn mock so the
+  // per-builder tests need not be rewritten: when the SQL is the
+  // fetchBucketedEnergySlots query (energy_slots_15m + `WITH dedup`), bucket
+  // the querySeries rows and return them in {key, bucket_ts, kwh} shape.
+  const dbQueryAdapter = async (sql, params) => {
+    if (typeof sql === 'string' && /energy_slots_15m/.test(sql) && /WITH dedup AS/.test(sql)) {
+      const m = sql.match(/time_bucket\('([^']+)'/);
+      const bucketSec = (m && BUCKET_INTERVAL_SECONDS[m[1]]) || 900;
+      const seriesKeys = Array.isArray(params && params[0]) ? params[0] : [];
+      const start = params && params[1];
+      const end = params && params[2];
+      const rawRows = await querySeriesFn({ seriesKeys, start, end, maxResolution: 900 });
+      const bucketed = bucketRawRows(rawRows, bucketSec);
+      return {
+        rows: bucketed
+          .filter((r) => seriesKeys.includes(r.key))
+          .map((r) => ({ key: r.key, bucket_ts: r.ts, kwh: (r.value * r.resolution) / 3_600_000 })),
+      };
+    }
+    return dbQueryFn(sql, params);
+  };
   ctx.telemetryStore = { querySeries: querySeriesFn, queryBucketedSeries: queryBucketedSeriesFn };
-  ctx.db = { query: dbQueryFn };
+  ctx.db = { query: dbQueryAdapter };
   // Re-create the aggregator with the populated stores (the original mockCtx
   // wired a no-store factory).
   ctx.historyVizApi = createHistoryVizAggregator(ctx);
@@ -1479,13 +1502,23 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.match(r.body.error || '', /view/i);
   });
 
-  it('Test W4-6 (Cycles formula sanity): SOC [0,100,0,100,0] → cumulative cycles 2.0', async () => {
-    // 4 transitions of 100% absolute change = 400 cumulative → 400/200 = 2.0.
-    // All 5 samples land on the SAME day so the per-DOW sum collapses to one DOW.
+  it('Test W4-6 (Cycles formula sanity): 20 kWh discharged → cycles 2.0 (cap 10 kWh)', async () => {
+    // Plan 09.4 — getCycles now reads realized battery_charge_w /
+    // battery_discharge_w energy from energy_slots_15m (via db.query).
+    // Equivalent full cycles = dischargedKwh / nominal capacity.
+    // batteryNominalKwh() defaults to 10 kWh (mock has no optimizer config),
+    // so 20 kWh discharged → 2.0 cycles. All rows land on the same UTC day.
     const querySeries = async ({ seriesKeys, start }) => {
-      assert.ok(seriesKeys.includes('battery_soc_pct'), 'getCycles should query battery_soc_pct');
-      // 5 samples 1h apart, all within the same UTC day (start..start+4h).
-      return makeSocRows({ start, values: [0, 100, 0, 100, 0], stepSec: 3600 });
+      assert.ok(seriesKeys.includes('battery_discharge_w'), 'getCycles should query battery_discharge_w');
+      const startMs = Date.parse(start);
+      const rows = [];
+      // 4 hourly slots, 5 kWh discharged + 5 kWh charged each (5000 W × 3600 s).
+      for (let i = 0; i < 4; i++) {
+        const ts = new Date(startMs + i * 3600 * 1000).toISOString();
+        rows.push({ key: 'battery_discharge_w', ts, value: 5000, unit: 'W', resolution: 3600 });
+        rows.push({ key: 'battery_charge_w', ts, value: 5000, unit: 'W', resolution: 3600 });
+      }
+      return rows;
     };
     const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
     const r = await ctx.historyVizApi.getCycles({ view: 'week', date: ANCHOR_DATE });
@@ -1494,29 +1527,28 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.equal(b.card, 'cycles');
     assert.ok(Array.isArray(b.perDow) && b.perDow.length === 7, `perDow should be 7 entries, got ${b.perDow?.length}`);
     const totalCycles = b.perDow.reduce((s, d) => s + d.cycles, 0);
-    assert.ok(Math.abs(totalCycles - 2.0) < 0.001, `cumulative cycles should be 2.0, got ${totalCycles}`);
-    assert.ok(b.totals && Math.abs(b.totals.cycles - 2.0) < 0.001, `totals.cycles should be 2.0, got ${b.totals?.cycles}`);
+    assert.ok(Math.abs(totalCycles - 2.0) < 0.01, `cumulative cycles should be 2.0, got ${totalCycles}`);
+    assert.ok(b.totals && Math.abs(b.totals.cycles - 2.0) < 0.01, `totals.cycles should be 2.0, got ${b.totals?.cycles}`);
+    assert.ok(Math.abs(b.totals.dischargedKwh - 20) < 0.1, `dischargedKwh should be 20, got ${b.totals?.dischargedKwh}`);
   });
 
-  it('Test W4-7 (Cycles dow distribution): cycles only on Wednesday → perDow[2] > 0, perDow[0] === 0', async () => {
+  it('Test W4-7 (Cycles dow distribution): discharge only on Wednesday → perDow[2] > 0, perDow[0] === 0', async () => {
     // ANCHOR_DATE 2026-05-14 is a Thursday; the rolling-week window starting
     // 6 days earlier covers Fri 05-08 .. Thu 05-14. 2026-05-13 is a Wednesday.
-    // Put SOC swings ONLY on 2026-05-13; all other days get a flat SOC.
+    // Emit battery_discharge_w energy ONLY on 2026-05-13; no rows elsewhere.
     const querySeries = async ({ seriesKeys, start, end }) => {
+      if (!seriesKeys.includes('battery_discharge_w')) return [];
       const rows = [];
       const startMs = Date.parse(start);
       const endMs = Date.parse(end);
       for (let t = startMs; t < endMs; t += 3600 * 1000) {
         const d = new Date(t);
-        const dateKey = d.toISOString().slice(0, 10);
-        // Wednesday 2026-05-13 → alternating 0/100; everything else flat 50.
-        const isWed = dateKey === '2026-05-13';
-        const hr = d.getUTCHours();
+        if (d.toISOString().slice(0, 10) !== '2026-05-13') continue;
         rows.push({
-          key: 'battery_soc_pct',
+          key: 'battery_discharge_w',
           ts: d.toISOString(),
-          value: isWed ? (hr % 2 === 0 ? 0 : 100) : 50,
-          unit: '%',
+          value: 4000,
+          unit: 'W',
           resolution: 3600,
         });
       }
