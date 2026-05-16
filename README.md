@@ -13,53 +13,54 @@
 
 <p align="center">
   <strong>Hack the Grid</strong><br/>
-  The unofficial DV interface — Direct Marketing Interface for Victron
+  Direktvermarktungs-Schnittstelle &amp; Home Energy Management System für Victron ESS
 </p>
 
-> **Digitale Direktvermarktungsschnittstelle** auf Basis der PLEXLOG Modbus-Register,
-> zugeschnitten auf Victron ESS-Systeme mit LUOX Energy (ehem. Lumenaza) als Direktvermarkter.
+> **DVhub** ist ein Energie-Management-System auf Basis der PLEXLOG-Modbus-Register,
+> zugeschnitten auf Victron-ESS-Systeme. Es bildet die Direktvermarktungs-Schnittstelle
+> in Software nach und erweitert sie um Prognose, Optimierung, Telemetrie-Historie
+> und ein Familien-Dashboard — getestet mit LUOX Energy (ehem. Lumenaza) als Direktvermarkter.
 
 | | |
 |---|---|
-| **Status** | `main` -- Version 0.4.1 |
-| **Getestet mit** | LUOX Energy, Victron Ekrano-GX, Fronius AC-PV |
-| **Lizenz** | Energy Community License (ECL-1.0) |
-
-<p align="center">
-  <a href="assets/screenshots/dashboard-live-full-2026-03-24.png"><img src="assets/screenshots/dashboard-live-full-2026-03-24.png" alt="DVhub Leitstand v0.4.0" width="880" /></a>
-</p>
-<p align="center">
-  <a href="assets/screenshots/history-day-2026-03-24-full.png"><img src="assets/screenshots/history-day-2026-03-24-full.png" alt="DVhub Historie Tag 24.03.2026" width="440" /></a>
-  <a href="assets/screenshots/settings-control-2026-03-24.png"><img src="assets/screenshots/settings-control-2026-03-24.png" alt="DVhub Einstellungen Steuerung" width="440" /></a>
-</p>
+| **Status** | `v1.0-dev` — Version 0.8.0 |
+| **Getestet mit** | LUOX Energy, Victron Ekrano-GX / Cerbo-GX, Fronius AC-PV |
+| **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
+| **Drittlizenzen** | [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) |
 
 ---
 
 ## Kurzüberblick
 
-DVhub ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle. Die Modbus-Kommunikation
-des Direktvermarkters wird in Software nachgebildet, während die Live-Daten direkt vom Victron-GX-System kommen.
+DVhub ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle: Die
+Modbus-Kommunikation des Direktvermarkters wird in Software nachgebildet, während
+die Live-Daten direkt vom Victron-GX-System kommen. Darüber hinaus ist DVhub zu
+einem vollwertigen Home Energy Management System (HEMS) ausgebaut.
 
 - **DV-Schnittstelle und Web-Leitstand** in einer Anwendung
 - **Dashboard** mit Energy-Flow-Visualisierung, Live-Werten, Day-Ahead-Preisen und Steuerung
-- **Historie** mit 5 Finanz-Karten (Energiekosten, Einnahmen, Cashflow, Vermiedene Kosten, Gesamtbilanz)
 - **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen
+- **Prognose-Engine** — PV-Ertrag (pvlib), Lastvorhersage und Multi-Modell-Ensemble
+- **Optimierung** — interner MILP-/Heuristik-Optimizer und Akkudoktor-EOS-Anbindung
+- **ML & Edge-KI** — selbstlernende Prognose-Korrektur und optionales lokales LLM-Dashboard
+- **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
+- **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Screensaver
+- **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, MQTT und TeslaMate
 - **DVhub Price API** (api.dvhub.de) als zentraler Preisfeed für alle 44 EPEX-Preiszonen
-- **Setup** — Victron-Anlage verbinden mit einem Klick
-- **Einstellungen** mit 4-Tab-Layout, kompakten Group-Cards und Sticky-Save-Bar
-- **Victron-Anbindung per Modbus TCP oder MQTT**
-- **PostgreSQL-Telemetrie** mit Rollups, Preis-Backfill und optionalem VRM-Nachimport
-- **Integrationsplattform** für EOS, EMHASS, Home Assistant und Loxone
+- **VPN-Manager** für OpenVPN-/WireGuard-/IPsec-Tunnel zum Direktvermarkter
 
 ## Inhaltsverzeichnis
 
 - [Schnellstart](#schnellstart)
 - [Was DVhub kann](#was-dvhub-kann)
 - [Oberflächen](#oberflächen)
+- [Prognose, Optimierung &amp; KI](#prognose-optimierung--ki)
 - [Integrationen](#integrationen)
+- [DVhub Price API](#dvhub-price-api)
 - [Direktvermarktung kompakt](#direktvermarktung-kompakt)
 - [Installation im Detail](#installation-im-detail)
 - [API und Konfiguration](#api-und-konfiguration)
+- [Changelog](#changelog)
 - [Lizenz](#lizenz)
 
 ---
@@ -82,25 +83,36 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 
 Der Installer:
 
-- installiert Node.js und PostgreSQL
+- installiert Node.js 22, PostgreSQL und die VPN-Pakete (OpenVPN, WireGuard, strongSwan)
 - legt PostgreSQL-User und Datenbank `dvhub` an (Peer-Auth via Unix-Socket)
-- klont das Repo nach `/opt/dvhub`
-- nutzt die App unter `/opt/dvhub/dvhub`
-- migriert alte Installationen aus `/opt/dvhub/dv-control-webapp`
-- richtet einen systemd-Service ein
-- nutzt eine externe Config-Datei unter `/etc/dvhub/config.json`
+- klont das Repo nach `/opt/dvhub` und betreibt die App unter `/opt/dvhub/dvhub`
+- richtet einen systemd-Service ein und nutzt eine externe Config unter `/etc/dvhub/config.json`
+- installiert je nach verfügbarem RAM zusätzliche Prognose-/KI-Komponenten (siehe **Leistungsstufen**)
 - aktiviert Health-Checks und optionalen Restart aus der GUI
-- startet `dvhub.service` nach dem Update automatisch neu
 - **Stable-Channel** (Standard): checkt den neuesten Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
 - Update-Channel ist über die Tools-Seite umschaltbar
 
 Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten Aufruf automatisch den Setup-Assistenten.
 
+### Leistungsstufen (RAM-Tiers)
+
+DVhub skaliert mit der verfügbaren Hardware. Der Installer erkennt den RAM und
+installiert nur die Komponenten, die das System tragen kann:
+
+| Stufe | RAM | Zusätzliche Funktionen |
+|-------|-----|------------------------|
+| **Tier 1** | < 2 GB | Kern-DV, Steuerung, Telemetrie, Börsenautomatik, Prognose-Grunddaten |
+| **Tier 2** | ≥ 2 GB | + ML-Pakete (scikit-learn, LightGBM, statsforecast) für selbstlernende Prognose-Korrektur |
+| **Tier 3** | ≥ 3 GB | + Akkudoktor-EOS als externer Optimizer-Dienst |
+| **Tier 3+** | ≥ 8 GB | + Ollama mit TinyLlama für das lokale LLM-Dashboard |
+
 ### Erster Aufruf
 
 - Dashboard: `http://<host>:8080/`
 - Historie: `http://<host>:8080/history.html`
+- Familien-Dashboard: `http://<host>:8080/family.html`
+- Integrationen: `http://<host>:8080/integrations.html`
 - Einstellungen: `http://<host>:8080/settings.html`
 - Setup: `http://<host>:8080/setup.html`
 - Tools: `http://<host>:8080/tools.html`
@@ -109,7 +121,7 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 
 ## Was DVhub kann
 
-### Kernfunktionen
+### Kernfunktionen (Direktvermarktung &amp; Steuerung)
 
 - **DV-Modbus-Server** auf Standard-Port `1502` mit FC3/FC4 Read und FC6/FC16 Write
 - **DV-Signalerkennung** inklusive Lease-Logik und sicherer Rückkehr in Freigabe
@@ -117,89 +129,134 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 - **Negativpreis-Schutz** mit automatischer Reaktion auf EPEX-Preise
 - **Day-Ahead-Preis-Engine** mit Heute-/Morgen-Daten, Hover-Details und Chart-Auswahl
 - **Zentraler Preisfeed** über api.dvhub.de mit allen 44 EPEX Day-Ahead Bidding Zones
-- **Dynamischer Preiszonen-Selektor** in Einstellungen und Setup mit Live-Abdeckungsinfo
 - **Schedule-System** mit Defaults, manuellen Writes und Chart-zu-Schedule-Auswahl
-- **Kosten- und Preislogik** für Netz, PV und Akku über `userEnergyPricing`
-- **Datumsbasierte Bezugspreise** über `userEnergyPricing.periods`
-- **Paragraph 14a Modul 3** mit konfigurierbaren Preisfenstern
-- **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen mit energiebasierter Slot-Allokation und dynamischem SOC-Floor (Sonnenaufgang-basiert)
-- **PostgreSQL-Telemetrie** mit Persistenz, Rollups, historischem Nachimport und History-Analyse
-- **Modulare Architektur** mit 8 Factory-Modulen und DI Context Pattern
+- **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen mit
+  energiebasierter Slot-Allokation und dynamischem SOC-Floor (Sonnenaufgang-basiert)
+- **Kosten- und Preislogik** für Netz, PV und Akku über `userEnergyPricing`,
+  inkl. datumsbasierter Bezugspreise und Paragraph 14a Modul 3
+
+### Prognose, Optimierung &amp; KI
+
+- **PV-Ertragsprognose** über pvlib mit standort- und anlagenspezifischen Parametern
+- **Lastvorhersage** über statistische Modelle (statsforecast) und LightGBM
+- **Multi-Modell-Ensemble** mit Nebel-Korrektur und gemessener Prognosegüte
+- **ML-Korrektur** — selbstlernende Korrektur systematischer Prognosefehler mit
+  atomarem Modell-Swap und Schema-Guard
+- **Interner Optimizer** — MILP-Batterieoptimierung (HiGHS-Solver) und Heuristik
+- **EOS-Anbindung** — Akkudoktor-EOS als externer Optimizer mit Confidence-Gate
+- **Edge-LLM** (optional) — lokales TinyLlama via Ollama erzeugt natürlichsprachige
+  Erläuterungen für Dashboard-Kacheln, mit Template-Fallback ohne LLM
+
+### Daten, Historie &amp; Observability
+
+- **PostgreSQL-Telemetrie** mit Persistenz, Rollups, historischem Nachimport und Retention
+- **TimescaleDB** optional zuschaltbar (Continuous Aggregates &amp; Retention statt App-Rollups)
+- **History-Visualisierung** mit 14 Analyse-Karten und CSV-/Parquet-Export
+- **Prometheus-Metriken** unter `/api/metrics` (prom-client)
+- **VRM-History-Import** zum Nachfüllen von Telemetrie-Lücken
 
 ### Betriebsmodell
 
 - **Modbus TCP oder MQTT** als Victron-Transport
 - **Externe Konfiguration** statt fest eingebauter Runtime-Dateien
-- **systemd-ready** für dauerhaften Betrieb
-- **Health-/Service-Status** direkt in Einstellungen und Tools
+- **Hersteller-Adapter** entkoppeln gerätespezifische Register/Endpunkte vom Kern
+- **systemd-ready** für dauerhaften Betrieb, Health-/Service-Status in GUI und Tools
+- **Modulare Architektur** mit Factory-Modulen, Service-Layer und DI-Context-Pattern
 
 ---
 
 ## Oberflächen
 
-### Dashboard
+Alle Oberflächen sind auf das **Aurora Design System** portiert — card-basiertes
+Layout, einheitliche Tokens, responsiv bis 430px Viewport.
 
-Das Dashboard bündelt die laufenden Betriebsdaten:
+### Dashboard (Leitstand)
 
-- DV-Schaltstatus
-- Börsenpreis mit Negativpreis-Schutz
-- Netzleistung pro Phase
-- Victron-Zusatzwerte wie SOC, Akku-Leistung und PV
-- Kostenübersicht für den aktuellen Tag
+- DV-Schaltstatus und Börsenpreis mit Negativpreis-Schutz
+- Energy-Flow-Visualisierung, Netzleistung pro Phase, Victron-Werte (SOC, Akku, PV)
 - Day-Ahead-Chart mit Hover, Highlight und Schedule-Auswahl
-- Kleine Börsenautomatik mit Planungsanzeige, Chart-Highlighting und Statusübersicht
+- Kleine Börsenautomatik mit Planungsanzeige und Chart-Highlighting
 - Steuerung mit aktiven Werten, Defaults und manuellen Writes
+- Prognose-Kacheln, optional mit LLM-erzeugter Erläuterung
 - letzte Events aus dem Systemlog
-
-### Einstellungen
-
-Die Einstellungsseite ist in kompakte Arbeitsbereiche gegliedert:
-
-- Schnellstart
-- Anlage verbinden
-- Steuerung
-- Preise & Daten
-- Erweitert
-
-Dazu kommen Import/Export, Health-Checks, Service-Status und optional ein Restart-Button.
-Die EPEX-Preiszone wird über einen dynamischen Selektor gewählt, der die verfügbaren Zonen samt Abdeckung direkt von der DVhub Price API lädt.
-
-### Setup
-
-Der First-Run-Setup-Assistent führt Schritt für Schritt durch:
-
-- Alle Felder sind mit sinnvollen Defaults vorbelegt — nur die Victron-IP muss eingegeben werden
-- HTTP-Port und API-Token
-- Victron-Verbindung per Modbus oder MQTT mit automatischer Systemerkennung
-- Meter- und DV-Basiswerte
-- EPEX-Grunddaten mit dynamischem Preiszonen-Selektor
-- Review-Schritt mit Validierung vor dem Speichern
-- Nach dem Speichern wird direkt zum Leitstand weitergeleitet
-
-### Tools / Wartung
-
-Die Wartungsseite enthält:
-
-- **DV-Schaltsignal-Log** mit Filterfunktion (Schaltbefehle, Modbus/Setpoint-Writes, Victron-Writes, Börsenautomatik)
-- Modbus Register Scan
-- Schedule JSON Bearbeitung
-- Health-/Service-Status
-- Config Import/Export
-- VRM History-Import für Telemetrie-Nachfüllung
-- API-Dokumentation (Swagger UI)
 
 ### Historie
 
-Die History-Seite bündelt die PostgreSQL-Telemetrie zu einer eigenen Analyseansicht:
+PostgreSQL-Telemetrie als eigene Analyseansicht:
 
 - Tag-, Wochen-, Monats- und Jahresansicht
-- Bezug, Einspeisung, Kosten, Erlöse und Netto je Zeitraum
+- Finanz-Karten: Energiekosten, Einnahmen, Cashflow, vermiedene Kosten, Gesamtbilanz
 - Preisvergleich zwischen historischem Marktpreis und eigenem Bezugspreis
-- Preisliste und Aggregat-Preishinweis in der Tagesansicht
-- Solar-Zusammenfassung mit Jahres-Marktwert in der Jahresansicht
-- Energie-Balkendiagramme in Wochen-/Monats-/Jahresansicht
-- Kennzeichnung unvollständiger Slots bei fehlenden Marktpreisen oder Tarifzeiträumen
-- gezielter Preis-Backfill nur für Telemetrie-Buckets ohne historischen Marktpreis
+- Solar-Zusammenfassung mit Jahres-Marktwert
+- **14 Visualisierungs-Karten**: u. a. Heatmap, Sankey-Energiefluss, Autarkie-Kalender,
+  Tagesprofil, Lastdauerlinie, Ladezyklen, Streudiagramm, Preis-Heatmap, Jahres-Ring
+- gezielter Preis-Backfill für Buckets ohne historischen Marktpreis
+- CSV- und Parquet-Export der Rohdaten
+
+### Familien-Dashboard
+
+Eine bewusst vereinfachte Haushaltsansicht (`family.html`):
+
+- gut lesbare Übersicht von Verbrauch, PV, Akku und Autarkie
+- Screensaver-Modus für dauerhaft laufende Displays
+- Prognose-Anzeige mit Badge bei eingeschränkter Datenlage
+
+### Integrationen
+
+Eigene Seite (`integrations.html`) für alle externen Anbindungen — Status,
+Health und Konfiguration von Home Assistant, Loxone, EOS, EMHASS, MQTT und TeslaMate
+inkl. MQTT-Inspector.
+
+### Einstellungen
+
+Sechs Tabs decken die Konfiguration ab: **Anlage** (Victron-Verbindung),
+**Steuerung**, **Preise**, **Status** (Health, Service, Config Import/Export),
+**ML &amp; AI** und **VPN**. Die EPEX-Preiszone wird über einen dynamischen
+Selektor gewählt, der verfügbare Zonen samt Abdeckung von der DVhub Price API lädt.
+
+### Setup
+
+Der First-Run-Assistent führt Schritt für Schritt durch Port/Token, Victron-Verbindung
+(Modbus oder MQTT mit automatischer Systemerkennung), Meter-/DV-Basiswerte und
+EPEX-Grunddaten — alle Felder sind mit sinnvollen Defaults vorbelegt.
+
+### Tools / Wartung
+
+- **DV-Schaltsignal-Log** mit Filterfunktion
+- Modbus Register Scan, Schedule-JSON-Bearbeitung
+- Health-/Service-Status, Config Import/Export
+- VRM History-Import, Update-Channel-Umschaltung, System-Updates/Reboot
+- VPN-Manager (Tunnel-Status, Config-Upload, Restart, Verlauf)
+- API-Dokumentation (Swagger UI unter `api-docs.html`) und Daten-Explorer
+
+---
+
+## Prognose, Optimierung &amp; KI
+
+DVhub trifft Lade-/Entladeentscheidungen nicht nur reaktiv, sondern vorausschauend.
+
+1. **Prognose** — Für PV-Ertrag wird pvlib mit Standort, Modulausrichtung und
+   Anlagenparametern gerechnet; die Hauslast wird über statistische Modelle und
+   LightGBM vorhergesagt. Ein Ensemble kombiniert die Modelle, eine Nebel-Korrektur
+   dämpft typische Schönwetter-Überschätzungen. Jede Prognose wird als Snapshot
+   gespeichert und gegen die tatsächlichen Messwerte ausgewertet (Accuracy-Tracking).
+
+2. **ML-Korrektur** — Aus dem gemessenen Prognosefehler lernt DVhub fortlaufend
+   ein Korrekturmodell (LightGBM). Modelle werden im Hintergrund neu trainiert und
+   atomar getauscht; ein Schema-Guard verhindert das Laden inkompatibler Modelle.
+
+3. **Optimierung** — Ein interner Optimizer plant das Batterie-Lade-/Entladeprofil
+   gegen die Day-Ahead-Preise: als MILP (HiGHS-Solver) oder als schnelle Heuristik.
+   Alternativ kann **Akkudoktor-EOS** als externer Optimizer-Dienst eingebunden
+   werden. Ein Confidence-Gate verwirft Optimierungsergebnisse, wenn die zugrunde
+   liegende Prognose zu unsicher ist.
+
+4. **Edge-LLM (optional, Tier 3+)** — Ein lokal über Ollama betriebenes TinyLlama
+   formuliert Dashboard-Kacheln in verständliche Sprache. Ohne LLM greift ein
+   deterministischer Template-Fallback — die Funktion ist nie blockierend.
+
+Die KI-Komponenten sind hardware-abhängig zuschaltbar (siehe [Leistungsstufen](#leistungsstufen-ram-tiers))
+und laufen vollständig lokal.
 
 ---
 
@@ -207,14 +264,19 @@ Die History-Seite bündelt die PostgreSQL-Telemetrie zu einer eigenen Analyseans
 
 DVhub stellt Daten bereit oder nimmt Optimierungsergebnisse entgegen für:
 
-- **Home Assistant**
-- **Loxone**
-- **EOS (Akkudoktor)**
-- **EMHASS**
+- **Home Assistant** — JSON-Endpunkt und MQTT-Auto-Discovery
+- **Loxone** — Textformat-Endpunkt
+- **EOS (Akkudoktor)** — Messwerte/Preise raus, Optimierung rein
+- **EMHASS** — Messwerte/Preisarrays raus, Optimierung rein
+- **MQTT** — eingebauter Broker (aedes) und Publisher
+- **TeslaMate** — Einbindung von Fahrzeug-/Ladedaten
 
-Zusätzlich kann DVhub historische Daten per **VRM** nachladen, wenn neue Installationen ältere Werte auffüllen sollen oder Lücken entstanden sind.
+Zusätzlich kann DVhub historische Daten per **VRM** nachladen, um Lücken in der
+Telemetrie zu füllen. Für Marktpreise nutzt DVhub den zentralen **DVhub Price Feed**
+(api.dvhub.de) mit Fallback auf Energy Charts.
 
-Für Marktpreise nutzt DVhub den zentralen **DVhub Price Feed** (api.dvhub.de) mit Fallback auf Energy Charts.
+**Benachrichtigungen** über Telegram und Pushover informieren über Schaltvorgänge
+und Systemereignisse.
 
 ---
 
@@ -256,15 +318,21 @@ Der Direktvermarkter kann so Einspeisung bewerten, regeln und wirtschaftlich ste
 
 ### Warum DVhub statt Plexlog?
 
-Der physische Plexlog kann Live-Daten liefern, aber die Steuerung moderner Victron-Setups ist in der Praxis oft unflexibel oder nicht vollständig nutzbar. DVhub liest die Daten direkt vom GX-Gerät und beantwortet die PLEXLOG-kompatiblen Modbus-Anfragen in Software.
+Der physische Plexlog kann Live-Daten liefern, aber die Steuerung moderner
+Victron-Setups ist in der Praxis oft unflexibel oder nicht vollständig nutzbar.
+DVhub liest die Daten direkt vom GX-Gerät und beantwortet die PLEXLOG-kompatiblen
+Modbus-Anfragen in Software.
 
 ### Wer braucht das?
 
-Nach dem Solarspitzengesetz benötigen PV-Anlagen ab **25 kWp** typischerweise eine DV-Schnittstelle für die Direktvermarktung. Kleinere Anlagen können freiwillig teilnehmen.
+Nach dem Solarspitzengesetz benötigen PV-Anlagen ab **25 kWp** typischerweise eine
+DV-Schnittstelle für die Direktvermarktung. Kleinere Anlagen können freiwillig teilnehmen.
 
 ### Warum ist das auch unter 30 kWp interessant?
 
-Mit der diskutierten **Pauschaloption / MiSpeL** wird Direktvermarktung auch für kleinere Anlagen mit Speicher attraktiver, weil Speicher flexibler aus PV und Netz geladen werden dürfen und die Vermarktung wirtschaftlich interessanter wird.
+Mit der diskutierten **Pauschaloption / MiSpeL** wird Direktvermarktung auch für
+kleinere Anlagen mit Speicher attraktiver, weil Speicher flexibler aus PV und Netz
+geladen werden dürfen und die Vermarktung wirtschaftlich interessanter wird.
 
 ### MiSpeL-Status
 
@@ -287,10 +355,11 @@ Stand **März 2026**:
 Für LUOX brauchst du in der Praxis:
 
 1. Meldung, dass eine PLEXLOG-kompatible DV-Schnittstelle vorhanden ist
-2. OpenVPN-Tunnel zu LUOX
+2. VPN-Tunnel zu LUOX (OpenVPN, WireGuard oder IPsec — verwaltbar im VPN-Manager)
 3. Portforwarding von Port `502` aus dem Tunnel auf Port `1502` von DVhub
 
-**Unifi-Hinweis:** Falls die GUI das Tunnel-Portforwarding nicht sauber abbildet, hilft das Skript [`20-dv-modbus.sh`](20-dv-modbus.sh) für die iptables-Regeln.
+**Unifi-Hinweis:** Falls die GUI das Tunnel-Portforwarding nicht sauber abbildet,
+hilft das Skript [`20-dv-modbus.sh`](20-dv-modbus.sh) für die iptables-Regeln.
 
 ---
 
@@ -298,18 +367,19 @@ Für LUOX brauchst du in der Praxis:
 
 ### Voraussetzungen
 
+- Debian/Ubuntu mit `apt-get`
 - Node.js 22+
 - PostgreSQL 14+ (für Telemetrie)
 - Victron GX-Gerät im lokalen Netz
+- optional: Python 3.11+ (Prognose/ML — vom Installer eingerichtet)
 
 ### Manuelle Installation
 
 ```bash
 sudo apt update
-sudo apt install -y curl ca-certificates git postgresql
+sudo apt install -y curl ca-certificates git postgresql openvpn wireguard-tools strongswan
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
-sudo apt install -y tcpdump jq
 sudo mkdir -p /opt/dvhub /etc/dvhub /var/lib/dvhub
 sudo useradd -r -s /usr/sbin/nologin dvhub
 sudo git clone https://github.com/chloepriceless/dvhub.git /opt/dvhub
@@ -327,14 +397,13 @@ sudo cp hersteller/victron.json /etc/dvhub/hersteller/victron.json
 sudo nano /etc/dvhub/config.json
 ```
 
-Technische Victron-Werte wie Register, Port, Unit-ID oder Timeout werden nicht mehr in `/etc/dvhub/config.json` gepflegt.
-Diese Werte liegen im Herstellerprofil unter `/etc/dvhub/hersteller/victron.json`.
+Technische Victron-Werte wie Register, Port, Unit-ID oder Timeout werden nicht in
+`/etc/dvhub/config.json` gepflegt, sondern im Herstellerprofil unter
+`/etc/dvhub/hersteller/victron.json`.
 
-Nur bei MQTT-Nutzung zusätzlich:
-
-```bash
-npm install mqtt
-```
+Prognose-/ML-Funktionen benötigen zusätzlich eine Python-Umgebung
+(`dvhub/python/requirements.txt`); der Installer richtet diese je nach
+[Leistungsstufe](#leistungsstufen-ram-tiers) automatisch ein.
 
 ### systemd Service
 
@@ -395,19 +464,30 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 
 ### Wichtige API-Endpunkte
 
+**Status &amp; DV:**
+
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | `GET` | `/dv/control-value` | DV Status: `0` = Abregelung, `1` = Einspeisung erlaubt |
 | `GET` | `/api/status` | Vollständiger Systemstatus |
 | `GET` | `/api/costs` | Tages-Kostenübersicht |
-| `GET` | `/api/log` | Letzte 300 Event-Log Einträge |
-| `GET` | `/api/config` | Aktuelle Konfiguration |
-| `POST` | `/api/config` | Konfiguration aktualisieren |
+| `GET` | `/api/log` | Event-Log (`?limit=`) |
+| `GET` | `/api/log/dv-signals` | DV-Schaltsignal-Log |
+| `GET` | `/api/metrics` | Prometheus-Metriken |
+
+**Konfiguration &amp; Admin:**
+
+| Methode | Pfad | Beschreibung |
+|---------|------|--------------|
+| `GET` `POST` | `/api/config` | Konfiguration lesen/aktualisieren |
 | `POST` | `/api/config/import` | Config aus JSON importieren |
-| `GET` | `/api/config/export` | Config als JSON exportieren |
 | `GET` | `/api/admin/health` | Health-Check Status |
 | `POST` | `/api/admin/service/restart` | systemd-Service neu starten |
-| `GET` | `/api/discovery/systems` | Netzwerk-Systemerkennung |
+| `GET` | `/api/admin/system/info` | Systeminformationen |
+| `POST` | `/api/admin/system/reboot` | System neu starten |
+| `GET` `POST` | `/api/admin/update/channel` | Update-Channel lesen/setzen |
+| `GET` `POST` | `/api/admin/update/check`, `/api/admin/update/apply` | App-Update prüfen/anwenden |
+| `GET` `POST` | `/api/admin/system/updates/check`, `.../apply` | System-Updates |
 
 **EPEX / Preise:**
 
@@ -418,7 +498,7 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 | `GET` | `/api/epex/gaps?zone=DE-LU` | Fehlende Preisdaten für Zone |
 | `POST` | `/api/epex/backfill` | Backfill fehlender Preise anstoßen |
 
-**History / Telemetrie:**
+**History / Telemetrie / Visualisierung:**
 
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
@@ -427,6 +507,19 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 | `GET` | `/api/history/import/status` | Import-Status |
 | `POST` | `/api/history/backfill/vrm` | VRM Full/Gap-Backfill |
 | `POST` | `/api/history/backfill/prices` | Preis-Backfill via Energy Charts |
+| `GET` | `/api/history/viz/{heatmap,sankey,ring,...}` | Visualisierungs-Karten (14 Endpunkte) |
+| `GET` | `/api/history/raw/export.csv`, `.../export.parquet` | Rohdaten-Export |
+| `GET` | `/api/telemetry/series?keys=...&start=...` | Telemetrie-Zeitreihen |
+
+**Prognose / Optimierung / KI:**
+
+| Methode | Pfad | Beschreibung |
+|---------|------|--------------|
+| `GET` | `/api/forecast` | Aktuelle PV-/Last-Prognose |
+| `GET` | `/api/ml/status` | ML-Modell-Status |
+| `GET` | `/api/ml/accuracy` | Prognosegüte / Accuracy-Tracking |
+| `GET` | `/api/optimizer/runs/latest` | Letzter Optimizer-Lauf |
+| `GET` | `/api/llm/models` | Verfügbare LLM-Modelle |
 
 **Schedule / Steuerung:**
 
@@ -435,34 +528,31 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 | `GET` | `/api/schedule` | Aktuelle Schedule-Regeln und Config |
 | `POST` | `/api/schedule/rules` | Schedule-Regeln aktualisieren |
 | `POST` | `/api/schedule/config` | Default-Werte aktualisieren |
-| `GET` | `/api/schedule/automation/config` | Kleine Börsenautomatik Config |
-| `POST` | `/api/schedule/automation/config` | Kleine Börsenautomatik anpassen |
+| `GET` `POST` | `/api/schedule/automation/config` | Kleine Börsenautomatik |
+| `POST` | `/api/schedule/automation/replan` | Neuplanung der Börsenautomatik anstoßen |
 | `POST` | `/api/control/write` | Manueller Write (gridSetpoint, chargeCurrent, minSoc) |
 
-**Modbus Scan:**
+**Integrationen / MQTT / VPN:**
 
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
-| `GET` | `/api/meter/scan` | Scan-Ergebnisse abrufen |
-| `POST` | `/api/meter/scan` | Modbus Register-Scan starten |
-
-**Integrationen:**
-
-| Methode | Pfad | Beschreibung |
-|---------|------|--------------|
+| `GET` | `/api/integrations/status`, `/api/integrations/health` | Integrations-Übersicht |
 | `GET` | `/api/integration/home-assistant` | Home Assistant JSON |
 | `GET` | `/api/integration/loxone` | Loxone Textformat |
-| `GET` | `/api/integration/eos` | EOS Messwerte + EPEX-Preise |
-| `POST` | `/api/integration/eos/apply` | EOS Optimierung anwenden |
-| `GET` | `/api/integration/emhass` | EMHASS Messwerte + Preisarrays |
-| `POST` | `/api/integration/emhass/apply` | EMHASS Optimierung anwenden |
+| `GET` `POST` | `/api/integration/eos`, `.../eos/apply` | EOS Messwerte / Optimierung anwenden |
+| `GET` `POST` | `/api/integration/emhass`, `.../emhass/apply` | EMHASS Messwerte / Optimierung anwenden |
+| `GET` | `/api/vpn/status`, `/api/vpn/config`, `/api/vpn/history` | VPN-Manager |
+| `POST` | `/api/vpn/config/upload`, `/api/vpn/restart` | VPN-Config hochladen / Tunnel neu starten |
 
-**Keepalive:**
+**Discovery / Modbus:**
 
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
-| `GET` | `/api/keepalive/modbus` | Letzte Modbus-Abfrage |
-| `GET` | `/api/keepalive/pulse` | 60s Uptime-Pulse |
+| `GET` | `/api/discovery/systems` | Netzwerk-Systemerkennung |
+| `GET` `POST` | `/api/meter/scan` | Modbus Register-Scan |
+
+> Die vollständige, immer aktuelle Endpunkt-Referenz steht als Swagger UI unter
+> `api-docs.html` zur Verfügung.
 
 ### Wichtige Config-Sektionen
 
@@ -471,9 +561,11 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 | `manufacturer` | Aktives Herstellerprofil, aktuell `victron` |
 | `victron` | Anlagenadresse, Transport (Modbus/MQTT) |
 | `schedule` | Zeitplan-Regeln, Defaults und Kleine Börsenautomatik (`smallMarketAutomation`) |
-| `epex` | Preiszone (`bzn`), Zeitzone, Price API URL |
-| `telemetry` | PostgreSQL-Verbindung, Rollups, Retention, VRM-History-Import |
-| `userEnergyPricing` | Preislogik für Netz, PV und Akku, Perioden, Marktwerte, Paragraph 14a |
+| `userEnergyPricing` | Preislogik (fix/dynamisch), Tarif-Perioden, Paragraph 14a Modul 3 |
+| `epex` | EPEX aktiviert, Preiszone (`bzn`), Zeitzone |
+| `telemetry` | PostgreSQL-Verbindung, optional TimescaleDB, Raw-Retention, VRM-History-Import |
+| `optimizer` | Optimizer-Konfiguration (intern/EOS) |
+| `vpn` | VPN-Tunnel — Protokoll, Auto-Connect, Watchdog |
 | `dvControl` | DV-Steuerung und Negativpreis-Schutz |
 | `scan` | Modbus Scan-Parameter |
 
@@ -483,207 +575,112 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 |-------|-------|
 | `/etc/dvhub/hersteller/victron.json` | Victron-spezifische Kommunikations- und Registerwerte |
 
-### Bezugspreise nach Zeitraum
-
-Unter `userEnergyPricing.periods` lassen sich mehrere Tarifzeiträume definieren:
-
-- Zeiträume sind tageweise und inklusive `startDate` bis `endDate`
-- Zeiträume dürfen sich nicht überschneiden
-- pro Zeitraum ist `fixed` oder `dynamic` möglich
-- wenn kein Zeitraum passt, greift die bestehende Legacy-Preislogik als Fallback
-
-### Marktwert- und Marktprämien-Modus
-
-Unter `userEnergyPricing` stehen für die History-Marktprämie zwei zusätzliche Felder bereit:
-
-- `marketValueMode`: `annual` für das bisherige Verhalten oder `monthly` für Monatsmarktwerte
-- `pvPlants`: Liste der PV-Anlagen mit `kwp` und `commissionedAt`
-
 ### Hinweise
 
 - Änderungen an Victron-Registern, Port, Unit-ID oder Timeout erfolgen nur in `/etc/dvhub/hersteller/victron.json`
-- Die normale `config.json` bleibt damit klein und enthält nur Betriebs- und Anlagenwerte
 - `dvControl.enabled` ist standardmäßig deaktiviert und muss aktiv gesetzt werden
 - `userEnergyPricing` erlaubt festen Endkundenpreis oder dynamische Preisbestandteile auf Basis von EPEX
+- `userEnergyPricing.periods` erlaubt mehrere, sich nicht überschneidende Tarifzeiträume (`fixed` oder `dynamic`)
 - im MQTT-Modus wird `victron.mqtt.portalId` benötigt; ohne eigenen Broker nutzt DVhub den GX-Host
-- `npm install mqtt` wird nur für MQTT-Betrieb benötigt
 - EPEX-Preise werden primär von api.dvhub.de geholt, Fallback auf Energy Charts direkt
+- TimescaleDB ist opt-in über `telemetry.database.timescaledb` und ersetzt dann App-Rollups/Retention
 
 ---
 
 ## Changelog
 
+### 0.8.0 (2026-05-15) — HEMS-Ausbau
+
+Großer Funktionssprung von der reinen DV-Schnittstelle zum Home Energy Management
+System. Verdichtete Übersicht der Arbeit seit 0.4.0:
+
+**Prognose-Engine:**
+
+- PV-Ertragsprognose über pvlib mit Standort-/Anlagenparametern
+- Lastvorhersage über statistische Modelle (statsforecast) und LightGBM
+- Multi-Modell-Ensemble, Nebel-Korrektur, Accuracy-Tracking und Forecast-Snapshots
+- optionale Cloud-Wetter-Provider als zusätzliche Eingangsdaten
+
+**Optimierung:**
+
+- interner MILP-Batterieoptimizer (HiGHS-Solver) und schnelle Heuristik
+- Anbindung von Akkudoktor-EOS als externer Optimizer-Dienst
+- Confidence-Gate verwirft Optimierungen bei zu unsicherer Prognose
+
+**ML &amp; Edge-KI:**
+
+- selbstlernende ML-Korrektur des Prognosefehlers mit atomarem Modell-Swap und Schema-Guard
+- Hintergrund-Retraining als Jobs, ML-Health-Überwachung
+- optionales lokales LLM (TinyLlama via Ollama) für natürlichsprachige Dashboard-Kacheln
+  mit deterministischem Template-Fallback und Spracherkennung
+- hardware-abhängige Leistungsstufen (RAM-Tiers) im Installer
+
+**Oberfläche &amp; Familien-Dashboard:**
+
+- vollständige Portierung aller Seiten auf das Aurora Design System
+- neues Familien-Dashboard mit Screensaver-Modus
+- History-Seite mit 14 Visualisierungs-Karten und CSV-/Parquet-Export
+- eigene Integrations-Seite inkl. MQTT-Inspector
+
+**Integrationen &amp; Betrieb:**
+
+- MQTT-Publisher mit Home-Assistant-Auto-Discovery, eingebauter Broker (aedes)
+- TeslaMate-Anbindung, Telegram-/Pushover-Benachrichtigungen
+- VPN-Manager für OpenVPN-/WireGuard-/IPsec-Tunnel
+- Hersteller-Adapter-Layer, Service-orientierte Architektur
+- Prometheus-Metriken unter `/api/metrics`
+- optionale TimescaleDB-Unterstützung (Continuous Aggregates &amp; Retention)
+- Multi-Schema-Telemetrie, Defence-in-Depth-Security-Hardening
+- `THIRD-PARTY-LICENSES.md` als Attributionsdatei ergänzt
+
+> Hinweis zur Versionierung: v1.0 ist für eine Veröffentlichung mit echtem
+> Nutzerkreis und Lizenzschlüssel-Mechanik reserviert; der aktuelle Stand wird
+> bewusst als 0.8 geführt.
+
 ### 0.4.0 (2026-03-24)
 
-**Responsive Dashboard (iPhone 15 Pro Max):**
+- Responsive Dashboard (iPhone-Viewport), Hamburger-Navigation ohne JS
+- PV-Export-Modus (nutzt `pvTotalW` statt nur DC-PV), Negativpreis-Pause
+- sinnvolle Defaults bei Erstinstallation, PV-Kopplungsauswahl (AC/DC/AC+DC)
+- Standort-Eingabe mit OpenStreetMap-Picker, MILP als Default-Engine
 
-- Hamburger-Navigation (CSS-only Checkbox-Hack, kein JS)
-- Flow-Diagramm skaliert auf 430px Viewport
-- Netzphasen-Detail unterhalb des Diagramms auf Mobile
-- Touch-optimierte Karten (44px Targets), kompakte Tabellen
-- Tier-Felder gestapelt (Label oben, Input darunter)
-- Keine horizontalen Scrollbars, keine versteckten Spalten
+### Ältere Versionen (0.3.x)
 
-**PV-Export-Modus (ehem. DC-Export-Modus):**
-
-- Umbenannt: DC-Export-Modus -> PV-Export-Modus
-- Nutzt jetzt pvTotalW (DC + AC) statt nur DC-PV fuer Grid Setpoint
-- Negativpreis-Schutz: Export pausiert automatisch bei EPEX < 0 ct/kWh
-- Bei Preis >= 0 wird sofort weiter exportiert
-
-**Dashboard-Verbesserungen:**
-
-- PV-Karte zeigt PV Gesamt als Hauptwert (DC-PV + AC-PV)
-- AC-PV-Wert wird aus Gesamtleistung und DC-PV berechnet
-- Tooltip-Icons (i) fuer alle Einstellungsfelder mit Help-Text
-
-**Einstellungen:**
-
-- Sinnvolle Defaults bei Erstinstallation (Strompreise, Batterie, Boersenautomatik)
-- PV-Kopplungsauswahl (AC/DC/AC+DC) mit Modbus-Endpunkt pro Hersteller
-- Standort-Eingabe mit OpenStreetMap-Picker (Koordinaten per Klick)
-- MILP als Default-Engine fuer Boersenautomatik
-
-### 0.3.10 (2026-03-22)
-
-**Update-Channel-System:**
-
-- Neuer Update-Channel: Stable (Release-Tags) oder Dev (Bleeding Edge main HEAD)
-- Channel wählbar über Tools-Seite oder Installer (`--channel dev`)
-- Stable folgt Git-Tags, Dev folgt origin/main — sauber umschaltbar
-- Installer schreibt `updateChannel` in die Config
-
-**PostgreSQL Auto-Schema:**
-
-- Datenbank-Tabellen werden beim ersten Start automatisch erstellt (CREATE TABLE IF NOT EXISTS)
-- Neue Installationen funktionieren ohne manuelle Schema-Migration
-- Installer installiert PostgreSQL, legt User/DB an und konfiguriert Peer-Auth via Unix-Socket
-
-**Bugfixes:**
-
-- Fix: startAutomaticMarketValueBackfill ruft getTelemetryBounds jetzt korrekt mit await auf
-- Fix: Unhandled Rejection bei leerer Datenbank behoben
-- Fix: Telemetrie-Init mit async Connectivity-Check und graceful Error-Handling
-
-### 0.3.9 (2026-03-21)
-
-**Schedule-gesteuerte DC-Einspeisung:**
-
-- feedExcessDcPv (Register 2707/2708) ist jetzt über Schedule-Regeln steuerbar
-- Default: EIN (Überschuss wird eingespeist), abschaltbar per Schedule-Regel oder manuell
-- Negativer Preisschutz und DV forcedOff überschreiben weiterhin (höchste Priorität)
-- Nach DV-Freigabe oder Lease-Ablauf wird der Schedule-Zustand respektiert statt blind einzuschalten
-- Neuer Default-Config-Wert: defaultFeedExcessDcPv (änderbar über Dashboard)
-- Dashboard zeigt DC-Einspeisungs-Status mit Quelle (Schedule/Default/DV/Negativpreis)
-
-**dcExportMode nur noch per Schedule:**
-
-- dcExportMode (dynamischer Grid Setpoint = -(PV - Buffer)) erfordert jetzt eine aktive Schedule-Regel
-- Statische Aktivierung über Config (enabled/priceThresholdCtKwh) entfernt
-- Verhindert unbeabsichtigte Batterie-Entladeblockade durch dauerhaften DC-Export
-- SOC-Guard bleibt aktiv (Batterie laden vor Abend-Peak)
-
-**applyDvVictronControl Fix:**
-
-- Register 2707 wird jetzt auch beim Einschalten (feedIn=true) aktiv geschrieben
-- Vorher wurde nur beim Abschalten geschrieben, Einschalten war ein No-Op
-
-### 0.3.6 (2026-03-18)
-
-**DVhub Price API:**
-
-- Zentraler Preisfeed unter api.dvhub.de für alle 44 EPEX Day-Ahead Bidding Zones
-- Historische Daten ab 2020, stündlich vor 01.10.2024, 15-Minuten danach
-- ENTSO-E Transparency Platform als Primärquelle, Energy Charts als Fallback
-- fetchEpexDay() nutzt primär api.dvhub.de mit automatischem Fallback auf Energy Charts
-- Neue Proxy-Endpunkte: `/api/epex/zones`, `/api/epex/gaps`, `/api/epex/backfill`
-- CORS-Support für DVhub-Instanzen
-- Swagger UI API-Dokumentation unter api.dvhub.de/docs
-- EPEX Spot Day-Ahead Live-Chart unter api.dvhub.de/spot und dvhub.de/spot
-- Backfill-API nur aus dem LAN erreichbar (POST /api/backfill)
-
-**Preiszonen-Selektor:**
-
-- Dynamischer Dropdown in Einstellungen und Setup-Wizard
-- Lädt verfügbare Zonen mit Abdeckungsinfo direkt von der Price API
-- Neuer Config-Typ `dynamicSelect` für API-gestützte Auswahlfelder
-- Neues Config-Feld `epex.priceApiUrl` (Standard: https://api.dvhub.de)
-
-**PostgreSQL-Migration:**
-
-- Telemetrie-Backend von SQLite auf PostgreSQL umgestellt
-- Neuer `telemetry-store-pg.js` mit Connection-Pooling
-- Neuer `db-client.js` für zentrale Datenbankverbindung
-- Migrationsscript `scripts/migrate-sqlite-to-pg.sh` mit SQLite-Backup
-- Config-Sektion `telemetry.database` für PostgreSQL-Verbindungsdaten
-
-**Kleine Börsenautomatik - Plan-Lock:**
-
-- Bugfix: Laufende Entladung wird nicht mehr durch Re-Planning abgebrochen
-- Plan-Lock-Mechanismus verhindert Neuberechnung während aktiver Slot-Ausführung
-- SoC-basierte Regeneration nur noch außerhalb der Entlade-/Cooldown-Phasen
-- Cooldown-Lock bis 30 Minuten nach letztem Slot-Ende bei vorhandenen Zukunfts-Slots
-
-**DV-Schaltsignal-Log:**
-
-- Neue Wartungsseiten-Ansicht für alle DV-Steuersignale
-- Filterfunktionen: Schaltbefehle, Modbus/Setpoint-Writes, Victron-Writes, Börsenautomatik
-- Erweiterte Signal-Typen: control_write, sma_plan_applied, schedule_auto_disabled, schedule_stop_soc_reached
-- Farbcodierung: Rot für Fehler/Abregelung, Grün für Freigabe/Plan, Blau für Writes
-
-**Weitere Änderungen:**
-
-- InfluxDB-Konfiguration entfernt (nicht mehr benötigt)
-- History-Import verwendet korrekte Datenbankabstraktion
-
-### 0.3.5.1 (2026-03-13)
-
-**Kleine Börsenautomatik (neu):**
-
-- Automatische Entladung in Hochpreisphasen basierend auf Day-Ahead-Preisen
-- Energiebasierte Slot-Allokation statt fester Slot-Anzahl
-- Multi-Stage Chain-Varianten für mehrstufige Entladestrategien
-- Chart-Highlighting der geplanten Entlade-Slots im Day-Ahead-Chart
-- Konfigurierbares Suchfenster, Min-SOC, Max-Entladeleistung und Aggressivitätsprämie
-
-**History und Marktwerte:**
-
-- Marktwerte für Wochen- und Monatsansichten nachladen
-- Lokale Persistenz der Marktwert-Referenzdaten
-- Solar-Zusammenfassung mit Jahres-Marktwert in der Jahresansicht
-- Energie-Balkendiagramme in Wochen-/Monats-/Jahresansicht
-- VRM Full-Backfill durchläuft jetzt auch alte Lücken am Anfang
-
-**Security-Hardening:**
-
-- Timing-Safe Token-Vergleich (`crypto.timingSafeEqual`)
-- Content-Security-Policy Header
-- API-Responses redaktieren sensible Felder
-- Config-Datei wird mit `0600`-Berechtigung geschrieben
-- SQL-Injection-Schutz in `countRows()` per Table-Allowlist
+- **0.3.10** — Update-Channel-System (Stable/Dev), PostgreSQL Auto-Schema
+- **0.3.9** — Schedule-gesteuerte DC-Einspeisung, `dcExportMode` nur per Schedule
+- **0.3.6** — DVhub Price API, Preiszonen-Selektor, Migration SQLite → PostgreSQL,
+  DV-Schaltsignal-Log
+- **0.3.5.1** — Kleine Börsenautomatik, History-Marktwerte, Security-Hardening
+  (Timing-Safe Token, CSP, Config `0600`, SQL-Injection-Schutz)
 
 ---
 
 ## Lizenz
 
-This project is licensed under the **Energy Community License (ECL-1.0)**.
+DVhub steht unter der **Energy Community License (ECL-1.0)** — siehe
+[`LICENSE.md`](LICENSE.md). Ziel der Lizenz ist es, die Energie-Community zu
+unterstützen und gleichzeitig den kommerziellen Weiterverkauf der Software zu
+verhindern.
 
-The goal of this license is to support the renewable energy community
-while preventing commercial reselling of the software.
+### Erlaubt
 
-### Allowed
+- Betrieb von Energieanlagen mit dieser Software, inkl. Einnahmen aus der Energieerzeugung
+- Beauftragung von Dienstleistern für Installation, Konfiguration oder Administration
+- Studium, Modifikation, Forks und Weitergabe modifizierter Versionen
 
-* Operating energy systems using this software
-* Generating revenue from energy production
-* Hiring companies for installation or administration
-* Community modifications and forks
+### Nicht erlaubt (ohne kommerzielle Lizenz)
 
-### Not allowed
+- Verkauf der Software selbst oder abgeleiteter Versionen
+- Verkauf von Hardware mit vorinstallierter Software
+- kommerzielle SaaS-Angebote auf Basis dieser Software
+- Bündelung der Software in kommerziellen Produkten
 
-* Selling the software itself
-* Selling hardware with the software preinstalled
-* Commercial SaaS offerings based on this software
-* Bundling the software into commercial products
+Wer die Software in ein kommerzielles Produkt integrieren möchte, fordert eine
+**kommerzielle Lizenz** an — siehe [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md).
 
-If your company wants to integrate this software into a commercial
-product, please request a **commercial license**.
+### Drittanbieter-Software
+
+DVhub bündelt und nutzt Software Dritter. Alle eingebundenen Komponenten stehen
+unter permissiven Lizenzen (MIT, Apache-2.0, ISC, BSD-3-Clause, 0BSD) — die
+vollständige Auflistung mit Lizenztexten steht in
+[`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
