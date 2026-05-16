@@ -196,119 +196,59 @@
          : 'dot-muted';
   }
 
-  // Build the 4 stat tiles per system. Phase 09.2 D-17 revised: per-system
-  // health-tracker fields (latencyMs / uptimeSec / errors24h / sampleRate /
-  // firmware) come via /api/integrations/health. The legacy /api/integrations/
-  // status fallback (D-20 unchanged) lacks these fields → defensive accessors
-  // return '—' so cards stay mockup-faithful without lying about numbers.
-  // System-specific identity tiles (Broker, SOC, Discovery, Provider, ...)
-  // remain when the legacy shape supplies them; otherwise they degrade.
+  // Build the 4 stat tiles per system. Phase 09.4-04 (D-01): buildStats()
+  // ALWAYS returns the 4 tracker tiles (Latency / Uptime|Sample / Errors·24h /
+  // Last-data). Identity fields no longer render as tiles — they move to a
+  // header subtitle line via buildIdentityLine() below. The /health + /status
+  // merge already happens in fetchStatus() so the same merged `data` object
+  // carries both data.latencyMs and data.broker. The defensive fmt* accessors
+  // return '—' (em-dash) when a system has not yet been observed by the tracker.
   function buildStats(key, data) {
-    var hasTrackerShape = data && (data.latencyMs != null || data.uptimeSec != null
-                                || data.firmware !== undefined || data.sampleIntervalHistogramMs);
-    // Tracker-fed systems (no legacy /status entry; ALL stats from health-tracker).
-    // 09.2-04 added victron/mid/luox to SYSTEMS but forgot the buildStats cases →
-    // those cards rendered 4 dashes via the default branch. Fixed 2026-05-15.
-    if (key === 'victron' || key === 'mid' || key === 'luox') {
-      return [
-        { label: 'Latency', value: fmtLatency(data.latencyMs) },
-        { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-        { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-        { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
-      ];
-    }
     switch (key) {
-      case 'mqtt':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last data', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
-        return [
-          { label: 'Broker', value: data.broker || 'embedded' },
-          { label: 'Topics', value: data.topicCount != null ? String(data.topicCount) : '—' },
-          { label: 'Errors · 24h', value: '—' },
-          { label: 'Last data', value: '—' }
-        ];
+      case 'victron':
+      case 'mid':
+      case 'luox':
       case 'tesla':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
-        var s = data.state || {};
         return [
-          { label: 'SOC', value: s.batteryLevel != null ? (s.batteryLevel + '%') : '—' },
-          { label: 'Status', value: s.state || '—' },
-          { label: 'Geofence', value: s.geofence || '—' },
-          { label: 'Last seen', value: fmtRel(data.lastUpdate) }
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
+        ];
+      case 'mqtt':
+        return [
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last data', value: fmtRel(data.lastSampleAt) }
         ];
       case 'homeAssistant':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
         return [
-          { label: 'Discovery', value: data.haDiscovery ? 'auto' : 'aus' },
-          { label: 'Entitäten', value: '—' },
-          { label: 'Topics', value: '—' },
-          { label: 'Last sync', value: '—' }
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
         ];
       case 'loxone':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
         return [
-          { label: 'Miniserver', value: data.configured ? 'konfiguriert' : 'aus' },
-          { label: 'Sensoren', value: '—' },
-          { label: 'Aktoren', value: '—' },
-          { label: 'Last sync', value: '—' }
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
         ];
       case 'devices':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
         return [
-          { label: 'Gesamt', value: data.total != null ? String(data.total) : '0' },
-          { label: 'Online', value: data.online != null ? String(data.online) : '0' },
-          { label: 'Errors · 24h', value: '—' },
-          { label: 'Sample', value: '—' }
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
         ];
       case 'notifications':
-        if (hasTrackerShape) {
-          return [
-            { label: 'Latency', value: fmtLatency(data.latencyMs) },
-            { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-            { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-            { label: 'Last send', value: fmtRel(data.lastSampleAt) }
-          ];
-        }
-        var providers = Array.isArray(data.providers) ? data.providers : [];
         return [
-          { label: 'Provider', value: providers.length ? providers.join(', ') : '—' },
-          { label: 'Sent · 24h', value: '—' },
-          { label: 'Failed · 24h', value: '—' },
-          { label: 'Last send', value: '—' }
+          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
+          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Last send', value: fmtRel(data.lastSampleAt) }
         ];
       default:
         return [
@@ -317,6 +257,46 @@
           { label: '—', value: '—' },
           { label: '—', value: '—' }
         ];
+    }
+  }
+
+  // Phase 09.4-04 (D-01/D-02): identity-in-header. Returns a STRING header
+  // subtitle for systems with identity data on /api/integrations/status, or
+  // null when no identity field is present — D-02 graceful degrade (the card
+  // simply omits the line). The 4 tracker tiles from buildStats() are unchanged.
+  function buildIdentityLine(key, data) {
+    if (!data) return null;
+    switch (key) {
+      case 'mqtt':
+        return data.broker || (data.embedded ? 'embedded' : null);
+      case 'tesla': {
+        var s = data.state || {};
+        return s.name || s.vin || null;
+      }
+      case 'homeAssistant':
+        return data.haDiscovery ? 'Auto-Discovery aktiv' : null;
+      case 'loxone':
+        return data.configured ? 'Miniserver konfiguriert' : null;
+      case 'devices':
+        return (data.total != null) ? (data.online + '/' + data.total + ' online') : null;
+      case 'notifications': {
+        var p = Array.isArray(data.providers) ? data.providers : [];
+        // Dual-shape: legacy entries are strings (always "on"); D-06 entries
+        // are {name,enabled} — count both so the line is correct during the
+        // Wave 2→3 transition window (see buildCard's badge guard).
+        var on = p.filter(function (x) {
+          return typeof x === 'string' ? true : !!(x && x.enabled);
+        }).length;
+        return p.length ? (on + '/' + p.length + ' aktiv') : null;
+      }
+      case 'victron':
+        return data.modelId || data.host || (data.firmware ? ('FW ' + data.firmware) : null);
+      case 'mid':
+        return data.serial || data.host || (data.firmware ? ('FW ' + data.firmware) : null);
+      case 'luox':
+        return data.identifier || (data.firmware ? ('FW ' + data.firmware) : null);
+      default:
+        return null;
     }
   }
 
