@@ -99,8 +99,7 @@
       var sdata = sres.ok ? await sres.json() : {};
       // Per-system shallow merge: tracker fields (hdata[key]) override legacy
       // fields (sdata[key]) for the same property names, so newer metrics win.
-      // Featured-Row only lives on /health (hdata.featured) so it carries over
-      // intact. Unknown extra keys on either side pass through.
+      // Unknown extra keys on either side pass through.
       lastData = Object.assign({}, sdata, hdata);
       for (var key in sdata) {
         if (!Object.prototype.hasOwnProperty.call(sdata, key)) continue;
@@ -400,44 +399,11 @@
     + '</article>';
   }
 
-  // Phase 09.2 D-19 revised: Featured-Row hero card (Victron-only).
-  // Bound by data-bind attributes in integrations.html. Uses textContent
-  // (not innerHTML) so injection is impossible even if the server payload
-  // ever contained user-supplied data — defence-in-depth XSS hardening.
-  function renderFeatured(data) {
-    var root = document.querySelector('.featured-row');
-    if (!root) return;
-    var feat = data && data.featured ? data.featured : null;
-    var heartbeatEl = root.querySelector('[data-bind="victron.heartbeatSec"]');
-    var modeEl = root.querySelector('[data-bind="victron.essMode"]');
-    if (heartbeatEl) {
-      heartbeatEl.textContent = feat && feat.victronHeartbeatSec != null
-        ? String(feat.victronHeartbeatSec)
-        : '—';
-    }
-    if (modeEl) {
-      modeEl.textContent = (feat && feat.victronEssMode) ? feat.victronEssMode : '—';
-    }
-    var card = root.querySelector('.featured-card.victron');
-    if (card) {
-      card.classList.remove('is-warn', 'is-err', 'is-ok');
-      var hb = feat ? feat.victronHeartbeatSec : null;
-      if (hb == null)        card.classList.add('is-err');
-      else if (hb > 300)     card.classList.add('is-err');
-      else if (hb > 30)      card.classList.add('is-warn');
-      else                   card.classList.add('is-ok');
-    }
-  }
-
   function renderAll(data) {
     var list = document.getElementById('intg-list');
     var empty = document.getElementById('intg-empty');
     if (!list) return;
     if (!data) return;
-
-    // Featured-Row first — the hero card lives outside #intg-list and is
-    // bound to fixed elements (no innerHTML rebuild on each poll).
-    renderFeatured(data);
 
     // Build cards for EVERY system in the SYSTEMS catalogue. If the tracker
     // has no entry for a system yet, render the card with `{}` so the

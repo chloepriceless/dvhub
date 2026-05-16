@@ -153,19 +153,17 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
 
   // --- Phase 09.2-09 smoke tests (D-17 revised, D-19 revised, D-21..D-24) ---
   // Asserts the Wave-2 (plan 09.2-04) deliverables on /integrations.html:
-  //   - Featured-Row hero card: Victron-only (no LUOX hero — D-19 revised)
+  //   - Featured-Row REMOVED (09.4 — redundant Victron hero dropped)
   //   - Activity-Pulse bars render with valid heights (CSP-safe DOM-property pattern)
   //   - Latency/Uptime/Errors values not the "—" placeholder once the tracker has data
 
-  test('Featured-Row is Victron-only (D-19 revised — LUOX hero dropped)', async ({ page }) => {
+  test('Featured-Row removed (09.4 — redundant Victron hero dropped)', async ({ page }) => {
     await page.goto('/integrations.html');
-    await page.waitForSelector('.featured-row');
-    const featuredCards = await page.$$('.featured-row .featured-card');
-    expect(featuredCards.length).toBe(1);
-    const victron = await page.$('.featured-row .featured-card.victron');
-    expect(victron).not.toBeNull();
-    const luox = await page.$('.featured-row .featured-card.luox');
-    expect(luox).toBeNull();  // D-19 revised — LUOX hero card MUST NOT exist
+    await page.waitForLoadState('networkidle');
+    // 09.4: the featured-row hero card was removed — Victron is already a
+    // regular .conn-card in #intg-list, so the hero card was redundant.
+    const featuredRow = await page.$('.featured-row');
+    expect(featuredRow).toBeNull();
   });
 
   test('.conn-pulse bars render with valid heights (CSP-safe DOM-property assignment)', async ({ page }) => {

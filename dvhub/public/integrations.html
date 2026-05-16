@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/integrations.css?v=1" />
+  <link rel="stylesheet" href="/integrations.css?v=2" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -103,24 +103,6 @@
         </p>
       </section>
 
-      <!-- Featured-Row — Victron hero card only (Phase 09.2 D-19 revised).
-           LUOX-Erloes hero dropped: source data does not exist (we use a
-           direct marketer, not direct EPEX trading). LUOX continues as a
-           regular .conn-card in #intg-list below. Values bound by
-           integrations.js#renderFeatured() via textContent (CSP-safe). -->
-      <section class="featured-row" aria-label="Live-Highlights">
-        <article class="featured-card victron" data-system="victron">
-          <header class="featured-head">
-            <span class="featured-kicker">Victron ESS &middot; Heartbeat</span>
-            <span class="featured-status" data-bind="victron.essMode">&mdash;</span>
-          </header>
-          <div class="featured-metric">
-            <span class="featured-value" data-bind="victron.heartbeatSec">&mdash;</span>
-            <span class="featured-unit">s seit letztem Sample</span>
-          </div>
-        </article>
-      </section>
-
       <!-- Connection grid — integrations.js renders one .conn-card per known
            system. #intg-empty is the empty state shown when no integration
            reports any state at all. -->
@@ -174,6 +156,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=7"></script>
+  <script src="/integrations.js?v=8"></script>
 </body>
 </html>

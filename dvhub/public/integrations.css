@@ -427,69 +427,6 @@
   border-color: var(--glass-brd-strong);
 }
 
-/* ===== Featured-Row — Victron-only hero (Phase 09.2 D-19 revised) ===== */
-/* LUOX-Erloes hero card was dropped because the source data does not exist
-   (we have an external direct marketer, not direct EPEX trading). Single
-   column at every breakpoint — explicitly NOT `repeat(N, minmax(0,1fr))`
-   per AURORA D-29 anti-pattern. */
-.featured-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.featured-card {
-  background: var(--glass-2);
-  border: 1px solid var(--glass-brd);
-  border-radius: var(--r-md, 10px);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  transition: border-color .15s;
-}
-.featured-card.victron.is-ok   { border-color: var(--green); }
-.featured-card.victron.is-warn { border-color: var(--warn, var(--yellow, #ffd421)); }
-.featured-card.victron.is-err  { border-color: var(--danger, var(--red, #ff5d5d)); }
-.featured-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.featured-kicker {
-  font-family: var(--f-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-.featured-status {
-  font-family: var(--f-mono);
-  font-size: 0.7rem;
-  color: var(--text);
-  background: var(--glass);
-  border: 1px solid var(--glass-brd);
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-.featured-metric {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-.featured-value {
-  font-family: var(--f-mono);
-  font-size: 1.6rem;
-  font-weight: 600;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.featured-unit {
-  font-size: 0.78rem;
-  color: var(--text-2);
-}
-
 /* ===== Activity-Pulse bars (Phase 09.2 D-03) ===== */
 /* Bar heights are set by integrations.js#applyPulseHeights() via a DOM
    property setter (data-h → el.style.height). NOT a `style="height:…"`
@@ -726,7 +663,6 @@
   .int-toolbar { padding: 10px; }
   .segmented button { padding: 5px 10px; font-size: 11px; }
   .conn-card { padding: 14px; }
-  .featured-value { font-size: 1.35rem; }
   .mte-table-head { display: none; }
   .mte-row {
     grid-template-columns: 1fr 1fr 32px;
