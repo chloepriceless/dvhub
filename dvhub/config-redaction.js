@@ -16,7 +16,7 @@ export const REDACTED_PATHS = Object.freeze([
   'notifications.providers.pushover.userKey'
 ]);
 
-const REDACTED = '***';
+export const REDACTED = '***';
 
 export function isRedactedPath(path) {
   return REDACTED_PATHS.includes(path);

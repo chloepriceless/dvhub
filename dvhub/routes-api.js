@@ -12,7 +12,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImpor
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
-import { REDACTED_PATHS, redactConfig, redactUrlCreds } from './config-redaction.js';
+import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { createDefaultConfig } from './config-model.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
@@ -2592,7 +2592,16 @@ export function createApiRoutes(ctx) {
       // Plan 09-01 (D-03 + D-05): token strength gate fires ONLY when a
       // non-empty apiToken string is supplied. Skip validation entirely when
       // missing / empty / null — empty is a valid "no external auth" config.
-      if (typeof body.config.apiToken === 'string' && body.config.apiToken.length > 0) {
+      //
+      // ALSO skip when the value is the redaction placeholder REDACTED ('***'):
+      // the settings UI GETs the config redacted and POSTs the whole object
+      // back, so an unchanged apiToken arrives as '***'. restoreRedacted()
+      // (inside ctx.saveAndApplyConfig) swaps the real token back in — but it
+      // runs AFTER this gate, so validating '***' here would wrongly reject a
+      // normal settings save with token_too_short.
+      if (typeof body.config.apiToken === 'string'
+          && body.config.apiToken.length > 0
+          && body.config.apiToken !== REDACTED) {
         const tokenCheck = validateApiTokenStrength(body.config.apiToken);
         if (!tokenCheck.ok) {
           return json(res, 400, { ok: false, error: tokenCheck.error });
