@@ -510,7 +510,154 @@
     applyFilter(btn.getAttribute('data-status-filter'));
   });
 
+  /* ===================== FAMILY MQTT TILES EDITOR ===================== */
+  // Operator-managed list of generic MQTT topics surfaced on the family page.
+  // Persisted into config.family.mqttTiles via POST /api/config. The rest of
+  // the `family` config object is read on load and merged back on save so a
+  // partial-root replace never drops sibling family settings.
+  var familyConfigCache = {}; // last-known config.family minus mqttTiles
+
+  function mteSlugId() {
+    return 't' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+  }
+
+  function mteRowEl(tile) {
+    var row = document.createElement('div');
+    row.className = 'mte-row';
+    row.setAttribute('data-id', (tile && tile.id) ? tile.id : mteSlugId());
+    var fields = [
+      { k: 'label', ph: 'Überschrift', cls: '' },
+      { k: 'topic', ph: 'mqtt/topic', cls: '' },
+      { k: 'field', ph: 'JSON-Feld (optional)', cls: 'mte-in-sm' },
+      { k: 'unit', ph: 'Einheit', cls: 'mte-in-sm' }
+    ];
+    fields.forEach(function (f) {
+      var inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'mte-in' + (f.cls ? ' ' + f.cls : '');
+      inp.setAttribute('data-k', f.k);
+      inp.placeholder = f.ph;
+      inp.value = (tile && tile[f.k] != null) ? String(tile[f.k]) : '';
+      row.appendChild(inp);
+    });
+    var del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'mte-del';
+    del.setAttribute('data-action', 'mte-del');
+    del.setAttribute('aria-label', 'Kachel entfernen');
+    del.textContent = '✕';
+    row.appendChild(del);
+    return row;
+  }
+
+  function mteRefreshEmpty() {
+    var rows = document.getElementById('mteRows');
+    var empty = document.getElementById('mteEmpty');
+    if (rows && empty) empty.hidden = rows.children.length > 0;
+  }
+
+  function mteRenderRows(tiles) {
+    var rows = document.getElementById('mteRows');
+    if (!rows) return;
+    rows.innerHTML = '';
+    (tiles || []).forEach(function (t) { rows.appendChild(mteRowEl(t)); });
+    mteRefreshEmpty();
+  }
+
+  function mteSetStatus(msg, kind) {
+    var el = document.getElementById('mteStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = 'mte-status' + (kind ? ' is-' + kind : '');
+  }
+
+  async function loadMqttTilesEditor() {
+    var rows = document.getElementById('mteRows');
+    if (!rows) return; // editor not present on this page
+    try {
+      var res = await apiFetch('/api/config');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      var cfg = (data && data.config) || {};
+      var fam = (cfg.family && typeof cfg.family === 'object') ? cfg.family : {};
+      familyConfigCache = {};
+      Object.keys(fam).forEach(function (k) {
+        if (k !== 'mqttTiles') familyConfigCache[k] = fam[k];
+      });
+      mteRenderRows(Array.isArray(fam.mqttTiles) ? fam.mqttTiles : []);
+    } catch (e) {
+      mteSetStatus('Konfiguration konnte nicht geladen werden.', 'err');
+    }
+  }
+
+  function mteCollect() {
+    var out = [];
+    var rows = document.getElementById('mteRows');
+    if (!rows) return out;
+    var rowEls = rows.querySelectorAll('.mte-row');
+    for (var i = 0; i < rowEls.length; i++) {
+      var r = rowEls[i];
+      var get = function (k) {
+        var inp = r.querySelector('[data-k="' + k + '"]');
+        return inp ? inp.value.trim() : '';
+      };
+      var topic = get('topic');
+      if (!topic) continue; // a row without a topic is incomplete — skip it
+      var tile = {
+        id: r.getAttribute('data-id') || mteSlugId(),
+        label: get('label') || topic,
+        topic: topic
+      };
+      var field = get('field');
+      var unit = get('unit');
+      if (field) tile.field = field;
+      if (unit) tile.unit = unit;
+      out.push(tile);
+    }
+    return out;
+  }
+
+  async function saveMqttTiles() {
+    var btn = document.getElementById('mteSave');
+    var tiles = mteCollect();
+    mteSetStatus('Speichern …', '');
+    if (btn) btn.disabled = true;
+    try {
+      var family = Object.assign({}, familyConfigCache, { mqttTiles: tiles });
+      var res = await apiFetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: { family: family } })
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      mteSetStatus(tiles.length + ' Kachel(n) gespeichert — erscheinen auf der Familienseite ✓', 'ok');
+    } catch (e) {
+      mteSetStatus('Fehler beim Speichern: ' + e.message, 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // Editor event delegation — separate from the segmented-filter listener above.
+  document.addEventListener('click', function (e) {
+    var del = e.target.closest('[data-action="mte-del"]');
+    if (del) {
+      var row = del.closest('.mte-row');
+      if (row && row.parentNode) row.parentNode.removeChild(row);
+      mteRefreshEmpty();
+      return;
+    }
+    if (e.target.closest('#mteAdd')) {
+      var rows = document.getElementById('mteRows');
+      if (rows) { rows.appendChild(mteRowEl(null)); mteRefreshEmpty(); }
+      return;
+    }
+    if (e.target.closest('#mteSave')) saveMqttTiles();
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);
+  loadMqttTilesEditor();
 })();

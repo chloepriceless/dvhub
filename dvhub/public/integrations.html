@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/integrations.css" />
+  <link rel="stylesheet" href="/integrations.css?v=1" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -130,11 +130,32 @@
           <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
         </div>
       </section>
+
+      <!-- Family-Dashboard MQTT tiles editor — operator configures generic
+           MQTT topics (Wallbox, any consumer, sensor) that appear as cards
+           on the family page. Saved to config.family.mqttTiles via
+           POST /api/config; integrations.js#initMqttTilesEditor() drives it. -->
+      <section class="card mqtt-tiles-editor" id="mqttTilesEditor" aria-label="MQTT-Kacheln f&uuml;r das Family-Dashboard">
+        <div class="mte-head">
+          <h2>Family-Dashboard &middot; MQTT-Kacheln</h2>
+          <p class="u-text-muted">MQTT-Topics, deren Werte als Kachel auf der <a href="/family">Familienseite</a> erscheinen &mdash; z.&nbsp;B. die Leistung einer Wallbox oder ein anderer Verbraucher. Die &Uuml;berschrift ist frei vergebbar; JSON-Feld und Einheit sind optional.</p>
+        </div>
+        <div class="mte-table-head" aria-hidden="true">
+          <span>&Uuml;berschrift</span><span>MQTT-Topic</span><span>JSON-Feld</span><span>Einheit</span><span></span>
+        </div>
+        <div class="mte-rows" id="mteRows"></div>
+        <p class="mte-empty u-text-muted" id="mteEmpty" hidden>Noch keine Kacheln &mdash; mit &bdquo;Kachel hinzuf&uuml;gen&ldquo; die erste anlegen.</p>
+        <div class="mte-actions">
+          <button type="button" class="btn sm ghost" id="mteAdd">+ Kachel hinzuf&uuml;gen</button>
+          <button type="button" class="btn sm" id="mteSave">Speichern</button>
+          <span class="mte-status" id="mteStatus" role="status" aria-live="polite"></span>
+        </div>
+      </section>
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=3"></script>
+  <script src="/integrations.js?v=4"></script>
 </body>
 </html>
