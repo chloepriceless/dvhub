@@ -636,6 +636,10 @@
   var MQTT_DRAWER_POLL_MS = 4000;
   var mqttPollTimer = null;
   var mqttDrawerEls = null;
+  // Phase 09.4 gap-closure: operator pause/resume of the topics poll loop.
+  // Values scroll past too fast on a busy broker — paused stops the
+  // setInterval so the table holds still and stays readable.
+  var mqttDrawerPaused = false;
 
   function getMqttDrawerEls() {
     if (mqttDrawerEls) return mqttDrawerEls;
@@ -645,10 +649,25 @@
       drawer: drawer,
       backdrop: document.getElementById('mqtt-drawer-backdrop'),
       close: document.getElementById('mqtt-drawer-close'),
+      pause: document.getElementById('mqtt-drawer-pause'),
       topics: document.getElementById('mqtt-drawer-topics'),
       meta: document.getElementById('mqtt-drawer-meta')
     };
     return mqttDrawerEls;
+  }
+
+  // Reflect the paused/running state onto the pause button + drawer. CSP-clean:
+  // a .is-paused class toggle on the drawer (no style.display writes) drives the
+  // "pausiert" badge in CSS; the button label/aria-pressed switch in JS.
+  function applyMqttPauseState() {
+    var els = getMqttDrawerEls();
+    if (!els) return;
+    els.drawer.classList.toggle('is-paused', mqttDrawerPaused);
+    if (els.pause) {
+      // ⏸ Pause when running, ▶ Fortsetzen when paused.
+      els.pause.textContent = mqttDrawerPaused ? '▶ Fortsetzen' : '⏸ Pause';
+      els.pause.setAttribute('aria-pressed', mqttDrawerPaused ? 'true' : 'false');
+    }
   }
 
   // Escape-key close — mirrors dv-modal.js's keyHandler discipline: a named
@@ -705,9 +724,36 @@
     }
   }
 
+  // Start (or restart) the topics poll loop. Centralised so the pause/resume
+  // toggle and openMqttDrawer() share one code path.
+  function startMqttPoll() {
+    if (mqttPollTimer) clearInterval(mqttPollTimer);
+    mqttPollTimer = setInterval(pollMqttTopics, MQTT_DRAWER_POLL_MS);
+  }
+  function stopMqttPoll() {
+    if (mqttPollTimer) { clearInterval(mqttPollTimer); mqttPollTimer = null; }
+  }
+
+  // Pause/resume toggle. Paused → clearInterval the loop (the table freezes on
+  // the last snapshot); resumed → an immediate poll + restart the interval.
+  function toggleMqttPause() {
+    mqttDrawerPaused = !mqttDrawerPaused;
+    if (mqttDrawerPaused) {
+      stopMqttPoll();
+    } else {
+      pollMqttTopics();
+      startMqttPoll();
+    }
+    applyMqttPauseState();
+  }
+
   function openMqttDrawer() {
     var els = getMqttDrawerEls();
     if (!els) return;
+    // Every open starts in the running state — a stale paused flag from a
+    // previous session would otherwise leave the drawer frozen on open.
+    mqttDrawerPaused = false;
+    applyMqttPauseState();
     // Remove [hidden] first, then add .is-open on the next frame so the
     // translateX transition actually animates (a [hidden]→.is-open switch in
     // the same frame would jump straight to the open position).
@@ -718,14 +764,13 @@
       if (els.backdrop) els.backdrop.classList.add('is-open');
     });
     pollMqttTopics();
-    if (mqttPollTimer) clearInterval(mqttPollTimer);
-    mqttPollTimer = setInterval(pollMqttTopics, MQTT_DRAWER_POLL_MS);
+    startMqttPoll();
     document.addEventListener('keydown', mqttDrawerKeyHandler);
   }
 
   function closeMqttDrawer() {
     var els = getMqttDrawerEls();
-    if (mqttPollTimer) { clearInterval(mqttPollTimer); mqttPollTimer = null; }
+    stopMqttPoll();
     document.removeEventListener('keydown', mqttDrawerKeyHandler);
     if (!els) return;
     els.drawer.classList.remove('is-open');
@@ -743,6 +788,10 @@
   // opens the drawer, EXCEPT on the card's Logs/Konfig <a> links (let those
   // navigate). The drawer's own close button + backdrop also route here.
   document.addEventListener('click', function (e) {
+    if (e.target.closest('#mqtt-drawer-pause')) {
+      toggleMqttPause();
+      return;
+    }
     if (e.target.closest('#mqtt-drawer-close') || e.target.closest('#mqtt-drawer-backdrop')) {
       closeMqttDrawer();
       return;

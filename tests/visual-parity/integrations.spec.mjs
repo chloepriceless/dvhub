@@ -276,6 +276,42 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     await expect(drawer).not.toHaveClass(/is-open/);
   });
 
+  test('MQTT drawer has a pause/resume toggle that toggles the .is-paused state', async ({ page }) => {
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
+    // The pause button is static drawer chrome — must exist regardless of backend.
+    const pauseBtn = page.locator('#mqtt-drawer-pause');
+    await expect(pauseBtn, '#mqtt-drawer-pause must exist in the DOM').toHaveCount(1);
+
+    const card = page.locator('.conn-card[data-system="mqtt"]');
+    if ((await card.count()) === 0) {
+      // eslint-disable-next-line no-console
+      console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip pause toggle');
+      return;
+    }
+    const drawer = page.locator('#mqtt-drawer');
+    await card.first().click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toHaveClass(/is-open/);
+    // Drawer opens running — not paused, button reads "⏸ Pause".
+    await expect(drawer).not.toHaveClass(/is-paused/);
+    await expect(pauseBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(pauseBtn).toHaveText(/Pause/);
+    // Click → paused: .is-paused set, aria-pressed=true, label shows resume.
+    await pauseBtn.click();
+    await page.waitForTimeout(150);
+    await expect(drawer).toHaveClass(/is-paused/);
+    await expect(pauseBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(pauseBtn).toHaveText(/Fortsetzen/);
+    // Click again → resumed.
+    await pauseBtn.click();
+    await page.waitForTimeout(150);
+    await expect(drawer).not.toHaveClass(/is-paused/);
+    await expect(pauseBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(pauseBtn).toHaveText(/Pause/);
+  });
+
   test('hybrid card-stats: each conn-card has exactly 4 tracker tiles', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');

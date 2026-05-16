@@ -580,6 +580,26 @@
   color: var(--text);
   margin: 0;
 }
+/* Phase 09.4 gap-closure: pause/resume + close grouped at the drawer header
+   right edge. Both reuse the Aurora .btn sm ghost token styling. */
+.mqtt-drawer-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+#mqtt-drawer-pause {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+/* Paused affordance — the button reads as "active/engaged" while frozen. */
+.mqtt-drawer.is-paused #mqtt-drawer-pause {
+  color: var(--warn, #ffd421);
+  border-color: rgba(255, 212, 33, 0.35);
+}
 #mqtt-drawer-close {
   flex-shrink: 0;
   font-size: 16px;
@@ -593,6 +613,17 @@
   font-size: 0.72rem;
   color: var(--text-2);
   letter-spacing: 0.02em;
+}
+/* Visible "pausiert" indication while the poll loop is stopped — a pill that
+   only renders when the drawer carries .is-paused. CSP-clean: pure class
+   toggle, no inline style. */
+.mqtt-drawer-meta::after {
+  content: '';
+}
+.mqtt-drawer.is-paused .mqtt-drawer-meta::after {
+  content: ' · pausiert';
+  color: var(--warn, #ffd421);
+  font-weight: 600;
 }
 
 .mqtt-drawer-body {

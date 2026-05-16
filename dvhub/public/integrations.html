@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/integrations.css?v=2" />
+  <link rel="stylesheet" href="/integrations.css?v=3" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -146,7 +146,10 @@
              aria-label="MQTT Topic Inspector" hidden>
         <header class="mqtt-drawer-head">
           <h2>MQTT Inspector</h2>
-          <button type="button" class="btn sm ghost" id="mqtt-drawer-close" aria-label="Schlie&szlig;en">&times;</button>
+          <div class="mqtt-drawer-head-actions">
+            <button type="button" class="btn sm ghost" id="mqtt-drawer-pause" aria-pressed="false">&#x23F8; Pause</button>
+            <button type="button" class="btn sm ghost" id="mqtt-drawer-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
         </header>
         <p class="mqtt-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
         <div class="mqtt-drawer-body" id="mqtt-drawer-topics"></div>
@@ -156,6 +159,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=8"></script>
+  <script src="/integrations.js?v=9"></script>
 </body>
 </html>
