@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/history.css?v=10" />
-  <link rel="stylesheet" href="/history-viz.css?v=2" />
+  <link rel="stylesheet" href="/history-viz.css?v=3" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -309,7 +309,7 @@
         <div class="card-head">
           <div>
             <span class="card-title"><span class="dot dot-violet"></span>Energiefluss · Sankey</span>
-            <p class="card-sub">Wohin geht die kWh — Quellen → Senken</p>
+            <p class="card-sub" id="sankeySub">Wohin geht die kWh — Quellen → Senken</p>
           </div>
         </div>
         <div class="sankey-wrap viz-chart-shell"><div id="sankeySvg"></div></div>
@@ -351,10 +351,19 @@
 
       <!-- PV-Heatmap (week/month/year only) -->
       <section class="card chart-panel" data-show-view="week month year" data-viz-card="heatmap">
-        <div class="card-head"><div>
-          <span class="card-title"><span class="dot dot-yellow"></span>PV-Heatmap · Stunde × Tag</span>
-          <p class="card-sub">PV-Erzeugung kWh pro Stunde</p>
-        </div></div>
+        <div class="card-head">
+          <div>
+            <span class="card-title"><span class="dot dot-yellow"></span>PV-Heatmap · Stunde × Tag</span>
+            <p class="card-sub">PV-Erzeugung kWh pro Stunde</p>
+          </div>
+          <!-- Round-2 — value-axis granularity toggle (week/month only; the
+               JS hides it in year view). Buttons carry data-gran; history-viz.js
+               event-delegates the click (no inline handlers — CSP). -->
+          <div class="chart-mode heatmap-gran-toggle" role="group" aria-label="Heatmap-Aufl&ouml;sung">
+            <button type="button" class="seg-btn is-active" data-gran="1h" aria-pressed="true">1&nbsp;h</button>
+            <button type="button" class="seg-btn" data-gran="15min" aria-pressed="false">15&nbsp;min</button>
+          </div>
+        </div>
         <div id="hm" class="heatmap viz-chart-shell"></div>
       </section>
 
@@ -369,7 +378,7 @@
         <article class="card chart-panel" data-show-view="day week month year" data-viz-card="autarky-calendar">
           <div class="card-head"><div>
             <span class="card-title"><span class="dot dot-green"></span>Autarkie-Map</span>
-            <p class="card-sub">Eigenversorgungsquote pro Tag</p>
+            <p class="card-sub" id="autarkSub">Eigenversorgungsquote pro Tag</p>
           </div></div>
           <div id="autarkCal" class="viz-chart-shell"></div>
           <div class="autark-legend">
@@ -508,7 +517,7 @@
   <script src="/chartjs-chart-matrix.min.js"></script>
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/history.js?v=7"></script>
-  <script src="/history-viz.js?v=2"></script>
+  <script src="/history.js?v=8"></script>
+  <script src="/history-viz.js?v=3"></script>
 </body>
 </html>

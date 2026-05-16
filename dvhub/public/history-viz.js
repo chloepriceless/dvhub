@@ -28,6 +28,11 @@
   // view-change so a viz that hides+re-shows is rebuilt with fresh data.
   const built = new Set();
   let __historyVizBound = false;
+  // Round-2 — PV-Heatmap value-axis granularity ('1h' default | '15min').
+  // The toggle in the heatmap card head flips this; buildHeatmap reads it and
+  // appends ?granularity= to the fetch. Only meaningful for week/month views
+  // (year rows are day-of-month — the toggle is hidden/disabled in year view).
+  let heatmapGranularity = '1h';
 
   // --- CSS-token bridge (re-implemented in IIFE scope; the IIFE cannot reach
   // app.js's cssVar). Identical contract to app.js:168-189.
@@ -98,8 +103,16 @@
 
   // --- Aggregator-fetch helper. Each builder calls fetchCardData(slug, view, date).
 
-  async function fetchCardData(slug, view, date) {
-    const url = `/api/history/viz/${slug}?view=${encodeURIComponent(view || '')}&date=${encodeURIComponent(date || '')}`;
+  async function fetchCardData(slug, view, date, extra) {
+    let url = `/api/history/viz/${slug}?view=${encodeURIComponent(view || '')}&date=${encodeURIComponent(date || '')}`;
+    // Optional extra query params (e.g. the heatmap `granularity` toggle).
+    // Other builders never pass `extra`, so the URL stays unchanged for them.
+    if (extra && typeof extra === 'object') {
+      for (const [k, v] of Object.entries(extra)) {
+        if (v == null || v === '') continue;
+        url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+      }
+    }
     const r = await apiFetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${slug}`);
     return r.json();
@@ -176,12 +189,32 @@
         delete historyVizCharts.sankey;
       }
       const canvas = mountCanvas(mount, 'sankeyCanvas');
+      // Round-2 — per-source link colors. chartjs-chart-sankey calls
+      // colorFrom/colorTo with the flow-context; ctx.dataset.data[ctx.dataIndex]
+      // carries {from,to,flow}. Color each link by its `from` node so PV
+      // (yellow), Netzbezug (pink), Akku-Entladen (green) read distinctly.
+      const NODE_COLORS = {
+        'PV':            cssVar('--yellow', '#ffd421'),
+        'Netzbezug':     cssVar('--pink',   '#ff7eb6'),
+        'Akku-Entladen': cssVar('--green',  '#3ee0a0'),
+        'Eigenverbrauch': cssVar('--cyan',  '#34dbff'),
+        'Akku-Laden':    cssVar('--green',  '#3ee0a0'),
+        'Einspeisung':   cssVar('--violet', '#a78bfa'),
+      };
+      const linkColorFrom = (ctx) => {
+        const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
+        return (d && NODE_COLORS[d.from]) || cssVar('--cyan', '#34dbff');
+      };
+      const linkColorTo = (ctx) => {
+        const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
+        return (d && NODE_COLORS[d.to]) || cssVar('--green', '#3ee0a0');
+      };
       historyVizCharts.sankey = new Chart(canvas.getContext('2d'), {
         type: 'sankey',
         data: { datasets: [{
           data: (data.flows || []).map((f) => ({ from: f.from, to: f.to, flow: f.flow })),
-          colorFrom: cssVar('--cyan', '#34dbff'),
-          colorTo:   cssVar('--green', '#3ee0a0'),
+          colorFrom: linkColorFrom,
+          colorTo:   linkColorTo,
           colorMode: 'gradient',
           // RC-E — node labels otherwise paint in Chart.defaults dark grey and
           // vanish on the dark Aurora theme. Force a light token + readable font.
@@ -191,8 +224,29 @@
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           interaction: INTERACTION_NEAREST,
+          plugins: {
+            // Round-2 — make the magnitudes legible: the sankey tooltip
+            // otherwise shows only the bare flow number. Append the unit.
+            tooltip: { callbacks: {
+              label(c) {
+                const d = c.dataset && c.dataset.data && c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                return `${d.from} → ${d.to}: ${Number(d.flow || 0).toFixed(2)} kWh`;
+              },
+            } },
+          },
         },
       });
+      // Round-2 — surface the kWh unit + period totals in the card-sub so the
+      // user knows the link widths are kWh. textContent only (D-22 XSS guard).
+      const t = data.totals || {};
+      const sub = document.getElementById('sankeySub');
+      if (sub) {
+        sub.textContent =
+          `Werte in kWh · PV ${Number(t.pvKwh || 0).toFixed(1)} · `
+          + `Eigenverbrauch ${Number(t.eigenverbrauchKwh || 0).toFixed(1)} · `
+          + `Einspeisung ${Number(t.einspeisungKwh || 0).toFixed(1)}`;
+      }
       setTimeout(() => {
         try { historyVizCharts.sankey && historyVizCharts.sankey.resize && historyVizCharts.sankey.resize(); }
         catch (_) { /* dead chart */ }
@@ -330,12 +384,32 @@
     }
   }
 
+  // Round-2 — sync the heatmap granularity toggle: mark the active button and
+  // hide the whole toggle in year view (year rows are day-of-month, so a
+  // value-axis granularity makes no sense there). Scoped querySelector within
+  // the card → no new top-level getElementById (binding-contract stays green).
+  function syncHeatmapToggle(view) {
+    const toggle = document.querySelector('[data-viz-card="heatmap"] .heatmap-gran-toggle');
+    if (!toggle) return;
+    // D-25 — visibility via class toggle, never inline style.
+    toggle.classList.toggle('viz-hidden-by-view', view === 'year');
+    toggle.querySelectorAll('[data-gran]').forEach((btn) => {
+      const isActive = btn.dataset.gran === heatmapGranularity;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+
   async function buildHeatmap(view, date) {
     const mount = document.getElementById('hm');
     if (!mount) return;
     if (typeof Chart === 'undefined') return;
     try {
-      const data = await fetchCardData('heatmap', view, date);
+      syncHeatmapToggle(view);
+      // year view ignores granularity (day-of-month rows); only week/month
+      // honour the 15-min slot subdivision.
+      const gran = (view === 'week' || view === 'month') ? heatmapGranularity : '1h';
+      const data = await fetchCardData('heatmap', view, date, { granularity: gran });
       if (historyVizCharts.heatmap) {
         try { historyVizCharts.heatmap.destroy(); } catch (_) { /* dead */ }
         delete historyVizCharts.heatmap;
@@ -407,6 +481,43 @@
   // lines via flat-line datasets). Same canvas-swap pattern as Wave 2.
   // -------------------------------------------------------------------------
 
+  // Round-2 — rebuild the Autarkie card legend. The legend lives in the
+  // `.autark-legend` div below the canvas; for the calendar mode it is the
+  // 0%→100% gradient bar, for the donut mode it is a 3-entry PV/Akku/Netz
+  // swatch row. Scoped querySelector within the card keeps binding-contract
+  // green (no new top-level getElementById). DOM-build only (D-22 / no
+  // innerHTML with data).
+  function renderAutarkyLegend(mode) {
+    const legend = document.querySelector('[data-viz-card="autarky-calendar"] .autark-legend');
+    if (!legend) return;
+    legend.replaceChildren();
+    if (mode === 'donut') {
+      const entries = [
+        { cls: 'sw-yellow', label: 'PV-Direkt' },
+        { cls: 'sw-green',  label: 'Akku' },
+        { cls: 'sw-pink',   label: 'Netz' },
+      ];
+      for (const e of entries) {
+        const l = document.createElement('span');
+        l.className = 'l';
+        const sw = document.createElement('span');
+        sw.className = `sw ${e.cls}`;
+        l.appendChild(sw);
+        l.appendChild(document.createTextNode(e.label));
+        legend.appendChild(l);
+      }
+    } else {
+      // calendar mode — restore the 0%→100% gradient bar.
+      const lo = document.createElement('span');
+      lo.textContent = '0 %';
+      const grad = document.createElement('div');
+      grad.className = 'autark-grad';
+      const hi = document.createElement('span');
+      hi.textContent = '100 %';
+      legend.append(lo, grad, hi);
+    }
+  }
+
   async function buildAutarkyCalendar(view, date) {
     const mount = document.getElementById('autarkCal');
     if (!mount) return;
@@ -417,6 +528,56 @@
         try { historyVizCharts.autarkyCalendar.destroy(); } catch (_) { /* dead */ }
         delete historyVizCharts.autarkyCalendar;
       }
+      const sub = document.getElementById('autarkSub');
+
+      // --- day view → doughnut (PV-Direkt / Akku / Netz) -------------------
+      if (data.mode === 'donut') {
+        renderAutarkyLegend('donut');
+        const canvas = mountCanvas(mount, 'autarkCalCanvas');
+        const sh = data.shares || { pvDirect: 0, battery: 0, grid: 0 };
+        const segs = [
+          { label: 'PV-Direkt', value: Number(sh.pvDirect) || 0, color: cssVar('--yellow', '#ffd421') },
+          { label: 'Akku',      value: Number(sh.battery)  || 0, color: cssVar('--green',  '#3ee0a0') },
+          { label: 'Netz',      value: Number(sh.grid)     || 0, color: cssVar('--pink',   '#ff7eb6') },
+        ];
+        const pct = Number(data.autarkyPct) || 0;
+        historyVizCharts.autarkyCalendar = new Chart(canvas.getContext('2d'), {
+          type: 'doughnut',
+          data: {
+            labels: segs.map((s) => s.label),
+            datasets: [{
+              data: segs.map((s) => s.value),
+              backgroundColor: segs.map((s) => s.color),
+              borderWidth: 0,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            cutout: '60%',
+            interaction: INTERACTION_NEAREST,
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: {
+                label(c) {
+                  const v = Number(c.raw) || 0;
+                  return `${c.label}: ${v.toFixed(2)} kWh`;
+                },
+              } },
+            },
+          },
+        });
+        // Autarky % overlay — textContent only (D-22 XSS guard). The card-sub
+        // carries the headline autark figure (PV-Direkt + Akku of the load).
+        if (sub) sub.textContent = `Autarkie heute · ${pct.toFixed(0)} %`;
+        setTimeout(() => {
+          try { historyVizCharts.autarkyCalendar && historyVizCharts.autarkyCalendar.resize && historyVizCharts.autarkyCalendar.resize(); }
+          catch (_) { /* dead chart */ }
+        }, 0);
+        return;
+      }
+
+      // --- week / month / year → per-day calendar matrix -------------------
+      renderAutarkyLegend('calendar');
       const canvas = mountCanvas(mount, 'autarkCalCanvas');
       const xLabels = data.xLabels || [];
       const yLabels = data.yLabels || [];
@@ -464,6 +625,13 @@
           },
         },
       });
+      // Round-2 — surface the whole-period autarky in the card-sub so the
+      // user sees the roll-up, not just the per-day cells. textContent only.
+      if (sub) {
+        const pt = data.periodTotal || {};
+        const ptPct = Number(pt.autarkyPct) || 0;
+        sub.textContent = `Eigenversorgungsquote pro Tag · Periode ${ptPct.toFixed(0)} %`;
+      }
       setTimeout(() => {
         try { historyVizCharts.autarkyCalendar && historyVizCharts.autarkyCalendar.resize && historyVizCharts.autarkyCalendar.resize(); }
         catch (_) { /* dead chart */ }
@@ -747,10 +915,14 @@
       }
       const canvas = mountCanvas(mount, 'vSpagCanvas');
       const seriesIn = Array.isArray(data.series) ? data.series : [];
-      // One line dataset per day. All days green-alpha; the "Heute" day
-      // overrides to white + thicker border and is drawn on top (order 0).
+      // One line dataset per series entry. week/month → one line per day;
+      // year → ~52 weekly lines (Round-2: the year payload aggregates SOC to
+      // ISO calendar weeks, so each entry carries `label:'KW nn'`). Use the
+      // entry's `label` where present (year), else fall back to `date`
+      // (week/month). All lines green-alpha; the "Heute" entry overrides to
+      // white + thicker border and is drawn on top (order 0).
       const datasets = seriesIn.map((s) => ({
-        label: s.date,
+        label: s.label || s.date,
         data: (s.points || []).map((p) => ({ x: p.h, y: p.soc })),
         borderColor: s.isToday ? '#ffffff' : cssVarAlpha('--green', 0.5, '#3ee0a0'),
         borderWidth: s.isToday ? 2 : 1,
@@ -1219,6 +1391,30 @@
       dateInp.addEventListener('change', () => {
         destroyAll();
         applyView(viewSel ? viewSel.value : 'day', dateInp.value);
+      });
+    }
+    // Round-2 — PV-Heatmap 1h/15min granularity toggle. Event-delegated on the
+    // toggle container (no inline handlers — CSP). A click flips the module
+    // granularity state, busts ALL heatmap memo entries (the memo key has no
+    // granularity segment), destroys the stale heatmap chart, and re-runs
+    // applyView so the heatmap rebuilds with the new ?granularity= param.
+    const granToggle = document.querySelector('[data-viz-card="heatmap"] .heatmap-gran-toggle');
+    if (granToggle) {
+      granToggle.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest('[data-gran]');
+        if (!btn || !granToggle.contains(btn)) return;
+        const next = btn.dataset.gran === '15min' ? '15min' : '1h';
+        if (next === heatmapGranularity) return;
+        heatmapGranularity = next;
+        // Drop every heatmap memo entry so the next applyView rebuilds it.
+        for (const k of [...built]) {
+          if (k.startsWith('heatmap:')) built.delete(k);
+        }
+        if (historyVizCharts.heatmap) {
+          try { historyVizCharts.heatmap.destroy(); } catch (_) { /* dead */ }
+          delete historyVizCharts.heatmap;
+        }
+        applyView(viewSel ? viewSel.value : 'day', dateInp ? dateInp.value : '');
       });
     }
     // First-render dispatch — co-listens to the same #historyView / #historyDate

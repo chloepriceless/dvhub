@@ -1972,6 +1972,13 @@ function stepCurrentRange(delta) {
   const date = byId('historyDate');
   if (!view || !date) return;
   date.value = shiftDate(date.value || currentDateValue(), view.value || 'day', delta);
+  // A programmatic `.value =` assignment does NOT fire a `change` event, so
+  // history-viz.js's applyView-on-`change` listener never runs — the viz cards
+  // would stay stuck on the date the page loaded with. Dispatch the event
+  // explicitly so the viz module follows prev/next navigation. (history.js's
+  // own `change` listener also re-runs loadHistorySummary, which is idempotent;
+  // the explicit call below is kept so the error-banner catch path is preserved.)
+  date.dispatchEvent(new Event('change', { bubbles: true }));
   loadHistorySummary().catch((error) => setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error'));
 }
 

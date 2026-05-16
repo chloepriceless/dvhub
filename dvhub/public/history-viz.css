@@ -262,3 +262,14 @@
   opacity: 0.3;
   background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(141, 180, 221, 0.05) 8px 16px);
 }
+
+/* -----------------------------------------------------------------------
+   Round-2 — PV-Heatmap 1h/15min granularity toggle.
+   The toggle re-uses the shared `.chart-mode` segmented-control styling
+   (history.css). It sits in the heatmap card-head and is hidden by
+   history-viz.js via `.viz-hidden-by-view` in year view (day-of-month rows
+   have no value-axis granularity). The card-head is a flex row, so the
+   toggle floats to the head's trailing edge with no inline style (D-22).
+   ----------------------------------------------------------------------- */
+.heatmap-gran-toggle { align-self: flex-start; flex: 0 0 auto; }
+.heatmap-gran-toggle.viz-hidden-by-view { display: none !important; }
