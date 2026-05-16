@@ -308,9 +308,19 @@ function renderKpis(summary) {
     setHidden('historyPremiumHint', false);
   }
 
-  // --- Columns 2-4: DV-Vergleich (only on month/year) ---
+  // --- Columns 2-4: DV-Vergleich (week/month/year) ---
   if (dvVisible) {
+    // Kopfzahl = kombiniert (Börsenerlös + Marktprämie). Darunter getrennt:
+    //  - Börsenerlös: was du REIN durch den Börsenverkauf erlöst hast
+    //    (exportKwh × Spotpreis) — vergleichbar mit einer "normalen"
+    //    Einspeisevergütung.
+    //  - ⌀ kombiniert: effektiver ct/kWh inkl. Netzbetreiber-Marktprämie.
     setText('historyKpiDvRevenue', fmtEur(kpis.dvRevenueEur));
+    const dvExportKwh = Number(kpis?.exportKwh || 0);
+    const spotRevenueEur = Number(kpis?.exportRevenueEur || 0);
+    const spotRateCtKwh = dvExportKwh > 0 ? (spotRevenueEur / dvExportKwh) * 100 : null;
+    setText('historyKpiDvSpotRevenue', fmtEur(spotRevenueEur));
+    setText('historyKpiDvSpotRate', hasFiniteNumber(spotRateCtKwh) ? fmtCt(spotRateCtKwh) : '-');
     setText('historyKpiDvRevenueRate', fmtCt(kpis.dvRevenueCtKwh));
 
     const dvMarketValueCt = kpis?.periodMarketValueCtKwh ?? kpis?.annualMarketValueCtKwh;
@@ -352,7 +362,7 @@ function renderKpis(summary) {
   } else {
     // Reset DV-only columns to placeholders when DV data is unavailable
     // (premium columns shown, but no dvRevenue/hypFeedIn for this period)
-    for (const id of ['historyKpiDvRevenue', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
+    for (const id of ['historyKpiDvRevenue', 'historyKpiDvSpotRevenue', 'historyKpiDvSpotRate', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
                        'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
       setText(id, '-');
     }
