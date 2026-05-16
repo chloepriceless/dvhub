@@ -833,6 +833,11 @@ function applyPeriodPremiumDisplay({ view, date, slots, kpis, meta, pricingConfi
   const annualCtKwhByYear = meta?.solarMarketValueAnnualCtKwhByYear || {};
   const monthlyCtKwhByMonth = meta?.solarMarketValueMonthlyCtKwhByMonth || {};
   const marketValueMode = resolveMarketValueMode(pricingConfig);
+  // Ride marketValueMode along in meta.marketPremium so every branch below
+  // (each spreads `...(meta?.marketPremium || {})`) carries it to the
+  // frontend — computeMarketPremium only runs for the year view, so
+  // week/month would otherwise lose it.
+  meta = { ...meta, marketPremium: { ...(meta?.marketPremium || {}), marketValueMode } };
   const premiumEligibleExportKwh = round2(slots.reduce((sum, slot) => {
     const marketPriceCtKwh = Number(slot?.marketPriceCtKwh);
     if (!Number.isFinite(marketPriceCtKwh) || marketPriceCtKwh < 0) return sum;
