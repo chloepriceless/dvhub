@@ -937,19 +937,49 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     }
     const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
     // bucketInterval is allow-list-checked above → safe to interpolate.
+    // timeseries_samples stores BOTH raw fine-grained samples AND a 900s
+    // (15-min) rollup tier covering the same time span. Summing
+    // value_num × resolution_seconds across all tiers double-counts the
+    // energy. Dedup by tier: integrate the raw tier (resolution < 900s) and
+    // the rollup tier (>= 900s) per bucket separately, then FULL OUTER JOIN
+    // and prefer raw — fall back to the rollup only where raw is absent
+    // (e.g. data older than the retained raw window).
     const result = await pool.query(`
+      WITH raw AS (
+        SELECT series_key,
+               time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+               SUM(value_num * COALESCE(resolution_seconds, 0)) AS energy,
+               AVG(value_num) AS mean_value,
+               MAX(unit) AS unit
+        FROM timeseries_samples
+        WHERE series_key IN (${placeholders})
+          AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
+          AND COALESCE(resolution_seconds, 0) < 900
+        GROUP BY series_key, bucket_ts
+      ),
+      roll AS (
+        SELECT series_key,
+               time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+               SUM(value_num * COALESCE(resolution_seconds, 0)) AS energy,
+               AVG(value_num) AS mean_value,
+               MAX(unit) AS unit
+        FROM timeseries_samples
+        WHERE series_key IN (${placeholders})
+          AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
+          AND COALESCE(resolution_seconds, 0) >= 900
+        GROUP BY series_key, bucket_ts
+      )
       SELECT
-        series_key,
-        time_bucket('${bucketInterval}', ts_utc) AS bucket_ts,
+        COALESCE(raw.series_key, roll.series_key) AS series_key,
+        COALESCE(raw.bucket_ts, roll.bucket_ts) AS bucket_ts,
         EXTRACT(EPOCH FROM '${bucketInterval}'::interval)::bigint AS bucket_seconds,
-        SUM(value_num * COALESCE(resolution_seconds, 0))
+        COALESCE(raw.energy, roll.energy)
           / NULLIF(EXTRACT(EPOCH FROM '${bucketInterval}'::interval), 0) AS energy_power_w,
-        AVG(value_num) AS mean_value,
-        MAX(unit) AS unit
-      FROM timeseries_samples
-      WHERE series_key IN (${placeholders})
-        AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
-      GROUP BY series_key, bucket_ts
+        COALESCE(raw.mean_value, roll.mean_value) AS mean_value,
+        COALESCE(raw.unit, roll.unit) AS unit
+      FROM raw
+      FULL OUTER JOIN roll
+        ON raw.series_key = roll.series_key AND raw.bucket_ts = roll.bucket_ts
       ORDER BY bucket_ts ASC, series_key ASC
     `, [...keys, isoTimestamp(start), isoTimestamp(end)]);
     return result.rows.map((row) => ({
