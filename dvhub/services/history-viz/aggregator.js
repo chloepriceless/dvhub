@@ -619,6 +619,11 @@ export function createHistoryVizAggregator(ctx) {
           'load_power_w', 'battery_charge_w', 'battery_discharge_w',
         ],
         start, end, view,
+        // decomposeEnergyFlows needs SUB-DAILY buckets to keep the day/night
+        // structure — at a 1-day bucket PV "covers" the whole day's load and
+        // the night-time battery discharge is misattributed to export. Force
+        // hourly for week/month/year/all (15-min for day).
+        intervalOverride: view === 'day' ? '15 minutes' : '1 hour',
       });
       // Plan 09.4 — energy-flow attribution depends on optimizer.allowGridCharge.
       // The per-bucket decomposition runs either way (it preserves the time
@@ -1138,6 +1143,9 @@ export function createHistoryVizAggregator(ctx) {
           'load_power_w', 'battery_charge_w', 'battery_discharge_w',
         ],
         start, end, view,
+        // Sub-daily buckets so decomposeEnergyFlows keeps the day/night
+        // structure (see getSankey) — hourly for week/month/year/all.
+        intervalOverride: view === 'day' ? '15 minutes' : '1 hour',
       });
       // Plan 09.4 — the autarky donut follows the SAME grid-charge rule as the
       // Sankey: with optimizer.allowGridCharge OFF (default) ALL grid import is
