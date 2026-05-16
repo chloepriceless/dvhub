@@ -1909,9 +1909,11 @@ export function createApiRoutes(ctx) {
     // Gap 3: the Uptime Kuma section now reflects the `monitoring` block
     // (monitoring.pushUrl + monitoring.pushIntervalSec) — the SINGLE Kuma
     // integration — NOT a duplicate notifications.providers.uptime-kuma. The
-    // pushUrl path token IS the credential, so it is emitted redacted as '***'.
-    // Secrets are redacted for transport — the UI never receives the real ntfy
-    // token or Kuma push URL. NOT in LAN_SAFE_ENDPOINTS: the POST is a config
+    // Kuma monitor URL is emitted in clear: the operator must see which monitor
+    // their heartbeat writes to, and it is LAN-trust appliance config (consistent
+    // with config-redaction.js, which leaves the monitoring.pushUrl path-token
+    // intact). The ntfy bearer token IS a true secret and stays redacted as '***'.
+    // NOT in LAN_SAFE_ENDPOINTS: the POST is a config
     // WRITE and must require Bearer auth (both verbs share the gate).
     if (url.pathname === '/api/integrations/notification-providers' && req.method === 'GET') {
       const raw = ctx.getRawCfg?.() || {};
@@ -1929,7 +1931,7 @@ export function createApiRoutes(ctx) {
           // Uptime Kuma is "configured" when monitoring.pushUrl is set —
           // there is no separate enabled flag; an empty pushUrl = disabled.
           enabled: !!monitoring.pushUrl,
-          pushUrl: monitoring.pushUrl ? '***' : '',   // the pushUrl path token IS the credential
+          pushUrl: monitoring.pushUrl || '',   // shown in clear — operator must see their monitor URL
           pushIntervalSec: Number(monitoring.pushIntervalSec) || 240
         }
       });
