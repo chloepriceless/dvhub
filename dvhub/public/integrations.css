@@ -289,6 +289,19 @@
   color: var(--text-2);
   margin-top: 2px;
 }
+/* Phase 09.4-04 (D-01/D-02): identity-in-header subtitle line. Mirrors
+   .conn-cat's muted token + sizing; clips with ellipsis so a long broker URL
+   or VIN never breaks the card layout (full value is in the title attr). */
+.conn-identity {
+  font-family: var(--f-mono);
+  font-size: 0.62rem;
+  color: var(--text-2);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 .conn-status-chip {
   display: inline-flex;
   align-items: center;
@@ -338,6 +351,34 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Phase 09.4-04 (D-06): per-provider enabled/disabled badge strip on the
+   notifications card. Simple flex-wrap row — NOT a repeat(N,minmax(0,1fr))
+   auto-grid (09.2 D-29 anti-pattern). */
+.conn-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 0;
+}
+.conn-badge {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+  white-space: nowrap;
+}
+.conn-badge.is-on {
+  color: var(--green);
+  border-color: rgba(62,224,160,.3);
+}
+.conn-badge.is-off {
+  color: var(--text-2);
 }
 
 /* Actions row */

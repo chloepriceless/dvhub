@@ -341,6 +341,7 @@
 
   function buildCard(sys, data, status) {
     var stats = buildStats(sys.key, data);
+    var identity = buildIdentityLine(sys.key, data);
     var dotClass = statusDotClass(status);
     var label = statusLabel(status);
     var cardClass = 'conn-card status-' + status + ' accent-' + sys.accent;
@@ -361,17 +362,40 @@
         + '</div>';
     }
     var pulseHtml = buildPulseBars(data && data.sampleIntervalHistogramMs);
+    // Phase 09.4-04 (D-06): per-provider enabled/disabled badge strip for the
+    // notifications card, WITH a dual-shape backward-compat guard
+    // (RESEARCH Pitfall 6). The /api/integrations/status providers array
+    // changed from string[] (pre-09.4-03) to {name,enabled}[] (09.4-03 D-06);
+    // during the Wave 2→3 transition the backend — or a stale cached page —
+    // may still serve either shape. Never .join() the array (that prints
+    // [object Object]); render each entry per-field and esc() the name.
+    var badges = '';
+    if (sys.key === 'notifications' && Array.isArray(data && data.providers)) {
+      badges = '<div class="conn-badges">';
+      for (var b = 0; b < data.providers.length; b++) {
+        var pr = data.providers[b];
+        // A legacy string entry has no enabled flag — treat it as enabled
+        // (it was only listed at all because the pre-D-06 filter kept actives).
+        var n = (typeof pr === 'string') ? pr : ((pr && pr.name) || '');
+        var isOn = (typeof pr === 'string') ? true : !!(pr && pr.enabled);
+        var badgeCls = isOn ? 'conn-badge is-on' : 'conn-badge is-off';
+        badges += '<span class="' + badgeCls + '">' + esc(n) + '</span>';
+      }
+      badges += '</div>';
+    }
     return '<article class="' + cardClass + '" data-system="' + esc(sys.key) + '" data-status="' + esc(status) + '" data-filter="' + filterBucket(status) + '">'
       + '<header class="conn-head">'
         + '<div class="conn-logo">' + esc(sys.logo) + '</div>'
         + '<div class="conn-meta">'
           + '<div class="conn-name">' + esc(sys.label) + '</div>'
           + '<div class="conn-cat">' + esc(sys.category) + '</div>'
+          + (identity ? ('<div class="conn-identity" title="' + esc(identity) + '">' + esc(identity) + '</div>') : '')
         + '</div>'
         + pulseHtml
         + '<span class="conn-status-chip"><span class="dot ' + dotClass + '"></span>' + esc(label) + '</span>'
       + '</header>'
       + '<div class="conn-stats">' + statsHtml + '</div>'
+      + badges
       + actions
     + '</article>';
   }
