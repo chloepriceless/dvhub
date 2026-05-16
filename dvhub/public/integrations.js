@@ -654,6 +654,141 @@
     if (e.target.closest('#mteSave')) saveMqttTiles();
   });
 
+  /* ===================== MQTT INSPECTOR DRAWER ===================== */
+  // Phase 09.4-05 (D-03/D-04). A slide-over drawer opened by clicking the MQTT
+  // .conn-card. While open it polls GET /api/integrations/mqtt/topics every 4s
+  // (within the D-04 3-5s band) and renders a per-topic table — topic name,
+  // message count, last-message relative time, last-payload preview. The
+  // drawer is plain static markup in integrations.html; this code only toggles
+  // the .is-open class + the hidden attribute (no display-property writes —
+  // CSP 09.1-07) and fills #mqtt-drawer-topics. Closes on the close button, a
+  // backdrop click, and the Escape key. ALL broker-supplied strings (topic
+  // names AND payloads) pass through esc() before insertAdjacentHTML — the
+  // payload is untrusted data published by any device on the broker
+  // (RESEARCH Pitfall 3 — XSS via MQTT payload).
+
+  var MQTT_DRAWER_POLL_MS = 4000;
+  var mqttPollTimer = null;
+  var mqttDrawerEls = null;
+
+  function getMqttDrawerEls() {
+    if (mqttDrawerEls) return mqttDrawerEls;
+    var drawer = document.getElementById('mqtt-drawer');
+    if (!drawer) return null; // drawer markup not on this page
+    mqttDrawerEls = {
+      drawer: drawer,
+      backdrop: document.getElementById('mqtt-drawer-backdrop'),
+      close: document.getElementById('mqtt-drawer-close'),
+      topics: document.getElementById('mqtt-drawer-topics'),
+      meta: document.getElementById('mqtt-drawer-meta')
+    };
+    return mqttDrawerEls;
+  }
+
+  // Escape-key close — mirrors dv-modal.js's keyHandler discipline: a named
+  // handler registered on open, removed on close so it never leaks.
+  function mqttDrawerKeyHandler(e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeMqttDrawer(); }
+  }
+
+  async function pollMqttTopics() {
+    var els = getMqttDrawerEls();
+    if (!els || !els.topics) return;
+    try {
+      var res = await apiFetch('/api/integrations/mqtt/topics');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      // Pitfall 7 — distinguish "MQTT off" from "no topics yet". The endpoint
+      // reports connected:false when the hub is not connected; show an
+      // explicit state rather than a blank table.
+      if (data && data.connected === false) {
+        if (els.meta) els.meta.textContent = 'MQTT nicht verbunden';
+        els.topics.innerHTML = '<p class="mqtt-drawer-empty">MQTT ist derzeit nicht verbunden. '
+          + 'Sobald der Broker erreichbar ist, erscheinen hier die beobachteten Topics.</p>';
+        return;
+      }
+      var topics = (data && Array.isArray(data.topics)) ? data.topics : [];
+      var total = (data && data.total != null) ? data.total : topics.length;
+      if (els.meta) {
+        els.meta.textContent = data && data.observedSince
+          ? (total + ' Topics · seit ' + fmtRel(data.observedSince))
+          : (total + ' Topics');
+      }
+      if (!topics.length) {
+        els.topics.innerHTML = '<p class="mqtt-drawer-empty">Noch keine Topics beobachtet — '
+          + 'sobald Geräte auf dem Broker publizieren, erscheinen sie hier.</p>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < topics.length; i++) {
+        var t = topics[i] || {};
+        // esc() BOTH the topic name AND the payload — untrusted broker data.
+        html += '<div class="mqtt-topic-row">'
+          + '<div class="mqtt-topic-head">'
+            + '<span class="mqtt-topic-name">' + esc(t.topic) + '</span>'
+            + '<span class="mqtt-topic-count">' + esc(String(t.count != null ? t.count : 0)) + '×</span>'
+            + '<span class="mqtt-topic-time">' + esc(fmtRel(t.lastAt)) + '</span>'
+          + '</div>'
+          + '<span class="mqtt-topic-payload">' + esc(t.lastPayload != null ? t.lastPayload : '') + '</span>'
+          + '</div>';
+      }
+      els.topics.innerHTML = html;
+    } catch (e) {
+      // Friendly message — never throw out of the poll loop.
+      if (els.meta) els.meta.textContent = 'Topics konnten nicht geladen werden.';
+    }
+  }
+
+  function openMqttDrawer() {
+    var els = getMqttDrawerEls();
+    if (!els) return;
+    // Remove [hidden] first, then add .is-open on the next frame so the
+    // translateX transition actually animates (a [hidden]→.is-open switch in
+    // the same frame would jump straight to the open position).
+    els.drawer.hidden = false;
+    if (els.backdrop) els.backdrop.hidden = false;
+    requestAnimationFrame(function () {
+      els.drawer.classList.add('is-open');
+      if (els.backdrop) els.backdrop.classList.add('is-open');
+    });
+    pollMqttTopics();
+    if (mqttPollTimer) clearInterval(mqttPollTimer);
+    mqttPollTimer = setInterval(pollMqttTopics, MQTT_DRAWER_POLL_MS);
+    document.addEventListener('keydown', mqttDrawerKeyHandler);
+  }
+
+  function closeMqttDrawer() {
+    var els = getMqttDrawerEls();
+    if (mqttPollTimer) { clearInterval(mqttPollTimer); mqttPollTimer = null; }
+    document.removeEventListener('keydown', mqttDrawerKeyHandler);
+    if (!els) return;
+    els.drawer.classList.remove('is-open');
+    if (els.backdrop) els.backdrop.classList.remove('is-open');
+    // Re-add [hidden] only after the slide-out transition finishes so it
+    // animates (matches the 220ms ≥ .2s CSS transition).
+    setTimeout(function () {
+      els.drawer.hidden = true;
+      if (els.backdrop) els.backdrop.hidden = true;
+    }, 220);
+  }
+
+  // Trigger delegation — a SECOND document click listener mirroring the
+  // [data-status-filter] pattern above. A click anywhere on the MQTT card
+  // opens the drawer, EXCEPT on the card's Logs/Konfig <a> links (let those
+  // navigate). The drawer's own close button + backdrop also route here.
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('#mqtt-drawer-close') || e.target.closest('#mqtt-drawer-backdrop')) {
+      closeMqttDrawer();
+      return;
+    }
+    // Inside the drawer itself — ignore (don't re-trigger).
+    if (e.target.closest('#mqtt-drawer')) return;
+    // A click on a card action link should navigate, not open the drawer.
+    if (e.target.closest('a')) return;
+    var card = e.target.closest('.conn-card[data-system="mqtt"]');
+    if (card) { e.preventDefault(); openMqttDrawer(); }
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);
