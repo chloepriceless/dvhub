@@ -14,13 +14,16 @@
 import { createTelegramProvider } from './providers/telegram.js';
 import { createPushoverProvider } from './providers/pushover.js';
 import { createNtfyProvider } from './providers/ntfy.js';
-import { createUptimeKumaProvider } from './providers/uptime-kuma.js';
 
+// Phase 09.4 gap-closure: the `uptime-kuma` notification provider was removed.
+// It duplicated the pre-existing `monitoring` block (config monitoring.pushUrl
+// + server.js startMonitoringHeartbeat()). Uptime Kuma is now driven solely by
+// that single HMAC-signed, SSRF-guarded heartbeat. Alert-push is wired through
+// ctx.monitoringAlertPush (see server.js) — not a notification provider.
 const PROVIDER_FACTORIES = {
   telegram: createTelegramProvider,
   pushover: createPushoverProvider,
-  ntfy: createNtfyProvider,
-  'uptime-kuma': createUptimeKumaProvider
+  ntfy: createNtfyProvider
 };
 
 const HYSTERESIS_BAND = 5; // SOC percentage
@@ -189,9 +192,6 @@ export function createNotificationService(ctx) {
       if (!factory) continue;
       try {
         providers.set(name, factory(pCfg));
-        // Phase 09.4 D-08: optional heartbeat hook — only the Uptime Kuma
-        // provider defines startHeartbeat; optional-chaining keeps this generic.
-        providers.get(name)?.startHeartbeat?.();
       } catch (err) {
         pushLog('notification_provider_error', { provider: name, error: err.message });
       }
@@ -271,6 +271,22 @@ export function createNotificationService(ctx) {
           }
         }
 
+        // Phase 09.4 gap-closure (Gap 3 step 3): also fire ONE Uptime Kuma
+        // alert-push per notification, REUSING the existing monitoring
+        // heartbeat's signed/SSRF-guarded send path (server.js exposes
+        // ctx.monitoringAlertPush). A 'critical' level maps to status=down so
+        // Kuma raises the monitor; everything else stays status=up. The hook
+        // is a no-op when monitoring.pushUrl is unset — fire-and-forget, never
+        // blocks or throws.
+        if (typeof ctx.monitoringAlertPush === 'function') {
+          try {
+            const alertStatus = (msg.level === 'critical') ? 'down' : 'up';
+            const alertMsg = `${msg.title || 'DVhub'}: ${msg.body || ''}`.slice(0, 200);
+            // Intentionally not awaited — fire-and-forget.
+            Promise.resolve(ctx.monitoringAlertPush(alertStatus, alertMsg)).catch(() => { /* noop */ });
+          } catch (_) { /* noop */ }
+        }
+
         // Mark as fired for throttle
         lastFired.set(eventType, nowMs);
       }
@@ -284,11 +300,6 @@ export function createNotificationService(ctx) {
   }
 
   function close() {
-    // Phase 09.4 D-08: stop any provider heartbeat timer (Uptime Kuma) on
-    // graceful shutdown so no dangling interval survives close().
-    for (const p of providers.values()) {
-      try { p.stopHeartbeat?.(); } catch (_) { /* noop */ }
-    }
     providers.clear();
     lastFired.clear();
     activeEvents.clear();

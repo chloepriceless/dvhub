@@ -1838,7 +1838,11 @@ export function createApiRoutes(ctx) {
         notifications: {
           enabled: getCfg().notifications?.enabled ?? false,
           // Phase 09.4 D-06: list ALL configured providers (incl. disabled) with an enabled flag.
+          // Phase 09.4 gap-closure: 'uptime-kuma' is no longer a notification
+          // provider (it duplicated the `monitoring` block) — filter out any
+          // stale config entry so it never re-appears as a provider badge.
           providers: Object.entries(getCfg().notifications?.providers || {})
+            .filter(([name]) => name !== 'uptime-kuma')
             .map(([name, v]) => ({ name, enabled: !!v.enabled }))
         }
       };
@@ -1900,15 +1904,20 @@ export function createApiRoutes(ctx) {
       });
     }
 
-    // GET /api/integrations/notification-providers — ntfy + uptime-kuma config
-    // for the integrations-page editor (Phase 09.4 D-07/D-08). Secrets are
-    // redacted for transport (mirrors redactConfig) — the UI never receives the
-    // real ntfy token or Kuma push URL. NOT in LAN_SAFE_ENDPOINTS: the POST is a
-    // config WRITE and must require Bearer auth (both verbs share the gate).
+    // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma
+    // config for the editor page (Phase 09.4 D-07/D-08; gap-closure Gap 3).
+    // Gap 3: the Uptime Kuma section now reflects the `monitoring` block
+    // (monitoring.pushUrl + monitoring.pushIntervalSec) — the SINGLE Kuma
+    // integration — NOT a duplicate notifications.providers.uptime-kuma. The
+    // pushUrl path token IS the credential, so it is emitted redacted as '***'.
+    // Secrets are redacted for transport — the UI never receives the real ntfy
+    // token or Kuma push URL. NOT in LAN_SAFE_ENDPOINTS: the POST is a config
+    // WRITE and must require Bearer auth (both verbs share the gate).
     if (url.pathname === '/api/integrations/notification-providers' && req.method === 'GET') {
-      const provs = ctx.getRawCfg?.()?.notifications?.providers || {};
+      const raw = ctx.getRawCfg?.() || {};
+      const provs = raw.notifications?.providers || {};
       const ntfy = provs.ntfy || {};
-      const kuma = provs['uptime-kuma'] || {};
+      const monitoring = raw.monitoring || {};
       return json(res, 200, {
         ok: true,
         ntfy: {
@@ -1917,21 +1926,27 @@ export function createApiRoutes(ctx) {
           token: ntfy.token ? '***' : ''        // redacted — never emit the real token
         },
         'uptime-kuma': {
-          enabled: !!kuma.enabled,
-          pushUrl: kuma.pushUrl ? '***' : '',   // the pushUrl path token IS the credential
-          heartbeatIntervalSec: kuma.heartbeatIntervalSec || 60
+          // Uptime Kuma is "configured" when monitoring.pushUrl is set —
+          // there is no separate enabled flag; an empty pushUrl = disabled.
+          enabled: !!monitoring.pushUrl,
+          pushUrl: monitoring.pushUrl ? '***' : '',   // the pushUrl path token IS the credential
+          pushIntervalSec: Number(monitoring.pushIntervalSec) || 240
         }
       });
     }
 
-    // POST /api/integrations/notification-providers — server-side merge of ONLY
-    // notifications.providers.{ntfy,uptime-kuma} into a getRawCfg() clone, then
-    // saveAndApplyConfig. This is the SAME shape as /api/family/mqtt-tiles: a
-    // partial POST to /api/config would REPLACE config.json verbatim and wipe
-    // apiToken/optimizer/mqtt (MEMORY feedback_config_save_replaces — prod
-    // crash-loop incident). When an incoming secret equals the redaction
-    // placeholder '***', the existing stored value is KEPT (same bug class as
-    // the 09-01 settings-save token_too_short regression).
+    // POST /api/integrations/notification-providers — server-side merge of the
+    // ntfy provider + the `monitoring` (Uptime Kuma) block into a getRawCfg()
+    // clone, then saveAndApplyConfig (Phase 09.4 D-07/D-08; gap-closure Gap 3).
+    // Gap 3: the Uptime Kuma section writes monitoring.pushUrl +
+    // monitoring.pushIntervalSec — the SINGLE Kuma integration — NOT a duplicate
+    // notifications.providers.uptime-kuma. This is the SAME shape as
+    // /api/family/mqtt-tiles: a partial POST to /api/config would REPLACE
+    // config.json verbatim and wipe apiToken/optimizer/mqtt (MEMORY
+    // feedback_config_save_replaces — prod crash-loop incident). When an
+    // incoming secret equals the redaction placeholder '***', the existing
+    // stored value is KEPT (same bug class as the 09-01 settings-save
+    // token_too_short regression).
     if (url.pathname === '/api/integrations/notification-providers' && req.method === 'POST') {
       let body;
       try { body = await parseBody(req); }
@@ -1946,7 +1961,7 @@ export function createApiRoutes(ctx) {
         ? next.notifications.providers : {};
       const prev = next.notifications.providers;
 
-      // ntfy
+      // ntfy — a real notifications.providers entry.
       const inNtfy = body.ntfy || {};
       const ntfyToken = (inNtfy.token === '***')
         ? (prev.ntfy && prev.ntfy.token) || ''      // keep existing — '***' means "unchanged"
@@ -1956,19 +1971,28 @@ export function createApiRoutes(ctx) {
         topicUrl: clip(inNtfy.topicUrl, 512),
         ...(ntfyToken ? { token: ntfyToken } : {})
       };
+      // Gap 3 step 2: scrub any stale duplicate provider so it cannot resurrect
+      // a second heartbeat after this save.
+      if (prev['uptime-kuma']) delete next.notifications.providers['uptime-kuma'];
 
-      // uptime-kuma
+      // Uptime Kuma → the `monitoring` block (the single Kuma integration).
+      next.monitoring = (next.monitoring && typeof next.monitoring === 'object') ? next.monitoring : {};
+      const prevMon = next.monitoring;
       const inKuma = body['uptime-kuma'] || {};
-      const kumaUrl = (inKuma.pushUrl === '***')
-        ? (prev['uptime-kuma'] && prev['uptime-kuma'].pushUrl) || ''
-        : clip(inKuma.pushUrl, 512);
-      // Kuma's minimum push interval is 20s (RESEARCH Pitfall 4); clamp [20,3600].
-      const hb = Math.max(20, Math.min(3600, Number(inKuma.heartbeatIntervalSec) || 60));
-      next.notifications.providers['uptime-kuma'] = {
-        enabled: !!inKuma.enabled,
-        pushUrl: kumaUrl,
-        heartbeatIntervalSec: hb
-      };
+      // An EMPTY (falsy) `enabled` clears the pushUrl → disables the heartbeat.
+      // When enabled: '***' keeps the stored URL, anything else replaces it.
+      let kumaUrl;
+      if (!inKuma.enabled) {
+        kumaUrl = '';
+      } else if (inKuma.pushUrl === '***') {
+        kumaUrl = prevMon.pushUrl || '';
+      } else {
+        kumaUrl = clip(inKuma.pushUrl, 512);
+      }
+      // monitoring.pushIntervalSec range mirrors config-model.js [30,600].
+      const intervalSec = Math.max(30, Math.min(600, Number(inKuma.pushIntervalSec) || 240));
+      next.monitoring.pushUrl = kumaUrl;
+      next.monitoring.pushIntervalSec = intervalSec;
 
       try {
         ctx.saveAndApplyConfig(next);
@@ -1978,7 +2002,7 @@ export function createApiRoutes(ctx) {
       }
       pushLog('notification_providers_saved', {
         ntfyEnabled: next.notifications.providers.ntfy.enabled,
-        kumaEnabled: next.notifications.providers['uptime-kuma'].enabled
+        kumaEnabled: !!next.monitoring.pushUrl
       }, actorContext(req));
       return json(res, 200, { ok: true });
     }

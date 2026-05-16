@@ -886,6 +886,19 @@ ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
 ctx.notificationService = notificationService;
 
+// Phase 09.4 gap-closure (Gap 3 step 3): Uptime Kuma alert-push hook. The
+// notification service calls ctx.monitoringAlertPush(status, msg) whenever it
+// dispatches a notification; that routes through the SAME signed/SSRF-guarded
+// send path as the monitoring heartbeat. `monitoringHeartbeatSend` is (re)set
+// by startMonitoringHeartbeat() — null when no/blocked pushUrl, in which case
+// the hook is a safe no-op. A stable wrapper on ctx survives heartbeat reloads.
+let monitoringHeartbeatSend = null;
+ctx.monitoringAlertPush = (status, msg) => {
+  if (typeof monitoringHeartbeatSend !== 'function') return Promise.resolve();
+  try { return Promise.resolve(monitoringHeartbeatSend(msg, status)); }
+  catch { return Promise.resolve(); }
+};
+
 // Phase 05: ML & Edge-AI (v0.9)
 const mlService = createMlService(ctx);
 ctx.mlService = mlService;
@@ -1320,6 +1333,10 @@ if (IS_RUNTIME_PROCESS) {
   }
   function startMonitoringHeartbeat() {
     if (monitoringTimerId) { clearInterval(monitoringTimerId); monitoringTimerId = null; }
+    // Phase 09.4 gap-closure: clear the alert-push hook up front. It is only
+    // re-armed below once an allowed pushUrl is confirmed — so a removed or
+    // blocked URL leaves ctx.monitoringAlertPush as a safe no-op.
+    monitoringHeartbeatSend = null;
     const pushUrl = cfg.monitoring?.pushUrl || '';
     const intervalMs = (Number(cfg.monitoring?.pushIntervalSec) || 240) * 1000;
     if (!pushUrl) return;
@@ -1343,7 +1360,11 @@ if (IS_RUNTIME_PROCESS) {
     const signingKey = cfg.monitoring?.signingKey || '';
     const hostname = os.hostname();
     const appVersion = APP_VERSION?.version || '';
-    const sendHeartbeat = async (msg) => {
+    // Phase 09.4 gap-closure (Gap 3 step 3): `status` is now a parameter so the
+    // same signed/SSRF-guarded send path serves BOTH the periodic heartbeat
+    // (status='up') and notification alert-pushes (status='up'|'down'). Default
+    // 'up' keeps every existing caller byte-identical.
+    const sendHeartbeat = async (msg, status = 'up') => {
       try {
         const ts = Date.now();
         const payload = `${msg}|${ts}|${hostname}|${appVersion}`;
@@ -1351,7 +1372,8 @@ if (IS_RUNTIME_PROCESS) {
           ? 'sha256=' + crypto.createHmac('sha256', signingKey).update(payload).digest('hex')
           : 'unsigned';
         const sep = pushUrl.includes('?') ? '&' : '?';
-        await fetch(pushUrl + sep + 'status=up&msg=' + encodeURIComponent(msg) + '&ping=', {
+        const kumaStatus = status === 'down' ? 'down' : 'up';
+        await fetch(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
           signal: AbortSignal.timeout(10000),
           headers: {
             'x-dvhub-signature': sig,
@@ -1364,6 +1386,8 @@ if (IS_RUNTIME_PROCESS) {
         pushLog('heartbeat_send_error', { error: e?.message ?? String(e) });
       }
     };
+    // Arm the alert-push hook — ctx.monitoringAlertPush() now routes here.
+    monitoringHeartbeatSend = sendHeartbeat;
     monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
     setTimeout(() => sendHeartbeat('DVhub started'), 5000);
     // Plan 08-03 Task 2: run through redactUrlCreds before any logging/exposure so that

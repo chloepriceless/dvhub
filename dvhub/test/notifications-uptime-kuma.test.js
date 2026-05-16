@@ -1,151 +1,146 @@
-// test/notifications-uptime-kuma.test.js -- RED tests for the Uptime Kuma provider (D-08)
+// test/notifications-uptime-kuma.test.js -- Uptime Kuma alert-push integration.
 //
-// Wave 0 (plan 09.4-01): written FIRST, against a module that does not exist
-// yet. EXPECTED TO FAIL with MODULE_NOT_FOUND until plan 09.4-03 ships
-// `services/notifications/providers/uptime-kuma.js`. RED is correct.
+// Phase 09.4 gap-closure (Gap 3): the standalone `uptime-kuma` notification
+// provider was REMOVED — it duplicated the pre-existing `monitoring` block
+// (config monitoring.pushUrl + server.js startMonitoringHeartbeat(), an
+// HMAC-signed/SSRF-guarded heartbeat). Uptime Kuma is now driven solely by
+// that single integration.
 //
-// Contract under test (from 09.4-RESEARCH.md § "Uptime Kuma provider"):
-//   createUptimeKumaProvider(cfg) -> { type:'uptime-kuma', notify, startHeartbeat, stopHeartbeat }
-//   - cfg: { pushUrl, heartbeatIntervalSec? }
-//     throws Error('uptime-kuma provider requires pushUrl') if !pushUrl
-//   - notify({level,title,body}) GETs pushUrl with searchParams
-//       status=(critical?'down':'up'), msg=`${title}: ${body}`
-//   - returns {ok} shape; never throws
-//   - startHeartbeat() sets a setInterval + sends an immediate push;
-//     stopHeartbeat() clears it; idempotent
+// What remains genuinely-new is the alert-push: when the notification service
+// dispatches a notification it ALSO fires ONE Kuma push via the
+// ctx.monitoringAlertPush(status, msg) hook (server.js routes that through the
+// shared signed/guarded heartbeat send path). These tests exercise that hook
+// from the notification service's evaluate() — i.e. the part that survived the
+// de-duplication.
 //
-// Threat T-09.4-02 (DoS): every test that starts a heartbeat MUST stop it; the
-// heartbeat interval is sub-second so total runtime stays under ~3s.
-import { describe, it, afterEach } from 'node:test';
+// Contract under test:
+//   - evaluate() calls ctx.monitoringAlertPush(status, msg) once per dispatched
+//     notification, with status='down' for level 'critical', else status='up'.
+//   - The hook is optional: a service built without ctx.monitoringAlertPush
+//     dispatches normally and never throws.
+//   - Alert-push is fire-and-forget: a rejecting hook never breaks evaluate().
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 
-import { createUptimeKumaProvider } from '../services/notifications/providers/uptime-kuma.js';
-
-// ---------- helpers ----------
-function startMockServer(responseStatus, responseBody) {
-  return new Promise((resolve) => {
-    const requests = [];
-    const server = http.createServer((req, res) => {
-      const chunks = [];
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
-        requests.push({
-          method: req.method,
-          url: req.url,
-          headers: req.headers,
-          body: Buffer.concat(chunks).toString()
-        });
-        res.writeHead(responseStatus, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(responseBody || {}));
-      });
-    });
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      resolve({ server, port, requests, baseUrl: `http://127.0.0.1:${port}` });
-    });
-  });
-}
-
-function closeMockServer(mock) {
-  return new Promise((resolve) => mock.server.close(resolve));
-}
+import { createNotificationService } from '../services/notifications/index.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-describe('createUptimeKumaProvider', () => {
-  let mock_;
-  let provider_;
+// Minimal fake provider — records the messages it was asked to notify().
+function fakeProvider() {
+  const sent = [];
+  return {
+    instance: { type: 'fake', notify: async (msg) => { sent.push(msg); return { ok: true }; } },
+    sent
+  };
+}
 
-  afterEach(async () => {
-    // Always stop a possibly-running heartbeat first (T-09.4-02 — no dangling timer).
-    if (provider_ && typeof provider_.stopHeartbeat === 'function') {
-      provider_.stopHeartbeat();
+function baseCfg(triggers) {
+  return {
+    notifications: {
+      enabled: true,
+      providers: { fake: { enabled: true } },
+      throttle: { minIntervalSec: 0, quietHoursStart: '00:00', quietHoursEnd: '00:00' },
+      triggers
     }
-    provider_ = null;
-    if (mock_) await closeMockServer(mock_);
-    mock_ = null;
+  };
+}
+
+describe('Uptime Kuma alert-push integration (notification service)', () => {
+  it('evaluate() calls ctx.monitoringAlertPush with status=up for a non-critical alert', async () => {
+    const calls = [];
+    const cfg = baseCfg([
+      { event: 'soc_low', threshold: 15, level: 'warn', channels: ['fake'] }
+    ]);
+    const ctx = {
+      getCfg: () => cfg,
+      pushLog: () => {},
+      monitoringAlertPush: (status, msg) => { calls.push({ status, msg }); return Promise.resolve(); }
+    };
+    const svc = createNotificationService(ctx);
+    const fp = fakeProvider();
+    svc._setProviders({ fake: fp.instance });
+
+    await svc.evaluate({ victron: { soc: 10 } }, Date.now());
+    await sleep(20); // alert-push is fire-and-forget
+
+    assert.equal(fp.sent.length, 1, 'the fake provider received the notification');
+    assert.equal(calls.length, 1, 'monitoringAlertPush fired exactly once');
+    assert.equal(calls[0].status, 'up', 'warn level -> status=up');
+    assert.ok(calls[0].msg.includes('SOC'), 'alert message carries the trigger title');
   });
 
-  it('throws when pushUrl is missing', () => {
-    assert.throws(() => createUptimeKumaProvider({}), /requires pushUrl/);
+  it('evaluate() calls ctx.monitoringAlertPush with status=down for a critical alert', async () => {
+    const calls = [];
+    const cfg = baseCfg([
+      { event: 'soc_low', threshold: 15, level: 'critical', channels: ['fake'] }
+    ]);
+    const ctx = {
+      getCfg: () => cfg,
+      pushLog: () => {},
+      monitoringAlertPush: (status, msg) => { calls.push({ status, msg }); return Promise.resolve(); }
+    };
+    const svc = createNotificationService(ctx);
+    svc._setProviders({ fake: fakeProvider().instance });
+
+    await svc.evaluate({ victron: { soc: 5 } }, Date.now());
+    await sleep(20);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].status, 'down', 'critical level -> status=down');
   });
 
-  it('notify GETs status=up for info level', async () => {
-    mock_ = await startMockServer(200, { ok: true });
-    provider_ = createUptimeKumaProvider({ pushUrl: mock_.baseUrl + '/api/push/tok' });
+  it('dispatches normally when ctx.monitoringAlertPush is absent (hook is optional)', async () => {
+    const cfg = baseCfg([
+      { event: 'soc_low', threshold: 15, level: 'warn', channels: ['fake'] }
+    ]);
+    const ctx = { getCfg: () => cfg, pushLog: () => {} }; // no monitoringAlertPush
+    const svc = createNotificationService(ctx);
+    const fp = fakeProvider();
+    svc._setProviders({ fake: fp.instance });
 
-    const result = await provider_.notify({ level: 'info', title: 'T', body: 'B' });
+    await svc.evaluate({ victron: { soc: 10 } }, Date.now());
+    await sleep(20);
 
-    assert.equal(result.ok, true);
-    assert.equal(mock_.requests.length, 1);
-    const req = mock_.requests[0];
-    assert.equal(req.method, 'GET');
-    const q = new URL('http://x' + req.url).searchParams;
-    assert.equal(q.get('status'), 'up', 'info level -> status=up');
-    assert.ok(String(q.get('msg')).includes('T'), 'msg carries the title');
+    assert.equal(fp.sent.length, 1, 'notification still dispatched without the hook');
   });
 
-  it('notify uses status=down for critical level', async () => {
-    mock_ = await startMockServer(200, { ok: true });
-    provider_ = createUptimeKumaProvider({ pushUrl: mock_.baseUrl + '/api/push/tok' });
+  it('a rejecting monitoringAlertPush never breaks evaluate() (fire-and-forget)', async () => {
+    const cfg = baseCfg([
+      { event: 'soc_low', threshold: 15, level: 'warn', channels: ['fake'] }
+    ]);
+    const ctx = {
+      getCfg: () => cfg,
+      pushLog: () => {},
+      monitoringAlertPush: () => Promise.reject(new Error('kuma unreachable'))
+    };
+    const svc = createNotificationService(ctx);
+    const fp = fakeProvider();
+    svc._setProviders({ fake: fp.instance });
 
-    await provider_.notify({ level: 'critical', title: 'Alarm', body: 'down' });
+    // Must resolve cleanly even though the hook rejects.
+    await svc.evaluate({ victron: { soc: 10 } }, Date.now());
+    await sleep(20);
 
-    const q = new URL('http://x' + mock_.requests[0].url).searchParams;
-    assert.equal(q.get('status'), 'down', 'critical level -> status=down');
+    assert.equal(fp.sent.length, 1, 'notification dispatched despite the hook rejection');
   });
 
-  it('returns {ok:false} on HTTP error and never throws', async () => {
-    mock_ = await startMockServer(500, { error: 'server' });
-    provider_ = createUptimeKumaProvider({ pushUrl: mock_.baseUrl + '/api/push/tok' });
+  it('does NOT fire monitoringAlertPush when no trigger matches', async () => {
+    const calls = [];
+    const cfg = baseCfg([
+      { event: 'soc_low', threshold: 15, level: 'warn', channels: ['fake'] }
+    ]);
+    const ctx = {
+      getCfg: () => cfg,
+      pushLog: () => {},
+      monitoringAlertPush: (status, msg) => { calls.push({ status, msg }); return Promise.resolve(); }
+    };
+    const svc = createNotificationService(ctx);
+    svc._setProviders({ fake: fakeProvider().instance });
 
-    const httpErr = await provider_.notify({ level: 'info', title: 'T', body: 'B' });
-    assert.equal(httpErr.ok, false);
+    await svc.evaluate({ victron: { soc: 50 } }, Date.now()); // soc above threshold
+    await sleep(20);
 
-    // Bad host — fetch rejects; provider must catch and return the shape.
-    const badHost = createUptimeKumaProvider({ pushUrl: 'http://127.0.0.1:1/api/push/tok' });
-    const netErr = await badHost.notify({ level: 'info', title: 'T', body: 'B' });
-    assert.equal(netErr.ok, false);
-    assert.equal(typeof netErr.error, 'string');
-  });
-
-  it('startHeartbeat sends an immediate push and schedules an interval', async () => {
-    mock_ = await startMockServer(200, { ok: true });
-    // Sub-second heartbeat keeps the test fast (T-09.4-02).
-    provider_ = createUptimeKumaProvider({
-      pushUrl: mock_.baseUrl + '/api/push/tok',
-      heartbeatIntervalSec: 0.2
-    });
-
-    provider_.startHeartbeat();
-    await sleep(500); // immediate beat + at least one interval beat
-    provider_.stopHeartbeat();
-
-    assert.ok(mock_.requests.length >= 1, 'at least one heartbeat push arrived');
-    const q = new URL('http://x' + mock_.requests[0].url).searchParams;
-    assert.equal(q.get('status'), 'up', 'heartbeat push uses status=up');
-  });
-
-  it('stopHeartbeat clears the timer and startHeartbeat is idempotent', async () => {
-    mock_ = await startMockServer(200, { ok: true });
-    provider_ = createUptimeKumaProvider({
-      pushUrl: mock_.baseUrl + '/api/push/tok',
-      heartbeatIntervalSec: 0.2
-    });
-
-    // Calling startHeartbeat twice must not double the timer (idempotent).
-    provider_.startHeartbeat();
-    provider_.startHeartbeat();
-    await sleep(400);
-    provider_.stopHeartbeat();
-
-    const countAfterStop = mock_.requests.length;
-    await sleep(500); // no further pushes must arrive after stopHeartbeat()
-    assert.equal(
-      mock_.requests.length,
-      countAfterStop,
-      'no heartbeat pushes after stopHeartbeat()'
-    );
+    assert.equal(calls.length, 0, 'no alert-push when nothing fired');
   });
 });
