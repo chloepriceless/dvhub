@@ -176,11 +176,14 @@ function renderKpis(summary) {
   setText('historyKpiOppCost', fmtEur(-Math.abs(oppCost)));
 
   // Karte 5: Energiebilanz — Verbrauch (Hauslast) nach Quelle aufgeschlüsselt.
-  // selfConsumptionKwh ist die versorgte Hauslast; pvShareKwh/batteryShareKwh/
+  // loadKwh ist der gemessene Hausverbrauch; pvShareKwh/batteryShareKwh/
   // gridShareKwh sind die proportional auf die Last verteilten Anteile aus
-  // PV-direkt, Akku und Netzbezug — sie summieren sich exakt zu Verbrauch.
+  // PV-direkt, Akku und Netzbezug — sie summieren sich zu loadKwh.
+  // (NICHT selfConsumptionKwh verwenden: das ist eine pro-Slot doppelt
+  // gerundete Summe und driftet über ein Jahr um ~1-2 kWh von loadKwh ab —
+  // genau die "Werte gehen nicht überein"-Diskrepanz.)
   setText('historyKpiPv', fmtKwh(kpis?.pvKwh));
-  setText('historyKpiConsumption', fmtKwh(kpis?.selfConsumptionKwh));
+  setText('historyKpiConsumption', fmtKwh(kpis?.loadKwh));
   setText('historyKpiConsPv', fmtKwh(kpis?.pvShareKwh));
   setText('historyKpiConsBattery', fmtKwh(kpis?.batteryShareKwh));
   setText('historyKpiConsGrid', fmtKwh(kpis?.gridShareKwh));
