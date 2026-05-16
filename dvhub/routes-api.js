@@ -733,6 +733,8 @@ export function createApiRoutes(ctx) {
     // Standard appliance pattern (cf. /api/telemetry/series, /api/forecast,
     // /api/history/summary): GET-only LAN bypass; external callers still need Bearer.
     '/api/integrations/health',
+    // Phase 09.4 D-05 — MQTT Inspector drawer poll; GET-only LAN bypass, Bearer for external.
+    '/api/integrations/mqtt/topics',
     '/api/history/raw',
     '/api/history/raw/export.csv',
     '/api/history/raw/export.parquet',
@@ -1808,6 +1810,23 @@ export function createApiRoutes(ctx) {
           haDiscovery: mqttCfg.haDiscovery?.enabled ?? false,
           topicsPublished: ctx.mqttPublisher?.topicCount ?? 0
         },
+        // Phase 09.4 D-09 — victron/mid/luox identity (Wave-3 hybrid-card header).
+        // Every field `|| null` (D-02 graceful-degrade). Only host (LAN IP),
+        // modelId, serial, firmware — non-secret identity (threat T-09.4-05).
+        victron: {
+          host: getCfg().victron?.host || null,
+          modelId: getCfg().victron?.modelId || null,
+          firmware: ctx.healthTracker?.snapshot?.()?.victron?.firmware || null
+        },
+        mid: {
+          serial: getCfg().mid?.serial || getCfg().mid?.serialNumber || null,
+          host: getCfg().mid?.host || null,
+          firmware: ctx.healthTracker?.snapshot?.()?.mid?.firmware || null
+        },
+        luox: {
+          identifier: getCfg().luox?.identifier || getCfg().luox?.host || null,
+          firmware: ctx.healthTracker?.snapshot?.()?.luox?.firmware || null
+        },
         loxone: {
           configured: !!getCfg().loxone
         },
@@ -1863,6 +1882,21 @@ export function createApiRoutes(ctx) {
         pushLog('integrations_health_error', { error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
+    }
+
+    // GET /api/integrations/mqtt/topics — live inbound topic registry (Phase 09.4 D-05).
+    // LAN-safe GET like /integrations/health; the topic-observer subscribes to '#'
+    // and maintains an in-memory Map. No TTL cache — the Inspector drawer wants
+    // live data and the Map read is cheap. `connected` distinguishes "MQTT off"
+    // from "no topics yet" (RESEARCH Pitfall 7).
+    if (url.pathname === '/api/integrations/mqtt/topics' && req.method === 'GET') {
+      const topics = ctx.mqttTopicObserver?.getTopics?.() || [];
+      return json(res, 200, {
+        connected: ctx.mqttHub?.connected ?? false,
+        observedSince: ctx.mqttTopicObserver?.observedSince ?? null,
+        total: topics.length,
+        topics
+      });
     }
 
     // Integrations page HTML route
