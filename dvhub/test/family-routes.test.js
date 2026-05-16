@@ -32,6 +32,25 @@ describe('family routes file integration (static checks)', () => {
     assert.match(match[1], /'\/api\/family\/presence'/);
   });
 
+  it('LAN_SAFE_ENDPOINTS contains /api/family/tile-history (Plan 11-03 D-14)', () => {
+    // The token-less kiosk panel chart fetches tile history; the GET-only LAN
+    // bypass is mandatory. The POST /api/family/mqtt-tiles stays OUT.
+    const src = readFile(ROUTES_API_PATH);
+    const match = src.match(/const\s+LAN_SAFE_ENDPOINTS\s*=\s*new Set\(\[([\s\S]*?)\]\s*\)/);
+    assert.ok(match, 'LAN_SAFE_ENDPOINTS declaration must exist');
+    assert.match(match[1], /'\/api\/family\/tile-history'/,
+      'allowlist must include /api/family/tile-history');
+  });
+
+  it('registers a GET /api/family/tile-history branch querying mqtt_tile_<id>', () => {
+    const src = readFile(ROUTES_API_PATH);
+    assert.match(src, /url\.pathname\s*===\s*['"]\/api\/family\/tile-history['"][\s\S]{0,120}req\.method\s*===\s*['"]GET['"]/);
+    // Series-key convention from Plan 02: 'mqtt_tile_' + id.
+    assert.match(src, /seriesKeys:\s*\[\s*'mqtt_tile_'\s*\+\s*id\s*\]/);
+    // V5 input clip — id pattern-restricted before use.
+    assert.match(src, /\.replace\(\/\[\^a-zA-Z0-9_-\]\/g,\s*''\)/);
+  });
+
   it('registers a GET /api/family/status branch that calls familyService.buildFamilyStatus', () => {
     const src = readFile(ROUTES_API_PATH);
     assert.match(src, /url\.pathname\s*===\s*['"]\/api\/family\/status['"]/);
