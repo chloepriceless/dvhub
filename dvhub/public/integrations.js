@@ -490,6 +490,60 @@
     return 't' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
   }
 
+  // Curated picker sets — the fixed UI-SPEC §"Curated emoji grid" / §"Curated
+  // accent swatch palette" values. The 28 emojis are in 7×4 row order; the 8
+  // swatches are stored verbatim (mixed-case hex).
+  var MTE_EMOJIS = [
+    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
+    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
+    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
+    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾'
+  ];
+  var MTE_SWATCHES = [
+    '#F7B731', '#26de81', '#4b7bec', '#22d3ee',
+    '#a55eea', '#fd9644', '#ff6b6b', '#78909c'
+  ];
+
+  // Inline re-declaration of the tile-meta heuristic (per 11-01-SUMMARY:
+  // family.js / integrations.js are browser IIFEs and cannot import the ESM
+  // services/family/tile-meta.js without a bundler — tile-meta.js stays the
+  // test's source of truth, this re-declares the SAME UI-SPEC table). Used
+  // ONLY for the editor's "auto" preview glyph/colour on an unpicked row —
+  // the auto value is never collected into the saved tile (Pitfall 4).
+  var MTE_UNIT_RULES = [
+    { re: /^(w|kw|mw)$/i, icon: '⚡', color: '#F7B731' },
+    { re: /^(wh|kwh)$/i, icon: '🔋', color: '#26de81' },
+    { re: /^(°c|°f|c|k)$/i, icon: '🌡️', color: '#ff6b6b' },
+    { re: /^(%)$/i, icon: '💧', color: '#4b7bec' },
+    { re: /^(v|a|hz)$/i, icon: '🔌', color: '#22d3ee' },
+    { re: /^(ct|ct\/kwh|eur|€)$/i, icon: '💡', color: '#fd9644' },
+    { re: /^(lx|lux)$/i, icon: '💡', color: '#F7B731' },
+    { re: /^(ppm|µg\/m³)$/i, icon: '💨', color: '#4b7bec' }
+  ];
+  var MTE_TOPIC_RULES = [
+    { re: /(tesla|car|ev)/i, icon: '🚗', color: '#a55eea' },
+    { re: /(temp|klima)/i, icon: '🌡️', color: '#ff6b6b' }
+  ];
+
+  // autoTileMeta(tile) → { icon, color } — the auto-derived preview for an
+  // unpicked row. Unit rules win over topic rules; no match → 📡 / Slate.
+  function autoTileMeta(tile) {
+    var unit = (tile && tile.unit != null) ? String(tile.unit).trim() : '';
+    var topic = (tile && tile.topic != null) ? String(tile.topic) : '';
+    var i;
+    for (i = 0; i < MTE_UNIT_RULES.length; i++) {
+      if (unit && MTE_UNIT_RULES[i].re.test(unit)) {
+        return { icon: MTE_UNIT_RULES[i].icon, color: MTE_UNIT_RULES[i].color };
+      }
+    }
+    for (i = 0; i < MTE_TOPIC_RULES.length; i++) {
+      if (topic && MTE_TOPIC_RULES[i].re.test(topic)) {
+        return { icon: MTE_TOPIC_RULES[i].icon, color: MTE_TOPIC_RULES[i].color };
+      }
+    }
+    return { icon: '📡', color: '#78909c' };
+  }
+
   function mteRowEl(tile) {
     var row = document.createElement('div');
     row.className = 'mte-row';
@@ -509,6 +563,68 @@
       inp.value = (tile && tile[f.k] != null) ? String(tile[f.k]) : '';
       row.appendChild(inp);
     });
+    // Symbol + Farbe picker cells (Phase 11-04, D-01/D-03). The auto preview
+    // is derived from the unit/topic; an explicit tile.icon/tile.color
+    // overrides it. Only an explicitly-set value tags the row via
+    // data-icon/data-color — a brand-new/auto row carries NEITHER attribute
+    // so it stays auto until the operator clicks a cell (Pitfall 4).
+    var auto = autoTileMeta(tile);
+    var hasIcon = !!(tile && tile.icon);
+    var hasColor = !!(tile && tile.color);
+    if (hasIcon) row.setAttribute('data-icon', tile.icon);
+    if (hasColor) row.setAttribute('data-color', tile.color);
+
+    // --- Symbol (emoji) picker cell ---
+    var symCell = document.createElement('div');
+    symCell.className = 'mte-symbol-cell';
+
+    var symTrigger = document.createElement('button');
+    symTrigger.type = 'button';
+    symTrigger.className = 'mte-emoji-trigger' + (hasIcon ? '' : ' is-auto');
+    symTrigger.setAttribute('data-action', 'mte-pick-icon');
+    symTrigger.setAttribute('aria-label', 'Symbol wählen');
+    symTrigger.textContent = hasIcon ? tile.icon : auto.icon;
+    symCell.appendChild(symTrigger);
+
+    var emojiGrid = document.createElement('div');
+    emojiGrid.className = 'emoji-grid';
+    MTE_EMOJIS.forEach(function (emo) {
+      var cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'emoji-cell' + (hasIcon && tile.icon === emo ? ' is-selected' : '');
+      cell.setAttribute('data-emoji', emo);
+      cell.textContent = emo;
+      emojiGrid.appendChild(cell);
+    });
+    symCell.appendChild(emojiGrid);
+    row.appendChild(symCell);
+
+    // --- Farbe (swatch) picker cell ---
+    var colCell = document.createElement('div');
+    colCell.className = 'mte-color-cell';
+
+    var colTrigger = document.createElement('button');
+    colTrigger.type = 'button';
+    colTrigger.className = 'mte-color-trigger' + (hasColor ? '' : ' is-auto');
+    colTrigger.setAttribute('data-action', 'mte-pick-color');
+    colTrigger.setAttribute('aria-label', 'Farbe wählen');
+    // CSP-safe: per-element colour set via .style in JS, never a style= attr.
+    colTrigger.style.background = hasColor ? tile.color : auto.color;
+    colCell.appendChild(colTrigger);
+
+    var swatchGrid = document.createElement('div');
+    swatchGrid.className = 'swatch-grid';
+    MTE_SWATCHES.forEach(function (hex) {
+      var cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'swatch-cell' + (hasColor && tile.color === hex ? ' is-selected' : '');
+      cell.setAttribute('data-swatch', hex);
+      cell.style.background = hex; // CSP-safe: .style in JS, not a style= attr
+      swatchGrid.appendChild(cell);
+    });
+    colCell.appendChild(swatchGrid);
+    row.appendChild(colCell);
+
     var del = document.createElement('button');
     del.type = 'button';
     del.className = 'mte-del';
@@ -575,6 +691,14 @@
       var unit = get('unit');
       if (field) tile.field = field;
       if (unit) tile.unit = unit;
+      // Additive icon/color — collected ONLY when the operator picked one
+      // (the row carries data-icon/data-color). An unpicked row serialises
+      // WITHOUT these keys so the kiosk auto-derives them (D-02/D-04). The
+      // trigger's displayed auto-preview glyph/colour is NOT read (Pitfall 4).
+      var icon = r.getAttribute('data-icon');
+      var color = r.getAttribute('data-color');
+      if (icon) tile.icon = icon;
+      if (color) tile.color = color;
       out.push(tile);
     }
     return out;
@@ -603,7 +727,16 @@
     }
   }
 
-  // Editor event delegation — separate from the segmented-filter listener above.
+  // Close every open emoji/swatch grid in the editor (click-outside-to-close
+  // and pre-toggle "close the others" helper).
+  function mteCloseAllGrids() {
+    var open = document.querySelectorAll('#mteRows .emoji-grid.is-open, #mteRows .swatch-grid.is-open');
+    for (var i = 0; i < open.length; i++) open[i].classList.remove('is-open');
+  }
+
+  // Editor event delegation — separate from the segmented-filter listener
+  // above. Extended (Phase 11-04) with the emoji/swatch picker branches —
+  // ONE delegated listener, no inline on*= handlers.
   document.addEventListener('click', function (e) {
     var del = e.target.closest('[data-action="mte-del"]');
     if (del) {
@@ -617,7 +750,67 @@
       if (rows) { rows.appendChild(mteRowEl(null)); mteRefreshEmpty(); }
       return;
     }
-    if (e.target.closest('#mteSave')) saveMqttTiles();
+    if (e.target.closest('#mteSave')) { saveMqttTiles(); return; }
+
+    // --- Symbol picker: toggle the sibling emoji grid ---
+    var iconTrig = e.target.closest('[data-action="mte-pick-icon"]');
+    if (iconTrig) {
+      var grid = iconTrig.parentNode.querySelector('.emoji-grid');
+      var wasOpen = grid && grid.classList.contains('is-open');
+      mteCloseAllGrids();
+      if (grid && !wasOpen) grid.classList.add('is-open');
+      return;
+    }
+    // --- Farbe picker: toggle the sibling swatch grid ---
+    var colorTrig = e.target.closest('[data-action="mte-pick-color"]');
+    if (colorTrig) {
+      var sGrid = colorTrig.parentNode.querySelector('.swatch-grid');
+      var sWasOpen = sGrid && sGrid.classList.contains('is-open');
+      mteCloseAllGrids();
+      if (sGrid && !sWasOpen) sGrid.classList.add('is-open');
+      return;
+    }
+    // --- Emoji cell picked: tag the row, update the trigger, close ---
+    var emojiCell = e.target.closest('.emoji-cell');
+    if (emojiCell) {
+      var eRow = emojiCell.closest('.mte-row');
+      var emo = emojiCell.getAttribute('data-emoji');
+      if (eRow && emo) {
+        eRow.setAttribute('data-icon', emo);
+        var eTrig = eRow.querySelector('.mte-emoji-trigger');
+        if (eTrig) { eTrig.textContent = emo; eTrig.classList.remove('is-auto'); }
+        var eGrid = emojiCell.closest('.emoji-grid');
+        if (eGrid) {
+          var prev = eGrid.querySelector('.emoji-cell.is-selected');
+          if (prev) prev.classList.remove('is-selected');
+          emojiCell.classList.add('is-selected');
+          eGrid.classList.remove('is-open');
+        }
+      }
+      return;
+    }
+    // --- Swatch cell picked: tag the row, update the trigger, close ---
+    var swatchCell = e.target.closest('.swatch-cell');
+    if (swatchCell) {
+      var sRow = swatchCell.closest('.mte-row');
+      var hex = swatchCell.getAttribute('data-swatch');
+      if (sRow && hex) {
+        sRow.setAttribute('data-color', hex);
+        var sTrig = sRow.querySelector('.mte-color-trigger');
+        // CSP-safe: per-element colour set via .style in JS.
+        if (sTrig) { sTrig.style.background = hex; sTrig.classList.remove('is-auto'); }
+        var sCellGrid = swatchCell.closest('.swatch-grid');
+        if (sCellGrid) {
+          var sPrev = sCellGrid.querySelector('.swatch-cell.is-selected');
+          if (sPrev) sPrev.classList.remove('is-selected');
+          swatchCell.classList.add('is-selected');
+          sCellGrid.classList.remove('is-open');
+        }
+      }
+      return;
+    }
+    // --- Click outside any picker → close every open grid ---
+    mteCloseAllGrids();
   });
 
   /* ===================== MQTT INSPECTOR DRAWER ===================== */
