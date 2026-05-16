@@ -653,9 +653,14 @@ export function createHistoryVizAggregator(ctx) {
       // For 15-min week/month rows, fetch at a 15-minute SQL bucket so each
       // slot maps to one cell (the view default for week/month is '1 hour').
       const fineGran = gran === '15min' && (view === 'week' || view === 'month');
+      // Plan 09.4 — fetch the EPEX spot price alongside PV in the SAME bucketed
+      // query so the per-bucket mean price is aligned 1:1 with the PV buckets
+      // (same bucketInterval). `price_ct_kwh` is a ratio series → meanSeries, so
+      // its `value` carries the plain per-bucket AVG, not an energy integral.
       const rows = await fetchBucketed({
-        seriesKeys: ['pv_total_w'],
+        seriesKeys: ['pv_total_w', PRICE_SERIES_KEY],
         start, end, view,
+        meanSeries: [PRICE_SERIES_KEY],
         intervalOverride: fineGran ? '15 minutes' : null,
       });
       let xLabels;
@@ -685,26 +690,42 @@ export function createHistoryVizAggregator(ctx) {
           : Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
         // Energy buckets: cell[xLabel][slot] kWh
         const cells = new Map(); // key=`${xLabel}:${y}` → kWh
+        // Plan 09.4 — price buckets: per-cell running mean of the EPEX spot
+        // price (ct/kWh). `priceCells` accumulates {sum,count}; a cell's mean
+        // price < 0 → `neg` true → curtailment overlay on the frontend.
+        const priceCells = new Map(); // key=`${xLabel}:${y}` → { sum, count }
         for (const r of rows) {
-          if (r.key !== 'pv_total_w') continue;
-          const w = Number(r.value);
-          const dt = Number(r.resolution || 0);
-          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
           const ts = new Date(r.ts);
           const xLabel = ts.toISOString().slice(0, 10);
           const y = slotOf(ts);
           const k = `${xLabel}:${y}`;
+          if (r.key === PRICE_SERIES_KEY) {
+            const p = Number(r.value);
+            if (!Number.isFinite(p)) continue;
+            const pc = priceCells.get(k) || { sum: 0, count: 0 };
+            pc.sum += p;
+            pc.count += 1;
+            priceCells.set(k, pc);
+            continue;
+          }
+          if (r.key !== 'pv_total_w') continue;
+          const w = Number(r.value);
+          const dt = Number(r.resolution || 0);
+          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
           const kwh = (w * dt) / 3_600_000;
           cells.set(k, (cells.get(k) || 0) + kwh);
         }
         matrix = [];
         for (const x of xLabels) {
           for (let y = 0; y < slots; y++) {
-            const v = round3(cells.get(`${x}:${y}`) || 0);
+            const k = `${x}:${y}`;
+            const v = round3(cells.get(k) || 0);
             if (v > domainMax) domainMax = v;
+            const pc = priceCells.get(k);
+            const neg = !!(pc && pc.count > 0 && pc.sum / pc.count < 0);
             // RC-2 — cell coords MUST be the exact label strings the
             // type:'category' Chart.js scale matches by `===`.
-            matrix.push({ x, y: yLabels[y], v });
+            matrix.push({ x, y: yLabels[y], v, neg });
           }
         }
       } else { // view === 'year'
@@ -713,19 +734,30 @@ export function createHistoryVizAggregator(ctx) {
         xLabels = bucketLabelsForView('year', start);
         yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
         const cells = new Map(); // key=`${monthIdx}:${day}` → kWh
+        // Plan 09.4 — per-cell mean spot price (see week/month branch).
+        const priceCells = new Map(); // key=`${monthIdx}:${day}` → { sum, count }
         const startDate = new Date(start);
         const startY = startDate.getUTCFullYear();
         const startM = startDate.getUTCMonth();
         for (const r of rows) {
-          if (r.key !== 'pv_total_w') continue;
-          const w = Number(r.value);
-          const dt = Number(r.resolution || 0);
-          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
           const ts = new Date(r.ts);
           const monthIdx = (ts.getUTCFullYear() - startY) * 12 + (ts.getUTCMonth() - startM);
           if (monthIdx < 0 || monthIdx > 11) continue;
           const day = ts.getUTCDate();
           const k = `${monthIdx}:${day}`;
+          if (r.key === PRICE_SERIES_KEY) {
+            const p = Number(r.value);
+            if (!Number.isFinite(p)) continue;
+            const pc = priceCells.get(k) || { sum: 0, count: 0 };
+            pc.sum += p;
+            pc.count += 1;
+            priceCells.set(k, pc);
+            continue;
+          }
+          if (r.key !== 'pv_total_w') continue;
+          const w = Number(r.value);
+          const dt = Number(r.resolution || 0);
+          if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
           const kwh = (w * dt) / 3_600_000;
           cells.set(k, (cells.get(k) || 0) + kwh);
         }
@@ -733,11 +765,14 @@ export function createHistoryVizAggregator(ctx) {
         for (let m = 0; m < 12; m++) {
           const xLabel = xLabels[m];
           for (let d = 1; d <= 31; d++) {
-            const v = round3(cells.get(`${m}:${d}`) || 0);
+            const k = `${m}:${d}`;
+            const v = round3(cells.get(k) || 0);
             if (v > domainMax) domainMax = v;
+            const pc = priceCells.get(k);
+            const neg = !!(pc && pc.count > 0 && pc.sum / pc.count < 0);
             // RC-2 — emit cell y as the exact yLabels string (zero-padded
             // day-of-month "01".."31"); yLabels[d - 1] aligns with day d.
-            matrix.push({ x: xLabel, y: yLabels[d - 1], v });
+            matrix.push({ x: xLabel, y: yLabels[d - 1], v, neg });
           }
         }
       }

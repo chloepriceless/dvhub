@@ -118,6 +118,13 @@
 .sw-pink   { background: var(--pink,   #ff7eb6); }
 .sw-red    { background: var(--red,    #ff5d5d); }
 
+/* Plan 09.4 — PV-Heatmap negative-price overlay legend swatch: a hollow box
+   with a red outline, mirroring the curtailed-cell marker on the matrix. */
+.sw-outline-red {
+  background: transparent;
+  border: 2px solid var(--red, #ff5d5d);
+}
+
 /* Friendly error-message inside a viz mount (D-22 — no inline style). */
 .viz-error-msg {
   font-family: var(--f-mono, monospace);

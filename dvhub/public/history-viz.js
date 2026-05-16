@@ -430,7 +430,18 @@
             const alpha = maxV > 0 ? Math.min(1, v / maxV) : 0;
             return cssVarAlpha('--yellow', alpha, '#ffd421');
           },
-          borderWidth: 0,
+          // Plan 09.4 — negative-spot-price overlay. Cells where the EPEX
+          // spot price was negative for that bucket (cell.neg) get a red
+          // outline ON TOP of the PV heat-fill — so a PV≈0 cell reads as
+          // curtailment ("abgeregelt") at negative prices, not absence of sun.
+          borderColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            return (cell && cell.neg) ? cssVar('--red', '#ff5d5d') : 'rgba(0,0,0,0)';
+          },
+          borderWidth(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            return (cell && cell.neg) ? 2 : 0;
+          },
           // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout pass.
           width(c) {
             const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
@@ -454,7 +465,9 @@
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
                 const v = Number(d.v) || 0;
-                return `${d.x} · ${d.y}: ${v.toFixed(2)} kWh`;
+                const base = `${d.x} · ${d.y}: ${v.toFixed(2)} kWh`;
+                // Plan 09.4 — flag the negative-price overlay in the tooltip.
+                return d.neg ? [base, '↳ negativer Spotpreis'] : base;
               },
             } },
           },

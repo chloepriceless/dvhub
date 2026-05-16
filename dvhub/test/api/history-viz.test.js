@@ -707,6 +707,74 @@ describe('Plan 09.3-02 Wave 2 — Sankey/DayProfile/Stack/Heatmap/Ledger builder
     assert.equal(fine2.body.yLabels.length, 96, 'cached 15min payload keeps 96 rows');
   });
 
+  it('Test W2-6c (Heatmap negative-price overlay): every cell carries a `neg` boolean; negative spot price flags it true', async () => {
+    // Plan 09.4 — the PV-Heatmap fetches the EPEX spot price (price_ct_kwh)
+    // alongside PV and tags each cell with `neg` (per-bucket mean price < 0).
+    // querySeries here returns flat PV plus a flat NEGATIVE price for the
+    // whole week → every cell's mean price is negative → neg === true.
+    const querySeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key === 'pv_total_w') {
+          all.push(...makeFlatSeriesRows({ start, end, key, watts: 1500 }));
+        } else if (key === 'price_ct_kwh') {
+          // Ratio series — value is ct/kWh, not watts. A flat −3.5 ct/kWh.
+          all.push(...makeFlatSeriesRows({ start, end, key, watts: -3.5 }));
+        }
+      }
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: querySeries });
+    const r = await ctx.historyVizApi.getHeatmap({ view: 'week', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status}`);
+    const b = r.body;
+    // Every cell MUST expose a boolean `neg` field.
+    for (const c of b.matrix) {
+      assert.equal(typeof c.neg, 'boolean', `cell.neg should be boolean, got ${typeof c.neg}`);
+    }
+    // The whole window had a negative price → every cell flagged.
+    assert.ok(b.matrix.every((c) => c.neg === true), 'all cells should be flagged neg with a flat negative price');
+    // Existing payload keys MUST stay intact (RC-2 — x/y are label strings).
+    assert.equal(b.matrix.length, 168);
+    for (const c of b.matrix.slice(0, 3)) {
+      assert.equal(typeof c.x, 'string');
+      assert.equal(typeof c.y, 'string');
+      assert.equal(typeof c.v, 'number');
+    }
+  });
+
+  it('Test W2-6d (Heatmap overlay): positive prices → neg === false; no price data → neg === false', async () => {
+    // Positive price everywhere → no curtailment overlay.
+    const posSeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key === 'pv_total_w') all.push(...makeFlatSeriesRows({ start, end, key, watts: 2000 }));
+        else if (key === 'price_ct_kwh') all.push(...makeFlatSeriesRows({ start, end, key, watts: 12.4 }));
+      }
+      return all;
+    };
+    const posCtx = mockCtxWithStores({ querySeriesFn: posSeries });
+    const posR = await posCtx.historyVizApi.getHeatmap({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(posR.status, 200);
+    assert.ok(posR.body.matrix.every((c) => c.neg === false), 'positive prices → no cell flagged neg');
+
+    // No price series at all (only PV) → neg defaults to false everywhere.
+    const noPriceSeries = async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) {
+        if (key === 'pv_total_w') all.push(...makeFlatSeriesRows({ start, end, key, watts: 2000 }));
+      }
+      return all;
+    };
+    const npCtx = mockCtxWithStores({ querySeriesFn: noPriceSeries });
+    const npR = await npCtx.historyVizApi.getHeatmap({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(npR.status, 200);
+    assert.ok(npR.body.matrix.every((c) => c.neg === false), 'absent price data → neg false (not undefined)');
+    for (const c of npR.body.matrix.slice(0, 3)) {
+      assert.equal(typeof c.neg, 'boolean', 'neg stays a boolean even with no price data');
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Ledger (T7 — shape + sort)
   // -------------------------------------------------------------------------
