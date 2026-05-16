@@ -1273,6 +1273,164 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.4 — Negativpreis-Heatmap (slug: neg-price). A dedicated matrix
+  // card visualising WHEN the EPEX spot price was negative (grid pays you to
+  // consume — curtailment-relevant). month + year only.
+  //
+  //   month view: x = day-of-month "01".."31", y = hour-of-day "00".."23",
+  //               cell v = MEAN spot price (ct/kWh) for that day-hour.
+  //   year  view: x = month "Jan".."Dez", y = day-of-month "1".."31",
+  //               cell v = that day's MINIMUM spot price (deeply-negative
+  //               days stand out).
+  //
+  // price_ct_kwh is a ratio series → the per-cell aggregate is AVG / MIN of
+  // value_num, NEVER an energy integral (same source path as getPheat). The
+  // raw SIGNED price is emitted as `v` (negatives included, never clamped);
+  // the frontend owns the diverging colour scale centred at 0. domain exposes
+  // the true signed min/max so the client can size the scale.
+  // -------------------------------------------------------------------------
+  async function getNegPrice({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    if (view !== 'month' && view !== 'year') {
+      return { status: 400, body: { ok: false, error: 'view not supported (neg-price is month|year only)' }, cached: false };
+    }
+    const key = `neg-price:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    try {
+      const { start, end } = resolveRange(view, date);
+      // Bucket server-side via EXTRACT in the Europe/Berlin zone (a SQL
+      // literal, not user input — T-09.3-19); the BETWEEN bounds are
+      // parameterized. month → AVG per day×hour; year → MIN per month×day.
+      let sql;
+      if (view === 'month') {
+        sql = `
+          SELECT
+            EXTRACT(DAY  FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS dom,
+            EXTRACT(HOUR FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS hr,
+            AVG(value_num) AS agg_ct
+          FROM timeseries_samples
+          WHERE series_key = '${PRICE_SERIES_KEY}'
+            AND value_num IS NOT NULL
+            AND ts_utc >= $1::timestamptz
+            AND ts_utc <  $2::timestamptz
+          GROUP BY dom, hr
+          ORDER BY dom, hr
+        `;
+      } else {
+        sql = `
+          SELECT
+            EXTRACT(YEAR  FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS yr,
+            EXTRACT(MONTH FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS mon,
+            EXTRACT(DAY   FROM ts_utc AT TIME ZONE 'Europe/Berlin') AS dom,
+            MIN(value_num) AS agg_ct
+          FROM timeseries_samples
+          WHERE series_key = '${PRICE_SERIES_KEY}'
+            AND value_num IS NOT NULL
+            AND ts_utc >= $1::timestamptz
+            AND ts_utc <  $2::timestamptz
+          GROUP BY yr, mon, dom
+          ORDER BY yr, mon, dom
+        `;
+      }
+      let rows = [];
+      if (db && typeof db.query === 'function') {
+        const result = await db.query(sql, [start, end]);
+        rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      }
+      let xLabels;
+      let yLabels;
+      const matrix = [];
+      let domainMin = Infinity;
+      let domainMax = -Infinity;
+      // `present` keys mark cells that actually carry a price — cells outside
+      // the data window stay `null` so the frontend can render them empty
+      // (a true 0 ct/kWh price reads identically to a missing cell otherwise).
+      const cells = new Map();
+      if (view === 'month') {
+        // x = day-of-month "01".."31", y = hour-of-day "00".."23".
+        xLabels = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+        yLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+        for (const r of rows) {
+          const dom = Math.trunc(Number(r.dom));
+          const hr = Math.trunc(Number(r.hr));
+          const v = Number(r.agg_ct);
+          if (!Number.isFinite(dom) || dom < 1 || dom > 31) continue;
+          if (!Number.isFinite(hr) || hr < 0 || hr > 23) continue;
+          if (!Number.isFinite(v)) continue;
+          cells.set(`${dom}:${hr}`, round3(v));
+        }
+        for (let d = 1; d <= 31; d++) {
+          for (let h = 0; h < 24; h++) {
+            const raw = cells.get(`${d}:${h}`);
+            const v = raw == null ? null : raw;
+            if (v != null) {
+              if (v < domainMin) domainMin = v;
+              if (v > domainMax) domainMax = v;
+            }
+            // RC-2 — cell x/y MUST be the exact label strings the
+            // type:'category' Chart.js scale matches by `===`.
+            matrix.push({ x: xLabels[d - 1], y: yLabels[h], v });
+          }
+        }
+      } else {
+        // year — x = month "Jan".."Dez", y = day-of-month "1".."31".
+        xLabels = bucketLabelsForView('year', start);
+        yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1));
+        const startDate = new Date(start);
+        const startY = startDate.getUTCFullYear();
+        const startM = startDate.getUTCMonth(); // 0..11
+        for (const r of rows) {
+          const yr = Math.trunc(Number(r.yr));
+          const mon = Math.trunc(Number(r.mon)); // 1..12
+          const dom = Math.trunc(Number(r.dom)); // 1..31
+          const v = Number(r.agg_ct);
+          if (!Number.isFinite(yr) || !Number.isFinite(mon) || !Number.isFinite(dom)) continue;
+          if (!Number.isFinite(v)) continue;
+          // monthIdx 0..11 relative to the 12-month window start.
+          const monthIdx = (yr - startY) * 12 + ((mon - 1) - startM);
+          if (monthIdx < 0 || monthIdx > 11) continue;
+          if (dom < 1 || dom > 31) continue;
+          cells.set(`${monthIdx}:${dom}`, round3(v));
+        }
+        for (let m = 0; m < 12; m++) {
+          for (let d = 1; d <= 31; d++) {
+            const raw = cells.get(`${m}:${d}`);
+            const v = raw == null ? null : raw;
+            if (v != null) {
+              if (v < domainMin) domainMin = v;
+              if (v > domainMax) domainMax = v;
+            }
+            matrix.push({ x: xLabels[m], y: yLabels[d - 1], v });
+          }
+        }
+      }
+      // Empty-window guard — no priced samples in range → flat 0 domain so the
+      // frontend renders the friendly placeholder instead of an Infinity scale.
+      if (!Number.isFinite(domainMin)) domainMin = 0;
+      if (!Number.isFinite(domainMax)) domainMax = 0;
+      const payload = {
+        ok: true,
+        card: 'neg-price',
+        view,
+        date,
+        generatedAt: new Date().toISOString(),
+        cached: false,
+        xLabels,
+        yLabels,
+        matrix,
+        domain: { min: round3(domainMin), max: round3(domainMax), unit: 'ct/kWh' },
+      };
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_neg_price_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
   async function getSpaghetti({ view, date } = {}) {
     const bad = validate({ view, date });
     if (bad) return bad;
@@ -1832,6 +1990,7 @@ export function createHistoryVizAggregator(ctx) {
     getRing,
     getDuration,
     getPheat,
+    getNegPrice,
     getSpaghetti,
     getCycles,
     getTop10,

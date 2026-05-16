@@ -36,7 +36,7 @@ const API_TOKEN = 'plan-09-3-01-test-token-xxxxxxxxxxxxxxxx';
 const SLUGS = [
   'sankey', 'heatmap', 'ledger', 'day-profile', 'stack',
   'autarky-calendar', 'ring', 'duration', 'pheat', 'spaghetti',
-  'cycles', 'top10', 'cal-year', 'scatter',
+  'cycles', 'top10', 'cal-year', 'scatter', 'neg-price',
 ];
 
 const SLUG_TO_METHOD = {
@@ -45,7 +45,7 @@ const SLUG_TO_METHOD = {
   'autarky-calendar': 'getAutarkyCalendar', ring: 'getRing',
   duration: 'getDuration', pheat: 'getPheat', spaghetti: 'getSpaghetti',
   cycles: 'getCycles', top10: 'getTop10', 'cal-year': 'getCalYear',
-  scatter: 'getScatter',
+  scatter: 'getScatter', 'neg-price': 'getNegPrice',
 };
 
 function mockRes() {
@@ -129,7 +129,7 @@ async function dispatch(ctx, req) {
 }
 
 describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
-  it('exposes all 14 getXxx methods + bustCache', () => {
+  it('exposes all 15 getXxx methods + bustCache', () => {
     const api = createHistoryVizAggregator(mockCtx());
     for (const slug of SLUGS) {
       const m = SLUG_TO_METHOD[slug];
@@ -149,7 +149,7 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
     'sankey', 'day-profile', 'stack', 'heatmap', 'ledger',
     'autarky-calendar', 'ring', 'duration',
     'pheat', 'spaghetti', 'cycles',
-    'top10', 'cal-year', 'scatter',
+    'top10', 'cal-year', 'scatter', 'neg-price',
   ];
   const STUB_SLUGS = SLUGS.filter((s) => !LIVE_SLUGS.includes(s));
 
@@ -1346,6 +1346,142 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
     assert.equal(c1.cached, false, 'first cycles call cached:false');
     assert.equal(c2.cached, true, 'second cycles call cached:true');
     assert.equal(c2.body.cached, true, 'second cycles body.cached:true');
+  });
+});
+
+// =============================================================================
+// Plan 09.4 — Negativpreis-Heatmap (slug: neg-price). A dedicated matrix card
+// visualising WHEN the EPEX spot price was negative. month|year only.
+//
+//   month: x = day-of-month "01".."31", y = hour "00".."23", v = MEAN price.
+//   year:  x = month "Jan".."Dez",      y = day "1".."31",   v = MIN price.
+//
+// The builder reads `timeseries_samples` (series_key='price_ct_kwh') via the
+// established price path; the raw SIGNED price (negatives included, never
+// clamped) is emitted as cell `v`. domain exposes the true signed min/max.
+// RC-2 — matrix cell x/y are the exact category label STRINGS.
+// =============================================================================
+describe('Plan 09.4 — Negativpreis-Heatmap (neg-price) builder', () => {
+  it('Test 09.4-1 (month shape): 31×24 matrix, RC-2 string coords, domain.unit ct/kWh', async () => {
+    const dbQuery = async (sql, params) => {
+      assert.ok(Array.isArray(params) && params.length >= 1, 'getNegPrice MUST use parameterized SQL');
+      assert.match(sql, /timeseries_samples/i, 'SQL should query timeseries_samples');
+      assert.match(sql, /price_ct_kwh/i, "SQL should select the 'price_ct_kwh' series");
+      assert.match(sql, /AVG\(/i, 'month view should aggregate via AVG (per-bucket mean)');
+      const rows = [];
+      for (let dom = 1; dom <= 31; dom++) {
+        for (let hr = 0; hr < 24; hr++) rows.push({ dom, hr, agg_ct: 6.5 });
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getNegPrice({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'neg-price');
+    assert.equal(b.view, 'month');
+    assert.equal(b.date, ANCHOR_DATE);
+    assert.ok(typeof b.generatedAt === 'string', 'generatedAt should be a string');
+    assert.equal(b.cached, false, 'first call cached:false');
+    assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 31, `xLabels=31 expected, got ${b.xLabels?.length}`);
+    assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 24, `yLabels=24 expected, got ${b.yLabels?.length}`);
+    assert.ok(Array.isArray(b.matrix) && b.matrix.length === 31 * 24, `matrix.length=744 expected, got ${b.matrix?.length}`);
+    for (const c of b.matrix) {
+      assert.equal(typeof c.x, 'string', 'cell.x should be a label string (RC-2)');
+      assert.equal(typeof c.y, 'string', 'cell.y should be a label string (RC-2)');
+      assert.ok(b.xLabels.includes(c.x), `cell.x '${c.x}' should be a member of xLabels`);
+      assert.ok(b.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
+    }
+    assert.ok(b.domain && b.domain.unit === 'ct/kWh', `domain.unit should be 'ct/kWh', got ${b.domain?.unit}`);
+  });
+
+  it('Test 09.4-2 (negative prices preserved, not clamped): a −4.2 ct cell stays −4.2', async () => {
+    // One day-hour deeply negative; everything else positive.
+    const dbQuery = async () => {
+      const rows = [];
+      for (let dom = 1; dom <= 31; dom++) {
+        for (let hr = 0; hr < 24; hr++) {
+          rows.push({ dom, hr, agg_ct: (dom === 12 && hr === 13) ? -4.2 : 8.0 });
+        }
+      }
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getNegPrice({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    // day-of-month 12 → xLabels[11]="12"; hour 13 → yLabels[13]="13".
+    const cell = b.matrix.find((c) => c.x === '12' && c.y === '13');
+    assert.ok(cell, 'expected a cell for day 12 hour 13');
+    assert.ok(Math.abs(cell.v - (-4.2)) < 0.001, `negative price MUST NOT be clamped — got ${cell.v}`);
+    assert.ok(b.domain.min < 0, `domain.min should be negative, got ${b.domain.min}`);
+    assert.ok(Math.abs(b.domain.min - (-4.2)) < 0.001, `domain.min should be the deepest negative −4.2, got ${b.domain.min}`);
+    assert.ok(b.domain.max > 0, `domain.max should be positive, got ${b.domain.max}`);
+  });
+
+  it('Test 09.4-3 (year shape): 12×31 matrix, month×day, MIN aggregate', async () => {
+    const dbQuery = async (sql) => {
+      assert.match(sql, /MIN\(/i, 'year view should aggregate via MIN (deeply-negative days stand out)');
+      // ANCHOR_DATE 2026-05-14 → 12-month window 2025-06 .. 2026-05.
+      // Provide one negative-min day in the anchor month.
+      return { rows: [
+        { yr: 2026, mon: 5, dom: 14, agg_ct: -7.5 },
+        { yr: 2026, mon: 5, dom: 1, agg_ct: 3.0 },
+        { yr: 2025, mon: 6, dom: 30, agg_ct: 2.0 },
+      ] };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r = await ctx.historyVizApi.getNegPrice({ view: 'year', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (body=${JSON.stringify(r.body).slice(0, 200)})`);
+    const b = r.body;
+    assert.equal(b.card, 'neg-price');
+    assert.ok(Array.isArray(b.xLabels) && b.xLabels.length === 12, `xLabels=12 months expected, got ${b.xLabels?.length}`);
+    assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 31, `yLabels=31 days expected, got ${b.yLabels?.length}`);
+    assert.ok(Array.isArray(b.matrix) && b.matrix.length === 12 * 31, `matrix.length=372 expected, got ${b.matrix?.length}`);
+    for (const c of b.matrix) {
+      assert.equal(typeof c.x, 'string', 'cell.x should be a month label string (RC-2)');
+      assert.equal(typeof c.y, 'string', 'cell.y should be a day label string (RC-2)');
+      assert.ok(b.xLabels.includes(c.x), `cell.x '${c.x}' should be a member of xLabels`);
+      assert.ok(b.yLabels.includes(c.y), `cell.y '${c.y}' should be a member of yLabels`);
+    }
+    // The −7.5 day must surface as domain.min and be present in the matrix.
+    assert.ok(Math.abs(b.domain.min - (-7.5)) < 0.001, `domain.min should be −7.5, got ${b.domain.min}`);
+    const negCell = b.matrix.find((c) => c.v === -7.5);
+    assert.ok(negCell, 'the −7.5 minimum-price day should appear as a matrix cell');
+  });
+
+  it('Test 09.4-4 (view rejection): day + week → 400 with error', async () => {
+    const ctx = mockCtxWithStores();
+    for (const view of ['day', 'week']) {
+      const r = await ctx.historyVizApi.getNegPrice({ view, date: ANCHOR_DATE });
+      assert.equal(r.status, 400, `expected 400 for view='${view}', got ${r.status}`);
+      assert.match(r.body.error || '', /view/i);
+    }
+  });
+
+  it('Test 09.4-5 (empty window): no priced samples → 200, flat 0 domain', async () => {
+    const ctx = mockCtxWithStores({ dbQueryFn: async () => ({ rows: [] }) });
+    const r = await ctx.historyVizApi.getNegPrice({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r.status, 200, `empty window should still be 200, got ${r.status}`);
+    assert.equal(r.body.domain.min, 0, 'empty-window domain.min should be 0 (no Infinity leak)');
+    assert.equal(r.body.domain.max, 0, 'empty-window domain.max should be 0 (no -Infinity leak)');
+  });
+
+  it('Test 09.4-6 (cache hit): 2nd call serves cached', async () => {
+    let calls = 0;
+    const dbQuery = async () => {
+      calls++;
+      const rows = [];
+      for (let dom = 1; dom <= 31; dom++) for (let hr = 0; hr < 24; hr++) rows.push({ dom, hr, agg_ct: -1.0 });
+      return { rows };
+    };
+    const ctx = mockCtxWithStores({ dbQueryFn: dbQuery });
+    const r1 = await ctx.historyVizApi.getNegPrice({ view: 'month', date: ANCHOR_DATE });
+    const r2 = await ctx.historyVizApi.getNegPrice({ view: 'month', date: ANCHOR_DATE });
+    assert.equal(r1.cached, false, 'first call cached:false');
+    assert.equal(r2.cached, true, 'second call cached:true');
+    assert.equal(r2.body.cached, true, 'second body.cached:true');
+    assert.equal(calls, 1, `db.query should run once for two cached calls; ran ${calls}`);
   });
 });
 

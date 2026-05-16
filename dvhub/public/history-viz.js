@@ -903,6 +903,117 @@
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Plan 09.4 — Negativpreis-Heatmap (slug: neg-price). A matrix card that
+  // makes negative-spot-price clusters visually obvious. month view is
+  // day×hour mean price; year view is month×day minimum price.
+  //
+  // Colour scale: DIVERGING, centred at 0. v < 0 → red, deeper red the more
+  // negative (interpolated --text-dim → --red across [−|min| .. 0]). v >= 0 →
+  // a muted cool neutral (--cyan at low alpha) so positives recede and the
+  // negatives pop. Cells with v == null (outside the data window) render
+  // transparent. Stops resolve via cssVar at paint time (theme-aware).
+  // -------------------------------------------------------------------------
+  async function buildNegPriceHeatmap(view, date) {
+    const mount = document.getElementById('vNegPrice');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      const data = await fetchCardData('neg-price', view, date);
+      if (historyVizCharts.negPrice) {
+        try { historyVizCharts.negPrice.destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts.negPrice;
+      }
+      const xLabels = data.xLabels || [];
+      const yLabels = data.yLabels || [];
+      const matrix = data.matrix || [];
+      const dom = data.domain || {};
+      const domMin = Number.isFinite(dom.min) ? dom.min : 0;
+      const domMax = Number.isFinite(dom.max) ? dom.max : 0;
+      // Empty-data path — no priced samples in range (matrix all-null, flat
+      // 0 domain). Render the friendly placeholder, not a uniform grid.
+      const hasData = matrix.some((c) => c && Number.isFinite(c.v));
+      if (!hasData) {
+        showEmptyData(mount);
+        return;
+      }
+      // |minNeg| sizes the red ramp; guard against an all-positive window
+      // (no negatives → minNeg is 0 → every cell paints the neutral).
+      const minNeg = domMin < 0 ? domMin : 0;
+      const negSpan = Math.abs(minNeg);
+      const canvas = mountCanvas(mount, 'vNegPriceCanvas');
+      historyVizCharts.negPrice = new Chart(canvas.getContext('2d'), {
+        type: 'matrix',
+        data: { datasets: [{
+          label: 'Spot ct/kWh',
+          data: matrix,
+          backgroundColor(c) {
+            const cell = c.dataset.data[c.dataIndex];
+            const v = cell && Number.isFinite(cell.v) ? cell.v : null;
+            // Missing cell → transparent (no price recorded there).
+            if (v == null) return 'rgba(0,0,0,0)';
+            if (v < 0) {
+              // Diverging negative arm: 0 → faint, |min| → full red.
+              const t = negSpan > 0 ? Math.min(1, Math.abs(v) / negSpan) : 1;
+              return interpolateGradient([
+                { at: 0, color: cssVarAlpha('--red', 0.22, '#ff5d5d') },
+                { at: 1, color: cssVar('--red', '#ff5d5d') },
+              ], t);
+            }
+            // v >= 0 → muted cool neutral; faintly deepens with magnitude so
+            // the (rare) expensive positive still reads, but stays low-key.
+            const tp = domMax > 0 ? Math.min(0.32, 0.1 + (v / domMax) * 0.22) : 0.12;
+            return cssVarAlpha('--cyan', tp, '#34dbff');
+          },
+          borderWidth: 0,
+          // RESEARCH §Pitfall 3 — chartArea may be undefined on first layout.
+          width(c) {
+            const w = (c.chart && c.chart.chartArea && c.chart.chartArea.width) || 0;
+            return Math.max(1, (w / Math.max(1, xLabels.length)) - 1);
+          },
+          height(c) {
+            const h = (c.chart && c.chart.chartArea && c.chart.chartArea.height) || 0;
+            return Math.max(1, (h / Math.max(1, yLabels.length)) - 1);
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_NEAREST,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title() { return ''; },
+              label(c) {
+                // RC-2 — d.x / d.y are the exact category label STRINGS.
+                // month: x=day-of-month "01".."31", y=hour "00".."23".
+                // year:  x=month "Jan".."Dez",      y=day-of-month "1".."31".
+                const d = c.dataset.data[c.dataIndex];
+                if (!d) return '';
+                if (d.v == null || !Number.isFinite(d.v)) return `${d.x} · ${d.y}: keine Daten`;
+                const v = Number(d.v);
+                // German formatting: comma decimal + U+2212 minus for negatives.
+                const txt = (v < 0 ? '−' : '') + Math.abs(v).toFixed(1).replace('.', ',');
+                const when = view === 'year' ? `${d.x} · Tag ${d.y}` : `Tag ${d.x} · ${d.y}:00`;
+                return `${when} · ${txt} ct/kWh`;
+              },
+            } },
+          },
+          scales: {
+            x: { type: 'category', labels: xLabels, ticks: { autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+            y: { type: 'category', labels: yLabels, offset: true, reverse: true, ticks: { autoSkip: true }, grid: { display: false } },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts.negPrice && historyVizCharts.negPrice.resize && historyVizCharts.negPrice.resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildNegPriceHeatmap failed', e);
+      showFriendlyError(mount, 'Negativpreis-Heatmap');
+    }
+  }
+
   async function buildSpaghetti(view, date) {
     const mount = document.getElementById('vSpag');
     if (!mount) return;
@@ -1286,6 +1397,7 @@
     ring: buildRing,
     duration: buildDuration,
     pheat: buildPheat,
+    'neg-price': buildNegPriceHeatmap,
     spaghetti: buildSpaghetti,
     cycles: buildCycles,
     top10: buildTop10,

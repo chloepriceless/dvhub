@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/history.css?v=10" />
-  <link rel="stylesheet" href="/history-viz.css?v=3" />
+  <link rel="stylesheet" href="/history-viz.css?v=4" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -453,6 +453,24 @@
         </article>
       </section>
 
+      <!-- ═══ Phase 09.4 — Negativpreis-Heatmap ═══
+           Matrix card visualising WHEN the EPEX spot price was negative
+           (grid pays you to consume). month|year only (data-show-view, D-15).
+           data-viz-card pairs it with the buildDispatch slug 'neg-price'
+           (D-14). NO inline style attrs (D-22) — geometry in history-viz.css. -->
+      <section class="card chart-panel" data-show-view="month year" data-viz-card="neg-price">
+        <div class="card-head"><div>
+          <span class="card-title"><span class="dot dot-red"></span>Negativpreis-Heatmap</span>
+          <p class="card-sub">Stunden mit negativem Spotpreis · ct/kWh</p>
+        </div></div>
+        <div id="vNegPrice" class="heatmap viz-chart-shell"></div>
+        <div class="viz-foot">
+          <span>negativ</span>
+          <span class="sw-grad-neg-price" aria-hidden="true"></span>
+          <span>&ge;&nbsp;0</span>
+        </div>
+      </section>
+
       <section class="card chart-panel" data-show-view="week month year" data-viz-card="cycles">
         <div class="card-head"><div>
           <span class="card-title"><span class="dot dot-green"></span>Akku-Zyklen · Wochentage</span>
@@ -518,6 +536,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/history.js?v=8"></script>
-  <script src="/history-viz.js?v=3"></script>
+  <script src="/history-viz.js?v=4"></script>
 </body>
 </html>

@@ -230,6 +230,20 @@
 }
 .pheat { aspect-ratio: 24 / 7; min-height: 180px; }
 
+/* Plan 09.4 — Negativpreis-Heatmap. The card reuses the `.heatmap` shell
+   (month is 31×24, year is 12×31 — both ≈ the .heatmap 30/24 ratio). The
+   footer swatch mirrors the matrix's DIVERGING scale: deep --red for the
+   most-negative prices fading to a muted --cyan neutral for >= 0. */
+.sw-grad-neg-price {
+  display: inline-block;
+  flex: 0 0 90px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg,
+    var(--red, #ff5d5d),
+    rgba(52, 219, 255, 0.18));
+}
+
 /* Plan 09.3-05 Wave 5 — Top-10-Slots / Cal-Heatmap-12-Monat / Wetter×Erlös-
    Scatter. .sw-grad-cal is the DIVERGING −€→0→+€ gradient bar in the Cal-Year
    footer (mirrors the matrix red→faded→green palette). .top10 gives the
