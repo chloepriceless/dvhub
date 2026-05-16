@@ -491,13 +491,20 @@
   }
 
   // Curated picker sets — the fixed UI-SPEC §"Curated emoji grid" / §"Curated
-  // accent swatch palette" values. The 28 emojis are in 7×4 row order; the 8
-  // swatches are stored verbatim (mixed-case hex).
+  // accent swatch palette" values. Phase 11-04 checkpoint feedback expanded the
+  // emoji set from 28 to 48 (8 columns × 6 rows) — the original 28 are kept
+  // (an already-picked icon must stay in the allowlist) and 20 common-household
+  // glyphs were added, including a fan/ventilator pair 🌀 (cyclone) + 🪭
+  // (folding hand fan). The 8 swatches are stored verbatim (mixed-case hex).
+  // MTE_EMOJIS MUST stay byte-identical to FAMILY_TILE_ICON_ALLOWLIST in
+  // routes-api.js or a newly-picked emoji is clipped off on save.
   var MTE_EMOJIS = [
-    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
-    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
-    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
-    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾'
+    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️', '🪫',
+    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️', '🌀',
+    '🪭', '🔆', '🕯️', '🌫️', '🌪️', '🫧', '♻️', '🧯',
+    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟', '🛁',
+    '🚰', '🚽', '☕', '🍽️', '🧊', '🧴', '🔔', '🪥',
+    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾', '💻'
   ];
   var MTE_SWATCHES = [
     '#F7B731', '#26de81', '#4b7bec', '#22d3ee',

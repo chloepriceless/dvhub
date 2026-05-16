@@ -1717,16 +1717,21 @@ export function createApiRoutes(ctx) {
         return json(res, 400, { ok: false, error: 'too_many_tiles' });
       }
       // Plan 11-03 (D-01/D-03): the per-tile `icon` and `color` are curated —
-      // the operator picks from a fixed 28-emoji grid / 8-hex swatch palette
+      // the operator picks from a fixed emoji grid / 8-hex swatch palette
       // (11-UI-SPEC.md). The normaliser allowlist-clips both: an off-allowlist
       // or absent value leaves the key UNSET so the client auto-derives
       // (D-02/D-04). Colour hexes are stored VERBATIM (mixed case) — match the
       // allowlist case-exactly; never .toUpperCase()/.toLowerCase() the input.
+      // Phase 11-04 (checkpoint feedback): the emoji grid was expanded from 28
+      // to 48 glyphs (8×6). This Set MUST stay byte-identical to MTE_EMOJIS in
+      // public/integrations.js or a newly-picked emoji is clipped off on save.
       const FAMILY_TILE_ICON_ALLOWLIST = new Set([
-        '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
-        '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
-        '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
-        '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾',
+        '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️', '🪫',
+        '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️', '🌀',
+        '🪭', '🔆', '🕯️', '🌫️', '🌪️', '🫧', '♻️', '🧯',
+        '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟', '🛁',
+        '🚰', '🚽', '☕', '🍽️', '🧊', '🧴', '🔔', '🪥',
+        '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾', '💻',
       ]);
       const FAMILY_TILE_COLOR_ALLOWLIST = new Set([
         '#F7B731', '#26de81', '#4b7bec', '#22d3ee',
@@ -1751,7 +1756,7 @@ export function createApiRoutes(ctx) {
         if (unit) tile.unit = unit;
         // D-01/D-03 — additive optional: omit when absent OR off-allowlist so
         // the client falls through to the auto-derivation heuristic (D-02/D-04).
-        const icon = clip(raw.icon, 8).trim();   // emoji can be multi-codepoint — clip generously
+        const icon = clip(raw.icon, 16).trim();  // emoji can be multi-codepoint (VS/ZWJ) — clip generously
         const color = clip(raw.color, 9).trim(); // '#RRGGBB' = 7 chars; small slack
         if (icon && FAMILY_TILE_ICON_ALLOWLIST.has(icon)) tile.icon = icon;   // additive — omit if invalid
         if (color && FAMILY_TILE_COLOR_ALLOWLIST.has(color)) tile.color = color; // case-EXACT to UI-SPEC

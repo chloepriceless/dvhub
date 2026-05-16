@@ -95,17 +95,22 @@ describe('family routes file integration (static checks)', () => {
 
 // --- Plan 11-03: per-tile icon/color allowlist (D-01/D-03) ---------------
 // The POST /api/family/mqtt-tiles normaliser must accept + allowlist-clip a
-// per-tile `icon` (28-emoji curated grid) and `color` (8-hex swatch palette).
+// per-tile `icon` (curated emoji grid) and `color` (8-hex swatch palette).
 // Keys are ADDITIVE OPTIONAL — written only when present AND on-allowlist, so
 // an unset/off-allowlist value leaves the key absent and the client
 // auto-derives (D-02/D-04). See 11-UI-SPEC.md for the fixed value sets.
+// Phase 11-04 (checkpoint feedback) expanded the emoji grid from 28 to 48
+// glyphs (8×6); ICONS below is the updated set and MUST stay byte-identical to
+// FAMILY_TILE_ICON_ALLOWLIST (routes-api.js) and MTE_EMOJIS (integrations.js).
 
 describe('mqtt-tiles POST normaliser — icon/color allowlists (D-01/D-03)', () => {
   const ICONS = [
-    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
-    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
-    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
-    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾',
+    '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️', '🪫',
+    '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️', '🌀',
+    '🪭', '🔆', '🕯️', '🌫️', '🌪️', '🫧', '♻️', '🧯',
+    '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟', '🛁',
+    '🚰', '🚽', '☕', '🍽️', '🧊', '🧴', '🔔', '🪥',
+    '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾', '💻',
   ];
   const COLORS = [
     '#F7B731', '#26de81', '#4b7bec', '#22d3ee',
@@ -124,8 +129,9 @@ describe('mqtt-tiles POST normaliser — icon/color allowlists (D-01/D-03)', () 
     assert.ok(count >= 2, `FAMILY_TILE_COLOR_ALLOWLIST must appear >=2 times (got ${count})`);
   });
 
-  it('contains all 28 curated emoji from 11-UI-SPEC', () => {
+  it('contains all 48 curated emoji from 11-UI-SPEC (Phase 11-04 expansion)', () => {
     const src = readFile(ROUTES_API_PATH);
+    assert.equal(ICONS.length, 48, 'the curated emoji set is 48 glyphs');
     for (const ic of ICONS) {
       assert.ok(src.includes(ic), `routes-api.js must contain icon ${ic}`);
     }
@@ -163,7 +169,10 @@ describe('mqtt-tiles POST normaliser — icon/color allowlists (D-01/D-03)', () 
     // not via a /api/config POST. Slice the handler region and assert.
     const start = src.indexOf("'/api/family/mqtt-tiles' && req.method === 'POST'");
     assert.ok(start > 0, 'mqtt-tiles POST handler must exist');
-    const region = src.slice(start, start + 3200);
+    // 4200-char window — widened from 3200 by Phase 11-04 (the 48-emoji
+    // allowlist + its comment grew the handler region; saveAndApplyConfig must
+    // still fall inside the slice). Same fragility 11-03 fixed once before.
+    const region = src.slice(start, start + 4200);
     assert.ok(!/url\.pathname\s*===\s*['"]\/api\/config['"]/.test(region),
       'mqtt-tiles handler must not POST to /api/config');
     assert.match(region, /saveAndApplyConfig/, 'must persist via saveAndApplyConfig');
