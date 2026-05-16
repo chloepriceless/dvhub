@@ -45,7 +45,39 @@ export function createFamilyMqttTiles(hub, ctx) {
       const pattern = tile.topic;
       if (subscribed.has(pattern)) continue;
       hub.subscribe(pattern, (_topic, payload) => {
-        lastByTopic.set(pattern, { raw: payload.toString(), lastSeen: Date.now() });
+        const raw = payload.toString();
+        lastByTopic.set(pattern, { raw, lastSeen: Date.now() });
+
+        // D-11/D-12/D-13: historise numeric values into timeseries_samples,
+        // fire-and-forget. Look the tile up FRESH (not a stale closure — a
+        // field/unit/id edit must be reflected without a restart).
+        const tile = getTileConfigs().find(t => t.topic === pattern);
+        if (!tile) return;
+        const value = extractValue(raw, tile.field);
+        if (typeof value !== 'number' || !Number.isFinite(value)) return;  // D-13: numeric only
+        // Lazy ctx read — telemetryStore is assigned onto the shared ctx
+        // object after this factory runs (server.js wiring order), so a
+        // boot-window no-op is expected and acceptable (D-12).
+        const store = ctx && ctx.telemetryStore;
+        if (!store || typeof store.writeSamples !== 'function') return;
+        Promise.resolve()
+          .then(() => store.writeSamples([{
+            seriesKey: 'mqtt_tile_' + tile.id,
+            scope: 'live',
+            source: 'mqtt',
+            quality: 'raw',
+            ts: new Date(),
+            resolutionSeconds: 1,
+            value,
+            valueText: null,
+            unit: tile.unit || null,
+            meta: { topic: tile.topic }
+          }]))
+          .catch(err => {
+            if (ctx && typeof ctx.pushLog === 'function') {
+              ctx.pushLog('family_mqtt_tile_persist_error', { error: err && err.message });
+            }
+          });
       });
       subscribed.add(pattern);
     }
