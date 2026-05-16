@@ -711,6 +711,7 @@ export function createApiRoutes(ctx) {
     '/api/forecast',
     '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
     '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
+    '/api/family/tile-history', // Plan 11-03 D-14 — token-less kiosk detail-panel chart fetch; GET-only LAN bypass, Bearer for external. The POST /api/family/mqtt-tiles write path stays OUT.
     '/api/epex/zones',
     '/api/epex/gaps',
     '/api/schedule',
@@ -1771,6 +1772,49 @@ export function createApiRoutes(ctx) {
       }
       pushLog('family_mqtt_tiles_saved', { count: tiles.length }, actorContext(req));
       return json(res, 200, { ok: true, tiles });
+    }
+
+    // Plan 11-03 (D-14): per-tile value history for the family-dashboard
+    // detail-panel "Verlauf heute" chart. Reads the timeseries_samples rows
+    // the Plan 02 MQTT historisation hook writes under series_key
+    // 'mqtt_tile_<tile.id>'. LAN-safe GET (token-less kiosk); external callers
+    // still pass checkAuth. The `id` is clipped + pattern-restricted (V5) and
+    // validated against the configured tiles (V4 — no series_key enumeration)
+    // before any DB call; querySeries is fully parameterised (no SQL concat).
+    if (url.pathname === '/api/family/tile-history' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.querySeries) {
+        return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      }
+      // V5: clip + pattern-restrict the id exactly like the tile-id normaliser.
+      const id = String(url.searchParams.get('id') || '').slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!id) return json(res, 400, { ok: false, error: 'missing id' });
+      // V4: id must match a configured tile — no arbitrary series_key enumeration.
+      const tiles = (ctx.getRawCfg && ctx.getRawCfg()?.family?.mqttTiles) || [];
+      const tile = Array.isArray(tiles) ? tiles.find(t => t && t.id === id) : null;
+      if (!tile) return json(res, 404, { ok: false, error: 'unknown tile' });
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const end = new Date(start.getTime() + 86400000);
+      try {
+        // Rows are written at resolution_seconds=1 (Plan 02); maxResolution:900
+        // returns every raw per-message sample for the today window.
+        const rows = await ctx.telemetryStore.querySeries({
+          seriesKeys: ['mqtt_tile_' + id],
+          start,
+          end,
+          maxResolution: 900,
+        });
+        return json(res, 200, {
+          ok: true,
+          id,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          data: rows,
+        });
+      } catch (e) {
+        pushLog('family_tile_history_error', { id, error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
