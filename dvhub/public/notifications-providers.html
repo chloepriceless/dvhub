@@ -88,7 +88,7 @@
           <legend>Uptime Kuma &middot; Heartbeat</legend>
           <p class="u-text-muted np-hint">DVhub sendet einen signierten Heartbeat an Uptime Kuma (Push-Monitor). Dies ist die <strong>einzige</strong> Kuma-Anbindung &mdash; sie wird zus&auml;tzlich genutzt, um Benachrichtigungen als Kuma-Alarm zu spiegeln. Die Werte werden aus der laufenden Konfiguration vorbef&uuml;llt.</p>
           <label><input type="checkbox" id="np-kuma-enabled"> Aktiviert</label>
-          <label>Push-URL <input type="password" id="np-kuma-pushUrl" placeholder="leer lassen = unver&auml;ndert" autocomplete="off"></label>
+          <label>Push-URL <input type="text" id="np-kuma-pushUrl" placeholder="https://uptime.bottom.zone/api/push/&hellip;" autocomplete="off" spellcheck="false"></label>
           <label>Heartbeat-Intervall (s) <input type="number" id="np-kuma-hb" min="30" max="600" value="240"></label>
           <p class="u-text-muted np-hint">Hinweis: Das Kuma-Monitor-Intervall muss &ge; 2&times; dieser Wert sein, sonst meldet Kuma DVhub f&auml;lschlich als DOWN. Standard: 240&nbsp;s (4&nbsp;Minuten).</p>
         </fieldset>
