@@ -91,6 +91,14 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .dev-bar-wrap{width:100%;height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;pointer-events:none}
 .dev-bar{height:100%;border-radius:2px;transition:width .8s ease;min-width:2px}
 
+/* Family extras — generic MQTT value tiles + Tesla card (rendered into #devices-tray) */
+.fam-extra-val{font-size:17px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;margin-bottom:0;pointer-events:none}
+.fam-tile .fam-extra-val{color:#22d3ee}
+.fam-tile.is-stale{opacity:.45}
+.fam-tesla{min-width:140px}
+.fam-tesla .fam-extra-val{color:var(--ev)}
+.fam-extra-sub{font-size:9px;font-weight:600;color:rgba(255,255,255,.5);margin-top:5px;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none}
+
 .flow-svg{position:absolute;inset:0;width:100%;height:100%;z-index:15;pointer-events:none}
 /* Aurora replaces the legacy SVG flow with the canvas dust constellation rendered into
    #bgFlow by family.js. #flowSvg / #flowGroup must stay in the DOM (binding contract

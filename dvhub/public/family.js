@@ -233,6 +233,171 @@
 
   function formatW(w) { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
 
+  /* ===================== FAMILY EXTRAS: MQTT tiles + Tesla ===================== */
+  // Operator-configured generic MQTT value tiles (family.mqttTiles) + the full
+  // TeslaMate snapshot, rendered into the (otherwise-unused) #devices-tray.
+  // Cards are reconciled across polls so they update in place without
+  // re-triggering the devPop entry animation. All dynamic strings are routed
+  // through escapeMsg() before reaching openPanel(), which uses innerHTML.
+  var familyExtraCards = {}; // logical-id -> element
+
+  function fmtTileValue(value, unit) {
+    if (value == null || value === '') return '—';
+    var out;
+    if (typeof value === 'number' && isFinite(value)) {
+      out = Number.isInteger(value) ? String(value) : String(Math.round(value * 10) / 10);
+    } else if (typeof value === 'boolean') {
+      out = value ? 'an' : 'aus';
+    } else {
+      out = String(value);
+    }
+    return unit ? out + ' ' + unit : out;
+  }
+
+  function fmtRelTime(ts) {
+    if (!ts) return 'nie';
+    var delta = Date.now() - Number(ts);
+    if (delta < 0) return 'gerade';
+    if (delta < 60000) return Math.floor(delta / 1000) + ' s';
+    if (delta < 3600000) return Math.floor(delta / 60000) + ' min';
+    if (delta < 86400000) return Math.floor(delta / 3600000) + ' h';
+    return Math.floor(delta / 86400000) + ' d';
+  }
+
+  var TESLA_CHARGE_LABEL = {
+    Charging: 'Lädt', Complete: 'Voll geladen', Disconnected: 'Nicht verbunden',
+    Stopped: 'Pausiert', Starting: 'Startet', NoPower: 'Kein Strom'
+  };
+  var TESLA_STATE_LABEL = {
+    driving: 'Unterwegs', asleep: 'Schläft', offline: 'Offline',
+    online: 'Bereit', charging: 'Lädt'
+  };
+
+  function makeExtraCard(logicalId, panelKey, modifierClass, hasSub) {
+    var el = document.createElement('div');
+    el.className = 'dev-card ' + modifierClass;
+    el.id = 'fam-card-' + logicalId;
+    el.setAttribute('data-panel', panelKey);
+    el.innerHTML =
+      '<div class="dev-emoji"></div>'
+      + '<div class="dev-name"></div>'
+      + '<div class="dev-watts fam-extra-val"></div>'
+      + (hasSub ? '<div class="fam-extra-sub"></div>' : '');
+    return el;
+  }
+
+  function renderFamilyExtras(mqttTiles, tesla) {
+    var tray = document.getElementById('devices-tray');
+    if (!tray) return;
+    var wanted = {};
+
+    // --- Tesla card (full TeslaMate detail) -------------------------
+    if (tesla && tesla.enabled && tesla.lastUpdateAt) {
+      wanted.tesla = true;
+      var tcard = familyExtraCards.tesla;
+      if (!tcard) {
+        tcard = makeExtraCard('tesla', 'tesla', 'fam-tesla', true);
+        tray.appendChild(tcard);
+        familyExtraCards.tesla = tcard;
+      }
+      var rangeTxt = typeof tesla.rangeKm === 'number' ? Math.round(tesla.rangeKm) + ' km' : '—';
+      var battTxt = typeof tesla.batteryLevel === 'number' ? Math.round(tesla.batteryLevel) + ' %' : '—';
+      var stateTxt = TESLA_STATE_LABEL[tesla.state] || tesla.state || '—';
+      var chgTxt;
+      if (tesla.chargingState === 'Charging') {
+        chgTxt = 'Lädt' + (typeof tesla.chargerPowerKw === 'number' && tesla.chargerPowerKw > 0
+          ? ' · ' + (Math.round(tesla.chargerPowerKw * 10) / 10) + ' kW' : '');
+      } else {
+        chgTxt = stateTxt;
+      }
+      tcard.querySelector('.dev-emoji').textContent = '🚗';
+      tcard.querySelector('.dev-name').textContent = tesla.name || 'Tesla';
+      tcard.querySelector('.fam-extra-val').textContent = rangeTxt;
+      tcard.querySelector('.fam-extra-sub').textContent = battTxt + ' · ' + chgTxt;
+
+      panelData.tesla = {
+        icon: '🚗', iconBg: 'rgba(165,94,234,.12)',
+        title: escapeMsg(tesla.name || 'Tesla'), sub: 'TeslaMate', color: '#a55eea',
+        summary: escapeMsg((tesla.name || 'Das Auto') + ' hat noch ' + rangeTxt
+          + ' Reichweite bei ' + battTxt + ' Akkustand.'),
+        stats: [
+          { label: 'Reichweite', val: escapeMsg(rangeTxt), delta: '', up: true },
+          { label: 'Akku', val: escapeMsg(battTxt), delta: '', up: true },
+          { label: 'Status', val: escapeMsg(stateTxt), delta: '', up: true }
+        ],
+        chart: null,
+        details: [
+          ['Reichweite (geschätzt)', escapeMsg(rangeTxt)],
+          ['Reichweite (Norm)', typeof tesla.ratedRangeKm === 'number' ? Math.round(tesla.ratedRangeKm) + ' km' : '—'],
+          ['Akkustand', escapeMsg(battTxt)],
+          ['Nutzbarer Akku', typeof tesla.usableBatteryLevel === 'number' ? Math.round(tesla.usableBatteryLevel) + ' %' : '—'],
+          ['Ladelimit', typeof tesla.chargeLimitSoc === 'number' ? Math.round(tesla.chargeLimitSoc) + ' %' : '—'],
+          ['Ladezustand', escapeMsg(TESLA_CHARGE_LABEL[tesla.chargingState] || tesla.chargingState || '—')],
+          ['Eingesteckt', tesla.pluggedIn === true ? 'Ja' : (tesla.pluggedIn === false ? 'Nein' : '—')],
+          ['Ladeleistung', typeof tesla.chargerPowerKw === 'number' ? (Math.round(tesla.chargerPowerKw * 10) / 10) + ' kW' : '—'],
+          ['Innentemperatur', typeof tesla.insideTempC === 'number' ? (Math.round(tesla.insideTempC * 10) / 10) + ' °C' : '—'],
+          ['Standort', escapeMsg(tesla.geofence || '—')],
+          ['Fahrzeugstatus', escapeMsg(stateTxt)],
+          ['Aktualisiert', 'vor ' + fmtRelTime(tesla.lastUpdateAt)]
+        ]
+      };
+    }
+
+    // --- Generic MQTT value tiles -----------------------------------
+    (mqttTiles || []).forEach(function (tile) {
+      if (!tile || !tile.id) return;
+      // "wenn werte stehen → anzeigen": skip tiles that never produced a value.
+      if (tile.value == null && !tile.lastSeen) return;
+      var logicalId = 'mqtt-' + tile.id;
+      var panelKey = 'fam-' + tile.id;
+      wanted[logicalId] = true;
+      var card = familyExtraCards[logicalId];
+      if (!card) {
+        card = makeExtraCard(logicalId, panelKey, 'fam-tile', false);
+        tray.appendChild(card);
+        familyExtraCards[logicalId] = card;
+      }
+      var valTxt = fmtTileValue(tile.value, tile.unit);
+      card.classList.toggle('is-stale', !tile.online);
+      card.querySelector('.dev-emoji').textContent = '📡';
+      card.querySelector('.dev-name').textContent = tile.label || tile.topic;
+      card.querySelector('.fam-extra-val').textContent = valTxt;
+
+      panelData[panelKey] = {
+        icon: '📡', iconBg: 'rgba(34,211,238,.12)',
+        title: escapeMsg(tile.label || tile.topic), sub: 'MQTT', color: '#22d3ee',
+        summary: escapeMsg(tile.value != null
+          ? (tile.label || 'Der Wert') + ' meldet aktuell ' + valTxt + '.'
+          : 'Auf diesem Topic liegen aktuell keine Daten an.'),
+        stats: [
+          { label: 'Wert', val: escapeMsg(valTxt), delta: '', up: true },
+          { label: 'Status', val: tile.online ? 'Live' : 'Offline', delta: '', up: !!tile.online },
+          { label: 'Empfangen', val: tile.lastSeen ? escapeMsg(fmtRelTime(tile.lastSeen)) : 'nie', delta: '', up: true }
+        ],
+        chart: null,
+        details: [
+          ['Aktueller Wert', escapeMsg(valTxt)],
+          ['MQTT-Topic', escapeMsg(tile.topic || '—')],
+          ['Zuletzt empfangen', tile.lastSeen ? 'vor ' + fmtRelTime(tile.lastSeen) : 'nie'],
+          ['Status', tile.online ? 'Live' : 'Offline']
+        ]
+      };
+    });
+
+    // --- Drop cards no longer wanted --------------------------------
+    Object.keys(familyExtraCards).forEach(function (id) {
+      if (!wanted[id]) {
+        var el = familyExtraCards[id];
+        if (el) {
+          var pk = el.getAttribute('data-panel');
+          if (pk) delete panelData[pk];
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }
+        delete familyExtraCards[id];
+      }
+    });
+  }
+
   /* ===================== STICKY FLOWS ===================== */
   function edge(f, t) { var fr = f.getBoundingClientRect(), tr = t.getBoundingClientRect(); var fc = { x: fr.left + fr.width / 2, y: fr.top + fr.height / 2 }; var tc = { x: tr.left + tr.width / 2, y: tr.top + tr.height / 2 }; var dx = tc.x - fc.x, dy = tc.y - fc.y, a = Math.atan2(dy, dx); var fs = Math.min((fr.width / 2 + 8) / Math.abs(Math.cos(a) || .001), (fr.height / 2 + 8) / Math.abs(Math.sin(a) || .001)); var ts = Math.min((tr.width / 2 + 8) / Math.abs(Math.cos(a) || .001), (tr.height / 2 + 8) / Math.abs(Math.sin(a) || .001)); return { x1: fc.x + Math.cos(a) * fs, y1: fc.y + Math.sin(a) * fs, x2: tc.x - Math.cos(a) * ts, y2: tc.y - Math.sin(a) * ts }; }
   var flows = [
@@ -826,6 +991,11 @@
     sr('family.devices', function () {
       // Devices (Phase 03: empty array, Phase 04 fills this in)
       updateDevices(data.devices || []);
+    });
+
+    sr('family.extras', function () {
+      // Generic MQTT value tiles (family.mqttTiles) + full Tesla detail card.
+      renderFamilyExtras(data.mqttTiles || [], data.tesla || null);
     });
 
     sr('family.forecast-widget', function () {
