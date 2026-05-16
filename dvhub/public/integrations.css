@@ -566,21 +566,32 @@
 .mte-emoji-trigger.is-auto,
 .mte-color-trigger.is-auto { opacity: 0.62; }
 
-/* Grid popovers — hidden by default, shown by the .is-open class. */
+/* Grid popovers — hidden by default, shown by the .is-open class.
+   Phase 11-04 checkpoint fix: the emoji popover is large (8×6 cells) — it must
+   stay reliably on-screen AND its cells must receive clicks. The earlier build
+   let the tall emoji popover (~200px+) overlap the later-painted .mte-actions
+   buttons (Speichern / + Kachel hinzufügen), which intercepted clicks on the
+   popover's lower cells — the icon picker "did not apply" while the much
+   shorter swatch popover stayed clear. Fixes: a high z-index so the popover
+   paints above every sibling control, and a max-height + overflow-y:auto so
+   the expanded set scrolls inside a bounded box that always fits the card. */
 .emoji-grid,
 .swatch-grid {
   display: none;
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 20;
+  z-index: 60;
+  max-height: min(56vh, 320px);
+  overflow-y: auto;
   background: var(--glass-2, var(--glass));
   border: 1px solid var(--glass-brd-strong, var(--glass-brd));
   border-radius: var(--r-sm, 8px);
   padding: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
-.emoji-grid.is-open { display: grid; grid-template-columns: repeat(7, 40px); gap: 8px; }
+/* Emoji grid: 8 columns × 6 rows (48 curated household glyphs, Phase 11-04). */
+.emoji-grid.is-open { display: grid; grid-template-columns: repeat(8, 40px); gap: 8px; }
 .swatch-grid.is-open { display: grid; grid-template-columns: repeat(4, 32px); gap: 8px; }
 
 /* Grid cells. */
