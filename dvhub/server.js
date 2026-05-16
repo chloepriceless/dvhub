@@ -104,6 +104,7 @@ import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
 import { createMqttPublisher } from './services/mqtt/publisher.js';
+import { createMqttTopicObserver } from './services/mqtt/topic-observer.js';
 import { publishHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
 import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
 import { createFamilyMqttTiles } from './services/mqtt/family-tiles.js';
@@ -874,6 +875,8 @@ const mqttHub = createMqttHub(ctx);
 ctx.mqttHub = mqttHub;
 const mqttPublisher = createMqttPublisher(mqttHub, ctx);
 ctx.mqttPublisher = mqttPublisher;
+const mqttTopicObserver = createMqttTopicObserver(mqttHub, ctx);
+ctx.mqttTopicObserver = mqttTopicObserver;
 const teslamateService = createTeslamateSubscriber(mqttHub, ctx);
 ctx.teslamateService = teslamateService;
 const familyMqttTiles = createFamilyMqttTiles(mqttHub, ctx);
@@ -1213,6 +1216,7 @@ if (IS_RUNTIME_PROCESS) {
   // Phase 04: Start integration services (runtime-only — MQTT connections, device polling, notifications)
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
+    mqttTopicObserver.start();   // sync — registers the '#' subscription (Phase 09.4 D-05)
     teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
     familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
     try {
@@ -1406,6 +1410,7 @@ async function gracefulShutdown(signal) {
     safeAsync('deviceService.close', () => deviceService.close()),
     safeAsync('teslamateService.close', () => teslamateService.close()),
     safeAsync('familyMqttTiles.close', () => familyMqttTiles.close()),
+    safeAsync('mqttTopicObserver.close', () => mqttTopicObserver.close()),
     safeAsync('mqttPublisher.close', () => mqttPublisher.close()),
     safeAsync('mqttHub.close', () => mqttHub.close()),
     // Close Modbus TCP connections gracefully (FIN, not RST)
