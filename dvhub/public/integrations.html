@@ -151,6 +151,24 @@
           <span class="mte-status" id="mteStatus" role="status" aria-live="polite"></span>
         </div>
       </section>
+
+      <!-- MQTT Inspector drawer (Phase 09.4 D-03/D-04). Static markup so the
+           drawer is never innerHTML-injected and needs no inline styling. The
+           slide-over animation lives entirely in integrations.css, toggled by
+           the .is-open class. integrations.js#openMqttDrawer() removes the
+           hidden attribute, then adds .is-open on the next frame so the
+           translateX transition runs; closeMqttDrawer() reverses it and stops
+           the topics poll loop. Opened by clicking the MQTT .conn-card. -->
+      <div class="mqtt-drawer-backdrop" id="mqtt-drawer-backdrop" hidden></div>
+      <aside class="mqtt-drawer" id="mqtt-drawer" role="dialog" aria-modal="true"
+             aria-label="MQTT Topic Inspector" hidden>
+        <header class="mqtt-drawer-head">
+          <h2>MQTT Inspector</h2>
+          <button type="button" class="btn sm ghost" id="mqtt-drawer-close" aria-label="Schlie&szlig;en">&times;</button>
+        </header>
+        <p class="mqtt-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
+        <div class="mqtt-drawer-body" id="mqtt-drawer-topics"></div>
+      </aside>
     </main>
   </div>
 

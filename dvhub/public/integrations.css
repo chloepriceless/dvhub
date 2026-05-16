@@ -588,6 +588,138 @@
 .mte-status.is-ok { color: var(--green, #45e0a0); }
 .mte-status.is-err { color: var(--danger, #ff6b6b); }
 
+/* ===== MQTT Inspector drawer (Phase 09.4 D-03/D-04) ===== */
+/* Slide-over panel anchored to the right edge. Visibility is driven entirely
+   by the .is-open class + the [hidden] attribute (toggled by integrations.js)
+   — there is NO style.display anywhere, so the CSP `style-src 'self'`
+   directive (no 'unsafe-inline' since 09.1-07) is never tripped. The drawer
+   carries its translateX transition at all times; integrations.js removes
+   [hidden] one frame BEFORE adding .is-open so the slide animates in. Tokens
+   reuse the Aurora custom properties the .conn-card rules use — no hex. */
+.mqtt-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  background: rgba(4, 8, 18, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+.mqtt-drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mqtt-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  z-index: 59;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 18px 22px;
+  box-sizing: border-box;
+  background: var(--bg-1, #0a1226);
+  border-left: 1px solid var(--glass-brd);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.4);
+  transform: translateX(100%);
+  transition: transform .2s ease;
+  overflow-y: auto;
+}
+.mqtt-drawer.is-open { transform: translateX(0); }
+
+.mqtt-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mqtt-drawer-head h2 {
+  font-family: var(--f-brand);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+#mqtt-drawer-close {
+  flex-shrink: 0;
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px 11px;
+}
+
+.mqtt-drawer-meta {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.mqtt-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mqtt-drawer-empty {
+  font-size: 0.82rem;
+  color: var(--text-2);
+  line-height: 1.5;
+  padding: 16px 4px;
+}
+
+/* Topic row — a simple flex column, NOT a repeat(N,minmax(0,1fr)) auto-grid
+   (09.2 D-29 anti-pattern). Name + count + relative time on one line, the
+   payload preview wrapping/truncating below it. */
+.mqtt-topic-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-sm, 8px);
+  background: var(--glass);
+}
+.mqtt-topic-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.mqtt-topic-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--f-mono);
+  font-size: 0.74rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mqtt-topic-count {
+  font-family: var(--f-mono);
+  font-size: 0.66rem;
+  color: var(--cyan);
+  flex-shrink: 0;
+}
+.mqtt-topic-time {
+  font-family: var(--f-mono);
+  font-size: 0.66rem;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.mqtt-topic-payload {
+  font-family: var(--f-mono);
+  font-size: 0.68rem;
+  color: var(--text-2);
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
 /* ===== Mobile responsive ===== */
 @media (max-width: 640px) {
   .conn-grid { grid-template-columns: 1fr; }
