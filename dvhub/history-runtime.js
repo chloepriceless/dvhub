@@ -810,6 +810,7 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
       ...meta,
       marketPremium: {
         source,
+        marketValueMode,
         annualMarketValueCtKwh: Number.isFinite(annualMarketValueCtKwh) ? annualMarketValueCtKwh : null,
         weightedApplicableValueCtKwh: Number.isFinite(weightedApplicableValueCtKwh) ? weightedApplicableValueCtKwh : null,
         premiumEligibleExportKwh,

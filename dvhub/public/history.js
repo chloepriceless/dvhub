@@ -306,6 +306,15 @@ function renderKpis(summary) {
     setText('historyPremiumHint',
       `Vorläufig aus verfügbaren Monatsmarktwerten berechnet. Monatswerte werden nachlaufend zu Beginn des Folgemonats veröffentlicht. Aktuell ${monthLabel} verfügbar.`);
     setHidden('historyPremiumHint', false);
+  } else if ((premiumMeta?.marketValueMode || 'annual') === 'annual'
+             && (view === 'week' || view === 'month')) {
+    // Jahresmarktwert-Modus: in Woche/Monat ist die Marktprämie nur eine
+    // Annahme aus dem Monatsmarktwert — der endgültige Wert steht erst mit
+    // dem Jahresmarktwert (nach Jahresende) fest. Scope-Label + Hinweis.
+    setText('historyPremiumScopeLabel', `${premiumScopeLabel} · Annahme`);
+    setText('historyPremiumHint',
+      'Annahme: Bei Jahresmarktwert-Anlagen ist die Marktprämie aus dem Monatsmarktwert geschätzt — der endgültige Wert steht erst mit dem Jahresmarktwert nach Jahresende fest.');
+    setHidden('historyPremiumHint', false);
   }
 
   // --- Columns 2-4: DV-Vergleich (week/month/year) ---
