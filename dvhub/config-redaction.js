@@ -13,7 +13,9 @@ export const REDACTED_PATHS = Object.freeze([
   'notifications.providers.telegram.botToken',
   'notifications.providers.telegram.chatId',
   'notifications.providers.pushover.appToken',
-  'notifications.providers.pushover.userKey'
+  'notifications.providers.pushover.userKey',
+  'notifications.providers.ntfy.token',
+  'notifications.providers.uptime-kuma.pushUrl'
 ]);
 
 export const REDACTED = '***';

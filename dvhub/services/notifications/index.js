@@ -13,10 +13,14 @@
 
 import { createTelegramProvider } from './providers/telegram.js';
 import { createPushoverProvider } from './providers/pushover.js';
+import { createNtfyProvider } from './providers/ntfy.js';
+import { createUptimeKumaProvider } from './providers/uptime-kuma.js';
 
 const PROVIDER_FACTORIES = {
   telegram: createTelegramProvider,
-  pushover: createPushoverProvider
+  pushover: createPushoverProvider,
+  ntfy: createNtfyProvider,
+  'uptime-kuma': createUptimeKumaProvider
 };
 
 const HYSTERESIS_BAND = 5; // SOC percentage
@@ -185,6 +189,9 @@ export function createNotificationService(ctx) {
       if (!factory) continue;
       try {
         providers.set(name, factory(pCfg));
+        // Phase 09.4 D-08: optional heartbeat hook — only the Uptime Kuma
+        // provider defines startHeartbeat; optional-chaining keeps this generic.
+        providers.get(name)?.startHeartbeat?.();
       } catch (err) {
         pushLog('notification_provider_error', { provider: name, error: err.message });
       }
@@ -277,6 +284,11 @@ export function createNotificationService(ctx) {
   }
 
   function close() {
+    // Phase 09.4 D-08: stop any provider heartbeat timer (Uptime Kuma) on
+    // graceful shutdown so no dangling interval survives close().
+    for (const p of providers.values()) {
+      try { p.stopHeartbeat?.(); } catch (_) { /* noop */ }
+    }
     providers.clear();
     lastFired.clear();
     activeEvents.clear();

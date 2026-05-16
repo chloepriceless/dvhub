@@ -1837,8 +1837,9 @@ export function createApiRoutes(ctx) {
         },
         notifications: {
           enabled: getCfg().notifications?.enabled ?? false,
+          // Phase 09.4 D-06: list ALL configured providers (incl. disabled) with an enabled flag.
           providers: Object.entries(getCfg().notifications?.providers || {})
-            .filter(([, v]) => v.enabled).map(([k]) => k)
+            .map(([name, v]) => ({ name, enabled: !!v.enabled }))
         }
       };
       return json(res, 200, payload);
