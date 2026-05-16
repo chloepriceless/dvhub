@@ -36,6 +36,29 @@ function makeCtx(tiles) {
   };
 }
 
+/**
+ * A mock telemetryStore whose writeSamples is a spy.
+ * `calls` accumulates each `rows` array passed to writeSamples.
+ * `behavior` selects the returned Promise: 'resolve' (default) or 'reject'.
+ */
+function makeMockStore(behavior = 'resolve') {
+  const calls = [];
+  return {
+    calls,
+    writeSamples(rows) {
+      calls.push(rows);
+      return behavior === 'reject'
+        ? Promise.reject(new Error('pg down'))
+        : Promise.resolve();
+    }
+  };
+}
+
+/** Wait one macrotask so a fire-and-forget Promise chain settles. */
+function flush() {
+  return new Promise(r => setTimeout(r, 0));
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 describe('createFamilyMqttTiles', () => {
@@ -145,5 +168,74 @@ describe('createFamilyMqttTiles', () => {
     assert.equal(svc._extractValue('{"p":9}', null), null);
     assert.equal(svc._extractValue('', null), null);
     assert.equal(svc._extractValue(null, null), null);
+  });
+
+  // ── D-11/D-12/D-13: numeric MQTT value historisation ──────────────
+
+  it('D-11/D-12: numeric MQTT message historises one timeseries_samples row', async () => {
+    const hub = makeMockHub();
+    const store = makeMockStore();
+    const ctx = makeCtx([
+      { id: 'plug1', label: 'Gebläse', topic: 'zigbee2mqtt/Steckdose_Gebläse', field: 'energy', unit: 'W' }
+    ]);
+    ctx.telemetryStore = store;
+    const svc = createFamilyMqttTiles(hub, ctx);
+    await svc.start();
+    hub._deliver('zigbee2mqtt/Steckdose_Gebläse', '{"energy":1234}');
+    await flush(); // write is fire-and-forget
+    assert.equal(store.calls.length, 1, 'writeSamples called exactly once');
+    assert.ok(Array.isArray(store.calls[0]), 'writeSamples got an array');
+    assert.equal(store.calls[0].length, 1, 'exactly one row written');
+    const row = store.calls[0][0];
+    assert.equal(row.seriesKey, 'mqtt_tile_plug1');
+    assert.equal(row.source, 'mqtt');
+    assert.equal(row.value, 1234);
+    assert.equal(row.unit, 'W');
+    assert.equal(row.meta.topic, 'zigbee2mqtt/Steckdose_Gebläse');
+  });
+
+  it('D-13: non-numeric MQTT message is not historised', async () => {
+    const hub = makeMockHub();
+    const store = makeMockStore();
+    const ctx = makeCtx([
+      { id: 'plug1', label: 'Gebläse', topic: 'zigbee2mqtt/Steckdose_Gebläse', field: 'energy', unit: 'W' }
+    ]);
+    ctx.telemetryStore = store;
+    const svc = createFamilyMqttTiles(hub, ctx);
+    await svc.start();
+    hub._deliver('zigbee2mqtt/Steckdose_Gebläse', '{"energy":"online"}');
+    await flush();
+    assert.equal(store.calls.length, 0, 'a text value writes no row');
+  });
+
+  it('D-11: missing telemetryStore is a silent no-op (boot window)', async () => {
+    const hub = makeMockHub();
+    const ctx = makeCtx([
+      { id: 'plug1', label: 'Gebläse', topic: 'zigbee2mqtt/Steckdose_Gebläse', field: 'energy', unit: 'W' }
+    ]);
+    // ctx has no telemetryStore — factory ran before server.js assigned it.
+    const svc = createFamilyMqttTiles(hub, ctx);
+    await svc.start();
+    hub._deliver('zigbee2mqtt/Steckdose_Gebläse', '{"energy":1234}');
+    await flush();
+    // No throw, test reaches here — display path unaffected.
+    assert.equal(svc.getTiles()[0].value, 1234);
+  });
+
+  it('D-12: a rejecting writeSamples does not crash the callback', async () => {
+    const hub = makeMockHub();
+    const store = makeMockStore('reject');
+    const ctx = makeCtx([
+      { id: 'plug1', label: 'Gebläse', topic: 'zigbee2mqtt/Steckdose_Gebläse', field: 'energy', unit: 'W' }
+    ]);
+    ctx.telemetryStore = store;
+    const svc = createFamilyMqttTiles(hub, ctx);
+    await svc.start();
+    hub._deliver('zigbee2mqtt/Steckdose_Gebläse', '{"energy":1234}');
+    await flush(); // production code must .catch() the rejection
+    assert.equal(store.calls.length, 1, 'writeSamples was attempted');
+    // The pushLog error log is the .catch() evidence; reaching here = no unhandled rejection.
+    assert.ok(ctx._logs.some(l => l.msg === 'family_mqtt_tile_persist_error'),
+      'a rejecting write is logged via pushLog, not rethrown');
   });
 });
