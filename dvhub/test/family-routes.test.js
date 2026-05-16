@@ -144,7 +144,7 @@ describe('mqtt-tiles POST normaliser — icon/color allowlists (D-01/D-03)', () 
     // not via a /api/config POST. Slice the handler region and assert.
     const start = src.indexOf("'/api/family/mqtt-tiles' && req.method === 'POST'");
     assert.ok(start > 0, 'mqtt-tiles POST handler must exist');
-    const region = src.slice(start, start + 2000);
+    const region = src.slice(start, start + 3200);
     assert.ok(!/url\.pathname\s*===\s*['"]\/api\/config['"]/.test(region),
       'mqtt-tiles handler must not POST to /api/config');
     assert.match(region, /saveAndApplyConfig/, 'must persist via saveAndApplyConfig');

@@ -1715,6 +1715,22 @@ export function createApiRoutes(ctx) {
       if (body.tiles.length > 50) {
         return json(res, 400, { ok: false, error: 'too_many_tiles' });
       }
+      // Plan 11-03 (D-01/D-03): the per-tile `icon` and `color` are curated —
+      // the operator picks from a fixed 28-emoji grid / 8-hex swatch palette
+      // (11-UI-SPEC.md). The normaliser allowlist-clips both: an off-allowlist
+      // or absent value leaves the key UNSET so the client auto-derives
+      // (D-02/D-04). Colour hexes are stored VERBATIM (mixed case) — match the
+      // allowlist case-exactly; never .toUpperCase()/.toLowerCase() the input.
+      const FAMILY_TILE_ICON_ALLOWLIST = new Set([
+        '⚡', '🔋', '☀️', '🔌', '💡', '🏠', '🌡️',
+        '💧', '🔥', '❄️', '💨', '🌬️', '☁️', '🌧️',
+        '🛋️', '🛏️', '🚪', '🚿', '🍳', '🧺', '🪟',
+        '🚗', '📡', '🖥️', '📺', '🔊', '🌿', '🐾',
+      ]);
+      const FAMILY_TILE_COLOR_ALLOWLIST = new Set([
+        '#F7B731', '#26de81', '#4b7bec', '#22d3ee',
+        '#a55eea', '#fd9644', '#ff6b6b', '#78909c',
+      ]);
       // Normalize + validate. A topic is mandatory; id/label/field/unit are
       // length-clipped strings so a malformed payload cannot bloat config.json.
       const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
@@ -1732,6 +1748,12 @@ export function createApiRoutes(ctx) {
         const unit = clip(raw.unit, 16).trim();
         if (field) tile.field = field;
         if (unit) tile.unit = unit;
+        // D-01/D-03 — additive optional: omit when absent OR off-allowlist so
+        // the client falls through to the auto-derivation heuristic (D-02/D-04).
+        const icon = clip(raw.icon, 8).trim();   // emoji can be multi-codepoint — clip generously
+        const color = clip(raw.color, 9).trim(); // '#RRGGBB' = 7 chars; small slack
+        if (icon && FAMILY_TILE_ICON_ALLOWLIST.has(icon)) tile.icon = icon;   // additive — omit if invalid
+        if (color && FAMILY_TILE_COLOR_ALLOWLIST.has(color)) tile.color = color; // case-EXACT to UI-SPEC
         if (raw.enabled === false) tile.enabled = false;
         tiles.push(tile);
       }
