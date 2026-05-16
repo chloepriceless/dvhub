@@ -1900,6 +1900,89 @@ export function createApiRoutes(ctx) {
       });
     }
 
+    // GET /api/integrations/notification-providers — ntfy + uptime-kuma config
+    // for the integrations-page editor (Phase 09.4 D-07/D-08). Secrets are
+    // redacted for transport (mirrors redactConfig) — the UI never receives the
+    // real ntfy token or Kuma push URL. NOT in LAN_SAFE_ENDPOINTS: the POST is a
+    // config WRITE and must require Bearer auth (both verbs share the gate).
+    if (url.pathname === '/api/integrations/notification-providers' && req.method === 'GET') {
+      const provs = ctx.getRawCfg?.()?.notifications?.providers || {};
+      const ntfy = provs.ntfy || {};
+      const kuma = provs['uptime-kuma'] || {};
+      return json(res, 200, {
+        ok: true,
+        ntfy: {
+          enabled: !!ntfy.enabled,
+          topicUrl: ntfy.topicUrl || '',
+          token: ntfy.token ? '***' : ''        // redacted — never emit the real token
+        },
+        'uptime-kuma': {
+          enabled: !!kuma.enabled,
+          pushUrl: kuma.pushUrl ? '***' : '',   // the pushUrl path token IS the credential
+          heartbeatIntervalSec: kuma.heartbeatIntervalSec || 60
+        }
+      });
+    }
+
+    // POST /api/integrations/notification-providers — server-side merge of ONLY
+    // notifications.providers.{ntfy,uptime-kuma} into a getRawCfg() clone, then
+    // saveAndApplyConfig. This is the SAME shape as /api/family/mqtt-tiles: a
+    // partial POST to /api/config would REPLACE config.json verbatim and wipe
+    // apiToken/optimizer/mqtt (MEMORY feedback_config_save_replaces — prod
+    // crash-loop incident). When an incoming secret equals the redaction
+    // placeholder '***', the existing stored value is KEPT (same bug class as
+    // the 09-01 settings-save token_too_short regression).
+    if (url.pathname === '/api/integrations/notification-providers' && req.method === 'POST') {
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.notifications = (next.notifications && typeof next.notifications === 'object') ? next.notifications : {};
+      next.notifications.providers = (next.notifications.providers && typeof next.notifications.providers === 'object')
+        ? next.notifications.providers : {};
+      const prev = next.notifications.providers;
+
+      // ntfy
+      const inNtfy = body.ntfy || {};
+      const ntfyToken = (inNtfy.token === '***')
+        ? (prev.ntfy && prev.ntfy.token) || ''      // keep existing — '***' means "unchanged"
+        : clip(inNtfy.token, 256);
+      next.notifications.providers.ntfy = {
+        enabled: !!inNtfy.enabled,
+        topicUrl: clip(inNtfy.topicUrl, 512),
+        ...(ntfyToken ? { token: ntfyToken } : {})
+      };
+
+      // uptime-kuma
+      const inKuma = body['uptime-kuma'] || {};
+      const kumaUrl = (inKuma.pushUrl === '***')
+        ? (prev['uptime-kuma'] && prev['uptime-kuma'].pushUrl) || ''
+        : clip(inKuma.pushUrl, 512);
+      // Kuma's minimum push interval is 20s (RESEARCH Pitfall 4); clamp [20,3600].
+      const hb = Math.max(20, Math.min(3600, Number(inKuma.heartbeatIntervalSec) || 60));
+      next.notifications.providers['uptime-kuma'] = {
+        enabled: !!inKuma.enabled,
+        pushUrl: kumaUrl,
+        heartbeatIntervalSec: hb
+      };
+
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('notification_providers_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('notification_providers_saved', {
+        ntfyEnabled: next.notifications.providers.ntfy.enabled,
+        kumaEnabled: next.notifications.providers['uptime-kuma'].enabled
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
     // Integrations page HTML route
     if (url.pathname === '/integrations' && req.method === 'GET') {
       return servePage(res, 'integrations.html');
