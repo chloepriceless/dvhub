@@ -712,6 +712,7 @@ export function createApiRoutes(ctx) {
     '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
     '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
     '/api/family/tile-history', // Plan 11-03 D-14 — token-less kiosk detail-panel chart fetch; GET-only LAN bypass, Bearer for external. The POST /api/family/mqtt-tiles write path stays OUT.
+    '/api/family/tesla-history', // Plan 11-06 round 10 — token-less kiosk EV-panel charge-history chart fetch; sibling of tile-history (GET-only LAN bypass, Bearer for external).
     '/api/epex/zones',
     '/api/epex/gaps',
     '/api/schedule',
@@ -1818,6 +1819,47 @@ export function createApiRoutes(ctx) {
         });
       } catch (e) {
         pushLog('family_tile_history_error', { id, error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // GET /api/family/tesla-history — the EV detail-panel charge-history chart.
+    // Plan 11-06 round 10. Sibling of /api/family/tile-history: a LAN-safe,
+    // GET-only read route over the Tesla series Plan 11-06 round 8 historises
+    // into timeseries_samples (source 'teslamate', keys tesla_<field>). The
+    // series keys are a FIXED server-side allowlist — no request-controlled
+    // series key — so there is no enumeration surface. The only request input
+    // is `days`, clamped to 1..31; querySeries is fully parameterised and the
+    // window is server-computed Date objects (no SQL concat, T-11-07).
+    if (url.pathname === '/api/family/tesla-history' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.querySeries) {
+        return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      }
+      // Charge events are sparse (a car charges every few days, and Tesla
+      // historisation only started recently) — default to a 7-day window.
+      const rawDays = parseInt(url.searchParams.get('days'), 10);
+      const days = Number.isFinite(rawDays) ? Math.max(1, Math.min(31, rawDays)) : 7;
+      // Primary series = charge power; SoC included so the panel can show both.
+      const seriesKeys = ['tesla_charger_power', 'tesla_battery_level'];
+      const now = new Date();
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const start = new Date(end.getTime() - days * 86400000);
+      try {
+        const rows = await ctx.telemetryStore.querySeries({
+          seriesKeys,
+          start,
+          end,
+          maxResolution: 900,
+        });
+        return json(res, 200, {
+          ok: true,
+          days,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          data: rows,
+        });
+      } catch (e) {
+        pushLog('family_tesla_history_error', { error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
     }

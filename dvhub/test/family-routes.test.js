@@ -51,6 +51,25 @@ describe('family routes file integration (static checks)', () => {
     assert.match(src, /\.replace\(\/\[\^a-zA-Z0-9_-\]\/g,\s*''\)/);
   });
 
+  it('LAN_SAFE_ENDPOINTS contains /api/family/tesla-history (Plan 11-06 round 10)', () => {
+    // The token-less kiosk EV-panel charge-history chart fetches tesla history;
+    // the GET-only LAN bypass is mandatory — a sibling of tile-history.
+    const src = readFile(ROUTES_API_PATH);
+    const match = src.match(/const\s+LAN_SAFE_ENDPOINTS\s*=\s*new Set\(\[([\s\S]*?)\]\s*\)/);
+    assert.ok(match, 'LAN_SAFE_ENDPOINTS declaration must exist');
+    assert.match(match[1], /'\/api\/family\/tesla-history'/,
+      'allowlist must include /api/family/tesla-history');
+  });
+
+  it('registers a GET /api/family/tesla-history branch querying the fixed tesla_* series', () => {
+    const src = readFile(ROUTES_API_PATH);
+    assert.match(src, /url\.pathname\s*===\s*['"]\/api\/family\/tesla-history['"][\s\S]{0,120}req\.method\s*===\s*['"]GET['"]/);
+    // Fixed server-side series allowlist — no request-controlled series key.
+    assert.match(src, /seriesKeys\s*=\s*\[\s*'tesla_charger_power'\s*,\s*'tesla_battery_level'\s*\]/);
+    // `days` is parsed + clamped to a bounded 1..31 window.
+    assert.match(src, /Math\.max\(1,\s*Math\.min\(31,\s*rawDays\)\)/);
+  });
+
   it('registers a GET /api/family/status branch that calls familyService.buildFamilyStatus', () => {
     const src = readFile(ROUTES_API_PATH);
     assert.match(src, /url\.pathname\s*===\s*['"]\/api\/family\/status['"]/);
