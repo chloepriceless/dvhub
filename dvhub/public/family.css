@@ -49,7 +49,14 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
 .tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
-.tag-ev{top:32%;right:5%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
+/* Phase 11-06 round 9: the EV tag grew much taller after round 5 added the
+   .tag-soc SoC block, so at the old top:32%;right:5% it extended down into the
+   vertically-centred .widgets sidebar (z-index 21) and was occluded. Moved up
+   into the open gap above the widgets and inward (right:23%) so it clears the
+   widgets horizontally — the full tall tag (icon + charge power + SoC block +
+   status) is now entirely visible. The bgFlow k_ev stream still resolves via
+   bgFlowEndpoint('tag-ev') (id unchanged) and draws to the new position. */
+.tag-ev{top:13%;right:23%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
 .tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(165,94,234,.12);color:var(--ev)}
 .tag-ev .tag-dot{background:var(--ev);box-shadow:0 0 12px var(--ev-g);left:-12px;top:50%;transform:translateY(-50%)}
 .tag-grid{top:10%;right:6%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
@@ -97,13 +104,13 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .dev-bar-wrap{width:100%;height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;pointer-events:none}
 .dev-bar{height:100%;border-radius:2px;transition:width .8s ease;min-width:2px}
 
-/* Family extras — generic MQTT value tiles + Tesla card (rendered into #devices-tray) */
+/* Family extras — generic MQTT value tiles (rendered into #devices-tray).
+   Phase 11-06 round 9: the standalone .fam-tesla tray card and the .fam-extra-sub
+   sub-row were removed — the Tesla now lives entirely on the #tag-ev
+   constellation node + the Tesla-driven EV detail panel. */
 .fam-extra-val{font-size:17px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;margin-bottom:0;pointer-events:none}
 .fam-tile .fam-extra-val{color:#22d3ee}
 .fam-tile.is-stale{opacity:.45}
-.fam-tesla{min-width:140px}
-.fam-tesla .fam-extra-val{color:var(--ev)}
-.fam-extra-sub{font-size:9px;font-weight:600;color:rgba(255,255,255,.5);margin-top:5px;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none}
 
 .flow-svg{position:absolute;inset:0;width:100%;height:100%;z-index:15;pointer-events:none}
 /* Aurora replaces the legacy SVG flow with the canvas dust constellation rendered into
@@ -225,6 +232,9 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   .tag{padding:10px 14px;border-radius:14px;min-width:120px}
   .tag-emoji{font-size:20px;margin-bottom:4px}.tag-friendly{font-size:11px}
   .tag-val{font-size:16px!important}
+  /* Phase 11-06 round 9: on <768px the .widgets cluster becomes a static
+     horizontal row (no overlap), so the desktop occlusion does not occur here —
+     the EV tag keeps its mirrored position opposite .tag-bat. */
   .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}
   /* Phase 11-06 round 3: narrower centre House readout on small viewports. */
   .pf-center-readout{padding:11px 18px}
