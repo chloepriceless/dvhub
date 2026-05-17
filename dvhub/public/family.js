@@ -1749,6 +1749,20 @@
      Einspeisung); the operator reported it visualised far too slowly, so its
      dust runs 20% faster. No other base stream is affected. */
   var BG_FLOWS_SPEED_FACTOR = { k_grid: 1.2 };
+  /* Min-visibility floor for the BG_FLOWS_BASE streams (grid/battery/solar/EV)
+     ONLY. The base streams scale linearly against a large nameplate (maxKw — the
+     grid is 30), so a real but small flow (e.g. the grid at 0.05 kW / 50 W of
+     export) computes a near-zero dust count/speed and renders as nothing. When a
+     base stream carries power above the bgFlowDraw() draw threshold (s.kw >= 0.05
+     — i.e. it WILL be drawn), its count and speed are raised to at least these
+     minima so the flow is a thin but clearly-visible trickle. Calibrated against
+     DUST_PER_STREAM (400) and the busy maxima (~320 count, ~0.2 speed): 40 dust
+     ≈ 10% density is a sparse, clearly-visible scatter; speed 0.03 is plainly
+     moving. A genuinely idle stream (s.kw < 0.05) is skipped by bgFlowDraw() and
+     gets NO floor. The s_mqtt_* device streams are deliberately NOT floored —
+     they stay strictly proportional. */
+  var BG_FLOW_MIN_COUNT = 40;
+  var BG_FLOW_MIN_SPEED = 0.03;
   var bgFlowDust = [];
   var bgFlowCanvas = null;
   var bgFlowCtx = null;
@@ -1873,6 +1887,14 @@
       // no s_mqtt_* stream is affected: BG_FLOWS_SPEED_FACTOR is 1 for all others.
       s.speed   = bgFlowPwr2Speed(eff) * (BG_FLOWS_SPEED_FACTOR[s.id] || 1);
       s.reverse = false;                              // direction is encoded in from/to
+      // Min-visibility floor: a base stream that WILL be drawn (s.kw >= 0.05, the
+      // bgFlowDraw threshold) is lifted to at least a clearly-visible trickle, so
+      // a real few-hundred-watt flow against a large nameplate is never invisible.
+      // An idle stream (s.kw < 0.05) is skipped by bgFlowDraw and gets no floor.
+      if (s.kw >= 0.05) {
+        s.count = Math.max(s.count, BG_FLOW_MIN_COUNT);
+        s.speed = Math.max(s.speed, BG_FLOW_MIN_SPEED);
+      }
     });
   }
 
