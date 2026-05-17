@@ -2445,6 +2445,55 @@ function sanitizeSmallMarketAutomationStages(value, warnings) {
     .filter(Boolean);
 }
 
+function sanitizePredictivePreEmpty(value, warnings) {
+  if (!isPlainObject(value)) return {};
+  const next = clone(value);
+  if (next.enabled != null) next.enabled = coerceBoolean(next.enabled);
+
+  // akkuHardLimitW (D-17): a missing/NaN value must NEVER silently disable the
+  // battery clamp — reset to the safe default 20000, then clamp into [1000, 50000].
+  if (next.akkuHardLimitW != null && next.akkuHardLimitW !== '') {
+    const n = Number(next.akkuHardLimitW);
+    if (!Number.isFinite(n)) {
+      warnings.push('schedule.smallMarketAutomation.predictivePreEmpty.akkuHardLimitW: invalid number, reset to safe default');
+      next.akkuHardLimitW = 20000;
+    } else {
+      next.akkuHardLimitW = clamp(n, 1000, 50000);
+    }
+  }
+
+  // pvGenerationCostCtKwh (D-05): no safe generic default — delete on invalid so the
+  // operator is forced to re-enter; clamp valid values to [0, 50].
+  if (next.pvGenerationCostCtKwh != null && next.pvGenerationCostCtKwh !== '') {
+    const n = Number(next.pvGenerationCostCtKwh);
+    if (!Number.isFinite(n)) {
+      warnings.push('schedule.smallMarketAutomation.predictivePreEmpty.pvGenerationCostCtKwh: invalid number, field was reset');
+      delete next.pvGenerationCostCtKwh;
+    } else {
+      next.pvGenerationCostCtKwh = clamp(n, 0, 50);
+    }
+  }
+
+  // Bounded tuning fields — delete on invalid, clamp on valid.
+  const bounded = [
+    ['pvHeadroomFracW', 0, 5000],
+    ['confidenceFactorLow', 0, 1],
+    ['confidenceFactorHigh', 0, 1],
+    ['haltenAbortDropPct', 5, 90]
+  ];
+  for (const [key, lo, hi] of bounded) {
+    if (next[key] == null || next[key] === '') continue;
+    const n = Number(next[key]);
+    if (!Number.isFinite(n)) {
+      warnings.push(`schedule.smallMarketAutomation.predictivePreEmpty.${key}: invalid number, field was reset`);
+      delete next[key];
+      continue;
+    }
+    next[key] = clamp(n, lo, hi);
+  }
+  return next;
+}
+
 function sanitizeSmallMarketAutomation(value, warnings) {
   if (!isPlainObject(value)) return {};
 
@@ -2497,6 +2546,12 @@ function sanitizeSmallMarketAutomation(value, warnings) {
     location[key] = numericValue;
   }
   next.location = location;
+  // Only sanitize predictivePreEmpty when the input actually carries it — never
+  // inject an empty sub-block into a config the operator never set it on. The
+  // createDefaultConfig defaults supply the full block via deepMerge downstream.
+  if (next.predictivePreEmpty !== undefined) {
+    next.predictivePreEmpty = sanitizePredictivePreEmpty(next.predictivePreEmpty, warnings);
+  }
   next.stages = sanitizeSmallMarketAutomationStages(next.stages, warnings);
   return next;
 }
@@ -2766,6 +2821,12 @@ function sanitizeRawConfig(rawInput) {
   const warnings = [];
   for (const field of FIELD_DEFINITIONS) {
     if (!hasPath(raw, field.path)) continue;
+    // predictivePreEmpty has its own dedicated sub-block validator
+    // (sanitizePredictivePreEmpty) with a reset-on-invalid contract — T-10-04
+    // requires an invalid akkuHardLimitW to RESET to the safe default, never be
+    // deleted. The generic number pass below deletes on invalid/out-of-range, so
+    // it must NOT touch these fields; sanitizeSmallMarketAutomation owns them.
+    if (field.path.startsWith('schedule.smallMarketAutomation.predictivePreEmpty.')) continue;
     const currentValue = getPath(raw, field.path);
     if ((currentValue === '' || currentValue == null) && field.empty === 'delete') {
       deletePath(raw, field.path);
