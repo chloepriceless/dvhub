@@ -4,8 +4,43 @@
 // fields in memory, and persists snapshots to PostgreSQL at a configurable
 // interval.  Display-only per D-10 -- no active vehicle control.
 //
+// Restart-persistence (Phase 11-06 round 7): TeslaMate only re-publishes a
+// topic when its value CHANGES. Fast-changing topics (battery_level, temps,
+// charger_voltage) come back within minutes after a dvhub restart, but
+// rarely-changing ones (charging_state, charger_power, plugged_in,
+// charge_limit_soc, geofence, state) are NOT re-published during steady-state
+// charging -- so a RAM-only cache leaves those fields null until the next
+// state change, and the Family Dashboard EV tile goes blank after a restart.
+// To fix this the cache + lastUpdateAt are mirrored to a JSON file in the
+// runtime data directory (next to energy_state.json), seeded back into the
+// cache on start() before subscribing. Live MQTT messages always arrive after
+// seeding, so the seed is a starting point and never masks fresh data. The
+// file is a RUNTIME artefact -- it lives in DV_DATA_DIR (outside the repo) in
+// production, and is .gitignore'd for the dev fallback path; it is never
+// committed and never added to the deploy tar.
+//
 // Factory: createTeslamateSubscriber(hub, ctx) -> { start, close, getState, lastUpdateAt }
 // DI context: { getCfg, pushLog, db }
+
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// ── Runtime cache-persistence file ──────────────────────────────────
+//
+// Resolved the SAME way server.js resolves energy_state.json: DV_DATA_DIR
+// when set (production -- a directory OUTSIDE the repo, injected via the
+// systemd unit), else the dvhub/ application directory for the dev fallback.
+// From services/mqtt/ the dvhub/ root is two levels up.
+const __teslamateDir = dirname(fileURLToPath(import.meta.url));
+const TESLA_CACHE_PATH = join(
+  process.env.DV_DATA_DIR || join(__teslamateDir, '..', '..'),
+  'tesla-cache.json'
+);
+
+// Debounce window for cache writes -- a burst of MQTT messages collapses to
+// one disk write this many ms after the last update.
+const CACHE_WRITE_DEBOUNCE_MS = 8000;
 
 // ── Topic-to-field mapping (15 TeslaMate topics from RESEARCH.md) ───
 
@@ -120,6 +155,78 @@ export function createTeslamateSubscriber(hub, ctx) {
 
   let lastUpdateAt = null;
   let snapshotTimer = null;
+  let cacheWriteTimer = null;
+
+  // Known cache keys -- used to filter a seeded file so an unexpected/renamed
+  // field in a stale tesla-cache.json can never inject an unknown property.
+  const CACHE_KEYS = Object.keys(cache);
+
+  // ── Cache persistence helpers ──
+
+  /**
+   * Write the current cache + lastUpdateAt to the runtime JSON file.
+   * Synchronous + try/catch-guarded -- a disk failure must NEVER throw into
+   * the MQTT message path or the close() path. On failure we log and continue.
+   */
+  function writeCacheFile() {
+    try {
+      const payload = JSON.stringify({
+        cache,
+        lastUpdateAt: lastUpdateAt ? new Date(lastUpdateAt).toISOString() : null
+      });
+      writeFileSync(TESLA_CACHE_PATH, payload, 'utf8');
+    } catch (err) {
+      pushLog(`[TeslaMate] Cache file write error: ${err.message}`);
+    }
+  }
+
+  /**
+   * Schedule a debounced cache write. A burst of MQTT messages resets the
+   * timer so it collapses to a single disk write CACHE_WRITE_DEBOUNCE_MS
+   * after the last update.
+   */
+  function scheduleCacheWrite() {
+    if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
+    cacheWriteTimer = setTimeout(() => {
+      cacheWriteTimer = null;
+      writeCacheFile();
+    }, CACHE_WRITE_DEBOUNCE_MS);
+    // Don't let the debounce timer keep Node.js alive.
+    if (cacheWriteTimer.unref) cacheWriteTimer.unref();
+  }
+
+  /**
+   * Seed the in-memory cache from the runtime JSON file, if it exists and is
+   * valid. Only known keys are copied. A missing or corrupt file degrades
+   * cleanly to the empty cache (current first-boot behaviour) -- never throws.
+   */
+  function seedCacheFromFile() {
+    let raw;
+    try {
+      raw = readFileSync(TESLA_CACHE_PATH, 'utf8');
+    } catch {
+      return; // No file yet (first boot / fresh install) -- empty cache.
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      const saved = parsed && typeof parsed.cache === 'object' && parsed.cache
+        ? parsed.cache
+        : null;
+      if (saved) {
+        for (const key of CACHE_KEYS) {
+          if (saved[key] !== undefined) cache[key] = saved[key];
+        }
+      }
+      if (parsed && parsed.lastUpdateAt) {
+        const d = new Date(parsed.lastUpdateAt);
+        if (!Number.isNaN(d.getTime())) lastUpdateAt = d;
+      }
+      pushLog('teslamate_cache_seeded', { path: TESLA_CACHE_PATH });
+    } catch (err) {
+      // Corrupt JSON -- ignore, start with the empty cache.
+      pushLog(`[TeslaMate] Cache file seed error (ignored): ${err.message}`);
+    }
+  }
 
   // ── Helpers ──
 
@@ -151,6 +258,7 @@ export function createTeslamateSubscriber(hub, ctx) {
       if (!Number.isFinite(parsed)) return; // Rejects NaN, Infinity, non-numeric
       cache[mapping.key] = parsed;
       lastUpdateAt = new Date();
+      scheduleCacheWrite();
       return;
     }
 
@@ -158,6 +266,7 @@ export function createTeslamateSubscriber(hub, ctx) {
 
     cache[mapping.key] = parsed;
     lastUpdateAt = new Date();
+    scheduleCacheWrite();
   }
 
   /**
@@ -211,6 +320,12 @@ export function createTeslamateSubscriber(hub, ctx) {
       await ensureSchema(db);
     }
 
+    // Restart-persistence: seed the cache from the runtime JSON file BEFORE
+    // subscribing, so the last-known Tesla state is available immediately
+    // after a restart. Live MQTT messages arrive after this and overwrite
+    // any seeded value, so the seed never masks fresh data.
+    seedCacheFromFile();
+
     const carId = cfg.teslamateCarId || 1;
     const topic = `teslamate/cars/${carId}/#`;
     hub.subscribe(topic, handleMessage);
@@ -234,6 +349,13 @@ export function createTeslamateSubscriber(hub, ctx) {
       clearInterval(snapshotTimer);
       snapshotTimer = null;
     }
+    // Flush any pending debounced write and persist the final cache state, so
+    // a graceful shutdown never loses the most recent updates.
+    if (cacheWriteTimer) {
+      clearTimeout(cacheWriteTimer);
+      cacheWriteTimer = null;
+    }
+    if (lastUpdateAt) writeCacheFile();
   }
 
   function getState() {

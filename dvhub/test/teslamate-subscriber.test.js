@@ -1,7 +1,23 @@
 // test/teslamate-subscriber.test.js -- TeslaMate MQTT subscriber tests (INTG-04, INTG-06)
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTeslamateSubscriber } from '../services/mqtt/teslamate.js';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Phase 11-06 round 7: teslamate.js resolves its cache-persistence file path
+// from DV_DATA_DIR at MODULE LOAD time. Point it at a throwaway temp dir
+// BEFORE importing the module so the persistence tests below never write
+// tesla-cache.json into the repo working tree.
+const TEST_DATA_DIR = mkdtempSync(join(tmpdir(), 'teslamate-test-'));
+process.env.DV_DATA_DIR = TEST_DATA_DIR;
+const TEST_CACHE_FILE = join(TEST_DATA_DIR, 'tesla-cache.json');
+
+const { createTeslamateSubscriber } = await import('../services/mqtt/teslamate.js');
+
+after(() => {
+  try { rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -280,5 +296,99 @@ describe('createTeslamateSubscriber', () => {
     if (sqlRegion) {
       assert.ok(!sqlRegion[0].includes('${'), 'SQL INSERT should not use template literal interpolation');
     }
+  });
+});
+
+// ── Restart-persistence (Phase 11-06 round 7) ───────────────────────
+//
+// TeslaMate only re-publishes a topic when its value changes, so rarely-
+// changing fields (charging_state, charger_power, plugged_in) stay null
+// after a dvhub restart until the next state change. The cache is mirrored
+// to a JSON file in the runtime data dir and seeded back on start().
+
+describe('TeslaMate cache-persistence', () => {
+  let hub, ctx;
+
+  beforeEach(() => {
+    hub = makeMockHub();
+    ctx = makeMockCtx();
+    // Each test starts from a clean slate -- remove any leftover cache file.
+    if (existsSync(TEST_CACHE_FILE)) rmSync(TEST_CACHE_FILE, { force: true });
+  });
+
+  it('close() writes the cache + lastUpdateAt to tesla-cache.json in DV_DATA_DIR', async () => {
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+    hub._deliver('teslamate/cars/2/charging_state', 'Charging');
+    hub._deliver('teslamate/cars/2/charger_power', '11');
+    hub._deliver('teslamate/cars/2/battery_level', '55');
+    sub.close(); // flushes the pending debounced write synchronously
+
+    assert.ok(existsSync(TEST_CACHE_FILE), 'tesla-cache.json should exist after close()');
+    const saved = JSON.parse(readFileSync(TEST_CACHE_FILE, 'utf8'));
+    assert.equal(saved.cache.chargingState, 'Charging');
+    assert.equal(saved.cache.chargerPower, 11);
+    assert.equal(saved.cache.batteryLevel, 55);
+    assert.ok(saved.lastUpdateAt, 'lastUpdateAt should be persisted');
+  });
+
+  it('start() seeds the cache from an existing tesla-cache.json before subscribing', async () => {
+    // Simulate a file left by a previous run.
+    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
+      cache: {
+        displayName: 'Model 3', chargingState: 'Charging', chargerPower: 7,
+        pluggedIn: true, batteryLevel: 48, chargeLimitSoc: 80
+      },
+      lastUpdateAt: '2026-05-17T10:00:00.000Z'
+    }), 'utf8');
+
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+
+    const state = sub.getState();
+    assert.equal(state.chargingState, 'Charging', 'rarely-changing field seeded from file');
+    assert.equal(state.chargerPower, 7);
+    assert.equal(state.pluggedIn, true);
+    assert.equal(state.batteryLevel, 48);
+    assert.ok(sub.lastUpdateAt, 'lastUpdateAt restored from file');
+  });
+
+  it('a live MQTT message overwrites a seeded value', async () => {
+    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
+      cache: { batteryLevel: 48, chargingState: 'Charging' },
+      lastUpdateAt: '2026-05-17T10:00:00.000Z'
+    }), 'utf8');
+
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+    assert.equal(sub.getState().batteryLevel, 48); // seeded
+    hub._deliver('teslamate/cars/2/battery_level', '72');
+    assert.equal(sub.getState().batteryLevel, 72, 'live message wins over the seed');
+  });
+
+  it('a missing cache file degrades cleanly to an empty cache (no throw)', async () => {
+    assert.equal(existsSync(TEST_CACHE_FILE), false);
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await assert.doesNotReject(() => sub.start());
+    assert.equal(sub.getState().batteryLevel, null);
+  });
+
+  it('a corrupt cache file degrades cleanly to an empty cache (no throw)', async () => {
+    writeFileSync(TEST_CACHE_FILE, '{ this is not valid json', 'utf8');
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await assert.doesNotReject(() => sub.start());
+    assert.equal(sub.getState().batteryLevel, null);
+  });
+
+  it('seeding only copies known cache keys (a stale unknown key is dropped)', async () => {
+    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
+      cache: { batteryLevel: 60, somethingRenamed: 'xyz' },
+      lastUpdateAt: '2026-05-17T10:00:00.000Z'
+    }), 'utf8');
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+    const state = sub.getState();
+    assert.equal(state.batteryLevel, 60);
+    assert.equal('somethingRenamed' in state, false, 'unknown key must not be injected');
   });
 });
