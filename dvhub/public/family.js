@@ -62,13 +62,22 @@
   var panelChart = null;
   var activeDevices = {};
 
+  /* Phase 11-06 round 10: the Tesla side-profile glyph used both on the #tag-ev
+     constellation node (inline in family.html) and as the EV detail-panel icon
+     (set here via innerHTML). currentColor inherits the EV accent purple;
+     CSP-safe — SVG presentation attributes only, no inline style=. The same
+     <path> data as the family.html markup so the two surfaces match. */
+  var TESLA_GLYPH_SVG = '<svg class="tesla-glyph" viewBox="0 0 64 26" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tesla">'
+    + '<path fill="currentColor" d="M9.6 23.4c-2 0-3.6-1.6-3.6-3.6 0-.5.1-1 .3-1.5H3.4c-1.3 0-2.4-1-2.5-2.3l-.3-3c-.1-1 .5-2 1.4-2.4l5.6-2.6 4.3-4.4C12.7 2 14 1.4 15.4 1.4h22.9c1.6 0 3.1.7 4.2 1.9l3.6 4.1 9.7 1.7c2.4.4 4.3 2.3 4.7 4.7l.3 1.8c.3 1.8-1.1 3.5-3 3.5h-3.4c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6s-3.6-1.6-3.6-3.6c0-.5.1-1 .3-1.5H16.5c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6z"/>'
+    + '<circle cx="13.2" cy="19.8" r="2.1" fill="#0a0c12"/><circle cx="51.4" cy="19.8" r="2.1" fill="#0a0c12"/></svg>';
+
   /* Panel data for main tags (static copy seeded from original; stats are
      rewritten on every poll via applyFamilyStatus -> updatePanelStats) */
   var panelData = {
     solar: { icon: '&#9728;&#65039;', iconBg: 'rgba(247,183,49,.1)', title: 'Solaranlage', sub: 'Deine Module auf dem Dach', color: '#F7B731', summary: 'Die Solaranlage wandelt Sonnenlicht in Strom um. An guten Tagen deckst du den gesamten Hausverbrauch und lädst gleichzeitig Batterie und Auto.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }], chart: null, details: [['Status', 'Live von /api/family/status']] },
     home: { icon: '&#127968;', iconBg: 'rgba(75,123,236,.1)', title: 'Dein Zuhause', sub: 'Gesamtverbrauch', color: '#4b7bec', summary: 'Der Verbrauch wird berechnet aus Solar minus Batterie, Auto und Netz.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Eigenverbrauch', val: '—', delta: '', up: true }], chart: null, details: [['Berechnung', 'Solar - Batterie - Auto - Netz']] },
     bat: { icon: '&#128267;', iconBg: 'rgba(38,222,129,.1)', title: 'Batteriespeicher', sub: 'Dein Stromspeicher', color: '#26de81', summary: 'Speichert Solarüberschuss für den Abend.', stats: [{ label: 'Stand', val: '—', delta: '', up: true }, { label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Reicht', val: '—', delta: '', up: true }], chart: null, details: [['Kapazität', '—']] },
-    ev: { icon: '&#128664;', iconBg: 'rgba(165,94,234,.1)', title: 'E-Auto', sub: 'Solarüberschuss-Laden', color: '#a55eea', summary: 'Lädt clever mit dem Strom den die Sonne liefert.', stats: [{ label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Akku', val: '—', delta: '', up: true }, { label: 'Modus', val: '—', delta: '', up: true }], chart: null, details: [['Wallbox', '—']] },
+    ev: { icon: TESLA_GLYPH_SVG, iconBg: 'rgba(165,94,234,.1)', title: 'E-Auto', sub: 'Solarüberschuss-Laden', color: '#a55eea', summary: 'Lädt clever mit dem Strom den die Sonne liefert.', stats: [{ label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Akku', val: '—', delta: '', up: true }, { label: 'Modus', val: '—', delta: '', up: true }], chart: null, details: [['Wallbox', '—']] },
     grid: { icon: '&#9889;', iconBg: 'rgba(253,150,68,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#fd9644', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
     forecast: { icon: '&#9925;', iconBg: 'rgba(247,183,49,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#F7B731', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
     price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'Stündliche EPEX Day-Ahead Börsenpreise.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
