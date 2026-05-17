@@ -145,6 +145,31 @@
     return { icon: icon, color: color };
   }
 
+  // Power-unit classifier (D-06). Re-declared inline here per 11-01-SUMMARY —
+  // family.js is a browser IIFE and cannot import services/family/tile-meta.js,
+  // so this MUST mirror isPowerUnit() in that ESM module exactly: true for
+  // W / kW / MW, case-insensitive, whitespace-trimmed.
+  function isPowerUnit(unit) {
+    var u = String(unit == null ? '' : unit).trim().toLowerCase();
+    return u === 'w' || u === 'kw' || u === 'mw';
+  }
+
+  // Convert a #RRGGBB hex string to an [r,g,b] triplet for a bgFlow stream
+  // color. Falls back to Slate (#78909c → [120,144,156]) on a malformed hex,
+  // matching the TILE_META_FALLBACK colour.
+  function hexToRgb(hex) {
+    var h = String(hex == null ? '' : hex).trim().replace(/^#/, '');
+    if (h.length === 3) {
+      h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return [120, 144, 156];
+    return [
+      parseInt(h.substr(0, 2), 16),
+      parseInt(h.substr(2, 2), 16),
+      parseInt(h.substr(4, 2), 16)
+    ];
+  }
+
   function openPanel(key) {
     var d = panelData[key]; if (!d) return;
     document.getElementById('p-icon').innerHTML = d.icon;
@@ -1094,6 +1119,13 @@
       // <canvas id="bgFlow"> by initBgFlow() at bootstrap. This replaces the
       // legacy SVG flow (#flowSvg) which is hidden by family.css.
       updateBgFlowFromStatus(data);
+      // Power-unit MQTT tiles join the constellation as their own streams
+      // (D-05..D-10). MUST run after the family.extras block above has called
+      // renderFamilyExtras() so the #fam-card-mqtt-<id> cards exist — a stream
+      // to a not-yet-rendered card silently does not paint (bgFlowEndpoint
+      // returns null). The sr() blocks run in order, so family.extras precedes
+      // this family.bg-flow block.
+      updateBgFlowMqttStreams(data.mqttTiles || []);
       // Aurora pf-center-readout (#pfCenter) shows the day-net-Euro headline.
       updatePfCenterReadout(data);
     });
@@ -1674,6 +1706,149 @@
       s.count   = bgFlowPwr2Count(eff);
       s.speed   = bgFlowPwr2Speed(eff);
       s.reverse = false;                              // direction is encoded in from/to
+    });
+  }
+
+  /* ===================== MQTT POWER-TILE bgFlow STREAMS (D-05..D-10) ========
+     A power-unit MQTT tile (W/kW/MW — isPowerUnit) joins the bgFlow dust
+     constellation as its own stream between the tile's tray card
+     (#fam-card-mqtt-<id>) and the hub (#pfCenter). Non-power tiles stay plain
+     cards with no stream.
+
+     These streams live in a SEPARATE array (bgFlowMqttStreams) rather than
+     being spliced into BG_FLOWS_BASE — keeps the base-stream code path (and its
+     fixed indices in updateBgFlowFromStatus) completely untouched. bgFlowDraw()
+     is extended to seed/draw the dust for both arrays.
+
+     Direction (D-07/D-08): a tile that has NEVER reported a negative value is a
+     SINK (consumer) — drawn FROM the hub TO the card. Once a negative value is
+     seen (everNegative becomes sticky-true), the direction follows the live
+     sign. The canonical positive-only plug case is therefore correct
+     immediately.
+
+     Intensity (operator request — see below): the s_mqtt_* streams scale dust
+     count/speed by a LOGARITHMIC curve of the absolute power, NOT the linear
+     bgFlowPwr2Count/bgFlowPwr2Speed mapping the base streams use. */
+
+  // Per-tile in-memory sign + running-max state. Lives in family.js memory and
+  // resets on page reload (acceptable — D-12 has no completeness guarantee).
+  // Keyed by tile.id → { everNegative: boolean, maxKw: number }.
+  var bgFlowMqttState = {};
+  // Active MQTT power-tile streams, keyed by tile.id. Each value is a stream
+  // object of the same shape bgFlowDraw() consumes.
+  var bgFlowMqttStreams = {};
+
+  // Logarithmic intensity tuning for the s_mqtt_* streams. MIN_* keep a small
+  // non-zero tile (~100 W) clearly alive; MAX_* keep a big MQTT tile comparable
+  // to (not louder than) the busiest base stream (bgFlowPwr2Count caps at 320).
+  var MQTT_FLOW_FLOOR_W = 10;       // log-floor — values below clamp to t=0
+  var MQTT_FLOW_MIN_COUNT = 70;     // a non-zero, visibly-alive minimum dust count
+  var MQTT_FLOW_MAX_COUNT = 300;    // near the base streams' busiest count
+  var MQTT_FLOW_MIN_SPEED = 0.05;   // a non-zero, visibly-alive minimum speed
+  var MQTT_FLOW_MAX_SPEED = 0.18;   // comparable to bgFlowPwr2Speed near peak
+
+  function bgFlowClamp01(v) {
+    if (!isFinite(v)) return 0;
+    return v < 0 ? 0 : (v > 1 ? 1 : v);
+  }
+
+  /* Reconcile the MQTT power-tile streams against the polled mqttTiles set.
+     MUST be called AFTER renderFamilyExtras() so the #fam-card-mqtt-<id> card
+     exists — bgFlowDraw silently skips a stream whose endpoint resolves null.
+     For each power-unit tile: create+seed a stream if new, then drive its
+     direction/maxKw/count/speed from the live value. Non-power tiles, and any
+     tile that has dropped out of the poll, have their stream torn down. */
+  function updateBgFlowMqttStreams(mqttTiles) {
+    var tiles = mqttTiles || [];
+    var seen = {};
+
+    tiles.forEach(function (tile) {
+      if (!tile || !tile.id) return;
+      // Skip a tile that never produced a value — same guard renderFamilyExtras
+      // uses to decide whether to render the card at all.
+      if (tile.value == null && !tile.lastSeen) return;
+      if (!isPowerUnit(tile.unit)) return;            // D-06: power units only
+      // A power tile whose value is non-numeric carries no flow magnitude.
+      var rawVal = tile.value;
+      var valW = (typeof rawVal === 'number' && isFinite(rawVal)) ? rawVal : null;
+      if (valW == null) return;
+
+      seen[tile.id] = true;
+      var st = bgFlowMqttState[tile.id];
+      if (!st) { st = bgFlowMqttState[tile.id] = { everNegative: false, maxKw: 0.001 }; }
+      if (valW < 0) st.everNegative = true;           // D-08: sticky sign state
+
+      var meta = resolveTileMeta(tile);
+      var cardId = 'fam-card-mqtt-' + tile.id;
+
+      var s = bgFlowMqttStreams[tile.id];
+      if (!s) {
+        // New stream — create with the card↔hub endpoints and individually
+        // seed its dust (BG_FLOWS_BASE.forEach(bgFlowSeedDust) ran once at
+        // init; streams added later are NOT auto-seeded).
+        s = {
+          id: 's_mqtt_' + tile.id,
+          from: cardId, to: 'pfCenter',
+          color: hexToRgb(meta.color),
+          maxKw: 0.001
+        };
+        bgFlowMqttStreams[tile.id] = s;
+        bgFlowSeedDust(s);                            // pushes DUST_PER_STREAM particles
+      }
+      // Keep the accent colour in sync if the tile was re-themed.
+      s.color = hexToRgb(meta.color);
+
+      // D-07/D-08 direction: positive-only tile → SINK (hub → card). Once a
+      // negative value has been seen, follow the live sign. Encode direction
+      // in from/to (mirrors the base streams) — reverse stays false.
+      if (!st.everNegative) {
+        s.from = 'pfCenter'; s.to = cardId;           // consumer/sink
+      } else if (valW >= 0) {
+        s.from = 'pfCenter'; s.to = cardId;           // positive → into the card
+      } else {
+        s.from = cardId; s.to = 'pfCenter';           // negative → out of the card
+      }
+      s.reverse = false;
+
+      // D-10 running-max maxKw — convert the tile value to kW first (base
+      // streams are all in kW); monotonically non-decreasing, never reset.
+      var absW = Math.abs(valW);
+      var valKw = absW / 1000;
+      st.maxKw = Math.max(st.maxKw || 0.001, valKw);
+      s.maxKw = st.maxKw;
+
+      // bgFlowDraw's `s.kw < 0.05` skip guard works in kW — keep it intact so a
+      // genuinely zero/idle tile still paints nothing.
+      s.kw = valKw;
+
+      // (f2) LOGARITHMIC particle intensity — operator request. This OVERRIDES
+      // the linear bgFlowPwr2Count/bgFlowPwr2Speed mapping for the s_mqtt_*
+      // streams ONLY; the BG_FLOWS_BASE streams keep their linear path
+      // untouched. Linear value/maxKw makes a 100 W tile invisible next to a
+      // 10 kW running-max; the log curve lifts small non-zero values into
+      // visibility while keeping 100 W / 1 kW / 10 kW as three clearly distinct,
+      // monotonically increasing dust intensities.
+      var FLOOR_W = MQTT_FLOW_FLOOR_W;
+      var CEIL_W = Math.max(11000, st.maxKw * 1000);  // running-max bounds the curve
+      var lgFloor = Math.log10(FLOOR_W);
+      var lgCeil = Math.log10(CEIL_W);
+      var t = (lgCeil > lgFloor)
+        ? bgFlowClamp01((Math.log10(Math.max(absW, FLOOR_W)) - lgFloor) / (lgCeil - lgFloor))
+        : 0;
+      s.count = Math.round(MQTT_FLOW_MIN_COUNT + t * (MQTT_FLOW_MAX_COUNT - MQTT_FLOW_MIN_COUNT));
+      s.speed = MQTT_FLOW_MIN_SPEED + t * (MQTT_FLOW_MAX_SPEED - MQTT_FLOW_MIN_SPEED);
+    });
+
+    // Tear down streams for tiles that dropped out of the poll, were disabled,
+    // or are no longer power-unit tiles — drop their dust so no orphan remains.
+    Object.keys(bgFlowMqttStreams).forEach(function (tileId) {
+      if (seen[tileId]) return;
+      var s = bgFlowMqttStreams[tileId];
+      // Remove this stream's dust particles from the shared bgFlowDust array.
+      for (var i = bgFlowDust.length - 1; i >= 0; i--) {
+        if (bgFlowDust[i].s === s) bgFlowDust.splice(i, 1);
+      }
+      delete bgFlowMqttStreams[tileId];
     });
   }
 
