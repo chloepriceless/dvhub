@@ -313,6 +313,17 @@ export function createFamilyService(ctx) {
       ? new Date(svc.lastUpdateAt).getTime()
       : null;
 
+    // Phase 11-06 round 7: derive "charging" from BOTH signals. TeslaMate
+    // re-publishes charger_power / charger_voltage far more often than
+    // charging_state, so after a dvhub restart charging_state can be
+    // momentarily null while the car is clearly drawing power. Treat the car
+    // as charging when chargingState is 'Charging' OR a positive charger
+    // power is reported -- no fabricated values, only an OR of signals that
+    // are already present.
+    const chargerPowerKw = s.chargerPower ?? null;
+    const charging = s.chargingState === 'Charging'
+      || (typeof chargerPowerKw === 'number' && chargerPowerKw > 0);
+
     return {
       enabled: true,
       name: s.displayName || teslaCfg.name || 'Tesla',
@@ -322,9 +333,10 @@ export function createFamilyService(ctx) {
       rangeKm: s.estRangeKm ?? null,                // estimated range
       ratedRangeKm: s.ratedRangeKm ?? null,
       chargingState: s.chargingState || null,       // Charging|Complete|Disconnected|...
+      charging,                                     // derived: chargingState OR chargerPowerKw>0
       pluggedIn: s.pluggedIn ?? null,
       chargeLimitSoc: s.chargeLimitSoc ?? null,
-      chargerPowerKw: s.chargerPower ?? null,
+      chargerPowerKw,
       insideTempC: s.insideTemp ?? null,
       geofence: s.geofence || null,
       lastUpdateAt

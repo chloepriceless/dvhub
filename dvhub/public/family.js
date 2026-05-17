@@ -510,6 +510,20 @@
     online: 'Bereit', charging: 'Lädt'
   };
 
+  // Phase 11-06 round 7: "is the Tesla charging" decided from BOTH signals.
+  // TeslaMate re-publishes charger_power far more often than charging_state,
+  // so after a dvhub restart charging_state can be momentarily null/stale
+  // while the car is clearly drawing power. The server already exposes a
+  // derived `tesla.charging` boolean (services/family/index.js) computed the
+  // same way — prefer it; otherwise OR the two raw signals locally. No
+  // fabricated values: only signals already present on the object.
+  function teslaIsCharging(t) {
+    if (!t) return false;
+    if (typeof t.charging === 'boolean') return t.charging;
+    return t.chargingState === 'Charging'
+      || (typeof t.chargerPowerKw === 'number' && t.chargerPowerKw > 0);
+  }
+
   function makeExtraCard(logicalId, panelKey, modifierClass, hasSub) {
     var el = document.createElement('div');
     el.className = 'dev-card ' + modifierClass;
@@ -548,7 +562,7 @@
       var battTxt = typeof tesla.batteryLevel === 'number' ? Math.round(tesla.batteryLevel) + ' %' : '—';
       var stateTxt = TESLA_STATE_LABEL[tesla.state] || tesla.state || '—';
       var chgTxt;
-      if (tesla.chargingState === 'Charging') {
+      if (teslaIsCharging(tesla)) {
         chgTxt = 'Lädt' + (typeof tesla.chargerPowerKw === 'number' && tesla.chargerPowerKw > 0
           ? ' · ' + (Math.round(tesla.chargerPowerKw * 10) / 10) + ' kW' : '');
       } else {
@@ -1166,7 +1180,7 @@
       // the object is missing, the existing EV display is left unchanged.
       var tesla = data.tesla;
       var teslaLive = !!(tesla && tesla.enabled);
-      var teslaCharging = teslaLive && tesla.chargingState === 'Charging';
+      var teslaCharging = teslaLive && teslaIsCharging(tesla);
       if (teslaLive) {
         // Friendly text + status driven by the Tesla, not the placeholder ev.
         var tChgKw = Number(tesla.chargerPowerKw);
@@ -1400,7 +1414,7 @@
     // data.tesla; otherwise keep the original Victron-placeholder stats.
     var teslaPanel = data.tesla;
     if (teslaPanel && teslaPanel.enabled) {
-      var tChg = teslaPanel.chargingState === 'Charging';
+      var tChg = teslaIsCharging(teslaPanel);
       var tKw = Number(teslaPanel.chargerPowerKw);
       var tLvl = typeof teslaPanel.batteryLevel === 'number' ? Math.round(teslaPanel.batteryLevel) : null;
       var tLim = typeof teslaPanel.chargeLimitSoc === 'number' ? Math.round(teslaPanel.chargeLimitSoc) : null;
@@ -1973,7 +1987,7 @@
     // (the wallbox draw is already inside homeKw — re-adding it would
     // double-count). Tesla-when-charging wins; otherwise fall back to evKw.
     var t = data.tesla;
-    if (t && t.chargingState === 'Charging' && Number(t.chargerPowerKw) > 0) {
+    if (t && teslaIsCharging(t) && Number(t.chargerPowerKw) > 0) {
       ev = Math.max(ev, Number(t.chargerPowerKw));
     }
 
