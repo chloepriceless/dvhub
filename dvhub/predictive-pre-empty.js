@@ -243,17 +243,27 @@ export function computePreEmptyTargetSoc({
 }
 
 /**
- * D-12 / D-17 — THE dual-limit export-setpoint clamp.
+ * D-12 / D-17 — the Stage-2 export-setpoint clamp with a DYNAMIC akku headroom.
  *
- * A pre-empty slot wants to export aggressively, but the implied battery
- * discharge must respect TWO independent physical limits:
- *   - the AC-side grid-export cap (`maxDischargeW`, negative W) — D-12, and
- *   - the DC-side Akku Hard Limit (`akkuHardLimitW`, positive W) — D-17.
- * The binding limit is the smaller battery share. By construction the implied
- * battery discharge can never exceed `akkuHardLimitW`, and `gridSetpointW` is
- * always <= 0 (export-only — never an illegal grid charge).
+ * A pre-empty slot wants to export aggressively. PV is exported at its full
+ * forecast value — it is never throttled. The battery's contribution is shaped
+ * by TWO limits:
+ *   - the AC-side grid-export ceiling (`maxDischargeW`, negative W) — D-12, and
+ *   - the DC-side battery discharge, governed by a soft/hard limit pair — D-17.
  *
- * Physical identity: batteryDischarge ~= |gridExport| + houseLoad - PV.
+ * Dynamic headroom (D-17): the battery discharges FREELY up to `akkuSoftLimitW`
+ * (default 18 kW). Above the soft limit each extra watt of demand is admitted
+ * at an exponentially decaying marginal rate — 1.0 at the soft limit, ->0
+ * toward the hard limit — so the discharge asymptotically approaches but never
+ * exceeds `akkuHardLimitW` (default 20 kW). There is NO fixed PV de-rating:
+ * when the battery is far from its limit it is used at full tilt; the taper
+ * only bites near the limit. The D-18 live clamp in schedule-eval.js is the
+ * runtime backstop against a real PV dip.
+ *
+ * `gridSetpointW` is always <= 0 (export-only — never an illegal grid charge)
+ * and `impliedBatteryDischargeW` is always <= `akkuHardLimitW`.
+ *
+ * Physical identity: batteryDischarge = |gridExport| + houseLoad - PV.
  *
  * @returns {{gridSetpointW:number, impliedBatteryDischargeW:number,
  *            batteryShareW:number, mode:string, reason:string}}
@@ -263,35 +273,52 @@ export function preEmptySlotSetpointW({
   expectedHouseLoadW,
   maxDischargeW = -12000,
   akkuHardLimitW = 20000,
-  pvHeadroomFracW = 0
+  akkuSoftLimitW = 18000
 } = {}) {
-  const pvSafeW = Math.max(0, toFiniteNumber(pvForecastW, 0) - toFiniteNumber(pvHeadroomFracW, 0));
+  const pvW = Math.max(0, toFiniteNumber(pvForecastW, 0));
   const houseLoadW = Math.max(0, toFiniteNumber(expectedHouseLoadW, 0));
   const acAbsCap = Math.abs(toFiniteNumber(maxDischargeW, -12000));
-  const akkuLimitW = Math.max(0, toFiniteNumber(akkuHardLimitW, 20000));
+  const hardW = Math.max(0, toFiniteNumber(akkuHardLimitW, 20000));
+  // The soft limit can never sit above the hard limit.
+  const softW = Math.min(hardW, Math.max(0, toFiniteNumber(akkuSoftLimitW, 18000)));
 
-  // D-12: AC-side battery headroom = export ceiling minus the PV already covering it.
-  const acBatteryShareW = Math.max(0, acAbsCap - pvSafeW);
-  // D-17: DC-side battery headroom = battery cap minus the house load it also serves.
-  const dcBatteryShareW = Math.max(0, akkuLimitW - houseLoadW);
+  // D-12: AC side — the battery export share the grid-export ceiling permits
+  // ON TOP OF the PV already flowing to grid. PV itself is never throttled.
+  const acBatteryExportShareW = Math.max(0, acAbsCap - pvW);
+  // The battery also serves the house load, so its raw TOTAL discharge demand:
+  const rawBatteryDischargeW = acBatteryExportShareW + houseLoadW;
 
-  // DUAL-LIMIT CLAMP: the binding limit is the smaller share.
-  const batteryShareW = Math.min(acBatteryShareW, dcBatteryShareW);
-  const akkuLimitBinds = dcBatteryShareW < acBatteryShareW;
+  // D-17 DYNAMIC HEADROOM: free below the soft limit; above it the excess is
+  // admitted with an exponentially decaying marginal rate, so the discharge
+  // asymptotically approaches but never reaches `akkuHardLimitW`.
+  let allowedBatteryDischargeW;
+  let tapered;
+  if (rawBatteryDischargeW <= softW || hardW <= softW) {
+    // Below the soft knee, or a degenerate soft>=hard config -> a plain cap.
+    allowedBatteryDischargeW = Math.min(rawBatteryDischargeW, hardW);
+    tapered = rawBatteryDischargeW > softW;
+  } else {
+    const band = hardW - softW;
+    const excessW = rawBatteryDischargeW - softW;
+    allowedBatteryDischargeW = hardW - band * Math.exp(-excessW / band);
+    tapered = true;
+  }
+  // D-17 invariant — pin the discharge strictly within [0, akkuHardLimitW].
+  allowedBatteryDischargeW = Math.min(Math.max(0, allowedBatteryDischargeW), hardW);
 
-  // Total grid export = PV (minus headroom) + the clamped battery share.
+  // The battery covers the house load first; the rest is its grid-export share.
+  const batteryShareW = Math.max(0, allowedBatteryDischargeW - houseLoadW);
+  // Total grid export = full PV forecast + the clamped battery export share.
   // Both terms are >= 0, so gridSetpointW is always <= 0 (export-only).
-  const gridSetpointW = -Math.round(pvSafeW + batteryShareW);
-
-  // Implied battery discharge — guaranteed <= akkuHardLimitW by construction.
-  const impliedBatteryDischargeW = Math.max(0, Math.abs(gridSetpointW) + houseLoadW - pvSafeW);
+  const gridSetpointW = -Math.round(pvW + batteryShareW);
+  const impliedBatteryDischargeW = batteryShareW + houseLoadW;
 
   return {
     gridSetpointW,
     impliedBatteryDischargeW,
     batteryShareW,
-    mode: akkuLimitBinds ? 'dcDischarge' : 'aggressiveExport',
-    reason: 'dual_limit_clamp'
+    mode: tapered ? 'dcDischarge' : 'aggressiveExport',
+    reason: tapered ? 'akku_soft_limit_taper' : 'aggressive_export'
   };
 }
 

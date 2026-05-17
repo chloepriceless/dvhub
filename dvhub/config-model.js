@@ -1015,12 +1015,12 @@ function buildFieldDefinitions() {
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.pvHeadroomFracW',
-      label: 'PV-Sicherheits-Headroom (W)',
+      path: 'schedule.smallMarketAutomation.predictivePreEmpty.akkuSoftLimitW',
+      label: 'Stage 2 Akku-Soft-Limit (W)',
       type: 'number',
       min: 0,
-      max: 5000,
-      help: 'Sicherheitsabschlag auf die prognostizierte PV-Leistung beim Export-Split. Verhindert, dass eine PV-Delle den Akku-Anteil über das Hard-Limit treibt.'
+      max: 50000,
+      help: 'Schwelle, ab der das vorausschauende Akku-Leeren (Stufe 2) gedrosselt wird. Bis zu dieser tatsächlichen Akku-Entladeleistung wird frei ausgespeist (auch aus dem Akku); darüber wird der Akku-Anteil schrittweise zurückgenommen, sodass die Entladeleistung das Akku-Hard-Limit nie erreicht. Richtwert: etwa 2000 W unter dem Akku-Hard-Limit.'
     },
     {
       section: 'schedule',
@@ -2130,7 +2130,7 @@ export function createDefaultConfig() {
         predictivePreEmpty: {
           enabled: false,
           akkuHardLimitW: 20000,
-          pvHeadroomFracW: 1000,
+          akkuSoftLimitW: 18000,
           confidenceFactorLow: 0.24,
           confidenceFactorHigh: 0.30,
           haltenAbortDropPct: 25
@@ -2455,7 +2455,7 @@ function sanitizePredictivePreEmpty(value, warnings) {
 
   // Bounded tuning fields — delete on invalid, clamp on valid.
   const bounded = [
-    ['pvHeadroomFracW', 0, 5000],
+    ['akkuSoftLimitW', 0, 50000],
     ['confidenceFactorLow', 0, 1],
     ['confidenceFactorHigh', 0, 1],
     ['haltenAbortDropPct', 5, 90]

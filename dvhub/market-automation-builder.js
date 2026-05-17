@@ -200,7 +200,7 @@ export function createMarketAutomationBuilder(ctx) {
       return idle('no_pv_cost_configured');
     }
     const akkuHardLimitW = toFiniteNumber(pp.akkuHardLimitW, 20000);
-    const pvHeadroomFracW = toFiniteNumber(pp.pvHeadroomFracW, 1000);
+    const akkuSoftLimitW = toFiniteNumber(pp.akkuSoftLimitW, 18000);
     const confidenceFactorLow = toFiniteNumber(pp.confidenceFactorLow, 0.24);
     const confidenceFactorHigh = toFiniteNumber(pp.confidenceFactorHigh, 0.30);
     const haltenAbortDropPct = toFiniteNumber(pp.haltenAbortDropPct, 25);
@@ -333,7 +333,7 @@ export function createMarketAutomationBuilder(ctx) {
           expectedHouseLoadW: expectedHouseLoadForSlot(slotTs),
           maxDischargeW: automationConfig?.maxDischargeW,
           akkuHardLimitW,
-          pvHeadroomFracW
+          akkuSoftLimitW
         });
         // Pitfall 1 / defence-in-depth: a Stage-2 gridSetpointW rule MUST never
         // carry a positive value (which would be an illegal grid charge).

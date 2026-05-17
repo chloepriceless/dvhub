@@ -162,45 +162,73 @@ test('computePreEmptyTargetSoc clamps targetSocPct to the hard floor, never belo
   assert.equal(r.targetSocPct, 10);
 });
 
-// --- preEmptySlotSetpointW (D-12 / D-17) ---
+// --- preEmptySlotSetpointW (D-12 / D-17 dynamic headroom) ---
 
-test('preEmptySlotSetpointW: AC limit binds (Example A) -> aggressiveExport at -16000 W', () => {
-  // 8 kW PV, 4 kW load, AC cap -16 kW, akku cap 20 kW.
-  // acBatteryShare = 16000-8000 = 8000 ; dcBatteryShare = 20000-4000 = 16000
-  // batteryShare = min(8000,16000) = 8000 ; gridSetpointW = -(8000+8000) = -16000
+test('preEmptySlotSetpointW: below the soft limit -> battery exports freely (no taper)', () => {
+  // 8 kW PV, 4 kW load, AC cap -16 kW. acBatteryExportShare = 16000-8000 = 8000;
+  // raw battery discharge = 8000 + 4000 = 12000, well below the 18 kW soft limit.
   const r = preEmptySlotSetpointW({
     pvForecastW: 8000,
     expectedHouseLoadW: 4000,
     maxDischargeW: -16000,
     akkuHardLimitW: 20000,
-    pvHeadroomFracW: 0
+    akkuSoftLimitW: 18000
   });
   assert.equal(r.gridSetpointW, -16000);
+  assert.equal(r.impliedBatteryDischargeW, 12000);
   assert.equal(r.mode, 'aggressiveExport');
 });
 
-test('preEmptySlotSetpointW: Akku limit binds (operator scenario) -> dcDischarge clamped at the akku limit', () => {
-  // 0 kW PV, 4 kW load, AC cap -16 kW, akku cap 14 kW (low -> the DC side binds).
-  // acBatteryShare = 16000-0 = 16000 ; dcBatteryShare = 14000-4000 = 10000
-  // batteryShare = min(16000,10000) = 10000 -> implied battery discharge clamps at 14000.
+test('preEmptySlotSetpointW: dynamic headroom tapers the battery share above the soft limit', () => {
+  // No PV, no load, AC cap -19 kW -> raw battery discharge demand = 19000,
+  // 1 kW into the [18 kW, 20 kW] taper band -> must be tapered DOWN.
   const r = preEmptySlotSetpointW({
     pvForecastW: 0,
-    expectedHouseLoadW: 4000,
-    maxDischargeW: -16000,
-    akkuHardLimitW: 14000,
-    pvHeadroomFracW: 0
+    expectedHouseLoadW: 0,
+    maxDischargeW: -19000,
+    akkuHardLimitW: 20000,
+    akkuSoftLimitW: 18000
   });
-  assert.ok(r.impliedBatteryDischargeW <= 14000,
-    `implied battery discharge clamped at akkuHardLimitW 14000, got ${r.impliedBatteryDischargeW}`);
+  assert.ok(r.impliedBatteryDischargeW > 18000 && r.impliedBatteryDischargeW < 19000,
+    `tapered discharge must land in (18000,19000), got ${r.impliedBatteryDischargeW}`);
+  assert.ok(r.impliedBatteryDischargeW < 20000, 'discharge stays below the hard limit');
   assert.equal(r.mode, 'dcDischarge');
 });
 
-test('preEmptySlotSetpointW invariant: implied battery discharge never exceeds akkuHardLimitW', () => {
+test('preEmptySlotSetpointW: PV is never throttled — only the battery share is tapered', () => {
+  // 6 kW PV with a generous AC cap so the battery is the binding side.
+  const r = preEmptySlotSetpointW({
+    pvForecastW: 6000,
+    expectedHouseLoadW: 0,
+    maxDischargeW: -40000,
+    akkuHardLimitW: 20000,
+    akkuSoftLimitW: 18000
+  });
+  // |gridExport| = the full 6 kW PV + the tapered battery share (rounding aside).
+  assert.ok(Math.abs(Math.abs(r.gridSetpointW) - r.batteryShareW - 6000) <= 1,
+    `full PV must be exported on top of the battery share, got ${r.gridSetpointW}`);
+  assert.ok(r.impliedBatteryDischargeW < 20000, 'battery discharge stays below the hard limit');
+});
+
+test('preEmptySlotSetpointW: a huge demand drives the discharge to — but not past — the hard limit', () => {
+  const r = preEmptySlotSetpointW({
+    pvForecastW: 0,
+    expectedHouseLoadW: 0,
+    maxDischargeW: -200000,
+    akkuHardLimitW: 20000,
+    akkuSoftLimitW: 18000
+  });
+  assert.ok(r.impliedBatteryDischargeW <= 20000,
+    `discharge must never exceed akkuHardLimitW, got ${r.impliedBatteryDischargeW}`);
+  assert.ok(r.impliedBatteryDischargeW > 19000, 'a huge demand drives it close to the limit');
+});
+
+test('preEmptySlotSetpointW invariant: discharge <= akkuHardLimitW, gridSetpointW <= 0', () => {
   const cases = [
-    { pvForecastW: 8000, expectedHouseLoadW: 4000, maxDischargeW: -16000, akkuHardLimitW: 20000, pvHeadroomFracW: 0 },
-    { pvForecastW: 0, expectedHouseLoadW: 4000, maxDischargeW: -16000, akkuHardLimitW: 14000, pvHeadroomFracW: 0 },
-    { pvForecastW: 2000, expectedHouseLoadW: 6000, maxDischargeW: -16000, akkuHardLimitW: 12000, pvHeadroomFracW: 500 },
-    { pvForecastW: 0, expectedHouseLoadW: 0, maxDischargeW: -16000, akkuHardLimitW: 16000, pvHeadroomFracW: 0 }
+    { pvForecastW: 8000, expectedHouseLoadW: 4000, maxDischargeW: -16000, akkuHardLimitW: 20000, akkuSoftLimitW: 18000 },
+    { pvForecastW: 0, expectedHouseLoadW: 4000, maxDischargeW: -16000, akkuHardLimitW: 14000, akkuSoftLimitW: 12000 },
+    { pvForecastW: 2000, expectedHouseLoadW: 6000, maxDischargeW: -16000, akkuHardLimitW: 12000, akkuSoftLimitW: 10000 },
+    { pvForecastW: 0, expectedHouseLoadW: 0, maxDischargeW: -16000, akkuHardLimitW: 16000, akkuSoftLimitW: 14000 }
   ];
   for (const c of cases) {
     const r = preEmptySlotSetpointW(c);

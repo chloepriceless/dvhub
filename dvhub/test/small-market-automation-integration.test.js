@@ -402,7 +402,7 @@ function makeStage2Ctx({ predictiveEnabled = true, hoardingForecast = false } = 
         predictivePreEmpty: {
           enabled: predictiveEnabled,
           akkuHardLimitW: 20000,
-          pvHeadroomFracW: 1000,
+          akkuSoftLimitW: 18000,
           confidenceFactorLow: 0.24,
           confidenceFactorHigh: 0.30,
           haltenAbortDropPct: 25
