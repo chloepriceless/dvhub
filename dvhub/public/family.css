@@ -44,14 +44,8 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-solar{top:6%;left:32%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
 .tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
 .tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
-/* tag-home moved off-center to the right (Plan 09.1-02 follow-up): house is the
-   destination for solar/bat/grid flows, and the user wants the bat→home flow to
-   cross through the center where pfCenter (Bilanz heute) sits. Original Aurora
-   source put tag-home at left:50% center which occluded pfCenter — incompatible
-   with the family page's hub-and-spoke flow semantics. */
-.tag-home{top:38%;right:18%;border:1.5px solid rgba(75,123,236,.25);padding:18px 26px;animation-delay:0s;min-width:170px}
-.tag-home .tag-emoji{font-size:28px}.tag-home .tag-friendly{font-size:15px}.tag-home .tag-val{color:var(--home);font-size:36px}
-.tag-home:hover,.tag-home:active{transform:scale(1.08)}.tag-home .tag-dot{display:none}
+/* Phase 11-06 round 3: the separate .tag-home Kachel was removed — the House is
+   now the centre of the bgFlow constellation (see .pf-center-readout below). */
 .tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
 .tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
@@ -62,7 +56,6 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-grid .tag-val{color:var(--grid)}.tag-grid .tag-status{background:rgba(253,150,68,.12);color:var(--grid)}
 .tag-grid .tag-dot{background:var(--grid);box-shadow:0 0 12px var(--grid-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
-.tag-home{animation-name:fadeIn}
 
 /* Device mini cards */
 .devices-tray{
@@ -218,10 +211,13 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   .greeting-msg{font-size:18px}.greeting-time{font-size:22px}
   .tag{padding:10px 14px;border-radius:14px;min-width:120px}
   .tag-emoji{font-size:20px;margin-bottom:4px}.tag-friendly{font-size:11px}
-  .tag-val{font-size:16px!important}.tag-home .tag-val{font-size:20px!important}
-  .tag-home{padding:14px 20px;min-width:140px}
+  .tag-val{font-size:16px!important}
   .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}
-  .tag-home{right:3%;top:42%}
+  /* Phase 11-06 round 3: narrower centre House readout on small viewports. */
+  .pf-center-readout{padding:11px 18px}
+  .pf-center-readout .v{font-size:30px}
+  .pf-center-readout .pf-house-icon{font-size:22px}
+  .pf-center-readout .pf-divider{width:96px}
   .glass{padding:12px 16px}.glass-top{flex-wrap:wrap;gap:8px}.glass-metric{min-width:70px}
   .panel-stats{grid-template-columns:repeat(2,1fr)}.panel{max-height:85vh}
   .dev-card{min-width:78px;padding:8px 10px}.dev-watts{font-size:14px}
@@ -263,9 +259,11 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   z-index:14;
 }
 
-/* Center net-Erlös readout (Aurora source position) — Bilanz heute sits at the
-   visual center of the viewport. tag-home was moved to the right (see above) so
-   the bat→home dust flow passes directly through this readout. */
+/* Center HOUSE readout (Phase 11-06, checkpoint round 3) — the House IS the
+   centre of the bgFlow constellation. The former separate .tag-home Kachel is
+   removed; sources feed into this centre and the proportional MQTT device
+   streams flow out of it. Primary line = 🏠 + Hausverbrauch (kW); a thin
+   divider; secondary line = the day net-Euro balance, smaller. */
 .pf-center-readout{
   position:absolute;
   left:50%;
@@ -273,8 +271,38 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   transform:translate(-50%,-50%);
   text-align:center;
   z-index:18;
-  pointer-events:none;
+  cursor:pointer;
+  display:inline-block;
+  padding:14px 26px;
+  border-radius:18px;
+  background:rgba(5,10,22,.55);
+  border:1px solid rgba(120,180,255,.14);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
 }
+.pf-center-readout:active{transform:translate(-50%,-50%) scale(1.04)}
+/* Primary House line: emoji + the live Hausverbrauch in kW. */
+.pf-center-readout .pf-house{
+  display:flex;
+  align-items:baseline;
+  justify-content:center;
+  gap:10px;
+}
+.pf-center-readout .pf-house-icon{
+  font-size:26px;
+  line-height:1;
+  position:relative;
+  top:1px;
+}
+.pf-center-readout .v{
+  font-size:38px;
+  color:#e8f1ff;
+  letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  font-weight:500;
+}
+/* "HAUSVERBRAUCH" label under the primary line. */
 .pf-center-readout .l{
   font-family:'JetBrains Mono','SF Mono',monospace;
   font-size:11px;
@@ -282,30 +310,29 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   text-transform:uppercase;
   color:rgba(120,180,255,.55);
   font-weight:500;
+  margin-top:6px;
 }
-.pf-center-readout .v{
-  font-size:38px;
-  color:#e8f1ff;
-  letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums;
-  margin-top:8px;
-  line-height:1;
-  display:inline-block;
-  padding:8px 20px;
-  border-radius:14px;
-  background:rgba(5,10,22,.55);
-  border:1px solid rgba(120,180,255,.1);
-  backdrop-filter:blur(8px);
-  -webkit-backdrop-filter:blur(8px);
-  font-weight:500;
+/* Thin divider between the House line and the net-Euro line. */
+.pf-center-readout .pf-divider{
+  width:120px;
+  height:1px;
+  margin:10px auto;
+  background:linear-gradient(90deg,transparent,rgba(120,180,255,.28),transparent);
 }
-.pf-center-readout .d{
+/* Secondary line: the daily net-Euro balance, smaller than the House figure. */
+.pf-center-readout .pf-net{
   font-family:'JetBrains Mono','SF Mono',monospace;
+  font-size:15px;
+  font-variant-numeric:tabular-nums;
+  color:#e8f1ff;
+  font-weight:500;
+  letter-spacing:.01em;
+}
+.pf-center-readout .pf-net-label{
   font-size:11px;
-  letter-spacing:.28em;
+  letter-spacing:.22em;
   color:#46d344;
-  margin-top:10px;
   font-weight:600;
   text-transform:uppercase;
 }
-.pf-center-readout.loss .d{color:#ff9a3c}
+.pf-center-readout.loss .pf-net-label{color:#ff9a3c}

@@ -646,11 +646,15 @@
 
   /* ===================== STICKY FLOWS ===================== */
   function edge(f, t) { var fr = f.getBoundingClientRect(), tr = t.getBoundingClientRect(); var fc = { x: fr.left + fr.width / 2, y: fr.top + fr.height / 2 }; var tc = { x: tr.left + tr.width / 2, y: tr.top + tr.height / 2 }; var dx = tc.x - fc.x, dy = tc.y - fc.y, a = Math.atan2(dy, dx); var fs = Math.min((fr.width / 2 + 8) / Math.abs(Math.cos(a) || .001), (fr.height / 2 + 8) / Math.abs(Math.sin(a) || .001)); var ts = Math.min((tr.width / 2 + 8) / Math.abs(Math.cos(a) || .001), (tr.height / 2 + 8) / Math.abs(Math.sin(a) || .001)); return { x1: fc.x + Math.cos(a) * fs, y1: fc.y + Math.sin(a) * fs, x2: tc.x - Math.cos(a) * ts, y2: tc.y - Math.sin(a) * ts }; }
+  /* Legacy SVG flows — #flowSvg is fully suppressed (opacity:0 in family.css) and
+     kept only for binding-contract DOM compatibility. Phase 11-06 round 3: the
+     'tag-home' endpoint was removed (the House is now #pfCenter), so these flows
+     route through 'pfCenter' instead. They remain visually invisible. */
   var flows = [
-    { from: 'tag-solar', to: 'tag-home', hex: '#F7B731', w: 2.5, p: 3, wh: 2, dur: 1.8, id: 'f1' },
-    { from: 'tag-home', to: 'tag-bat', hex: '#26de81', w: 2, p: 2, wh: 1, dur: 2.2, id: 'f2' },
-    { from: 'tag-home', to: 'tag-ev', hex: '#a55eea', w: 2, p: 2, wh: 1, dur: 2.0, id: 'f3' },
-    { from: 'tag-home', to: 'tag-grid', hex: '#fd9644', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
+    { from: 'tag-solar', to: 'pfCenter', hex: '#F7B731', w: 2.5, p: 3, wh: 2, dur: 1.8, id: 'f1' },
+    { from: 'pfCenter', to: 'tag-bat', hex: '#26de81', w: 2, p: 2, wh: 1, dur: 2.2, id: 'f2' },
+    { from: 'pfCenter', to: 'tag-ev', hex: '#a55eea', w: 2, p: 2, wh: 1, dur: 2.0, id: 'f3' },
+    { from: 'pfCenter', to: 'tag-grid', hex: '#fd9644', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
   ];
   var pathEls = {}, lblEls = {};         // pathEls[fl.id] = { fwd, rev } — two <path> elements per flow
   var particleGroupEls = {};             // particleGroupEls[fl.id] = { fwd, rev } — two <g> with circles+animateMotion
@@ -735,7 +739,7 @@
       visibleDevices.forEach(function (d, i) {
         var cardEl = document.getElementById('dev-card-' + d.id);
         if (!cardEl) return;
-        var devFlow = { from: 'tag-home', to: 'dev-card-' + d.id, hex: d.color || '#78909c', w: 1.2, p: 1, wh: 0, dur: 2.0 + i * 0.3, id: 'df-' + d.id };
+        var devFlow = { from: 'pfCenter', to: 'dev-card-' + d.id, hex: d.color || '#78909c', w: 1.2, p: 1, wh: 0, dur: 2.0 + i * 0.3, id: 'df-' + d.id };
         lastDeviceFlows.push(devFlow);
         addFlowToSvg(g, devFlow);
       });
@@ -1108,8 +1112,8 @@
 
     // Patch energy.homeKw via conservation when the API reports 0 / wrong value.
     // Mutating the payload's energy object here means every downstream consumer
-    // (tag-home v-h, friendly-text rules, autarky calc, panel-stats, bgFlow)
-    // sees a consistent home-consumption number.
+    // (the #pfCenter House readout, friendly-text rules, autarky calc,
+    // panel-stats, bgFlow) sees a consistent home-consumption number.
     energy.homeKw = inferHomeKw(energy);
 
     // Plan 09-04: per-card error boundary inside applyFamilyStatus. A throw in
@@ -1120,9 +1124,10 @@
     var sr = (window.DVhubCommon && window.DVhubCommon.safeRender) || function (_, fn) { try { fn(); } catch (e) { console.error('[family-fallback]', _, e); } };
 
     sr('family.main-tags', function () {
-      // 5 main tag values
+      // 4 surrounding tag values — the House is no longer a separate Kachel
+      // (Phase 11-06 round 3): Hausverbrauch is shown on the #pfCenter centre
+      // readout, driven by updatePfCenterReadout() in the family.bg-flow block.
       setText('v-s', formatKw(energy.solarKw));
-      setText('v-h', formatKw(energy.homeKw));
       setText('v-b', typeof battery.socPct === 'number' ? Math.round(battery.socPct) + '%' : '—');
       setText('v-e', formatKw(ev.powerKw));
       setText('v-g', formatKw(Math.abs(energy.gridKw || 0)));
@@ -1130,8 +1135,9 @@
 
     sr('family.solar-home-status', function () {
       // Friendly texts & statuses — LLM-generated captions when present, else rule-based.
+      // The former tf-home friendly text was removed with the .tag-home Kachel
+      // (Phase 11-06 round 3) — the centre House readout shows the kW figure only.
       setText('tf-solar', tileFriendlies.solar || (energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne')));
-      setText('tf-home', tileFriendlies.home || ((energy.homeKw || 0) > 4 ? 'Hoher Verbrauch' : (energy.homeKw || 0) > 2.5 ? 'Verbrauch normal' : 'Wenig Verbrauch'));
     });
 
     sr('family.battery', function () {
@@ -1267,12 +1273,13 @@
       // to a not-yet-rendered card silently does not paint (bgFlowEndpoint
       // returns null). The sr() blocks run in order, so family.extras precedes
       // this family.bg-flow block.
-      // houseW: the SAME Hausverbrauch figure the base k_home stream uses
-      // (data.energy.homeKw, already patched by inferHomeKw in family.tags).
-      // Converted to W so it is unit-consistent with the MQTT device value.
+      // houseW: the Hausverbrauch figure (data.energy.homeKw, already patched by
+      // inferHomeKw in family.tags) — also the value the #pfCenter House readout
+      // shows. Converted to W so it is unit-consistent with the MQTT device value.
       var houseW = Math.max(0, Number((data.energy && data.energy.homeKw) || 0)) * 1000;
       updateBgFlowMqttStreams(data.mqttTiles || [], houseW);
-      // Aurora pf-center-readout (#pfCenter) shows the day-net-Euro headline.
+      // #pfCenter centre readout — the House: Hausverbrauch (kW) primary,
+      // day-net-Euro balance secondary (Phase 11-06 round 3).
       updatePfCenterReadout(data);
     });
 
@@ -1694,10 +1701,12 @@
   }
 
   /* ===================== AURORA BG-FLOW DUST CONSTELLATION (Plan 09.1-02) ====
-     Dust particles flow between the 5 tag DOM centers (tag-solar, tag-bat,
-     tag-home, tag-ev, tag-grid), painted into <canvas id="bgFlow"> as a
-     fullscreen background layer. This is the Aurora replacement for the legacy
-     SVG flowSvg/flowGroup rendering, which is kept in the DOM (binding-contract
+     Dust particles flow between the source/sink tag DOM centers (tag-solar,
+     tag-bat, tag-ev, tag-grid) and the central #pfCenter hub, painted into
+     <canvas id="bgFlow"> as a fullscreen background layer. Phase 11-06 round 3:
+     the House is no longer a separate tag — #pfCenter IS the House, the centre
+     of the constellation. This is the Aurora replacement for the legacy SVG
+     flowSvg/flowGroup rendering, which is kept in the DOM (binding-contract
      compatibility) but visually suppressed via #flowSvg{opacity:0} in family.css.
 
      Ported from .planning/DESIGN-2026-05-10-aurora/family.html inline <script>
@@ -1705,11 +1714,12 @@
      replaced here by an explicit updateBgFlowFromStatus(data) call wired into
      applyStatus().
      ======================================================================== */
-  /* Hub-and-spoke wiring: all flows route through a virtual hub at the visual
-     center of the viewport (#pfCenter, where the "Bilanz heute" readout sits).
-     This mirrors the dvhub-powerflow widget topology — sources (PV/Bat/Grid)
-     feed INTO the hub; sinks (Bat/Home/EV/Grid) draw FROM the hub. Battery and
-     Grid have one "source" stream and one "sink" stream each — only one is
+  /* Hub-and-spoke wiring: all flows route through a hub at the visual centre of
+     the viewport (#pfCenter — which Phase 11-06 round 3 repurposed as the House
+     readout). This mirrors the dvhub-powerflow widget topology — sources
+     (PV/Bat/Grid) feed INTO the hub; sinks (Bat/EV/Grid) draw FROM the hub. The
+     House sink (k_home) was removed because the hub now IS the House. Battery
+     and Grid have one "source" stream and one "sink" stream each — only one is
      active at any moment (positive batteryKw = charging = sink; negative =
      discharging = source. Positive gridKw = importing = source; negative =
      exporting = sink). The visual effect: bat→home is rendered as two segments
@@ -1719,6 +1729,10 @@
      kW. This way a 1 kW grid feed-in produces visibly different intensity than
      a 20 kW solar peak even though both are "moderate" in absolute terms.
      EV defaults to 22 kW (typical 3-phase wallbox); user-spec did not list EV. */
+  /* Phase 11-06 round 3: the k_home stream (hub → tag-home) was removed — the
+     House IS the hub (#pfCenter) now, so a pfCenter→pfCenter stream would be
+     meaningless. Source streams still feed the centre; the proportional MQTT
+     device streams flow OUT of the centre to the device tiles. */
   var BG_FLOWS_BASE = [
     // Source streams (feed INTO the hub at pfCenter)
     { from: 'tag-solar', to: 'pfCenter', color: [255,212,33],  id: 's_pv',   maxKw: 27 },
@@ -1726,7 +1740,6 @@
     { from: 'tag-grid',  to: 'pfCenter', color: [255,122,198], id: 's_grid', maxKw: 30 },
     // Sink streams (drawn FROM the hub at pfCenter)
     { from: 'pfCenter',  to: 'tag-bat',  color: [70,211,68],   id: 'k_bat',  maxKw: 24 },
-    { from: 'pfCenter',  to: 'tag-home', color: [75,123,236],  id: 'k_home', maxKw: 40 },
     { from: 'pfCenter',  to: 'tag-ev',   color: [165,94,234],  id: 'k_ev',   maxKw: 22 },
     { from: 'pfCenter',  to: 'tag-grid', color: [255,122,198], id: 'k_grid', maxKw: 30 }
   ];
@@ -1840,18 +1853,16 @@
     var solar = Math.max(0, Number(e.solarKw   || 0));
     var bat   = Number(e.batteryKw || 0);
     var grid  = Number(e.gridKw    || 0);
-    var home  = Math.max(0, Number(e.homeKw    || 0));
     var ev    = Math.max(0, Number(e.evKw      || 0));
 
     // Sources → hub
     BG_FLOWS_BASE[0].kw = solar;                      // s_pv:   pv  → hub
     BG_FLOWS_BASE[1].kw = bat  < 0 ? -bat  : 0;       // s_bat:  bat → hub (discharging)
     BG_FLOWS_BASE[2].kw = grid > 0 ?  grid : 0;       // s_grid: grid→ hub (importing)
-    // Hub → sinks
+    // Hub → sinks (k_home removed — the House IS the hub now, Phase 11-06 round 3)
     BG_FLOWS_BASE[3].kw = bat  > 0 ?  bat  : 0;       // k_bat:  hub → bat (charging)
-    BG_FLOWS_BASE[4].kw = home;                       // k_home: hub → home
-    BG_FLOWS_BASE[5].kw = ev;                         // k_ev:   hub → ev
-    BG_FLOWS_BASE[6].kw = grid < 0 ? -grid : 0;       // k_grid: hub → grid (exporting)
+    BG_FLOWS_BASE[4].kw = ev;                         // k_ev:   hub → ev
+    BG_FLOWS_BASE[5].kw = grid < 0 ? -grid : 0;       // k_grid: hub → grid (exporting)
 
     BG_FLOWS_BASE.forEach(function (s) {
       var eff   = bgFlowEffectiveKw(s.kw, s.maxKw);   // scale by stream's nameplate
@@ -2002,19 +2013,25 @@
     });
   }
 
-  // Aurora pf-center-readout — net Euro headline above the live powerflow.
+  // #pfCenter centre readout (Phase 11-06 round 3) — the House IS the centre of
+  // the bgFlow constellation. Primary line: 🏠 + the live Hausverbrauch (kW);
+  // secondary line: the daily net-Euro balance. Both figures are live-updated
+  // on every /api/family/status poll from the family.bg-flow sr-block.
   function updatePfCenterReadout(data) {
     var c = document.getElementById('pfCenter');
     if (!c) return;
+    var energy = (data && data.energy) || {};
+    // Primary House line — the SAME homeKw the proportional MQTT streams use as
+    // their denominator (already patched by inferHomeKw in the family.tags block).
+    setText('pf-house-kw', formatKw(Math.max(0, Number(energy.homeKw || 0))));
+    // Secondary net-Euro line — feed-in revenue + avoided cost = the day balance.
     var sav = (data && data.savings) || {};
     var feed = parseFloat(sav.feedInRevenueEur || '0');
     var avoid = parseFloat(sav.avoidedCostEur || '0');
     var net = (isFinite(feed) ? feed : 0) + (isFinite(avoid) ? avoid : 0);
-    var v = c.querySelector('.v');
-    var d = c.querySelector('.d');
     var sign = net >= 0 ? '+' : '−'; // unicode minus
-    if (v) v.textContent = sign + Math.abs(net).toFixed(2).replace('.', ',') + ' €';
-    if (d) d.textContent = net >= 0 ? 'Gewinn heute' : 'Kosten heute';
+    setText('pf-center-v', sign + Math.abs(net).toFixed(2).replace('.', ',') + ' €');
+    setText('pf-center-d', net >= 0 ? 'Gewinn heute' : 'Kosten heute');
     c.classList.toggle('loss', net < 0);
   }
 

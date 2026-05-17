@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css">
+<link rel="stylesheet" href="/family.css?v=2">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -32,16 +32,19 @@
   <svg class="flow-svg" id="flowSvg" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gl"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g id="flowGroup"></g></svg>
 
   <div class="tag tag-solar" id="tag-solar" data-panel="solar"><span class="tag-dot"></span><div class="tag-emoji">&#9728;&#65039;</div><div class="tag-friendly" id="tf-solar">Sonne gibt Vollgas</div><div class="tag-val" id="v-s">4.8 kW</div><div class="tag-status" id="ts-solar">Toller Tag!</div></div>
-  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Verbrauch normal</div><div class="tag-val" id="v-h">3.2 kW</div></div>
   <div class="tag tag-bat" id="tag-bat" data-panel="bat"><span class="tag-dot"></span><div class="tag-emoji">&#128267;</div><div class="tag-friendly" id="tf-bat">Batterie l&auml;dt</div><div class="tag-val" id="v-b">78%</div><div class="tag-status" id="ts-bat">+1.2 kW</div></div>
   <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji">&#128664;</div><div class="tag-friendly" id="tf-ev">Auto l&auml;dt mit Solar</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-status" id="ts-ev">Fertig ca. 22 Uhr</div></div>
   <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Wir speisen ein</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">Verdienen gerade</div></div>
 
-  <!-- Center net-Erlös readout (Aurora) — sits in the middle of the bgFlow dust constellation. -->
-  <div class="pf-center-readout" id="pfCenter">
-    <div class="l">Bilanz heute</div>
-    <div class="v" id="pf-center-v">+0,00 &euro;</div>
-    <div class="d" id="pf-center-d">&euro; NETTO</div>
+  <!-- Center HOUSE readout (Phase 11-06, checkpoint round 3) — the House IS the
+       centre of the bgFlow constellation: sources feed in, device streams flow
+       out. Primary line = Hausverbrauch (kW); secondary line = day net-Euro
+       balance. data-panel="home" makes tapping the centre open the home panel. -->
+  <div class="pf-center-readout" id="pfCenter" data-panel="home">
+    <div class="pf-house"><span class="pf-house-icon">&#127968;</span><span class="v" id="pf-house-kw">0,0 kW</span></div>
+    <div class="l">Hausverbrauch</div>
+    <div class="pf-divider"></div>
+    <div class="pf-net"><span id="pf-center-v">+0,00 &euro;</span> <span class="pf-net-label" id="pf-center-d">NETTO</span></div>
   </div>
 
   <div class="devices-tray" id="devices-tray"></div>
@@ -110,6 +113,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=5"></script>
+<script src="/family.js?v=6"></script>
 </body>
 </html>
