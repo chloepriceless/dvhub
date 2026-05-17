@@ -75,6 +75,76 @@
     optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'Lade-/Entlade-Strategie', color: '#4b7bec', summary: 'Der interne Optimizer plant Lade- und Entladephasen basierend auf EPEX Preisen und PV-Vorhersage.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/optimizer/status']] }
   };
 
+  /* ===================== TILE ICON / COLOUR HEURISTIC (D-01..D-04) ==========
+     Per-tile icon + accent colour for MQTT value tiles. An explicit
+     tile.icon / tile.color (operator-picked in the integrations editor) always
+     wins; an unset field is auto-derived from the tile's unit (preferred) or
+     topic (fallback). 100% backward compatible — icon/color are additive
+     optional config fields, so an existing prod tile with neither still
+     renders a sensible auto icon + colour with zero migration.
+
+     family.js is a browser IIFE and cannot `import` the ESM module
+     dvhub/services/family/tile-meta.js, so the SAME RULES table is re-declared
+     inline here (the Phase 11 browser-consumption approach — 11-01-SUMMARY).
+     tile-meta.js stays the test's single source of truth; this inline copy
+     MUST mirror it exactly. */
+  var TILE_META_FALLBACK = { icon: '📡', color: '#78909c' };
+  // Ordered rules — first match wins. `units` matched against the lowercased
+  // unit; `topicIncludes` against the lowercased topic. Unit rules are checked
+  // across ALL rules before any topic rule, so a power unit always wins over a
+  // topic match (unit `W` + topic `tesla` → ⚡, not 🚗).
+  var TILE_META_RULES = [
+    { units: ['w', 'kw', 'mw'],            icon: '⚡',  color: '#F7B731' },
+    { units: ['wh', 'kwh'],                icon: '🔋', color: '#26de81' },
+    { units: ['°c', '°f', 'c', 'k'],       icon: '🌡️', color: '#ff6b6b' },
+    { units: ['%'],                        icon: '💧', color: '#4b7bec' },
+    { units: ['v', 'a', 'hz'],             icon: '🔌', color: '#22d3ee' },
+    { units: ['ct', 'ct/kwh', 'eur', '€'], icon: '💡', color: '#fd9644' },
+    { units: ['lx', 'lux'],                icon: '💡', color: '#F7B731' },
+    { units: ['ppm', 'µg/m³'],             icon: '💨', color: '#4b7bec' },
+    { topicIncludes: ['tesla', 'car', 'ev'], icon: '🚗', color: '#a55eea' },
+    { topicIncludes: ['temp', 'klima'],      icon: '🌡️', color: '#ff6b6b' }
+  ];
+
+  // Auto-derive { icon, color } purely from a tile's unit/topic. Slate
+  // fallback when nothing matches.
+  function autoTileMeta(tile) {
+    var unit = String((tile && tile.unit) || '').trim().toLowerCase();
+    var topic = String((tile && tile.topic) || '').toLowerCase();
+    var i, r;
+    for (i = 0; i < TILE_META_RULES.length; i++) {
+      r = TILE_META_RULES[i];
+      if (r.units && unit && r.units.indexOf(unit) !== -1) {
+        return { icon: r.icon, color: r.color };
+      }
+    }
+    for (i = 0; i < TILE_META_RULES.length; i++) {
+      r = TILE_META_RULES[i];
+      if (r.topicIncludes) {
+        for (var j = 0; j < r.topicIncludes.length; j++) {
+          if (topic.indexOf(r.topicIncludes[j]) !== -1) {
+            return { icon: r.icon, color: r.color };
+          }
+        }
+      }
+    }
+    return { icon: TILE_META_FALLBACK.icon, color: TILE_META_FALLBACK.color };
+  }
+
+  // Resolve a tile's final { icon, color }. An explicit tile.icon / tile.color
+  // wins per-field; each unset field falls through to the heuristic. Mirrors
+  // resolveTileIconColor() in services/family/tile-meta.js.
+  function resolveTileMeta(tile) {
+    var auto = autoTileMeta(tile);
+    var icon = (tile && typeof tile.icon === 'string' && tile.icon.trim())
+      ? tile.icon
+      : auto.icon;
+    var color = (tile && typeof tile.color === 'string' && tile.color.trim())
+      ? tile.color
+      : auto.color;
+    return { icon: icon, color: color };
+  }
+
   function openPanel(key) {
     var d = panelData[key]; if (!d) return;
     document.getElementById('p-icon').innerHTML = d.icon;
@@ -358,14 +428,23 @@
         familyExtraCards[logicalId] = card;
       }
       var valTxt = fmtTileValue(tile.value, tile.unit);
+      // Per-tile icon + accent colour (D-01..D-04): operator-picked tile.icon /
+      // tile.color win, else auto-derived from unit/topic. Computed once before
+      // the assignments below, which run on BOTH the create and update render
+      // paths (the `if (!card)` block above only builds the DOM shell), so an
+      // edited tile updates its glyph + accent in place across the 5s poll.
+      var meta = resolveTileMeta(tile);
       card.classList.toggle('is-stale', !tile.online);
-      card.querySelector('.dev-emoji').textContent = '📡';
+      card.querySelector('.dev-emoji').textContent = meta.icon;
       card.querySelector('.dev-name').textContent = tile.label || tile.topic;
       card.querySelector('.fam-extra-val').textContent = valTxt;
+      // CSP-safe: per-element accent set via .style.color in JS AFTER the
+      // textContent write — never a style= attribute in markup/innerHTML.
+      card.querySelector('.fam-extra-val').style.color = meta.color;
 
       panelData[panelKey] = {
-        icon: '📡', iconBg: 'rgba(34,211,238,.12)',
-        title: escapeMsg(tile.label || tile.topic), sub: 'MQTT', color: '#22d3ee',
+        icon: meta.icon, iconBg: meta.color + '1f',
+        title: escapeMsg(tile.label || tile.topic), sub: 'MQTT', color: meta.color,
         summary: escapeMsg(tile.value != null
           ? (tile.label || 'Der Wert') + ' meldet aktuell ' + valTxt + '.'
           : 'Auf diesem Topic liegen aktuell keine Daten an.'),
