@@ -501,14 +501,9 @@
     return Math.floor(delta / 86400000) + ' d';
   }
 
-  var TESLA_CHARGE_LABEL = {
-    Charging: 'Lädt', Complete: 'Voll geladen', Disconnected: 'Nicht verbunden',
-    Stopped: 'Pausiert', Starting: 'Startet', NoPower: 'Kein Strom'
-  };
-  var TESLA_STATE_LABEL = {
-    driving: 'Unterwegs', asleep: 'Schläft', offline: 'Offline',
-    online: 'Bereit', charging: 'Lädt'
-  };
+  // Phase 11-06 round 9: TESLA_CHARGE_LABEL / TESLA_STATE_LABEL were removed
+  // together with the standalone Tesla tray card — the EV panel (panelData.ev,
+  // built in family.sr('family.ev')) carries its own German charge/state copy.
 
   // Phase 11-06 round 7: "is the Tesla charging" decided from BOTH signals.
   // TeslaMate re-publishes charger_power far more often than charging_state,
@@ -524,7 +519,9 @@
       || (typeof t.chargerPowerKw === 'number' && t.chargerPowerKw > 0);
   }
 
-  function makeExtraCard(logicalId, panelKey, modifierClass, hasSub) {
+  // Phase 11-06 round 9: the `hasSub` param was dropped with the Tesla tray
+  // card — only the generic MQTT value tile uses this now, which has no sub-row.
+  function makeExtraCard(logicalId, panelKey, modifierClass) {
     var el = document.createElement('div');
     el.className = 'dev-card ' + modifierClass;
     el.id = 'fam-card-' + logicalId;
@@ -532,74 +529,19 @@
     el.innerHTML =
       '<div class="dev-emoji"></div>'
       + '<div class="dev-name"></div>'
-      + '<div class="dev-watts fam-extra-val"></div>'
-      + (hasSub ? '<div class="fam-extra-sub"></div>' : '');
+      + '<div class="dev-watts fam-extra-val"></div>';
     return el;
   }
 
-  function renderFamilyExtras(mqttTiles, tesla) {
+  // Phase 11-06 checkpoint round 9: the standalone Tesla tray card was removed.
+  // The detailed EV constellation node (#tag-ev, with the round-5/6 SoC display)
+  // is now the single Tesla surface — tapping it opens panelData.ev, which is
+  // Tesla-driven in family.sr('family.ev'). renderFamilyExtras only renders the
+  // generic MQTT value tiles into #devices-tray now.
+  function renderFamilyExtras(mqttTiles) {
     var tray = document.getElementById('devices-tray');
     if (!tray) return;
     var wanted = {};
-
-    // --- Tesla card (full TeslaMate detail) -------------------------
-    if (tesla && tesla.enabled && tesla.lastUpdateAt) {
-      wanted.tesla = true;
-      var tcard = familyExtraCards.tesla;
-      if (!tcard) {
-        tcard = makeExtraCard('tesla', 'tesla', 'fam-tesla', true);
-        tray.appendChild(tcard);
-        familyExtraCards.tesla = tcard;
-      }
-      var rangeTxt = typeof tesla.rangeKm === 'number' ? Math.round(tesla.rangeKm) + ' km' : '—';
-      // Asleep-state graceful degradation (checkpoint round 6): rangeKm goes
-      // null while the car sleeps — for the prominent card value / summary /
-      // first stat, fall back to ratedRangeKm (norm range, survives sleep) so
-      // the tray card never reads as a bare "—". The detail rows below keep
-      // "geschätzt" vs "Norm" distinct on purpose.
-      var rangeCardTxt = typeof tesla.rangeKm === 'number' ? Math.round(tesla.rangeKm) + ' km'
-        : (typeof tesla.ratedRangeKm === 'number' ? Math.round(tesla.ratedRangeKm) + ' km' : '—');
-      var battTxt = typeof tesla.batteryLevel === 'number' ? Math.round(tesla.batteryLevel) + ' %' : '—';
-      var stateTxt = TESLA_STATE_LABEL[tesla.state] || tesla.state || '—';
-      var chgTxt;
-      if (teslaIsCharging(tesla)) {
-        chgTxt = 'Lädt' + (typeof tesla.chargerPowerKw === 'number' && tesla.chargerPowerKw > 0
-          ? ' · ' + (Math.round(tesla.chargerPowerKw * 10) / 10) + ' kW' : '');
-      } else {
-        chgTxt = stateTxt;
-      }
-      tcard.querySelector('.dev-emoji').textContent = '🚗';
-      tcard.querySelector('.dev-name').textContent = tesla.name || 'Tesla';
-      tcard.querySelector('.fam-extra-val').textContent = rangeCardTxt;
-      tcard.querySelector('.fam-extra-sub').textContent = battTxt + ' · ' + chgTxt;
-
-      panelData.tesla = {
-        icon: '🚗', iconBg: 'rgba(165,94,234,.12)',
-        title: escapeMsg(tesla.name || 'Tesla'), sub: 'TeslaMate', color: '#a55eea',
-        summary: escapeMsg((tesla.name || 'Das Auto') + ' hat noch ' + rangeCardTxt
-          + ' Reichweite bei ' + battTxt + ' Akkustand.'),
-        stats: [
-          { label: 'Reichweite', val: escapeMsg(rangeCardTxt), delta: '', up: true },
-          { label: 'Akku', val: escapeMsg(battTxt), delta: '', up: true },
-          { label: 'Status', val: escapeMsg(stateTxt), delta: '', up: true }
-        ],
-        chart: null,
-        details: [
-          ['Reichweite (geschätzt)', escapeMsg(rangeTxt)],
-          ['Reichweite (Norm)', typeof tesla.ratedRangeKm === 'number' ? Math.round(tesla.ratedRangeKm) + ' km' : '—'],
-          ['Akkustand', escapeMsg(battTxt)],
-          ['Nutzbarer Akku', typeof tesla.usableBatteryLevel === 'number' ? Math.round(tesla.usableBatteryLevel) + ' %' : '—'],
-          ['Ladelimit', typeof tesla.chargeLimitSoc === 'number' ? Math.round(tesla.chargeLimitSoc) + ' %' : '—'],
-          ['Ladezustand', escapeMsg(TESLA_CHARGE_LABEL[tesla.chargingState] || tesla.chargingState || '—')],
-          ['Eingesteckt', tesla.pluggedIn === true ? 'Ja' : (tesla.pluggedIn === false ? 'Nein' : '—')],
-          ['Ladeleistung', typeof tesla.chargerPowerKw === 'number' ? (Math.round(tesla.chargerPowerKw * 10) / 10) + ' kW' : '—'],
-          ['Innentemperatur', typeof tesla.insideTempC === 'number' ? (Math.round(tesla.insideTempC * 10) / 10) + ' °C' : '—'],
-          ['Standort', escapeMsg(tesla.geofence || '—')],
-          ['Fahrzeugstatus', escapeMsg(stateTxt)],
-          ['Aktualisiert', 'vor ' + fmtRelTime(tesla.lastUpdateAt)]
-        ]
-      };
-    }
 
     // --- Generic MQTT value tiles -----------------------------------
     (mqttTiles || []).forEach(function (tile) {
@@ -611,7 +553,7 @@
       wanted[logicalId] = true;
       var card = familyExtraCards[logicalId];
       if (!card) {
-        card = makeExtraCard(logicalId, panelKey, 'fam-tile', false);
+        card = makeExtraCard(logicalId, panelKey, 'fam-tile');
         tray.appendChild(card);
         familyExtraCards[logicalId] = card;
       }
@@ -1328,8 +1270,10 @@
     });
 
     sr('family.extras', function () {
-      // Generic MQTT value tiles (family.mqttTiles) + full Tesla detail card.
-      renderFamilyExtras(data.mqttTiles || [], data.tesla || null);
+      // Generic MQTT value tiles (family.mqttTiles). The Tesla is no longer a
+      // tray card (round 9) — it lives entirely on the #tag-ev constellation
+      // node + the Tesla-driven EV panel (panelData.ev).
+      renderFamilyExtras(data.mqttTiles || []);
     });
 
     sr('family.forecast-widget', function () {
