@@ -43,8 +43,3 @@ config.backup-*.json
 dvhub/config.backup-*.json
 # Setup-wizard bootstrap token (server.js writes this at boot when needsSetup=true)
 dvhub/bootstrap.token
-# TeslaMate cache-persistence file (Phase 11-06): runtime artefact written by
-# services/mqtt/teslamate.js. In production it lives in DV_DATA_DIR (outside
-# the repo); this covers the dev fallback where it lands next to energy_state.json.
-tesla-cache.json
-dvhub/tesla-cache.json

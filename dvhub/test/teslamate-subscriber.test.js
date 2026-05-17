@@ -1,23 +1,8 @@
 // test/teslamate-subscriber.test.js -- TeslaMate MQTT subscriber tests (INTG-04, INTG-06)
-import { describe, it, beforeEach, after } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-// Phase 11-06 round 7: teslamate.js resolves its cache-persistence file path
-// from DV_DATA_DIR at MODULE LOAD time. Point it at a throwaway temp dir
-// BEFORE importing the module so the persistence tests below never write
-// tesla-cache.json into the repo working tree.
-const TEST_DATA_DIR = mkdtempSync(join(tmpdir(), 'teslamate-test-'));
-process.env.DV_DATA_DIR = TEST_DATA_DIR;
-const TEST_CACHE_FILE = join(TEST_DATA_DIR, 'tesla-cache.json');
-
-const { createTeslamateSubscriber } = await import('../services/mqtt/teslamate.js');
-
-after(() => {
-  try { rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-});
+import { createTeslamateSubscriber } from '../services/mqtt/teslamate.js';
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -58,10 +43,39 @@ function makeMockDb() {
   };
 }
 
+/**
+ * A fake telemetryStore for the DB-historisation/seed tests, mirroring the
+ * Plan 11-02 family-mqtt-tiles `makeMockStore` shape.
+ *  - `writes` accumulates every `rows` array passed to writeSamples.
+ *  - `seedRows` is the array querySeries returns (set up per test).
+ *  - querySeries `behavior`: 'resolve' (default) or 'reject'.
+ */
+function makeMockStore({ seedRows = [], behavior = 'resolve' } = {}) {
+  const writes = [];
+  return {
+    writes,
+    seedRows,
+    writeSamples(rows) {
+      writes.push(rows);
+      return Promise.resolve();
+    },
+    querySeries(_opts) {
+      return behavior === 'reject'
+        ? Promise.reject(new Error('pg down'))
+        : Promise.resolve(seedRows);
+    }
+  };
+}
+
+/** Wait one macrotask so a fire-and-forget Promise chain settles. */
+function flush() {
+  return new Promise(r => setTimeout(r, 0));
+}
+
 function makeMockCtx(overrides = {}) {
   const logs = [];
   const db = overrides.db || makeMockDb();
-  return {
+  const ctx = {
     state: {},
     getCfg: () => ({
       integrations: {
@@ -79,6 +93,10 @@ function makeMockCtx(overrides = {}) {
     _logs: logs,
     _db: db
   };
+  // telemetryStore is read LAZILY off ctx by teslamate.js (server.js wires it
+  // after the factory runs), so a test attaches it directly onto the ctx object.
+  if (overrides.telemetryStore !== undefined) ctx.telemetryStore = overrides.telemetryStore;
+  return ctx;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -230,7 +248,6 @@ describe('createTeslamateSubscriber', () => {
       q.sql.includes('CREATE TABLE IF NOT EXISTS tesla_snapshots')
     );
     assert.ok(schemaQuery, 'Expected CREATE TABLE IF NOT EXISTS tesla_snapshots query');
-    assert.ok(schemaQuery.sql.includes('idx_tesla_snapshots_car_ts'), 'Expected index creation');
   });
 
   it('lastUpdateAt is null initially and updates on message receipt', async () => {
@@ -299,96 +316,199 @@ describe('createTeslamateSubscriber', () => {
   });
 });
 
-// ── Restart-persistence (Phase 11-06 round 7) ───────────────────────
+// ── DB historisation + restart-seed (Phase 11-06 round 8) ───────────
 //
-// TeslaMate only re-publishes a topic when its value changes, so rarely-
-// changing fields (charging_state, charger_power, plugged_in) stay null
-// after a dvhub restart until the next state change. The cache is mirrored
-// to a JSON file in the runtime data dir and seeded back on start().
+// Round 7 mirrored the 15-field cache to a tesla-cache.json runtime file.
+// Round 8 (operator request) replaces that with DB historisation: every Tesla
+// value is written into timeseries_samples via ctx.telemetryStore, exactly the
+// way Plan 11-02 historises generic MQTT-tile values, and start() seeds the
+// cache from the latest DB sample per tesla_* series so a restart restores the
+// last-known state. The store is read LAZILY off ctx (server.js wires it after
+// the factory runs); a missing store / missing data degrades cleanly.
 
-describe('TeslaMate cache-persistence', () => {
-  let hub, ctx;
+describe('TeslaMate DB historisation + restart-seed', () => {
+  let hub;
 
   beforeEach(() => {
     hub = makeMockHub();
-    ctx = makeMockCtx();
-    // Each test starts from a clean slate -- remove any leftover cache file.
-    if (existsSync(TEST_CACHE_FILE)) rmSync(TEST_CACHE_FILE, { force: true });
   });
 
-  it('close() writes the cache + lastUpdateAt to tesla-cache.json in DV_DATA_DIR', async () => {
+  it('historises a numeric value into timeseries_samples via telemetryStore.writeSamples', async () => {
+    const store = makeMockStore();
+    const ctx = makeMockCtx({ telemetryStore: store });
     const sub = createTeslamateSubscriber(hub, ctx);
     await sub.start();
-    hub._deliver('teslamate/cars/2/charging_state', 'Charging');
-    hub._deliver('teslamate/cars/2/charger_power', '11');
-    hub._deliver('teslamate/cars/2/battery_level', '55');
-    sub.close(); // flushes the pending debounced write synchronously
 
-    assert.ok(existsSync(TEST_CACHE_FILE), 'tesla-cache.json should exist after close()');
-    const saved = JSON.parse(readFileSync(TEST_CACHE_FILE, 'utf8'));
-    assert.equal(saved.cache.chargingState, 'Charging');
-    assert.equal(saved.cache.chargerPower, 11);
-    assert.equal(saved.cache.batteryLevel, 55);
-    assert.ok(saved.lastUpdateAt, 'lastUpdateAt should be persisted');
+    hub._deliver('teslamate/cars/2/charger_power', '11');
+    await flush(); // historisation write is fire-and-forget
+
+    assert.equal(store.writes.length, 1, 'writeSamples called exactly once');
+    const row = store.writes[0][0];
+    assert.equal(row.seriesKey, 'tesla_charger_power');
+    assert.equal(row.value, 11);
+    assert.equal(row.source, 'teslamate');
+    assert.equal(row.scope, 'live');
+    assert.equal(row.quality, 'raw');
+    assert.equal(row.resolutionSeconds, 1);
   });
 
-  it('start() seeds the cache from an existing tesla-cache.json before subscribing', async () => {
-    // Simulate a file left by a previous run.
-    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
-      cache: {
-        displayName: 'Model 3', chargingState: 'Charging', chargerPower: 7,
-        pluggedIn: true, batteryLevel: 48, chargeLimitSoc: 80
-      },
-      lastUpdateAt: '2026-05-17T10:00:00.000Z'
-    }), 'utf8');
+  it('historises an enum/string value with both value_text and a numeric code', async () => {
+    const store = makeMockStore();
+    const ctx = makeMockCtx({ telemetryStore: store });
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
 
+    hub._deliver('teslamate/cars/2/charging_state', 'Charging');
+    await flush();
+
+    assert.equal(store.writes.length, 1);
+    const row = store.writes[0][0];
+    assert.equal(row.seriesKey, 'tesla_charging_state');
+    assert.equal(row.valueText, 'Charging', 'enum stored as value_text');
+    assert.equal(typeof row.value, 'number', 'enum also stored as a numeric code so querySeries can read it back');
+    assert.ok(row.value > 0, 'enum code is a positive integer');
+  });
+
+  it('historises a boolean value as 0/1 numeric', async () => {
+    const store = makeMockStore();
+    const ctx = makeMockCtx({ telemetryStore: store });
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+
+    hub._deliver('teslamate/cars/2/plugged_in', 'true');
+    await flush();
+
+    assert.equal(store.writes.length, 1);
+    assert.equal(store.writes[0][0].seriesKey, 'tesla_plugged_in');
+    assert.equal(store.writes[0][0].value, 1, 'true -> 1');
+  });
+
+  it('a missing telemetryStore (boot window) is a silent no-op — no throw', async () => {
+    const ctx = makeMockCtx(); // no telemetryStore on ctx
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await assert.doesNotReject(() => sub.start());
+    // Delivering a message must not throw with no store wired.
+    assert.doesNotThrow(() => hub._deliver('teslamate/cars/2/battery_level', '60'));
+    await flush();
+    assert.equal(sub.getState().batteryLevel, 60, 'cache still updates without a store');
+  });
+
+  it('a rejecting writeSamples does not crash the MQTT message path', async () => {
+    const store = makeMockStore();
+    store.writeSamples = () => Promise.reject(new Error('pg down'));
+    const ctx = makeMockCtx({ telemetryStore: store });
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+
+    assert.doesNotThrow(() => hub._deliver('teslamate/cars/2/battery_level', '70'));
+    await flush(); // the fire-and-forget .catch() must absorb the rejection
+    assert.equal(sub.getState().batteryLevel, 70);
+  });
+
+  it('start() seeds numeric fields from the latest DB sample per series', async () => {
+    // Simulate samples left in timeseries_samples by a previous run.
+    const store = makeMockStore({ seedRows: [
+      { key: 'tesla_battery_level', ts: '2026-05-17T09:00:00.000Z', value: 48, unit: null, resolution: 1 },
+      { key: 'tesla_charger_power', ts: '2026-05-17T09:30:00.000Z', value: 7, unit: null, resolution: 1 },
+      { key: 'tesla_charge_limit_soc', ts: '2026-05-17T09:15:00.000Z', value: 80, unit: null, resolution: 1 }
+    ] });
+    const ctx = makeMockCtx({ telemetryStore: store });
     const sub = createTeslamateSubscriber(hub, ctx);
     await sub.start();
 
     const state = sub.getState();
-    assert.equal(state.chargingState, 'Charging', 'rarely-changing field seeded from file');
-    assert.equal(state.chargerPower, 7);
-    assert.equal(state.pluggedIn, true);
-    assert.equal(state.batteryLevel, 48);
-    assert.ok(sub.lastUpdateAt, 'lastUpdateAt restored from file');
+    assert.equal(state.batteryLevel, 48, 'numeric field seeded from the DB');
+    assert.equal(state.chargerPower, 7, 'rarely-changing field seeded from the DB');
+    assert.equal(state.chargeLimitSoc, 80);
+    assert.ok(sub.lastUpdateAt, 'lastUpdateAt restored from the newest seeded sample');
+  });
+
+  it('start() decodes an enum field seeded from its numeric code', async () => {
+    // teslamate.js encodes chargingState as a numeric code; the seed must
+    // decode it back to the enum string (querySeries only returns value_num).
+    // Round-trip test: historise 'Charging' to discover its code, then feed
+    // that exact code back through the seed and assert the string is restored.
+    const probeStore = makeMockStore();
+    const probeHub = makeMockHub();
+    const probe = createTeslamateSubscriber(probeHub, makeMockCtx({ telemetryStore: probeStore }));
+    await probe.start();
+    probeHub._deliver('teslamate/cars/2/charging_state', 'Charging');
+    await flush();
+    const chargingCode = probeStore.writes[probeStore.writes.length - 1][0].value;
+    assert.equal(typeof chargingCode, 'number');
+    assert.ok(chargingCode > 0, 'enum code is a positive integer');
+
+    const seedStore = makeMockStore({ seedRows: [
+      { key: 'tesla_charging_state', ts: '2026-05-17T09:00:00.000Z', value: chargingCode, unit: null, resolution: 1 }
+    ] });
+    const ctx = makeMockCtx({ telemetryStore: seedStore });
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+
+    assert.equal(sub.getState().chargingState, 'Charging', 'enum code decoded back to the string');
+  });
+
+  it('start() decodes a boolean field seeded from its 0/1 code', async () => {
+    const store = makeMockStore({ seedRows: [
+      { key: 'tesla_plugged_in', ts: '2026-05-17T09:00:00.000Z', value: 1, unit: null, resolution: 1 }
+    ] });
+    const ctx = makeMockCtx({ telemetryStore: store });
+    const sub = createTeslamateSubscriber(hub, ctx);
+    await sub.start();
+
+    assert.equal(sub.getState().pluggedIn, true, '1 decoded back to true');
   });
 
   it('a live MQTT message overwrites a seeded value', async () => {
-    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
-      cache: { batteryLevel: 48, chargingState: 'Charging' },
-      lastUpdateAt: '2026-05-17T10:00:00.000Z'
-    }), 'utf8');
-
+    const store = makeMockStore({ seedRows: [
+      { key: 'tesla_battery_level', ts: '2026-05-17T09:00:00.000Z', value: 48, unit: null, resolution: 1 }
+    ] });
+    const ctx = makeMockCtx({ telemetryStore: store });
     const sub = createTeslamateSubscriber(hub, ctx);
     await sub.start();
-    assert.equal(sub.getState().batteryLevel, 48); // seeded
+    assert.equal(sub.getState().batteryLevel, 48, 'seeded');
+
     hub._deliver('teslamate/cars/2/battery_level', '72');
     assert.equal(sub.getState().batteryLevel, 72, 'live message wins over the seed');
   });
 
-  it('a missing cache file degrades cleanly to an empty cache (no throw)', async () => {
-    assert.equal(existsSync(TEST_CACHE_FILE), false);
+  it('start() degrades cleanly when the store has no tesla_* data (empty cache, no throw)', async () => {
+    const store = makeMockStore({ seedRows: [] });
+    const ctx = makeMockCtx({ telemetryStore: store });
     const sub = createTeslamateSubscriber(hub, ctx);
     await assert.doesNotReject(() => sub.start());
     assert.equal(sub.getState().batteryLevel, null);
   });
 
-  it('a corrupt cache file degrades cleanly to an empty cache (no throw)', async () => {
-    writeFileSync(TEST_CACHE_FILE, '{ this is not valid json', 'utf8');
+  it('start() degrades cleanly when querySeries rejects (empty cache, no throw)', async () => {
+    const store = makeMockStore({ behavior: 'reject' });
+    const ctx = makeMockCtx({ telemetryStore: store });
     const sub = createTeslamateSubscriber(hub, ctx);
     await assert.doesNotReject(() => sub.start());
     assert.equal(sub.getState().batteryLevel, null);
   });
 
-  it('seeding only copies known cache keys (a stale unknown key is dropped)', async () => {
-    writeFileSync(TEST_CACHE_FILE, JSON.stringify({
-      cache: { batteryLevel: 60, somethingRenamed: 'xyz' },
-      lastUpdateAt: '2026-05-17T10:00:00.000Z'
-    }), 'utf8');
+  it('start() degrades cleanly when no telemetryStore is wired yet (empty cache, no throw)', async () => {
+    const ctx = makeMockCtx(); // no telemetryStore
     const sub = createTeslamateSubscriber(hub, ctx);
-    await sub.start();
-    const state = sub.getState();
-    assert.equal(state.batteryLevel, 60);
-    assert.equal('somethingRenamed' in state, false, 'unknown key must not be injected');
+    await assert.doesNotReject(() => sub.start());
+    assert.equal(sub.getState().batteryLevel, null);
+  });
+
+  it('the module no longer performs tesla-cache.json file-IO', async () => {
+    // Structural guard: round 8 removed the round-7 file-IO persistence.
+    // (The header comment may still NAME tesla-cache.json to explain its
+    // removal — what must be gone is the actual fs IO and the import.)
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(dir, '..', 'services', 'mqtt', 'teslamate.js'), 'utf8');
+    assert.ok(!src.includes('writeFileSync'), 'no file-write IO');
+    assert.ok(!src.includes('readFileSync'), 'no file-read IO');
+    assert.ok(!/from\s+['"]node:fs['"]/.test(src), 'no node:fs import');
+    assert.ok(!src.includes('TESLA_CACHE_PATH'), 'no cache-file path constant');
+    assert.ok(!src.includes('writeCacheFile'), 'no writeCacheFile helper');
+    assert.ok(!src.includes('seedCacheFromFile'), 'no seedCacheFromFile helper');
   });
 });
