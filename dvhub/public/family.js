@@ -1267,7 +1267,11 @@
       // to a not-yet-rendered card silently does not paint (bgFlowEndpoint
       // returns null). The sr() blocks run in order, so family.extras precedes
       // this family.bg-flow block.
-      updateBgFlowMqttStreams(data.mqttTiles || []);
+      // houseW: the SAME Hausverbrauch figure the base k_home stream uses
+      // (data.energy.homeKw, already patched by inferHomeKw in family.tags).
+      // Converted to W so it is unit-consistent with the MQTT device value.
+      var houseW = Math.max(0, Number((data.energy && data.energy.homeKw) || 0)) * 1000;
+      updateBgFlowMqttStreams(data.mqttTiles || [], houseW);
       // Aurora pf-center-readout (#pfCenter) shows the day-net-Euro headline.
       updatePfCenterReadout(data);
     });
@@ -1878,27 +1882,26 @@
      sign. The canonical positive-only plug case is therefore correct
      immediately.
 
-     Intensity (operator request — see below): the s_mqtt_* streams scale dust
-     count/speed by a LOGARITHMIC curve of the absolute power, NOT the linear
-     bgFlowPwr2Count/bgFlowPwr2Speed mapping the base streams use. */
+     Intensity (operator request — see below): each s_mqtt_* stream is sized
+     STRICTLY PROPORTIONALLY to that device's share of the total house
+     consumption (device W ÷ house W, clamped 0..1). The device streams visually
+     divide up the house-consumption flow — NO minimum visibility floor: a small
+     device (e.g. 114 W of a 1.29 kW house ≈ 9%) draws a correspondingly thin,
+     slow stream. This SUPERSEDES the earlier logarithmic / running-max model. */
 
-  // Per-tile in-memory sign + running-max state. Lives in family.js memory and
-  // resets on page reload (acceptable — D-12 has no completeness guarantee).
-  // Keyed by tile.id → { everNegative: boolean, maxKw: number }.
+  // Per-tile in-memory sign state. Lives in family.js memory and resets on page
+  // reload (acceptable — D-12 has no completeness guarantee).
+  // Keyed by tile.id → { everNegative: boolean }.
   var bgFlowMqttState = {};
   // Active MQTT power-tile streams, keyed by tile.id. Each value is a stream
   // object of the same shape bgFlowDraw() consumes.
   var bgFlowMqttStreams = {};
 
-  // Logarithmic intensity tuning for the s_mqtt_* streams. MIN_* keep a small
-  // non-zero tile (~100 W) clearly alive; MAX_* keep a big MQTT tile comparable
-  // to (not louder than) the busiest base stream (bgFlowPwr2Count caps at 320).
-  var MQTT_FLOW_FLOOR_W = 50;       // log-floor — values below clamp to t=0
-                                    // (aligned with bgFlowDraw's s.kw<0.05=50W skip
-                                    //  threshold: a tile below 50 W is skipped anyway)
-  var MQTT_FLOW_MIN_COUNT = 70;     // a non-zero, visibly-alive minimum dust count
-  var MQTT_FLOW_MAX_COUNT = 300;    // near the base streams' busiest count
-  var MQTT_FLOW_MIN_SPEED = 0.05;   // a non-zero, visibly-alive minimum speed
+  // Proportional intensity tuning for the s_mqtt_* streams. A device that IS the
+  // whole house load (frac = 1) draws a near-full stream; these maxima are set
+  // near the base streams' busiest values (bgFlowPwr2Count caps at 320, peak
+  // bgFlowPwr2Speed ≈ 0.2) so a full-house device is comparable to the base flows.
+  var MQTT_FLOW_MAX_COUNT = 300;    // near the base streams' busiest dust count
   var MQTT_FLOW_MAX_SPEED = 0.18;   // comparable to bgFlowPwr2Speed near peak
 
   function bgFlowClamp01(v) {
@@ -1910,10 +1913,12 @@
      MUST be called AFTER renderFamilyExtras() so the #fam-card-mqtt-<id> card
      exists — bgFlowDraw silently skips a stream whose endpoint resolves null.
      For each power-unit tile: create+seed a stream if new, then drive its
-     direction/maxKw/count/speed from the live value. Non-power tiles, and any
-     tile that has dropped out of the poll, have their stream torn down. */
-  function updateBgFlowMqttStreams(mqttTiles) {
+     direction/count/speed from the live value sized as a STRICTLY PROPORTIONAL
+     share of houseW (the total house consumption, in W). Non-power tiles, and
+     any tile that has dropped out of the poll, have their stream torn down. */
+  function updateBgFlowMqttStreams(mqttTiles, houseW) {
     var tiles = mqttTiles || [];
+    var houseLoadW = Math.max(0, Number(houseW) || 0);
     var seen = {};
 
     tiles.forEach(function (tile) {
@@ -1929,7 +1934,7 @@
 
       seen[tile.id] = true;
       var st = bgFlowMqttState[tile.id];
-      if (!st) { st = bgFlowMqttState[tile.id] = { everNegative: false, maxKw: 0.001 }; }
+      if (!st) { st = bgFlowMqttState[tile.id] = { everNegative: false }; }
       if (valW < 0) st.everNegative = true;           // D-08: sticky sign state
 
       var meta = resolveTileMeta(tile);
@@ -1943,8 +1948,7 @@
         s = {
           id: 's_mqtt_' + tile.id,
           from: cardId, to: 'pfCenter',
-          color: hexToRgb(meta.color),
-          maxKw: 0.001
+          color: hexToRgb(meta.color)
         };
         bgFlowMqttStreams[tile.id] = s;
         bgFlowSeedDust(s);                            // pushes DUST_PER_STREAM particles
@@ -1964,33 +1968,25 @@
       }
       s.reverse = false;
 
-      // D-10 running-max maxKw — convert the tile value to kW first (base
-      // streams are all in kW); monotonically non-decreasing, never reset.
       var absW = Math.abs(valW);
-      var valKw = absW / 1000;
-      st.maxKw = Math.max(st.maxKw || 0.001, valKw);
-      s.maxKw = st.maxKw;
 
       // bgFlowDraw's `s.kw < 0.05` skip guard works in kW — keep it intact so a
       // genuinely zero/idle tile still paints nothing.
-      s.kw = valKw;
+      s.kw = absW / 1000;
 
-      // (f2) LOGARITHMIC particle intensity — operator request. This OVERRIDES
-      // the linear bgFlowPwr2Count/bgFlowPwr2Speed mapping for the s_mqtt_*
-      // streams ONLY; the BG_FLOWS_BASE streams keep their linear path
-      // untouched. Linear value/maxKw makes a 100 W tile invisible next to a
-      // 10 kW running-max; the log curve lifts small non-zero values into
-      // visibility while keeping 100 W / 1 kW / 10 kW as three clearly distinct,
-      // monotonically increasing dust intensities.
-      var FLOOR_W = MQTT_FLOW_FLOOR_W;
-      var CEIL_W = Math.max(11000, st.maxKw * 1000);  // running-max bounds the curve
-      var lgFloor = Math.log10(FLOOR_W);
-      var lgCeil = Math.log10(CEIL_W);
-      var t = (lgCeil > lgFloor)
-        ? bgFlowClamp01((Math.log10(Math.max(absW, FLOOR_W)) - lgFloor) / (lgCeil - lgFloor))
-        : 0;
-      s.count = Math.round(MQTT_FLOW_MIN_COUNT + t * (MQTT_FLOW_MAX_COUNT - MQTT_FLOW_MIN_COUNT));
-      s.speed = MQTT_FLOW_MIN_SPEED + t * (MQTT_FLOW_MAX_SPEED - MQTT_FLOW_MIN_SPEED);
+      // (f) STRICTLY PROPORTIONAL particle intensity — operator request. Each
+      // device stream is sized by its SHARE of the total house consumption:
+      // the s_mqtt_* streams visually divide up the house-consumption flow.
+      // frac = clamp01(device W ÷ house W); NO minimum visibility floor — a
+      // 114 W device of a 1.29 kW house ≈ 9% → a correspondingly thin, slow
+      // stream. A device that IS the whole house load (frac = 1) draws a
+      // near-full stream comparable to the busiest base flows. Clamping to
+      // [0,1] guards measurement-timing skew where a device briefly reads
+      // higher than the measured house total. This applies to the s_mqtt_*
+      // streams ONLY — BG_FLOWS_BASE keeps its bgFlowPwr2Count/Speed path.
+      var frac = bgFlowClamp01(absW / Math.max(houseLoadW, 1));
+      s.count = Math.round(frac * MQTT_FLOW_MAX_COUNT);
+      s.speed = frac * MQTT_FLOW_MAX_SPEED;
     });
 
     // Tear down streams for tiles that dropped out of the poll, were disabled,
