@@ -121,7 +121,7 @@ export function createFamilyMqttTiles(hub, ctx) {
     return getTileConfigs().map(tile => {
       const last = lastByTopic.get(tile.topic) || null;
       const value = last ? extractValue(last.raw, tile.field) : null;
-      return {
+      const out = {
         id: tile.id || tile.topic,
         label: tile.label || tile.topic,
         topic: tile.topic,
@@ -130,6 +130,14 @@ export function createFamilyMqttTiles(hub, ctx) {
         lastSeen: last ? last.lastSeen : null,
         online: !!(last && (now - last.lastSeen) < OFFLINE_THRESHOLD_MS)
       };
+      // Pass the operator-picked per-tile icon/colour through to the kiosk
+      // ADDITIVELY (cross-plan data-path gap closed for 11-05): the key is
+      // included ONLY when the tile config carries a non-empty string value,
+      // mirroring the additive-optional convention used across this phase —
+      // an absent key lets the kiosk's resolveTileMeta() auto-derive.
+      if (typeof tile.icon === 'string' && tile.icon.trim()) out.icon = tile.icon;
+      if (typeof tile.color === 'string' && tile.color.trim()) out.color = tile.color;
+      return out;
     });
   }
 

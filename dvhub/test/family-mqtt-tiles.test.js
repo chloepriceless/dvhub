@@ -159,6 +159,42 @@ describe('createFamilyMqttTiles', () => {
     assert.equal(tile.online, true); // fresh
   });
 
+  // ── 11-05: per-tile icon/color pass-through to /api/family/status ──
+
+  it('getTiles() passes a picked icon + color through when the tile config has them', async () => {
+    const hub = makeMockHub();
+    const svc = createFamilyMqttTiles(hub, makeCtx([
+      { id: 'tmp8tugaxl5', label: 'Gebläse', topic: 'zigbee2mqtt/Steckdose_Gebläse',
+        field: 'energy', unit: 'W', icon: '🪭', color: '#22d3ee' }
+    ]));
+    await svc.start();
+    const tile = svc.getTiles()[0];
+    assert.equal(tile.icon, '🪭', 'picked icon is surfaced on the status tile');
+    assert.equal(tile.color, '#22d3ee', 'picked accent colour is surfaced on the status tile');
+  });
+
+  it('getTiles() omits icon/color entirely when the tile config has none (kiosk auto-derives)', async () => {
+    const hub = makeMockHub();
+    const svc = createFamilyMqttTiles(hub, makeCtx([
+      { id: 'wb', label: 'Wallbox', topic: 'wallbox/power', unit: 'W' }
+    ]));
+    await svc.start();
+    const tile = svc.getTiles()[0];
+    assert.ok(!('icon' in tile), 'no icon key when the config did not pick one');
+    assert.ok(!('color' in tile), 'no color key when the config did not pick one');
+  });
+
+  it('getTiles() omits icon/color when they are present but empty/blank strings', async () => {
+    const hub = makeMockHub();
+    const svc = createFamilyMqttTiles(hub, makeCtx([
+      { id: 'wb', label: 'Wallbox', topic: 'wallbox/power', unit: 'W', icon: '', color: '   ' }
+    ]));
+    await svc.start();
+    const tile = svc.getTiles()[0];
+    assert.ok(!('icon' in tile), 'an empty icon string is not passed through');
+    assert.ok(!('color' in tile), 'a blank color string is not passed through');
+  });
+
   it('_extractValue handles JSON primitives, objects, and plain values', () => {
     const svc = createFamilyMqttTiles(makeMockHub(), makeCtx([]));
     assert.equal(svc._extractValue('42', null), 42);
