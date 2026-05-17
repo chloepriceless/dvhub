@@ -1230,7 +1230,16 @@ if (IS_RUNTIME_PROCESS) {
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
     mqttTopicObserver.start();   // sync — registers the '#' subscription (Phase 09.4 D-05)
-    teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
+    // teslamateService.start() seeds its in-memory cache from timeseries_samples
+    // (teslamate.js seedCacheFromStore) so a restart restores the last-known
+    // Tesla state while the car is offline/asleep and publishes nothing. That
+    // seed needs ctx.telemetryStore — assigned by the telemetryReady IIFE — so
+    // wait for it here. Without this the MQTT broker (LAN) connects faster than
+    // Postgres init, the seed silently no-ops, and the EV tile stays blank
+    // until the car next publishes a changed value.
+    telemetryReady.then(() => {
+      teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
+    });
     familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
     try {
       publishHaDiscoveryTopics(mqttHub, ctx.getCfg);
