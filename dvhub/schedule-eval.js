@@ -16,6 +16,12 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // eslint-disable-next-line no-unused-vars
 import { safeInterval } from './services/safe-async.js';
 
+// D-18 live runtime Akku-Hard-Limit clamp — hysteresis dead-band (W).
+// Within [akkuHardLimitW - HYST, akkuHardLimitW + HYST] the clamp does not
+// change the setpoint, so a measured battery discharge hovering near the
+// limit cannot flap the Stage-2 LEEREN gridSetpointW every control cycle.
+const STAGE2_CLAMP_HYSTERESIS_W = 500;
+
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
 
@@ -459,6 +465,79 @@ export function createScheduleEvaluator(ctx) {
       if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0)) > 50) {
         continue;
       }
+
+      // === D-18 live runtime Akku-Hard-Limit clamp =========================
+      // The runtime half of the D-17/D-18 dual enforcement. The plan-time
+      // clamp (plan 10-03/10-04) sizes the Stage-2 LEEREN gridSetpointW on
+      // FORECAST. A higher-than-forecast morning load or a PV dip can push a
+      // plan-locked LEEREN slot's REAL battery discharge over the Akku Hard
+      // Limit. This clamp inspects measured battery discharge every control
+      // cycle and trims the active Stage-2 LEEREN setpoint toward 0 so
+      // forecast error can never overdraw the physical 43 kWh battery.
+      // Structurally mirrors the negativePriceProtection block above: inspect
+      // eff.value, compare against a limit, conditionally write a clamped
+      // value with its own source tag, continue. NEVER touches a non-Stage-2
+      // gridSetpointW (a manual rule, the optimizer, a plain SMA rule).
+      if (target === 'gridSetpointW' && eff.rule?.stage2Phase === 'LEEREN') {
+        const akkuHardLimitW = Number(
+          cfg.schedule?.smallMarketAutomation?.predictivePreEmpty?.akkuHardLimitW ?? 20000
+        );
+        const measuredBatteryDischargeW = state.victron.batteryDischargeW;
+
+        // Note: Number(null) === 0 (finite), so a bare Number.isFinite check
+        // would silently treat missing telemetry as a 0 W discharge. Reject
+        // null/undefined explicitly before coercing — a missing reading must
+        // hit the fail-safe path, never be read as "0 W, clamp not needed".
+        if (
+          measuredBatteryDischargeW == null ||
+          !Number.isFinite(Number(measuredBatteryDischargeW))
+        ) {
+          // FAIL SAFE: telemetry missing/null/non-finite. Hold the current
+          // (already plan-time-clamped) setpoint — do NOT no-op into an
+          // unbounded discharge. Log once per episode.
+          if (!state.ctrl._stage2ClampTelemetryMissing) {
+            pushLog('stage2_akku_telemetry_missing', {
+              rule: eff.rule?.id || null,
+              eff: eff.value
+            });
+            state.ctrl._stage2ClampTelemetryMissing = true;
+          }
+          await applyControlTarget(target, eff.value, eff.source);
+          continue;
+        }
+        state.ctrl._stage2ClampTelemetryMissing = false;
+
+        const measured = Number(measuredBatteryDischargeW);
+        if (measured > akkuHardLimitW + STAGE2_CLAMP_HYSTERESIS_W) {
+          // The clamp BINDS: real discharge is above the upper hysteresis
+          // edge. Trim the (negative) setpoint toward 0 by the overshoot.
+          // Math.min(0, ...) caps at 0 — the trim can never cross into a
+          // positive (grid-charge) value, so it stays legal under the
+          // EEG/§14a gate in applyControlTarget.
+          const overshoot = measured - akkuHardLimitW;
+          const trimmedValue = Math.min(0, Number(eff.value) + overshoot);
+          await applyControlTarget('gridSetpointW', trimmedValue, 'stage2_akku_clamp');
+          if (!state.ctrl._stage2ClampActive) {
+            pushLog('stage2_akku_hard_limit_exceeded', {
+              measured,
+              limit: akkuHardLimitW,
+              from: eff.value,
+              to: trimmedValue
+            });
+            state.ctrl._stage2ClampActive = true;
+          }
+          continue;
+        }
+        if (measured < akkuHardLimitW - STAGE2_CLAMP_HYSTERESIS_W) {
+          // Recovered below the lower hysteresis edge — reset the one-shot
+          // flag so a future overshoot logs the binding episode again.
+          state.ctrl._stage2ClampActive = false;
+        }
+        // Within the hysteresis dead-band: no write change (no flapping) —
+        // fall through to the normal applyControlTarget below.
+      }
+      // === end D-18 live runtime Akku-Hard-Limit clamp =====================
+
       await applyControlTarget(target, eff.value, eff.source);
     }
 
