@@ -63,33 +63,6 @@ test('normalizeConfigInput coerces predictivePreEmpty.enabled string "true" to b
   assert.equal(typeof ppe.enabled, 'boolean');
 });
 
-test('normalizeConfigInput round-trips pvGenerationCostCtKwh and resets an out-of-range value', () => {
-  const ok = normalizeConfigInput({
-    schedule: {
-      smallMarketAutomation: {
-        enabled: true,
-        predictivePreEmpty: { pvGenerationCostCtKwh: '8.5' }
-      }
-    }
-  });
-  const okPpe = ok.rawConfig.schedule.smallMarketAutomation.predictivePreEmpty;
-  assert.equal(okPpe.pvGenerationCostCtKwh, 8.5);
-  assert.equal(typeof okPpe.pvGenerationCostCtKwh, 'number');
-
-  // 200 is above the field max of 50 -> must be reset, not kept.
-  const bad = normalizeConfigInput({
-    schedule: {
-      smallMarketAutomation: {
-        enabled: true,
-        predictivePreEmpty: { pvGenerationCostCtKwh: 200 }
-      }
-    }
-  });
-  const badPpe = bad.rawConfig.schedule.smallMarketAutomation.predictivePreEmpty;
-  assert.notEqual(badPpe.pvGenerationCostCtKwh, 200,
-    'an out-of-range pvGenerationCostCtKwh (200 > max 50) must be reset');
-});
-
 // Smoke guard so this file always runs at least one assertion that exercises
 // the module surface even if the schedule block above changes shape.
 test('getConfigDefinition and createDefaultConfig remain importable', () => {

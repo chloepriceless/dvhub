@@ -996,19 +996,7 @@ function buildFieldDefinitions() {
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.enabled',
       label: 'Forecast Aware++ (Stufe 2) aktivieren',
       type: 'boolean',
-      help: 'Aktiviert das vorausschauende Akku-Leeren (Stufe 2). Nur wirksam, wenn die Forecast-aware Börsenautomatik (Stufe 1) ebenfalls aktiv ist. Stufe 2 verkauft aktiv und leert den physischen Akku — separat scharfschalten.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.pvGenerationCostCtKwh',
-      label: 'PV-Erzeugungskosten (ct/kWh)',
-      type: 'number',
-      min: 0,
-      max: 50,
-      help: 'Ihre PV-Gestehungskosten in ct/kWh. Liegt der Börsenpreis darunter, lohnt sich Einspeichern statt Verkaufen. Auslöser für Stufe 2 — muss vom Betreiber gesetzt werden.'
+      help: 'Aktiviert das vorausschauende Akku-Leeren (Stufe 2). Nur wirksam, wenn die Forecast-aware Börsenautomatik (Stufe 1) ebenfalls aktiv ist. Stufe 2 verkauft aktiv und leert den physischen Akku — separat scharfschalten. Auslöser ist der Börsenpreis unter den PV-Erzeugungskosten — diese werden unter Preise → Interne Kosten → „PV-Kosten (ct/kWh)“ gepflegt.'
     },
     {
       section: 'schedule',
@@ -2141,7 +2129,6 @@ export function createDefaultConfig() {
         aggressivePremiumPct: 20,
         predictivePreEmpty: {
           enabled: false,
-          pvGenerationCostCtKwh: null,
           akkuHardLimitW: 20000,
           pvHeadroomFracW: 1000,
           confidenceFactorLow: 0.24,
@@ -2462,17 +2449,9 @@ function sanitizePredictivePreEmpty(value, warnings) {
     }
   }
 
-  // pvGenerationCostCtKwh (D-05): no safe generic default — delete on invalid so the
-  // operator is forced to re-enter; clamp valid values to [0, 50].
-  if (next.pvGenerationCostCtKwh != null && next.pvGenerationCostCtKwh !== '') {
-    const n = Number(next.pvGenerationCostCtKwh);
-    if (!Number.isFinite(n)) {
-      warnings.push('schedule.smallMarketAutomation.predictivePreEmpty.pvGenerationCostCtKwh: invalid number, field was reset');
-      delete next.pvGenerationCostCtKwh;
-    } else {
-      next.pvGenerationCostCtKwh = clamp(n, 0, 50);
-    }
-  }
+  // The Stage-2 below-PV-cost trigger reads the operator's existing PV
+  // generation cost (userEnergyPricing.costs.pvCtKwh) — there is no Stage-2-
+  // specific duplicate of that field, so nothing to sanitize here for it.
 
   // Bounded tuning fields — delete on invalid, clamp on valid.
   const bounded = [

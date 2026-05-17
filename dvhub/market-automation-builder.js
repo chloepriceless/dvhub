@@ -190,9 +190,12 @@ export function createMarketAutomationBuilder(ctx) {
     const cfg = getCfg();
     const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
 
-    const pvGenerationCostCtKwh = toFiniteNumber(pp.pvGenerationCostCtKwh, null);
-    // D-05: the operator MUST configure the PV generation cost — there is no safe
-    // generic default. Without it Stage 2 cannot detect a below-PV-cost window.
+    // D-05: Stage 2's below-PV-cost trigger uses the operator's EXISTING PV
+    // generation cost — the "PV-Kosten (ct/kWh)" field under Preise → Interne
+    // Kosten (userEnergyPricing.costs.pvCtKwh) — not a Stage-2-specific
+    // duplicate. The null guard stays defensive: if that field is somehow
+    // unset, Stage 2 stays idle rather than misfiring on a window.
+    const pvGenerationCostCtKwh = toFiniteNumber(cfg.userEnergyPricing?.costs?.pvCtKwh, null);
     if (pvGenerationCostCtKwh == null) {
       return idle('no_pv_cost_configured');
     }

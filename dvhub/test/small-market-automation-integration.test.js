@@ -384,6 +384,9 @@ function makeStage2Ctx({ predictiveEnabled = true, hoardingForecast = false } = 
   const logs = [];
   const cfg = {
     epex: { timezone: 'Europe/Berlin' },
+    // Stage 2's below-PV-cost trigger reads the operator's existing PV
+    // generation cost — "PV-Kosten" under Preise → Interne Kosten.
+    userEnergyPricing: { costs: { pvCtKwh: 8 } },
     schedule: {
       timezone: 'Europe/Berlin',
       smallMarketAutomation: {
@@ -398,7 +401,6 @@ function makeStage2Ctx({ predictiveEnabled = true, hoardingForecast = false } = 
         searchWindowEnd: '10:00',
         predictivePreEmpty: {
           enabled: predictiveEnabled,
-          pvGenerationCostCtKwh: 8,
           akkuHardLimitW: 20000,
           pvHeadroomFracW: 1000,
           confidenceFactorLow: 0.24,
