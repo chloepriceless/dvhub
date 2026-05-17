@@ -362,6 +362,69 @@
       });
   }
 
+  /* Format a Tesla-history sample timestamp into a kiosk label. The tesla
+     window spans several days (sparse charge events), so include the day. */
+  function fmtTeslaHistTime(ts) {
+    var dt = new Date(ts);
+    if (isNaN(dt.getTime())) return '';
+    return String(dt.getDate()).padStart(2, '0') + '.'
+      + String(dt.getMonth() + 1).padStart(2, '0') + ' '
+      + String(dt.getHours()).padStart(2, '0') + ':'
+      + String(dt.getMinutes()).padStart(2, '0');
+  }
+
+  /* Lazily fetch the Tesla charge history and render it as the EV-panel
+     "Verlauf heute" chart. Mirrors loadTileHistoryChart() exactly: openPanel()
+     stays synchronous, this fires the async fetch and re-renders only the
+     chart section on resolve. The primary series is tesla_charger_power (the
+     charge power over time). Empty history → the no-data copy; a network
+     error / 503 degrades to a hidden chart, console-only (no kiosk error).
+     Guarded against the panel being closed/switched before the fetch lands. */
+  function loadTeslaHistoryChart(key) {
+    fetch('/api/family/tesla-history')
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        var d = panelData[key];
+        if (!d) return;
+        var allRows = (body && body.ok && Array.isArray(body.data)) ? body.data : [];
+        // The route returns tesla_charger_power AND tesla_battery_level rows;
+        // the charge-history chart plots the charge power.
+        var rows = allRows.filter(function (r) { return r && r.key === 'tesla_charger_power'; });
+        if (!rows.length) {
+          d.chart = null;
+          if (panelChart) { panelChart.destroy(); panelChart = null; }
+          var box = document.querySelector('.panel-chart');
+          var canvas = document.getElementById('p-chart');
+          if (box) box.style.display = '';
+          if (canvas) canvas.style.display = 'none';
+          setPanelChartMessage('Noch keine Ladehistorie — die Kurve erscheint, sobald das Auto wieder lädt.');
+          return;
+        }
+        var labels = [], values = [];
+        rows.forEach(function (r) {
+          labels.push(fmtTeslaHistTime(r.ts));
+          values.push(typeof r.value === 'number' ? r.value : Number(r.value));
+        });
+        d.chart = { labels: labels, data: values };
+        d.chartUnit = (rows[0] && rows[0].unit) || 'kW';
+        renderPanelChart(d, key);
+      })
+      .catch(function (err) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('tesla-history fetch failed', err);
+        }
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        if (panelChart) { panelChart.destroy(); panelChart = null; }
+        var box = document.querySelector('.panel-chart');
+        var canvas = document.getElementById('p-chart');
+        if (canvas) canvas.style.display = 'none';
+        if (box) box.style.display = 'none';
+      });
+  }
+
   function openPanel(key) {
     var d = panelData[key]; if (!d) return;
     currentPanelKey = key;
@@ -382,6 +445,11 @@
     var api = document.getElementById('p-api'); if (d.apiHint) { api.innerHTML = d.apiHint; api.style.display = 'block'; } else { api.style.display = 'none'; }
     // Clear any stale no-data message from a previously-open MQTT panel.
     setPanelChartMessage('');
+    // Chart section label — "Verlauf heute" for the today-windowed panels, but
+    // the EV panel charts a multi-day Tesla charge history (round 10), so it
+    // reads "Ladehistorie". textContent only — no markup (CSP posture).
+    var chartLabel = document.querySelector('.panel-chart .chart-label');
+    if (chartLabel) chartLabel.textContent = (key === 'ev') ? 'Ladehistorie' : 'Verlauf heute';
     // Render the chart synchronously for the 5 main tags (d.chart is already
     // populated from the poll). MQTT tiles arrive here with d.chart === null
     // and get their history lazily fetched below.
@@ -392,6 +460,12 @@
     // panel is not an MQTT value tile and is skipped (no fetch, no chart).
     if (key.indexOf('fam-') === 0) {
       loadTileHistoryChart(key, key.slice(4));
+    }
+    // Plan 11-06 round 10 — the EV detail panel lazily fetches the Tesla
+    // charge history (GET /api/family/tesla-history) and renders it as the
+    // panel chart, the same way an MQTT tile renders its "Verlauf heute".
+    if (key === 'ev') {
+      loadTeslaHistoryChart(key);
     }
     document.getElementById('overlay').classList.add('open');
     document.getElementById('panel').scrollTop = 0;
