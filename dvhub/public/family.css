@@ -57,6 +57,19 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-grid .tag-dot{background:var(--grid);box-shadow:0 0 12px var(--grid-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 
+/* Tesla state-of-charge on the EV tag (Phase 11-06, checkpoint round 5) — a
+   compact SoC readout + charge-progress bar mirroring the Aurora tag styling.
+   Shown only when data.tesla.enabled is true (the JS toggles [hidden]). */
+.tag-soc{margin-top:6px;pointer-events:none}
+.tag-soc-row{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.tag-soc-pct{font-size:14px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;color:var(--ev)}
+.tag-soc-limit{font-size:10px;font-weight:600;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums}
+.tag-soc-bar{position:relative;height:6px;border-radius:100px;background:rgba(165,94,234,.16);overflow:hidden}
+.tag-soc-fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:100px;background:linear-gradient(90deg,var(--ev),#c89bf2);box-shadow:0 0 8px var(--ev-g);transition:width .6s cubic-bezier(.34,1.1,.64,1)}
+.tag-soc-bar.is-charging .tag-soc-fill{animation:socPulse 2.2s ease-in-out infinite}
+@keyframes socPulse{0%,100%{opacity:1}50%{opacity:.62}}
+.tag-soc-limit-mark{position:absolute;top:-1px;bottom:-1px;width:2px;background:rgba(255,255,255,.7);border-radius:1px}
+
 /* Device mini cards */
 .devices-tray{
   position:absolute;z-index:22;
