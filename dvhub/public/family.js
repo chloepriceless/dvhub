@@ -1726,6 +1726,12 @@
     { from: 'pfCenter',  to: 'tag-ev',   color: [165,94,234],  id: 'k_ev',   maxKw: 22 },
     { from: 'pfCenter',  to: 'tag-grid', color: [255,122,198], id: 'k_grid', maxKw: 30 }
   ];
+  /* Per-stream dust-speed multiplier for BG_FLOWS_BASE — applied on top of the
+     bgFlowPwr2Speed() result. Default (any id not listed) is 1. k_grid is the
+     hub → grid export stream (PV/solar power flowing toward the grid /
+     Einspeisung); the operator reported it visualised far too slowly, so its
+     dust runs 20% faster. No other base stream is affected. */
+  var BG_FLOWS_SPEED_FACTOR = { k_grid: 1.2 };
   var bgFlowDust = [];
   var bgFlowCanvas = null;
   var bgFlowCtx = null;
@@ -1846,7 +1852,11 @@
     BG_FLOWS_BASE.forEach(function (s) {
       var eff   = bgFlowEffectiveKw(s.kw, s.maxKw);   // scale by stream's nameplate
       s.count   = bgFlowPwr2Count(eff);
-      s.speed   = bgFlowPwr2Speed(eff);
+      // k_grid (hub → grid = PV/solar feed-in toward the grid / Einspeisung) runs
+      // 20% faster than its bgFlowPwr2Speed value (operator request — the base
+      // PV-to-grid export stream looked far too slow). No other base stream and
+      // no s_mqtt_* stream is affected: BG_FLOWS_SPEED_FACTOR is 1 for all others.
+      s.speed   = bgFlowPwr2Speed(eff) * (BG_FLOWS_SPEED_FACTOR[s.id] || 1);
       s.reverse = false;                              // direction is encoded in from/to
     });
   }
@@ -1883,7 +1893,9 @@
   // Logarithmic intensity tuning for the s_mqtt_* streams. MIN_* keep a small
   // non-zero tile (~100 W) clearly alive; MAX_* keep a big MQTT tile comparable
   // to (not louder than) the busiest base stream (bgFlowPwr2Count caps at 320).
-  var MQTT_FLOW_FLOOR_W = 10;       // log-floor — values below clamp to t=0
+  var MQTT_FLOW_FLOOR_W = 50;       // log-floor — values below clamp to t=0
+                                    // (aligned with bgFlowDraw's s.kw<0.05=50W skip
+                                    //  threshold: a tile below 50 W is skipped anyway)
   var MQTT_FLOW_MIN_COUNT = 70;     // a non-zero, visibly-alive minimum dust count
   var MQTT_FLOW_MAX_COUNT = 300;    // near the base streams' busiest count
   var MQTT_FLOW_MIN_SPEED = 0.05;   // a non-zero, visibly-alive minimum speed
