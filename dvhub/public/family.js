@@ -1150,13 +1150,67 @@
 
     sr('family.ev', function () {
       var evMode = ev.mode || 'idle';
-      setText('tf-ev', tileFriendlies.ev || (evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt'));
-      setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
+      // Part B (checkpoint round 5) — surface the Tesla state-of-charge on the
+      // EV tag, Aurora-styled, driven entirely from the top-level data.tesla
+      // object. The Tesla integration (TeslaMate) delivers live SoC / charge
+      // limit / charging state / range; energy.ev is the idle Victron
+      // placeholder, so without this the EV tag shows nothing meaningful while
+      // the car charges. Degrades gracefully: when tesla.enabled is false /
+      // the object is missing, the existing EV display is left unchanged.
+      var tesla = data.tesla;
+      var teslaLive = !!(tesla && tesla.enabled);
+      var teslaCharging = teslaLive && tesla.chargingState === 'Charging';
+      if (teslaLive) {
+        // Friendly text + status driven by the Tesla, not the placeholder ev.
+        var tChgKw = Number(tesla.chargerPowerKw);
+        if (teslaCharging) {
+          setText('tf-ev', 'Auto lädt' + (tChgKw > 0 ? ' · ' + (Math.round(tChgKw * 10) / 10) + ' kW' : ''));
+        } else if (tesla.pluggedIn === true) {
+          setText('tf-ev', 'Auto eingesteckt');
+        } else {
+          setText('tf-ev', tesla.geofence ? 'Auto · ' + tesla.geofence : 'Auto parkt');
+        }
+        // Primary value line: charge power while charging, else the range.
+        if (teslaCharging && tChgKw > 0) {
+          setText('v-e', (Math.round(tChgKw * 10) / 10).toString().replace('.', ',') + ' kW');
+        } else if (typeof tesla.rangeKm === 'number') {
+          setText('v-e', Math.round(tesla.rangeKm) + ' km');
+        } else {
+          setText('v-e', '—');
+        }
+        // SoC readout + charge-progress bar.
+        var lvl = typeof tesla.batteryLevel === 'number' ? Math.max(0, Math.min(100, tesla.batteryLevel)) : null;
+        var lim = typeof tesla.chargeLimitSoc === 'number' ? Math.max(0, Math.min(100, tesla.chargeLimitSoc)) : null;
+        var socWrap = document.getElementById('ev-soc-wrap');
+        if (socWrap) socWrap.hidden = lvl == null;
+        if (lvl != null) {
+          setText('ev-soc-pct', Math.round(lvl) + ' %');
+          setText('ev-soc-limit', lim != null ? 'Limit ' + Math.round(lim) + ' %' : '');
+          var fill = document.getElementById('ev-soc-fill');
+          if (fill) fill.style.width = Math.round(lvl) + '%';
+          var mark = document.getElementById('ev-soc-limit-mark');
+          if (mark) {
+            mark.hidden = lim == null;
+            if (lim != null) mark.style.left = Math.round(lim) + '%';
+          }
+          var bar = socWrap ? socWrap.querySelector('.tag-soc-bar') : null;
+          if (bar) bar.classList.toggle('is-charging', teslaCharging);
+        }
+        setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
+      } else {
+        setText('tf-ev', tileFriendlies.ev || (evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt'));
+        setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
+        var socWrapOff = document.getElementById('ev-soc-wrap');
+        if (socWrapOff) socWrapOff.hidden = true;
+      }
       // Hide the EV tag entirely when no wallbox reports power and no vehicle
       // SoC is known — on installs without an EV integration the empty tile
       // was sitting on top of the right edge widgets and looked broken.
       // Phase 04 will populate ev.vehicles[] when an integration is wired.
-      var evConnected = (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
+      // A live Tesla also counts as "connected" so the tag stays visible while
+      // the car is plugged in / charging even though energy.ev is idle.
+      var evConnected = teslaLive
+        || (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
         || (typeof ev.socPct === 'number' && ev.socPct !== null)
         || (Array.isArray(ev.vehicles) && ev.vehicles.length > 0);
       var evTag = document.getElementById('tag-ev');
@@ -1327,11 +1381,33 @@
           : (typeof battery.runtimeHours === 'number' ? '~' + battery.runtimeHours.toFixed(1) + ' h' : '—'),
         delta: '', up: true }
     ];
-    panelData.ev.stats = [
-      { label: 'Leistung', val: formatKw(ev.powerKw), delta: ev.mode || '', up: true },
-      { label: 'Akku', val: formatPct(ev.socPct), delta: '', up: true },
-      { label: 'Modus', val: ev.mode || '—', delta: '', up: true }
-    ];
+    // EV detail panel — Part B (checkpoint round 5): when a Tesla is live,
+    // surface its SoC / charge limit / charge power / range / state from
+    // data.tesla; otherwise keep the original Victron-placeholder stats.
+    var teslaPanel = data.tesla;
+    if (teslaPanel && teslaPanel.enabled) {
+      var tChg = teslaPanel.chargingState === 'Charging';
+      var tKw = Number(teslaPanel.chargerPowerKw);
+      var tLvl = typeof teslaPanel.batteryLevel === 'number' ? Math.round(teslaPanel.batteryLevel) : null;
+      var tLim = typeof teslaPanel.chargeLimitSoc === 'number' ? Math.round(teslaPanel.chargeLimitSoc) : null;
+      panelData.ev.stats = [
+        { label: 'Ladezustand', val: tLvl != null ? tLvl + ' %' : '—', delta: tLim != null ? 'Limit ' + tLim + ' %' : '', up: true },
+        { label: 'Ladeleistung', val: (tChg && tKw > 0) ? (Math.round(tKw * 10) / 10) + ' kW' : '0 kW', delta: tChg ? 'lädt' : '', up: true },
+        { label: 'Reichweite', val: typeof teslaPanel.rangeKm === 'number' ? Math.round(teslaPanel.rangeKm) + ' km' : '—', delta: '', up: true }
+      ];
+      panelData.ev.details = [
+        ['Status', tChg ? 'Lädt' : (teslaPanel.pluggedIn === true ? 'Eingesteckt' : 'Geparkt')],
+        ['Ladelimit', tLim != null ? tLim + ' %' : '—'],
+        ['Standort', escapeMsg(teslaPanel.geofence || '—')]
+      ];
+      panelData.ev.sub = 'Tesla · Ladezustand';
+    } else {
+      panelData.ev.stats = [
+        { label: 'Leistung', val: formatKw(ev.powerKw), delta: ev.mode || '', up: true },
+        { label: 'Akku', val: formatPct(ev.socPct), delta: '', up: true },
+        { label: 'Modus', val: ev.mode || '—', delta: '', up: true }
+      ];
+    }
     panelData.grid.stats = [
       { label: 'Gerade', val: formatKw(Math.abs(energy.gridKw || 0)) + (energy.feedingToGrid ? ' ein' : ' bez'), delta: '', up: energy.feedingToGrid },
       { label: 'Bezug jetzt', val: typeof price.importCtKwh === 'number' ? price.importCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.nowCtKwh === 'number' ? 'EPEX ' + price.nowCtKwh.toFixed(1) + ' ct' : '', up: true },
@@ -1869,13 +1945,26 @@
     var grid  = Number(e.gridKw    || 0);
     var ev    = Math.max(0, Number(e.evKw      || 0));
 
+    // Part A (checkpoint round 5): when the Tesla is charging at home its live
+    // charge power drives the k_ev constellation stream so the charging flow is
+    // visible. energy.evKw is wired to the Victron evPowerW placeholder (idle on
+    // this install) — the real charge power lives in the top-level data.tesla
+    // object. This is a VISUAL-only override of the k_ev stream magnitude: it
+    // does NOT touch energy.evKw nor the server-side energy-balance/surplus math
+    // (the wallbox draw is already inside homeKw — re-adding it would
+    // double-count). Tesla-when-charging wins; otherwise fall back to evKw.
+    var t = data.tesla;
+    if (t && t.chargingState === 'Charging' && Number(t.chargerPowerKw) > 0) {
+      ev = Math.max(ev, Number(t.chargerPowerKw));
+    }
+
     // Sources → hub
     BG_FLOWS_BASE[0].kw = solar;                      // s_pv:   pv  → hub
     BG_FLOWS_BASE[1].kw = bat  < 0 ? -bat  : 0;       // s_bat:  bat → hub (discharging)
     BG_FLOWS_BASE[2].kw = grid > 0 ?  grid : 0;       // s_grid: grid→ hub (importing)
     // Hub → sinks (k_home removed — the House IS the hub now, Phase 11-06 round 3)
     BG_FLOWS_BASE[3].kw = bat  > 0 ?  bat  : 0;       // k_bat:  hub → bat (charging)
-    BG_FLOWS_BASE[4].kw = ev;                         // k_ev:   hub → ev
+    BG_FLOWS_BASE[4].kw = ev;                         // k_ev:   hub → ev (Tesla charge power when charging)
     BG_FLOWS_BASE[5].kw = grid < 0 ? -grid : 0;       // k_grid: hub → grid (exporting)
 
     BG_FLOWS_BASE.forEach(function (s) {
@@ -2010,16 +2099,31 @@
       // (f) STRICTLY PROPORTIONAL particle intensity — operator request. Each
       // device stream is sized by its SHARE of the total house consumption:
       // the s_mqtt_* streams visually divide up the house-consumption flow.
-      // frac = clamp01(device W ÷ house W); NO minimum visibility floor — a
-      // 114 W device of a 1.29 kW house ≈ 9% → a correspondingly thin, slow
-      // stream. A device that IS the whole house load (frac = 1) draws a
-      // near-full stream comparable to the busiest base flows. Clamping to
-      // [0,1] guards measurement-timing skew where a device briefly reads
-      // higher than the measured house total. This applies to the s_mqtt_*
-      // streams ONLY — BG_FLOWS_BASE keeps its bgFlowPwr2Count/Speed path.
+      // frac = clamp01(device W ÷ house W). A device that IS the whole house
+      // load (frac = 1) draws a near-full stream comparable to the busiest base
+      // flows. Clamping to [0,1] guards measurement-timing skew where a device
+      // briefly reads higher than the measured house total. This applies to the
+      // s_mqtt_* streams ONLY — BG_FLOWS_BASE keeps its bgFlowPwr2Count/Speed
+      // path.
       var frac = bgFlowClamp01(absW / Math.max(houseLoadW, 1));
       s.count = Math.round(frac * MQTT_FLOW_MAX_COUNT);
       s.speed = frac * MQTT_FLOW_MAX_SPEED;
+
+      // Min-visibility floor (checkpoint round 5 — REVISES the round-2 "strictly
+      // proportional, no floor" decision). The operator observed the 117 W
+      // Gebläse stream as dead: against a ~10 kW house, frac ≈ 0.012 gives ~3
+      // particles and nothing visibly arrives. A device that carries real power
+      // (above the bgFlowDraw() s.kw < 0.05 skip threshold — i.e. it WILL be
+      // drawn) is now lifted to at least the SAME minima as the base streams
+      // (BG_FLOW_MIN_COUNT / BG_FLOW_MIN_SPEED, round 4) so the operator's MQTT
+      // floor matches the grid/base behaviour. The proportional sizing still
+      // governs ABOVE the floor — a device that is a big share of the house
+      // still draws a correspondingly bigger stream. A genuinely idle device
+      // (s.kw < 0.05) is skipped by bgFlowDraw and gets NO floor.
+      if (s.kw >= 0.05) {
+        s.count = Math.max(s.count, BG_FLOW_MIN_COUNT);
+        s.speed = Math.max(s.speed, BG_FLOW_MIN_SPEED);
+      }
     });
 
     // Tear down streams for tiles that dropped out of the poll, were disabled,
