@@ -538,6 +538,13 @@
         familyExtraCards.tesla = tcard;
       }
       var rangeTxt = typeof tesla.rangeKm === 'number' ? Math.round(tesla.rangeKm) + ' km' : '—';
+      // Asleep-state graceful degradation (checkpoint round 6): rangeKm goes
+      // null while the car sleeps — for the prominent card value / summary /
+      // first stat, fall back to ratedRangeKm (norm range, survives sleep) so
+      // the tray card never reads as a bare "—". The detail rows below keep
+      // "geschätzt" vs "Norm" distinct on purpose.
+      var rangeCardTxt = typeof tesla.rangeKm === 'number' ? Math.round(tesla.rangeKm) + ' km'
+        : (typeof tesla.ratedRangeKm === 'number' ? Math.round(tesla.ratedRangeKm) + ' km' : '—');
       var battTxt = typeof tesla.batteryLevel === 'number' ? Math.round(tesla.batteryLevel) + ' %' : '—';
       var stateTxt = TESLA_STATE_LABEL[tesla.state] || tesla.state || '—';
       var chgTxt;
@@ -549,16 +556,16 @@
       }
       tcard.querySelector('.dev-emoji').textContent = '🚗';
       tcard.querySelector('.dev-name').textContent = tesla.name || 'Tesla';
-      tcard.querySelector('.fam-extra-val').textContent = rangeTxt;
+      tcard.querySelector('.fam-extra-val').textContent = rangeCardTxt;
       tcard.querySelector('.fam-extra-sub').textContent = battTxt + ' · ' + chgTxt;
 
       panelData.tesla = {
         icon: '🚗', iconBg: 'rgba(165,94,234,.12)',
         title: escapeMsg(tesla.name || 'Tesla'), sub: 'TeslaMate', color: '#a55eea',
-        summary: escapeMsg((tesla.name || 'Das Auto') + ' hat noch ' + rangeTxt
+        summary: escapeMsg((tesla.name || 'Das Auto') + ' hat noch ' + rangeCardTxt
           + ' Reichweite bei ' + battTxt + ' Akkustand.'),
         stats: [
-          { label: 'Reichweite', val: escapeMsg(rangeTxt), delta: '', up: true },
+          { label: 'Reichweite', val: escapeMsg(rangeCardTxt), delta: '', up: true },
           { label: 'Akku', val: escapeMsg(battTxt), delta: '', up: true },
           { label: 'Status', val: escapeMsg(stateTxt), delta: '', up: true }
         ],
@@ -1171,10 +1178,17 @@
           setText('tf-ev', tesla.geofence ? 'Auto · ' + tesla.geofence : 'Auto parkt');
         }
         // Primary value line: charge power while charging, else the range.
+        // Graceful degradation for the ASLEEP state (checkpoint round 6) —
+        // when the Tesla sleeps, chargerPowerKw / rangeKm / chargingState all
+        // go null but the norm/estimated range (ratedRangeKm) and batteryLevel
+        // survive. Fall back to ratedRangeKm so the primary value never
+        // collapses to a bare "—" while range data IS actually known.
         if (teslaCharging && tChgKw > 0) {
           setText('v-e', (Math.round(tChgKw * 10) / 10).toString().replace('.', ',') + ' kW');
         } else if (typeof tesla.rangeKm === 'number') {
           setText('v-e', Math.round(tesla.rangeKm) + ' km');
+        } else if (typeof tesla.ratedRangeKm === 'number') {
+          setText('v-e', Math.round(tesla.ratedRangeKm) + ' km');
         } else {
           setText('v-e', '—');
         }
@@ -1390,10 +1404,15 @@
       var tKw = Number(teslaPanel.chargerPowerKw);
       var tLvl = typeof teslaPanel.batteryLevel === 'number' ? Math.round(teslaPanel.batteryLevel) : null;
       var tLim = typeof teslaPanel.chargeLimitSoc === 'number' ? Math.round(teslaPanel.chargeLimitSoc) : null;
+      // Asleep-state graceful degradation (checkpoint round 6): rangeKm goes
+      // null while the car sleeps — fall back to ratedRangeKm (norm range),
+      // which survives sleep, so the panel never shows a bare "—".
+      var tRangeKm = typeof teslaPanel.rangeKm === 'number' ? teslaPanel.rangeKm
+        : (typeof teslaPanel.ratedRangeKm === 'number' ? teslaPanel.ratedRangeKm : null);
       panelData.ev.stats = [
         { label: 'Ladezustand', val: tLvl != null ? tLvl + ' %' : '—', delta: tLim != null ? 'Limit ' + tLim + ' %' : '', up: true },
         { label: 'Ladeleistung', val: (tChg && tKw > 0) ? (Math.round(tKw * 10) / 10) + ' kW' : '0 kW', delta: tChg ? 'lädt' : '', up: true },
-        { label: 'Reichweite', val: typeof teslaPanel.rangeKm === 'number' ? Math.round(teslaPanel.rangeKm) + ' km' : '—', delta: '', up: true }
+        { label: 'Reichweite', val: tRangeKm != null ? Math.round(tRangeKm) + ' km' : '—', delta: '', up: true }
       ];
       panelData.ev.details = [
         ['Status', tChg ? 'Lädt' : (teslaPanel.pluggedIn === true ? 'Eingesteckt' : 'Geparkt')],
