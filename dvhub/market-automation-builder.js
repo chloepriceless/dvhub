@@ -21,6 +21,14 @@ import {
 } from './small-market-automation.js';
 import { pickMilpPlan } from './milp-optimizer.js';
 import { readSunTimesForDate } from './sun-times-cache.js';
+import { sumForecastSlotsKwh } from './small-market-automation.js';
+import {
+  detectQualifyingWindow,
+  estimateWindowPvKwh,
+  computePreEmptyTargetSoc,
+  preEmptySlotSetpointW,
+  resolveStage2Phase
+} from './predictive-pre-empty.js';
 
 // --- Named exports (shared constants + helper) ---
 
@@ -28,6 +36,14 @@ export const SMALL_MARKET_AUTOMATION_SOURCE = 'small_market_automation';
 export const SMALL_MARKET_AUTOMATION_DISPLAY_TONE = 'yellow';
 export const SMA_ID_PREFIX = 'sma-';
 export const SLOT_DURATION_MS = 15 * 60 * 1000;
+
+// --- Stage-2 (predictive pre-empty) integration constants ---
+// Non-zero baseload used when state.forecast.load.data is empty/missing. A zero
+// house load would under-estimate the implied battery discharge in the dual-limit
+// clamp (RESEARCH.md Environment Availability) — NEVER fall back to 0.
+const STAGE2_BASELOAD_FALLBACK_W = 400;
+// SOC tolerance when checking whether the pre-empty target has been reached.
+const STAGE2_TARGET_TOLERANCE_PCT = 1;
 
 export function isSmallMarketAutomationRule(rule) {
   if (!rule || typeof rule !== 'object') return false;
@@ -116,6 +132,352 @@ export function createMarketAutomationBuilder(ctx) {
     return `${hours}:${minutes}`;
   }
 
+  // Normalize state.forecast.{pv,load}.data rows (shape varies per source —
+  // ts vs ts_utc, powerW vs power_w) to a uniform {start, end, powerW, confidence}
+  // so sumForecastSlotsKwh / computeForecastReserveSocPct can consume them.
+  // Factory-scoped: shared by buildSmallMarketAutomationRules (Stage 1) and the
+  // Stage-2 pre-pass (D-01 — both read the SAME normalized forecast rows).
+  function normalizeForecastRows(rows, baselineConfidence, slotMin) {
+    if (!Array.isArray(rows)) return [];
+    const slotMs = slotMin * 60000;
+    return rows.map((row) => {
+      const startMs = row.ts ? new Date(row.ts).getTime()
+                     : row.ts_utc ? new Date(row.ts_utc).getTime()
+                     : null;
+      if (!Number.isFinite(startMs)) return null;
+      return {
+        start: new Date(startMs).toISOString(),
+        end: new Date(startMs + slotMs).toISOString(),
+        powerW: Number(row.powerW ?? row.power_w ?? row.expected_w ?? 0),
+        confidence: Number(row.confidence ?? baselineConfidence ?? 0.3)
+      };
+    }).filter(Boolean);
+  }
+
+  // --- Stage-2 (predictive pre-empty) pre-pass ---
+  //
+  // The stateful glue around the pure planning core in predictive-pre-empty.js.
+  // Runs AFTER the Stage-1 hoarding gate (D-14): detects a qualifying EPEX
+  // window, sizes a forecast-confidence-gated target SOC, emits the morning
+  // LEEREN discharge rules (dual-limit-clamped gridSetpointW, per-slot stopSocPct
+  // at the hard floor) plus the HALTEN dcExportMode rule, drives the
+  // LEEREN/HALTEN/FREIGEBEN phase machine, persists the day-plan state, and
+  // returns a stage2 summary object for planSummary.
+  //
+  // D-01: this NEVER touches computeForecastReserveSocPct /
+  // computeDynamicAutomationMinSocPct. When predictivePreEmpty.enabled is OFF
+  // (the default) it returns { rules: [], stage2: null } before doing anything.
+  function runStage2PrePass({
+    now,
+    automationConfig,
+    forecastReserve,
+    currentSocPct,
+    batteryCapacityKwh,
+    sunTimesCache
+  } = {}) {
+    const idle = (reason) => ({ rules: [], stage2: reason ? { phase: 'IDLE', reason } : null });
+
+    // D-15: the sub-switch is only effective when forecastAware is also on.
+    if (!automationConfig?.forecastAware || !automationConfig?.predictivePreEmpty?.enabled) {
+      return idle(null);
+    }
+    // D-14: Stage 1's hoarding gate has absolute priority — Stage 2 stays idle.
+    if (forecastReserve?.hoardingActive) {
+      return idle('hoarding_active');
+    }
+
+    const pp = automationConfig.predictivePreEmpty;
+    const cfg = getCfg();
+    const timeZone = cfg.schedule?.timezone || 'Europe/Berlin';
+
+    const pvGenerationCostCtKwh = toFiniteNumber(pp.pvGenerationCostCtKwh, null);
+    // D-05: the operator MUST configure the PV generation cost — there is no safe
+    // generic default. Without it Stage 2 cannot detect a below-PV-cost window.
+    if (pvGenerationCostCtKwh == null) {
+      return idle('no_pv_cost_configured');
+    }
+    const akkuHardLimitW = toFiniteNumber(pp.akkuHardLimitW, 20000);
+    const pvHeadroomFracW = toFiniteNumber(pp.pvHeadroomFracW, 1000);
+    const confidenceFactorLow = toFiniteNumber(pp.confidenceFactorLow, 0.24);
+    const confidenceFactorHigh = toFiniteNumber(pp.confidenceFactorHigh, 0.30);
+    const haltenAbortDropPct = toFiniteNumber(pp.haltenAbortDropPct, 25);
+
+    // D-06: sun-derived day bounds. Stage 2 computes its own daytime window and
+    // does NOT inherit the SMA searchWindow config (10-WAVE0-FINDINGS decision).
+    const nowDateStr = berlinDateString(new Date(now), cfg.epex?.timezone || timeZone);
+    const todaySun = readSunTimesForDate({ cache: sunTimesCache?.cache, dateKey: nowDateStr });
+    const sunriseMs = todaySun?.sunriseTs ? new Date(todaySun.sunriseTs).getTime() : null;
+    const sunsetMs = todaySun?.sunsetTs ? new Date(todaySun.sunsetTs).getTime() : null;
+    if (sunriseMs == null || sunsetMs == null) {
+      return idle('no_sun_times');
+    }
+    const dayBounds = { startTs: sunriseMs, endTs: sunsetMs };
+
+    // D-04 / D-07: detect the qualifying negative/below-PV-cost EPEX window.
+    const window = detectQualifyingWindow(state.epex?.data, pvGenerationCostCtKwh, dayBounds);
+    if (!window) {
+      return idle('no_qualifying_window');
+    }
+
+    // D-08: estimate the PV the window will produce + its forecast confidence.
+    const pvSlots = normalizeForecastRows(
+      state.forecast?.pv?.data,
+      state.forecast?.pv?.confidence,
+      15
+    );
+    const pvEstimate = estimateWindowPvKwh({ pvSlots, window });
+
+    // D-08 / D-09 / D-10: size the forecast-confidence-gated target SOC.
+    const hardFloorSocPct = state.victron?.minSocPct ?? 5;
+    const targetSoc = computePreEmptyTargetSoc({
+      windowPvKwh: pvEstimate.totalKwh,
+      confidence: pvEstimate.avgConfidence,
+      batteryCapacityKwh,
+      currentSocPct,
+      hardFloorSocPct,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct,
+      confidenceFactorLow,
+      confidenceFactorHigh
+    });
+    const targetSocPct = targetSoc.targetSocPct;
+
+    // D-11: the LEEREN deadline (holdStartTs) — the time by which the target SOC
+    // must be reached. Compute the energy that must be discharged, divide by the
+    // achievable per-slot battery share, and stretch the LEEREN phase over that
+    // many 15-min slots so the target is guaranteed by the deadline. If the
+    // target is already reached there are zero LEEREN slots and holdStartTs=now.
+    const deltaSocPct = Math.max(0, toFiniteNumber(currentSocPct, 0) - targetSocPct);
+    const acKwhPer100Pct = computeAvailableEnergyKwh({
+      batteryCapacityKwh,
+      currentSocPct: 100,
+      minSocPct: 0,
+      inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct,
+      safetyMarginPct: 0
+    });
+    const dischargeEnergyKwh = (toFiniteNumber(acKwhPer100Pct, 0) / 100) * deltaSocPct;
+    const maxDischargeAbsW = Math.abs(toFiniteNumber(automationConfig?.maxDischargeW, -12000));
+    const perSlotKwh = (maxDischargeAbsW / 1000) * (SLOT_DURATION_MS / 3600000);
+    const slotsNeeded = perSlotKwh > 0
+      ? Math.ceil(dischargeEnergyKwh / perSlotKwh)
+      : 0;
+    // The LEEREN phase ends slotsNeeded slots from now, but never past the window.
+    let holdStartTs = Math.min(now + slotsNeeded * SLOT_DURATION_MS, window.startTs);
+    if (!Number.isFinite(holdStartTs)) holdStartTs = now;
+
+    // D-13: compare a fresh window PV estimate against the persisted plan's
+    // estimate — a relative drop beyond haltenAbortDropPct flags the forecast as
+    // degraded, which resolveStage2Phase turns into a HALTEN abort. On the first
+    // plan of the day there is no prior estimate -> forecastDegraded = false.
+    const persisted = state.schedule?.smallMarketAutomation?.stage2 || null;
+    const priorWindowPvKwh = (persisted && persisted.planDate === nowDateStr)
+      ? toFiniteNumber(persisted.plannedWindowPvKwh, null)
+      : null;
+    let forecastDegraded = false;
+    if (priorWindowPvKwh != null && priorWindowPvKwh > 0) {
+      const relDropPct = ((priorWindowPvKwh - pvEstimate.totalKwh) / priorWindowPvKwh) * 100;
+      forecastDegraded = relDropPct > haltenAbortDropPct;
+    }
+
+    const targetReached = toFiniteNumber(currentSocPct, 0) <= targetSocPct + STAGE2_TARGET_TOLERANCE_PCT;
+
+    // D-13: resolve the phase from the clock + plan inputs.
+    const resolved = resolveStage2Phase({
+      nowTs: now,
+      windowStartTs: window.startTs,
+      holdStartTs,
+      targetReached,
+      forecastDegraded
+    });
+    const phase = resolved.phase;
+
+    // --- Per-phase rule emission ---
+    const rules = [];
+    const summarySlots = [];
+
+    // House-load forecast (W) for the dual-limit clamp — averaged over a slot.
+    // NEVER zero: an empty load forecast falls back to a non-zero baseload.
+    const loadSlots = normalizeForecastRows(
+      state.forecast?.load?.data,
+      state.forecast?.load?.confidence,
+      60
+    );
+    const slotHours = SLOT_DURATION_MS / 3600000;
+    const expectedHouseLoadForSlot = (slotStartTs) => {
+      const summed = sumForecastSlotsKwh({
+        slots: loadSlots,
+        fromTs: slotStartTs,
+        toTs: slotStartTs + SLOT_DURATION_MS,
+        defaultDurationMin: 60
+      });
+      const avgW = summed.slotsCounted > 0 ? (summed.totalKwh / slotHours) * 1000 : 0;
+      return avgW > 0 ? avgW : STAGE2_BASELOAD_FALLBACK_W;
+    };
+    const pvForecastForSlot = (slotStartTs) => {
+      const summed = sumForecastSlotsKwh({
+        slots: pvSlots,
+        fromTs: slotStartTs,
+        toTs: slotStartTs + SLOT_DURATION_MS,
+        defaultDurationMin: 15
+      });
+      return summed.slotsCounted > 0 ? (summed.totalKwh / slotHours) * 1000 : 0;
+    };
+
+    if (phase === 'LEEREN') {
+      // One gridSetpointW discharge rule per morning slot in [now, holdStartTs].
+      for (let slotTs = now; slotTs < holdStartTs; slotTs += SLOT_DURATION_MS) {
+        const setpoint = preEmptySlotSetpointW({
+          pvForecastW: pvForecastForSlot(slotTs),
+          expectedHouseLoadW: expectedHouseLoadForSlot(slotTs),
+          maxDischargeW: automationConfig?.maxDischargeW,
+          akkuHardLimitW,
+          pvHeadroomFracW
+        });
+        // Pitfall 1 / defence-in-depth: a Stage-2 gridSetpointW rule MUST never
+        // carry a positive value (which would be an illegal grid charge).
+        if (!(setpoint.gridSetpointW <= 0)) continue;
+        const start = new Date(slotTs);
+        const end = new Date(slotTs + SLOT_DURATION_MS);
+        rules.push({
+          id: `sma-stage2-leeren-${slotTs}`,
+          enabled: true,
+          target: 'gridSetpointW',
+          start: formatLocalHHMM(start, timeZone),
+          end: formatLocalHHMM(end, timeZone),
+          value: setpoint.gridSetpointW,
+          activeDate: nowDateStr,
+          slotTs,
+          slotEndTs: slotTs + SLOT_DURATION_MS,
+          source: SMALL_MARKET_AUTOMATION_SOURCE,
+          autoManaged: true,
+          displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE,
+          // D-10 / Pitfall 4: per-slot stop floor is the global HARD floor, NOT
+          // the static minSocPct — Stage 2 is allowed to drain to the hard floor.
+          stopSocPct: hardFloorSocPct,
+          stage2Phase: 'LEEREN'
+        });
+        summarySlots.push({
+          ts: slotTs,
+          gridSetpointW: setpoint.gridSetpointW,
+          impliedBatteryDischargeW: setpoint.impliedBatteryDischargeW,
+          mode: setpoint.mode
+        });
+      }
+    } else if (phase === 'HALTEN') {
+      // D-02 / D-03: ONE dcExportMode rule holds the battery empty until the
+      // qualifying window opens — reuses the existing dc_export_mode runtime.
+      rules.push({
+        id: `sma-stage2-hold-${holdStartTs}`,
+        enabled: true,
+        target: 'dcExportMode',
+        value: 1,
+        start: formatLocalHHMM(new Date(holdStartTs), timeZone),
+        end: formatLocalHHMM(new Date(window.startTs), timeZone),
+        activeDate: nowDateStr,
+        source: SMALL_MARKET_AUTOMATION_SOURCE,
+        autoManaged: true,
+        displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE,
+        stage2Phase: 'HALTEN'
+      });
+    }
+    // FREIGEBEN / IDLE: emit no Stage-2 rules.
+
+    // D-16: the stage2 summary object surfaced via planSummary.
+    const stage2 = {
+      phase,
+      reason: resolved.reason,
+      window: { startTs: window.startTs, endTs: window.endTs },
+      targetSocPct,
+      depthFactor: targetSoc.depthFactor,
+      plannedWindowPvKwh: pvEstimate.totalKwh,
+      windowPvConfidence: pvEstimate.avgConfidence,
+      forecastDegraded,
+      holdStartTs,
+      slots: summarySlots
+    };
+
+    // Persist the day-plan state so a mid-day restart recomputes the phase
+    // idempotently from `now` (Open Question 3).
+    const prevPhase = persisted?.phase ?? null;
+    if (state.schedule) {
+      if (!state.schedule.smallMarketAutomation) state.schedule.smallMarketAutomation = {};
+      state.schedule.smallMarketAutomation.stage2 = {
+        phase,
+        windowStartTs: window.startTs,
+        holdStartTs,
+        targetSocPct,
+        planDate: nowDateStr,
+        plannedWindowPvKwh: pvEstimate.totalKwh
+      };
+    }
+
+    // D-16: pushLog on every phase change.
+    if (prevPhase !== phase) {
+      pushLog('stage2_phase_change', {
+        from: prevPhase,
+        to: phase,
+        windowStartTs: window.startTs,
+        targetSocPct
+      });
+    }
+
+    return { rules, stage2 };
+  }
+
+  // Pitfall 5 carve-out: re-evaluate ONLY the Stage-2 phase decision (and the
+  // HALTEN dcExportMode rule) without re-planning the plan-locked LEEREN
+  // discharge slots. Called on the cycles where regeneration is skipped (plan
+  // locked or no regeneration needed) so the phase machine keeps evolving and a
+  // degraded forecast can still abort HALTEN. Reads Stage 1 read-only (D-01).
+  function reevaluateStage2PhaseOnly({ now, automationConfig, currentSocPct, batteryCapacityKwh } = {}) {
+    if (!automationConfig?.forecastAware || !automationConfig?.predictivePreEmpty?.enabled) return;
+
+    // Compute the Stage-1 hoarding gate read-only (D-01 — never mutates Stage 1).
+    const forecastReserve = computeForecastReserveSocPct({
+      pvSlots: normalizeForecastRows(state.forecast?.pv?.data, state.forecast?.pv?.confidence, 15),
+      loadSlots: normalizeForecastRows(state.forecast?.load?.data, state.forecast?.load?.confidence, 60),
+      nowTs: now,
+      horizonHours: 24,
+      currentSocPct,
+      batteryCapacityKwh,
+      configuredMinSocPct: automationConfig?.minSocPct,
+      globalMinSocPct: state.victron?.minSocPct ?? 5,
+      safetyMarginKwh: 1.5,
+      confidenceThreshold: 0.25
+    });
+
+    const sunTimesCache = ctx.getSunTimesCacheForPlanning({ now });
+    const result = runStage2PrePass({
+      now,
+      automationConfig,
+      forecastReserve,
+      currentSocPct,
+      batteryCapacityKwh,
+      sunTimesCache
+    });
+
+    // Only touch the HALTEN dcExportMode rule — never the locked LEEREN slots.
+    const rules = Array.isArray(state.schedule?.rules) ? state.schedule.rules : [];
+    const existingHold = rules.filter((r) => r?.stage2Phase === 'HALTEN');
+    const desiredHold = result.rules.filter((r) => r?.stage2Phase === 'HALTEN');
+    let changed = false;
+    // Drop a stale HALTEN rule when the phase is no longer HALTEN (abort/release).
+    if (existingHold.length && !desiredHold.length) {
+      state.schedule.rules = rules.filter((r) => r?.stage2Phase !== 'HALTEN');
+      changed = true;
+    } else if (desiredHold.length) {
+      // (Re)install the HALTEN rule — replace any existing one.
+      state.schedule.rules = [
+        ...rules.filter((r) => r?.stage2Phase !== 'HALTEN'),
+        ...desiredHold
+      ];
+      changed = true;
+    }
+    // Refresh the surfaced stage2 summary on the plan object.
+    const sma = state.schedule?.smallMarketAutomation;
+    if (sma?.plan) sma.plan.stage2 = result.stage2 ?? null;
+    if (changed) ctx.persistConfig();
+  }
+
   // --- Public methods ---
 
   async function buildSmallMarketAutomationRules({
@@ -195,24 +557,9 @@ export function createMarketAutomationBuilder(ctx) {
     // floor (it acts as a CEILING on conservatism). Also surfaces a hoarding-gate that
     // suppresses discharge entirely when the 24h energy balance is negative.
     // state.forecast.{pv,load}.data are the raw forecast subsystems' rows. Shape varies
-    // per source (ts vs ts_utc, powerW vs power_w). Normalize to {start, end, powerW, confidence}
-    // so sumForecastSlotsKwh can consume either uniformly.
-    const normalizeForecastRows = (rows, baselineConfidence, slotMin) => {
-      if (!Array.isArray(rows)) return [];
-      const slotMs = slotMin * 60000;
-      return rows.map((row) => {
-        const startMs = row.ts ? new Date(row.ts).getTime()
-                       : row.ts_utc ? new Date(row.ts_utc).getTime()
-                       : null;
-        if (!Number.isFinite(startMs)) return null;
-        return {
-          start: new Date(startMs).toISOString(),
-          end: new Date(startMs + slotMs).toISOString(),
-          powerW: Number(row.powerW ?? row.power_w ?? row.expected_w ?? 0),
-          confidence: Number(row.confidence ?? baselineConfidence ?? 0.3)
-        };
-      }).filter(Boolean);
-    };
+    // per source (ts vs ts_utc, powerW vs power_w). normalizeForecastRows (factory-scoped)
+    // maps them to {start, end, powerW, confidence} so sumForecastSlotsKwh can consume
+    // either uniformly.
     const forecastReserve = automationConfig?.forecastAware
       ? computeForecastReserveSocPct({
           pvSlots: normalizeForecastRows(state.forecast?.pv?.data, state.forecast?.pv?.confidence, 15),
@@ -650,11 +997,20 @@ export function createMarketAutomationBuilder(ctx) {
 
     // Even if regeneration is needed, skip it while a plan is actively running
     if (planIsLocked && needsRegeneration && !priceDataChanged) {
-      // Plan is locked — defer regeneration until current execution completes
+      // Plan is locked — defer the discharge-slot regeneration until the current
+      // execution completes. BUT the Stage-2 phase decision (Pitfall 5) is NOT
+      // plan-locked: re-evaluate the LEEREN/HALTEN/FREIGEBEN phase + the HALTEN
+      // abort every cycle so a degraded forecast can expire the dcExportMode rule
+      // without re-planning the locked discharge slots.
+      reevaluateStage2PhaseOnly({ now, automationConfig, currentSocPct, batteryCapacityKwh });
       return;
     }
 
-    if (!needsRegeneration) return;
+    if (!needsRegeneration) {
+      // Same — no full regeneration needed, but the Stage-2 phase still evolves.
+      reevaluateStage2PhaseOnly({ now, automationConfig, currentSocPct, batteryCapacityKwh });
+      return;
+    }
 
     const sunTimesCache = ctx.getSunTimesCacheForPlanning({ now });
 
@@ -690,6 +1046,21 @@ export function createMarketAutomationBuilder(ctx) {
     delete generatedRules._planMeta;
     const effectiveAvailableEnergyKwh = planMeta.availableEnergyKwh ?? availableEnergyKwh;
 
+    // --- Stage-2 (predictive pre-empty) pre-pass ---
+    // Runs AFTER the Stage-1 hoarding gate: buildSmallMarketAutomationRules
+    // returns its forecastReserve in _planMeta; when hoardingActive is true
+    // runStage2PrePass itself sees it and emits nothing (D-14). The Stage-2
+    // rules (morning LEEREN slots + the HALTEN dcExportMode rule) are PREPENDED
+    // to the SMA rules — they own their own slots and never double-emit.
+    const stage2Result = runStage2PrePass({
+      now,
+      automationConfig,
+      forecastReserve: planMeta.forecastReserve,
+      currentSocPct,
+      batteryCapacityKwh,
+      sunTimesCache
+    });
+
     // Build transparent plan summary for the UI
     const selectedSlotTimestamps = generatedRules
       .map((r) => {
@@ -719,6 +1090,7 @@ export function createMarketAutomationBuilder(ctx) {
       maxDischargeW: automationConfig?.maxDischargeW,
       forecastAware: !!automationConfig?.forecastAware,
       forecastReserve: planMeta.forecastReserve ?? null,
+      stage2: stage2Result.stage2 ?? null,
       estimatedRevenueCt: generatedRules.reduce((sum, r) => {
         const slot = state.epex?.data?.find((s) => {
           const match = r?.id?.match(/^sma-(\d+)-/);
@@ -729,8 +1101,12 @@ export function createMarketAutomationBuilder(ctx) {
       }, 0)
     };
 
-    // Apply rules
-    state.schedule.rules = [...manualRules, ...generatedRules];
+    // Apply rules — Stage-2 rules prepended ahead of the Stage-1 SMA rules.
+    state.schedule.rules = [...manualRules, ...stage2Result.rules, ...generatedRules];
+    // runStage2PrePass persisted its day-plan state into
+    // state.schedule.smallMarketAutomation.stage2; capture it before the object
+    // is reassigned so a mid-day restart can recompute the phase idempotently.
+    const stage2DayPlan = state.schedule.smallMarketAutomation?.stage2 ?? null;
     state.schedule.smallMarketAutomation = {
       lastRunDate: runDate,
       lastOutcome: generatedRules.length ? 'generated' : 'no_slots',
@@ -739,7 +1115,8 @@ export function createMarketAutomationBuilder(ctx) {
       availableEnergyKwh: effectiveAvailableEnergyKwh,
       lastSocPct: currentSocPct,
       selectedSlotTimestamps,
-      plan: planSummary
+      plan: planSummary,
+      stage2: stage2DayPlan
     };
     ctx.persistConfig();
 
