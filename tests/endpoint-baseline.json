@@ -16,6 +16,7 @@
     "/api/discovery/systems?manufacturer=",
     "/api/epex/refresh",
     "/api/family/mqtt-tiles",
+    "/api/family/tile-history?id=",
     "/api/forecast",
     "/api/history/backfill/prices",
     "/api/history/backfill/vrm",

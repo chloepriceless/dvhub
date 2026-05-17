@@ -170,8 +170,192 @@
     ];
   }
 
+  // The currently-open panel key — set by openPanel(), cleared by closePanel().
+  // The lazy MQTT-history fetch checks this before drawing so a result that
+  // arrives after the panel was closed (or switched) is discarded.
+  var currentPanelKey = null;
+
+  // Show/clear a no-data message inside .panel-chart. The message element is
+  // created lazily; the text is set via .textContent (never innerHTML markup)
+  // — D-14 / T-11-18 CSP posture.
+  function setPanelChartMessage(text) {
+    var box = document.querySelector('.panel-chart');
+    if (!box) return;
+    var msg = box.querySelector('.panel-chart-empty');
+    if (!msg) {
+      msg = document.createElement('div');
+      msg.className = 'panel-chart-empty';
+      box.appendChild(msg);
+    }
+    if (text) {
+      msg.textContent = text;
+      msg.style.display = '';
+    } else {
+      msg.textContent = '';
+      msg.style.display = 'none';
+    }
+  }
+
+  /* Build (or rebuild) the Chart.js line chart for the currently-open panel.
+     `d.chart` may be:
+       - a bare array (the 5 main tags — 96 = 15-min EPEX, else hourly), OR
+       - an { labels:[], data:[] } object (an MQTT tile's lazily-fetched
+         today history — labels are HH:MM strings from the sample ts).
+     A falsy/empty `d.chart` hides the chart section. */
+  function renderPanelChart(d, key) {
+    // Pitfall 1 — destroy before re-creating to avoid chart instance leak.
+    if (panelChart) { panelChart.destroy(); panelChart = null; }
+    var box = document.querySelector('.panel-chart');
+    var canvas = document.getElementById('p-chart');
+
+    var labels = null, series = null, isMqtt = false;
+    if (d && d.chart && !Array.isArray(d.chart)
+        && Array.isArray(d.chart.labels) && Array.isArray(d.chart.data)) {
+      labels = d.chart.labels; series = d.chart.data; isMqtt = true;
+    } else if (d && Array.isArray(d.chart) && d.chart.length) {
+      series = d.chart;
+      // Derive x-axis labels from the chart array length — 96 = 15-min EPEX
+      // resolution (00:00, 00:15, …, 23:45), 24 = hourly (00:00..23:00).
+      if (d.chart.length === 96) {
+        labels = [];
+        for (var hh = 0; hh < 24; hh++) {
+          for (var mm = 0; mm < 60; mm += 15) {
+            labels.push(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'));
+          }
+        }
+      } else {
+        labels = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, '0') + ':00'; });
+      }
+    }
+
+    if (!series || !series.length) {
+      // No chart for this panel — hide the section. (An MQTT tile with no
+      // history reaches setPanelChartMessage() separately, which keeps the
+      // section visible; this branch covers the no-chart main tags.)
+      if (box) box.style.display = 'none';
+      if (canvas) canvas.style.display = 'none';
+      return;
+    }
+
+    if (box) box.style.display = '';
+    if (canvas) canvas.style.display = '';
+    setPanelChartMessage('');
+    var ctx = canvas.getContext('2d');
+    // Unit per panel: price chart shows ct/kWh, MQTT tiles show their own unit,
+    // everything else shows kW. Signed panels (bat, grid) skip beginAtZero so
+    // Chart.js auto-scales the y-axis to include negative values.
+    var isPrice = key === 'price';
+    var isSigned = (key === 'bat' || key === 'grid');
+    var mqttUnit = isMqtt ? (d.chartUnit || '') : '';
+    var unitFn;
+    if (isMqtt) {
+      unitFn = function (v) {
+        var n = (typeof v === 'number') ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : v;
+        return mqttUnit ? n + ' ' + mqttUnit : String(n);
+      };
+    } else if (isPrice) {
+      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(1) : v) + ' ct'; };
+    } else {
+      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(2) : v) + ' kW'; };
+    }
+    panelChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: labels, datasets: [{ data: series, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        // mode:'index' + intersect:false makes mouseover AND touchmove reveal
+        // the value at whichever x the finger/pointer is over, even between
+        // line segments. Essential on the tablet where there are no hover
+        // events and the chart is touch-driven.
+        interaction: { mode: 'index', intersect: false, axis: 'x' },
+        hover: { mode: 'index', intersect: false, axis: 'x' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            enabled: true,
+            backgroundColor: 'rgba(14,16,24,.92)', titleColor: '#fff', bodyColor: '#ccc',
+            borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10,
+            displayColors: false,
+            callbacks: {
+              title: function (items) { return items && items[0] ? items[0].label + ' Uhr' : ''; },
+              label: function (c) { return unitFn(c.parsed.y); }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } },
+          y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return unitFn(v); } }, border: { display: false }, beginAtZero: !isSigned }
+        }
+      }
+    });
+  }
+
+  // Format an MQTT-tile sample timestamp into a kiosk HH:MM label.
+  function fmtTileHistTime(ts) {
+    var dt = new Date(ts);
+    if (isNaN(dt.getTime())) return '';
+    return String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
+  }
+
+  /* Lazily fetch an MQTT tile's today history and render it as the Verlauf
+     heute chart (D-14, RESEARCH Pattern 2 option A). openPanel() stays
+     synchronous; this fires the async fetch and re-renders only the chart
+     section on resolve. Empty history → the no-data copy. A non-numeric tile,
+     a network error, or a 503 degrade gracefully — no error is surfaced to the
+     kiosk (T-11-16). Guarded against the panel being closed/switched before
+     the fetch resolves. */
+  function loadTileHistoryChart(key, tileId) {
+    if (!tileId) return;
+    fetch('/api/family/tile-history?id=' + encodeURIComponent(tileId))
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        // Discard a result for a panel that is no longer the open one.
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        var d = panelData[key];
+        if (!d) return;
+        var rows = (body && body.ok && Array.isArray(body.data)) ? body.data : [];
+        if (!rows.length) {
+          // Empty history — show the no-data copy, no chart, keep the section
+          // visible so the operator sees the explanation.
+          d.chart = null;
+          if (panelChart) { panelChart.destroy(); panelChart = null; }
+          var box = document.querySelector('.panel-chart');
+          var canvas = document.getElementById('p-chart');
+          if (box) box.style.display = '';
+          if (canvas) canvas.style.display = 'none';
+          setPanelChartMessage('Noch keine Verlaufsdaten — die Kurve erscheint, sobald Werte eintreffen.');
+          return;
+        }
+        var labels = [], values = [];
+        rows.forEach(function (r) {
+          labels.push(fmtTileHistTime(r.ts));
+          values.push(typeof r.value === 'number' ? r.value : Number(r.value));
+        });
+        d.chart = { labels: labels, data: values };
+        d.chartUnit = (rows[0] && rows[0].unit) || '';
+        renderPanelChart(d, key);
+      })
+      .catch(function (err) {
+        // Network / 503 / parse error must not throw into the kiosk — degrade
+        // to a hidden chart, log to console only (T-11-16).
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('tile-history fetch failed', err);
+        }
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        if (panelChart) { panelChart.destroy(); panelChart = null; }
+        var box = document.querySelector('.panel-chart');
+        var canvas = document.getElementById('p-chart');
+        if (canvas) canvas.style.display = 'none';
+        if (box) box.style.display = 'none';
+      });
+  }
+
   function openPanel(key) {
     var d = panelData[key]; if (!d) return;
+    currentPanelKey = key;
     document.getElementById('p-icon').innerHTML = d.icon;
     document.getElementById('p-icon').style.background = d.iconBg;
     document.getElementById('p-title').innerHTML = d.title;
@@ -187,68 +371,26 @@
     var dh = ''; d.details.forEach(function (r) { dh += '<div class="detail-row"><span class="detail-key">' + r[0] + '</span><span class="detail-val">' + r[1] + '</span></div>'; });
     document.getElementById('p-details').innerHTML = dh;
     var api = document.getElementById('p-api'); if (d.apiHint) { api.innerHTML = d.apiHint; api.style.display = 'block'; } else { api.style.display = 'none'; }
-    // Pitfall 1 — destroy before re-creating to avoid chart instance leak
-    if (panelChart) { panelChart.destroy(); panelChart = null; }
-    if (d.chart) {
-      var ctx = document.getElementById('p-chart').getContext('2d');
-      // Derive x-axis labels from the chart array length — 96 = 15-min EPEX
-      // resolution (00:00, 00:15, …, 23:45), 24 = hourly (00:00..23:00).
-      var hrs;
-      if (d.chart.length === 96) {
-        hrs = [];
-        for (var hh = 0; hh < 24; hh++) {
-          for (var mm = 0; mm < 60; mm += 15) {
-            hrs.push(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'));
-          }
-        }
-      } else {
-        hrs = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, '0') + ':00'; });
-      }
-      // Unit per panel: price chart shows ct/kWh, everything else shows kW.
-      // Signed panels (bat, grid) skip beginAtZero so Chart.js auto-scales
-      // the y-axis to include negative values (discharge / export).
-      var isPrice = key === 'price';
-      var isSigned = (key === 'bat' || key === 'grid');
-      var unitFn = isPrice
-        ? function (v) { return (typeof v === 'number' ? v.toFixed(1) : v) + ' ct'; }
-        : function (v) { return (typeof v === 'number' ? v.toFixed(2) : v) + ' kW'; };
-      panelChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels: hrs, datasets: [{ data: d.chart, borderColor: d.color, backgroundColor: d.color + '18', fill: true, tension: .4, pointRadius: 0, borderWidth: 2 }] },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          // mode:'index' + intersect:false makes mouseover AND touchmove reveal
-          // the value at whichever x the finger/pointer is over, even between
-          // line segments. Essential on the tablet where there are no hover
-          // events and the chart is touch-driven.
-          interaction: { mode: 'index', intersect: false, axis: 'x' },
-          hover: { mode: 'index', intersect: false, axis: 'x' },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              enabled: true,
-              backgroundColor: 'rgba(14,16,24,.92)', titleColor: '#fff', bodyColor: '#ccc',
-              borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 10, padding: 10,
-              displayColors: false,
-              callbacks: {
-                title: function (items) { return items && items[0] ? items[0].label + ' Uhr' : ''; },
-                label: function (c) { return unitFn(c.parsed.y); }
-              }
-            }
-          },
-          scales: {
-            x: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, maxTicksLimit: 6 }, border: { display: false } },
-            y: { grid: { color: 'rgba(255,255,255,.04)' }, ticks: { color: 'rgba(255,255,255,.2)', font: { size: 10 }, callback: function (v) { return unitFn(v); } }, border: { display: false }, beginAtZero: !isSigned }
-          }
-        }
-      });
-      document.querySelector('.panel-chart').style.display = '';
-    } else { document.querySelector('.panel-chart').style.display = 'none'; }
+    // Clear any stale no-data message from a previously-open MQTT panel.
+    setPanelChartMessage('');
+    // Render the chart synchronously for the 5 main tags (d.chart is already
+    // populated from the poll). MQTT tiles arrive here with d.chart === null
+    // and get their history lazily fetched below.
+    renderPanelChart(d, key);
+    // D-14 lazy "Verlauf heute" chart for an MQTT tile. The MQTT panel key is
+    // 'fam-<tile.id>' (renderFamilyExtras builds panelKey = 'fam-' + tile.id);
+    // the 5 main tags use plain keys (solar/home/...). A 'dev-*' or 'tesla'
+    // panel is not an MQTT value tile and is skipped (no fetch, no chart).
+    if (key.indexOf('fam-') === 0) {
+      loadTileHistoryChart(key, key.slice(4));
+    }
     document.getElementById('overlay').classList.add('open');
     document.getElementById('panel').scrollTop = 0;
   }
-  function closePanel() { document.getElementById('overlay').classList.remove('open'); }
+  function closePanel() {
+    currentPanelKey = null;
+    document.getElementById('overlay').classList.remove('open');
+  }
 
   var panel = document.getElementById('panel');
   var startY = 0, currentY = 0, dragging = false;
