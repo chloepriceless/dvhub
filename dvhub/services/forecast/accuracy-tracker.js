@@ -15,6 +15,13 @@
 //   - All queries UTC-only (Pitfall A-2). The existing 02:00 scheduler now calls
 //     evaluateAndWrite(yesterday).
 
+// energy_slots_15m stores materialized rows as kWh-per-15-min-slot (unit='kWh');
+// forecasts (store.getLatest*Forecast / forecast_snapshots) are in watts. To make
+// MAE/RMSE/confidence a watts-vs-watts comparison, normalize the actual to average
+// watts: kWh-per-15min -> W is x4000 (x4 for 15min->h, x1000 for kW->W). Legacy
+// unit='W' rows, if any, pass through unscaled.
+const ACTUAL_POWER_W_SQL = `CASE WHEN unit = 'kWh' THEN value_num * 4000 ELSE value_num END`;
+
 /**
  * Compute Mean Absolute Error.
  * @param {number[]} forecasted - Forecasted values
@@ -180,7 +187,7 @@ export function createAccuracyTracker(ctx, { store }) {
       // Get yesterday's actual values from energy_slots_15m
       const seriesKey = forecastType === 'pv' ? 'solar_power_w' : 'load_power_w';
       const actualResult = await db.query(`
-        SELECT slot_start_utc AS ts_utc, value_num
+        SELECT slot_start_utc AS ts_utc, ${ACTUAL_POWER_W_SQL} AS value_num
         FROM energy_slots_15m
         WHERE series_key = $1
           AND source_kind IN ('vrm_import', 'local_live')
@@ -288,7 +295,7 @@ export function createAccuracyTracker(ctx, { store }) {
     let actuals = [];
     try {
       const actualsResult = await store.query(`
-        SELECT slot_start_utc AS ts_utc, value_num
+        SELECT slot_start_utc AS ts_utc, ${ACTUAL_POWER_W_SQL} AS value_num
         FROM energy_slots_15m
         WHERE series_key = 'pv_total_w'
           AND source_kind IN ('local_live','vrm_import','live')
