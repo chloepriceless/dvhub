@@ -183,7 +183,7 @@ export function createAccuracyTracker(ctx, { store }) {
         SELECT slot_start_utc AS ts_utc, value_num
         FROM energy_slots_15m
         WHERE series_key = $1
-          AND source_kind = 'live'
+          AND source_kind IN ('vrm_import', 'local_live')
           AND slot_start_utc >= $2
           AND slot_start_utc < $3
         ORDER BY slot_start_utc ASC

@@ -128,15 +128,19 @@ async function main() {
     errors: []
   };
 
-  // Mirror load-forecast.js queryLoadHistory pattern; use same series_key=load_power_w source_kind=live.
+  // Mirror load-forecast.js queryLoadHistory pattern: series_key=load_power_w,
+  // source_kind IN ('vrm_import','local_live') (the values telemetry-store-pg.js
+  // actually writes — never the legacy 'live'), and the kWh-per-15min → average
+  // watts conversion (× 4000) under a unit='kWh' guard.
   let rows = [];
   try {
     const pool = new pg.Pool();
     const result = await pool.query(`
-      SELECT slot_start_utc AS ts_utc, value_num AS power_w
+      SELECT slot_start_utc AS ts_utc, value_num * 4000 AS power_w
       FROM energy_slots_15m
       WHERE series_key = 'load_power_w'
-        AND source_kind = 'live'
+        AND source_kind IN ('vrm_import', 'local_live')
+        AND unit = 'kWh'
         AND slot_start_utc >= NOW() - ($1 || ' days')::INTERVAL
       ORDER BY slot_start_utc ASC
     `, [String(args.days)]);

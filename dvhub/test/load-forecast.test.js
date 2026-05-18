@@ -23,6 +23,27 @@ test('buildLoadForecastQuery uses load_power_w as series_key', () => {
   assert.ok(sql.includes("'load_power_w'"), 'should use load_power_w literal');
 });
 
+test('buildLoadForecastQuery filters by the source_kind values telemetry-store actually writes', () => {
+  const sql = buildLoadForecastQuery();
+  // telemetry-store-pg.js writes 'local_live' / 'vrm_import' — never the
+  // legacy 'live' value (which matched 0 rows and forced flat-800 cold-start).
+  assert.ok(
+    sql.includes("source_kind IN ('vrm_import', 'local_live')"),
+    'should filter source_kind to vrm_import + local_live'
+  );
+  assert.ok(
+    !/source_kind\s*=\s*'live'/.test(sql),
+    'must NOT use the bogus source_kind = \'live\' filter'
+  );
+});
+
+test('buildLoadForecastQuery converts kWh-per-15min to average watts (x4000) under a unit=kWh guard', () => {
+  const sql = buildLoadForecastQuery();
+  // load_power_w rows store kWh-per-15min-slot; x4000 = (x4 for 15min->h)(x1000 kW->W).
+  assert.ok(sql.includes('value_num * 4000'), 'should scale value_num by 4000');
+  assert.ok(sql.includes("unit = 'kWh'"), 'should guard the x4000 scaling with unit = kWh');
+});
+
 // --- computeLoadConfidence ---
 
 test('computeLoadConfidence returns 0.3 when sampleCount < 7', () => {

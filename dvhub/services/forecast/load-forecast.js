@@ -49,17 +49,28 @@ export function nextLoadForecastState(currentState, source) {
  * Build the SQL query for same-weekday load forecast from energy_slots_15m.
  * Averages hourly power for the same day-of-week over a 28-day lookback window.
  * Exported for testability.
+ *
+ * Unit note: `load_power_w` rows in energy_slots_15m store kWh-per-15min-slot
+ * (unit = 'kWh', written by telemetry-store-pg.js buildMaterializedEnergySlotWrites).
+ * Convert to average watts with × 4000 (× 4 for 15min→h, × 1000 for kW→W) — same
+ * conversion as telemetry-store-pg.js listPvActualSlots. A `unit = 'kWh'` guard
+ * keeps the ×4000 from double-scaling any legacy `unit = 'W'` rows.
+ *
+ * source_kind note: telemetry-store-pg.js writes 'local_live' / 'vrm_import' —
+ * never the legacy 'live' value, which would match 0 rows.
+ *
  * @returns {string} SQL query text (parameterized: $1 = reference date)
  */
 export function buildLoadForecastQuery() {
   return `
     SELECT
       EXTRACT(HOUR FROM slot_start_utc AT TIME ZONE 'Europe/Berlin') AS hour_of_day,
-      AVG(value_num) AS avg_power_w,
+      AVG(value_num * 4000) AS avg_power_w,
       COUNT(*) AS sample_count
     FROM energy_slots_15m
     WHERE series_key = 'load_power_w'
-      AND source_kind = 'live'
+      AND source_kind IN ('vrm_import', 'local_live')
+      AND unit = 'kWh'
       AND EXTRACT(DOW FROM slot_start_utc) = EXTRACT(DOW FROM $1::timestamptz)
       AND slot_start_utc >= NOW() - INTERVAL '28 days'
     GROUP BY 1
@@ -131,13 +142,17 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
  * @returns {Promise<Array<{ts_utc: string, power_w: number}>>}
  */
 async function queryLoadHistory(store, months) {
+  // Unit + source_kind: see buildLoadForecastQuery — load_power_w rows store
+  // kWh-per-15min (unit='kWh'); × 4000 yields average watts so StatsForecast
+  // trains on watts consistent with the rest of the forecast pipeline.
   const result = await store.query(`
     SELECT
       slot_start_utc AS ts_utc,
-      value_num AS power_w
+      value_num * 4000 AS power_w
     FROM energy_slots_15m
     WHERE series_key = 'load_power_w'
-      AND source_kind = 'live'
+      AND source_kind IN ('vrm_import', 'local_live')
+      AND unit = 'kWh'
       AND slot_start_utc >= NOW() - ($1 || ' months')::INTERVAL
     ORDER BY slot_start_utc ASC
   `, [months]);
