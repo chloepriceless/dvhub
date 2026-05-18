@@ -185,7 +185,10 @@ export function createAccuracyTracker(ctx, { store }) {
       }
 
       // Get yesterday's actual values from energy_slots_15m
-      const seriesKey = forecastType === 'pv' ? 'solar_power_w' : 'load_power_w';
+      // PV actuals are stored under 'pv_total_w' (the same series evaluatePerProvider
+      // and the Phase-06 ml-correction use) — 'solar_power_w' was never written, so
+      // the 'pv' path silently skipped on every run.
+      const seriesKey = forecastType === 'pv' ? 'pv_total_w' : 'load_power_w';
       const actualResult = await db.query(`
         SELECT slot_start_utc AS ts_utc, ${ACTUAL_POWER_W_SQL} AS value_num
         FROM energy_slots_15m
