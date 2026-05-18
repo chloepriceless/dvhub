@@ -28,6 +28,12 @@
 | **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
 | **Drittlizenzen** | [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) |
 
+<p align="center">
+  <img src="assets/screenshots/leitstand-2026-05-18.png" alt="DVhub Leitstand — Live-Dashboard" width="900" />
+  <br/>
+  <em>Leitstand — Live-Dashboard mit Energy-Flow-Visualisierung, Day-Ahead-Preisen und Steuerung</em>
+</p>
+
 ---
 
 ## Kurzüberblick
@@ -182,6 +188,10 @@ Layout, einheitliche Tokens, responsiv bis 430px Viewport.
 
 ### Historie
 
+<p align="center">
+  <img src="assets/screenshots/historie-2026-05-18.png" alt="DVhub Historie — Finanz- und Telemetrie-Auswertung" width="900" />
+</p>
+
 PostgreSQL-Telemetrie als eigene Analyseansicht:
 
 - Tag-, Wochen-, Monats- und Jahresansicht
@@ -194,6 +204,10 @@ PostgreSQL-Telemetrie als eigene Analyseansicht:
 - CSV- und Parquet-Export der Rohdaten
 
 ### Familien-Dashboard
+
+<p align="center">
+  <img src="assets/screenshots/familie-2026-05-18.png" alt="DVhub Familien-Dashboard" width="900" />
+</p>
 
 Eine bewusst vereinfachte Haushaltsansicht (`family.html`):
 
