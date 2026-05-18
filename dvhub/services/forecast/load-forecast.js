@@ -359,11 +359,25 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       pushLog('load_forecast_error', { error: err.message });
     }
 
-    // VRM consumption fallback — if SQL produced no meaningful data (all zeros = cold start), use VRM
+    // VRM consumption fallback — engage when the SQL rollup did not yield a
+    // usable hour-of-day profile. Two degenerate cases trigger it:
+    //   1. all-zero history (no telemetry rows at all), or
+    //   2. cold-start / flat forecast — fewer than 7 unique hours had data, so
+    //      formatLoadSlots served a constant `defaultPowerW` to every slot
+    //      (signalled by sqlColdStart / confidence 0.3, or every slot identical).
+    // The genuine VRM consumption forecast has real per-hour variation, so it
+    // is a far better safety net than the flat-800 constant. flat-800 stays as
+    // the last resort only when neither real source is available.
     const loadData = state.forecast.load.data || [];
     const hasRealData = loadData.some(s => (s.power_w || s.powerW || 0) > 0);
+    const distinctPowers = new Set(
+      loadData.map(s => Math.round((s.power_w ?? s.powerW ?? 0) * 100) / 100)
+    );
+    const isDegenerateForecast = sqlColdStart
+      || !sqlSucceeded
+      || (loadData.length > 1 && distinctPowers.size === 1);
     let vrmApplied = false;
-    if (!hasRealData && vrmForecast?.isAvailable()) {
+    if ((!hasRealData || isDegenerateForecast) && vrmForecast?.isAvailable()) {
       try {
         const vrmLoad = await vrmForecast.readLoadForecast();
         if (vrmLoad && vrmLoad.length > 0) {
@@ -372,7 +386,10 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
           state.forecast.load.lastFetchAt = new Date().toISOString();
           state.forecast.load.confidence = 0.25;
           ctx.bumpForecastVersion?.();
-          pushLog('load_forecast_vrm_fallback', { slots: slots.length });
+          pushLog('load_forecast_vrm_fallback', {
+            slots: slots.length,
+            reason: !hasRealData ? 'all_zero_history' : 'cold_start_flat'
+          });
           vrmApplied = true;
         }
       } catch (err) {

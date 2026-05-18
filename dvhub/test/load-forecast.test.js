@@ -154,3 +154,53 @@ test('createLoadForecast returns object with start, close, runForecast', () => {
   assert.equal(typeof svc.close, 'function');
   assert.equal(typeof svc.runForecast, 'function');
 });
+
+// --- runForecast VRM fallback (Part A — widened cold-start fallback) ---
+
+function makeRunForecastCtx() {
+  return {
+    state: { forecast: { load: { lastFetchAt: null, data: null, confidence: 0.3 } } },
+    getCfg: () => ({ forecast: { load: { defaultPowerW: 800 } }, ml: {} }),
+    pushLog: () => {},
+    bumpForecastVersion: () => {},
+    forecastService: { tier: 1 },
+    // mock DB: SQL rollup returns < 7 hours -> formatLoadSlots cold-start (flat 800)
+    db: { query: async () => ({ rows: [{ hour_of_day: 0, avg_power_w: 500, sample_count: '3' }] }) }
+  };
+}
+
+test('runForecast prefers the VRM consumption forecast over flat-800 on a cold-start rollup', async () => {
+  const ctx = makeRunForecastCtx();
+  const vrmSlots = Array.from({ length: 24 }, (_, h) => ({
+    ts_utc: new Date(Date.UTC(2026, 4, 18, h)).toISOString(),
+    power_w: 300 + h * 50
+  }));
+  const vrmForecast = {
+    isAvailable: () => true,
+    readLoadForecast: async () => vrmSlots
+  };
+  const svc = createLoadForecast(ctx, { store: { insertLoadForecast: async () => {} }, vrmForecast });
+  await svc.runForecast();
+
+  const data = ctx.state.forecast.load.data;
+  assert.ok(Array.isArray(data) && data.length === 24, 'should hold the VRM slots');
+  // Flat-800 would make every slot identical; VRM data has per-hour variation.
+  const distinct = new Set(data.map(s => s.power_w));
+  assert.ok(distinct.size > 1, 'VRM fallback should produce a non-flat profile');
+  assert.ok(!data.every(s => s.power_w === 800), 'must NOT serve the flat-800 constant');
+  assert.equal(svc.getState().source, 'vrm_fallback', 'state source should be vrm_fallback');
+});
+
+test('runForecast keeps flat-800 as last resort when VRM is unavailable', async () => {
+  const ctx = makeRunForecastCtx();
+  const vrmForecast = {
+    isAvailable: () => false,
+    readLoadForecast: async () => { throw new Error('should not be called'); }
+  };
+  const svc = createLoadForecast(ctx, { store: { insertLoadForecast: async () => {} }, vrmForecast });
+  await svc.runForecast();
+
+  const data = ctx.state.forecast.load.data;
+  assert.ok(data.every(s => s.power_w === 800), 'flat-800 stays the last resort');
+  assert.equal(svc.getState().source, 'naive_constant', 'state source should be naive_constant');
+});
