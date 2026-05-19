@@ -1021,14 +1021,6 @@ export function createApiRoutes(ctx) {
     try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
   }
 
-  // ── Validation helpers ───────────────────────────────────────────────
-  function validateScheduleRule(rule) {
-    if (typeof rule !== 'object' || rule === null) return false;
-    if (typeof rule.target !== 'string') return false;
-    if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
-    return true;
-  }
-
   // Plan 08-04 Task 1 Step 5: walk a JSON payload depth-first, return the first
   // path+pattern that matches any PROMPT_INJECTION_PATTERNS entry. Returns null
   // when the payload is clean. Strings only — numbers / booleans / null skipped
@@ -2167,7 +2159,10 @@ export function createApiRoutes(ctx) {
       // migration 015 only allows debug/info/warn/error/critical.
       const NORMALISED_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
       const pushLevel = NORMALISED_LEVELS.has(level) ? level : 'error';
-      pushLog(`frontend_${level}`, {
+      // H-5: build the audit event name from the normalized, allowlisted level —
+      // never the raw, attacker-controlled body.level (caps event_type cardinality
+      // and stops audit-log pollution from arbitrary client-supplied strings).
+      pushLog(`frontend_${pushLevel}`, {
         source,
         page: typeof body.page === 'string' ? body.page.slice(0, 200) : null,
         type: typeof body.type === 'string' ? body.type.slice(0, 64) : null,
@@ -3899,7 +3894,7 @@ export function createApiRoutes(ctx) {
     //      mlService.runRetrainEndpoint; return 202 with {jobId, statusUrl}
     //      so the handler releases the HTTP socket immediately
     if (url.pathname === '/api/ml/retrain' && req.method === 'POST') {
-      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      if (!checkAuth(req, res)) return;
       try {
         if (!ctx.mlService || !ctx.mlRetrainJobs) {
           return json(res, 503, { error: 'ml_retrain_service_unavailable' });
@@ -3975,7 +3970,7 @@ export function createApiRoutes(ctx) {
     // validation (ISO YYYY-MM-DD, from <= to inclusive per REVIEWS H8) + 409 on concurrent
     // run. Fire-and-forget; progress polled via /api/admin/backfill/status.
     if (url.pathname === '/api/admin/backfill' && req.method === 'POST') {
-      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      if (!checkAuth(req, res)) return;
       try {
         if (!ctx.pvnodeBackfill) {
           return json(res, 503, { error: 'pvnode_backfill_service_unavailable' });
