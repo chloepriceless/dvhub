@@ -109,7 +109,10 @@ function makeReq(pathname, { method = 'GET', token = API_TOKEN, ip = REMOTE_IP }
 //
 // Also implements `pool.query(sql, params)` (used by Plan 05's /api/history/raw
 // in the row-count parity test).
-function makeMockPoolWithCursor(seed = []) {
+// `failConnect: true` makes pool.connect() reject — drives the H-6 regression
+// (a failed DB connection mid-export must yield a 503 JSON error, NOT a 200 +
+// empty/BOM-only file because res.writeHead(200) already flushed).
+function makeMockPoolWithCursor(seed = [], { failConnect = false } = {}) {
   const queryCalls = [];
   const cursorState = { closed: false };
   let clientReleased = false;
@@ -117,7 +120,9 @@ function makeMockPoolWithCursor(seed = []) {
     queryCalls,
     cursorClosed: () => cursorState.closed,
     clientReleased: () => clientReleased,
-    connect: async () => ({
+    connect: failConnect
+      ? async () => { throw new Error('connection refused (simulated)'); }
+      : async () => ({
       query: (cursorObj /* a pg.Cursor instance */) => {
         const sql = cursorObj?.text ?? cursorObj;
         const params = cursorObj?.values ?? [];
@@ -475,5 +480,63 @@ describe('GET /api/history/raw/export.csv', () => {
       true,
       `pg.Cursor must be closed after client disconnect (T-09.2-DOS-CONN). got cursorClosed=false`
     );
+  });
+});
+
+// ── H-6 Regression: failed db.connect() during an export ──────────────
+//
+// Plan 16-03 Task 1. Before the fix both export handlers called
+// res.writeHead(200, ...) and res.write(BOM) BEFORE `await ctx.db.connect()`.
+// A connect() rejection then hit the post-header catch block which only calls
+// res.end() — so the client received a "successful" 200 with an empty / BOM-
+// only body instead of a real error. The `!ctx.db` 503 pre-check covers a
+// MISSING pool only, never a FAILED connect().
+//
+// Fix: connect() runs BEFORE writeHead — a connect failure yields a real
+// 503 {ok:false,error} JSON response and no 200 header is ever sent.
+describe('H-6: failed db.connect() during an export → 503 JSON', () => {
+  it('CSV export: a rejecting ctx.db.connect() returns 503 JSON, not a 200 empty file', async () => {
+    const ctx = mockCtx({ pool: makeMockPoolWithCursor(buildSeed(3), { failConnect: true }) });
+    const req = makeReq('/api/history/raw/export.csv');
+    const res = await dispatch(ctx, req);
+    await waitForClose(res);
+
+    assert.equal(
+      res._captured.status,
+      503,
+      `a failed db.connect() must yield 503, not ${res._captured.status} (silent empty 200)`
+    );
+    let body;
+    assert.doesNotThrow(
+      () => { body = JSON.parse(res._captured.body); },
+      `503 body must be JSON, got: ${JSON.stringify(res._captured.body)}`
+    );
+    assert.equal(body.ok, false, `503 body must be {ok:false,...}, got ${JSON.stringify(body)}`);
+    assert.ok(body.error, `503 body must carry an error field, got ${JSON.stringify(body)}`);
+    // The 200 streaming header / BOM must NEVER have been written.
+    assert.ok(
+      !res._captured.body.includes(BOM),
+      `a failed-connect response must not include the streaming BOM, body=${JSON.stringify(res._captured.body)}`
+    );
+  });
+
+  it('Parquet export: a rejecting ctx.db.connect() returns 503 JSON, not a 200 truncated file', async () => {
+    const ctx = mockCtx({ pool: makeMockPoolWithCursor(buildSeed(3), { failConnect: true }) });
+    const req = makeReq('/api/history/raw/export.parquet');
+    const res = await dispatch(ctx, req);
+    await waitForClose(res);
+
+    assert.equal(
+      res._captured.status,
+      503,
+      `a failed db.connect() must yield 503, not ${res._captured.status} (silent truncated 200)`
+    );
+    let body;
+    assert.doesNotThrow(
+      () => { body = JSON.parse(res._captured.body); },
+      `503 body must be JSON, got: ${JSON.stringify(res._captured.body)}`
+    );
+    assert.equal(body.ok, false, `503 body must be {ok:false,...}, got ${JSON.stringify(body)}`);
+    assert.ok(body.error, `503 body must carry an error field, got ${JSON.stringify(body)}`);
   });
 });

@@ -2473,18 +2473,6 @@ export function createApiRoutes(ctx) {
       // read anywhere in this handler.
       const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.csv`;
 
-      res.writeHead(200, {
-        ...SECURITY_HEADERS,
-        'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-store',
-      });
-      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
-      // and renders the German umlauts + the semicolon separator natively.
-      res.write('﻿');
-      res.write('ts_utc;series_key;value;unit\n');
-
       let dbClient = null;
       let pgCursor = null;
       let aborted = false;
@@ -2501,6 +2489,30 @@ export function createApiRoutes(ctx) {
         }
       }
 
+      // H-6 (Plan 16-03): connect BEFORE res.writeHead so a failed connection
+      // yields a real 503 JSON error. The `!ctx.db` pre-check above only covers
+      // a MISSING pool — a pool whose connect() rejects (DB down, pool drained)
+      // would otherwise flush a 200 header and a BOM-only body, mis-signalling
+      // a "successful" empty export to the client.
+      try {
+        dbClient = await ctx.db.connect();
+      } catch (e) {
+        pushLog('history_raw_csv_error', { error: e.message, stage: 'connect' });
+        return json(res, 503, { ok: false, error: 'db_unavailable' });
+      }
+
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
+      // and renders the German umlauts + the semicolon separator natively.
+      res.write('﻿');
+      res.write('ts_utc;series_key;value;unit\n');
+
       // Both req.on('close') and res.on('close') — different runtimes emit
       // close on different sockets; we register both for defence-in-depth.
       // A single cleanup() is idempotent.
@@ -2508,7 +2520,6 @@ export function createApiRoutes(ctx) {
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
 
         function readNext() {
@@ -2633,17 +2644,6 @@ export function createApiRoutes(ctx) {
       // read anywhere in this handler.
       const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.parquet`;
 
-      // Headers MUST be flushed BEFORE ParquetWriter.openStream begins writing
-      // (the writer immediately writes the Parquet magic bytes "PAR1" via the
-      // first oswrite call inside openStream).
-      res.writeHead(200, {
-        ...SECURITY_HEADERS,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-store',
-      });
-
       let dbClient = null;
       let pgCursor = null;
       let writer = null;
@@ -2661,13 +2661,34 @@ export function createApiRoutes(ctx) {
         }
       }
 
+      // H-6 (Plan 16-03): connect BEFORE res.writeHead so a failed connection
+      // yields a real 503 JSON error instead of a 200 + truncated Parquet file
+      // (a partial file with no footer magic is indistinguishable from a
+      // legitimate-but-empty export to a naive client).
+      try {
+        dbClient = await ctx.db.connect();
+      } catch (e) {
+        pushLog('history_raw_parquet_error', { error: e.message, stage: 'connect' });
+        return json(res, 503, { ok: false, error: 'db_unavailable' });
+      }
+
+      // Headers MUST be flushed BEFORE ParquetWriter.openStream begins writing
+      // (the writer immediately writes the Parquet magic bytes "PAR1" via the
+      // first oswrite call inside openStream).
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+
       // Both req.on('close') and res.on('close') — different runtimes emit
       // close on different sockets; defence-in-depth (idempotent cleanup).
       req.on('close', () => { aborted = true; cleanup(); });
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
         writer = await parquet.ParquetWriter.openStream(PARQUET_SCHEMA, res);
 
