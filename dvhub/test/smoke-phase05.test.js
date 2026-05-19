@@ -398,6 +398,49 @@ describe('Phase 05 Smoke Tests', () => {
   });
 });
 
+// ── C-1 Regression: dead isLanSafeRequest guard on POST endpoints ──
+//
+// Before the fix, both /api/ml/retrain and /api/admin/backfill were guarded by
+// `if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;`. isLanSafeRequest
+// short-circuits to false on any non-GET request, so every POST returned from
+// handleRequest WITHOUT writing a response → serveStatic 404 fallthrough. The
+// handler body was 100% dead code. After the fix the guard is `checkAuth` only,
+// so a POST reaches the handler and produces the handler's own status (503 when
+// the backing service is absent), never the 404 static fallback.
+
+describe('C-1 Regression: dead guard on POST /api/ml/retrain + /api/admin/backfill', () => {
+  it('POST /api/ml/retrain reaches the handler (503, not 404)', async () => {
+    // Omit mlService + mlRetrainJobs → handler returns 503 service-unavailable.
+    // A 404 here would prove the isLanSafeRequest guard still short-circuits.
+    const ctx = mockCtx({ mlService: undefined, mlRetrainJobs: undefined });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/ml/retrain'), res,
+      new URL('http://localhost/api/ml/retrain')
+    );
+    assert.equal(res._captured.status, 503,
+      'POST /api/ml/retrain must reach its handler (503), not fall through to a 404');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'ml_retrain_service_unavailable');
+  });
+
+  it('POST /api/admin/backfill reaches the handler (503, not 404)', async () => {
+    // pvnodeBackfill is absent from mockCtx → handler returns 503 service-unavailable.
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/admin/backfill'), res,
+      new URL('http://localhost/api/admin/backfill')
+    );
+    assert.equal(res._captured.status, 503,
+      'POST /api/admin/backfill must reach its handler (503), not fall through to a 404');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'pvnode_backfill_service_unavailable');
+  });
+});
+
 // ── H-14 Regression: optimizer kill-switch purges forecast_optimizer rules ──
 
 describe('H-14 Regression: Optimizer Kill-Switch', () => {
