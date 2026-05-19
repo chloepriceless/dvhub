@@ -14,6 +14,9 @@ import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } fro
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { createDefaultConfig } from './config-model.js';
+// L-11 (Plan 16-03): MESSAGE_TYPES is the single source of truth for the
+// /api/messages/generate type allowlist — see MESSAGE_TYPE_ALLOWLIST below.
+import { MESSAGE_TYPES } from './services/llm/message-types.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -238,6 +241,11 @@ export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
+// L-11 (Plan 16-03): /api/messages/generate body.type allowlist. Derived from
+// the LLM service's MESSAGE_TYPES enum (single source of truth) so adding a
+// new message type there automatically extends the allowlist. An unknown type
+// is normalised to 'status' before reaching generateMessage (T-16-12 Tampering).
+export const MESSAGE_TYPE_ALLOWLIST = new Set(Object.values(MESSAGE_TYPES));
 // /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
 // and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
@@ -1117,13 +1125,18 @@ export function createApiRoutes(ctx) {
   // ── Response builders ────────────────────────────────────────────────
   function epexPriceArray() {
     if (!state.epex.ok || !Array.isArray(state.epex.data)) return [];
-    return state.epex.data.map((row) => ({
-      ts: row.ts,
-      ts_iso: new Date(row.ts).toISOString(),
-      eur_mwh: Number(row.eur_mwh ?? 0),
-      eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
-      ct_kwh: Number(row.ct_kwh ?? 0)
-    }));
+    // L-7 (Plan 16-03): new Date(row.ts).toISOString() throws a RangeError on
+    // a malformed row.ts (Invalid Date) — a single bad row would 500 the whole
+    // endpoint. Skip rows whose ts cannot be parsed (T-16-13 DoS).
+    return state.epex.data
+      .filter((row) => Number.isFinite(Date.parse(row.ts)))
+      .map((row) => ({
+        ts: row.ts,
+        ts_iso: new Date(row.ts).toISOString(),
+        eur_mwh: Number(row.eur_mwh ?? 0),
+        eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
+        ct_kwh: Number(row.ct_kwh ?? 0)
+      }));
   }
 
   function userEnergyPricingSummary() {
@@ -2785,6 +2798,12 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/forecast/refresh' && req.method === 'POST') {
+      // L-6 (Plan 16-03): ctx.fetchVrmForecast() throws synchronously if the
+      // service is unwired — guard before invoking so an unwired service
+      // yields a clean 503 instead of an uncaught 500 (T-16-13 DoS).
+      if (typeof ctx.fetchVrmForecast !== 'function') {
+        return json(res, 503, { ok: false, error: 'forecast_service_unavailable' });
+      }
       ctx.fetchVrmForecast().catch(e => pushLog('vrm_forecast_manual_error', { error: e.message }));
       return json(res, 202, { ok: true, message: 'Forecast refresh started' });
     }
@@ -3458,6 +3477,11 @@ export function createApiRoutes(ctx) {
 
     // --- Update Channel ---
     if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
+      // M-6 (Plan 16-03): gate parity — the sibling /api/admin/update/check
+      // and /api/admin/update/apply handlers both start with this exact
+      // service-actions gate. Without it the channel change is persisted
+      // even when service actions are disabled (T-16-11 EoP).
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
         const body = await parseBody(req);
         const channel = body?.channel;
@@ -4235,13 +4259,17 @@ export function createApiRoutes(ctx) {
         // the interval ticker uses — otherwise the prompt templates' Watt-vs-kW
         // interpolation resolves to undefined and the LLM produces "Fehlende
         // Daten" output even when state.victron is fully populated.
-        const type = body.type || 'status';
+        // L-11 (Plan 16-03): validate body.type against MESSAGE_TYPE_ALLOWLIST.
+        // An unknown / attacker-supplied type is normalised to 'status' rather
+        // than passed verbatim into generateMessage (graceful default per the
+        // review's recommendation — no 400, the LLM still produces output).
+        const safeType = MESSAGE_TYPE_ALLOWLIST.has(body.type) ? body.type : 'status';
         const liveData = typeof ctx.llmService.getLiveData === 'function'
           ? ctx.llmService.getLiveData()
           : {};
         const data = { ...liveData, ...(body.data || {}) };
 
-        const msg = await ctx.llmService.generateMessage(type, data);
+        const msg = await ctx.llmService.generateMessage(safeType, data);
         return json(res, 200, { ok: true, message: msg });
       } catch (e) {
         return json(res, 500, { error: e.message });

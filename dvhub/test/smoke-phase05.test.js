@@ -996,3 +996,72 @@ describe('M-1..M-5: input validation', () => {
     assert.equal(body.error, 'too_many_keys');
   });
 });
+
+// ── M-6 / L-11 Regression: gate parity + message-type allowlist ───────
+//
+// Plan 16-03 Task 3.
+//   M-6 — /api/admin/update/channel jumped straight into parseBody +
+//         saveAndApplyConfig; its siblings /api/admin/update/check and
+//         /api/admin/update/apply BOTH start with a getServiceActionsEnabled
+//         403 gate. Without it the channel change is persisted even when
+//         service actions are disabled. Fix: add the identical gate first.
+//   L-11 — /api/messages/generate passed body.type straight to
+//         generateMessage with no allowlist. Fix: validate against
+//         MESSAGE_TYPE_ALLOWLIST, default to 'status' on a miss.
+describe('M-6 / L-11: gate parity + message-type allowlist', () => {
+  it('M-6: POST /api/admin/update/channel with service actions disabled → 403', async () => {
+    // base mockCtx getServiceActionsEnabled() === false
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/admin/update/channel', { channel: 'dev' }),
+      res,
+      new URL('http://localhost/api/admin/update/channel')
+    );
+    assert.equal(res._captured.status, 403,
+      `channel switch must be gated by service-actions, got ${res._captured.status}`);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, false, `403 body must be {ok:false,...}, got ${JSON.stringify(body)}`);
+  });
+
+  it('L-11: POST /api/messages/generate with an unknown type falls back to "status"', async () => {
+    let seenType = null;
+    const ctx = mockCtx({
+      llmService: {
+        generateMessage: async (type) => { seenType = type; return { text: 'ok', type }; },
+        getMessages: () => []
+      }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/messages/generate', { type: 'evilarbitrary' }),
+      res,
+      new URL('http://localhost/api/messages/generate')
+    );
+    assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status}`);
+    assert.equal(seenType, 'status',
+      `an unknown message type must fall back to 'status', generateMessage saw '${seenType}'`);
+  });
+
+  it('L-11: a known type (savings) is passed through unchanged', async () => {
+    let seenType = null;
+    const ctx = mockCtx({
+      llmService: {
+        generateMessage: async (type) => { seenType = type; return { text: 'ok', type }; },
+        getMessages: () => []
+      }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/messages/generate', { type: 'savings' }),
+      res,
+      new URL('http://localhost/api/messages/generate')
+    );
+    assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status}`);
+    assert.equal(seenType, 'savings',
+      `a known message type must pass through, generateMessage saw '${seenType}'`);
+  });
+});
