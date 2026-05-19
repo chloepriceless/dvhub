@@ -889,3 +889,110 @@ describe('H-4: EPEX upstream response byte-cap', () => {
     }
   });
 });
+
+// ── M-1..M-5 Regression: input validation hardening ──────────────────
+//
+// Plan 16-03 Task 2. Each item is a genuine input-validation defect from
+// REVIEW-routes-api-2026-05-18.md:
+//   M-1 — serveStatic's decodeURIComponent throws URIError on a malformed
+//         `%` seq → uncaught 500; a NUL byte decodes into the filename →
+//         fs ERR_INVALID_ARG_VALUE → 500. Fix: try/catch → 400; reject `\0`.
+//   M-2 — /api/devices/:id derives the id via split('/api/devices/')[1]
+//         which keeps embedded slashes. Fix: reject ids containing `/`.
+//   M-3 — /api/log/dv-signals `limit` has no upper cap. Fix: Math.min clamp.
+//   M-4 — /api/telemetry/series start/end aren't parse-validated; the DoS
+//         guard treats unparseable as 0. Fix: parseIsoOrNull false → 400.
+//   M-5 — /api/telemetry/series `keys` has no length cap. Fix: >50 → 400.
+describe('M-1..M-5: input validation', () => {
+  // M-1 — serveStatic is exported separately; invoke it directly. A plain
+  // mockRes captures the text(res,400,...) writeHead/end the handler emits.
+  it('M-1: serveStatic malformed %-sequence → 400 bad path (not 500)', () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    // `%E0%A4%A` is an incomplete UTF-8 escape — decodeURIComponent throws.
+    routes.serveStatic({ url: '/%E0%A4%A', headers: { host: 'localhost' } }, res);
+    assert.equal(res._captured.status, 400,
+      `a malformed %-sequence must yield 400, got ${res._captured.status}`);
+  });
+
+  it('M-1: serveStatic NUL-byte path → 400 bad path', () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    // %00 decodes to a NUL byte — fs would throw ERR_INVALID_ARG_VALUE.
+    routes.serveStatic({ url: '/app%00.js', headers: { host: 'localhost' } }, res);
+    assert.equal(res._captured.status, 400,
+      `a NUL-byte path must yield 400, got ${res._captured.status}`);
+  });
+
+  it('M-2: GET /api/devices/a/b → 400 invalid_device_id', async () => {
+    const ctx = mockCtx({ deviceService: { getDevices: () => [] } });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('GET', '/api/devices/a/b'),
+      res,
+      new URL('http://localhost/api/devices/a/b')
+    );
+    assert.equal(res._captured.status, 400,
+      `a device id with an embedded slash must yield 400, got ${res._captured.status}`);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'invalid_device_id');
+  });
+
+  it('M-3: /api/log/dv-signals?limit=99999999 → effective limit clamped to 2000', async () => {
+    let seenLimit = null;
+    const ctx = mockCtx({
+      telemetryStore: {
+        listControlEvents: async ({ limit }) => { seenLimit = limit; return []; }
+      }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('GET', '/api/log/dv-signals?limit=99999999'),
+      res,
+      new URL('http://localhost/api/log/dv-signals?limit=99999999')
+    );
+    assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status}`);
+    assert.equal(seenLimit, 2000,
+      `an unbounded limit must be clamped to 2000, store saw limit=${seenLimit}`);
+  });
+
+  it('M-4: /api/telemetry/series?start=notadate → 400 invalid_timestamp', async () => {
+    const ctx = mockCtx({
+      telemetryStore: { querySeries: async () => [] }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('GET', '/api/telemetry/series?start=notadate'),
+      res,
+      new URL('http://localhost/api/telemetry/series?start=notadate')
+    );
+    assert.equal(res._captured.status, 400,
+      `an unparseable start timestamp must yield 400, got ${res._captured.status}`);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'invalid_timestamp');
+  });
+
+  it('M-5: /api/telemetry/series with >50 keys → 400 too_many_keys', async () => {
+    const ctx = mockCtx({
+      telemetryStore: { querySeries: async () => [] }
+    });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const manyKeys = Array.from({ length: 60 }, (_, i) => `k${i}`).join(',');
+    const path = `/api/telemetry/series?keys=${manyKeys}`;
+    await routes.handleRequest(
+      makeReq('GET', path),
+      res,
+      new URL(`http://localhost${path}`)
+    );
+    assert.equal(res._captured.status, 400,
+      `>50 keys must yield 400, got ${res._captured.status}`);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'too_many_keys');
+  });
+});

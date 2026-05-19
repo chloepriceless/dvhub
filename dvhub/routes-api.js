@@ -235,6 +235,9 @@ export const MAX_MINSOC_PCT = 100;
 // TimescaleDB hypertable + (series_key, ts_utc) index makes 1.5M-row scans
 // sub-second on the production Pi.
 export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
+// M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
+// readings (24 * 60 / 5). Named so the magic number is self-documenting.
+export const DEVICE_HISTORY_ROW_LIMIT = 288;
 // /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
 // and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
@@ -1457,7 +1460,22 @@ export function createApiRoutes(ctx) {
   function serveStatic(req, res) {
     const appDir = ctx.getAppDir();
     const urlPath = new URL(req.url, 'http://localhost').pathname;
-    const reqPath = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
+    // M-1 (Plan 16-03): decodeURIComponent throws a URIError on a malformed
+    // `%` escape (e.g. `/%E0%A4%A`) — caught here it would otherwise bubble
+    // to an uncaught 500. A `%00` decodes into a NUL byte which fs rejects
+    // with ERR_INVALID_ARG_VALUE → another 500. Both are bad client input,
+    // not server faults, so they map to 400.
+    let reqPath;
+    if (urlPath === '/') {
+      reqPath = '/index.html';
+    } else {
+      try {
+        reqPath = decodeURIComponent(urlPath);
+      } catch {
+        return text(res, 400, 'bad path');
+      }
+      if (reqPath.includes('\0')) return text(res, 400, 'bad path');
+    }
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, reqPath.replace(/^\/+/, ''));
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
@@ -1925,14 +1943,21 @@ export function createApiRoutes(ctx) {
     if (url.pathname.startsWith('/api/devices/') && req.method === 'GET') {
       const deviceId = decodeURIComponent(url.pathname.split('/api/devices/')[1]);
       if (!deviceId) return json(res, 400, { error: 'Missing device ID' });
+      // M-2 (Plan 16-03): split('/api/devices/')[1] keeps embedded slashes, so
+      // `/api/devices/a/b` would yield deviceId='a/b'. A device id is a single
+      // path segment — reject any id carrying a slash.
+      if (deviceId.includes('/')) return json(res, 400, { ok: false, error: 'invalid_device_id' });
       const devices = ctx.deviceService?.getDevices() || [];
       const device = devices.find(d => d.id === deviceId);
       if (!device) return json(res, 404, { error: 'Device not found' });
       let history = [];
       if (ctx.db) {
         try {
+          // LIMIT uses the DEVICE_HISTORY_ROW_LIMIT module constant (288 =
+          // 24h of 5-min readings). It is a trusted compile-time integer, not
+          // user input — safe to interpolate; device_id stays parameterised.
           const result = await ctx.db.query(
-            'SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT 288',
+            `SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT ${DEVICE_HISTORY_ROW_LIMIT}`,
             [deviceId]
           );
           history = result.rows;
@@ -2233,7 +2258,9 @@ export function createApiRoutes(ctx) {
     // Persistent DV signal log from database
     if (url.pathname === '/api/log/dv-signals' && req.method === 'GET') {
       if (!ctx.telemetryStore?.listControlEvents) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-      const limit = Number(url.searchParams.get('limit')) || 200;
+      // M-3 (Plan 16-03): clamp `limit` to 1..2000 — an unbounded limit lets a
+      // caller drag the store into an arbitrarily large scan (T-16-09 DoS).
+      const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
       const eventType = url.searchParams.get('type') || null;
       try {
         const rows = await ctx.telemetryStore.listControlEvents({ limit, eventType });
@@ -2247,9 +2274,21 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/telemetry/series' && req.method === 'GET') {
       if (!ctx.telemetryStore?.querySeries) return json(res, 503, { ok: false, error: 'telemetry store not available' });
       const keys = (url.searchParams.get('keys') || 'battery_soc_pct').split(',').map(k => k.trim()).filter(Boolean);
+      // M-5 (Plan 16-03): cap the key count before the DoS slot-guard — each
+      // key multiplies the scan, so an unbounded key list defeats the slot cap.
+      if (keys.length > 50) return json(res, 400, { ok: false, error: 'too_many_keys' });
       const now = new Date();
-      const start = url.searchParams.get('start') || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const end = url.searchParams.get('end') || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+      // M-4 (Plan 16-03): validate start/end with parseIsoOrNull — its
+      // tri-state contract (null=absent, false=garbage, ISO=valid) matches
+      // /api/history/raw. Without this an unparseable timestamp slips past
+      // the DoS slot-guard (which treats unparseable as 0).
+      const startRaw = parseIsoOrNull(url.searchParams.get('start'));
+      const endRaw = parseIsoOrNull(url.searchParams.get('end'));
+      if (startRaw === false || endRaw === false) {
+        return json(res, 400, { ok: false, error: 'invalid_timestamp' });
+      }
+      const start = startRaw || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const end = endRaw || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
       const maxRes = Number(url.searchParams.get('maxResolution')) || 900;
       // Plan 08-04 Task 1 Step 7: bound total slot scan. Without this an
       // attacker could pass start=0&end=now&step=1 across many keys and drag
