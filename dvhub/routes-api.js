@@ -686,6 +686,35 @@ export function createApiRoutes(ctx) {
     }
   }
 
+  // H-4 (Plan 16-02): size-bounded JSON read for the EPEX upstream fetch.
+  // A bare `await r.json()` on a config-controlled upstream (epex.priceApiUrl)
+  // would buffer an arbitrarily large — potentially multi-GB — response into
+  // memory and OOM the LXC. EPEX zone/price payloads are tiny; 1 MB is a
+  // generous ceiling. Rejects early on the content-length header when present,
+  // and otherwise enforces the cap chunk-by-chunk while streaming. The thrown
+  // error carries statusCode=502 so the EPEX handlers' existing catch maps it
+  // to a clean upstream-error response rather than an uncaught 500.
+  const EPEX_MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MB
+  async function readJsonCapped(r, maxBytes = EPEX_MAX_RESPONSE_BYTES) {
+    const cl = Number(r.headers.get('content-length'));
+    if (Number.isFinite(cl) && cl > maxBytes) {
+      const e = new Error('upstream_response_too_large'); e.statusCode = 502; throw e;
+    }
+    const reader = r.body.getReader();
+    const chunks = []; let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        const e = new Error('upstream_response_too_large'); e.statusCode = 502; throw e;
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+
   // ── Auth / Rate Limiting ─────────────────────────────────────────────
   // Plan 09-03: route LAN-trust decision through deriveClientIp so that, when
   // an operator opts in via cfg.trustProxy=true + cfg.trustedProxyIps, XFF from
@@ -2711,10 +2740,13 @@ export function createApiRoutes(ctx) {
         const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
         const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
@@ -2725,10 +2757,13 @@ export function createApiRoutes(ctx) {
         const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
         const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
@@ -2752,10 +2787,13 @@ export function createApiRoutes(ctx) {
           signal: AbortSignal.timeout(10000)
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
@@ -2892,6 +2930,21 @@ export function createApiRoutes(ctx) {
       const unknownRoots = Object.keys(body.config).filter((k) => !ALLOWED_CONFIG_ROOTS.has(k));
       if (unknownRoots.length > 0) {
         return json(res, 400, { ok: false, error: 'unknown_config_paths', paths: unknownRoots });
+      }
+      // H-3 (Plan 16-02): SSRF guard on epex.priceApiUrl. The /api/epex/*
+      // handlers issue a server-side `fetch` to this config-controlled URL —
+      // the CSP does not constrain outbound fetch. A config writer could
+      // otherwise point it at an internal host (RFC1918/loopback) and proxy
+      // that host's response back to the caller, or downgrade to plain http.
+      // Reject at save time: scheme must be https, host must not be private.
+      // Reuse the existing isRfc1918OrLoopback matcher — no new private-IP code.
+      const candidatePriceApiUrl = body.config?.epex?.priceApiUrl;
+      if (candidatePriceApiUrl) {
+        let u;
+        try { u = new URL(candidatePriceApiUrl); } catch { /* u stays undefined → reject below */ }
+        if (!u || u.protocol !== 'https:' || isRfc1918OrLoopback(u.hostname)) {
+          return json(res, 400, { ok: false, error: 'invalid_epex_price_api_url' });
+        }
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. Flipping either

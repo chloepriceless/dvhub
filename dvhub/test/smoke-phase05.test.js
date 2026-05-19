@@ -703,3 +703,189 @@ describe('H-2: keepalive divide-by-zero clamp', () => {
       'pulseTimestamp must be finite when keepalivePulseSec is missing');
   });
 });
+
+// ── H-3/H-4 Regression: EPEX SSRF guard + response byte-cap ──
+//
+// Plan 16-02 Task 3.
+//   H-3 — epex.priceApiUrl is config-controlled and the /api/epex/* handlers
+//   issue a server-side fetch to it. Saving a non-https URL or one pointing at
+//   an RFC1918/loopback host must be rejected at config-save time (400).
+//   H-4 — a bare `await r.json()` on that upstream would buffer an arbitrarily
+//   large body and OOM the LXC. An oversize upstream response must produce a
+//   clean 502, not a 500 / OOM.
+//
+// NOTE: the /api/epex/* handlers call the GLOBAL `fetch`, not a ctx-injected
+// one. The H-4 test therefore stubs `globalThis.fetch` and restores it in a
+// finally block — this differs from the plan's suggested mockCtx.fetch
+// mechanism, which does not match the code (deviation: Rule 3, plan/code
+// mismatch).
+
+describe('H-3: EPEX priceApiUrl SSRF guard', () => {
+  it('non-https priceApiUrl → 400 invalid_epex_price_api_url', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'http://api.example.com' } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    assert.equal(res._captured.status, 400,
+      'a non-https priceApiUrl must be rejected at save time');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'invalid_epex_price_api_url');
+  });
+
+  it('RFC1918 priceApiUrl → 400 invalid_epex_price_api_url', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'https://192.168.1.5/x' } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    assert.equal(res._captured.status, 400,
+      'a priceApiUrl pointing at a private host must be rejected');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'invalid_epex_price_api_url');
+  });
+
+  it('loopback priceApiUrl → 400 invalid_epex_price_api_url', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'https://127.0.0.1:9000/x' } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    assert.equal(res._captured.status, 400);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.error, 'invalid_epex_price_api_url');
+  });
+
+  it('valid public https priceApiUrl is accepted (not 400)', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'https://api.dvhub.de' } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    assert.notEqual(res._captured.status, 400,
+      'a valid public https priceApiUrl must pass the SSRF guard');
+  });
+});
+
+describe('H-4: EPEX upstream response byte-cap', () => {
+  it('oversize EPEX upstream body → 502 (not 500/OOM)', async () => {
+    const realFetch = globalThis.fetch;
+    // Fake upstream: a ReadableStream that yields > 1 MB of bytes.
+    globalThis.fetch = async () => {
+      let emitted = 0;
+      const chunk = new Uint8Array(256 * 1024); // 256 KB per read
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null }, // no content-length → exercise the streaming cap
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (emitted >= 2 * 1024 * 1024) return { done: true, value: undefined };
+                emitted += chunk.length;
+                return { done: false, value: chunk };
+              },
+              async cancel() {}
+            };
+          }
+        }
+      };
+    };
+    try {
+      const ctx = mockCtx();
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('GET', '/api/epex/zones'),
+        res,
+        new URL('http://localhost/api/epex/zones')
+      );
+      assert.equal(res._captured.status, 502,
+        'an oversize EPEX upstream body must produce a clean 502');
+      const body = JSON.parse(res._captured.body);
+      assert.equal(body.error, 'upstream_response_too_large');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('content-length over the cap → 502 before streaming', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: (h) => (h === 'content-length' ? String(5 * 1024 * 1024) : null) },
+      body: { getReader() { return { async read() { return { done: true }; }, async cancel() {} }; } }
+    });
+    try {
+      const ctx = mockCtx();
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('GET', '/api/epex/zones'),
+        res,
+        new URL('http://localhost/api/epex/zones')
+      );
+      assert.equal(res._captured.status, 502,
+        'a content-length over the cap must be rejected before buffering');
+      const body = JSON.parse(res._captured.body);
+      assert.equal(body.error, 'upstream_response_too_large');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('small EPEX upstream body is returned normally (200)', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      let sent = false;
+      const payload = Buffer.from(JSON.stringify({ zones: ['DE-LU'] }), 'utf8');
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (h) => (h === 'content-length' ? String(payload.length) : null) },
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (sent) return { done: true, value: undefined };
+                sent = true;
+                return { done: false, value: new Uint8Array(payload) };
+              },
+              async cancel() {}
+            };
+          }
+        }
+      };
+    };
+    try {
+      const ctx = mockCtx();
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('GET', '/api/epex/zones'),
+        res,
+        new URL('http://localhost/api/epex/zones')
+      );
+      assert.equal(res._captured.status, 200,
+        'a small upstream body must pass the cap and return normally');
+      const body = JSON.parse(res._captured.body);
+      assert.deepEqual(body.zones, ['DE-LU']);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
