@@ -668,6 +668,24 @@ export function createApiRoutes(ctx) {
     res.end(body);
   }
 
+  // H-1 (Plan 16-02): shared body-parse wrapper. parseBody rejects an
+  // invalid-JSON body with statusCode=400 and a body-too-large with
+  // statusCode=413 (server-utils.js). Without a try/catch the rejection
+  // bubbles to an uncaught 500 + a killed socket. readJsonBody turns both
+  // cases into a clean, consistent {ok:false,error} JSON response and returns
+  // null so the caller can early-return. NOTE: this is the ONE place that
+  // emits the {ok:false,error} envelope on a parse failure — sibling handlers
+  // keep their existing local response shapes (M-7 envelope normalization is
+  // deferred to a later plan).
+  async function readJsonBody(req, res) {
+    try { return await parseBody(req); }
+    catch (e) {
+      const status = e.statusCode || 413;
+      json(res, status, { ok: false, error: status === 413 ? 'body_too_large' : 'invalid_json_body' });
+      return null;
+    }
+  }
+
   // ── Auth / Rate Limiting ─────────────────────────────────────────────
   // Plan 09-03: route LAN-trust decision through deriveClientIp so that, when
   // an operator opts in via cfg.trustProxy=true + cfg.trustedProxyIps, XFF from
@@ -2142,7 +2160,8 @@ export function createApiRoutes(ctx) {
     // operator-visible logs show frontend crashes too. Auth-required (handled by
     // checkAuth above for any non-LAN-safe /api/ path).
     if (url.pathname === '/api/log' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'json_body_required' });
       }
@@ -2736,7 +2755,8 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/meter/scan' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 08-04 Task 2 Step 3: SSRF guard. Meter scan talks raw Modbus TCP —
       // an attacker with a stolen token could otherwise point it at any host on
       // the internet (data-exfil, port-scan via the Pi, liveness oracle).
@@ -2831,7 +2851,8 @@ export function createApiRoutes(ctx) {
 
     // --- Config POST / Import POST ---
     if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
       }
@@ -3385,7 +3406,8 @@ export function createApiRoutes(ctx) {
 
     // --- EOS Apply ---
     if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const results = [];
       if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
         results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
@@ -3407,7 +3429,8 @@ export function createApiRoutes(ctx) {
 
     // --- EMHASS Apply ---
     if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const results = [];
       if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
         results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
@@ -3430,7 +3453,8 @@ export function createApiRoutes(ctx) {
     // --- History Import ---
     if (url.pathname === '/api/history/import' && req.method === 'POST') {
       if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 09-05 Task 2: audit envelope around the import lifecycle. history-import.js
       // is NOT a worker thread (verified via grep — no parentPort / new Worker calls);
       // its manager methods are plain async returning {ok, ...}. So we emit
@@ -3501,7 +3525,8 @@ export function createApiRoutes(ctx) {
     // --- History Backfill VRM ---
     if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
       if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
       ctx.assertValidRuntimeCommand('history_backfill', {
         mode: requestedMode,
@@ -3532,7 +3557,8 @@ export function createApiRoutes(ctx) {
       if (!ctx.historyApi || typeof ctx.historyApi.postPriceBackfill !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 09-05 Task 3: audit envelope for the price backfill route.
       const priceBackfillStartedAt = Date.now();
       pushLog('backfill_started', {
@@ -3555,7 +3581,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Rules POST ---
     if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
       const validRules = body.rules.filter((rule) => {
         if (typeof rule !== 'object' || rule === null) return false;
@@ -3578,7 +3605,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Config POST ---
     if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (body.defaultGridSetpointW !== undefined) {
         const v = Number(body.defaultGridSetpointW);
         if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultGridSetpointW invalid' });
@@ -3606,7 +3634,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Automation Config POST ---
     if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         return json(res, 400, { ok: false, error: 'invalid body' });
       }
@@ -3652,7 +3681,8 @@ export function createApiRoutes(ctx) {
 
     // --- Control Write POST ---
     if (url.pathname === '/api/control/write' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const target = String(body.target || '');
       const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct']);
       if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
@@ -3826,7 +3856,8 @@ export function createApiRoutes(ctx) {
       }
 
       // JSON body: { ovpn/config: "...", ca: "...", cert: "...", key: "...", secrets: "..." }
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const configContent = body.ovpn || body.config;
       if (!configContent) return json(res, 400, { ok: false, error: 'missing ovpn/config field' });
 

@@ -18,14 +18,24 @@ function mockRes() {
   };
 }
 
-function makeReq(method, urlPath, body) {
+// makeReq(method, urlPath, body[, opts])
+//   body  — a JS object → JSON-stringified (the original behaviour), OR
+//   opts.rawBody — a raw string emitted verbatim as the request body. Used by
+//     the H-1 tests to drive an INVALID-JSON body (parseBody → 400).
+//   opts.headers — extra request headers merged onto the default set.
+// The extension is additive: callers that pass only (method, urlPath, body)
+// behave exactly as before.
+function makeReq(method, urlPath, body, opts = {}) {
+  const rawBody = typeof opts.rawBody === 'string'
+    ? opts.rawBody
+    : (body ? JSON.stringify(body) : '');
   const req = {
     method,
     url: urlPath,
-    headers: { host: 'localhost' },
+    headers: { host: 'localhost', ...(opts.headers || {}) },
     socket: { remoteAddress: '127.0.0.1' },
     // Implement on/destroy for readRawBody calls (POST endpoints)
-    _body: body ? JSON.stringify(body) : '',
+    _body: rawBody,
     _listeners: {},
     on(event, cb) {
       if (event === 'data' && req._body) {
@@ -42,7 +52,7 @@ function makeReq(method, urlPath, body) {
       }
       return req;
     },
-    destroy() {}
+    destroy() { req._destroyed = true; }
   };
   return req;
 }
@@ -568,5 +578,67 @@ describe('H-17 Regression: feedInMode with fixed tariff', () => {
     // With feedInMode=spot and spotCtKwh=5.0, feedIn = 5.0 * 0.85 = 4.25
     assert.equal(enriched[0].feedInCtKwh, 5.0 * 0.85,
       'feedInCtKwh must use spot*factor from optimizer.tariff config');
+  });
+});
+
+// ── H-1 Regression: readJsonBody — body-parse 400/413 consistency ──
+//
+// Plan 16-02 Task 1. ~13 POST handlers call `await parseBody(req)` with no
+// surrounding try/catch. server-utils.js parseBody rejects a body-too-large
+// with a bare Error (no statusCode) → server.js maps it to an uncaught 500 +
+// a killed socket. The fix: parseBody's body-too-large error carries
+// statusCode=413, and a shared `readJsonBody(req,res)` helper turns both the
+// invalid-JSON (400) and body-too-large (413) cases into a clean, consistent
+// `{ok:false,error}` JSON response. We drive POST /api/log (routes-api.js) —
+// the simplest body-parsing endpoint, no service mock needed.
+
+describe('H-1: readJsonBody body-parse 400/413', () => {
+  it('invalid JSON body → 400 {ok:false,error:invalid_json_body}', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    // A syntactically invalid JSON body — parseBody's JSON.parse throws.
+    await routes.handleRequest(
+      makeReq('POST', '/api/log', null, { rawBody: '{ this is not json' }),
+      res,
+      new URL('http://localhost/api/log')
+    );
+    assert.equal(res._captured.status, 400,
+      'an invalid-JSON body must return 400, not an uncaught 500');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'invalid_json_body');
+  });
+
+  it('oversize body → 413 {ok:false,error:body_too_large} (not 500)', async () => {
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    // parseBody's MAX_BODY_BYTES is 256 KB — emit a single chunk above it.
+    const oversize = 'x'.repeat(300 * 1024);
+    await routes.handleRequest(
+      makeReq('POST', '/api/log', null, { rawBody: oversize }),
+      res,
+      new URL('http://localhost/api/log')
+    );
+    assert.equal(res._captured.status, 413,
+      'a body-too-large must return a clean 413, not an uncaught 500');
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'body_too_large');
+  });
+
+  it('valid JSON body still reaches the handler (200)', async () => {
+    // Regression guard: the helper must not break the happy path.
+    const ctx = mockCtx();
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/log', { level: 'error', message: 'test' }),
+      res,
+      new URL('http://localhost/api/log')
+    );
+    assert.equal(res._captured.status, 200,
+      'a valid body must still reach the /api/log handler');
   });
 });
