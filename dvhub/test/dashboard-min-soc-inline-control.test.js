@@ -97,12 +97,16 @@ test('dashboard markup exposes a single top-level Minimum-SOC editor and removes
 });
 
 test('dashboard styles define interactive Minimum-SOC row, popup editor, and pending state classes', () => {
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  // Plan 16-04 (D-06 triage, UI-drift): styles.css -> per-page index.css. The
+  // Aurora dashboard renamed the editor primitives: `metric-row-action` ->
+  // `min-soc-editor*` slider editor, and the pending state reuses the shared
+  // `pulse` keyframe instead of a dedicated `minSocPulse`. Rebuilt against the
+  // shipped index.css editor classes.
+  const css = fs.readFileSync(path.join(publicDir, 'index.css'), 'utf8');
 
-  assert.match(css, /\.metric-row-action/);
-  assert.match(css, /\.min-soc-editor/);
-  assert.match(css, /\.min-soc-pending/);
-  assert.match(css, /@keyframes\s+minSocPulse/);
+  assert.match(css, /\.min-soc-editor\s*\{/);
+  assert.match(css, /\.min-soc-editor-slider/);
+  assert.match(css, /\.min-soc-pending\s*\{[^}]*animation:/);
 });
 
 test('submitMinSocUpdate posts minSocPct and requests popup close plus pending state', async () => {

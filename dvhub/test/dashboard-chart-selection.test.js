@@ -61,13 +61,19 @@ test('dashboard helper groups contiguous slots and splits gaps into separate sch
 });
 
 test('dashboard markup and styles expose the chart selection callout and bar highlight states', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): the Aurora dashboard moved the price
+  // chart to a Chart.js canvas (no per-bar `.price-bar` DOM element), and split
+  // the monolithic styles.css into dvhub-app.css + index.css. Rebuilt as
+  // targeted assertions on the shipped chart-selection callout markup + CSS.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'index.css'), 'utf8');
 
-  assert.match(html, /chartScheduleCallout/);
-  assert.match(html, /createSelectionScheduleBtn/);
-  assert.match(css, /\.price-bar\.is-hovered/);
-  assert.match(css, /\.chart-selection-callout\.is-visible/);
+  assert.match(html, /id="chartScheduleCallout"/);
+  assert.match(html, /id="createSelectionScheduleBtn"/);
+  // The callout element carries the .chart-selection-callout class and is
+  // toggled via the [hidden] attribute (CSS rule .chart-selection-callout[hidden]).
+  assert.match(html, /class="chart-selection-callout"/);
+  assert.match(css, /\.chart-selection-callout\s*\{/);
 });
 
 test('dashboard exposes and renders today min max with the same scaling as tomorrow', () => {
@@ -219,12 +225,18 @@ test('dashboard dv control helper prefers live GX readback over the last write r
 });
 
 test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): styles.css -> per-page index.css. The
+  // expired-row styling moved from a CSS class rule to an inline opacity set in
+  // app.js (renderScheduleRow toggles `sched-row-expired` + sets tr.style.opacity).
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
-  assert.match(html, /chartComparisonSummary/);
-  assert.match(html, /chartComparisonDetail/);
-  assert.match(css, /\.sched-row-expired/);
+  assert.match(html, /id="chartComparisonSummary"/);
+  assert.match(html, /id="chartComparisonDetail"/);
+  // Expired schedule windows: app.js toggles the sched-row-expired class and
+  // dims the row — assert the shipped behaviour, not a removed CSS-class rule.
+  assert.match(app, /sched-row-expired/);
+  assert.match(app, /isScheduleWindowExpired/);
 });
 
 test('dashboard schedule table exposes a stop-soc column', () => {
@@ -310,22 +322,31 @@ test('dashboard escapes dynamic schedule and plan row template values', () => {
 });
 
 test('dashboard places the schedule panel directly after the price chart panel', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): the Aurora dashboard renamed the
+  // schedule panel heading from "Zeitplan" to "Optimizer · Schedule". The
+  // load-bearing assertion — schedule panel ordered after the price chart —
+  // is preserved against the shipped headings.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const chartIndex = html.indexOf('Day-Ahead-Preise');
-  const scheduleIndex = html.indexOf('<p class="card-title">Zeitplan</p>');
+  const scheduleIndex = html.indexOf('Optimizer &middot; Schedule');
 
-  assert.ok(chartIndex >= 0);
-  assert.ok(scheduleIndex > chartIndex);
+  assert.ok(chartIndex >= 0, 'price chart panel must exist');
+  assert.ok(scheduleIndex > chartIndex, 'schedule panel must follow the price chart panel');
 });
 
 test('dashboard source preserves automation metadata and yellow rule styling', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): styles.css split — the
+  // .sched-row-automation rule moved to index.css and the
+  // --schedule-automation-yellow token moved to the global dvhub-app.css.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const indexCss = fs.readFileSync(path.join(publicDir, 'index.css'), 'utf8');
+  const globalCss = fs.readFileSync(path.join(publicDir, 'dvhub-app.css'), 'utf8');
   const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
-  assert.match(html, /Börsenautomatik/);
-  assert.match(css, /\.sched-row-automation/);
-  assert.match(css, /--schedule-automation-yellow/);
+  // Aurora index.html uses the HTML entity B&ouml;rsenautomatik for the ö.
+  assert.match(html, /B(ö|&ouml;)rsenautomatik/);
+  assert.match(indexCss, /\.sched-row-automation/);
+  assert.match(globalCss, /--schedule-automation-yellow/);
   assert.match(app, /displayTone/);
   assert.match(app, /small_market_automation/);
 });
