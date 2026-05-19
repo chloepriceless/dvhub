@@ -31,7 +31,12 @@ export function parseBody(req) {
       size += c.length;
       if (size > MAX_BODY_BYTES) {
         req.destroy();
-        return reject(new Error('body too large'));
+        // H-1 (Plan 16-02): carry statusCode=413 so the route layer can map a
+        // body-too-large to a clean 413 instead of an uncaught 500. Mirrors the
+        // invalid-JSON branch below, which already sets statusCode=400.
+        const e = new Error('body too large');
+        e.statusCode = 413;
+        return reject(e);
       }
       chunks.push(c);
     });

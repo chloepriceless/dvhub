@@ -668,6 +668,53 @@ export function createApiRoutes(ctx) {
     res.end(body);
   }
 
+  // H-1 (Plan 16-02): shared body-parse wrapper. parseBody rejects an
+  // invalid-JSON body with statusCode=400 and a body-too-large with
+  // statusCode=413 (server-utils.js). Without a try/catch the rejection
+  // bubbles to an uncaught 500 + a killed socket. readJsonBody turns both
+  // cases into a clean, consistent {ok:false,error} JSON response and returns
+  // null so the caller can early-return. NOTE: this is the ONE place that
+  // emits the {ok:false,error} envelope on a parse failure — sibling handlers
+  // keep their existing local response shapes (M-7 envelope normalization is
+  // deferred to a later plan).
+  async function readJsonBody(req, res) {
+    try { return await parseBody(req); }
+    catch (e) {
+      const status = e.statusCode || 413;
+      json(res, status, { ok: false, error: status === 413 ? 'body_too_large' : 'invalid_json_body' });
+      return null;
+    }
+  }
+
+  // H-4 (Plan 16-02): size-bounded JSON read for the EPEX upstream fetch.
+  // A bare `await r.json()` on a config-controlled upstream (epex.priceApiUrl)
+  // would buffer an arbitrarily large — potentially multi-GB — response into
+  // memory and OOM the LXC. EPEX zone/price payloads are tiny; 1 MB is a
+  // generous ceiling. Rejects early on the content-length header when present,
+  // and otherwise enforces the cap chunk-by-chunk while streaming. The thrown
+  // error carries statusCode=502 so the EPEX handlers' existing catch maps it
+  // to a clean upstream-error response rather than an uncaught 500.
+  const EPEX_MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MB
+  async function readJsonCapped(r, maxBytes = EPEX_MAX_RESPONSE_BYTES) {
+    const cl = Number(r.headers.get('content-length'));
+    if (Number.isFinite(cl) && cl > maxBytes) {
+      const e = new Error('upstream_response_too_large'); e.statusCode = 502; throw e;
+    }
+    const reader = r.body.getReader();
+    const chunks = []; let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        const e = new Error('upstream_response_too_large'); e.statusCode = 502; throw e;
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+
   // ── Auth / Rate Limiting ─────────────────────────────────────────────
   // Plan 09-03: route LAN-trust decision through deriveClientIp so that, when
   // an operator opts in via cfg.trustProxy=true + cfg.trustedProxyIps, XFF from
@@ -1145,11 +1192,16 @@ export function createApiRoutes(ctx) {
   function keepalivePulsePayload() {
     const now = Date.now();
     const cfg = getCfg();
-    const slot = Math.floor(now / (cfg.keepalivePulseSec * 1000));
-    const slotTs = slot * cfg.keepalivePulseSec * 1000;
+    // H-2 (Plan 16-02): clamp the pulse period. A misconfigured
+    // keepalivePulseSec of 0 — or a missing value — would make the divisor 0,
+    // so pulseSlot becomes Infinity and serializes to JSON `null` on a polled
+    // LAN-safe endpoint. Clamp to >=1 with a 60 s fallback.
+    const period = Math.max(1, Number(cfg.keepalivePulseSec) || 60);
+    const slot = Math.floor(now / (period * 1000));
+    const slotTs = slot * period * 1000;
     return {
       ok: true,
-      periodSec: cfg.keepalivePulseSec,
+      periodSec: period,
       pulseSlot: slot,
       pulseTimestamp: slotTs,
       now
@@ -2142,7 +2194,8 @@ export function createApiRoutes(ctx) {
     // operator-visible logs show frontend crashes too. Auth-required (handled by
     // checkAuth above for any non-LAN-safe /api/ path).
     if (url.pathname === '/api/log' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'json_body_required' });
       }
@@ -2687,10 +2740,13 @@ export function createApiRoutes(ctx) {
         const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
         const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
@@ -2701,10 +2757,13 @@ export function createApiRoutes(ctx) {
         const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
         const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
@@ -2728,15 +2787,19 @@ export function createApiRoutes(ctx) {
           signal: AbortSignal.timeout(10000)
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
+        const data = await readJsonCapped(r);
         return json(res, 200, data);
       } catch (e) {
-        return json(res, 502, { error: e.message });
+        // H-4 (Plan 16-02): readJsonCapped throws statusCode=502 +
+        // 'upstream_response_too_large' on an oversize upstream body — emit a
+        // clean {ok:false,error} 502 rather than letting it bubble to a 500.
+        return json(res, e.statusCode || 502, { ok: false, error: e.message });
       }
     }
 
     if (url.pathname === '/api/meter/scan' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 08-04 Task 2 Step 3: SSRF guard. Meter scan talks raw Modbus TCP —
       // an attacker with a stolen token could otherwise point it at any host on
       // the internet (data-exfil, port-scan via the Pi, liveness oracle).
@@ -2831,7 +2894,8 @@ export function createApiRoutes(ctx) {
 
     // --- Config POST / Import POST ---
     if ((url.pathname === '/api/config' || url.pathname === '/api/config/import') && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
       }
@@ -2866,6 +2930,21 @@ export function createApiRoutes(ctx) {
       const unknownRoots = Object.keys(body.config).filter((k) => !ALLOWED_CONFIG_ROOTS.has(k));
       if (unknownRoots.length > 0) {
         return json(res, 400, { ok: false, error: 'unknown_config_paths', paths: unknownRoots });
+      }
+      // H-3 (Plan 16-02): SSRF guard on epex.priceApiUrl. The /api/epex/*
+      // handlers issue a server-side `fetch` to this config-controlled URL —
+      // the CSP does not constrain outbound fetch. A config writer could
+      // otherwise point it at an internal host (RFC1918/loopback) and proxy
+      // that host's response back to the caller, or downgrade to plain http.
+      // Reject at save time: scheme must be https, host must not be private.
+      // Reuse the existing isRfc1918OrLoopback matcher — no new private-IP code.
+      const candidatePriceApiUrl = body.config?.epex?.priceApiUrl;
+      if (candidatePriceApiUrl) {
+        let u;
+        try { u = new URL(candidatePriceApiUrl); } catch { /* u stays undefined → reject below */ }
+        if (!u || u.protocol !== 'https:' || isRfc1918OrLoopback(u.hostname)) {
+          return json(res, 400, { ok: false, error: 'invalid_epex_price_api_url' });
+        }
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. Flipping either
@@ -3385,7 +3464,8 @@ export function createApiRoutes(ctx) {
 
     // --- EOS Apply ---
     if (url.pathname === '/api/integration/eos/apply' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const results = [];
       if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
         results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'eos_optimization'));
@@ -3407,7 +3487,8 @@ export function createApiRoutes(ctx) {
 
     // --- EMHASS Apply ---
     if (url.pathname === '/api/integration/emhass/apply' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const results = [];
       if (body.gridSetpointW !== undefined && Number.isFinite(Number(body.gridSetpointW))) {
         results.push(await ctx.applyControlTarget('gridSetpointW', Number(body.gridSetpointW), 'emhass_optimization'));
@@ -3430,7 +3511,8 @@ export function createApiRoutes(ctx) {
     // --- History Import ---
     if (url.pathname === '/api/history/import' && req.method === 'POST') {
       if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 09-05 Task 2: audit envelope around the import lifecycle. history-import.js
       // is NOT a worker thread (verified via grep — no parentPort / new Worker calls);
       // its manager methods are plain async returning {ok, ...}. So we emit
@@ -3501,7 +3583,8 @@ export function createApiRoutes(ctx) {
     // --- History Backfill VRM ---
     if (url.pathname === '/api/history/backfill/vrm' && req.method === 'POST') {
       if (!ctx.historyImportManager) return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const requestedMode = body?.mode === 'full' ? 'full' : 'gap';
       ctx.assertValidRuntimeCommand('history_backfill', {
         mode: requestedMode,
@@ -3532,7 +3615,8 @@ export function createApiRoutes(ctx) {
       if (!ctx.historyApi || typeof ctx.historyApi.postPriceBackfill !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       // Plan 09-05 Task 3: audit envelope for the price backfill route.
       const priceBackfillStartedAt = Date.now();
       pushLog('backfill_started', {
@@ -3555,7 +3639,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Rules POST ---
     if (url.pathname === '/api/schedule/rules' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!Array.isArray(body.rules)) return json(res, 400, { ok: false, error: 'rules array required' });
       const validRules = body.rules.filter((rule) => {
         if (typeof rule !== 'object' || rule === null) return false;
@@ -3578,7 +3663,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Config POST ---
     if (url.pathname === '/api/schedule/config' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (body.defaultGridSetpointW !== undefined) {
         const v = Number(body.defaultGridSetpointW);
         if (!Number.isFinite(v)) return json(res, 400, { ok: false, error: 'defaultGridSetpointW invalid' });
@@ -3606,7 +3692,8 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Automation Config POST ---
     if (url.pathname === '/api/schedule/automation/config' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         return json(res, 400, { ok: false, error: 'invalid body' });
       }
@@ -3652,7 +3739,8 @@ export function createApiRoutes(ctx) {
 
     // --- Control Write POST ---
     if (url.pathname === '/api/control/write' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const target = String(body.target || '');
       const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct']);
       if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
@@ -3826,7 +3914,8 @@ export function createApiRoutes(ctx) {
       }
 
       // JSON body: { ovpn/config: "...", ca: "...", cert: "...", key: "...", secrets: "..." }
-      const body = await parseBody(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
       const configContent = body.ovpn || body.config;
       if (!configContent) return json(res, 400, { ok: false, error: 'missing ovpn/config field' });
 
