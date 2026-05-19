@@ -78,9 +78,13 @@ describe('createMlCorrection', () => {
     assert.equal(result.applied, false);
     assert.deepStrictEqual(result.corrected, pvSlots);
     assert.equal(result.model, null);
-    // Verify error was logged
-    assert.ok(mockPushLog.mock.calls.length > 0);
-    assert.equal(mockPushLog.mock.calls[0].arguments[0], 'ml_predict_error');
+    // Verify error was logged. Plan 16-05 D-01 added an `ml_feature_diff`
+    // log earlier in correct(), so search for the error event by name rather
+    // than assuming it is the first push.
+    const errLog = mockPushLog.mock.calls.find(
+      c => c.arguments[0] === 'ml_predict_error'
+    );
+    assert.ok(errLog, 'Should log ml_predict_error');
   });
 
   it('test 5: handles bridge returning applied:false (no_model on disk)', async () => {

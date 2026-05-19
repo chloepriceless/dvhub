@@ -12,7 +12,12 @@ Input schema:
 }
 
 Output schema (success):
-{"ok": true, "mae": 123.4, "n": 72}
+{"ok": true, "mae": 123.4, "n": 72,
+ "predictions": [{"rawPv": 2340.0, "correctedPv": 2280.1}, ...]}
+
+`predictions` (Plan 16-05 D-02) is aligned to the held-out rows: `rawPv` is the
+measured PV ground truth (`y_true`), `correctedPv` is the model's prediction.
+ml-training.js promoteIfBetter consumes it for the pre-promotion sanity gate.
 
 Output schema (schema mismatch — fail-open):
 {"ok": false, "error": "schema_mismatch", "model_version": 1, "runtime_version": 2}
@@ -91,7 +96,20 @@ def eval_model(params):
     y_true = np.array([float(row.get('y_true', 0.0) or 0.0) for row in held_out])
     mae = float(np.mean(np.abs(y_true - y_pred)))
 
-    return {'ok': True, 'mae': mae, 'n': len(held_out), 'model_type': model_type}
+    # Plan 16-05 D-02: per-row predictions for the pre-promotion sanity gate.
+    # rawPv = measured ground truth (y_true), correctedPv = model prediction.
+    predictions = [
+        {'rawPv': float(yt), 'correctedPv': float(yp)}
+        for yt, yp in zip(y_true, y_pred)
+    ]
+
+    return {
+        'ok': True,
+        'mae': mae,
+        'n': len(held_out),
+        'model_type': model_type,
+        'predictions': predictions,
+    }
 
 
 if __name__ == '__main__':

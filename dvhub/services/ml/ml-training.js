@@ -322,9 +322,15 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
   /**
    * REVIEWS H12: delegate to ml_eval.py Python helper.
    *
+   * Plan 16-05 D-02: returns the per-row predictions alongside the MAE so the
+   * caller can run the magnitude sanity gate. ml_eval.py emits `predictions`
+   * (an array of `{rawPv, correctedPv}` aligned to the held-out rows); older
+   * helper builds that return only `mae` degrade gracefully — `predictions`
+   * is then `[]` and the sanity gate is skipped (empty-daylight path).
+   *
    * @param {string} modelPath
    * @param {Array<object>} heldOutRows
-   * @returns {Promise<number>} MAE
+   * @returns {Promise<{mae: number, predictions: Array<{rawPv: number, correctedPv: number}>}>}
    */
   async function evalModel(modelPath, heldOutRows) {
     const scriptPath = path.join(SCRIPTS_DIR, 'ml_eval.py');
@@ -335,7 +341,10 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
     if (!result || !result.ok) {
       throw new Error(`eval_failed: ${result?.error ?? 'null_result'}`);
     }
-    return Number(result.mae);
+    return {
+      mae: Number(result.mae),
+      predictions: Array.isArray(result.predictions) ? result.predictions : [],
+    };
   }
 
   /**
@@ -396,10 +405,35 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
     await validateModel(candidatePath);
 
     // Step 2: evaluate both on held-out
-    const v1Mae = await evalModel(activePath, heldOutRows);
-    const v2Mae = await evalModel(candidatePath, heldOutRows);
+    const v1Eval = await evalModel(activePath, heldOutRows);
+    const v2Eval = await evalModel(candidatePath, heldOutRows);
+    const v1Mae = v1Eval.mae;
+    const v2Mae = v2Eval.mae;
     const improveRatio = v1Mae > 0 ? (v1Mae - v2Mae) / v1Mae : 0;
     pushLog('ml_candidate_eval', { v1Mae, v2Mae, improveRatio });
+
+    // Plan 16-05 D-02: pre-promotion SANITY GATE — an orthogonal magnitude
+    // check the MAE-improvement gate alone cannot catch. A collapsed model
+    // (v1's failure mode: daytime peaks squashed to ~0 W) can still post a
+    // deceptively "better" MAE on a degenerate held-out slice, so MAE is not
+    // sufficient. Over daylight slots (raw PV > 0), mean(corrected)/mean(raw)
+    // must land in [0.5, 1.5]; outside the band -> reject before promotion.
+    // `corrected` = the candidate model's predictions, `raw` = the measured PV
+    // ground truth carried per held-out row (the in-pipeline "raw" proxy).
+    const daylight = (v2Eval.predictions || []).filter(p => Number(p.rawPv) > 0);
+    if (daylight.length > 0) {
+      const meanRaw = daylight.reduce((s, p) => s + Number(p.rawPv), 0) / daylight.length;
+      const meanCorrected = daylight.reduce((s, p) => s + Number(p.correctedPv), 0) / daylight.length;
+      const sanityRatio = meanRaw > 0 ? meanCorrected / meanRaw : 0;
+      if (sanityRatio < 0.5 || sanityRatio > 1.5) {
+        const rejectedPath = await moveToRejected(candidatePath);
+        pushLog('ml_sanity_gate_rejected', {
+          sanityRatio, meanCorrected, meanRaw,
+          daylightSlots: daylight.length, rejectedPath,
+        });
+        return { decision: 'rejected', reason: 'sanity_gate', sanityRatio, rejectedPath };
+      }
+    }
 
     // Promotion gate: ≥10% improvement → promoted;
     // any improvement 0-10% → promoted_weak;
