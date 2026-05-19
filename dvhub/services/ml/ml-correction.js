@@ -145,6 +145,14 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
       // D-A1: Build feature dict internally
       const features = await buildFeatures(pvSlots, getCfg());
 
+      // Plan 16-05 D-01: feature-diff logging. Make the INFERENCE feature set
+      // observable so it can be diffed against the training feature set
+      // (ml-training.js queryTrainingData) — shape, scale, units. This is the
+      // diagnostic that surfaces the v1-collapse root cause (data drift /
+      // Node↔Python pipeline mismatch / target leakage). For each feature
+      // group log the key names, the numeric value count, and min/max/mean.
+      pushLog('ml_feature_diff', summarizeFeatures(features));
+
       const scriptPath = path.join(SCRIPTS_DIR, 'ml_predict.py');
       const result = await pythonBridge.call(scriptPath, {
         slots: pvSlots,
@@ -182,6 +190,49 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
       pushLog('ml_predict_error', { error: error.message });
       return { applied: false, corrected: pvSlots, model: null };
     }
+  }
+
+  /**
+   * Plan 16-05 D-01: summarize the inference feature dict for the
+   * `ml_feature_diff` diagnostic log. For each feature group captures the key
+   * names, the count of numeric values, and their min/max/mean — so the
+   * inference feature set's SHAPE (keys), SCALE (ranges), and units can be
+   * diffed against the training feature set without dumping raw arrays.
+   *
+   * @param {{weather: Array, plant: object, accuracy: object}} features
+   * @returns {object} per-group {keys, numericCount, min, max, mean}
+   */
+  function summarizeFeatures(features) {
+    const numericStats = (values) => {
+      const nums = values.filter(v => typeof v === 'number' && Number.isFinite(v));
+      if (nums.length === 0) return { numericCount: 0, min: null, max: null, mean: null };
+      let min = nums[0], max = nums[0], sum = 0;
+      for (const n of nums) {
+        if (n < min) min = n;
+        if (n > max) max = n;
+        sum += n;
+      }
+      return {
+        numericCount: nums.length,
+        min: Math.round(min * 1000) / 1000,
+        max: Math.round(max * 1000) / 1000,
+        mean: Math.round((sum / nums.length) * 1000) / 1000,
+      };
+    };
+
+    // weather is an Array of per-hour dicts — flatten the numeric values.
+    const weather = Array.isArray(features?.weather) ? features.weather : [];
+    const weatherKeys = weather.length > 0 ? Object.keys(weather[0]) : [];
+    const weatherValues = weather.flatMap(row => Object.values(row || {}));
+
+    const plant = features?.plant || {};
+    const accuracy = features?.accuracy || {};
+
+    return {
+      weather: { rows: weather.length, keys: weatherKeys, ...numericStats(weatherValues) },
+      plant: { keys: Object.keys(plant), ...numericStats(Object.values(plant)) },
+      accuracy: { keys: Object.keys(accuracy), ...numericStats(Object.values(accuracy)) },
+    };
   }
 
   /**
