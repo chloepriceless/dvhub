@@ -72,6 +72,13 @@ export function createPoller(ctx) {
 
   // --- pointFromRegs: convert raw register values to engineering value ---
   function pointFromRegs(regs, conf) {
+    // Fronius SunSpec Float32: transport-fronius.js gibt { __froniusFloat32, value } zurück
+    if (regs && regs.__froniusFloat32 === true) {
+      if (regs.value === null || !Number.isFinite(regs.value)) return null;
+      const scale = Number(conf.scale ?? 1);
+      const offset = Number(conf.offset ?? 0);
+      return Number((regs.value * scale + offset).toFixed(3));
+    }
     if (!regs || !regs.length) return null;
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
@@ -223,11 +230,23 @@ export function createPoller(ctx) {
         };
       } else {
         // Modbus: Register lesen und signed interpretieren
-        const regs = await transport.mbRequest(cfg.meter);
-        const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
-        const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
-        const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
-        const rawTotal = rawL1 + rawL2 + rawL3;
+        const meterResult = await transport.mbRequest(cfg.meter);
+        let rawL1, rawL2, rawL3, rawTotal;
+
+        if (meterResult && meterResult.__froniusMeterBlock === true) {
+          // Fronius Smart Meter: SunSpec Float32-Block (transport-fronius.js)
+          rawL1 = meterResult.l1 ?? 0;
+          rawL2 = meterResult.l2 ?? 0;
+          rawL3 = meterResult.l3 ?? 0;
+          rawTotal = Number.isFinite(meterResult.total) ? meterResult.total : rawL1 + rawL2 + rawL3;
+        } else {
+          // Standard Modbus (Victron o. ä.): uint16-Array mit signed-Interpretation
+          const regs = meterResult;
+          rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
+          rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
+          rawL3 = regs.length > 2 ? s16(regs[2]) : 0;
+          rawTotal = rawL1 + rawL2 + rawL3;
+        }
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
@@ -236,7 +255,7 @@ export function createPoller(ctx) {
         l3 = rawL3 * sign;
         total = rawTotal * sign;
         state.meter = {
-          ok: true, updatedAt: Date.now(), raw: regs,
+          ok: true, updatedAt: Date.now(), raw: [rawL1, rawL2, rawL3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
           error: null
         };

@@ -145,6 +145,16 @@ export function createScheduleEvaluator(ctx) {
       try {
         if (transport.type === 'mqtt') {
           await transport.mqttWrite('dontFeedExcessAcPv', val);
+        } else if (transport.manufacturer === 'fronius') {
+          // Fronius: Einspeisebegrenzung via IC123 WMaxLimPct + WMaxLim_Ena
+          // feedIn=true  → Einspeisung freigeben → WMaxLim_Ena = 0
+          // feedIn=false → Einspeisung sperren   → WMaxLimPct = 0%, WMaxLim_Ena = 1
+          await transport.setWMaxLim(!feedIn, 0, {
+            host: dc.dontFeedExcessAcPv.host,
+            port: dc.dontFeedExcessAcPv.port,
+            unitId: dc.dontFeedExcessAcPv.unitId,
+            timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
+          });
         } else {
           await transport.mbWriteSingle({
             host: dc.dontFeedExcessAcPv.host, port: dc.dontFeedExcessAcPv.port,

@@ -1,0 +1,210 @@
+{
+  "_comment": "Fronius Herstellerprofil fuer DVhub — SunSpec Modbus TCP (Float-Modus)",
+  "_doc": [
+    "Unterstuetzte Geraete: Fronius Symo GEN24 Plus + Fronius Reserva Batterie",
+    "Voraussetzung:",
+    "  - Fronius Webinterface: Modbus TCP aktiviert, SunSpec Model Type = Float",
+    "  - Wechselrichter-Steuerung ueber Modbus aktiviert (Technician-Passwort noetig)",
+    "  - Batterie-Management-Regeln im Fronius Webinterface DEAKTIVIEREN,",
+    "    sonst konkurrieren WR-interne Regeln mit Modbus-Schreibbefehlen",
+    "",
+    "IC124 Basic Storage Controls (Float-Modus, Startadresse 40355):",
+    "  Alle Offsets gegenueber Block-Start:",
+    "  +0  = 40355  WChaMax    Max Lade-Sollwert [W]",
+    "  +3  = 40358  StorCtl_Mod Steuermodus Bitfeld (bit0=Laden, bit1=Entladen)",
+    "  +5  = 40360  MinRsvPct  Mindest-SOC [%]",
+    "  +6  = 40361  ChaState   SOC [%*100, uint16] (0-10000 = 0.00-100.00%)",
+    "  +9  = 40364  ChaSt      Ladestatus (3=Entladen, 4=Laden, 5=Voll)",
+    "  +10 = 40365  OutWRte    Entladerate [% WChaMax, int16]",
+    "  +11 = 40366  InWRte     Laderate [% WChaMax, int16]",
+    "  +15 = 40370  ChaGriSet  Netzladen (0=nein, 1=ja, uint16)"
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Fronius Smart Meter (Unit-ID 200): W total + WphA/B/C als Float32-Block",
+    "host": null,
+    "port": 502,
+    "unitId": 200,
+    "timeoutMs": 2000,
+    "fc": 3,
+    "address": 40090,
+    "quantity": 8,
+    "encoding": "sunspec_float32_meter_block"
+  },
+
+  "points": {
+    "pvPowerW": {
+      "_comment": "AC-Wirkleistung gesamt (Float32). Bei Hybrid-WR: PV-Erzeugung (ohne Akku-Anteil).",
+      "enabled": true,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40093,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "sunspec_float32"
+    },
+    "acPvL1W": {
+      "enabled": false,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40073,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "sunspec_float32"
+    },
+    "acPvL2W": {
+      "enabled": false,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40075,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "sunspec_float32"
+    },
+    "acPvL3W": {
+      "enabled": false,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40077,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "sunspec_float32"
+    },
+    "soc": {
+      "_comment": "IC124 ChaState: SOC in Promille (0-10000 = 0.00-100.00%). Adresse 40361 (Float-Offset +6). Skalierung 0.01 -> %.",
+      "enabled": true,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40361,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "encoding": "raw_uint16"
+    },
+    "batteryPowerW": {
+      "_comment": "DC-Eingangsleistung (Float32, Register 40107 = DCW). Positiv=PV->WR, Negativ=Akku entlaedt. Vorzeichen-Konvention: im Transport wird invertiert, sodass positiv=Laden, negativ=Entladen.",
+      "enabled": true,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40107,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "sunspec_float32_battery_dc"
+    },
+    "gridSetpointW": {
+      "_comment": "Kein ESS Grid-Setpoint bei Fronius",
+      "enabled": false,
+      "fc": 3,
+      "address": 0,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    },
+    "minSocPct": {
+      "_comment": "IC124 MinRsvPct: Mindest-SOC in % (uint16). Adresse 40360 (Float-Offset +5).",
+      "enabled": true,
+      "fc": 3,
+      "unitId": 1,
+      "address": 40360,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "encoding": "raw_uint16"
+    },
+    "selfConsumptionW": {
+      "enabled": false,
+      "fc": 3,
+      "address": 0,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "controlWrite": {
+    "gridSetpointW": {
+      "enabled": false,
+      "fc": 6,
+      "address": 0,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "chargeCurrentA": {
+      "enabled": false,
+      "fc": 6,
+      "address": 0,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "minSocPct": {
+      "_comment": "IC124 MinRsvPct: Mindest-SOC schreiben (uint16, Wert in %). Adresse 40360.",
+      "enabled": true,
+      "fc": 6,
+      "unitId": 1,
+      "address": 40360,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    }
+  },
+
+  "dvControl": {
+    "_comment": "DV-Abregelung: WMaxLimPct=0 + WMaxLim_Ena=1 sperrt Einspeisung. Bei Freigabe: WMaxLim_Ena=0. Batterie-Entladung bleibt aktiv solange StorCtl_Mod=2 (nur Entladen erlaubt).",
+    "enabled": true,
+    "feedExcessDcPv": {
+      "enabled": false,
+      "fc": 6,
+      "address": 0,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "dontFeedExcessAcPv": {
+      "_comment": "Fronius-Einspeisesperre via WMaxLim. Logik in transport-fronius.js::setWMaxLim().",
+      "enabled": true,
+      "unitId": 1,
+      "fc": 16,
+      "address": 40267,
+      "writeType": "fronius_wmax_lim",
+      "signed": false,
+      "scale": 100,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "negativePriceProtection": {
+      "enabled": true,
+      "gridSetpointW": -40
+    }
+  }
+}

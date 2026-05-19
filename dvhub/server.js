@@ -42,6 +42,7 @@ import {
 import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
+import { createFroniusTransport } from './transport-fronius.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
   nowIso,
@@ -161,7 +162,9 @@ const state = {
 // ── Transport erstellen (Modbus oder MQTT) ──────────────────────────
 const transport = cfg.victron?.transport === 'mqtt'
   ? createMqttTransport(cfg.victron)
-  : createModbusTransport();
+  : cfg.manufacturer === 'fronius'
+    ? createFroniusTransport(cfg.victron)
+    : createModbusTransport();
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport();
