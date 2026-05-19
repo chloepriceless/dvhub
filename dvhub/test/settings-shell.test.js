@@ -130,7 +130,12 @@ test('real config workspace stays section-focused and does not reopen unrelated 
   const definition = getConfigDefinition();
   const workspace = buildDestinationWorkspace(definition, 'connection');
 
-  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron', 'vpn']);
+  // Plan 16-04 (D-06 triage, UI-drift): VPN moved out of the `connection`
+  // destination-workspace into a dedicated settings tab (settings.html
+  // data-tab="vpn"). The `connection` destination now holds only the
+  // Anlagenprofil (`victron`) section. The workspace must stay focused on the
+  // requested destination and not reopen unrelated sections — still asserted.
+  assert.deepEqual(Array.from(workspace.sections, (section) => section.id), ['victron']);
   assert.equal(workspace.sections[0].groups[0].openByDefault, true);
 });
 

@@ -49,25 +49,41 @@ test('dashboard helper groups contiguous slots and splits gaps into separate sch
     { ts: Date.parse('2026-03-09T09:00:00Z'), ct_kwh: 4 }
   ];
 
+  // Plan 16-04 (D-06 triage, brittle test): the window start/end strings come
+  // from app.js `fmtHm`, which uses `toLocaleTimeString` WITHOUT a timeZone —
+  // so the output follows the runner's ambient TZ (the test was authored on a
+  // Europe/Berlin box; CI here runs Etc/UTC). The behaviour under test is the
+  // CONTIGUITY GROUPING (a 1h gap splits the selection into two windows), not
+  // the absolute clock formatting. Derive the expected strings the exact same
+  // way the production code does, so the assertion is TZ-independent.
+  const hm = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const HOUR = 3600 * 1000;
+
   assert.equal(typeof helpers.buildScheduleWindowsFromSelection, 'function');
   const windows = JSON.parse(JSON.stringify(helpers.buildScheduleWindowsFromSelection(data, [0, 1, 2, 3])));
-  assert.deepEqual(
-    windows,
-    [
-      { start: '06:00', end: '08:00' },
-      { start: '09:00', end: '11:00' }
-    ]
-  );
+  assert.equal(windows.length, 2, 'the 1h gap splits the selection into two windows');
+  assert.deepEqual(windows, [
+    // window 1: slots [0,1] -> 05:00Z..06:00Z, ends at the 06:00Z slot's end (07:00Z)
+    { start: hm(data[0].ts), end: hm(data[1].ts + HOUR) },
+    // window 2: slots [2,3] -> 08:00Z..09:00Z, ends at the 09:00Z slot's end (10:00Z)
+    { start: hm(data[2].ts), end: hm(data[3].ts + HOUR) }
+  ]);
 });
 
 test('dashboard markup and styles expose the chart selection callout and bar highlight states', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): the Aurora dashboard moved the price
+  // chart to a Chart.js canvas (no per-bar `.price-bar` DOM element), and split
+  // the monolithic styles.css into dvhub-app.css + index.css. Rebuilt as
+  // targeted assertions on the shipped chart-selection callout markup + CSS.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'index.css'), 'utf8');
 
-  assert.match(html, /chartScheduleCallout/);
-  assert.match(html, /createSelectionScheduleBtn/);
-  assert.match(css, /\.price-bar\.is-hovered/);
-  assert.match(css, /\.chart-selection-callout\.is-visible/);
+  assert.match(html, /id="chartScheduleCallout"/);
+  assert.match(html, /id="createSelectionScheduleBtn"/);
+  // The callout element carries the .chart-selection-callout class and is
+  // toggled via the [hidden] attribute (CSS rule .chart-selection-callout[hidden]).
+  assert.match(html, /class="chart-selection-callout"/);
+  assert.match(css, /\.chart-selection-callout\s*\{/);
 });
 
 test('dashboard exposes and renders today min max with the same scaling as tomorrow', () => {
@@ -219,12 +235,18 @@ test('dashboard dv control helper prefers live GX readback over the last write r
 });
 
 test('dashboard markup and styles expose user price comparison summary and expired schedule styling', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): styles.css -> per-page index.css. The
+  // expired-row styling moved from a CSS class rule to an inline opacity set in
+  // app.js (renderScheduleRow toggles `sched-row-expired` + sets tr.style.opacity).
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
-  assert.match(html, /chartComparisonSummary/);
-  assert.match(html, /chartComparisonDetail/);
-  assert.match(css, /\.sched-row-expired/);
+  assert.match(html, /id="chartComparisonSummary"/);
+  assert.match(html, /id="chartComparisonDetail"/);
+  // Expired schedule windows: app.js toggles the sched-row-expired class and
+  // dims the row — assert the shipped behaviour, not a removed CSS-class rule.
+  assert.match(app, /sched-row-expired/);
+  assert.match(app, /isScheduleWindowExpired/);
 });
 
 test('dashboard schedule table exposes a stop-soc column', () => {
@@ -272,19 +294,22 @@ test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back
     }
   ]);
 
+  // Plan 16-04 (D-06 triage, brittle test): the grouped-rule object legitimately
+  // gained an `activeDate` field (per-slot scheduling — app.js ~L2102). A full-
+  // object deepEqual pinned every field and broke on the additive change.
+  // Hardened to assert the load-bearing fields (the stopSocPct hydration this
+  // test exists to guard), tolerant of additive object growth.
   const grouped = JSON.parse(JSON.stringify(helpers.groupScheduleRulesForDashboard(rules)));
-  assert.deepEqual(grouped, [
-    {
-      start: '08:00',
-      end: '09:00',
-      enabled: true,
-      grid: -40,
-      charge: 80,
-      stopSocPct: 25,
-      dcExport: false,
-      ruleId: 'grid_1'
-    }
-  ]);
+  assert.equal(grouped.length, 1, 'one grouped window');
+  const g = grouped[0];
+  assert.equal(g.start, '08:00');
+  assert.equal(g.end, '09:00');
+  assert.equal(g.enabled, true);
+  assert.equal(g.grid, -40);
+  assert.equal(g.charge, 80);
+  assert.equal(g.stopSocPct, 25, 'stopSocPct hydrated back onto the grouped rule');
+  assert.equal(g.dcExport, false);
+  assert.equal(g.ruleId, 'grid_1');
 });
 
 test('dashboard schedule row template includes stop-soc controls', () => {
@@ -310,22 +335,31 @@ test('dashboard escapes dynamic schedule and plan row template values', () => {
 });
 
 test('dashboard places the schedule panel directly after the price chart panel', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): the Aurora dashboard renamed the
+  // schedule panel heading from "Zeitplan" to "Optimizer · Schedule". The
+  // load-bearing assertion — schedule panel ordered after the price chart —
+  // is preserved against the shipped headings.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const chartIndex = html.indexOf('Day-Ahead-Preise');
-  const scheduleIndex = html.indexOf('<p class="card-title">Zeitplan</p>');
+  const scheduleIndex = html.indexOf('Optimizer &middot; Schedule');
 
-  assert.ok(chartIndex >= 0);
-  assert.ok(scheduleIndex > chartIndex);
+  assert.ok(chartIndex >= 0, 'price chart panel must exist');
+  assert.ok(scheduleIndex > chartIndex, 'schedule panel must follow the price chart panel');
 });
 
 test('dashboard source preserves automation metadata and yellow rule styling', () => {
+  // Plan 16-04 (D-06 triage, UI-drift): styles.css split — the
+  // .sched-row-automation rule moved to index.css and the
+  // --schedule-automation-yellow token moved to the global dvhub-app.css.
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(publicDir, 'styles.css'), 'utf8');
+  const indexCss = fs.readFileSync(path.join(publicDir, 'index.css'), 'utf8');
+  const globalCss = fs.readFileSync(path.join(publicDir, 'dvhub-app.css'), 'utf8');
   const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
-  assert.match(html, /Börsenautomatik/);
-  assert.match(css, /\.sched-row-automation/);
-  assert.match(css, /--schedule-automation-yellow/);
+  // Aurora index.html uses the HTML entity B&ouml;rsenautomatik for the ö.
+  assert.match(html, /B(ö|&ouml;)rsenautomatik/);
+  assert.match(indexCss, /\.sched-row-automation/);
+  assert.match(globalCss, /--schedule-automation-yellow/);
   assert.match(app, /displayTone/);
   assert.match(app, /small_market_automation/);
 });

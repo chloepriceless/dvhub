@@ -1,5 +1,11 @@
 // test/forecast-api.test.js -- Tests for /api/forecast combined endpoint (FORE-07).
 // Uses mock state objects (no live DB needed).
+//
+// Plan 16-04 (D-06 triage, brittle test): buildForecastResponse() became async
+// (it awaits ML correction + VRM fetch). The buildForecastResponse describe
+// block called it synchronously and inspected the returned Promise — every
+// `response.meta` etc. was undefined. Fixed by awaiting the call and making the
+// affected `it()` callbacks async.
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -84,16 +90,16 @@ describe('buildForecastResponse', () => {
     service = createForecastService(ctx);
   });
 
-  it('should return object with meta, price, pv, load keys', () => {
-    const response = service.buildForecastResponse();
+  it('should return object with meta, price, pv, load keys', async () => {
+    const response = await service.buildForecastResponse();
     assert.ok(response.meta, 'response should have meta');
     assert.ok(response.price, 'response should have price');
     assert.ok(response.pv, 'response should have pv');
     assert.ok(response.load, 'response should have load');
   });
 
-  it('meta should contain generatedAt, horizon, tier, pvModel, loadModel', () => {
-    const { meta } = service.buildForecastResponse();
+  it('meta should contain generatedAt, horizon, tier, pvModel, loadModel', async () => {
+    const { meta } = await service.buildForecastResponse();
     assert.ok(meta.generatedAt, 'meta.generatedAt should exist');
     assert.equal(meta.horizon, '72h');
     assert.equal(typeof meta.tier, 'number');
@@ -101,29 +107,29 @@ describe('buildForecastResponse', () => {
     assert.ok(meta.loadModel, 'meta.loadModel should exist');
   });
 
-  it('meta.generatedAt should be a valid ISO date', () => {
-    const { meta } = service.buildForecastResponse();
+  it('meta.generatedAt should be a valid ISO date', async () => {
+    const { meta } = await service.buildForecastResponse();
     const parsed = new Date(meta.generatedAt);
     assert.ok(!isNaN(parsed.getTime()), 'generatedAt should be a valid date');
   });
 
-  it('price.resolution should be 15min per D-02', () => {
-    const { price } = service.buildForecastResponse();
+  it('price.resolution should be 15min per D-02', async () => {
+    const { price } = await service.buildForecastResponse();
     assert.equal(price.resolution, '15min');
   });
 
-  it('pv.resolution should be 15min per D-02', () => {
-    const { pv } = service.buildForecastResponse();
+  it('pv.resolution should be 15min per D-02', async () => {
+    const { pv } = await service.buildForecastResponse();
     assert.equal(pv.resolution, '15min');
   });
 
-  it('load.resolution should be 1h per D-02', () => {
-    const { load } = service.buildForecastResponse();
+  it('load.resolution should be 1h per D-02', async () => {
+    const { load } = await service.buildForecastResponse();
     assert.equal(load.resolution, '1h');
   });
 
-  it('price slots should have start, end, ctKwh, confidence fields', () => {
-    const { price } = service.buildForecastResponse();
+  it('price slots should have start, end, ctKwh, confidence fields', async () => {
+    const { price } = await service.buildForecastResponse();
     assert.ok(price.slots.length > 0, 'should have price slots from mock EPEX data');
     for (const slot of price.slots) {
       assert.ok(slot.start, 'slot should have start');
@@ -133,7 +139,7 @@ describe('buildForecastResponse', () => {
     }
   });
 
-  it('confidence values should be between 0.0 and 1.0 per D-05', () => {
+  it('confidence values should be between 0.0 and 1.0 per D-05', async () => {
     // Set up PV and load data for broader coverage
     ctx.state.forecast.pv.data = [
       { ts: new Date().toISOString(), powerW: 3500, confidence: 0.7 }
@@ -142,7 +148,7 @@ describe('buildForecastResponse', () => {
       { ts_utc: new Date().toISOString(), power_w: 850, confidence: 0.5 }
     ];
 
-    const response = service.buildForecastResponse();
+    const response = await service.buildForecastResponse();
 
     // Check price confidence
     for (const slot of response.price.slots) {
@@ -163,37 +169,37 @@ describe('buildForecastResponse', () => {
     }
   });
 
-  it('should return empty slots arrays when no data available', () => {
+  it('should return empty slots arrays when no data available', async () => {
     // Start with clean state (no EPEX data)
     ctx.state.epex = { ok: false, data: null };
     ctx.state.forecast.pv.data = null;
     ctx.state.forecast.load.data = null;
 
-    const response = service.buildForecastResponse();
+    const response = await service.buildForecastResponse();
     assert.deepEqual(response.price.slots, []);
     assert.deepEqual(response.pv.slots, []);
     assert.deepEqual(response.load.slots, []);
   });
 
-  it('should use cfg defaults for pvModel and loadModel', () => {
-    const { meta } = service.buildForecastResponse();
+  it('should use cfg defaults for pvModel and loadModel', async () => {
+    const { meta } = await service.buildForecastResponse();
     assert.equal(meta.pvModel, 'solcast');
     assert.equal(meta.loadModel, 'sql_weekday');
   });
 
-  it('should use state.forecast.pv.model when available', () => {
+  it('should use state.forecast.pv.model when available', async () => {
     ctx.state.forecast.pv.model = 'pvlib';
-    const { meta } = service.buildForecastResponse();
+    const { meta } = await service.buildForecastResponse();
     assert.equal(meta.pvModel, 'pvlib');
   });
 
-  it('pv slots should have start, end, powerW, confidence', () => {
+  it('pv slots should have start, end, powerW, confidence', async () => {
     ctx.state.forecast.pv.data = [
       { ts: new Date().toISOString(), powerW: 3500, confidence: 0.7 },
       { ts: new Date(Date.now() + 900_000).toISOString(), powerW: 3200, confidence: 0.65 }
     ];
 
-    const { pv } = service.buildForecastResponse();
+    const { pv } = await service.buildForecastResponse();
     assert.equal(pv.slots.length, 2);
     for (const slot of pv.slots) {
       assert.ok(slot.start, 'slot should have start');
@@ -203,13 +209,13 @@ describe('buildForecastResponse', () => {
     }
   });
 
-  it('load slots should have start, end, powerW, confidence', () => {
+  it('load slots should have start, end, powerW, confidence', async () => {
     ctx.state.forecast.load.data = [
       { ts_utc: new Date().toISOString(), power_w: 850, confidence: 0.5 },
       { ts_utc: new Date(Date.now() + 3_600_000).toISOString(), power_w: 920, confidence: 0.5 }
     ];
 
-    const { load } = service.buildForecastResponse();
+    const { load } = await service.buildForecastResponse();
     assert.equal(load.slots.length, 2);
     for (const slot of load.slots) {
       assert.ok(slot.start, 'slot should have start');

@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const publicDir = path.join(repoRoot, 'public');
 const appPath = path.join(publicDir, 'app.js');
-const stylesPath = path.join(publicDir, 'styles.css');
+// Plan 16-04 (D-06 triage, UI-drift): the monolithic styles.css was split by
+// the Aurora redesign — the chart-highlight design tokens now live in the
+// global dvhub-app.css.
+const stylesPath = path.join(publicDir, 'dvhub-app.css');
 
 function loadDashboardHelpers() {
   const source = fs.readFileSync(appPath, 'utf8');

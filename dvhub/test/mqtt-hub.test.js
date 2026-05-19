@@ -27,48 +27,49 @@ function makeMockAedesBroker() {
 
 // ---------- Tests ----------
 
-describe('config-model mqtt sections', () => {
-  it('createDefaultConfig includes mqtt section with brokerUrl and embeddedBroker', async () => {
+// Plan 16-04 (D-06 triage, "config-model mqtt sections"): REBUILT.
+// The original block asserted that mqtt / integrations / devices / notifications
+// were present in createDefaultConfig(). That contract changed by design:
+// createDefaultConfig() is intentionally MINIMAL — these optional feature
+// sections are absent-by-default ("feature off") and only materialise when the
+// user configures them via the settings UI. routes-api.js ALLOWED_CONFIG_ROOTS
+// documents them explicitly as "Migration-seeded / optional sections", and every
+// runtime consumer reads them defensively (getCfg().mqtt || {} etc.). These
+// tests now assert that REAL contract: an absent section degrades gracefully to
+// "off", which is the property that actually matters.
+describe('config-model optional-section contract', () => {
+  it('createDefaultConfig is importable and minimal — optional feature sections are absent by default', async () => {
     const { createDefaultConfig } = await import('../config-model.js');
     const cfg = createDefaultConfig();
-    assert.ok(cfg.mqtt, 'mqtt section exists');
-    assert.equal(cfg.mqtt.brokerUrl, '');
-    assert.ok(cfg.mqtt.embeddedBroker, 'embeddedBroker exists');
-    assert.equal(cfg.mqtt.embeddedBroker.port, 1883);
-    assert.equal(cfg.mqtt.embeddedBroker.host, undefined, 'no host field for security');
-    assert.equal(cfg.mqtt.publishIntervalMs, 5000);
-    assert.equal(cfg.mqtt.topicPrefix, 'dvhub');
-    assert.ok(cfg.mqtt.haDiscovery, 'haDiscovery exists');
-    assert.equal(cfg.mqtt.haDiscovery.enabled, false);
-    assert.equal(cfg.mqtt.haDiscovery.prefix, 'homeassistant');
+    assert.ok(cfg && typeof cfg === 'object', 'createDefaultConfig returns an object');
+    // Optional feature sections are NOT seeded into the minimal default config —
+    // they are layered in by the settings UI / migrations when actually used.
+    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family']) {
+      assert.equal(cfg[optional], undefined,
+        `${optional} is an optional section — absent from the minimal default config`);
+    }
   });
 
-  it('createDefaultConfig includes integrations section', async () => {
-    const { createDefaultConfig } = await import('../config-model.js');
-    const cfg = createDefaultConfig();
-    assert.ok(cfg.integrations, 'integrations section exists');
-    assert.ok(cfg.integrations.tesla, 'tesla config exists');
-    assert.equal(cfg.integrations.tesla.enabled, false);
-    assert.equal(cfg.integrations.tesla.teslamateCarId, 1);
+  it('routes-api ALLOWED_CONFIG_ROOTS still accepts the optional sections on POST /api/config', async () => {
+    // The sections are absent from defaults but MUST round-trip through the
+    // strict root-key allowlist when a user saves them — otherwise the settings
+    // UI could never configure MQTT / integrations / notifications.
+    const { ALLOWED_CONFIG_ROOTS } = await import('../routes-api.js');
+    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family']) {
+      assert.ok(ALLOWED_CONFIG_ROOTS.has(optional),
+        `${optional} must be an accepted POST /api/config root key`);
+    }
   });
 
-  it('createDefaultConfig includes devices array', async () => {
-    const { createDefaultConfig } = await import('../config-model.js');
-    const cfg = createDefaultConfig();
-    assert.ok(Array.isArray(cfg.devices), 'devices is an array');
-    assert.equal(cfg.devices.length, 0);
-  });
-
-  it('createDefaultConfig includes notifications section', async () => {
-    const { createDefaultConfig } = await import('../config-model.js');
-    const cfg = createDefaultConfig();
-    assert.ok(cfg.notifications, 'notifications section exists');
-    assert.equal(cfg.notifications.enabled, false);
-    assert.ok(cfg.notifications.providers.telegram, 'telegram provider exists');
-    assert.ok(cfg.notifications.providers.pushover, 'pushover provider exists');
-    assert.ok(Array.isArray(cfg.notifications.triggers), 'triggers is array');
-    assert.ok(cfg.notifications.throttle, 'throttle exists');
-    assert.equal(cfg.notifications.throttle.minIntervalSec, 300);
+  it('the MQTT hub treats an absent mqtt section as "feature off" (no throw)', async () => {
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    // getCfg() with NO mqtt section — the documented absent-by-default state.
+    const offHub = createMqttHub({ getCfg: () => ({}), pushLog: () => {} });
+    // getMqttConfig() -> getCfg().mqtt || {} -> {}; start() returns early on
+    // !mqttCfg.enabled. close() before start must be safe.
+    await assert.doesNotReject(() => offHub.close(),
+      'close() on a hub built from config with no mqtt section must not throw');
+    assert.equal(offHub.connected, false, 'hub stays disconnected when mqtt section is absent');
   });
 });
 

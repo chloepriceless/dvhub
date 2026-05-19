@@ -3042,9 +3042,17 @@ export function createApiRoutes(ctx) {
       // the first-caller-wins race on a fresh device — even LAN attackers cannot
       // take over the box without filesystem access.
       const currentApiToken = currentCfgForGate.apiToken;
+      // Plan 16-04: the redaction placeholder REDACTED ('***') is NOT a real
+      // token — the settings UI GETs the config redacted and POSTs the whole
+      // object back, so an UNCHANGED apiToken arrives as '***'. Treating that
+      // as "setting a new token" would wrongly force a routine settings save
+      // through the bootstrap-token gate during setup phase (apiToken empty).
+      // restoreRedacted() inside ctx.saveAndApplyConfig swaps the real value
+      // back in. Exclude REDACTED here, mirroring the strength gate above.
       const settingApiToken = Object.prototype.hasOwnProperty.call(body.config, 'apiToken')
         && typeof body.config.apiToken === 'string'
-        && body.config.apiToken.length > 0;
+        && body.config.apiToken.length > 0
+        && body.config.apiToken !== REDACTED;
       const setupPhase = (!currentApiToken || currentApiToken === '') && settingApiToken;
       if (setupPhase) {
         if (!requireBootstrapToken(req, res)) return;
