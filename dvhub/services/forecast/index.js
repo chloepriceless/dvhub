@@ -56,7 +56,11 @@ export function createForecastService(ctx) {
           pushLog('ml_correction_sanity_fallback', details);
           lastLogAt = Date.now();
         } else if (stateChanged && lastState === true) {
-          pushLog('ml_correction_sanity_recovered', {});
+          pushLog('ml_correction_sanity_recovered', {
+            severity: 'info',
+            note: 'ML correction sanity-fallback disengaged — the ML-corrected '
+                + 'PV forecast is back within sane bounds.'
+          });
         }
         lastState = active;
       }
@@ -265,6 +269,10 @@ export function createForecastService(ctx) {
       const corrMax = maxOf(correctedPv.slots);
       if (rawMax >= 200 && corrMax < rawMax * 0.01) {
         mlSanityFallbackLogger.report(true, () => ({
+          severity: 'emergency',
+          note: 'EMERGENCY: ML correction collapsed the PV forecast to ~0 W — '
+              + 'raw PV substituted to keep the forecast usable. The active ML '
+              + 'model is unhealthy; investigate model health / retrain.',
           rawMaxW: Math.round(rawMax),
           corrMaxW: Math.round(corrMax * 10) / 10,
           mlModel: mlResult.model
