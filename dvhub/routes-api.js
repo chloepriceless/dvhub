@@ -14,6 +14,9 @@ import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } fro
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { createDefaultConfig } from './config-model.js';
+// L-11 (Plan 16-03): MESSAGE_TYPES is the single source of truth for the
+// /api/messages/generate type allowlist — see MESSAGE_TYPE_ALLOWLIST below.
+import { MESSAGE_TYPES } from './services/llm/message-types.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -235,6 +238,14 @@ export const MAX_MINSOC_PCT = 100;
 // TimescaleDB hypertable + (series_key, ts_utc) index makes 1.5M-row scans
 // sub-second on the production Pi.
 export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
+// M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
+// readings (24 * 60 / 5). Named so the magic number is self-documenting.
+export const DEVICE_HISTORY_ROW_LIMIT = 288;
+// L-11 (Plan 16-03): /api/messages/generate body.type allowlist. Derived from
+// the LLM service's MESSAGE_TYPES enum (single source of truth) so adding a
+// new message type there automatically extends the allowlist. An unknown type
+// is normalised to 'status' before reaching generateMessage (T-16-12 Tampering).
+export const MESSAGE_TYPE_ALLOWLIST = new Set(Object.values(MESSAGE_TYPES));
 // /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
 // and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
@@ -1114,13 +1125,18 @@ export function createApiRoutes(ctx) {
   // ── Response builders ────────────────────────────────────────────────
   function epexPriceArray() {
     if (!state.epex.ok || !Array.isArray(state.epex.data)) return [];
-    return state.epex.data.map((row) => ({
-      ts: row.ts,
-      ts_iso: new Date(row.ts).toISOString(),
-      eur_mwh: Number(row.eur_mwh ?? 0),
-      eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
-      ct_kwh: Number(row.ct_kwh ?? 0)
-    }));
+    // L-7 (Plan 16-03): new Date(row.ts).toISOString() throws a RangeError on
+    // a malformed row.ts (Invalid Date) — a single bad row would 500 the whole
+    // endpoint. Skip rows whose ts cannot be parsed (T-16-13 DoS).
+    return state.epex.data
+      .filter((row) => Number.isFinite(Date.parse(row.ts)))
+      .map((row) => ({
+        ts: row.ts,
+        ts_iso: new Date(row.ts).toISOString(),
+        eur_mwh: Number(row.eur_mwh ?? 0),
+        eur_kwh: Number((row.eur_mwh ?? 0) / 1000),
+        ct_kwh: Number(row.ct_kwh ?? 0)
+      }));
   }
 
   function userEnergyPricingSummary() {
@@ -1457,7 +1473,22 @@ export function createApiRoutes(ctx) {
   function serveStatic(req, res) {
     const appDir = ctx.getAppDir();
     const urlPath = new URL(req.url, 'http://localhost').pathname;
-    const reqPath = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
+    // M-1 (Plan 16-03): decodeURIComponent throws a URIError on a malformed
+    // `%` escape (e.g. `/%E0%A4%A`) — caught here it would otherwise bubble
+    // to an uncaught 500. A `%00` decodes into a NUL byte which fs rejects
+    // with ERR_INVALID_ARG_VALUE → another 500. Both are bad client input,
+    // not server faults, so they map to 400.
+    let reqPath;
+    if (urlPath === '/') {
+      reqPath = '/index.html';
+    } else {
+      try {
+        reqPath = decodeURIComponent(urlPath);
+      } catch {
+        return text(res, 400, 'bad path');
+      }
+      if (reqPath.includes('\0')) return text(res, 400, 'bad path');
+    }
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, reqPath.replace(/^\/+/, ''));
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
@@ -1925,14 +1956,21 @@ export function createApiRoutes(ctx) {
     if (url.pathname.startsWith('/api/devices/') && req.method === 'GET') {
       const deviceId = decodeURIComponent(url.pathname.split('/api/devices/')[1]);
       if (!deviceId) return json(res, 400, { error: 'Missing device ID' });
+      // M-2 (Plan 16-03): split('/api/devices/')[1] keeps embedded slashes, so
+      // `/api/devices/a/b` would yield deviceId='a/b'. A device id is a single
+      // path segment — reject any id carrying a slash.
+      if (deviceId.includes('/')) return json(res, 400, { ok: false, error: 'invalid_device_id' });
       const devices = ctx.deviceService?.getDevices() || [];
       const device = devices.find(d => d.id === deviceId);
       if (!device) return json(res, 404, { error: 'Device not found' });
       let history = [];
       if (ctx.db) {
         try {
+          // LIMIT uses the DEVICE_HISTORY_ROW_LIMIT module constant (288 =
+          // 24h of 5-min readings). It is a trusted compile-time integer, not
+          // user input — safe to interpolate; device_id stays parameterised.
           const result = await ctx.db.query(
-            'SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT 288',
+            `SELECT ts_utc, power_w, energy_today_wh, online FROM device_readings WHERE device_id = $1 ORDER BY ts_utc DESC LIMIT ${DEVICE_HISTORY_ROW_LIMIT}`,
             [deviceId]
           );
           history = result.rows;
@@ -2233,7 +2271,9 @@ export function createApiRoutes(ctx) {
     // Persistent DV signal log from database
     if (url.pathname === '/api/log/dv-signals' && req.method === 'GET') {
       if (!ctx.telemetryStore?.listControlEvents) return json(res, 503, { ok: false, error: 'telemetry store not available' });
-      const limit = Number(url.searchParams.get('limit')) || 200;
+      // M-3 (Plan 16-03): clamp `limit` to 1..2000 — an unbounded limit lets a
+      // caller drag the store into an arbitrarily large scan (T-16-09 DoS).
+      const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
       const eventType = url.searchParams.get('type') || null;
       try {
         const rows = await ctx.telemetryStore.listControlEvents({ limit, eventType });
@@ -2247,9 +2287,21 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/telemetry/series' && req.method === 'GET') {
       if (!ctx.telemetryStore?.querySeries) return json(res, 503, { ok: false, error: 'telemetry store not available' });
       const keys = (url.searchParams.get('keys') || 'battery_soc_pct').split(',').map(k => k.trim()).filter(Boolean);
+      // M-5 (Plan 16-03): cap the key count before the DoS slot-guard — each
+      // key multiplies the scan, so an unbounded key list defeats the slot cap.
+      if (keys.length > 50) return json(res, 400, { ok: false, error: 'too_many_keys' });
       const now = new Date();
-      const start = url.searchParams.get('start') || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const end = url.searchParams.get('end') || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+      // M-4 (Plan 16-03): validate start/end with parseIsoOrNull — its
+      // tri-state contract (null=absent, false=garbage, ISO=valid) matches
+      // /api/history/raw. Without this an unparseable timestamp slips past
+      // the DoS slot-guard (which treats unparseable as 0).
+      const startRaw = parseIsoOrNull(url.searchParams.get('start'));
+      const endRaw = parseIsoOrNull(url.searchParams.get('end'));
+      if (startRaw === false || endRaw === false) {
+        return json(res, 400, { ok: false, error: 'invalid_timestamp' });
+      }
+      const start = startRaw || new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const end = endRaw || new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
       const maxRes = Number(url.searchParams.get('maxResolution')) || 900;
       // Plan 08-04 Task 1 Step 7: bound total slot scan. Without this an
       // attacker could pass start=0&end=now&step=1 across many keys and drag
@@ -2473,18 +2525,6 @@ export function createApiRoutes(ctx) {
       // read anywhere in this handler.
       const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.csv`;
 
-      res.writeHead(200, {
-        ...SECURITY_HEADERS,
-        'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-store',
-      });
-      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
-      // and renders the German umlauts + the semicolon separator natively.
-      res.write('﻿');
-      res.write('ts_utc;series_key;value;unit\n');
-
       let dbClient = null;
       let pgCursor = null;
       let aborted = false;
@@ -2501,6 +2541,30 @@ export function createApiRoutes(ctx) {
         }
       }
 
+      // H-6 (Plan 16-03): connect BEFORE res.writeHead so a failed connection
+      // yields a real 503 JSON error. The `!ctx.db` pre-check above only covers
+      // a MISSING pool — a pool whose connect() rejects (DB down, pool drained)
+      // would otherwise flush a 200 header and a BOM-only body, mis-signalling
+      // a "successful" empty export to the client.
+      try {
+        dbClient = await ctx.db.connect();
+      } catch (e) {
+        pushLog('history_raw_csv_error', { error: e.message, stage: 'connect' });
+        return json(res, 503, { ok: false, error: 'db_unavailable' });
+      }
+
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
+      // and renders the German umlauts + the semicolon separator natively.
+      res.write('﻿');
+      res.write('ts_utc;series_key;value;unit\n');
+
       // Both req.on('close') and res.on('close') — different runtimes emit
       // close on different sockets; we register both for defence-in-depth.
       // A single cleanup() is idempotent.
@@ -2508,7 +2572,6 @@ export function createApiRoutes(ctx) {
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
 
         function readNext() {
@@ -2633,17 +2696,6 @@ export function createApiRoutes(ctx) {
       // read anywhere in this handler.
       const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.parquet`;
 
-      // Headers MUST be flushed BEFORE ParquetWriter.openStream begins writing
-      // (the writer immediately writes the Parquet magic bytes "PAR1" via the
-      // first oswrite call inside openStream).
-      res.writeHead(200, {
-        ...SECURITY_HEADERS,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-store',
-      });
-
       let dbClient = null;
       let pgCursor = null;
       let writer = null;
@@ -2661,13 +2713,34 @@ export function createApiRoutes(ctx) {
         }
       }
 
+      // H-6 (Plan 16-03): connect BEFORE res.writeHead so a failed connection
+      // yields a real 503 JSON error instead of a 200 + truncated Parquet file
+      // (a partial file with no footer magic is indistinguishable from a
+      // legitimate-but-empty export to a naive client).
+      try {
+        dbClient = await ctx.db.connect();
+      } catch (e) {
+        pushLog('history_raw_parquet_error', { error: e.message, stage: 'connect' });
+        return json(res, 503, { ok: false, error: 'db_unavailable' });
+      }
+
+      // Headers MUST be flushed BEFORE ParquetWriter.openStream begins writing
+      // (the writer immediately writes the Parquet magic bytes "PAR1" via the
+      // first oswrite call inside openStream).
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+      });
+
       // Both req.on('close') and res.on('close') — different runtimes emit
       // close on different sockets; defence-in-depth (idempotent cleanup).
       req.on('close', () => { aborted = true; cleanup(); });
       res.on('close', () => { aborted = true; cleanup(); });
 
       try {
-        dbClient = await ctx.db.connect();
         pgCursor = dbClient.query(new Cursor(sql, params));
         writer = await parquet.ParquetWriter.openStream(PARQUET_SCHEMA, res);
 
@@ -2725,6 +2798,12 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/forecast/refresh' && req.method === 'POST') {
+      // L-6 (Plan 16-03): ctx.fetchVrmForecast() throws synchronously if the
+      // service is unwired — guard before invoking so an unwired service
+      // yields a clean 503 instead of an uncaught 500 (T-16-13 DoS).
+      if (typeof ctx.fetchVrmForecast !== 'function') {
+        return json(res, 503, { ok: false, error: 'forecast_service_unavailable' });
+      }
       ctx.fetchVrmForecast().catch(e => pushLog('vrm_forecast_manual_error', { error: e.message }));
       return json(res, 202, { ok: true, message: 'Forecast refresh started' });
     }
@@ -3398,6 +3477,11 @@ export function createApiRoutes(ctx) {
 
     // --- Update Channel ---
     if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
+      // M-6 (Plan 16-03): gate parity — the sibling /api/admin/update/check
+      // and /api/admin/update/apply handlers both start with this exact
+      // service-actions gate. Without it the channel change is persisted
+      // even when service actions are disabled (T-16-11 EoP).
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
         const body = await parseBody(req);
         const channel = body?.channel;
@@ -4175,13 +4259,17 @@ export function createApiRoutes(ctx) {
         // the interval ticker uses — otherwise the prompt templates' Watt-vs-kW
         // interpolation resolves to undefined and the LLM produces "Fehlende
         // Daten" output even when state.victron is fully populated.
-        const type = body.type || 'status';
+        // L-11 (Plan 16-03): validate body.type against MESSAGE_TYPE_ALLOWLIST.
+        // An unknown / attacker-supplied type is normalised to 'status' rather
+        // than passed verbatim into generateMessage (graceful default per the
+        // review's recommendation — no 400, the LLM still produces output).
+        const safeType = MESSAGE_TYPE_ALLOWLIST.has(body.type) ? body.type : 'status';
         const liveData = typeof ctx.llmService.getLiveData === 'function'
           ? ctx.llmService.getLiveData()
           : {};
         const data = { ...liveData, ...(body.data || {}) };
 
-        const msg = await ctx.llmService.generateMessage(type, data);
+        const msg = await ctx.llmService.generateMessage(safeType, data);
         return json(res, 200, { ok: true, message: msg });
       } catch (e) {
         return json(res, 500, { error: e.message });
