@@ -642,3 +642,64 @@ describe('H-1: readJsonBody body-parse 400/413', () => {
       'a valid body must still reach the /api/log handler');
   });
 });
+
+// ── H-2 Regression: keepalivePulsePayload divide-by-zero clamp ──
+//
+// Plan 16-02 Task 2. keepalivePulsePayload computes
+// `Math.floor(now / (cfg.keepalivePulseSec * 1000))`. A misconfigured
+// keepalivePulseSec of 0 (or a missing value) makes the divisor 0, so
+// pulseSlot becomes Infinity and serializes to JSON `null` on a polled
+// LAN-safe endpoint. The fix clamps period = Math.max(1, Number(...) || 60).
+
+describe('H-2: keepalive divide-by-zero clamp', () => {
+  function cfgWith(keepalivePulseSec) {
+    return () => ({
+      epex: { enabled: false, timezone: 'Europe/Berlin' },
+      optimizer: { enabled: false, batteryCapacityWh: 10000 },
+      family: {
+        screensaver: { enabled: true, defaultTimeoutSec: 120, windows: [], dimOpacity: 0.3 },
+        presence: { pollIntervalMs: 2000, webhookEnabled: true }
+      },
+      apiToken: '',
+      gridPositiveMeans: 'grid_import',
+      keepalivePulseSec,
+      schedule: { timezone: 'Europe/Berlin' },
+      telemetry: { enabled: false }
+    });
+  }
+
+  it('keepalivePulseSec=0 → finite pulseSlot + pulseTimestamp', async () => {
+    const ctx = mockCtx({ getCfg: cfgWith(0) });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('GET', '/api/keepalive/pulse'),
+      res,
+      new URL('http://localhost/api/keepalive/pulse')
+    );
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.ok(Number.isFinite(body.pulseSlot),
+      'pulseSlot must be finite even when keepalivePulseSec is 0');
+    assert.ok(body.pulseSlot !== null, 'pulseSlot must not serialize to null');
+    assert.ok(Number.isFinite(body.pulseTimestamp),
+      'pulseTimestamp must be finite even when keepalivePulseSec is 0');
+  });
+
+  it('keepalivePulseSec missing → finite pulseSlot (falls back to 60)', async () => {
+    const ctx = mockCtx({ getCfg: cfgWith(undefined) });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('GET', '/api/keepalive/pulse'),
+      res,
+      new URL('http://localhost/api/keepalive/pulse')
+    );
+    assert.equal(res._captured.status, 200);
+    const body = JSON.parse(res._captured.body);
+    assert.ok(Number.isFinite(body.pulseSlot),
+      'pulseSlot must be finite when keepalivePulseSec is missing');
+    assert.ok(Number.isFinite(body.pulseTimestamp),
+      'pulseTimestamp must be finite when keepalivePulseSec is missing');
+  });
+});

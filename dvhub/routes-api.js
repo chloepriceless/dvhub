@@ -1163,11 +1163,16 @@ export function createApiRoutes(ctx) {
   function keepalivePulsePayload() {
     const now = Date.now();
     const cfg = getCfg();
-    const slot = Math.floor(now / (cfg.keepalivePulseSec * 1000));
-    const slotTs = slot * cfg.keepalivePulseSec * 1000;
+    // H-2 (Plan 16-02): clamp the pulse period. A misconfigured
+    // keepalivePulseSec of 0 — or a missing value — would make the divisor 0,
+    // so pulseSlot becomes Infinity and serializes to JSON `null` on a polled
+    // LAN-safe endpoint. Clamp to >=1 with a 60 s fallback.
+    const period = Math.max(1, Number(cfg.keepalivePulseSec) || 60);
+    const slot = Math.floor(now / (period * 1000));
+    const slotTs = slot * period * 1000;
     return {
       ok: true,
-      periodSec: cfg.keepalivePulseSec,
+      periodSec: period,
       pulseSlot: slot,
       pulseTimestamp: slotTs,
       now
