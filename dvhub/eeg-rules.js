@@ -9,12 +9,10 @@
  *   - From 2025-02-25 >= 2 kWp: 15min rule (Solarspitzengesetz)
  */
 
-function round2(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  const sign = numeric < 0 ? -1 : 1;
-  return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
-}
+// Sweep package 6: shared 2-decimal rounding helper (see server-utils.js).
+// nullOnInvalid:true preserves this file's original "return null on non-finite" behavior.
+import { round2 as sharedRound2 } from './server-utils.js';
+const round2 = (value) => sharedRound2(value, { nullOnInvalid: true });
 
 /**
  * Ordered from newest to oldest commissioning date so the first match wins.

@@ -87,11 +87,13 @@ function setStatusInfo(html = '') {
   renderStatusInfo();
 }
 
-function round2(value) {
+// Sweep package 6: delegate to the shared common.js round2 (no local duplicate).
+// Falls back to an inline copy if common.js is unavailable at call time.
+const round2 = common.round2 || ((value) => {
   const numeric = Number(value || 0);
   const sign = numeric < 0 ? -1 : 1;
   return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
-}
+});
 
 function hasFiniteNumber(value) {
   return value !== null && value !== '' && Number.isFinite(Number(value));

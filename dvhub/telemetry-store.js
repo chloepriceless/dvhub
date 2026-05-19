@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+// Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
+import { round2 } from './server-utils.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -47,11 +49,7 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   'battery_to_grid_w'
 ]);
 
-function roundKwh(value) {
-  const numeric = Number(value || 0);
-  const sign = numeric < 0 ? -1 : 1;
-  return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
-}
+const roundKwh = round2;
 
 function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();

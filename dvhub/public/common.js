@@ -110,6 +110,15 @@
       .replaceAll("'", '&#39;');
   }
 
+  // Sweep package 6: shared frontend 2-decimal rounding helper.
+  // Was a local round2 duplicate in history.js; sign-aware + EPSILON-corrected,
+  // matching the server-side server-utils.js round2 default behavior.
+  function round2(value) {
+    const numeric = Number(value || 0);
+    const sign = numeric < 0 ? -1 : 1;
+    return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
+  }
+
   // Plan 08-07 Task 3: global frontend error boundary.
   // Surfaces uncaught exceptions and unhandled promise rejections to /api/log
   // so widget crashes are observable in the operator log instead of dying silently
@@ -281,6 +290,7 @@
     apiFetch,
     buildApiUrl,
     escapeHtml,
+    round2,             // Sweep package 6 — shared frontend 2-decimal rounding helper
     getStoredApiToken,
     setStoredApiToken,
     safeRender,         // Plan 09-04 — per-sub-widget error boundary

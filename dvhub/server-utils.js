@@ -53,6 +53,19 @@ export function roundCtKwh(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
+// Sweep package 6: single shared 2-decimal rounding helper.
+// Was duplicated in eeg-rules.js, history-runtime.js, bundesnetzagentur-applicable-values.js
+// (as round2) and telemetry-store{,-pg}.js (as roundKwh). Sign-aware and EPSILON-corrected.
+// nullOnInvalid:true preserves the eeg-rules / bundesnetzagentur "return null on a
+// non-finite input" behavior; the default returns 0 (the history-runtime / telemetry
+// `Number(value||0)` behavior).
+export function round2(value, { nullOnInvalid = false } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return nullOnInvalid ? null : 0;
+  const sign = numeric < 0 ? -1 : 1;
+  return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
+}
+
 export function berlinDateString(d = new Date(), timezone = 'Europe/Berlin') {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: timezone }).format(d);
 }

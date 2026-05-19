@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+// Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
+// nullOnInvalid:true preserves this file's original "return null on non-finite" behavior.
+// All round2 call sites here operate on non-negative EEG applicable-value rates, so the
+// shared sign-aware helper is behavior-equivalent to the previous plain Math.round body.
+import { round2 as sharedRound2 } from './server-utils.js';
+const round2 = (value) => sharedRound2(value, { nullOnInvalid: true });
 
 const BUNDESNETZAGENTUR_BASE_URL = 'https://www.bundesnetzagentur.de';
 const BUNDESNETZAGENTUR_ARCHIVE_URL = `${BUNDESNETZAGENTUR_BASE_URL}/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/start.html`;
@@ -25,12 +31,6 @@ function normalizeNumber(value) {
   if (typeof value !== 'string') return null;
   const numeric = Number(value.replace(',', '.'));
   return Number.isFinite(numeric) ? numeric : null;
-}
-
-function round2(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  return Math.round((numeric + Number.EPSILON) * 100) / 100;
 }
 
 function columnToNumber(columnLabel) {

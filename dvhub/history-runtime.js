@@ -1,5 +1,7 @@
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
+// Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
+import { round2 } from './server-utils.js';
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year', 'all']);
@@ -41,12 +43,6 @@ const AGGREGATE_SUM_FIELDS = [
   'premiumValuedExportKwh',
   'marketPremiumCtTotal'
 ];
-
-function round2(value) {
-  const numeric = Number(value || 0);
-  const sign = numeric < 0 ? -1 : 1;
-  return sign * (Math.round((Math.abs(numeric) + Number.EPSILON) * 100) / 100);
-}
 
 function roundCtKwh(value) {
   return round2(value);
