@@ -37,10 +37,18 @@ describe('family dashboard static assets (DASH-01)', () => {
   });
 
   it('family.html contains all 5 main tag elements', () => {
-    const html = readFileOnce(FAMILY_HTML);
-    for (const id of ['tag-solar', 'tag-home', 'tag-bat', 'tag-ev', 'tag-grid']) {
-      assert.ok(html.includes(`id="${id}"`), `missing tag: ${id}`);
+    // Plan 16-04 (D-06 triage, UI-drift): the Phase-11 House-centre redesign
+    // split the 5 tiles into 4 corner `tag-*` tiles + 1 central power-flow
+    // readout (`pfCenter`, the "home" tile). The 5 tiles are still all present,
+    // but the "home" tile is no longer a uniform `id="tag-home"` — adapt.
+    for (const id of ['tag-solar', 'tag-bat', 'tag-ev', 'tag-grid']) {
+      const html = readFileOnce(FAMILY_HTML);
+      assert.ok(html.includes(`id="${id}"`), `missing corner tag: ${id}`);
     }
+    const html = readFileOnce(FAMILY_HTML);
+    // The central "home" tile is the power-flow readout (data-panel="home").
+    assert.ok(html.includes('id="pfCenter"') && html.includes('data-panel="home"'),
+      'missing the central home tile (pfCenter / data-panel="home")');
   });
 
   it('family.html has data-panel attributes for touch panels', () => {
@@ -75,7 +83,10 @@ describe('family dashboard static assets (DASH-01)', () => {
 
   it('family.html uses external /family.js (no inline script blocks with logic)', () => {
     const html = readFileOnce(FAMILY_HTML);
-    assert.ok(html.includes('src="/family.js"'), 'must load /family.js as external script');
+    // Plan 16-04 (D-06 triage, UI-drift): family.html ships the script with a
+    // cache-bust query (`/family.js?v=12`). Match the path, tolerate the query.
+    assert.ok(/src="\/family\.js(\?[^"]*)?"/.test(html),
+      'must load /family.js as external script');
     // CSP pre-check: SECURITY_HEADERS script-src does not allow 'unsafe-inline',
     // so any non-trivial inline <script>...</script> block would be blocked.
     assert.ok(!/<script>\s*var\s+API_URL/.test(html), 'must not contain original inline API block');
