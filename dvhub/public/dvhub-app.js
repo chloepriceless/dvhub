@@ -5,16 +5,10 @@
 (function(){
   'use strict';
 
-  /* ─── HTML-escape for status.text interpolation (T-09.1-01-04 mitigation) ─── */
-  function escapeHtml(s) {
-    if (s === null || s === undefined) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+  /* ─── HTML-escape for status.text interpolation (T-09.1-01-04 mitigation) ───
+     Sweep package 6: delegate to the canonical common.js escapeHtml so no copy
+     can drift. Falls back to a minimal stringifier if common.js is unavailable. */
+  const escapeHtml = (window.DVhubCommon || {}).escapeHtml || ((s) => String(s ?? ''));
 
   /* ─── TOPBAR INJECTION ─────────────────────────────────────────────
      PAGES list and shell-build helpers ported from

@@ -68,11 +68,15 @@ function fmtCentFromTenthCt(value) {
 }
 
 function escapeAttr(value) {
+  // Sweep package 6: the single-quote escape was missing — an attribute value
+  // broken out of a single-quoted context could inject markup. Now matches the
+  // canonical common.js escapeHtml set (& " < > ').
   return String(value)
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&#39;');
 }
 const escapeHtml = (window.DVhubCommon || {}).escapeHtml || escapeAttr;
 

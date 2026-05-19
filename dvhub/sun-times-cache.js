@@ -31,5 +31,9 @@ export function readSunTimesCacheStore(cachePath) {
 export function writeSunTimesCacheStore(cachePath, store) {
   if (!cachePath) return;
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  fs.writeFileSync(cachePath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+  // Atomic write: temp file + rename prevents a partial/corrupt cache file on a
+  // crash mid-write. No chmod — this is non-secret reference data.
+  const tmpPath = cachePath + '.tmp';
+  fs.writeFileSync(tmpPath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmpPath, cachePath);
 }

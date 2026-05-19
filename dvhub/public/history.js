@@ -124,14 +124,14 @@ function fmtPct(value) {
   return `${Number(value).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
+// Sweep package 6: delegate to the canonical common.js escapeHtml (no local
+// duplicate). Falls back to an inline copy if common.js is unavailable.
+const escapeHtml = common.escapeHtml || ((value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;'));
 
 function renderBackfillButtonState() {
   const button = byId('historyBackfillBtn');
