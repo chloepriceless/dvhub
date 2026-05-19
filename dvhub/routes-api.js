@@ -3899,7 +3899,7 @@ export function createApiRoutes(ctx) {
     //      mlService.runRetrainEndpoint; return 202 with {jobId, statusUrl}
     //      so the handler releases the HTTP socket immediately
     if (url.pathname === '/api/ml/retrain' && req.method === 'POST') {
-      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      if (!checkAuth(req, res)) return;
       try {
         if (!ctx.mlService || !ctx.mlRetrainJobs) {
           return json(res, 503, { error: 'ml_retrain_service_unavailable' });
@@ -3975,7 +3975,7 @@ export function createApiRoutes(ctx) {
     // validation (ISO YYYY-MM-DD, from <= to inclusive per REVIEWS H8) + 409 on concurrent
     // run. Fire-and-forget; progress polled via /api/admin/backfill/status.
     if (url.pathname === '/api/admin/backfill' && req.method === 'POST') {
-      if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;
+      if (!checkAuth(req, res)) return;
       try {
         if (!ctx.pvnodeBackfill) {
           return json(res, 503, { error: 'pvnode_backfill_service_unavailable' });
