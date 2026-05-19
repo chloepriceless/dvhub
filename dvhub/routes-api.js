@@ -1021,14 +1021,6 @@ export function createApiRoutes(ctx) {
     try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
   }
 
-  // ── Validation helpers ───────────────────────────────────────────────
-  function validateScheduleRule(rule) {
-    if (typeof rule !== 'object' || rule === null) return false;
-    if (typeof rule.target !== 'string') return false;
-    if (rule.value !== undefined && !Number.isFinite(Number(rule.value))) return false;
-    return true;
-  }
-
   // Plan 08-04 Task 1 Step 5: walk a JSON payload depth-first, return the first
   // path+pattern that matches any PROMPT_INJECTION_PATTERNS entry. Returns null
   // when the payload is clean. Strings only — numbers / booleans / null skipped
@@ -2167,7 +2159,10 @@ export function createApiRoutes(ctx) {
       // migration 015 only allows debug/info/warn/error/critical.
       const NORMALISED_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
       const pushLevel = NORMALISED_LEVELS.has(level) ? level : 'error';
-      pushLog(`frontend_${level}`, {
+      // H-5: build the audit event name from the normalized, allowlisted level —
+      // never the raw, attacker-controlled body.level (caps event_type cardinality
+      // and stops audit-log pollution from arbitrary client-supplied strings).
+      pushLog(`frontend_${pushLevel}`, {
         source,
         page: typeof body.page === 'string' ? body.page.slice(0, 200) : null,
         type: typeof body.type === 'string' ? body.type.slice(0, 64) : null,
