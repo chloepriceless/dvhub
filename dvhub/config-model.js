@@ -2798,6 +2798,11 @@ function resetLegacyPlaceholderRegisters(raw, warnings) {
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
+  // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
+  // config — before the FIELD_DEFINITIONS coercion pass below, which would
+  // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric
+  // apiToken) past the type check. Warn-and-continue only; never aborts.
+  validateConfigSchema(raw, warnings);
   for (const field of FIELD_DEFINITIONS) {
     if (!hasPath(raw, field.path)) continue;
     // predictivePreEmpty has its own dedicated sub-block validator
@@ -2867,8 +2872,70 @@ function sanitizeRawConfig(rawInput) {
   return { raw, warnings };
 }
 
+// Sweep package 6: shape-level config-schema validation.
+// Runs at the START of sanitizeRawConfig, BEFORE the FIELD_DEFINITIONS coercion
+// pass — so it sees the raw parsed value and a wrong-typed scalar (e.g. a
+// numeric apiToken) is caught before string-coercion masks the type. It catches
+// a config that parses as JSON but carries wrong-typed critical fields, warns,
+// and substitutes a safe default. WARN-AND-CONTINUE only — it NEVER aborts
+// startup or sets valid=false; a hard abort on a bad config edit would brick
+// the battery controller. The `warnings` array it receives is the same channel
+// surfaced to loadConfigFile callers and the server-side startup log.
+function isFiniteIntInRange(value, lo, hi) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= lo && numeric <= hi;
+}
+
+function validateConfigSchema(raw, warnings) {
+  if (!isPlainObject(raw)) return;
+  const defaults = createDefaultConfig();
+
+  // httpPort — must be a finite integer 1-65535. (FIELD_DEFINITIONS also covers
+  // this; the extra layer catches a value that slipped past, e.g. an object.)
+  if ('httpPort' in raw && !isFiniteIntInRange(raw.httpPort, 1, 65535)) {
+    warnings.push(`config.httpPort (${JSON.stringify(raw.httpPort)}) is not a valid port number — using default ${defaults.httpPort}`);
+    raw.httpPort = defaults.httpPort;
+  }
+
+  // httpsPort — optional; only validated when present. No createDefaultConfig
+  // key exists, so an invalid value is dropped (server.js treats absent as
+  // "no HTTPS"), never carried forward.
+  if ('httpsPort' in raw && raw.httpsPort != null && raw.httpsPort !== ''
+      && !isFiniteIntInRange(raw.httpsPort, 1, 65535)) {
+    warnings.push(`config.httpsPort (${JSON.stringify(raw.httpsPort)}) is not a valid port number — HTTPS disabled`);
+    delete raw.httpsPort;
+  }
+
+  // apiToken — must be a string. A non-string token would break the bearer
+  // comparison in routes-api.js; fall back to the empty-string default (the
+  // LAN-trust no-external-auth posture) rather than carrying a bad value.
+  if ('apiToken' in raw && raw.apiToken != null && typeof raw.apiToken !== 'string') {
+    warnings.push(`config.apiToken is not a string (got ${typeof raw.apiToken}) — using empty token (no external auth)`);
+    raw.apiToken = defaults.apiToken;
+  }
+
+  // keepalivePulseSec — must be a positive number (pairs with H-2 in Plan 16-02).
+  if ('keepalivePulseSec' in raw
+      && !(Number.isFinite(Number(raw.keepalivePulseSec)) && Number(raw.keepalivePulseSec) > 0)) {
+    warnings.push(`config.keepalivePulseSec (${JSON.stringify(raw.keepalivePulseSec)}) is not a positive number — using default ${defaults.keepalivePulseSec}`);
+    raw.keepalivePulseSec = defaults.keepalivePulseSec;
+  }
+
+  // epex / optimizer — must be objects when present, else deepMerge would carry
+  // a scalar into an object slot. Drop a wrong-typed section so the default
+  // object stands in.
+  for (const section of ['epex', 'optimizer']) {
+    if (section in raw && raw[section] != null && !isPlainObject(raw[section])) {
+      warnings.push(`config.${section} is not an object (got ${typeof raw[section]}) — section reset to default`);
+      delete raw[section];
+    }
+  }
+}
+
 export function normalizeConfigInput(rawInput) {
   const defaults = createDefaultConfig();
+  // sanitizeRawConfig runs the sweep-package-6 validateConfigSchema shape checks
+  // first, then the FIELD_DEFINITIONS coercion pass — both push to `warnings`.
   const { raw, warnings } = sanitizeRawConfig(rawInput);
   const persistedConfig = deepMerge(defaults, raw);
   if (!Array.isArray(persistedConfig.schedule?.rules)) persistedConfig.schedule.rules = [];

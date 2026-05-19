@@ -134,6 +134,14 @@ const CONFIG_DEFINITION = getConfigDefinition();
 let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
 let cfg = loadedConfig.effectiveConfig;
+
+// Sweep package 6: surface config-load warnings (wrong-typed / out-of-range
+// fields caught by config-model's warn-and-continue schema validation). These
+// are observability only — a config-shape problem warns and a safe default is
+// substituted; it never aborts startup.
+if (Array.isArray(loadedConfig.warnings) && loadedConfig.warnings.length > 0) {
+  for (const w of loadedConfig.warnings) console.warn(`[config] ${w}`);
+}
 const SERVICE_ACTIONS_ENABLED = process.env.DV_ENABLE_SERVICE_ACTIONS === '1';
 
 // Plan 08-01 Task 1 (CRITICAL #1): refuse to start with service actions enabled
@@ -1112,6 +1120,35 @@ const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
   // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
+
+  // Sweep package 6: service-start health summary. A concise, grouped report of
+  // the critical subsystems the server depends on, following the
+  // checkSystemRequirements {message}-array idiom. Observability only — it does
+  // NOT change startup control flow and does NOT exit on a degraded subsystem
+  // (the FATAL apiToken guard above is the only intentional exit).
+  try {
+    const healthLines = [];
+    healthLines.push(loadedConfig.needsSetup
+      ? `config: NEEDS SETUP (${loadedConfig.parseError || 'no config / invalid'})`
+      : `config: loaded from ${loadedConfig.path}`);
+    if (Array.isArray(loadedConfig.warnings) && loadedConfig.warnings.length > 0) {
+      healthLines.push(`config: ${loadedConfig.warnings.length} warning(s) — see [config] lines above`);
+    }
+    healthLines.push(telemetryStore
+      ? 'store: PostgreSQL telemetry store ready'
+      : 'store: telemetry store DISABLED (no DB) — history features unavailable');
+    healthLines.push((cfg.apiToken && cfg.apiToken !== '')
+      ? 'apiToken: configured'
+      : 'apiToken: NOT configured — authenticated endpoints return 503 until set');
+    console.log('Health: service-start subsystem summary —');
+    for (const line of healthLines) {
+      const degraded = /NEEDS SETUP|DISABLED|NOT configured|warning/.test(line);
+      (degraded ? console.warn : console.log)(`  ${line}`);
+    }
+  } catch (e) {
+    // A health-summary failure must never affect startup.
+    console.warn(`[health] could not build startup health summary: ${e.message}`);
+  }
   // Phase 09.2 D-01: per-system health tracker. Pool comes from dbPool (shared
   // pg.Pool used by telemetryStore); recordSample hooks fire from polling.js,
   // epex-fetch.js, and services/mqtt/publisher.js. Tracker is created here so
