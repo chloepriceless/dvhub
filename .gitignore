@@ -24,6 +24,10 @@ docs/plans/
 tmp/
 *.tmp
 
+# Python bytecode caches (py_compile / pytest)
+__pycache__/
+*.pyc
+
 # Playwright e2e artifacts (test-results/ holds traces/screenshots per run)
 test-results/
 playwright-report/
