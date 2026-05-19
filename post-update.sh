@@ -131,11 +131,29 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" 2>/dev/null 
 echo "  Berechtigungen: OK"
 
 # ── 8. systemd Service aktuell? ──
-CURRENT_EXECSTART=$(grep "ExecStart=" /etc/systemd/system/${SERVICE_NAME}.service 2>/dev/null | head -1 || echo "")
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+CURRENT_EXECSTART=$(grep "^ExecStart=" "$SERVICE_FILE" 2>/dev/null | head -1 || echo "")
 EXPECTED_EXECSTART="ExecStart=/usr/bin/node ${APP_DIR}/server.js"
+SERVICE_CHANGED=0
 if [[ "$CURRENT_EXECSTART" != "$EXPECTED_EXECSTART" ]]; then
   echo "  Service-Datei wird aktualisiert..."
-  sed -i "s|^ExecStart=.*|${EXPECTED_EXECSTART}|" /etc/systemd/system/${SERVICE_NAME}.service
+  sed -i "s|^ExecStart=.*|${EXPECTED_EXECSTART}|" "$SERVICE_FILE"
+  SERVICE_CHANGED=1
+fi
+
+# Phase 16 D-09: ensure the ExecStartPre hook is present in the LIVE unit file.
+# Existing prod boxes were installed before this hook existed, and a tar|ssh deploy
+# never re-runs install.sh — so post-update.sh must add the hook to the unit itself.
+# Idempotent: the grep guard means the sed insert runs at most once.
+EXPECTED_EXECSTARTPRE="ExecStartPre=+/usr/bin/bash ${INSTALL_DIR}/post-update.sh"
+if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^ExecStartPre=.*post-update\.sh' "$SERVICE_FILE"; then
+  echo "  ExecStartPre-Hook (D-09) wird eingefuegt..."
+  # Insert the ExecStartPre line immediately before the ExecStart= line.
+  sed -i "\|^ExecStart=|i ${EXPECTED_EXECSTARTPRE}" "$SERVICE_FILE"
+  SERVICE_CHANGED=1
+fi
+
+if [[ "$SERVICE_CHANGED" -eq 1 ]]; then
   systemctl daemon-reload
 fi
 echo "  systemd Service: OK"

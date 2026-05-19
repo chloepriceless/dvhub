@@ -668,6 +668,10 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${APP_DIR}
+# Phase 16 D-09: run post-update.sh on every service start so the sudoers block
+# stays current regardless of deploy mechanism (tar|ssh never triggers /api/admin/update/apply).
+# Leading '+' runs this ExecStartPre as root despite User=${SERVICE_USER}; post-update.sh requires root.
+ExecStartPre=+/usr/bin/bash ${INSTALL_DIR}/post-update.sh
 ExecStart=/usr/bin/node ${APP_DIR}/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=${CONFIG_PATH}
