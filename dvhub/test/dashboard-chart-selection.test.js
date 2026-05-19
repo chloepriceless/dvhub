@@ -49,15 +49,25 @@ test('dashboard helper groups contiguous slots and splits gaps into separate sch
     { ts: Date.parse('2026-03-09T09:00:00Z'), ct_kwh: 4 }
   ];
 
+  // Plan 16-04 (D-06 triage, brittle test): the window start/end strings come
+  // from app.js `fmtHm`, which uses `toLocaleTimeString` WITHOUT a timeZone —
+  // so the output follows the runner's ambient TZ (the test was authored on a
+  // Europe/Berlin box; CI here runs Etc/UTC). The behaviour under test is the
+  // CONTIGUITY GROUPING (a 1h gap splits the selection into two windows), not
+  // the absolute clock formatting. Derive the expected strings the exact same
+  // way the production code does, so the assertion is TZ-independent.
+  const hm = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const HOUR = 3600 * 1000;
+
   assert.equal(typeof helpers.buildScheduleWindowsFromSelection, 'function');
   const windows = JSON.parse(JSON.stringify(helpers.buildScheduleWindowsFromSelection(data, [0, 1, 2, 3])));
-  assert.deepEqual(
-    windows,
-    [
-      { start: '06:00', end: '08:00' },
-      { start: '09:00', end: '11:00' }
-    ]
-  );
+  assert.equal(windows.length, 2, 'the 1h gap splits the selection into two windows');
+  assert.deepEqual(windows, [
+    // window 1: slots [0,1] -> 05:00Z..06:00Z, ends at the 06:00Z slot's end (07:00Z)
+    { start: hm(data[0].ts), end: hm(data[1].ts + HOUR) },
+    // window 2: slots [2,3] -> 08:00Z..09:00Z, ends at the 09:00Z slot's end (10:00Z)
+    { start: hm(data[2].ts), end: hm(data[3].ts + HOUR) }
+  ]);
 });
 
 test('dashboard markup and styles expose the chart selection callout and bar highlight states', () => {
@@ -284,19 +294,22 @@ test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back
     }
   ]);
 
+  // Plan 16-04 (D-06 triage, brittle test): the grouped-rule object legitimately
+  // gained an `activeDate` field (per-slot scheduling — app.js ~L2102). A full-
+  // object deepEqual pinned every field and broke on the additive change.
+  // Hardened to assert the load-bearing fields (the stopSocPct hydration this
+  // test exists to guard), tolerant of additive object growth.
   const grouped = JSON.parse(JSON.stringify(helpers.groupScheduleRulesForDashboard(rules)));
-  assert.deepEqual(grouped, [
-    {
-      start: '08:00',
-      end: '09:00',
-      enabled: true,
-      grid: -40,
-      charge: 80,
-      stopSocPct: 25,
-      dcExport: false,
-      ruleId: 'grid_1'
-    }
-  ]);
+  assert.equal(grouped.length, 1, 'one grouped window');
+  const g = grouped[0];
+  assert.equal(g.start, '08:00');
+  assert.equal(g.end, '09:00');
+  assert.equal(g.enabled, true);
+  assert.equal(g.grid, -40);
+  assert.equal(g.charge, 80);
+  assert.equal(g.stopSocPct, 25, 'stopSocPct hydrated back onto the grouped rule');
+  assert.equal(g.dcExport, false);
+  assert.equal(g.ruleId, 'grid_1');
 });
 
 test('dashboard schedule row template includes stop-soc controls', () => {
