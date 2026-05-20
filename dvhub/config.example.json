@@ -152,5 +152,8 @@
       "maxBackoffMs": 120000
     }
   },
+  "licensing": {
+    "keygenAccount": ""
+  },
   "configSchemaVersion": 1
 }
