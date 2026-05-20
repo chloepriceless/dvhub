@@ -82,3 +82,62 @@ test('B6 catches query errors and returns query_failed', async () => {
   assert.equal(r.isStale, true);
   assert.equal(r.reason, 'query_failed');
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Plan 19-07 — Threshold boundary tests (yellow @ 2d, red @ 5d frontend-only).
+//
+// Backend reports daysSinceLastRun + isStale (>= 2d). Yellow vs red is a pure
+// frontend distinction (settings.js + family.js share FORECAST_INSPECTOR_COLD_*
+// constants). These 4 tests lock the boundary semantics so a future change to
+// the stale threshold doesn't silently drift the banner colors.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('isStale boundary — 1.9 days ago → isStale=false', async () => {
+  const ts = new Date(Date.now() - 1.9 * 86400000).toISOString();
+  const inspector = createInspector(makeCtx(), {
+    telemetryStore: {
+      getLatestOptimizerRun: async () => ({ runStartedAt: ts, optimizer: 'internal' }),
+    },
+  });
+  const r = await inspector.getOptimizerCold();
+  assert.equal(r.isStale, false);
+});
+
+test('isStale boundary — exactly 2.0 days ago → isStale=true', async () => {
+  const ts = new Date(Date.now() - 2 * 86400000).toISOString();
+  const inspector = createInspector(makeCtx(), {
+    telemetryStore: {
+      getLatestOptimizerRun: async () => ({ runStartedAt: ts, optimizer: 'internal' }),
+    },
+  });
+  const r = await inspector.getOptimizerCold();
+  assert.equal(r.isStale, true);
+  assert.ok(r.daysSinceLastRun >= 2.0 && r.daysSinceLastRun <= 2.1,
+    `daysSinceLastRun ${r.daysSinceLastRun} should be in [2.0, 2.1]`);
+});
+
+test('isStale at 4.9 days — still yellow zone (backend only reports days; frontend chooses color)', async () => {
+  const ts = new Date(Date.now() - 4.9 * 86400000).toISOString();
+  const inspector = createInspector(makeCtx(), {
+    telemetryStore: {
+      getLatestOptimizerRun: async () => ({ runStartedAt: ts, optimizer: 'internal' }),
+    },
+  });
+  const r = await inspector.getOptimizerCold();
+  assert.equal(r.isStale, true);
+  assert.ok(r.daysSinceLastRun >= 4.8 && r.daysSinceLastRun <= 5.0,
+    `daysSinceLastRun ${r.daysSinceLastRun} should be in [4.8, 5.0]`);
+});
+
+test('isStale at 5.0 days — red zone, backend reports days only', async () => {
+  const ts = new Date(Date.now() - 5 * 86400000).toISOString();
+  const inspector = createInspector(makeCtx(), {
+    telemetryStore: {
+      getLatestOptimizerRun: async () => ({ runStartedAt: ts, optimizer: 'internal' }),
+    },
+  });
+  const r = await inspector.getOptimizerCold();
+  assert.equal(r.isStale, true);
+  assert.ok(r.daysSinceLastRun >= 5.0 && r.daysSinceLastRun <= 5.1,
+    `daysSinceLastRun ${r.daysSinceLastRun} should be in [5.0, 5.1]`);
+});
