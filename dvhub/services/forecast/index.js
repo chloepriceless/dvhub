@@ -394,7 +394,22 @@ export function createForecastService(ctx) {
         horizon: '72h',
         tier,
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
-        loadModel: cfg.forecast?.load?.model || 'sql_weekday',
+        // Phase 18-02: meta.loadModel now reports the ACTUAL source the
+        // load-forecast subsystem just produced (statsforecast / sql_weekday),
+        // not the config string. The config field `forecast.load.model` was
+        // being read here as if it switched between SF and SQL paths, but it
+        // does not — runForecast() tries SF first unconditionally when
+        // ml.sfEnabled + tier>=2 + pythonBridge are present, and only falls
+        // back to SQL rollup when SF returns null. On prod verified
+        // 2026-05-20: cfg.forecast.load.model="sql_weekday" (misleading) while
+        // load_forecast_state.source="statsforecast" (truth). Cold-start
+        // returns source='unknown' before the first run completes — in that
+        // case fall back to the config-declared default for display.
+        loadModel: (() => {
+          const liveSource = loadForecast.getState?.()?.source;
+          if (liveSource && liveSource !== 'unknown') return liveSource;
+          return cfg.forecast?.load?.model || 'sql_weekday';
+        })(),
         mlActive,
         mlModel: mlActive ? (mlResult.model || null) : null,
         mlSanityFallback,
