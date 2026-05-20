@@ -132,8 +132,20 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
       // defence-in-depth shortcut to skip the subprocess spawn when we can
       // already see the model version won't match).
       const modelDir = getCfg().ml?.mlModelDir ?? '/opt/dvhub/ml-models';
-      const modelName = `pv_correction_${currentModel.model_type}_v${currentModel.version}`;
-      const metaPath = path.join(modelDir, modelName, 'meta.json');
+      // Phase 18-01e+h: the startup loader in services/ml/index.js prefers the
+      // atomic-swap `active/` dir over the legacy `pv_correction_<T>_v<N>/`
+      // scan and tags the loaded meta with `_loadedFrom` so we can re-derive
+      // the exact path here. Without this, ml_predict.py would be told
+      // model_dir=/opt/dvhub/ml-models + model_type=lightgbm + version=1, then
+      // build `/opt/dvhub/ml-models/pv_correction_lightgbm_v1/model.txt` and
+      // ENOENT on disk — silently returning {applied:false} so /api/forecast
+      // showed `mlActive:false` even though the model loaded fine and the
+      // /api/ml/status endpoint reported v1 active.
+      const loadedFrom = currentModel._loadedFrom;
+      const legacyName = `pv_correction_${currentModel.model_type}_v${currentModel.version}`;
+      const modelName = loadedFrom && loadedFrom !== legacyName ? loadedFrom : legacyName;
+      const modelPath = path.join(modelDir, modelName);
+      const metaPath = path.join(modelPath, 'meta.json');
       if (fs.existsSync(metaPath)) {
         const guard = checkModelSchema(metaPath);
         if (!guard.ok && guard.reason === 'schema_mismatch') {
@@ -158,6 +170,9 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
         slots: pvSlots,
         features,
         model_dir: modelDir,
+        // 18-01h: explicit model_path overrides ml_predict.py's default
+        // (model_dir + pv_correction_<T>_v<N>) when we loaded from active/.
+        model_path: modelPath,
         model_type: currentModel.model_type,
         version: currentModel.version
       }, 30000);
@@ -251,7 +266,14 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
     currentModel = {
       model_type: meta.model_type,
       version: meta.version,
-      mae: meta.mae
+      mae: meta.mae,
+      // Phase 18-01h: preserve the host directory name the loader picked
+      // (set by ml/index.js to either "active" for atomic-swap promoted models
+      // or "pv_correction_<T>_v<N>" for legacy daily-training output) so
+      // correct() can route ml_predict.py at the right path. Undefined for
+      // callers that don't supply it (older tests) — code in correct()
+      // gracefully falls back to the legacy naming convention.
+      _loadedFrom: meta._loadedFrom
     };
   }
 
