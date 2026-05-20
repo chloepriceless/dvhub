@@ -140,7 +140,15 @@ export function filterOfflineGaps(matched) {
  * @returns {{ start: Function, close: Function, evaluateAccuracy: Function }}
  */
 export function createAccuracyTracker(ctx, { store }) {
-  const { state, pushLog, db } = ctx;
+  const { state, pushLog } = ctx;
+  // Phase 18-01b fix: ctx.db is a lazy getter that returns dbPool, which is only
+  // populated AFTER createTelemetryStoreIfEnabled() runs at server bootstrap. The
+  // forecast factory (which instantiates this tracker) runs BEFORE that, so a
+  // destructuring `const { db } = ctx` at factory time captured `undefined` and
+  // the tracker bailed forever with `accuracy_tracker_skip — no_db`. Lazy getter
+  // via getDb() reads ctx.db at the moment start() / evaluateAccuracy() actually
+  // need the pool — by then dbPool is populated and the tracker actually runs.
+  const getDb = () => ctx.db;
   let timeoutHandle = null;
   let intervalHandle = null;
 
@@ -168,6 +176,7 @@ export function createAccuracyTracker(ctx, { store }) {
    * @param {string} forecastType - 'pv' or 'load'
    */
   async function evaluateAccuracy(forecastType) {
+    const db = getDb();
     if (!db) return;
 
     const { start, end, dateStr } = getYesterdayRange();
@@ -431,7 +440,7 @@ export function createAccuracyTracker(ctx, { store }) {
    * Uses setTimeout for initial delay to 02:00, then setInterval for 24h period.
    */
   async function start() {
-    if (!db) {
+    if (!getDb()) {
       pushLog('accuracy_tracker_skip', { reason: 'no_db' });
       return;
     }
