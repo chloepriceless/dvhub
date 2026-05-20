@@ -499,6 +499,17 @@ install_eos() {
   sudo "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
   sudo "$EOS_VENV/bin/pip" install -e "$EOS_DIR"
 
+  # Phase 18-03: starlette 1.x dropped the `on_startup` kwarg in favour of
+  # `lifespan`, but fasthtml 0.12.x (pinned by monsterui 1.0.44, which the EOS
+  # v0.3.0 requirements pull in) still calls Starlette.__init__(on_startup=…).
+  # Result on Debian 13 / Python 3.13 with pip default-resolving starlette to
+  # the latest 1.x: EOSdash subprocess crashes on every restart with
+  #   TypeError: Starlette.__init__() got an unexpected keyword argument 'on_startup'
+  # while the EOS HTTP API itself stays up. Pin starlette to the 0.x line until
+  # EOS upstream upgrades fasthtml; verified working on prod 2026-05-20 at
+  # starlette 0.52.1. Idempotent — pip re-resolves the constraint on every run.
+  sudo "$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
+
   # Ownership: systemd user `dvhub` must execute the venv
   sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
 
