@@ -2,6 +2,22 @@
 // Reads solar_yield and consumption forecasts from vrm_forecasts table
 // (already populated by epex-fetch.js fetchVrmForecast()).
 // No additional API calls needed — just reads what's already there.
+//
+// Phase 18-05 VRM credential single-source-of-truth (verified 2026-05-20):
+// The VRM portal-id + access-token live at exactly ONE location in cfg —
+//   cfg.telemetry.historyImport.vrmPortalId
+//   cfg.telemetry.historyImport.vrmToken
+// — and are consumed by FOUR producers/consumers without duplication:
+//   1. history-import.js              (Phase 09 backfill)
+//   2. vrm-forecast.js (this file)    (forecast subsystem)
+//   3. epex-fetch.js fetchVrmForecast (populates the vrm_forecasts table)
+//   4. integrations-health-tracker.js (provider availability indicator)
+// There is intentionally NO `cfg.forecast.vrm.*` slot. If a future setting
+// needs a forecast-side override (separate token, different portal id), add
+// it here with explicit fallback to telemetry.historyImport.* — do NOT
+// silently fork the field into two places. The Phase 20 settings UI will
+// surface the single source as the canonical entry point so the operator
+// only ever fills it in once.
 
 /**
  * Create VRM Forecast reader.
