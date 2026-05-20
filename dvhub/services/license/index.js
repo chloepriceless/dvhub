@@ -56,7 +56,12 @@ const VALID_STATUSES = new Set(['active', 'invalid', 'expired', 'suspended', 'no
 // V5 ASVS — whitelist featureName for the 403-response body to prevent
 // log/response injection. Phase 17 ships exactly one Pro feature
 // ('family-dashboard'). Phase 18+ extends this set.
-const ALLOWED_FEATURES = new Set(['family-dashboard']);
+const ALLOWED_FEATURES = new Set([
+  'family-dashboard',
+  'forecast-inspector-ml',     // Phase 19 Plan 19-04 (B3 ML-Korrektur-Inspector)
+  'forecast-inspector-eos',    // Phase 19 Plan 19-05 (B4 EOS-Output-Inspector)
+  'forecast-inspector-stage2', // Phase 19 Plan 19-06 (B5 Stage-2-Backtest-Inspector)
+]);
 
 /**
  * Build a fresh "none" state object (used on first-boot, on corrupt-file
