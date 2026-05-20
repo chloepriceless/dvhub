@@ -400,3 +400,131 @@ describe('handleRequest /api/family/status integration', () => {
     assert.equal(body.updatedAt, 12345);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 17 Plan 04 — Option B coverage: LAN-source-IP + no Bearer + license
+// !== 'active' must STILL produce 403 from each LAN_SAFE_ENDPOINTS family
+// endpoint, AND license === 'active' with the same LAN-no-Bearer request must
+// produce 200 (preserves D-14's token-less kiosk flow for activated boxes).
+//
+// Proves both halves of the design:
+//   (1) the gate inside the handler runs AFTER LAN-bypass already accepted
+//       the request — so a kiosk without licence still sees 403;
+//   (2) once licence is active, the LAN kiosk works exactly as today (no
+//       Bearer required from LAN).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Build a licenseService stub whose requirePro mimics the real 403 contract
+// (status='active' → return true; else write 403 pro_required body and
+// return false). Mirrors services/license/index.js requirePro semantics.
+function makeLicenseStub(status) {
+  return {
+    requirePro(req, res, featureName) {
+      if (status === 'active') return true;
+      const body = JSON.stringify({ error: 'pro_required', feature: featureName });
+      res.writeHead(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body, 'utf8')
+      });
+      res.end(body);
+      return false;
+    }
+  };
+}
+
+// makeReqLanNoBearer simulates the kiosk shape: a private-range remoteAddress,
+// NO Authorization header. checkAuth's isLocalNetworkRequest path accepts it
+// (192.168.0.0/16 — RFC 1918), and the family handler is then where the
+// requirePro gate fires.
+function makeReqLanNoBearer(method, pathname, body) {
+  const rawBody = body ? JSON.stringify(body) : '';
+  const req = {
+    method,
+    url: pathname,
+    headers: { host: 'localhost' }, // NO Authorization
+    socket: { remoteAddress: '192.168.1.50' }, // LAN — RFC 1918
+    _body: rawBody,
+    _listeners: {},
+    on(event, cb) {
+      if (event === 'data' && req._body) {
+        setTimeout(() => cb(Buffer.from(req._body)), 0);
+        setTimeout(() => { const endCb = req._listeners['end']; if (endCb) endCb(); }, 1);
+      } else if (event === 'end' && !req._body) {
+        setTimeout(() => cb(), 0);
+      } else {
+        req._listeners[event] = cb;
+      }
+      return req;
+    },
+    destroy() { req._destroyed = true; }
+  };
+  return req;
+}
+
+describe('Family LAN-bypass + license gate (Option B / CONTEXT Amendment)', () => {
+  // Only the GET endpoints that join LAN_SAFE_ENDPOINTS are exercised here —
+  // POST endpoints don't get LAN-bypass (isLanSafeRequest enforces method='GET')
+  // so a no-Bearer POST hits 401 before requirePro. The 4 LAN-safe Family GETs:
+  const lanEndpoints = [
+    '/api/family/status',
+    '/api/family/presence',
+    '/api/family/tile-history?id=plug1',
+    '/api/family/tesla-history',
+  ];
+
+  for (const path of lanEndpoints) {
+    for (const status of ['none', 'invalid', 'expired', 'suspended']) {
+      it(`${path} with LAN source + no Bearer + status=${status} → 403`, async () => {
+        const ctx = mockCtx({
+          licenseService: makeLicenseStub(status),
+          familyService: {
+            buildFamilyStatus: () => ({}),
+            getPresence: () => ({ detected: false, source: null, updatedAt: 0 }),
+            setPresence: () => {}
+          },
+          // tile-history/tesla-history reach into ctx.telemetryStore + getRawCfg
+          // — handlers return 403 BEFORE they get there, but stubs are safe.
+          telemetryStore: { querySeries: async () => [] },
+          getRawCfg: () => ({ family: { mqttTiles: [{ id: 'plug1', topic: 't/plug1', label: 'Plug 1' }] } })
+        });
+        const routes = createApiRoutes(ctx);
+        const res = mockRes();
+        const pathname = path.split('?')[0];
+        await routes.handleRequest(
+          makeReqLanNoBearer('GET', path),
+          res,
+          new URL('http://localhost' + path)
+        );
+        assert.equal(res._captured.status, 403,
+          `${path}@${status}: expected 403, got ${res._captured.status} body=${res._captured.body}`);
+        const body = JSON.parse(res._captured.body);
+        assert.equal(body.error, 'pro_required');
+        assert.equal(body.feature, 'family-dashboard');
+      });
+    }
+
+    it(`${path} with LAN source + no Bearer + status=active → 200 (D-14 kiosk flow preserved)`, async () => {
+      const ctx = mockCtx({
+        licenseService: makeLicenseStub('active'),
+        familyService: {
+          buildFamilyStatus: () => ({ now: 1, energy: {}, presence: {} }),
+          getPresence: () => ({ detected: false, source: null, updatedAt: 0 }),
+          setPresence: () => {}
+        },
+        telemetryStore: { querySeries: async () => [] },
+        getRawCfg: () => ({ family: { mqttTiles: [{ id: 'plug1', topic: 't/plug1', label: 'Plug 1' }] } })
+      });
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReqLanNoBearer('GET', path),
+        res,
+        new URL('http://localhost' + path)
+      );
+      assert.equal(res._captured.status, 200,
+        `${path}@active: expected 200, got ${res._captured.status} body=${res._captured.body}`);
+      const body = JSON.parse(res._captured.body);
+      assert.equal(body.ok, true);
+    });
+  }
+});
