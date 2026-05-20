@@ -2800,7 +2800,100 @@ function renderPvProvidersInspector(payload) {
   renderInspectorSparkline(canvas, sparkPoints, '#34dbff', 'rgba(52,219,255,0.10)');
 }
 
-function renderLoadInspector(_payload) { /* Plan 19-03 */ }
+// Plan 19-03 — fixed column order for the B2 Load-Forecast table. The
+// sql_weekday vs sql_weekday_fallback distinction is preserved verbatim so
+// operators see the Phase-18-01k cold-start signal in the table itself.
+var LOAD_INSPECTOR_MODEL_COLUMNS = ['sql_weekday', 'sql_weekday_fallback', 'statsforecast'];
+
+function renderLoadInspector(payload) {
+  if (!payload || !payload.models) return;
+  var models = payload.models || {};
+  var actual = payload.actual || [];
+  var fallbackActive = !!(payload.meta && payload.meta.sqlWeekdayFallbackActive);
+
+  // 1. Union of timestamps across all model columns + actual (sorted ascending).
+  var tsSet = {};
+  LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
+    (models[m] || []).forEach(function (s) { tsSet[s.ts_utc] = true; });
+  });
+  actual.forEach(function (a) { tsSet[a.ts_utc] = true; });
+  var ts = Object.keys(tsSet).sort();
+
+  // 2. Slot → {model: power_w, actual: power_w} lookup so each row indexes O(1).
+  var byTs = {};
+  LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
+    (models[m] || []).forEach(function (s) {
+      if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
+      byTs[s.ts_utc][m] = s.power_w;
+    });
+  });
+  actual.forEach(function (a) {
+    if (!byTs[a.ts_utc]) byTs[a.ts_utc] = {};
+    byTs[a.ts_utc].actual = a.power_w;
+  });
+
+  // 3. Summary-Karten — SQL-weekday state, Actuals geladen, Forecast-Slots.
+  var summary = document.getElementById('inspector-summary-load');
+  if (summary) {
+    var sqlWeekdayState = fallbackActive
+      ? 'Fallback'
+      : ((models.sql_weekday && models.sql_weekday.length) ? 'aktiv' : 'aus');
+    summary.innerHTML =
+      '<div class="stat-card"><div class="stat-label">SQL weekday</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(sqlWeekdayState) + '</div>' +
+        (fallbackActive
+          ? '<div class="stat-delta" title="Siehe Phase 18-01k">Fallback 800 W</div>'
+          : '<div class="stat-delta"></div>') +
+      '</div>' +
+      '<div class="stat-card"><div class="stat-label">Actuals geladen</div>' +
+        '<div class="stat-val">' + actual.length + '</div>' +
+        '<div class="stat-delta">Slots</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Forecast-Slots</div>' +
+        '<div class="stat-val">' + (payload.meta ? (payload.meta.rowCount || 0) : 0) + '</div>' +
+        '<div class="stat-delta"></div></div>';
+  }
+
+  // 4. Detail-meta — slot count + window length.
+  var meta = document.querySelector('[data-inspector-meta="load"]');
+  if (meta) meta.textContent = ts.length + ' Slots · 24 h';
+
+  // 5. Detail-Tabelle — 1 row per slot, 3 forecast cols + 1 actual col.
+  // sql_weekday_fallback column gets .data-row--warning on every row when
+  // meta.sqlWeekdayFallbackActive — Phase 18-01k cold-start visual signal.
+  var tbody = document.querySelector('[data-inspector-tbody="load"]');
+  if (tbody) {
+    var html = '';
+    for (var i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      var slot = byTs[t] || {};
+      html += '<tr>';
+      html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(t)) + '</td>';
+      LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
+        var v = slot[m];
+        if (m === 'sql_weekday_fallback' && fallbackActive) {
+          html += '<td class="data-row--warning" title="Fallback-Wert 800 W aktiv. Siehe Phase 18-01k.">' +
+            escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        } else {
+          html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        }
+      });
+      html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(slot.actual)) + '</td>';
+      html += '</tr>';
+    }
+    if (!ts.length) {
+      html = '<tr><td colspan="5" class="dv-log-empty">Keine Load-Forecast-Daten — sql_weekday und sf laden gerade.</td></tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
+  // 6. Sparkline — statsforecast preferred (B2 accent --blue/#1f8dff per UI-SPEC);
+  //    sql_weekday fallback when sf is empty.
+  var sparkData = (models.statsforecast && models.statsforecast.length)
+    ? models.statsforecast
+    : (models.sql_weekday || []);
+  var canvas = document.querySelector('canvas[data-inspector-spark="load-sf"]');
+  renderInspectorSparkline(canvas, sparkData, '#1f8dff', 'rgba(31,141,255,0.10)');
+}
 function renderMlCorrectionInspector(_payload) { /* Plan 19-04 */ }
 function renderEosInspector(_payload) { /* Plan 19-05 */ }
 function renderStage2BacktestResult(_payload) { /* Plan 19-06 */ }
