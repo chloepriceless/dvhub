@@ -103,7 +103,17 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
           MAX(COALESCE(fa.mae_7d_pvlib,   0))::float AS mae_7d_pvlib,
           MAX(COALESCE(fa.mae_7d_merged,  0))::float AS mae_7d_merged,
           MAX(COALESCE(fa.mae_7d_ml,      0))::float AS mae_7d_ml,
-          AVG(e.value_num) AS theoretical_power_w
+          -- Phase 18-01 unit fix: energy_slots_15m.value_num is kWh per 15-min slot
+          -- (verified via DB sample: series_key='pv_total_w' rows carry unit='kWh',
+          -- typical values 0..5 kWh per quarter-hour for a 30 kWp plant). Multiply
+          -- by 4000 to convert "mean kWh per 15-min slot" -> "mean Watt over the hour":
+          --   kWh / (0.25 h) = kW;  × 1000 = W;  combined factor = × 4000.
+          -- Pre-fix this column was named *_power_w but actually held kWh/15min, so the
+          -- trained model regressed to ~0.6 (kWh/15min) which got returned as 0.6 W to
+          -- the caller (4000× too small) — the live-runtime sanity-fallback at
+          -- forecast/index.js then engaged on every build and substituted raw-PV. See
+          -- .planning/PROD-AUDIT-2026-05-20.md §3 and 16-ML-DIAGNOSIS.md for the trail.
+          AVG(e.value_num) * 4000 AS theoretical_power_w
         FROM weather_forecasts w
         LEFT JOIN energy_slots_15m e
           ON date_trunc('hour', e.slot_start_utc) = date_trunc('hour', w.ts_utc)
