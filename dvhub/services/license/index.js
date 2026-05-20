@@ -123,6 +123,20 @@ export function createLicenseService(ctx) {
   const licensePath = path.join(baseDir, 'license_state.json');
   const securityHeaders = ctx.securityHeaders || {};
 
+  // Timer-injection seam — tests pass ctx.timers = { setInterval, setTimeout,
+  // clearInterval, clearTimeout } to capture scheduled callbacks without
+  // running the real event loop (Plan 17-03 poller-tests; RESEARCH §Pitfall 4).
+  // Production callers omit ctx.timers and get the globals.
+  const timers = ctx.timers || {
+    setInterval: globalThis.setInterval,
+    setTimeout: globalThis.setTimeout,
+    clearInterval: globalThis.clearInterval,
+    clearTimeout: globalThis.clearTimeout
+  };
+  let pollerInterval = null;
+  let pollerInitialTimeout = null;
+  let revalidateInFlight = false;
+
   // Initialize state.license eagerly so callers (e.g. requirePro before
   // loadStateFromDisk) never see undefined. loadStateFromDisk() will overwrite
   // this with the persisted state when invoked at boot.
@@ -430,19 +444,60 @@ export function createLicenseService(ctx) {
   // ----------------- Lifecycle -----------------
 
   /**
-   * start: no-op in Plan 02. Plan 03 adds the 24 h setInterval + 30 s boot
-   * delay poller here.
+   * Wrap a revalidateLicense() call with an overlap-guard so a slow upstream
+   * can never produce concurrent in-flight calls (RESEARCH §Pitfall 4 —
+   * matches the weather-fetch.js polling pattern at services/forecast/weather-fetch.js:138-145).
    */
-  async function start() {
-    // intentionally empty — Plan 03 wires the poller
+  function guardedRevalidate(source) {
+    if (revalidateInFlight) {
+      pushLog('license_revalidate_skipped_overlap', { source });
+      return;
+    }
+    revalidateInFlight = true;
+    revalidateLicense()
+      .catch(err => pushLog('license_revalidate_error', { source, error: err?.message ?? String(err) }))
+      .finally(() => { revalidateInFlight = false; });
   }
 
   /**
-   * close: no-op in Plan 02 (no timer to clear). Plan 03 clears the poller's
-   * setInterval here.
+   * start: schedules the license poller. Two timers:
+   *   1. setTimeout(30_000) — first validate 30s after boot. Verifies the
+   *      persisted license without blocking server bootstrap (CONTEXT D-11).
+   *   2. setInterval(24h)   — recurring validate every 24h.
+   *
+   * Both wrap revalidateLicense() in an overlap-guard so a slow upstream
+   * (Keygen latency / outage) never piles up concurrent calls.
+   *
+   * Timer injection via ctx.timers (see factory header) makes the schedule
+   * deterministic under test.
    */
-  function close() {
-    // intentionally empty — Plan 03 clears the poller
+  async function start() {
+    // First validate runs 30s after start() — not synchronously. Boot must
+    // never block on a Keygen call.
+    pollerInitialTimeout = timers.setTimeout(() => {
+      guardedRevalidate('boot');
+    }, 30_000);
+
+    // Recurring 24h validate.
+    pollerInterval = timers.setInterval(() => {
+      guardedRevalidate('interval');
+    }, 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * close: clears the boot setTimeout AND the 24h setInterval. Uses the
+   * type-correct clear* function for each handle. Safe to call multiple times.
+   */
+  async function close() {
+    if (pollerInterval != null) {
+      timers.clearInterval(pollerInterval);
+      pollerInterval = null;
+    }
+    if (pollerInitialTimeout != null) {
+      const clearTimeoutFn = timers.clearTimeout || timers.clearInterval;
+      clearTimeoutFn(pollerInitialTimeout);
+      pollerInitialTimeout = null;
+    }
   }
 
   // ----------------- @internal test seams -----------------
