@@ -2221,6 +2221,88 @@
     c.classList.toggle('loss', net < 0);
   }
 
+  /* =======================================================================
+     Phase 19 Plan 19-07 — Family-dashboard Optimizer-Cold mirror.
+     Independent 60s polling block (sibling of pollFamilyStatus) that mirrors
+     the settings.html #optimizerColdBanner onto the kiosk surface. Same
+     thresholds, same copy, same markup as settings.js — the mirror MUST stay
+     identical (UI-SPEC §"Family-dashboard mirror"). Pauses on tab-hidden via
+     the existing visibilitychange handler is not enough — we install a
+     dedicated one because pollFamilyStatus runs at 5s anyway, but this block
+     is gated to 60s + must stop when hidden.
+     ======================================================================= */
+  var FAMILY_COLD_POLL_MS = 60_000;
+  var FAMILY_COLD_YELLOW_DAYS = 2;
+  var FAMILY_COLD_RED_DAYS = 5;
+  var familyColdTimer = null;
+
+  function getFamilyColdBanner() {
+    return document.getElementById('familyOptimizerColdBanner');
+  }
+
+  function renderFamilyColdBanner(payload) {
+    var banner = getFamilyColdBanner();
+    if (!banner) return;
+    if (!payload || payload.ok === false) {
+      banner.hidden = true;
+      banner.textContent = '';
+      return;
+    }
+    var days = payload.daysSinceLastRun;
+    if (days == null || days < FAMILY_COLD_YELLOW_DAYS) {
+      banner.hidden = true;
+      banner.classList.remove('warn', 'error');
+      banner.textContent = '';
+      return;
+    }
+    banner.hidden = false;
+    var dateStr = '';
+    if (payload.lastRunAt) {
+      var d = new Date(payload.lastRunAt);
+      if (!isNaN(d.getTime())) {
+        dateStr = ('0' + d.getDate()).slice(-2) + '.' +
+                  ('0' + (d.getMonth() + 1)).slice(-2) + '.' +
+                  d.getFullYear();
+      }
+    }
+    if (days >= FAMILY_COLD_RED_DAYS) {
+      banner.classList.remove('warn');
+      banner.classList.add('error');
+      banner.textContent = 'Optimizer ist seit ' + Math.floor(days) +
+        ' Tagen kalt. Stage-2-Automatik liefert keine neuen Pläne mehr — bitte Optimizer-Status prüfen.';
+    } else {
+      banner.classList.remove('error');
+      banner.classList.add('warn');
+      banner.textContent = 'Optimizer kalt seit ' + Math.floor(days) + ' Tagen.' +
+        (dateStr ? ' Stage-2-Plan wurde zuletzt am ' + dateStr + ' berechnet.' : '');
+    }
+  }
+
+  function pollFamilyCold() {
+    apiFetchCompat('/api/forecast/inspector/optimizer-cold')
+      .then(function (r) { return r && r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.ok !== false) renderFamilyColdBanner(j); })
+      .catch(function () { /* silent — banner retains last state on network blip */ });
+  }
+
+  function startFamilyColdPoll() {
+    if (familyColdTimer != null) return;
+    pollFamilyCold();
+    familyColdTimer = setInterval(pollFamilyCold, FAMILY_COLD_POLL_MS);
+  }
+
+  function stopFamilyColdPoll() {
+    if (familyColdTimer == null) return;
+    clearInterval(familyColdTimer);
+    familyColdTimer = null;
+  }
+
+  // Visibility gate — pause cold-poll on tab hidden, resume on visible.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') startFamilyColdPoll();
+    else stopFamilyColdPoll();
+  });
+
   /* ===================== BOOTSTRAP ===================== */
   // Initialise the Aurora bgFlow dust constellation eagerly so the background
   // paints (idle) before the first /api/family/status poll completes; the poll
@@ -2229,6 +2311,8 @@
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
   initMessageWidget();
+  // Phase 19 Plan 19-07 — start the optimizer-cold poll alongside the rest.
+  startFamilyColdPoll();
   // Periodic clock fallback in case /api/family/status is unreachable at boot —
   // the greeting.time field from the backend takes over once the first poll succeeds.
   (function bootstrapClock() {

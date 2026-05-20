@@ -19,11 +19,15 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=5">
+<link rel="stylesheet" href="/family.css?v=6">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
 <div class="viewport">
+  <!-- Phase 19 Plan 19-07: Optimizer-Cold banner mirror (kiosk surface).
+       Hidden by default; family.js polls /api/forecast/inspector/optimizer-cold
+       every 60s and toggles .warn (2-4d) / .error (5+d) on stale state. -->
+  <div id="familyOptimizerColdBanner" class="config-banner warn" hidden role="status" aria-live="polite"></div>
   <div class="bg"></div>
   <canvas class="bg-flow" id="bgFlow"></canvas>
   <div class="bg-dim"></div>
@@ -113,6 +117,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=12"></script>
+<script src="/family.js?v=13"></script>
 </body>
 </html>

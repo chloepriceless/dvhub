@@ -367,3 +367,54 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   text-transform:uppercase;
 }
 .pf-center-readout.loss .pf-net-label{color:#ff9a3c}
+
+/* =========================================================================
+   Phase 19 Plan 19-07 — Family-dashboard Optimizer-Cold banner.
+   Mirrors settings.html #optimizerColdBanner onto the kiosk surface so the
+   operator sees the alert without having to open Settings. Positioned at
+   the very top of the .viewport (above the bgFlow constellation + greeting),
+   absolutely placed with high z-index so it overlays the bg layers but
+   doesn't displace existing fixed-position tags. Hidden by default; family.js
+   toggles .warn (2–4d) / .error (5+d).
+
+   IMPORTANT: family.html does NOT load settings.css, so the .config-banner.*
+   palette is inlined here rather than inherited. Tokens match the UI-SPEC
+   §"Optimizer-Cold Banner" yellow (--yellow #ffd421) / red (--red #ff5d5d).
+   ========================================================================= */
+#familyOptimizerColdBanner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 35; /* above .greeting (z-30); below .picker-overlay/.overlay (z=50+) */
+  margin: 8px 12px 0;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-family: var(--f);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-align: left;
+  pointer-events: none; /* purely informational — operator opens Settings to act */
+}
+#familyOptimizerColdBanner[hidden] { display: none; }
+#familyOptimizerColdBanner.warn {
+  background: rgba(255, 212, 33, .12);
+  border: 1px solid rgba(255, 212, 33, .28);
+  color: #ffd421;
+  box-shadow: 0 4px 16px rgba(255, 212, 33, .08);
+}
+#familyOptimizerColdBanner.error {
+  background: rgba(255, 93, 93, .12);
+  border: 1px solid rgba(255, 93, 93, .32);
+  color: #ff7d7d;
+  box-shadow: 0 4px 16px rgba(255, 93, 93, .12);
+}
+@media (max-width: 600px) {
+  #familyOptimizerColdBanner {
+    margin: 6px 8px 0;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
