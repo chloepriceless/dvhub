@@ -9,6 +9,8 @@
   --blue:#1f8dff;
   --cyan:#34dbff;
   --violet:#a78bff;
+  --accent-pro:#b89fff;
+  --accent-pro-glow:rgba(184,159,255,0.30);
   --yellow:#ffd421;
   --green:#3ee0a0;
   --red:#ff5d5d;
@@ -90,6 +92,8 @@
   --blue:#1561c2;
   --yellow:#a87a00;
   --violet:#6d4ed9;
+  --accent-pro:#5a3fc4;
+  --accent-pro-glow:rgba(90,63,196,0.22);
   --green:#1e8a5b;
   --red:#c43a3a;
   --accent:#0a8fb0;
