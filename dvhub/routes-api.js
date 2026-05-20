@@ -798,6 +798,17 @@ export function createApiRoutes(ctx) {
     '/api/history/raw',
     '/api/history/raw/export.csv',
     '/api/history/raw/export.parquet',
+    // Phase 19 Plan 19-01 — Forecast Inspector (read-only diagnostic surface).
+    // GET-only LAN bypass per appliance trust model (matches /api/forecast,
+    // /api/integrations/health, /api/family/* pattern). External callers still
+    // need Bearer. Pro-gating happens IN-HANDLER via requirePro() — LAN-bypassed
+    // kiosks see 403 too when license inactive (Option B per Phase 17 D-15 spirit).
+    '/api/forecast/inspector/pv-providers',
+    '/api/forecast/inspector/load',
+    '/api/forecast/inspector/ml-correction',
+    '/api/forecast/inspector/eos',
+    '/api/forecast/inspector/stage2',
+    '/api/forecast/inspector/optimizer-cold',
   ]);
 
   function isLanSafeRequest(req) {
@@ -2881,6 +2892,165 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         pushLog('forecast_api_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'forecast generation failed' });
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phase 19 Plan 19-01 — Forecast Inspector (6 read-only diagnostic endpoints).
+    //
+    // Shape per CONTEXT D-16:
+    //   - 5 window-shaped endpoints (B1..B4 + optimizer-cold has no window)
+    //   - 1 date-shaped endpoint (B5 stage2)
+    //
+    // Security posture (threat_model T-19-01, T-19-04, T-19-08, T-19-09):
+    //   - LAN_SAFE_ENDPOINTS bypass GET-auth on LAN; external callers need Bearer.
+    //   - B3/B4/B5 are Pro-gated via requirePro() BEFORE business logic — the
+    //     gate runs even on LAN-bypassed kiosks (Option B). featureName is
+    //     whitelisted in services/license/index.js ALLOWED_FEATURES.
+    //   - from/to ISO validated + 7-day DoS cap (T-19-09).
+    //   - stage2 date regex-validated YYYY-MM-DD + 30-day retention window.
+    //   - ctx.inspector=null → 503 (Phase 19-01 wires inspector at server bootstrap;
+    //     a missing inspector indicates wiring drift and should fail loudly).
+    //   - Handler throws → 500 with static `pushLog` event-name (T-19-10 accept).
+    //
+    // Stub passthrough: B1..B5 currently return {ok:false,error:'not_implemented'}
+    // from inspector.js — the handler emits 501 to signal "not yet implemented"
+    // (vs 500 server-error). Plans 19-02..19-06 replace each method body and the
+    // handler will then return 200.
+    // ─────────────────────────────────────────────────────────────────────
+
+    // B6 — Optimizer-Cold (free; fully implemented in Plan 19-01)
+    if (url.pathname === '/api/forecast/inspector/optimizer-cold' && req.method === 'GET') {
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      try {
+        const payload = await ctx.inspector.getOptimizerCold();
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_optimizer_cold_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // B1 — PV Providers (free; stubbed in Plan 19-01, body in Plan 19-02)
+    if (url.pathname === '/api/forecast/inspector/pv-providers' && req.method === 'GET') {
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      const from = url.searchParams.get('from');
+      const to   = url.searchParams.get('to');
+      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      const spanMs = Date.parse(to) - Date.parse(from);
+      if (spanMs < 0 || spanMs > 7 * 86_400_000) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      try {
+        const payload = await ctx.inspector.getPvProviders({ from, to });
+        if (payload && payload.ok === false && payload.error === 'not_implemented') {
+          return json(res, 501, payload);
+        }
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_pv_providers_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // B2 — Load Forecast (free; stubbed in Plan 19-01, body in Plan 19-03)
+    if (url.pathname === '/api/forecast/inspector/load' && req.method === 'GET') {
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      const from = url.searchParams.get('from');
+      const to   = url.searchParams.get('to');
+      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      const spanMs = Date.parse(to) - Date.parse(from);
+      if (spanMs < 0 || spanMs > 7 * 86_400_000) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      try {
+        const payload = await ctx.inspector.getLoad({ from, to });
+        if (payload && payload.ok === false && payload.error === 'not_implemented') {
+          return json(res, 501, payload);
+        }
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_load_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // B3 — ML Shadow Correction (Pro; stubbed in Plan 19-01, body in Plan 19-04)
+    if (url.pathname === '/api/forecast/inspector/ml-correction' && req.method === 'GET') {
+      if (!requirePro(req, res, 'forecast-inspector-ml')) return;
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      const from = url.searchParams.get('from');
+      const to   = url.searchParams.get('to');
+      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      const spanMs = Date.parse(to) - Date.parse(from);
+      if (spanMs < 0 || spanMs > 7 * 86_400_000) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      try {
+        const payload = await ctx.inspector.getMlCorrection({ from, to });
+        if (payload && payload.ok === false && payload.error === 'not_implemented') {
+          return json(res, 501, payload);
+        }
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_ml_correction_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // B4 — EOS Output (Pro; stubbed in Plan 19-01, body in Plan 19-05)
+    if (url.pathname === '/api/forecast/inspector/eos' && req.method === 'GET') {
+      if (!requirePro(req, res, 'forecast-inspector-eos')) return;
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      const from = url.searchParams.get('from');
+      const to   = url.searchParams.get('to');
+      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      const spanMs = Date.parse(to) - Date.parse(from);
+      if (spanMs < 0 || spanMs > 7 * 86_400_000) {
+        return json(res, 400, { ok: false, error: 'invalid_window' });
+      }
+      try {
+        const payload = await ctx.inspector.getEos({ from, to });
+        if (payload && payload.ok === false && payload.error === 'not_implemented') {
+          return json(res, 501, payload);
+        }
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_eos_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // B5 — Stage-2 Backtest (Pro; stubbed in Plan 19-01, body in Plan 19-06)
+    if (url.pathname === '/api/forecast/inspector/stage2' && req.method === 'GET') {
+      if (!requirePro(req, res, 'forecast-inspector-stage2')) return;
+      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
+      const date = url.searchParams.get('date');
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return json(res, 400, { ok: false, error: 'invalid_date' });
+      }
+      const dateMs = Date.parse(date + 'T00:00:00Z');
+      // Retention window: today-30 .. today (yesterday is the default; today acceptable for partial day)
+      if (!Number.isFinite(dateMs) || dateMs < Date.now() - 31 * 86_400_000 || dateMs > Date.now()) {
+        return json(res, 400, { ok: false, error: 'invalid_date' });
+      }
+      try {
+        const payload = await ctx.inspector.getStage2({ date });
+        if (payload && payload.ok === false && payload.error === 'not_implemented') {
+          return json(res, 501, payload);
+        }
+        return json(res, 200, { ok: true, ...payload });
+      } catch (e) {
+        pushLog('inspector_stage2_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'inspector_failed' });
       }
     }
 

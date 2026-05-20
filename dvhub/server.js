@@ -100,6 +100,8 @@ import { createForecastService } from './services/forecast/index.js';
 import { createForecastSnapshots } from './services/forecast/forecast-snapshots.js';
 import { createPvnodeBackfill } from './services/forecast/pvnode-backfill.js';
 import { createPvnodeQuota } from './services/forecast/pvnode-quota.js';
+// Phase 19 Plan 19-01: Forecast Inspector — read-only diagnostic factory.
+import { createInspector } from './services/forecast/inspector.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
@@ -935,6 +937,21 @@ const mlRetrainJobs = createRetrainJobs(ctx);
 ctx.mlRetrainJobs = mlRetrainJobs;
 const llmService = createLlmService(ctx);
 ctx.llmService = llmService;
+
+// Phase 19 Plan 19-01: Forecast Inspector — read-only diagnostic factory.
+// The inspector composes existing forecast/store/telemetry/ml services and
+// shapes their state for the /api/forecast/inspector/* read endpoints.
+// Pro-gating happens at the route layer (routes-api.js) via licenseService.requirePro.
+// Note: telemetryStore is read LAZILY from ctx (Phase 18 lesson) — ctx.telemetryStore
+// is set later inside the telemetryReady IIFE, AFTER this wiring runs.
+// Note: Plan 19-05 will swap eosAdapter:null for a second adapter instance with timeoutMs:5000.
+const inspector = createInspector(ctx, {
+  store: forecast.store,
+  mlService,
+  eosAdapter: null,           // wired in Plan 19-05
+  forecastService: forecast,
+});
+ctx.inspector = inspector;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
