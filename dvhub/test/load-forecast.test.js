@@ -122,19 +122,23 @@ test('formatLoadSlots produces ISO timestamps at 1h boundaries', () => {
   }
 });
 
-test('formatLoadSlots maps hour_of_day to correct power values', () => {
+test('formatLoadSlots maps hour_of_day to correct power values (Berlin-zone-aware)', () => {
+  // 18-01k: hourMap is keyed by Berlin local hour-of-day (matching the SQL
+  // EXTRACT domain). 2026-04-03 is in CEST (UTC+2), so Berlin midnight on
+  // 2026-04-04 = 2026-04-03T22:00:00Z. We pick that instant so result[0]
+  // looks up Berlin-hour=0 and the 100/200/.../2400 mapping holds.
   const sqlRows = [];
   for (let h = 0; h < 24; h++) {
     sqlRows.push({ hour_of_day: h, avg_power_w: 100 * (h + 1), sample_count: '28' });
   }
-  const now = new Date('2026-04-03T00:00:00Z');
+  const now = new Date('2026-04-03T22:00:00Z'); // Berlin 2026-04-04T00:00 CEST
   const result = formatLoadSlots(sqlRows, 800, now);
-  // Hour 0 -> 100W, Hour 1 -> 200W, etc.
-  assert.equal(result[0].power_w, 100, 'hour 0 should map to 100W');
-  assert.equal(result[1].power_w, 200, 'hour 1 should map to 200W');
-  assert.equal(result[23].power_w, 2400, 'hour 23 should map to 2400W');
-  // Hour 24 wraps to hour 0 again
-  assert.equal(result[24].power_w, 100, 'hour 24 wraps to hour 0');
+  // Berlin-hour 0 -> 100W, Berlin-hour 1 -> 200W, etc.
+  assert.equal(result[0].power_w, 100, 'Berlin-hour 0 should map to 100W');
+  assert.equal(result[1].power_w, 200, 'Berlin-hour 1 should map to 200W');
+  assert.equal(result[23].power_w, 2400, 'Berlin-hour 23 should map to 2400W');
+  // Berlin-hour 24 wraps to Berlin-hour 0 again
+  assert.equal(result[24].power_w, 100, 'Berlin-hour 24 wraps to Berlin-hour 0');
 });
 
 // --- createLoadForecast ---
