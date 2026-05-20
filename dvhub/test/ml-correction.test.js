@@ -113,6 +113,71 @@ describe('createMlCorrection', () => {
     assert.equal(info.version, 3);
     assert.equal(info.mae, 42);
   });
+
+  // === Phase 19 P19-R3 — shadow-mode tests (Plan 19-04) ===
+  //
+  // shadow:true bypasses the mlEnabled gate but preserves the currentModel===null gate.
+  // Mirrors the existing factory + setModel() helpers — no new scaffolding.
+
+  it('test 7a [shadow]: correct({shadow:true}) bypasses mlEnabled=false when model loaded', async () => {
+    // mlEnabled=false (legacy gate would short-circuit applied:false)
+    mockGetCfg = () => ({ ml: { mlEnabled: false, mlModelDir: '/tmp/ml-models' } });
+    correction = createMlCorrection({
+      pythonBridge: mockBridge,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog,
+    });
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    // Python bridge will be called because shadow:true bypasses the mlEnabled gate
+    mockBridge.call.mock.mockImplementation(async () => ({
+      ok: true,
+      applied: true,
+      model: 'linear_v1',
+      corrected: [{ start: '2026-05-20T10:00:00Z', powerW: 950, rawPowerW: 1000 }],
+    }));
+
+    const pvSlots = [{ start: '2026-05-20T10:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, { forecastVersion: 1, shadow: true });
+    assert.equal(result.applied, true, 'shadow:true with model loaded should bypass mlEnabled=false gate');
+    assert.equal(result.model, 'linear_v1');
+    assert.equal(result.corrected[0].powerW, 950);
+  });
+
+  it('test 7b [shadow]: correct({shadow:false}) preserves legacy mlEnabled=false bypass', async () => {
+    mockGetCfg = () => ({ ml: { mlEnabled: false, mlModelDir: '/tmp/ml-models' } });
+    correction = createMlCorrection({
+      pythonBridge: mockBridge,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog,
+    });
+    correction.setModel({ model_type: 'linear', version: 1, mae: 50 });
+
+    const pvSlots = [{ start: '2026-05-20T10:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, { forecastVersion: 1, shadow: false });
+    assert.equal(result.applied, false, 'shadow:false legacy path: mlEnabled=false → applied:false');
+    assert.deepStrictEqual(result.corrected, pvSlots);
+    assert.equal(result.model, null);
+    // Bridge must NOT have been called
+    assert.equal(mockBridge.call.mock.calls.length, 0, 'mlEnabled=false bypass must short-circuit before bridge call');
+  });
+
+  it('test 7c [shadow]: correct({shadow:true}) still returns applied:false reason:no_model when no model loaded', async () => {
+    mockGetCfg = () => ({ ml: { mlEnabled: false, mlModelDir: '/tmp/ml-models' } });
+    correction = createMlCorrection({
+      pythonBridge: mockBridge,
+      getCfg: mockGetCfg,
+      pushLog: mockPushLog,
+    });
+    // NO setModel call — currentModel stays null
+
+    const pvSlots = [{ start: '2026-05-20T10:00:00Z', powerW: 1000 }];
+    const result = await correction.correct(pvSlots, { forecastVersion: 1, shadow: true });
+    assert.equal(result.applied, false);
+    assert.equal(result.model, null);
+    assert.equal(result.reason, 'no_model', 'currentModel=null gate must be preserved + add reason:no_model');
+    assert.equal(mockBridge.call.mock.calls.length, 0, 'no model → no bridge spawn');
+  });
 });
 
 describe('createMlTraining', () => {
