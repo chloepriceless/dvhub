@@ -2558,6 +2558,12 @@ var FORECAST_INSPECTOR_COLD_YELLOW_DAYS = 2;
 var FORECAST_INSPECTOR_COLD_RED_DAYS = 5;
 var forecastInspectorPollTimer = null;
 var forecastInspectorVisibilityHandler = null;
+// Lazy chart.js instances keyed by data-inspector-spark slug. Sparklines are
+// created on first render and updated in-place thereafter (no flicker).
+var forecastInspectorSparkCharts = {};
+// Plan 19-02 — fixed column order for the B1 PV-Provider table. `combined` is
+// the ensemble output and rendered separately as the rightmost column.
+var PV_INSPECTOR_PROVIDER_COLUMNS = ['solcast', 'forecast_solar', 'open_meteo_solar', 'pvnode', 'vrm'];
 
 function setInspectorPollState(slug, state) {
   // Both the gated overlay and the live scaffold may exist for Pro sections.
@@ -2607,8 +2613,193 @@ function renderOptimizerColdBanner(payload) {
   }
 }
 
-/* Stub renderers — Plans 19-02..19-05 replace these once their body methods ship. */
-function renderPvProvidersInspector(_payload) { /* Plan 19-02 */ }
+/* Stub renderers — Plans 19-03..19-05 replace these once their body methods ship. */
+
+// Plan 19-02 helpers — kept local to the Forecast-Inspector block so they don't
+// collide with other tabs. esc / format / sparkline helpers consumed only by
+// renderPvProvidersInspector (and 19-03..05 once they ship — they can lift
+// these to a shared util then).
+
+function escHtmlForecastInspector(s) {
+  // Mirror common.js escapeHtml() but avoid relying on it being globally
+  // available at parse time (settings.js loads after common.js but renderers
+  // are referenced from polling code that may fire before common.js evaluates
+  // in older browsers).
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function formatBerlinTimeForecastInspector(isoTs) {
+  try {
+    var d = new Date(isoTs);
+    if (isNaN(d.getTime())) return '--';
+    return new Intl.DateTimeFormat('de-DE', {
+      hour: '2-digit', minute: '2-digit',
+      timeZone: 'Europe/Berlin', hour12: false,
+    }).format(d);
+  } catch (_) {
+    return '--';
+  }
+}
+
+function formatPowerForecastInspector(w) {
+  if (w == null) return '--';
+  var n = Number(w);
+  if (!isFinite(n)) return '--';
+  if (n === 0) return '--';
+  return Math.round(n) + ' W';
+}
+
+function relativeAgeHoursForecastInspector(isoTs) {
+  if (!isoTs) return '—';
+  var d = new Date(isoTs);
+  if (isNaN(d.getTime())) return '—';
+  var hrs = Math.max(0, (Date.now() - d.getTime()) / 3600000);
+  if (hrs < 1) return 'vor < 1 h';
+  return 'vor ' + Math.floor(hrs) + ' h';
+}
+
+// Lazy chart.js sparkline — first call creates the chart, subsequent calls
+// update the data without re-instantiating (avoids flicker on 30s polls).
+function renderInspectorSparkline(canvas, points, color, fillColor) {
+  if (!canvas || typeof Chart === 'undefined') return;
+  var slug = canvas.getAttribute('data-inspector-spark');
+  var labels = points.map(function (p) { return p.ts_utc; });
+  var data = points.map(function (p) { return Number(p.power_w) || 0; });
+  var existing = forecastInspectorSparkCharts[slug];
+  if (existing) {
+    existing.data.labels = labels;
+    existing.data.datasets[0].data = data;
+    existing.update('none');
+    return;
+  }
+  forecastInspectorSparkCharts[slug] = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        borderColor: color,
+        backgroundColor: fillColor,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+      }],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: { x: { display: false }, y: { display: false, beginAtZero: true } },
+    },
+  });
+}
+
+function renderPvProvidersInspector(payload) {
+  if (!payload || !payload.providers) return;
+  var providers = payload.providers || {};
+
+  // 1. Per-provider stats: active count + all-zero detection (Phase 18-01i regression flag).
+  var activeProviders = 0;
+  var allZeroByProvider = {};
+  PV_INSPECTOR_PROVIDER_COLUMNS.concat(['combined']).forEach(function (m) {
+    var slots = providers[m] || [];
+    var hasNonZero = slots.some(function (s) { return Number(s.power_w) > 0; });
+    if (m !== 'combined' && hasNonZero) activeProviders++;
+    allZeroByProvider[m] = slots.length > 0 && !hasNonZero;
+  });
+
+  // 2. Union of timestamps across all providers (sorted ascending).
+  var tsSet = {};
+  Object.keys(providers).forEach(function (m) {
+    (providers[m] || []).forEach(function (s) { tsSet[s.ts_utc] = true; });
+  });
+  var ts = Object.keys(tsSet).sort();
+
+  // 3. Slot → model → power_w lookup so each row can index by provider O(1).
+  var byTs = {};
+  Object.keys(providers).forEach(function (m) {
+    (providers[m] || []).forEach(function (s) {
+      if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
+      byTs[s.ts_utc][m] = s.power_w;
+    });
+  });
+
+  // 4. Summary-Karten — Aktive Provider, Ensemble aktiv, Datenalter.
+  var oldestAcross = null;
+  Object.keys(payload.oldestFetchedAt || {}).forEach(function (m) {
+    var fa = payload.oldestFetchedAt[m];
+    if (!oldestAcross || (fa && fa < oldestAcross)) oldestAcross = fa;
+  });
+  var weightsLine = '';
+  if (payload.ensembleActive && payload.ensembleWeights) {
+    weightsLine = Object.keys(payload.ensembleWeights).map(function (k) {
+      var v = Number(payload.ensembleWeights[k]);
+      return escHtmlForecastInspector(k) + ' ' + (isFinite(v) ? v.toFixed(2) : '?');
+    }).join(' · ');
+  }
+  var summary = document.getElementById('inspector-summary-pv-providers');
+  if (summary) {
+    summary.innerHTML =
+      '<div class="stat-card"><div class="stat-label">Aktive Provider</div>' +
+        '<div class="stat-val">' + activeProviders + '</div>' +
+        '<div class="stat-delta">von ' + PV_INSPECTOR_PROVIDER_COLUMNS.length + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Ensemble aktiv</div>' +
+        '<div class="stat-val">' + (payload.ensembleActive ? 'ja' : 'nein') + '</div>' +
+        '<div class="stat-delta">' + weightsLine + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Datenalter</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(relativeAgeHoursForecastInspector(oldestAcross)) + '</div>' +
+        '<div class="stat-delta"></div></div>';
+  }
+
+  // 5. Detail-meta — slot count + window length.
+  var meta = document.querySelector('[data-inspector-meta="pv-providers"]');
+  if (meta) meta.textContent = ts.length + ' Slots · 24 h';
+
+  // 6. Detail-Tabelle — 1 row per slot, 5 provider cols + 1 ensemble col.
+  // Provider-column cells get .data-row--warning when that provider had
+  // power_w=0 across all 24 h slots (Solcast 18-01i regression indicator).
+  // Tooltip via title="" attribute, escHtml for all interpolated values.
+  var tbody = document.querySelector('[data-inspector-tbody="pv-providers"]');
+  if (tbody) {
+    var html = '';
+    for (var i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      var slot = byTs[t] || {};
+      html += '<tr>';
+      html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(t)) + '</td>';
+      PV_INSPECTOR_PROVIDER_COLUMNS.forEach(function (m) {
+        var v = slot[m];
+        if (allZeroByProvider[m]) {
+          html += '<td class="data-row--warning" title="Provider lieferte 0 W für 24 h. Siehe Phase 18-01i.">' +
+            escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        } else {
+          html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        }
+      });
+      html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(slot.combined)) + '</td>';
+      html += '</tr>';
+    }
+    if (!ts.length) {
+      html = '<tr><td colspan="7" class="dv-log-empty">Keine PV-Forecast-Daten — prüfe Phase 18-01i.</td></tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
+  // 7. Sparkline — combined (ensemble) if present, else first non-empty provider.
+  // Aurora cyan accent (#34dbff) per UI-SPEC §"B1 PV-Providers".
+  var sparkPoints = (providers.combined && providers.combined.length)
+    ? providers.combined
+    : (providers.solcast && providers.solcast.length
+        ? providers.solcast
+        : []);
+  var canvas = document.querySelector('canvas[data-inspector-spark="pv-ensemble"]');
+  renderInspectorSparkline(canvas, sparkPoints, '#34dbff', 'rgba(52,219,255,0.10)');
+}
+
 function renderLoadInspector(_payload) { /* Plan 19-03 */ }
 function renderMlCorrectionInspector(_payload) { /* Plan 19-04 */ }
 function renderEosInspector(_payload) { /* Plan 19-05 */ }
