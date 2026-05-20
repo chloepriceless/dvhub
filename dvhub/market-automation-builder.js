@@ -167,6 +167,32 @@ export function createMarketAutomationBuilder(ctx) {
   // D-01: this NEVER touches computeForecastReserveSocPct /
   // computeDynamicAutomationMinSocPct. When predictivePreEmpty.enabled is OFF
   // (the default) it returns { rules: [], stage2: null } before doing anything.
+  //
+  // ─── Phase 18-01g: prod operational note (2026-05-20) ───────────────────
+  // On prod (192.168.1.66) Stage-2 was actively planning LEEREN slots and
+  // driving the battery at -16000 W when the operator observed that the day's
+  // remaining PV would not be enough to refill the akku. Root issue at that
+  // moment: the upstream PV forecast (raw Solcast, because the ML-correction
+  // sanity-fallback was engaged on the bug-for-bug v7 model) was too
+  // optimistic, so Stage-2's pre-empty plan assumed pv-headroom that never
+  // materialised. To stop the unsafe discharge mid-loop, predictivePreEmpty.
+  // enabled was flipped to false in /etc/dvhub/config.json (backup
+  // /etc/dvhub/config.json.bak-pre-empty-stop-2026-05-20). NOT a code change.
+  //
+  // Re-enable conditions (when these all hold, prod can flip the flag back):
+  //   1. Phase 18-01 ML correction is live and mlActive=true / no sanity-
+  //      fallback in /api/forecast meta. (Achieved 2026-05-20 — lightgbm v1
+  //      in W units, mae=2625 W, runtime sanity-fallback disengaged.)
+  //   2. Phase 18-02 load-forecast SF-path landed so Stage-2 uses the
+  //      stochastic load-forecast instead of the sql_weekday weekday-mean
+  //      proxy, which under-predicts evening consumption.
+  //   3. forecast_solar / open_meteo_solar / pvnode all persisting their
+  //      slot outputs (Phase 18-01d already lifted the writePvForecasts gap;
+  //      pvnode rate-limit handling still TBD).
+  //   4. Phase 19 SMA-Stage-2 plan-inspector + backtest UI gives the operator
+  //      a way to see the pre-empty plan BEFORE the discharge starts, not
+  //      only when it's already running.
+  // ─────────────────────────────────────────────────────────────────────────
   function runStage2PrePass({
     now,
     automationConfig,
