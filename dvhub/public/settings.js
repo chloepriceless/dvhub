@@ -2793,3 +2793,232 @@ function renderMaeSparkline(data) {
     mlMaeSparklineChart = new Chart(canvas, config);
   }
 }
+
+/* =========================================================================
+   Phase 17 Plan 17-05 — License section bindings
+   =========================================================================
+   Wires the License-section markup added to settings.html in Plan 17-05
+   Task 1 against the four backend endpoints introduced by Plan 17-03:
+     - GET  /api/license/state      → load + render current state on page open
+     - POST /api/license/activate   → submit a new key (trimmed)
+     - POST /api/license/revalidate → "Jetzt prüfen" (D-20 optimistic loading)
+     - POST /api/license/remove     → dvConfirm + clear local license
+   All DOM updates are CSP-clean: textContent + classList + hidden +
+   dataset.status. No innerHTML and no inline-style mutation paths (the
+   csp-lint + plan verification grep enforce this contract).
+   Plaintext key is never displayed — only the masked fingerprint from the
+   backend (key_fingerprint, last-4 chars).
+   ========================================================================= */
+(function initLicenseSection() {
+  if (typeof document === 'undefined') return;
+  const section = document.getElementById('license');
+  if (!section) return;
+  const chip = section.querySelector('.chip.license-status');
+  const chipLabel = section.querySelector('.license-status-label');
+  const input = section.querySelector('#licenseKeyInput');
+  const inputField = input ? input.closest('.field') : null;
+  const meta = section.querySelector('.license-meta');
+  const fingerprintEl = section.querySelector('.license-fingerprint');
+  const lastCheckEl = section.querySelector('.license-last-check');
+  const expiryEl = section.querySelector('.license-expiry');
+  const activateBtn = section.querySelector('#licenseActivateBtn');
+  const recheckBtn = section.querySelector('#licenseRecheckBtn');
+  const removeBtn = section.querySelector('#licenseRemoveBtn');
+
+  // Status → German label (per UI-SPEC §Copywriting Contract).
+  const LABELS = {
+    active: 'Aktiv',
+    expired: 'Abgelaufen',
+    suspended: 'Pausiert',
+    invalid: 'Ungültig',
+    none: 'Keine Lizenz'
+  };
+
+  // 25 hours: per UI-SPEC, a status of "active" with last_check_ok_at older
+  // than 25h means the daily poller has missed a beat (permissive-offline
+  // window). Render an explicit "letzte Prüfung fehlgeschlagen" suffix.
+  const STALE_CHECK_MS = 25 * 60 * 60 * 1000;
+
+  function formatRelativeTime(iso) {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return '';
+    const diffMin = Math.max(0, Math.floor((Date.now() - then) / 60000));
+    if (diffMin < 1) return 'gerade eben';
+    if (diffMin < 60) return `vor ${diffMin} ${diffMin === 1 ? 'Minute' : 'Minuten'}`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `vor ${diffH} ${diffH === 1 ? 'Stunde' : 'Stunden'}`;
+    const diffD = Math.floor(diffH / 24);
+    return `vor ${diffD} ${diffD === 1 ? 'Tag' : 'Tagen'}`;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    try {
+      return new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+    } catch (e) {
+      return d.toLocaleDateString('de-DE');
+    }
+  }
+
+  function render(state) {
+    const status = (state && state.status) || 'none';
+    if (chip) chip.dataset.status = status;
+
+    let label = LABELS[status] || status;
+    if (status === 'active' && state.last_check_ok_at) {
+      const ageMs = Date.now() - new Date(state.last_check_ok_at).getTime();
+      if (Number.isFinite(ageMs) && ageMs > STALE_CHECK_MS) {
+        label = 'Aktiv (letzte Prüfung fehlgeschlagen)';
+      }
+    }
+    if (chipLabel) chipLabel.textContent = label;
+
+    // State-table per UI-SPEC §"1. License-Section":
+    //   none     → input visible, only Activate button, no meta
+    //   invalid  → input visible (preserves user input), only Activate, no meta
+    //   active/expired/suspended → input hidden, Recheck + Remove visible, meta visible
+    const showInput = (status === 'none' || status === 'invalid');
+    if (inputField) inputField.hidden = !showInput;
+    if (activateBtn) activateBtn.hidden = !showInput;
+    if (recheckBtn) recheckBtn.hidden = showInput;
+    if (removeBtn) removeBtn.hidden = showInput;
+    if (meta) meta.hidden = showInput;
+
+    if (meta && !meta.hidden) {
+      const fp = state.key_fingerprint || 'XXXX';
+      if (fingerprintEl) fingerprintEl.textContent = `Aktiver Schlüssel: DVHB-…${fp}`;
+      if (lastCheckEl) {
+        lastCheckEl.textContent = state.last_check_ok_at
+          ? `Zuletzt geprüft: ${formatRelativeTime(state.last_check_ok_at)}`
+          : '';
+      }
+      if (expiryEl) {
+        expiryEl.textContent = state.subscription_until
+          ? `Gültig bis: ${formatDate(state.subscription_until)}`
+          : '';
+      }
+    }
+  }
+
+  function mapErrorToToast(result, httpStatus) {
+    const r = result || {};
+    if (r.status === 'invalid') return 'Lizenzschlüssel ungültig. Bitte prüfe die Eingabe.';
+    if (r.status === 'expired') return 'Diese Lizenz ist abgelaufen.';
+    if (r.status === 'suspended') return 'Diese Lizenz wurde pausiert. Kontaktiere den Support.';
+    if (r.error === 'server_error') return 'license.dvhub.de aktuell nicht erreichbar. Der Status bleibt unverändert.';
+    if (r.error === 'keygen_account_not_configured') return 'Lizenz-Server ist nicht konfiguriert. Setze licensing.keygenAccount in der config.';
+    if (r.error === 'no_license_active') return 'Keine Lizenz aktiv — bitte zuerst aktivieren.';
+    if (r.error === 'empty_key') return 'Bitte Lizenzschlüssel eingeben.';
+    if (r.error === 'invalid_json') return 'Ungültige Anfrage.';
+    return `Lizenz-Fehler (${httpStatus || '?'}).`;
+  }
+
+  async function loadState() {
+    if (typeof apiFetch !== 'function') return;
+    try {
+      const r = await apiFetch('/api/license/state');
+      if (!r.ok) return;
+      const state = await r.json();
+      render(state);
+    } catch (e) {
+      // silent — keep the markup default "none" until the operator acts
+    }
+  }
+
+  if (activateBtn && input) {
+    activateBtn.addEventListener('click', async () => {
+      const key = (input.value || '').trim();
+      if (!key) {
+        setBanner('Bitte Lizenzschlüssel eingeben', 'error');
+        return;
+      }
+      activateBtn.disabled = true;
+      const original = activateBtn.textContent;
+      activateBtn.textContent = 'Wird geprüft …';
+      try {
+        const r = await apiFetch('/api/license/activate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+        let result = {};
+        try { result = await r.json(); } catch (e) { /* keep default */ }
+        if (r.ok && result.ok) {
+          showSettingsToast('Lizenz erfolgreich aktiviert.');
+          input.value = '';
+        } else {
+          showSettingsToast(mapErrorToToast(result, r.status));
+        }
+        await loadState();
+      } catch (e) {
+        showSettingsToast('Lizenz-Fehler: ' + (e && e.message ? e.message : 'unbekannt'));
+      } finally {
+        activateBtn.disabled = false;
+        activateBtn.textContent = original;
+      }
+    });
+  }
+
+  if (recheckBtn) {
+    recheckBtn.addEventListener('click', async () => {
+      recheckBtn.disabled = true;
+      const original = recheckBtn.textContent;
+      recheckBtn.textContent = 'Wird geprüft …';
+      try {
+        const r = await apiFetch('/api/license/revalidate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}'
+        });
+        let result = {};
+        try { result = await r.json(); } catch (e) { /* keep default */ }
+        if (r.ok && result.ok) {
+          showSettingsToast('Lizenz erfolgreich geprüft.');
+        } else {
+          showSettingsToast(mapErrorToToast(result, r.status));
+        }
+        await loadState();
+      } catch (e) {
+        showSettingsToast('Lizenz-Fehler: ' + (e && e.message ? e.message : 'unbekannt'));
+      } finally {
+        recheckBtn.disabled = false;
+        recheckBtn.textContent = original;
+      }
+    });
+  }
+
+  if (removeBtn) {
+    removeBtn.addEventListener('click', async () => {
+      // dvConfirm signature is (message, opts) — see dvhub/public/dv-modal.js:113.
+      const ok = await window.dvConfirm(
+        'Damit verlierst du Zugriff auf alle Pro-Features. Du kannst die Lizenz jederzeit wieder aktivieren.',
+        { title: 'Lizenz entfernen?', okLabel: 'Entfernen', cancelLabel: 'Abbrechen', variant: 'danger' }
+      );
+      if (!ok) return;
+      try {
+        await apiFetch('/api/license/remove', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}'
+        });
+        showSettingsToast('Lizenz entfernt.');
+      } catch (e) {
+        showSettingsToast('Fehler beim Entfernen.');
+      }
+      await loadState();
+    });
+  }
+
+  // Initial fetch + anchor-scroll handling for /settings.html#license
+  // (the Pro-Required-Modal CTA target — Plan 17-06).
+  loadState();
+  if (typeof window !== 'undefined' && window.location && window.location.hash === '#license') {
+    const target = document.getElementById('license');
+    if (target && typeof target.scrollIntoView === 'function') {
+      try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* noop */ }
+    }
+  }
+})();
