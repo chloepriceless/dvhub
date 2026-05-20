@@ -20,7 +20,7 @@ import { createNtfyProvider } from './providers/ntfy.js';
 // + server.js startMonitoringHeartbeat()). Uptime Kuma is now driven solely by
 // that single HMAC-signed, SSRF-guarded heartbeat. Alert-push is wired through
 // ctx.monitoringAlertPush (see server.js) — not a notification provider.
-const PROVIDER_FACTORIES = {
+export const PROVIDER_FACTORIES = {
   telegram: createTelegramProvider,
   pushover: createPushoverProvider,
   ntfy: createNtfyProvider
