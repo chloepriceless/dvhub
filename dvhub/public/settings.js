@@ -2478,6 +2478,11 @@ function initSettingsPage() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       history.replaceState(null, '', '#' + target);
       syncRenderedFieldsToDraft();
+      // Phase 19: Forecast tab lazy-init — fires once per page load via the
+      // window._forecastTabInit guard inside initForecastTab.
+      if (target === 'forecast') {
+        setTimeout(function () { try { initForecastTab(); } catch (_) {} }, 0);
+      }
     });
 
     // Restore tab from URL hash on load.
@@ -2538,6 +2543,233 @@ function initMlTab() {
   }).catch(function () {
     // Sparkline stays empty
   });
+}
+
+/* =========================================================================
+   Phase 19 — Forecast Inspector (initForecastTab)
+   Polls /api/forecast/inspector/* every 30s while the tab is visible.
+   License-aware: pre-fetches /api/license/state once and gates the 3 Pro
+   sections (B3/B4/B5) by toggling [data-pro-gated] + the .inspector-live-scaffold
+   sibling. Stub renderers are placeholders that Plans 19-02..19-06 replace.
+   The Pro-CTA click handler is delegated and idempotent.
+   ========================================================================= */
+var FORECAST_INSPECTOR_POLL_MS = 30000;
+var FORECAST_INSPECTOR_COLD_YELLOW_DAYS = 2;
+var FORECAST_INSPECTOR_COLD_RED_DAYS = 5;
+var forecastInspectorPollTimer = null;
+var forecastInspectorVisibilityHandler = null;
+
+function setInspectorPollState(slug, state) {
+  // Both the gated overlay and the live scaffold may exist for Pro sections.
+  // Update all matching pills so the visible state is consistent regardless of
+  // which scaffold is currently shown.
+  var pills = document.querySelectorAll(
+    '.config-group[data-inspector="' + slug + '"] .inspector-poll-state, ' +
+    '.inspector-live-scaffold[data-inspector="' + slug + '"] .inspector-poll-state'
+  );
+  if (!pills || pills.length === 0) return;
+  var labels = { live: 'LIVE', loading: 'LÄDT …', paused: 'PAUSIERT — TAB VERDECKT', error: 'FEHLER' };
+  pills.forEach(function (pill) {
+    pill.setAttribute('data-state', state);
+    pill.textContent = labels[state] || '--';
+  });
+}
+
+function setAllInspectorPollState(state) {
+  ['pv-providers', 'load', 'ml-correction', 'eos'].forEach(function (s) { setInspectorPollState(s, state); });
+}
+
+function renderOptimizerColdBanner(payload) {
+  var banner = document.getElementById('optimizerColdBanner');
+  if (!banner) return;
+  if (!payload || payload.ok === false) { banner.hidden = true; banner.textContent = ''; return; }
+  var days = payload.daysSinceLastRun;
+  if (days == null || days < FORECAST_INSPECTOR_COLD_YELLOW_DAYS) {
+    banner.hidden = true;
+    banner.classList.remove('warn', 'error');
+    banner.textContent = '';
+    return;
+  }
+  banner.hidden = false;
+  var dateStr = '';
+  if (payload.lastRunAt) {
+    var d = new Date(payload.lastRunAt);
+    if (!isNaN(d.getTime())) {
+      dateStr = ('0' + d.getDate()).slice(-2) + '.' + ('0' + (d.getMonth() + 1)).slice(-2) + '.' + d.getFullYear();
+    }
+  }
+  if (days >= FORECAST_INSPECTOR_COLD_RED_DAYS) {
+    banner.classList.remove('warn'); banner.classList.add('error');
+    banner.textContent = 'Optimizer ist seit ' + Math.floor(days) + ' Tagen kalt. Stage-2-Automatik liefert keine neuen Pläne mehr — bitte Optimizer-Status prüfen.';
+  } else {
+    banner.classList.remove('error'); banner.classList.add('warn');
+    banner.textContent = 'Optimizer kalt seit ' + Math.floor(days) + ' Tagen.' + (dateStr ? ' Stage-2-Plan wurde zuletzt am ' + dateStr + ' berechnet.' : '');
+  }
+}
+
+/* Stub renderers — Plans 19-02..19-05 replace these once their body methods ship. */
+function renderPvProvidersInspector(_payload) { /* Plan 19-02 */ }
+function renderLoadInspector(_payload) { /* Plan 19-03 */ }
+function renderMlCorrectionInspector(_payload) { /* Plan 19-04 */ }
+function renderEosInspector(_payload) { /* Plan 19-05 */ }
+function renderStage2BacktestResult(_payload) { /* Plan 19-06 */ }
+
+function isInspectorProActive() {
+  var cache = window._licenseStateCache;
+  return !!(cache && cache.status === 'active');
+}
+
+function inspectorWindowParams() {
+  // Default window per CONTEXT D-03: now → now + 24h
+  var now = new Date();
+  var end = new Date(now.getTime() + 24 * 3600 * 1000);
+  return '?from=' + encodeURIComponent(now.toISOString()) + '&to=' + encodeURIComponent(end.toISOString());
+}
+
+function pollOnceForecastInspector() {
+  if (typeof apiFetch !== 'function') return;
+  setAllInspectorPollState('loading');
+  var qs = inspectorWindowParams();
+
+  apiFetch('/api/forecast/inspector/optimizer-cold').then(function (r) { return r.json(); }).then(function (j) {
+    if (j && j.ok !== false) renderOptimizerColdBanner(j);
+  }).catch(function () { /* swallow — banner stays in last state */ });
+
+  apiFetch('/api/forecast/inspector/pv-providers' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
+    if (j && j.ok) { renderPvProvidersInspector(j); setInspectorPollState('pv-providers', 'live'); }
+    else if (j && j.error === 'not_implemented') { setInspectorPollState('pv-providers', 'loading'); }
+    else { setInspectorPollState('pv-providers', 'error'); }
+  }).catch(function () { setInspectorPollState('pv-providers', 'error'); });
+
+  apiFetch('/api/forecast/inspector/load' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
+    if (j && j.ok) { renderLoadInspector(j); setInspectorPollState('load', 'live'); }
+    else if (j && j.error === 'not_implemented') { setInspectorPollState('load', 'loading'); }
+    else { setInspectorPollState('load', 'error'); }
+  }).catch(function () { setInspectorPollState('load', 'error'); });
+
+  if (isInspectorProActive()) {
+    apiFetch('/api/forecast/inspector/ml-correction' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
+      if (j && j.ok) { renderMlCorrectionInspector(j); setInspectorPollState('ml-correction', 'live'); }
+      else if (j && j.error === 'not_implemented') { setInspectorPollState('ml-correction', 'loading'); }
+      else { setInspectorPollState('ml-correction', 'error'); }
+    }).catch(function () { setInspectorPollState('ml-correction', 'error'); });
+
+    apiFetch('/api/forecast/inspector/eos' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
+      if (j && j.ok) { renderEosInspector(j); setInspectorPollState('eos', 'live'); }
+      else if (j && j.error === 'not_implemented') { setInspectorPollState('eos', 'loading'); }
+      else { setInspectorPollState('eos', 'error'); }
+    }).catch(function () { setInspectorPollState('eos', 'error'); });
+  }
+}
+
+function startInspectorPoll() {
+  if (forecastInspectorPollTimer != null) return;
+  pollOnceForecastInspector();
+  forecastInspectorPollTimer = setInterval(pollOnceForecastInspector, FORECAST_INSPECTOR_POLL_MS);
+}
+
+function stopInspectorPoll() {
+  if (forecastInspectorPollTimer == null) return;
+  clearInterval(forecastInspectorPollTimer);
+  forecastInspectorPollTimer = null;
+}
+
+function applyProGateState() {
+  var active = isInspectorProActive();
+  ['ml-correction', 'eos', 'stage2'].forEach(function (slug) {
+    var section = document.querySelector('.config-group[data-inspector="' + slug + '"]');
+    if (!section) return;
+    var liveScaffold = section.querySelector('.inspector-live-scaffold[data-inspector="' + slug + '"]');
+    if (active) {
+      section.removeAttribute('data-pro-gated');
+      if (liveScaffold) liveScaffold.hidden = false;
+    } else {
+      section.setAttribute('data-pro-gated', 'true');
+      if (liveScaffold) liveScaffold.hidden = true;
+    }
+  });
+}
+
+function bindProGateCta() {
+  // Delegated handler — survives content swaps; idempotent guard so we don't
+  // double-bind if initForecastTab is called twice.
+  if (window._forecastTabProCtaBound) return;
+  window._forecastTabProCtaBound = true;
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.pro-gate-banner-cta') : null;
+    if (!btn) return;
+    var feat = btn.dataset.proFeature || '';
+    e.preventDefault();
+    if (typeof window.openProRequired === 'function') {
+      try { window.openProRequired(feat); return; } catch (_) { /* fall through */ }
+    }
+    // Fallback when Phase 17-06 Pro-Modal is not yet shipped: navigate to the
+    // license anchor on the same settings page.
+    window.location.hash = '#license';
+  });
+}
+
+function bindBacktestForm() {
+  // Plan 19-06 populates the full submit logic. For now, just prevent default
+  // and show a hint banner so operators understand it's a placeholder.
+  var form = document.getElementById('backtestForm');
+  if (form) form.addEventListener('submit', function (e) { e.preventDefault(); });
+  var btn = document.getElementById('backtestSubmitBtn');
+  if (btn) btn.addEventListener('click', function () {
+    var hint = document.querySelector('[data-inspector-banner="stage2"]');
+    if (hint) {
+      hint.classList.remove('u-hidden');
+      hint.classList.add('config-banner');
+      hint.textContent = 'Backtest-Logik wird in Plan 19-06 implementiert.';
+    }
+  });
+
+  // Date input constraints: min = 30 days ago, max = yesterday, default = yesterday
+  var dateInput = document.getElementById('backtestDate');
+  if (dateInput) {
+    var today = new Date();
+    var yesterday = new Date(today.getTime() - 86400000);
+    var thirtyAgo = new Date(today.getTime() - 30 * 86400000);
+    function fmt(d) {
+      return d.getFullYear() + '-' + ('0' + (d.getMonth()+1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    }
+    dateInput.value = fmt(yesterday);
+    dateInput.min = fmt(thirtyAgo);
+    dateInput.max = fmt(yesterday);
+  }
+}
+
+function initForecastTab() {
+  if (typeof apiFetch !== 'function') return;
+  if (window._forecastTabInit) return;
+  window._forecastTabInit = true;
+
+  // 1. License pre-fetch — caches state for the page lifetime so the 30s
+  // polling loop can skip Pro endpoints when license is inactive (saves a
+  // wasted round-trip + a noisy 403 in /api/log).
+  apiFetch('/api/license/state').then(function (r) { return r.ok ? r.json() : { status: 'none' }; }).then(function (state) {
+    window._licenseStateCache = state || { status: 'none' };
+  }).catch(function () {
+    window._licenseStateCache = { status: 'none' };
+  }).then(function () {
+    applyProGateState();
+    bindProGateCta();
+    bindBacktestForm();
+    startInspectorPoll();
+  });
+
+  // 2. Visibility-gate listener (idempotent — single attach per page load)
+  if (!forecastInspectorVisibilityHandler) {
+    forecastInspectorVisibilityHandler = function () {
+      if (document.visibilityState === 'visible') {
+        startInspectorPoll();
+      } else {
+        stopInspectorPoll();
+        setAllInspectorPollState('paused');
+      }
+    };
+    document.addEventListener('visibilitychange', forecastInspectorVisibilityHandler);
+  }
 }
 
 function formatMlDate(ts) {
