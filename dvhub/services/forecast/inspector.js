@@ -18,6 +18,7 @@
 
 export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
+  const state = ctx && ctx.state ? ctx.state : null;
   const { store, mlService, eosAdapter, forecastService, vrmForecast } = deps;
   // telemetryStore is read lazily — supports both deps.telemetryStore (passed
   // at factory time) AND ctx.telemetryStore (set later in server bootstrap).
@@ -29,9 +30,85 @@ export function createInspector(ctx, deps = {}) {
 
   pushLog('inspector_init', { hasStore: !!store, hasTelemetry: !!getTelemetryStore() });
 
-  // ───────────── B1 — PV Providers (stubbed; Plan 19-02 implements) ─────────────
+  // ───────────── B1 — PV Providers (Plan 19-02) ─────────────
+  //
+  // Pivots store.getLatestPvForecast({start,end}) rows by `model` column.
+  // CRITICAL Pitfall-1 guard: this method MUST NOT call vrmForecast.readPvForecast()
+  // — that path triggers a write-amplification re-fetch (Phase 18-01i). We read
+  // exclusively from the store, which queries pv_forecasts read-only.
+  //
+  // Returns envelope:
+  //   {
+  //     window: { from, to },
+  //     providers: { solcast: [{ts_utc, power_w, confidence}], ..., combined: [...] },
+  //     ensembleWeights: state.forecast?.pv?.ensembleWeights ?? null,
+  //     ensembleActive: !!state.forecast?.pv?.ensembleWeights,
+  //     oldestFetchedAt: { solcast: ISO|null, ... } (latest fetched_at per model),
+  //     meta: { rowCount, modelCount }
+  //   }
+  //
+  // ensembleActive reflects the PIPELINE state (weights present in state), NOT
+  // whether any `combined` rows landed in the response window. Operators need
+  // to see "ensemble configured but no data" distinct from "ensemble off".
   async function getPvProviders({ from, to } = {}) {
-    return { ok: false, error: 'not_implemented', stub: 'b1', window: { from, to } };
+    if (!store || typeof store.getLatestPvForecast !== 'function') {
+      return { ok: false, error: 'store_unavailable', window: { from, to } };
+    }
+    let rows = [];
+    try {
+      rows = (await store.getLatestPvForecast({ start: from, end: to })) || [];
+    } catch (e) {
+      pushLog('inspector_pv_providers_query_error', { error: e && e.message ? e.message : String(e) });
+      return { ok: false, error: 'query_failed', window: { from, to } };
+    }
+
+    // Pivot rows by model. Each row → {ts_utc:string, power_w:number, confidence:number|null}
+    const providers = {};
+    const fetchedByModel = {};
+    for (const r of rows) {
+      if (!r || typeof r !== 'object') continue;
+      const model = r.model || 'unknown';
+      const ts = r.ts_utc instanceof Date ? r.ts_utc.toISOString() : String(r.ts_utc);
+      const powerNum = Number(r.power_w);
+      const confRaw = r.confidence == null ? null : Number(r.confidence);
+      const conf = confRaw == null || !Number.isFinite(confRaw) ? null : confRaw;
+      if (!providers[model]) providers[model] = [];
+      providers[model].push({
+        ts_utc: ts,
+        power_w: Number.isFinite(powerNum) ? powerNum : 0,
+        confidence: conf,
+      });
+      const fetched = r.fetched_at instanceof Date
+        ? r.fetched_at
+        : (r.fetched_at ? new Date(r.fetched_at) : null);
+      if (fetched && Number.isFinite(fetched.getTime())) {
+        if (!fetchedByModel[model] || fetched > fetchedByModel[model]) {
+          fetchedByModel[model] = fetched;
+        }
+      }
+    }
+    // Sort each provider's slots ascending by ts_utc string (ISO strings sort
+    // lexicographically the same as chronologically).
+    for (const m of Object.keys(providers)) {
+      providers[m].sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
+    }
+    const oldestFetchedAt = {};
+    for (const m of Object.keys(fetchedByModel)) {
+      oldestFetchedAt[m] = fetchedByModel[m].toISOString();
+    }
+
+    const ensembleWeights = state && state.forecast && state.forecast.pv
+      ? (state.forecast.pv.ensembleWeights || null)
+      : null;
+
+    return {
+      window: { from, to },
+      providers,
+      ensembleWeights,
+      ensembleActive: !!ensembleWeights,
+      oldestFetchedAt,
+      meta: { rowCount: rows.length, modelCount: Object.keys(providers).length },
+    };
   }
 
   // ───────────── B2 — Load Forecast (stubbed; Plan 19-03 implements) ─────────────
