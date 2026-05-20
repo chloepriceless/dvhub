@@ -2894,7 +2894,95 @@ function renderLoadInspector(payload) {
   var canvas = document.querySelector('canvas[data-inspector-spark="load-sf"]');
   renderInspectorSparkline(canvas, sparkData, '#1f8dff', 'rgba(31,141,255,0.10)');
 }
-function renderMlCorrectionInspector(_payload) { /* Plan 19-04 */ }
+// Plan 19-04 (B3 ML Shadow Correction) — renders summary + banner + table.
+// Payload shape (from inspector.js getMlCorrection):
+//   { raw, corrected, delta, model, applied, reason, mlEnabled,
+//     meta: { inputModel, cacheHit } }
+// or, on hard failure: { ok:false, error, window } — caller handles ok:false
+// separately (this function only fleshes a successful envelope).
+function renderMlCorrectionInspector(payload) {
+  if (!payload) return;
+  var raw = payload.raw || [];
+  var corrected = payload.corrected || [];
+  var delta = payload.delta || [];
+
+  // 1. Summary-Karten — Modell · Angewandt (mit Shadow-Mode-Delta) · Input-Modell.
+  var summary = document.getElementById('inspector-summary-ml-correction');
+  if (summary) {
+    var modelLabel = payload.model || 'kein Modell';
+    var appliedLabel = payload.applied ? 'ja' : 'nein';
+    var inputModelLabel = (payload.meta && payload.meta.inputModel) || '--';
+    summary.innerHTML =
+      '<div class="stat-card"><div class="stat-label">Modell</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(modelLabel) + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Angewandt</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(appliedLabel) + '</div>' +
+        (payload.mlEnabled ? '' : '<div class="stat-delta">ML in Settings off — Shadow-Mode</div>') +
+        '</div>' +
+      '<div class="stat-card"><div class="stat-label">Input-Modell</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(inputModelLabel) + '</div></div>';
+  }
+
+  // 2. Inline-Banner — reason-aware state messaging.
+  //    no_model → kein ML-Modell auf Disk (Operator muss trainieren/laden)
+  //    python_unavailable → ml_predict.py spawn fehlgeschlagen
+  //    no_input → keine PV-Forecast-Rows im Fenster (Phase 18-01i Sanity-Check)
+  var banner = document.querySelector('[data-inspector-banner="ml-correction"]');
+  if (banner) {
+    banner.classList.remove('warn', 'error');
+    if (payload.reason === 'no_model') {
+      banner.classList.add('warn');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'Kein ML-Modell geladen. Trainiere oder lade ein Modell unter Settings → ML & AI.';
+    } else if (payload.reason === 'python_unavailable') {
+      banner.classList.add('error');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'Python ML-Pipeline nicht verfügbar.';
+    } else if (payload.reason === 'no_input') {
+      banner.classList.add('warn');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'Kein PV-Forecast-Input für die ML-Korrektur — prüfe PV-Provider-Tabelle.';
+    } else {
+      banner.classList.add('u-hidden');
+      banner.textContent = '';
+    }
+  }
+
+  // 3. Detail-meta — slot count.
+  var meta = document.querySelector('[data-inspector-meta="ml-correction"]');
+  if (meta) meta.textContent = raw.length + ' Slots · 24 h';
+
+  // 4. Detail-Tabelle — Slot | Raw PV | ML-Korrigiert | Delta | Modell.
+  //    Empty-state colspan=5 (5 columns). Delta cell gets a +N/−N prefix so
+  //    operators see direction at a glance without colour cues.
+  var tbody = document.querySelector('[data-inspector-tbody="ml-correction"]');
+  if (tbody) {
+    if (!raw.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="dv-log-empty">Keine Daten — siehe Banner oben.</td></tr>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < raw.length; i++) {
+      var r = raw[i];
+      var c = corrected[i];
+      var d = delta[i];
+      html += '<tr>';
+      html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(r.ts_utc)) + '</td>';
+      html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(r.power_w)) + '</td>';
+      html += '<td>' + escHtmlForecastInspector(c ? formatPowerForecastInspector(c.power_w) : '--') + '</td>';
+      if (d && d.delta_w != null && isFinite(Number(d.delta_w))) {
+        var dw = Number(d.delta_w);
+        var deltaStr = (dw > 0 ? '+' : '') + Math.round(dw) + ' W';
+        html += '<td>' + escHtmlForecastInspector(deltaStr) + '</td>';
+      } else {
+        html += '<td>--</td>';
+      }
+      html += '<td>' + escHtmlForecastInspector(payload.model || '--') + '</td>';
+      html += '</tr>';
+    }
+    tbody.innerHTML = html;
+  }
+}
 function renderEosInspector(_payload) { /* Plan 19-05 */ }
 function renderStage2BacktestResult(_payload) { /* Plan 19-06 */ }
 

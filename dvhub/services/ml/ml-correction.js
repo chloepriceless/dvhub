@@ -106,15 +106,20 @@ export function createMlCorrection({ pythonBridge, getCfg, pushLog, store, state
    * @param {object} opts - { forecastVersion }
    * @returns {Promise<{applied: boolean, corrected: Array, model: string|null}>}
    */
-  async function correct(pvSlots, { forecastVersion } = {}) {
-    // Bypass: ML disabled
-    if (!getCfg().ml?.mlEnabled) {
+  async function correct(pvSlots, { forecastVersion, shadow = false } = {}) {
+    // Bypass: ML disabled — bypassable with shadow:true (Phase 19 P19-R3 ML-Inspector).
+    // The Inspector's shadow-mode lets the operator preview ML output BEFORE
+    // flipping mlEnabled=true. Legacy callers (forecast/index.js) omit the flag
+    // → shadow=false default → mlEnabled gate stays in force.
+    if (!shadow && !getCfg().ml?.mlEnabled) {
       return { applied: false, corrected: pvSlots, model: null };
     }
 
-    // Bypass: no model loaded
+    // Bypass: no model loaded — NEVER bypassable by shadow flag (no model = no
+    // prediction possible). `reason:'no_model'` is additive (legacy callers
+    // ignore the extra field; the Inspector surfaces it as a banner).
     if (currentModel === null) {
-      return { applied: false, corrected: pvSlots, model: null };
+      return { applied: false, corrected: pvSlots, model: null, reason: 'no_model' };
     }
 
     // D-A3: Check forecastVersion cache

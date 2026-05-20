@@ -16,10 +16,23 @@
 // is fine when the caller has already wired the dep — the inspector is
 // composed AFTER its deps are stable.
 
+// Plan 19-04 (B3 ML Shadow Correction): preference rank for selecting an
+// input PV-forecast model to feed into mlService.correct({shadow:true}).
+// Mirrors the order used by buildForecastResponse in services/forecast/index.js
+// — combined (ensemble) is preferred; falls through to single-provider models.
+const ML_SHADOW_INPUT_MODEL_RANK = ['combined', 'solcast', 'forecast_solar', 'pvnode', 'open_meteo_solar', 'vrm'];
+
 export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
   const state = ctx && ctx.state ? ctx.state : null;
+  const getCfg = ctx && typeof ctx.getCfg === 'function' ? ctx.getCfg : () => ({});
   const { store, mlService, eosAdapter, forecastService, vrmForecast } = deps;
+
+  // Plan 19-04 (B3): single-slot ML-shadow cache. Keyed on forecastVersion +
+  // 60s TTL so two consecutive 30s polls share the same Python spawn. Scoped
+  // to the factory closure — every createInspector call gets its own cache,
+  // which matches the production wiring (one inspector per server process).
+  let mlShadowCache = null; // { forecastVersion, expiresAt, payload } | null
   // telemetryStore is read lazily — supports both deps.telemetryStore (passed
   // at factory time) AND ctx.telemetryStore (set later in server bootstrap).
   function getTelemetryStore() {
@@ -192,9 +205,153 @@ export function createInspector(ctx, deps = {}) {
     };
   }
 
-  // ───────────── B3 — ML Shadow Correction (stubbed; Plan 19-04 implements) ─────────────
+  // ───────────── B3 — ML Shadow Correction (Plan 19-04 — IMPLEMENTED) ─────────────
+  //
+  // Runs the ML model in SHADOW mode (mlService.correct(..., {shadow:true}))
+  // so the operator can preview ML output BEFORE flipping cfg.ml.mlEnabled.
+  // The Python spawn cost is amortised by a 60s sliding cache keyed on
+  // forecastService.forecastVersion — two consecutive 30s polls hit the cache
+  // (one spawn, not two). A forecastVersion bump (new forecast pipeline run)
+  // invalidates the cache transparently.
+  //
+  // Input-model selection per ML_SHADOW_INPUT_MODEL_RANK. The cache stores
+  // the FULL payload (raw + corrected + delta) so cacheHit serves the same
+  // envelope shape the frontend already renders.
+  //
+  // Returns envelope:
+  //   {
+  //     window: { from, to },
+  //     raw:        [{ ts_utc, power_w }],     // input PV slots
+  //     corrected:  [{ ts_utc, power_w }]|null, // null when applied=false
+  //     delta:      [{ ts_utc, delta_w }]|null, // null when applied=false
+  //     model:      string|null,
+  //     applied:    boolean,
+  //     reason:     string|null,    // 'no_model'|'no_input'|null
+  //     mlEnabled:  boolean,
+  //     meta: { inputModel: string|null, cacheHit: boolean }
+  //   }
+  // Or, on hard failure: { ok: false, error: ..., window }.
   async function getMlCorrection({ from, to } = {}) {
-    return { ok: false, error: 'not_implemented', stub: 'b3', window: { from, to } };
+    if (!store || typeof store.getLatestPvForecast !== 'function') {
+      return { ok: false, error: 'store_unavailable', window: { from, to } };
+    }
+    if (!mlService || typeof mlService.correct !== 'function') {
+      return { ok: false, error: 'ml_unavailable', window: { from, to } };
+    }
+
+    // Read forecastVersion lazily — forecastService may expose a getter or a
+    // plain numeric field. Default to 0 when unavailable (cache still works
+    // — every call shares fv=0 until a real forecast version lands).
+    let fv = 0;
+    if (forecastService) {
+      const rawFv = forecastService.forecastVersion;
+      const n = Number(rawFv);
+      if (Number.isFinite(n)) fv = n;
+    }
+
+    const now = Date.now();
+    if (mlShadowCache && mlShadowCache.forecastVersion === fv && mlShadowCache.expiresAt > now) {
+      // Cache hit — return clone with cacheHit:true (preserve cached envelope shape).
+      const cachedMeta = mlShadowCache.payload.meta || {};
+      return Object.assign({}, mlShadowCache.payload, {
+        meta: Object.assign({}, cachedMeta, { cacheHit: true }),
+      });
+    }
+
+    let rows = [];
+    try {
+      rows = (await store.getLatestPvForecast({ start: from, end: to })) || [];
+    } catch (e) {
+      pushLog('inspector_ml_correction_query_error', { error: e && e.message ? e.message : String(e) });
+      return { ok: false, error: 'query_failed', window: { from, to } };
+    }
+
+    // Bucket rows by model
+    const byModel = {};
+    for (const r of rows) {
+      if (!r || typeof r !== 'object') continue;
+      const m = r.model || 'unknown';
+      if (!byModel[m]) byModel[m] = [];
+      byModel[m].push(r);
+    }
+
+    // Pick first non-empty model per preference rank
+    let inputModel = null;
+    let inputRows = [];
+    for (const m of ML_SHADOW_INPUT_MODEL_RANK) {
+      if (byModel[m] && byModel[m].length > 0) {
+        inputModel = m;
+        inputRows = byModel[m];
+        break;
+      }
+    }
+
+    const raw = inputRows
+      .map(r => ({
+        ts_utc: r.ts_utc instanceof Date ? r.ts_utc.toISOString() : String(r.ts_utc),
+        power_w: Number.isFinite(Number(r.power_w)) ? Number(r.power_w) : 0,
+      }))
+      .sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
+
+    const mlEnabled = !!(getCfg().ml && getCfg().ml.mlEnabled);
+
+    if (raw.length === 0) {
+      // Transient empty — do NOT cache, so a follow-up poll re-queries cheaply.
+      return {
+        window: { from, to },
+        raw: [],
+        corrected: null,
+        delta: null,
+        model: null,
+        applied: false,
+        reason: 'no_input',
+        mlEnabled,
+        meta: { inputModel: null, cacheHit: false },
+      };
+    }
+
+    // Adapt to mlService.correct input shape: [{start, powerW}]
+    const slotsForMl = raw.map(r => ({ start: r.ts_utc, powerW: r.power_w }));
+    let mlResult;
+    try {
+      mlResult = await mlService.correct(slotsForMl, { forecastVersion: fv, shadow: true });
+    } catch (e) {
+      pushLog('inspector_ml_correction_predict_error', { error: e && e.message ? e.message : String(e) });
+      return { ok: false, error: 'ml_predict_failed', window: { from, to } };
+    }
+
+    let corrected = null;
+    let delta = null;
+    if (mlResult && mlResult.applied && Array.isArray(mlResult.corrected)) {
+      corrected = mlResult.corrected.map((c, i) => ({
+        ts_utc: (c && c.start) || (raw[i] && raw[i].ts_utc) || null,
+        power_w: Number.isFinite(Number(c && c.powerW)) ? Number(c.powerW) : 0,
+      }));
+      delta = corrected.map((c, i) => ({
+        ts_utc: c.ts_utc,
+        delta_w: Number(c.power_w) - Number((raw[i] && raw[i].power_w) || 0),
+      }));
+    }
+
+    const payload = {
+      window: { from, to },
+      raw,
+      corrected,
+      delta,
+      model: (mlResult && mlResult.model) || null,
+      applied: !!(mlResult && mlResult.applied),
+      reason: (mlResult && mlResult.reason) || null,
+      mlEnabled,
+      meta: { inputModel, cacheHit: false },
+    };
+
+    // Cache only when applied — skipping caches for no_model / no_input avoids
+    // 60s 'stuck' UX after the operator loads a model or rectifies the input.
+    if (payload.applied) {
+      mlShadowCache = { forecastVersion: fv, expiresAt: now + 60_000, payload };
+    }
+
+    return payload;
   }
 
   // ───────────── B4 — EOS Output (stubbed; Plan 19-05 implements) ─────────────
