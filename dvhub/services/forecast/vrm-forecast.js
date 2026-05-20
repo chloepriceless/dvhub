@@ -23,9 +23,17 @@
  * Create VRM Forecast reader.
  * Reads from existing vrm_forecasts table populated by epex-fetch.js.
  *
+ * Phase 18-01j: a successful readPvForecast() ALSO mirrors its rows into
+ * pv_forecasts(model='vrm') via the optional `store` dep, so the ensemble
+ * merger and Phase 19 B1 PV-Provider Inspector see VRM uniformly alongside
+ * solcast / forecast_solar / pvnode / open_meteo. The deps arg is defaulted
+ * so old callers that don't pass `{ store }` still work — they just lose
+ * the mirror (read path stays identical).
+ *
  * @param {object} ctx - DI context { state, getCfg, pushLog, db }
+ * @param {object} [deps] - { store } — forecast-store with writePvForecasts()
  */
-export function createVrmForecast(ctx) {
+export function createVrmForecast(ctx, { store } = {}) {
   const { state, pushLog } = ctx;
   const getDb = () => ctx.db; // lazy — ctx.db set after telemetry store init
 
@@ -57,6 +65,26 @@ export function createVrmForecast(ctx) {
         ts_utc: new Date(r.ts_utc).toISOString(),
         power_w: Math.round(parseFloat(r.value_w) * 10) / 10
       }));
+
+      // Phase 18-01j: mirror solar_yield reads into pv_forecasts(model='vrm') so
+      // the ensemble merger and Phase 19 B1 PV-Provider Inspector see VRM as a
+      // first-class provider in the unified pv_forecasts table. epex-fetch.js
+      // continues to populate vrm_forecasts (the source-specific table); this
+      // is a fire-and-forget mirror — failure here must not break the read path
+      // (consumers still get `slots` back even if the persist fails).
+      if (store && typeof store.writePvForecasts === 'function' && slots.length > 0) {
+        const mirrorRows = slots.map(s => ({
+          model: 'vrm',
+          ts_utc: s.ts_utc,
+          power_w: s.power_w,
+          confidence: 0.6 // VRM forecasts are operator-tuned; mid confidence vs solcast/forecast_solar 0.7
+        }));
+        try {
+          await store.writePvForecasts(mirrorRows);
+        } catch (e) {
+          pushLog('vrm_forecast_persist_error', { error: e?.message || String(e), rows: mirrorRows.length });
+        }
+      }
 
       // Silenced: was logging on every forecast build (~5 min) and crowding
       // out actually-interesting events in the Systemprotokoll ring buffer.

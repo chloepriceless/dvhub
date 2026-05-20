@@ -95,7 +95,7 @@ export function createForecastService(ctx) {
   const weatherFetch = createWeatherFetch(ctx, { store });
   const solcastClient = createSolcastClient(ctx, { store });
   const forecastSolar = createForecastSolar(ctx, { store });
-  const vrmForecast = createVrmForecast(ctx);
+  const vrmForecast = createVrmForecast(ctx, { store }); // Phase 18-01j: deps-object threads store for pv_forecasts mirror
   const openMeteoSolar = createOpenMeteoSolar(ctx, { store });
   const pvnodeClient = createPvnodeClient(ctx, { store });
   const pythonBridge = tier >= 2 ? createPythonBridge(ctx, { tier }) : null;
