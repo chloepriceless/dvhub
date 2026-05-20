@@ -24,6 +24,7 @@
     "/api/forecast/inspector/ml-correction",
     "/api/forecast/inspector/optimizer-cold",
     "/api/forecast/inspector/pv-providers",
+    "/api/forecast/inspector/stage2?date=",
     "/api/history/backfill/prices",
     "/api/history/backfill/vrm",
     "/api/history/export?view=",

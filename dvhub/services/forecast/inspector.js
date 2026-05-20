@@ -499,9 +499,138 @@ export function createInspector(ctx, deps = {}) {
     };
   }
 
-  // ───────────── B5 — Stage-2 Backtest (stubbed; Plan 19-06 implements) ─────────────
+  // ───────────── B5 — Stage-2 Backtest (Plan 19-06 — IMPLEMENTED) ─────────────
+  //
+  // Loads the latest schedule_snapshot for the given calendar day + the measured
+  // battery actuals for the same day, partitions rules into Stage-2 plan rules vs
+  // operator-override rules via partitionRulesByStage2, then classifies each plan
+  // slot via classifyStage2Slot (MATCHED / OVERRIDE / DEVIATION / NEUTRAL).
+  //
+  // Operator-facing question the envelope answers: "On day D, which Stage-2 plan
+  // slots ran as expected, which were overridden by a custom rule, and which
+  // failed silently?" — the digital twin of Phase-15-style real-life-verification.
+  //
+  // Threat-model mitigations (19-06 plan §threat_model):
+  //   - T-19-06 (Stage-2 reconstruction integrity): triple-marker partition in
+  //     partitionRulesByStage2 (OR-logic). Verified by stage2-reconstruction.test.js.
+  //   - T-19-08 (SQL injection via `date`): two-layer validation — route handler
+  //     regex-checks YYYY-MM-DD AND querySnapshotsForDate re-validates + binds
+  //     via $1::date placeholder.
+  //   - T-19-24 (rules_json corruption): try/catch around JSON.parse falls back
+  //     to []. No-rules path exercised by the empty-slots test.
+  //   - T-19-26 (DoS via wide range): date input clamps min/max client-side +
+  //     route handler caps to today-30..today. Each call = 1 SQL + 1 actuals,
+  //     single-day window (96 slots max).
+  //
+  // Returns envelope:
+  //   {
+  //     ok: true,
+  //     date: 'YYYY-MM-DD',
+  //     snapshot: { id, ts },
+  //     slots: [{ ts_utc, planAction:'LEEREN'|'HALTEN'|null, planPowerW,
+  //              actualPowerW, override:{id,source}|null, status }],
+  //     summary: { plannedCount, matchedCount, overrideCount, deviationCount, matchedPct },
+  //   }
+  // Or on failure:
+  //   { ok:false, error:'telemetry_unavailable'|'no_snapshot'|'query_failed', date }
   async function getStage2({ date } = {}) {
-    return { ok: false, error: 'not_implemented', stub: 'b5', date };
+    const telemetryStore = getTelemetryStore();
+    if (!telemetryStore || typeof telemetryStore.querySnapshotsForDate !== 'function') {
+      return { ok: false, error: 'telemetry_unavailable', date };
+    }
+    // Day-bounded window for actuals — UTC midnight to next-day UTC midnight
+    const startIso = date + 'T00:00:00.000Z';
+    const endIso = new Date(Date.parse(startIso) + 86_400_000).toISOString();
+
+    let snapshot = null;
+    let actuals = [];
+    try {
+      const tasks = [
+        telemetryStore.querySnapshotsForDate(date),
+        (typeof telemetryStore.listBatteryActualSlots === 'function')
+          ? telemetryStore.listBatteryActualSlots({ start: startIso, end: endIso })
+          : Promise.resolve([]),
+      ];
+      const results = await Promise.all(tasks);
+      snapshot = results[0];
+      actuals = results[1] || [];
+    } catch (e) {
+      pushLog('inspector_stage2_query_error', { error: e && e.message ? e.message : String(e) });
+      return { ok: false, error: 'query_failed', date };
+    }
+    if (!snapshot) {
+      return { ok: false, error: 'no_snapshot', date };
+    }
+
+    const { planRules, overrideRules } = partitionRulesByStage2(snapshot.rules || []);
+
+    // Build actual-by-ts map (key = ISO slot start)
+    const actualByTs = {};
+    for (const a of actuals) {
+      const ts = typeof a.start === 'string' ? a.start : new Date(a.start).toISOString();
+      actualByTs[ts] = Number(a.powerW);
+    }
+    // Build override-by-ts map — keyed on slot start; accepts epoch-ms OR ISO string
+    const overrideByTs = {};
+    for (const o of overrideRules) {
+      let ts = null;
+      if (typeof o.startTs === 'number' && Number.isFinite(o.startTs)) {
+        ts = new Date(o.startTs).toISOString();
+      } else if (typeof o.startTs === 'string') {
+        ts = o.startTs;
+      }
+      if (ts) overrideByTs[ts] = { id: o.id || null, source: o.source || null };
+    }
+
+    // Iterate Stage-2 plan rules — one output slot per rule
+    const slots = [];
+    for (const p of planRules) {
+      let ts = null;
+      if (typeof p.startTs === 'number' && Number.isFinite(p.startTs)) {
+        ts = new Date(p.startTs).toISOString();
+      } else if (typeof p.startTs === 'string') {
+        ts = p.startTs;
+      }
+      if (!ts) continue;
+      const actualRaw = actualByTs[ts];
+      const hasActual = actualRaw != null && Number.isFinite(Number(actualRaw));
+      const override = overrideByTs[ts] || null;
+      const status = classifyStage2Slot(
+        { plannedPowerW: Number(p.powerW) || 0 },
+        { actualPowerW: hasActual ? Number(actualRaw) : NaN },
+        override
+      );
+      slots.push({
+        ts_utc: ts,
+        planAction: p.stage2Phase || null,
+        planPowerW: Number(p.powerW) || 0,
+        actualPowerW: hasActual ? Number(actualRaw) : null,
+        override,
+        status,
+      });
+    }
+    slots.sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
+
+    let matchedCount = 0;
+    let overrideCount = 0;
+    let deviationCount = 0;
+    for (const s of slots) {
+      if (s.status === 'MATCHED') matchedCount++;
+      else if (s.status === 'OVERRIDE') overrideCount++;
+      else if (s.status === 'DEVIATION') deviationCount++;
+    }
+    const plannedCount = slots.length;
+    const matchedPct = plannedCount > 0
+      ? Math.round((matchedCount / plannedCount) * 1000) / 10
+      : 0;
+
+    return {
+      ok: true,
+      date,
+      snapshot: { id: snapshot.id, ts: snapshot.ts },
+      slots,
+      summary: { plannedCount, matchedCount, overrideCount, deviationCount, matchedPct },
+    };
   }
 
   // ───────────── B6 — Optimizer Cold (IMPLEMENTED — Plan 19-01) ─────────────

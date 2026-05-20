@@ -2555,3 +2555,40 @@ body.dv-modal-open {
   .config-group[data-pro-gated="true"] .pro-gate-content { transition: none; }
   .inspector-details-chevron { transition: none; }
 }
+
+/* === Phase 19 Plan 19-06: Stage-2 Backtest status pills === */
+/* Pills inside .inspector-status rows (one per backtest table row). 4 states
+   per UI-SPEC §B5 — MATCHED / OVERRIDE / DEVIATION / NEUTRAL. */
+.inspector-status .status-pill {
+  display: inline-block;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+}
+.inspector-status.status-MATCHED .status-pill {
+  color: var(--green);
+  background: rgba(62, 224, 160, 0.08);
+  border-color: rgba(62, 224, 160, 0.28);
+}
+.inspector-status.status-OVERRIDE .status-pill {
+  color: var(--yellow);
+  background: rgba(255, 212, 33, 0.08);
+  border-color: rgba(255, 212, 33, 0.28);
+}
+.inspector-status.status-DEVIATION .status-pill {
+  color: var(--red);
+  background: rgba(255, 93, 93, 0.08);
+  border-color: rgba(255, 93, 93, 0.28);
+}
+.inspector-status.status-NEUTRAL .status-pill {
+  color: var(--text-dim);
+}
+/* Subtle row tint for OVERRIDE / DEVIATION so the operator can see clusters
+   at a glance without reading the pill column. */
+.inspector-status.status-OVERRIDE td { background: rgba(255, 212, 33, 0.04); }
+.inspector-status.status-DEVIATION td { background: rgba(255, 93, 93, 0.04); }

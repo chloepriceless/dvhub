@@ -1300,6 +1300,46 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       }
       return [...byTs.values()];
     },
+    /**
+     * Query the latest schedule_snapshot row for a given calendar day (UTC).
+     * Phase 19 Plan 19-06 (B5 Stage-2 Backtest inspector).
+     *
+     * Day window is `ts_utc >= $1::date AND ts_utc < ($1::date + INTERVAL '1 day')` —
+     * Postgres `::date` cast normalises the input to a calendar day under server timezone
+     * (postgres conf defaults to UTC on dvhub). Returns the LATEST row in the window
+     * (ORDER BY ts_utc DESC LIMIT 1) since the optimizer typically writes multiple
+     * snapshots per day; we surface the freshest one for backtest evaluation.
+     *
+     * Returns `{id, ts:ISO, rules: parsed JSON array | [], source}` on success or
+     * `null` when no row exists for the day. JSON.parse failures fall back to `rules:[]`
+     * (T-19-24 mitigation: defensive parse on untrusted DB content).
+     *
+     * Caller (route handler in Plan 19-01 routes-api.js:3037) regex-validates
+     * `^\d{4}-\d{2}-\d{2}$`; this method defensively re-validates as a second layer
+     * (T-19-08 SQL injection mitigation — two-layer validation).
+     */
+    async querySnapshotsForDate(date) {
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error('invalid_date_format');
+      }
+      const result = await pool.query(`
+        SELECT id, ts_utc, rules_json, source
+        FROM schedule_snapshots
+        WHERE ts_utc >= $1::date AND ts_utc < ($1::date + INTERVAL '1 day')
+        ORDER BY ts_utc DESC
+        LIMIT 1
+      `, [date]);
+      if (result.rows.length === 0) return null;
+      const row = result.rows[0];
+      let rules = [];
+      try { rules = JSON.parse(row.rules_json || '[]'); } catch (_) { rules = []; }
+      return {
+        id: Number(row.id),
+        ts: row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
+        rules: Array.isArray(rules) ? rules : [],
+        source: row.source,
+      };
+    },
     async close() {
       await pool.end();
     }
