@@ -468,7 +468,7 @@ export function actorContext(req) {
 }
 
 export function createApiRoutes(ctx) {
-  const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
+  const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
 
   // ── Admin health payload builder ────────────────────────────────────
   // Plan 09-06 Task 3: every checks[] entry carries additive
@@ -1937,6 +1937,57 @@ export function createApiRoutes(ctx) {
         pushLog('family_tesla_history_error', { error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Phase 17 Plan 03: License management endpoints.
+    // POST /api/license/activate   — operator submits a new key
+    // GET  /api/license/state      — settings UI reads current status (redacted)
+    // POST /api/license/revalidate — "Jetzt prüfen" — same code path as poller
+    // POST /api/license/remove     — clear the local license record
+    //
+    // All four require checkAuth. The LAN_SAFE_ENDPOINTS allowlist above does
+    // NOT include any /api/license/* path, so external callers must use
+    // Bearer regardless of source IP (T-17-03-01 mitigation).
+    //
+    // GET /state NEVER returns the plaintext license_key — getState() in the
+    // service redacts the field to null before return (T-17-03-02).
+    // ──────────────────────────────────────────────────────────────────────
+    if (url.pathname === '/api/license/activate' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      const key = typeof body?.key === 'string' ? body.key.trim() : '';
+      if (!key) return json(res, 400, { ok: false, error: 'empty_key' });
+      const result = await licenseService.activateLicense(key);
+      const code = result.ok
+        ? 200
+        : (result.error === 'server_error' || result.error === 'keygen_account_not_configured' ? 503 : 422);
+      return json(res, code, result);
+    }
+
+    if (url.pathname === '/api/license/state' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      return json(res, 200, licenseService.getState());
+    }
+
+    if (url.pathname === '/api/license/revalidate' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const result = await licenseService.revalidateLicense();
+      const code = result.ok
+        ? 200
+        : (result.error === 'server_error'
+            || result.error === 'keygen_account_not_configured'
+            || result.error === 'no_license_active'
+            ? 503 : 422);
+      return json(res, code, result);
+    }
+
+    if (url.pathname === '/api/license/remove' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const result = licenseService.removeLicense();
+      return json(res, 200, result);
     }
 
     // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
