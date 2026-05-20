@@ -105,17 +105,53 @@ export function createMlService(ctx) {
    * On Tier 3: starts persistent Python bridge.
    */
   async function start() {
-    // Try to load existing model metadata
+    // Try to load existing model metadata.
+    //
+    // There are TWO codepaths in this repo that produce a "trained model" on disk:
+    //
+    //   (a) Daily training (scheduleDaily → triggerTraining → ml_train.py with
+    //       no candidate_path) saves to {modelDir}/pv_correction_{type}_v{N}/.
+    //       This is the historical convention from Phase 06.
+    //
+    //   (b) runRetrainEndpoint → promoteIfBetter (REVIEWS H11 atomic swap from
+    //       Phase 07 MLAI-08) operates on {modelDir}/active/ — the candidate
+    //       directory is renamed onto that path after sanity-gate + MAE checks.
+    //
+    // Pre-fix, this loader only scanned for pattern (a). After a successful
+    // runRetrainEndpoint the promoted model lived at {modelDir}/active/ and was
+    // invisible to startup — getStatus() showed modelVersion=0, /api/forecast
+    // showed mlActive=false, runtime sanity-fallback engaged on every build
+    // (verified on prod 2026-05-20 after Phase-18-01 unit fix + first
+    // promotion). Operator workaround: `mv active pv_correction_lightgbm_v1`.
+    //
+    // Phase 18-01e: prefer the atomic-swap `active/` dir when it exists (it's
+    // the authoritative current model per the H11 contract), else fall back to
+    // the daily-training scan. Both meta.json shapes are identical; only the
+    // host directory name differs.
     const modelDir = getCfg().ml?.mlModelDir ?? '/opt/dvhub/ml-models';
+    const activeModelPath = getCfg().ml?.activeModelPath ?? path.join(modelDir, 'active');
     let modelLoaded = false;
 
     try {
-      // Training saves to {modelDir}/pv_correction_{model_type}_v{version}/meta.json.
-      // Scan subdirectories and pick the most recent (highest version) trained model.
-      if (fs.existsSync(modelDir)) {
+      let best = null;
+
+      // (b) atomic-swap promoted model takes precedence
+      const activeMetaPath = path.join(activeModelPath, 'meta.json');
+      if (fs.existsSync(activeMetaPath)) {
+        try {
+          const meta = JSON.parse(fs.readFileSync(activeMetaPath, 'utf8'));
+          if (meta.model_type && meta.version != null) {
+            best = { ...meta, _loadedFrom: 'active' };
+          }
+        } catch {
+          // fall through to daily-training scan
+        }
+      }
+
+      // (a) fall back to daily-training scan if no `active/meta.json` or it was malformed
+      if (!best && fs.existsSync(modelDir)) {
         const entries = fs.readdirSync(modelDir, { withFileTypes: true })
           .filter(e => e.isDirectory() && e.name.startsWith('pv_correction_'));
-        let best = null;
         for (const entry of entries) {
           const metaPath = path.join(modelDir, entry.name, 'meta.json');
           if (!fs.existsSync(metaPath)) continue;
@@ -123,17 +159,18 @@ export function createMlService(ctx) {
             const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
             if (meta.model_type && meta.version != null) {
               if (!best || meta.version > best.version) {
-                best = meta;
+                best = { ...meta, _loadedFrom: entry.name };
               }
             }
           } catch {
             // skip malformed meta.json
           }
         }
-        if (best) {
-          mlCorrection.setModel(best);
-          modelLoaded = true;
-        }
+      }
+
+      if (best) {
+        mlCorrection.setModel(best);
+        modelLoaded = true;
       }
     } catch (err) {
       pushLog('ml_model_load_error', { error: err.message });

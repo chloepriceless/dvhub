@@ -470,6 +470,16 @@ export function createForecastStore(ctx) {
     insertWeather,
     insertPvForecast,
     insertPvForecastBatch, // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
+    // Phase 18-01d: forecast-solar / open-meteo-solar / pvnode-client all call
+    // `store.writePvForecasts(rows)` but the method didn't exist on the store,
+    // so every fetch failed with `store.writePvForecasts is not a function` and
+    // those three providers never persisted anything to `pv_forecasts`. Aliased
+    // to insertPvForecastBatch — same row shape (model, ts_utc, power_w,
+    // confidence) and same idempotent ON CONFLICT semantics. Without this, the
+    // ensemble in pv-forecast.js can only see solcast + vrm; the auto-merger
+    // can't gain from forecast_solar / open_meteo / pvnode coverage and
+    // ensembleActive stays false on prod (verified via /api/forecast meta).
+    writePvForecasts: insertPvForecastBatch,
     insertLoadForecast,
     insertAccuracy,
     getLatestWeather,

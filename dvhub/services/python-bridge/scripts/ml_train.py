@@ -228,8 +228,39 @@ def train(params):
         model, scaler, mae = train_linear(X_train, y_train, X_val, y_val)
         model_type = 'linear'
 
-    # Rollback check (D-07): reject if new MAE > previous_mae * threshold
+    # Rollback check (D-07): reject if new MAE > previous_mae * threshold.
+    #
+    # Phase 18-01f cross-unit safety: detect unit/scale boundaries before the
+    # naive comparison rejects an otherwise-correct model. Concrete trigger
+    # from prod 2026-05-20: Phase-18-01 fixed the SQL training target from
+    # `AVG(kWh/15min)` to `AVG(kWh/15min) * 4000` (Watts). The next retrain
+    # produced a model with mae=2625 W; the still-active previous model
+    # carried mae=0.56 (kWh/15min units, never converted). Naive rollback
+    # check rejected the new model because 2625 > 0.56 * 1.10, even though
+    # the new model was the unit-correct replacement.
+    #
+    # Heuristic: PV power MAE in Watts for a residential plant is O(100..5000) W;
+    # PV power MAE in any sub-unit normalised scale (per-kWp, fraction-of-kWp,
+    # kWh/15min) is O(0.01..5). A ratio of >100× between previous_mae and
+    # new_mae is essentially impossible without a unit/scale boundary — even
+    # a catastrophically degraded model would not flip MAE by 100×. When that
+    # ratio is detected, skip the rollback check and let promotion proceed,
+    # but surface the event so the caller can log it as an explicit decision.
     if previous_mae is not None and mae > previous_mae * rollback_threshold:
+        magnitude_ratio = mae / max(previous_mae, 1e-9)
+        if magnitude_ratio > 100.0:
+            # Unit/scale boundary — let promotion through, flag it.
+            return {
+                'ok': True,
+                'reason': 'unit_boundary_override',
+                'new_mae': mae,
+                'previous_mae': previous_mae,
+                'magnitude_ratio': magnitude_ratio,
+                'model_type': model_type,
+                'version': version,
+                'n_samples': n_samples,
+                'model_path': save_model(model, scaler, model_type, version, mae, model_dir, n_samples, FEATURE_COLS),
+            }
         return {
             'ok': False,
             'reason': 'rollback',
