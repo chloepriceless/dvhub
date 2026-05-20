@@ -113,6 +113,11 @@ import { createNotificationService } from './services/notifications/index.js';
 import { createMlService } from './services/ml/index.js';
 import { createRetrainJobs } from './services/ml/ml-retrain-jobs.js';
 import { createLlmService } from './services/llm/index.js';
+// Phase 17 Plan 03 — license-service bootstrap. Sync state-load runs in the
+// IS_RUNTIME_PROCESS block right after loadEnergy(); async start() (the 24h
+// poller) chains after notificationService.start() so on-revoke notifications
+// reach configured providers.
+import { createLicenseService } from './services/license/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -894,6 +899,20 @@ ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
 ctx.notificationService = notificationService;
 
+// Phase 17 Plan 03 — license-service. Constructed unconditionally so
+// routes-api.js can destructure ctx.licenseService for the four /api/license/*
+// endpoints (Plan 17-03 Task 3) and for the Family-route gate (Plan 17-04).
+// SECURITY_HEADERS comes from routes-api.js (imported at top of server.js) so
+// the 403 pro_required response shares the canonical header set.
+const licenseService = createLicenseService({
+  state,
+  getCfg,
+  pushLog,
+  appDir: __dirname,
+  securityHeaders: SECURITY_HEADERS
+});
+ctx.licenseService = licenseService;
+
 // Phase 09.4 gap-closure (Gap 3 step 3): Uptime Kuma alert-push hook. The
 // notification service calls ctx.monitoringAlertPush(status, msg) whenever it
 // dispatches a notification; that routes through the SAME signed/SSRF-guarded
@@ -1262,6 +1281,11 @@ if (IS_WEB_PROCESS) {
 
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
+  // Phase 17 Plan 03 — sync boot-load of license_state.json. Runs BEFORE any
+  // service.start() / HTTP listener so the very first request sees the
+  // persisted license status (no race window where requirePro returns 403 on
+  // a paid customer just because the file hadn't been read yet).
+  licenseService.loadStateFromDisk();
   modbus.start();
   // Phase 04: Start integration services (runtime-only — MQTT connections, device polling, notifications)
   mqttHub.start().then(() => {
@@ -1286,6 +1310,12 @@ if (IS_RUNTIME_PROCESS) {
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));
+  // Phase 17 Plan 03 — license-poller. Schedules a 30s-after-boot first
+  // validate + a recurring 24h setInterval (services/license/index.js#start).
+  // Chained AFTER notificationService.start() so an on-revoke notification
+  // (active -> !active transition) can reach configured providers without a
+  // bootstrap-order race.
+  licenseService.start().catch(err => console.error('License service start error:', err.message));
   mlService.start().catch(err => console.error('ML service start error:', err.message));
   llmService.start().catch(err => console.error('LLM service start error:', err.message));
   if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
