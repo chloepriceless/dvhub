@@ -204,3 +204,82 @@ test('runForecast keeps flat-800 as last resort when VRM is unavailable', async 
   assert.ok(data.every(s => s.power_w === 800), 'flat-800 stays the last resort');
   assert.equal(svc.getState().source, 'naive_constant', 'state source should be naive_constant');
 });
+
+// --- 18-01k: timezone-key bug + distinct fallback model name ---
+
+test('18-01k: formatLoadSlots looks up hourMap in Berlin-local hours (matches SQL query domain)', () => {
+  // Build a Berlin-keyed hourMap: hour_of_day = Berlin local hour, distinct values per hour
+  const sqlRows = [];
+  for (let h = 0; h < 24; h++) {
+    sqlRows.push({ hour_of_day: h, avg_power_w: 100 + h * 100, sample_count: '30' });
+  }
+  // Berlin summer (UTC+2): UTC 16:00 == Berlin 18:00 -> Berlin-hour key 18 -> avg_power_w 1900
+  const now = new Date('2026-05-20T16:00:00Z');
+  const result = formatLoadSlots(sqlRows, 800, now);
+  assert.notEqual(result[0].power_w, 800, 'must not fall through to defaultPowerW');
+  assert.equal(result[0].power_w, 1900, 'Berlin-hour=18 should map to avg_power_w=1900');
+});
+
+test('18-01k: formatLoadSlots maps Berlin-keyed hourMap correctly in winter (UTC+1 offset)', () => {
+  // Winter (CET, UTC+1): UTC 09:00 == Berlin 10:00 -> Berlin-hour key 10 -> avg_power_w 600
+  // Under the bug, ts.getUTCHours()=9 -> avg_power_w 500. Asserting 600 catches it.
+  // Also asserts a non-flat profile via specific-value mapping at a later slot.
+  const sqlRows = [];
+  for (let h = 0; h < 24; h++) {
+    sqlRows.push({ hour_of_day: h, avg_power_w: 100 + h * 50, sample_count: '20' });
+  }
+  const now = new Date('2026-01-15T09:00:00Z'); // Berlin 10:00 CET
+  const result = formatLoadSlots(sqlRows, 800, now);
+  assert.equal(result[0].power_w, 600, 'Berlin-hour=10 should map to avg_power_w=600 (UTC code would yield 550)');
+  // Curve must vary across 24h (catches all-800W flat bug AND constant-curve bugs).
+  const distinct = new Set(result.slice(0, 24).map(s => s.power_w));
+  assert.ok(distinct.size > 1, `expected > 1 distinct values, got ${distinct.size}: ${[...distinct]}`);
+});
+
+function makeRunForecastHarness({ sqlRows, defaultPowerW = 800 } = {}) {
+  const persisted = [];
+  const ctx = {
+    state: { forecast: { load: {} } },
+    getCfg: () => ({ forecast: { load: { defaultPowerW } }, ml: {} }),
+    pushLog: () => {},
+    db: { query: async () => ({ rows: sqlRows }) },
+    forecastService: { tier: 1 },
+    bumpForecastVersion: () => {}
+  };
+  const store = {
+    insertLoadForecast: async (row) => { persisted.push(row); },
+    query: async () => ({ rows: [] })
+  };
+  const vrmForecast = { isAvailable: () => false, readLoadForecast: async () => null };
+  const lf = createLoadForecast(ctx, { store, vrmForecast });
+  return { ctx, store, persisted, lf };
+}
+
+test('18-01k: runForecast persists model=sql_weekday_fallback when cold-start defaultPowerW is served', async () => {
+  const h = makeRunForecastHarness({
+    sqlRows: [
+      { hour_of_day: 0, avg_power_w: 500, sample_count: '3' },
+      { hour_of_day: 1, avg_power_w: 400, sample_count: '2' }
+    ]
+  });
+  await h.lf.runForecast();
+  assert.ok(h.persisted.length > 0, 'something was persisted');
+  assert.ok(
+    h.persisted.every(r => r.model === 'sql_weekday_fallback'),
+    `expected every row model=sql_weekday_fallback, got: ${[...new Set(h.persisted.map(r => r.model))]}`
+  );
+});
+
+test('18-01k: runForecast persists model=sql_weekday for real rollup (24 distinct hours)', async () => {
+  const sqlRows = [];
+  for (let h = 0; h < 24; h++) {
+    sqlRows.push({ hour_of_day: h, avg_power_w: 500 + h * 30, sample_count: '20' });
+  }
+  const h = makeRunForecastHarness({ sqlRows });
+  await h.lf.runForecast();
+  assert.ok(h.persisted.length > 0, 'something was persisted');
+  assert.ok(
+    h.persisted.every(r => r.model === 'sql_weekday'),
+    `expected every row model=sql_weekday, got: ${[...new Set(h.persisted.map(r => r.model))]}`
+  );
+});
