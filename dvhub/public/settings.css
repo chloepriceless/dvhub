@@ -2349,3 +2349,45 @@ body.dv-modal-open {
 .settings-aurora .config-group .config-banner {
   margin: 0 24px 8px;
 }
+
+/* ============================================================
+   Phase 17 — License section (Plan 17-05)
+   ============================================================
+   See UI-SPEC §"1. License-Section". Consumes Aurora tokens defined
+   in dvhub-app.css (--accent-pro from Plan 17-01). Status colours
+   live on `.chip.license-status[data-status="…"]` — the JS toggles
+   the `data-status` attribute, the CSS matches.
+
+   --orange exists only in :root (dark theme); under [data-theme="light"]
+   the warning hue is --yellow (per UI-SPEC §Color). The expired/suspended
+   chip below uses --yellow so it renders in both themes — matches the
+   semantic "warning" role even though the literal token name differs
+   from the dark-theme orange.
+   ============================================================ */
+.license-section {
+  margin-bottom: 24px;
+  border-left: 3px solid var(--accent-pro);
+}
+.license-kicker { color: var(--accent-pro); }
+
+.chip.license-status[data-status="active"]    { color: var(--green);    border-color: rgba(62,224,160,.28); background: rgba(62,224,160,.08); }
+.chip.license-status[data-status="expired"],
+.chip.license-status[data-status="suspended"] { color: var(--yellow);   border-color: rgba(255,212,33,.28); background: rgba(255,212,33,.08); }
+.chip.license-status[data-status="invalid"]   { color: var(--red);      border-color: rgba(255,93,93,.28);  background: rgba(255,93,93,.08); }
+.chip.license-status[data-status="none"]      { color: var(--text-dim); border-color: var(--glass-brd);     background: var(--glass); }
+
+.license-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-1);
+  margin-top: var(--gap-3);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.license-shop-link {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-decoration: none;
+}
+.license-shop-link:hover { color: var(--accent-pro); }

@@ -62,6 +62,44 @@
 
     <main class="page-content">
       <div class="settings-aurora">
+        <!-- Phase 17 Plan 17-05 — License-section.
+             Anchor `#license` is the target of the Pro-Required-Modal CTA
+             (Plan 17-06). Section sits ABOVE the page header so it's the first
+             thing the operator sees on Settings. Per UI-SPEC §1, all DOM
+             updates happen via classList + data-status + hidden attribute —
+             no inline style/onclick (CSP-clean). -->
+        <section id="license" class="card aurora-edge license-section" aria-labelledby="licenseSectionTitle">
+          <header class="card-head">
+            <div>
+              <div class="config-group-kicker license-kicker">LIZENZ / PRO</div>
+              <h2 id="licenseSectionTitle" class="h-3">Lizenz</h2>
+              <p class="sa-page-sub license-sub">Schalte alle Pro-Features mit deiner DVhub-Pro-Lizenz frei.</p>
+            </div>
+            <span class="chip license-status" data-status="none">
+              <span class="dot"></span>
+              <span class="license-status-label">Keine Lizenz</span>
+            </span>
+          </header>
+          <div class="card-body license-body">
+            <div class="field license-field">
+              <label class="field-label" for="licenseKeyInput">Lizenzschl&uuml;ssel</label>
+              <input id="licenseKeyInput" class="input mono" type="text" autocomplete="off" spellcheck="false" placeholder="DVHB-XXXX-XXXX-XXXX-XXXX" />
+              <span class="field-hint">Du findest deinen Schl&uuml;ssel in deiner Polar-Bestellbest&auml;tigung.</span>
+            </div>
+            <div class="license-meta" hidden>
+              <span class="license-fingerprint mono"></span>
+              <span class="license-last-check mono"></span>
+              <span class="license-expiry mono"></span>
+            </div>
+          </div>
+          <footer class="card-actions license-actions">
+            <button id="licenseActivateBtn" class="btn primary" type="button">Aktivieren</button>
+            <button id="licenseRecheckBtn" class="btn" type="button" hidden>Jetzt pr&uuml;fen</button>
+            <button id="licenseRemoveBtn" class="btn danger" type="button" hidden>Lizenz entfernen</button>
+            <a class="license-shop-link" href="https://shop.dvhub.de" target="_blank" rel="noopener noreferrer">Noch keine Lizenz? Jetzt bestellen.</a>
+          </footer>
+        </section>
+
         <!-- Page header -->
         <div class="sa-page-header">
           <div>
