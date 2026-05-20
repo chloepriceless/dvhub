@@ -1040,6 +1040,28 @@ export function createApiRoutes(ctx) {
     return false;
   }
 
+  // ──────────────────────────────────────────────────────────────────────
+  // Phase 17 Plan 04: License-gate helper (Option B per CONTEXT Amendment).
+  //
+  // Local wrapper around licenseService.requirePro() so call-sites stay
+  // readable — `if (!requirePro(req,res,FEAT)) return;` — instead of the
+  // verbose service-prefixed form. FEAT is whitelisted to a known feature
+  // slug (e.g. family-dashboard) inside licenseService.requirePro.
+  //
+  // The gate runs INSIDE each Family-route handler — BEFORE any business
+  // logic — so even LAN-bypassed kiosks (LAN_SAFE_ENDPOINTS at lines 770-773
+  // stay UNTOUCHED per Option B) see a 403 when the license is not active.
+  // With status='active', the gate returns true and the handler runs normally
+  // — D-14's token-less kiosk flow is preserved for activated installations.
+  //
+  // 403 body shape: { error: 'pro_required', feature: <whitelisted feat> }.
+  // featureName is whitelisted inside licenseService.requirePro (V5 ASVS —
+  // prevents log/response injection).
+  // ──────────────────────────────────────────────────────────────────────
+  function requirePro(req, res, featureName) {
+    return licenseService.requirePro(req, res, featureName);
+  }
+
   // Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap.
   // When apiToken is currently empty, the device is in setup phase. LAN clients
   // bypass checkAuth, so any compromised device on the LAN could otherwise win the
@@ -1734,6 +1756,7 @@ export function createApiRoutes(ctx) {
     // LAN-allowlisted read path: tablet on the local network can reach it
     // without a Bearer token. See LAN_SAFE_ENDPOINTS above.
     if (url.pathname === '/api/family/status' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
       try {
         const payload = ctx.familyService.buildFamilyStatus();
@@ -1746,6 +1769,7 @@ export function createApiRoutes(ctx) {
 
     // Presence state read — screensaver wake polling (D-19). LAN-safe GET.
     if (url.pathname === '/api/family/presence' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
       return json(res, 200, { ok: true, ...ctx.familyService.getPresence() });
     }
@@ -1754,6 +1778,7 @@ export function createApiRoutes(ctx) {
     // isLanSafeRequest rejects non-GET requests by design. Loxone/HA/MQTT
     // integrations configure the Bearer token in Phase 04.
     if (url.pathname === '/api/family/presence' && req.method === 'POST') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
       let body;
       try {
@@ -1774,12 +1799,14 @@ export function createApiRoutes(ctx) {
     // client never round-trips the whole config object (which would, with a
     // partial body, replace it: saveAndApplyConfig overwrites, never merges).
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       const fam = ctx.getRawCfg?.()?.family;
       const tiles = (fam && Array.isArray(fam.mqttTiles)) ? fam.mqttTiles : [];
       return json(res, 200, { ok: true, tiles });
     }
 
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'POST') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       let body;
       try {
         body = await parseBody(req);
@@ -1863,6 +1890,7 @@ export function createApiRoutes(ctx) {
     // validated against the configured tiles (V4 — no series_key enumeration)
     // before any DB call; querySeries is fully parameterised (no SQL concat).
     if (url.pathname === '/api/family/tile-history' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       if (!ctx.telemetryStore?.querySeries) {
         return json(res, 503, { ok: false, error: 'telemetry store not available' });
       }
@@ -1907,6 +1935,7 @@ export function createApiRoutes(ctx) {
     // is `days`, clamped to 1..31; querySeries is fully parameterised and the
     // window is server-computed Date objects (no SQL concat, T-11-07).
     if (url.pathname === '/api/family/tesla-history' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       if (!ctx.telemetryStore?.querySeries) {
         return json(res, 503, { ok: false, error: 'telemetry store not available' });
       }
@@ -1992,7 +2021,14 @@ export function createApiRoutes(ctx) {
 
     // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
     // Served via servePage so the filename 'family.html' stays inside publicDir.
+    // Phase 17 Plan 04: license-gated. Without a Pro licence the page route
+    // returns 403 {error:'pro_required', feature:'family-dashboard'} — the
+    // top-nav lock badge + Pro-modal (Plan 17-05) handle the UX. The static
+    // assets /family.js + /family.css are NOT individually gated — without the
+    // gated /family page no browser loads them, and a raw curl returns inert JS
+    // source (no application logic executes). Matches SPEC R-6 acceptance.
     if (url.pathname === '/family' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
       return servePage(res, 'family.html');
     }
 

@@ -386,38 +386,173 @@ test('POST /api/license/remove resets status to none', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// R-6 — Family-route gating (still skipped — Plan 04 owns this wave)
+// R-6 — Family-route gating (Plan 17-04 — Option B / CONTEXT Amendment)
 // ---------------------------------------------------------------------------
+//
+// Per CONTEXT D-07 + D-14 amendment (Option B): LAN_SAFE_ENDPOINTS at
+// routes-api.js:770-773 stays UNTOUCHED. requirePro() runs INSIDE each
+// /api/family/* handler (and the /family servePage handler) BEFORE any
+// business logic — so even LAN-bypassed kiosks see 403 when license != active.
+// With status='active', the handler runs normally — D-14's token-less kiosk
+// flow is preserved.
+//
+// 9 tests below: 8 family API endpoints (status, presence GET+POST, mqtt-tiles
+// GET+POST, tile-history, tesla-history) + /family servePage. Each asserts
+// 403 {error:'pro_required', feature:'family-dashboard'} when license !== active.
+// Plus 1 positive-path test that asserts status=active → 200 normal response.
 
-test.skip('GET /api/family/status returns 403 pro_required when license !== active', async () => {
-  // TODO: implement in Plan 17-04 — see 17-PATTERNS.md §Two-gate pattern
-  // state.license.status='none' -> requirePro returns false -> 403 body:{error:'pro_required', feature:'family-dashboard'}
-  assert.ok(true);
+/**
+ * Extend mockCtx with a minimal familyService + getRawCfg shim so the family
+ * route handlers can reach business logic when the gate lets the request
+ * through. mqtt-tiles POST also needs saveAndApplyConfig (already stubbed in
+ * mockCtx). tile-history/tesla-history need ctx.telemetryStore.querySeries.
+ */
+function mockCtxFamily(licenseStatus = 'none', over = {}) {
+  const ctx = mockCtx(over);
+  ctx.familyService = {
+    buildFamilyStatus: () => ({
+      now: 1700000000,
+      energy: {}, battery: {}, ev: {}, devices: [], forecast: null,
+      price: { slots: [] }, optimizer: { enabled: false },
+      savings: {}, greeting: {}, presence: {}, config: {}
+    }),
+    getPresence: () => ({ detected: false, source: null, updatedAt: 0 }),
+    setPresence: () => {}
+  };
+  ctx.telemetryStore = {
+    querySeries: async () => []
+  };
+  // mqtt-tiles POST persists into config.family.mqttTiles — saveAndApplyConfig
+  // is already stubbed in mockCtx, and getRawCfg returns the same cfg object.
+  // We also need to flip the license status BEFORE the handler runs.
+  ctx.licenseService.setStatusForTest(licenseStatus);
+  return ctx;
+}
+
+// helper for /family servePage route (returns HTML — only sane assertion
+// is the 200 vs 403/'pro_required' branch)
+async function expectFamilyPageGate(licenseStatus, expectedStatus) {
+  const ctx = mockCtxFamily(licenseStatus);
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(
+    makeReq('GET', '/family'),
+    res,
+    urlFor('/family')
+  );
+  return { ctx, res, body: res._captured.body, status: res._captured.status };
+}
+
+test('GET /api/family/status returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/family/status'), res, urlFor('/api/family/status'));
+  assert.equal(res._captured.status, 403, `expected 403, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
 });
 
-test.skip('GET /api/family/status returns 200 when license === active', async () => {
-  // TODO: implement in Plan 17-04
-  // state.license.status='active' -> requirePro returns true -> handler runs -> 200
-  assert.ok(true);
+test('GET /api/family/status returns 200 when license === active', async () => {
+  const ctx = mockCtxFamily('active');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/family/status'), res, urlFor('/api/family/status'));
+  assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.ok, true);
 });
 
-test.skip('GET /api/family/presence returns 403 pro_required when license !== active', async () => {
-  // TODO: implement in Plan 17-04 — see 17-PATTERNS.md (all 7 /api/family/* handlers)
-  assert.ok(true);
+test('GET /api/family/presence returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('expired');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/family/presence'), res, urlFor('/api/family/presence'));
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
 });
 
-test.skip('GET /api/family/tile-history returns 403 pro_required when license !== active', async () => {
-  // TODO: implement in Plan 17-04
-  assert.ok(true);
+test('POST /api/family/presence returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('suspended');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(
+    makeReq('POST', '/api/family/presence', { detected: true, source: 'test' }),
+    res,
+    urlFor('/api/family/presence')
+  );
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
 });
 
-test.skip('GET /api/family/tesla-history returns 403 pro_required when license !== active', async () => {
-  // TODO: implement in Plan 17-04
-  assert.ok(true);
+test('GET /api/family/mqtt-tiles returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('invalid');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/family/mqtt-tiles'), res, urlFor('/api/family/mqtt-tiles'));
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
 });
 
-test.skip('GET /family page returns 403 pro_required when license !== active', async () => {
-  // TODO: implement in Plan 17-04 — see 17-CONTEXT.md D-08 (static-file serving for family.html/.js/.css)
-  // GET /family.html with no license -> 403 pro_required (not the static file)
-  assert.ok(true);
+test('POST /api/family/mqtt-tiles returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(
+    makeReq('POST', '/api/family/mqtt-tiles', { tiles: [] }),
+    res,
+    urlFor('/api/family/mqtt-tiles')
+  );
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
+});
+
+test('GET /api/family/tile-history returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(
+    makeReq('GET', '/api/family/tile-history?id=test'),
+    res,
+    urlFor('/api/family/tile-history?id=test')
+  );
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
+});
+
+test('GET /api/family/tesla-history returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtxFamily('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(
+    makeReq('GET', '/api/family/tesla-history'),
+    res,
+    urlFor('/api/family/tesla-history')
+  );
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
+});
+
+test('GET /family page returns 403 pro_required when license !== active', async () => {
+  // /family servePage handler is gated too — without it, a kiosk with no
+  // license still loads the HTML (and the JS/CSS load no-op against the
+  // gated /api/family/* endpoints). Gating the page route closes that gap.
+  const { res } = await expectFamilyPageGate('none');
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'family-dashboard');
 });

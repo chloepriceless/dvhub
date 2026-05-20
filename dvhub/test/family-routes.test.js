@@ -239,6 +239,12 @@ function mockRes() {
 
 function mockCtx(overrides = {}) {
   return {
+    // Phase 17 Plan 04: license-gate requires ctx.licenseService.requirePro.
+    // Default to an always-allow stub so the pre-existing /api/family/*
+    // integration tests below keep exercising the GREEN-path business logic
+    // (gate is covered by license-routes.test.js). Tests that need to assert
+    // the 403 gate can override with a 403-returning stub.
+    licenseService: { requirePro: () => true },
     state: {
       meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0 },
       victron: { soc: 50, batteryPowerW: 0, pvTotalW: 0, gridImportW: 0, gridExportW: 0, updatedAt: 0 },

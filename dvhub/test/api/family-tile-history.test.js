@@ -45,6 +45,10 @@ const SAMPLE_ROW = {
 
 function mockCtx(overrides = {}) {
   const ctx = {
+    // Phase 17 Plan 04: license-gate requires ctx.licenseService.requirePro.
+    // Default to allow so the existing integration tests cover the
+    // business-logic path; license-routes.test.js covers the 403 gate path.
+    licenseService: { requirePro: () => true },
     state: { log: [] },
     getCfg: () => ({
       epex: { enabled: false, timezone: 'Europe/Berlin' },

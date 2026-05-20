@@ -59,6 +59,12 @@ function makeReq(method, urlPath, body, opts = {}) {
 
 function mockCtx(overrides = {}) {
   const base = {
+    // Phase 17 Plan 04: license-gate requires ctx.licenseService.requirePro.
+    // Default to an always-allow stub so the smoke tests continue to exercise
+    // the business-logic path of /api/family/* and /family. The 403-gate path
+    // is covered in license-routes.test.js. Tests that need to assert the
+    // gate can override `licenseService` via the overrides arg.
+    licenseService: { requirePro: () => true },
     state: {
       meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0 },
       victron: { soc: 50, batteryPowerW: 0, pvTotalW: 3000, gridImportW: 0, gridExportW: 0, updatedAt: 0 },
