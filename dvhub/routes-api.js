@@ -4301,6 +4301,55 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // Phase 18-01c: forecast_accuracy backfill so the 14-day retrain gate can open.
+    // POST /api/admin/accuracy-backfill body: { days?: 14 } — runs the existing
+    // evaluateAndWrite for each of the last N days (default 14). Idempotent: the
+    // INSERT inside evaluateAndWrite is ON CONFLICT DO UPDATE keyed on
+    // (forecast_type, model, evaluation_date), so repeat runs just refresh values.
+    // Synchronous (not fire-and-forget) — the loop is bounded (max ~30 dates) and
+    // each evaluatePerProvider is fast; an operator wants the result immediately.
+    if (url.pathname === '/api/admin/accuracy-backfill' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      try {
+        const tracker = ctx.forecastService?.accuracyTracker;
+        if (!tracker?.evaluateAndWrite) {
+          return json(res, 503, { error: 'accuracy_tracker_unavailable' });
+        }
+        let body = {};
+        try {
+          const raw = await readRawBody(req, 4096);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          return json(res, 400, { error: 'invalid_json_body' });
+        }
+        const days = Math.min(Math.max(Number(body.days) || 14, 1), 30);
+
+        const results = [];
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+        for (let i = days; i >= 1; i--) {
+          const d = new Date(today);
+          d.setUTCDate(d.getUTCDate() - i);
+          const dateStr = d.toISOString().slice(0, 10);
+          try {
+            const daily = await tracker.evaluateAndWrite(dateStr);
+            results.push({ date: dateStr, ok: true, daily });
+          } catch (err) {
+            results.push({ date: dateStr, ok: false, error: err?.message ?? String(err) });
+          }
+        }
+        pushLog('accuracy_backfill_done', {
+          actor: req.headers['x-actor'] || 'admin',
+          actorIp: deriveClientIp(req, getCfg()),
+          days,
+          okCount: results.filter(r => r.ok).length
+        }, { ...actorContext(req), severity: 'info' });
+        return json(res, 200, { days, results });
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
+    }
+
     // GET /api/messages — latest LLM messages (LAN-safe for family tablet)
     if (url.pathname === '/api/messages' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;

@@ -428,6 +428,11 @@ export function createForecastService(ctx) {
     tier,
     store,
     pvnodeClient,
+    // Phase 18-01c: expose accuracyTracker so /api/admin/accuracy-backfill can call
+    // evaluateAndWrite() over a date range to seed forecast_accuracy ahead of the
+    // 14-day retrain gate. Without this admin path the gate never opens on a fresh
+    // prod box because the tracker only writes one row per day at 02:00 UTC.
+    accuracyTracker,
     buildForecastResponse,
     // Phase 07 FORE-12 D-D2: load-forecast degradation visibility via /api/ml/status.
     getLoadForecastState: () => loadForecast.getState?.() ?? {

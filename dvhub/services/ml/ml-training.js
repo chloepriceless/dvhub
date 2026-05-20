@@ -299,10 +299,24 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
    */
   async function has14DaysOfAccuracyData() {
     try {
+      // Phase 18-01c: gate originally required `mae_7d_pvnode IS NOT NULL`
+      // (Phase 07 MLAI-08 assumption that pvnode would be the primary provider).
+      // On prod pvnode is rate-limited AND can't persist (store.writePvForecasts
+      // is missing — separate 18-01d bug), so the gate never opens against
+      // pvnode. Loosened to require ANY non-null per-provider 7d rolling MAE:
+      // pvnode, solcast, merged, or ml. The semantic the gate actually wants
+      // is "we have >=14 days of accuracy history for at least one layer",
+      // not "specifically pvnode". forecast_snapshots inventory on prod
+      // currently carries solcast + merged.
       const result = await store.query(`
         SELECT COUNT(DISTINCT evaluation_date) AS d
         FROM forecast_accuracy
-        WHERE mae_7d_pvnode IS NOT NULL
+        WHERE (
+          mae_7d_pvnode  IS NOT NULL OR
+          mae_7d_solcast IS NOT NULL OR
+          mae_7d_merged  IS NOT NULL OR
+          mae_7d_ml      IS NOT NULL
+        )
           AND evaluation_date >= CURRENT_DATE - INTERVAL '14 days'
       `);
       const d = Number(result.rows[0]?.d ?? 0);
