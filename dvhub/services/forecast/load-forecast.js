@@ -116,6 +116,24 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
 
   const confidence = isColdStart ? 0.3 : computeLoadConfidence(minSampleCount);
 
+  // Phase 18-01k: hourMap is keyed by Berlin local hour-of-day (the SQL query
+  // uses `EXTRACT(HOUR FROM slot_start_utc AT TIME ZONE 'Europe/Berlin')`).
+  // Earlier code used ts.getUTCHours() here, which is OFF by +1 or +2 hours
+  // depending on DST, so every lookup missed and every slot fell through to
+  // defaultPowerW (verified prod 2026-05-20: state.forecast.load.data was
+  // 24x 800W constant). Match the SQL domain.
+  const berlinHourFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Berlin', hour12: false, hour: '2-digit'
+  });
+  function getBerlinHour(date) {
+    // formatToParts returns [{type:'hour', value:'00'..'23'}] when hour12=false.
+    // Note: some locales render 24 instead of 0 for midnight - coerce.
+    const parts = berlinHourFmt.formatToParts(date);
+    const raw = parts.find(p => p.type === 'hour')?.value ?? '0';
+    const h = Number(raw) % 24;
+    return h;
+  }
+
   // Start from current hour boundary
   const startHour = new Date(now);
   startHour.setMinutes(0, 0, 0);
@@ -123,7 +141,7 @@ export function formatLoadSlots(sqlRows, defaultPowerW, now) {
   const slots = [];
   for (let i = 0; i < SLOT_COUNT; i++) {
     const ts = new Date(startHour.getTime() + i * 3600000);
-    const hourOfDay = ts.getUTCHours();
+    const hourOfDay = getBerlinHour(ts);
     const power = isColdStart ? defaultPowerW : (hourMap.get(hourOfDay) ?? defaultPowerW);
     slots.push({
       ts_utc: ts.toISOString(),
@@ -333,10 +351,14 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
       sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
 
-      // Persist via store
+      // Phase 18-01k: distinguish 'sql_weekday' (real rollup, isColdStart=false)
+      // from 'sql_weekday_fallback' (constant defaultPowerW, isColdStart=true).
+      // Phase 19 B2 Inspector reads load_forecasts.model and shows the operator
+      // whether the served curve is genuine weekday-mean or a fallback constant.
+      const persistModel = sqlColdStart ? 'sql_weekday_fallback' : 'sql_weekday';
       for (const slot of slots) {
         await store.insertLoadForecast({
-          model: 'sql_weekday',
+          model: persistModel,
           ts_utc: slot.ts_utc,
           power_w: slot.power_w,
           confidence: slot.confidence
@@ -353,7 +375,8 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       pushLog('load_forecast_updated', {
         slots: slots.length,
         confidence,
-        coldStart: sqlColdStart
+        coldStart: sqlColdStart,
+        model: persistModel
       });
     } catch (err) {
       pushLog('load_forecast_error', { error: err.message });
