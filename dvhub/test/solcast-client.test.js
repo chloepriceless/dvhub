@@ -92,18 +92,40 @@ test('18-01i: parseSolcastResponse returns non-zero powerW for realistic pv_esti
   assert.equal(rows[0].powerW, 4200);
 });
 
-test('18-01i: parseSolcastResponse drops rows where pv_estimate is missing or non-finite', () => {
+test('18-01i: parseSolcastResponse drops rows where pv_estimate AND pv_estimate_period are missing', () => {
+  // Row 1: valid point-endpoint shape — survives.
+  // Row 2: NaN pv_estimate — dropped (NaN-guard would have silently zeroed it).
+  // Row 3: no pv field at all (future API drift past both known shapes) — dropped.
   const forecasts = [
     { period_end: 't1', pv_estimate: 3.0, pv_estimate10: 2.5, pv_estimate90: 3.5 },
-    { period_end: 't2', pv_estimate_period: 2.0 }, // missing pv_estimate
-    { period_end: 't3' } // no pv field at all
+    { period_end: 't2', pv_estimate: NaN },
+    { period_end: 't3', unknown_field: 5.0 }
   ];
   const { rows, dropped, firstRawKeys } = parseSolcastResponse(forecasts);
   assert.equal(rows.length, 1, 'only the row with valid pv_estimate survives');
   assert.equal(rows[0].powerW, 3000);
-  assert.ok(dropped >= 1, `dropped should be >= 1, got ${dropped}`);
+  assert.equal(dropped, 2, `dropped should be 2, got ${dropped}`);
   assert.ok(Array.isArray(firstRawKeys), 'firstRawKeys should be an array');
   assert.ok(firstRawKeys.includes('period_end'), 'firstRawKeys should include period_end');
+});
+
+test('18-01i: parseSolcastResponse maps pv_estimate_period (period endpoint shape) to powerW', () => {
+  // Solcast period endpoint exposes pv_estimate_period instead of pv_estimate.
+  // Fall back chain in pickEstimate must persist this as non-zero power.
+  const forecasts = [
+    { period_end: '2026-05-21T12:00:00Z', pv_estimate_period: 3.7 }
+  ];
+  const { rows, dropped } = parseSolcastResponse(forecasts);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].powerW, 3700);
+  assert.equal(dropped, 0);
+});
+
+test('18-01i: computeSolcastConfidence returns 0.5 when prediction interval bounds are missing', () => {
+  // Period-endpoint shape has only pv_estimate / pv_estimate_period, no p10/p90.
+  // Must return mid-confidence (0.5), not NaN.
+  const c = computeSolcastConfidence({ pv_estimate: 4.0 });
+  assert.equal(c, 0.5);
 });
 
 test('18-01i: fetchPvForecast logs solcast_persist_diag when API field-drift causes all-zero parse', async () => {
@@ -117,16 +139,18 @@ test('18-01i: fetchPvForecast logs solcast_persist_diag when API field-drift cau
   const store = { insertPvForecast: async () => {} };
   const client = createSolcastClient(ctx, { store });
 
-  // Mock fetch to return forecasts using pv_estimate_period instead of pv_estimate
-  // (simulates Solcast period-endpoint field drift)
+  // Mock fetch to return forecasts with an unknown field name (not in the
+  // fallback chain) — simulates future Solcast API drift past the two known
+  // shapes. All rows must be dropped and the diag pushLog must fire with the
+  // raw firstRawKeys so the operator can see which field actually arrived.
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
     ok: true,
     status: 200,
     json: async () => ({
       forecasts: [
-        { period_end: '2026-05-21T12:00:00Z', pv_estimate_period: 4.2 },
-        { period_end: '2026-05-21T13:00:00Z', pv_estimate_period: 3.8 }
+        { period_end: '2026-05-21T12:00:00Z', pv_estimate_kw: 4.2 },
+        { period_end: '2026-05-21T13:00:00Z', pv_estimate_kw: 3.8 }
       ]
     })
   });
@@ -141,7 +165,8 @@ test('18-01i: fetchPvForecast logs solcast_persist_diag when API field-drift cau
   assert.ok(diag, `pushLog should have fired solcast_persist_diag, logs: ${JSON.stringify(logs.map(l => l.key))}`);
   assert.ok(Array.isArray(diag.data.firstRawKeys), 'diag should include firstRawKeys array');
   assert.ok(diag.data.firstRawKeys.includes('period_end'), 'firstRawKeys should contain period_end');
-  assert.ok(diag.data.firstRawKeys.includes('pv_estimate_period'), 'firstRawKeys should contain pv_estimate_period');
+  assert.ok(diag.data.firstRawKeys.includes('pv_estimate_kw'), 'firstRawKeys should contain pv_estimate_kw (the unknown drifted field)');
+  assert.ok(diag.data.dropped >= 2, `dropped should reflect skipped rows, got ${diag.data.dropped}`);
 });
 
 // --- createSolcastClient ---

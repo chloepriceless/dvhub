@@ -8,12 +8,46 @@ const MAX_CALLS_PER_DAY = 10;
 /**
  * Compute confidence score from Solcast prediction interval.
  * Narrow prediction interval = high confidence, wide = low.
- * @param {object} f - Solcast forecast entry with pv_estimate, pv_estimate10, pv_estimate90
+ *
+ * 18-01i: tolerates missing pv_estimate10/pv_estimate90 (period-endpoint
+ * response shape exposes only `pv_estimate_period`) — returns 0.5 when the
+ * interval bounds are absent rather than producing NaN.
+ *
+ * @param {object} f - Solcast forecast entry; may have either
+ *   { pv_estimate, pv_estimate10, pv_estimate90 } (point endpoint) or
+ *   { pv_estimate_period } (period endpoint).
  * @returns {number} confidence between 0.3 and 1.0
  */
 export function computeSolcastConfidence(f) {
-  const range = (f.pv_estimate90 - f.pv_estimate10) / Math.max(f.pv_estimate, 0.01);
+  const lo = Number.isFinite(f.pv_estimate10) ? f.pv_estimate10 : null;
+  const hi = Number.isFinite(f.pv_estimate90) ? f.pv_estimate90 : null;
+  const mid = Number.isFinite(f.pv_estimate) ? f.pv_estimate
+            : Number.isFinite(f.pv_estimate_period) ? f.pv_estimate_period
+            : null;
+  if (lo == null || hi == null || mid == null) return 0.5; // unknown spread -> mid confidence
+  const range = (hi - lo) / Math.max(mid, 0.01);
   return Math.max(0.3, Math.min(1.0, 1.0 - range));
+}
+
+/**
+ * Pick the power estimate (kW) from a Solcast forecast entry.
+ *
+ * The Solcast API has two known response shapes:
+ *   - point endpoint:   { pv_estimate, pv_estimate10, pv_estimate90 }  (kW)
+ *   - period endpoint:  { pv_estimate_period, ... }                    (kW averaged)
+ *
+ * Some account tiers only return one. Prefer the point estimate; fall back
+ * to the period estimate. Returns null if neither is finite — the caller
+ * (parseSolcastResponse) drops the row and fetchPvForecast emits a
+ * `solcast_persist_diag` pushLog with the raw first-row keys.
+ *
+ * @param {object} f - Solcast forecast entry
+ * @returns {number|null} estimate in kW, or null if no usable field
+ */
+function pickEstimate(f) {
+  if (Number.isFinite(f.pv_estimate)) return f.pv_estimate;
+  if (Number.isFinite(f.pv_estimate_period)) return f.pv_estimate_period;
+  return null;
 }
 
 /**
@@ -43,10 +77,15 @@ export function parseSolcastResponse(forecasts) {
   let dropped = 0;
   const rows = [];
   for (const f of forecasts) {
-    if (!Number.isFinite(f.pv_estimate)) { dropped++; continue; }
+    // 18-01i: use pickEstimate fallback chain (pv_estimate -> pv_estimate_period)
+    // so the period-endpoint response shape also persists non-zero power. The
+    // `Number.isFinite(f.pv_estimate)` drop guard is preserved (now inside
+    // pickEstimate). Rows missing BOTH fields are dropped + counted.
+    const estKw = pickEstimate(f);
+    if (estKw == null) { dropped++; continue; }
     rows.push({
       ts: f.period_end,
-      powerW: Math.round(f.pv_estimate * 1000),
+      powerW: Math.round(estKw * 1000),
       confidence: computeSolcastConfidence(f)
     });
   }
