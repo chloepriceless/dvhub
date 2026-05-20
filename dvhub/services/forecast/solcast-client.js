@@ -18,16 +18,39 @@ export function computeSolcastConfidence(f) {
 
 /**
  * Parse Solcast forecast response into rows with W (not kW).
+ *
+ * 18-01i: previously returned a plain array via `.map(...)` — but if
+ * `f.pv_estimate` was undefined/null/NaN (Solcast API field drift, or wrong
+ * endpoint shape) the resulting `powerW` was `NaN`, which forecast-store.js
+ * `insertPvForecast` then silently coerced to 0 via its NaN-guard. Result: 145
+ * zero-power rows persisted per fetch with no error in logs.
+ *
+ * Now returns `{ rows, dropped, firstRawKeys }`:
+ *   - rows: only entries where pv_estimate is a finite number
+ *   - dropped: count of skipped entries
+ *   - firstRawKeys: Object.keys of forecasts[0] (for the caller diagnostic)
+ *
+ * The caller (`fetchPvForecast`) emits a `solcast_persist_diag` pushLog when
+ * `dropped > 0` or all parsed rows are zero, so prod drift in field names is
+ * visible in `/api/log`.
+ *
  * @param {Array<object>} forecasts - Solcast forecasts[] array
- * @returns {Array<{ ts: string, powerW: number, confidence: number }>}
+ * @returns {{ rows: Array<{ ts: string, powerW: number, confidence: number }>, dropped: number, firstRawKeys: string[] }}
  */
 export function parseSolcastResponse(forecasts) {
-  if (!Array.isArray(forecasts)) return [];
-  return forecasts.map(f => ({
-    ts: f.period_end,
-    powerW: Math.round(f.pv_estimate * 1000),
-    confidence: computeSolcastConfidence(f)
-  }));
+  if (!Array.isArray(forecasts)) return { rows: [], dropped: 0, firstRawKeys: [] };
+  const firstRawKeys = forecasts.length > 0 ? Object.keys(forecasts[0]) : [];
+  let dropped = 0;
+  const rows = [];
+  for (const f of forecasts) {
+    if (!Number.isFinite(f.pv_estimate)) { dropped++; continue; }
+    rows.push({
+      ts: f.period_end,
+      powerW: Math.round(f.pv_estimate * 1000),
+      confidence: computeSolcastConfidence(f)
+    });
+  }
+  return { rows, dropped, firstRawKeys };
 }
 
 /**
@@ -93,7 +116,21 @@ export function createSolcastClient(ctx, { store }) {
       callsToday++;
 
       const data = await res.json();
-      const rows = parseSolcastResponse(data.forecasts || []);
+      const { rows, dropped, firstRawKeys } = parseSolcastResponse(data.forecasts || []);
+
+      // 18-01i: surface field-name drift or all-zero parse to /api/log so the
+      // operator can see WHY persisted rows are 0 (the forecast-store NaN-guard
+      // silently coerces undefined/NaN power_w to 0).
+      const allZero = rows.length > 0 && rows.every(r => r.powerW === 0);
+      if (dropped > 0 || allZero) {
+        pushLog('solcast_persist_diag', {
+          parsed: rows.length,
+          dropped,
+          allZero,
+          firstRawKeys,
+          rawSample: data.forecasts?.[0] ?? null
+        });
+      }
 
       // Persist via forecast-store
       for (const r of rows) {
