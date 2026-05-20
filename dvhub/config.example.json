@@ -32,7 +32,14 @@
       "stages": []
     },
     "rules": [
-      { "id": "fallback", "enabled": false, "target": "gridSetpointW", "start": "18:00", "end": "23:59", "value": -40 }
+      {
+        "id": "fallback",
+        "enabled": false,
+        "target": "gridSetpointW",
+        "start": "18:00",
+        "end": "23:59",
+        "value": -40
+      }
     ]
   },
   "userEnergyPricing": {
@@ -69,9 +76,27 @@
     },
     "usesParagraph14aModule3": false,
     "module3Windows": {
-      "window1": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
-      "window2": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null },
-      "window3": { "enabled": false, "label": "", "start": "", "end": "", "priceCtKwh": null }
+      "window1": {
+        "enabled": false,
+        "label": "",
+        "start": "",
+        "end": "",
+        "priceCtKwh": null
+      },
+      "window2": {
+        "enabled": false,
+        "label": "",
+        "start": "",
+        "end": "",
+        "priceCtKwh": null
+      },
+      "window3": {
+        "enabled": false,
+        "label": "",
+        "start": "",
+        "end": "",
+        "priceCtKwh": null
+      }
     },
     "costs": {
       "pvCtKwh": 6,
@@ -126,5 +151,6 @@
       "failThreshold": 3,
       "maxBackoffMs": 120000
     }
-  }
+  },
+  "configSchemaVersion": 1
 }
