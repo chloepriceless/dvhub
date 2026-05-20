@@ -1250,6 +1250,56 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       }
       return [...byTs.values()];
     },
+    /**
+     * List measured Load actual values from energy_slots_15m for a time range.
+     * Phase 19 Plan 19-03 (B2 Load-Forecast inspector). Verbatim analog of
+     * listPvActualSlots with series_key='load_power_w'. Same kWh/15min → W
+     * conversion (* 4000), same dedupe-by-slot semantics (prefers local_live
+     * over vrm_import via ORDER BY source_kind ASC).
+     * Returns [{start: ISO, powerW: number}].
+     */
+    async listLoadActualSlots({ start, end } = {}) {
+      const result = await pool.query(`
+        SELECT slot_start_utc, value_num, source_kind
+        FROM energy_slots_15m
+        WHERE series_key = 'load_power_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+        ORDER BY slot_start_utc ASC, source_kind ASC
+      `, [isoTimestamp(start), isoTimestamp(end)]);
+      const byTs = new Map();
+      for (const row of result.rows) {
+        const ts = new Date(row.slot_start_utc).toISOString();
+        if (!byTs.has(ts)) {
+          byTs.set(ts, { start: ts, powerW: Number(row.value_num) * 4000 });
+        }
+      }
+      return [...byTs.values()];
+    },
+    /**
+     * List measured Battery actual values from energy_slots_15m for a time range.
+     * Phase 19 Plan 19-03 (added pre-emptively for Plan 19-06 — Stage-2 backtest).
+     * Same shape as listLoadActualSlots; series_key='battery_power_w'.
+     * Returns [{start: ISO, powerW: number}].
+     */
+    async listBatteryActualSlots({ start, end } = {}) {
+      const result = await pool.query(`
+        SELECT slot_start_utc, value_num, source_kind
+        FROM energy_slots_15m
+        WHERE series_key = 'battery_power_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+        ORDER BY slot_start_utc ASC, source_kind ASC
+      `, [isoTimestamp(start), isoTimestamp(end)]);
+      const byTs = new Map();
+      for (const row of result.rows) {
+        const ts = new Date(row.slot_start_utc).toISOString();
+        if (!byTs.has(ts)) {
+          byTs.set(ts, { start: ts, powerW: Number(row.value_num) * 4000 });
+        }
+      }
+      return [...byTs.values()];
+    },
     async close() {
       await pool.end();
     }

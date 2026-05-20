@@ -111,9 +111,85 @@ export function createInspector(ctx, deps = {}) {
     };
   }
 
-  // ───────────── B2 — Load Forecast (stubbed; Plan 19-03 implements) ─────────────
+  // ───────────── B2 — Load Forecast (Plan 19-03) ─────────────
+  //
+  // Pivots store.getLatestLoadForecast({start,end}) rows by `model` column +
+  // joins measured load via telemetryStore.listLoadActualSlots. The B2 surface
+  // ties the Phase-18-01k SQL-weekday distinction to a live UI signal:
+  //   - 'sql_weekday'          — real weekday rollup (≥4 weeks of data)
+  //   - 'sql_weekday_fallback' — cold-start constant 800 W (Phase 18-01k)
+  //   - 'statsforecast'        — Python statsforecast output
+  // sqlWeekdayFallbackActive is true iff the fallback model has at least one
+  // row in the response window — operators see the fallback banner whenever
+  // the SQL forecaster is in cold-start mode.
+  //
+  // Returns envelope:
+  //   {
+  //     window: { from, to },
+  //     models: {
+  //       sql_weekday: [{ts_utc, power_w}, ...],
+  //       sql_weekday_fallback: [...],
+  //       statsforecast: [...],
+  //     },
+  //     actual: [{ts_utc, power_w}, ...],  // measured (load_power_w * 4000)
+  //     meta: { sqlWeekdayFallbackActive, rowCount, actualCount },
+  //   }
   async function getLoad({ from, to } = {}) {
-    return { ok: false, error: 'not_implemented', stub: 'b2', window: { from, to } };
+    if (!store || typeof store.getLatestLoadForecast !== 'function') {
+      return { ok: false, error: 'store_unavailable', window: { from, to } };
+    }
+    let forecastRows = [];
+    let actualRows = [];
+    try {
+      const telemetryStore = getTelemetryStore();
+      const tasks = [
+        store.getLatestLoadForecast({ start: from, end: to }),
+        (telemetryStore && typeof telemetryStore.listLoadActualSlots === 'function')
+          ? telemetryStore.listLoadActualSlots({ start: from, end: to })
+          : Promise.resolve([]),
+      ];
+      const results = await Promise.all(tasks);
+      forecastRows = results[0] || [];
+      actualRows = results[1] || [];
+    } catch (e) {
+      pushLog('inspector_load_query_error', { error: e && e.message ? e.message : String(e) });
+      return { ok: false, error: 'query_failed', window: { from, to } };
+    }
+
+    const models = {};
+    for (const r of forecastRows) {
+      if (!r || typeof r !== 'object') continue;
+      const m = r.model || 'unknown';
+      const ts = r.ts_utc instanceof Date ? r.ts_utc.toISOString() : String(r.ts_utc);
+      const powerNum = Number(r.power_w);
+      if (!models[m]) models[m] = [];
+      models[m].push({
+        ts_utc: ts,
+        power_w: Number.isFinite(powerNum) ? powerNum : 0,
+      });
+    }
+    for (const m of Object.keys(models)) {
+      models[m].sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
+    }
+
+    const actual = actualRows.map(r => ({
+      ts_utc: typeof r.start === 'string' ? r.start : new Date(r.start).toISOString(),
+      power_w: Number(r.powerW) || 0,
+    })).sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
+
+    const fallbackRows = models.sql_weekday_fallback || [];
+    const sqlWeekdayFallbackActive = fallbackRows.length > 0;
+
+    return {
+      window: { from, to },
+      models,
+      actual,
+      meta: {
+        sqlWeekdayFallbackActive,
+        rowCount: forecastRows.length,
+        actualCount: actualRows.length,
+      },
+    };
   }
 
   // ───────────── B3 — ML Shadow Correction (stubbed; Plan 19-04 implements) ─────────────
