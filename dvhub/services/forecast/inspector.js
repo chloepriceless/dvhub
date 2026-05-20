@@ -354,9 +354,149 @@ export function createInspector(ctx, deps = {}) {
     return payload;
   }
 
-  // ───────────── B4 — EOS Output (stubbed; Plan 19-05 implements) ─────────────
+  // ───────────── B4 — EOS Output (Plan 19-05 — IMPLEMENTED) ─────────────
+  //
+  // Surfaces the EOSdash push/pull exchange so operators can see exactly which
+  // payload is shipped to EOS and which schedule comes back. Uses a DEDICATED
+  // 5s-timeout adapter (wired in server.js Plan 19-05) so a hung EOS process
+  // caps Inspector polls at 5s instead of the optimizer's 30s.
+  //
+  // Threat-model mitigations (19-PLAN §threat_model):
+  //   - T-19-05 (DoS via cascading 30s timeouts): mitigated by 5s adapter wiring
+  //     verified statically in inspector-b4.test.js
+  //   - T-19-07 (DoS via cascading isAvailable timeouts): isAvailable() short-
+  //     circuit — when false, NO pushForecast/pullSchedule attempted
+  //   - T-19-22 (XSS via untrusted plan strings): all string values pass
+  //     through escHtmlForecastInspector in settings.js before innerHTML
+  //
+  // Adapter shape from services/optimizer/eos-adapter.js (live impl):
+  //   - pushForecast(payload) → { ok, error? }    (never throws)
+  //   - pullSchedule()        → Array<slot>|null  (never throws)
+  //   - isAvailable()         → boolean
+  //
+  // Returns envelope:
+  //   {
+  //     available: boolean,
+  //     window: { from, to },
+  //     push: { ok, payloadSummary:{pvSlotCount,loadSlotCount,priceSlotCount}, error|null },
+  //     pull: { ok, slots:[{ts_utc, planAction, planPowerW}], error|null },
+  //     meta: { timeoutMs: 5000 },
+  //   }
+  // Or, if EOS off: { available:false, reason:'eos_off'|'adapter_unavailable', window }.
   async function getEos({ from, to } = {}) {
-    return { ok: false, error: 'not_implemented', stub: 'b4', window: { from, to } };
+    if (!eosAdapter || typeof eosAdapter.isAvailable !== 'function') {
+      return { available: false, reason: 'adapter_unavailable', window: { from, to } };
+    }
+
+    let available = false;
+    try {
+      available = await eosAdapter.isAvailable();
+    } catch (e) {
+      pushLog('inspector_eos_isavailable_error', { error: e && e.message ? e.message : String(e) });
+      return { available: false, reason: 'eos_off', window: { from, to } };
+    }
+    if (!available) {
+      return { available: false, reason: 'eos_off', window: { from, to } };
+    }
+
+    // Build the same payload the optimizer pushes to EOS — mirrors RESEARCH §B4.
+    // forecastService.buildForecastResponse() returns { meta, pv:{slots}, rawPv,
+    // load:{slots}, price:{slots}, … }. We pass it verbatim to pushForecast which
+    // extracts pv.slots / price.slots / load.slots (eos-adapter.js:97-126).
+    let forecastPayload = null;
+    try {
+      if (forecastService && typeof forecastService.buildForecastResponse === 'function') {
+        forecastPayload = await forecastService.buildForecastResponse();
+      }
+    } catch (e) {
+      pushLog('inspector_eos_payload_build_error', { error: e && e.message ? e.message : String(e) });
+      // Continue with null — pushForecast will degrade gracefully (empty payload).
+    }
+
+    // Fire push + pull in parallel. The 5s timeout is enforced inside the
+    // adapter (per adapter-instance closure); we don't need to add a Promise.race
+    // wrapper here. Each adapter call resolves to its own envelope and NEVER
+    // throws (eos-adapter.js wraps errors as { ok:false, error } / null).
+    const [pushResult, pullResult] = await Promise.all([
+      eosAdapter.pushForecast(forecastPayload),
+      eosAdapter.pullSchedule(),
+    ]);
+
+    // pushResult shape: { ok:boolean, error?:string }
+    const pushOk = !!(pushResult && pushResult.ok);
+    const pushError = (pushResult && !pushResult.ok && pushResult.error) || null;
+
+    // pullResult shape: REAL adapter returns Array|null (eos-adapter.js:169-187).
+    // We also accept { ok, data } in case a test/mock uses the older envelope.
+    let pullOk = false;
+    let pullRows = [];
+    let pullError = null;
+    if (Array.isArray(pullResult)) {
+      pullOk = true;
+      pullRows = pullResult;
+    } else if (pullResult && typeof pullResult === 'object' && pullResult.ok) {
+      // Defensive: mock-style envelope { ok, data }
+      pullOk = true;
+      pullRows = Array.isArray(pullResult.data) ? pullResult.data : [];
+    } else if (pullResult && typeof pullResult === 'object' && pullResult.ok === false) {
+      pullError = pullResult.error || 'pull_failed';
+    } else if (pullResult == null) {
+      // Real adapter returns null on any pull error — we surface as ok:false.
+      pullOk = false;
+    }
+
+    // Shape pull slots for the frontend. Real adapter rows look like
+    //   { ts, endTs, powerW, confidence }
+    // with `ts` as a millisecond epoch. We project to { ts_utc, planAction,
+    // planPowerW } so the frontend can render uniformly with the other tabs.
+    // planAction is derived from sign of powerW (charge / discharge / idle) —
+    // matches the rule-of-thumb interpretation in optimizer/index.js.
+    const pullSlots = pullRows.map((s) => {
+      let tsUtc = null;
+      if (s && typeof s.ts_utc === 'string') tsUtc = s.ts_utc;
+      else if (s && typeof s.start === 'string') tsUtc = s.start;
+      else if (s && (typeof s.ts === 'number' || typeof s.start === 'number')) {
+        const ms = typeof s.ts === 'number' ? s.ts : s.start;
+        if (Number.isFinite(ms)) tsUtc = new Date(ms).toISOString();
+      } else if (s && (s.start instanceof Date || s.ts instanceof Date)) {
+        const d = s.start instanceof Date ? s.start : s.ts;
+        tsUtc = d.toISOString();
+      }
+      const powerW = Number(s && (s.powerW != null ? s.powerW : (s.planPowerW != null ? s.planPowerW : 0)));
+      let action = (s && (s.action || s.planAction)) || null;
+      if (!action) {
+        if (powerW > 50) action = 'charge';
+        else if (powerW < -50) action = 'discharge';
+        else action = 'idle';
+      }
+      return {
+        ts_utc: tsUtc,
+        planAction: action,
+        planPowerW: Number.isFinite(powerW) ? powerW : 0,
+      };
+    });
+
+    // Summarize push payload — operator wants slot counts, not full arrays.
+    // Real buildForecastResponse() returns objects with .slots arrays. Tests
+    // may pass plain arrays — handle both shapes.
+    function slotCountOf(section) {
+      if (Array.isArray(section)) return section.length;
+      if (section && Array.isArray(section.slots)) return section.slots.length;
+      return 0;
+    }
+    const payloadSummary = forecastPayload ? {
+      pvSlotCount: slotCountOf(forecastPayload.pv),
+      loadSlotCount: slotCountOf(forecastPayload.load),
+      priceSlotCount: slotCountOf(forecastPayload.price),
+    } : { pvSlotCount: 0, loadSlotCount: 0, priceSlotCount: 0 };
+
+    return {
+      available: true,
+      window: { from, to },
+      push: { ok: pushOk, payloadSummary, error: pushError },
+      pull: { ok: pullOk, slots: pullSlots, error: pullError },
+      meta: { timeoutMs: 5000 },
+    };
   }
 
   // ───────────── B5 — Stage-2 Backtest (stubbed; Plan 19-06 implements) ─────────────

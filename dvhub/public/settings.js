@@ -2983,7 +2983,105 @@ function renderMlCorrectionInspector(payload) {
     tbody.innerHTML = html;
   }
 }
-function renderEosInspector(_payload) { /* Plan 19-05 */ }
+// Phase 19 Plan 19-05 — B4 EOS-Output Inspector renderer.
+//
+// Consumes the GET /api/forecast/inspector/eos envelope built by
+// services/forecast/inspector.js#getEos(). Reason-aware empty-state banners
+// per 19-UI-SPEC §Empty States ("EOS-Service deaktiviert"). All untrusted
+// payload values pass through escHtmlForecastInspector before innerHTML
+// (T-19-22 XSS mitigation per 19-05 §threat_model).
+function renderEosInspector(payload) {
+  if (!payload) return;
+
+  var summary = document.getElementById('inspector-summary-eos');
+  var banner = document.querySelector('[data-inspector-banner="eos"]');
+  var tbody = document.querySelector('[data-inspector-tbody="eos"]');
+  var meta = document.querySelector('[data-inspector-meta="eos"]');
+
+  // available:false → render empty-state. EOS-off is the most common case on
+  // dev hosts (eos.service is opt-in) and during EOS upgrades on prod.
+  if (!payload.available) {
+    if (summary) {
+      summary.innerHTML =
+        '<div class="stat-card"><div class="stat-label">EOS</div><div class="stat-val">aus</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Push</div><div class="stat-val">--</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Pull-Slots</div><div class="stat-val">--</div></div>';
+    }
+    if (banner) {
+      banner.classList.remove('u-hidden');
+      banner.classList.remove('error');
+      banner.classList.add('warn');
+      banner.textContent = (payload.reason === 'eos_off')
+        ? 'EOS-Service deaktiviert oder nicht erreichbar. Aktiviere EOS unter Einstellungen → Anlage.'
+        : 'EOS-Inspector nicht verfügbar.';
+    }
+    if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">EOS aus.</td></tr>';
+    if (meta) meta.textContent = '--';
+    return;
+  }
+
+  // available:true — clear banner if it was previously visible.
+  if (banner) {
+    banner.classList.add('u-hidden');
+    banner.classList.remove('warn');
+    banner.classList.remove('error');
+    banner.textContent = '';
+  }
+
+  var push = payload.push || {};
+  var pull = payload.pull || {};
+  var slots = (pull && Array.isArray(pull.slots)) ? pull.slots : [];
+
+  if (summary) {
+    var pushStateLabel = push.ok ? 'ok' : ('Fehler: ' + (push.error || 'unbekannt'));
+    var pushDelta = push.payloadSummary
+      ? ('pv ' + (push.payloadSummary.pvSlotCount || 0) +
+         ' · load ' + (push.payloadSummary.loadSlotCount || 0) +
+         ' · preis ' + (push.payloadSummary.priceSlotCount || 0))
+      : '';
+    var pullDelta = pull.ok ? '' : ('Fehler: ' + (pull.error || 'unbekannt'));
+    summary.innerHTML =
+      '<div class="stat-card">' +
+        '<div class="stat-label">EOS</div>' +
+        '<div class="stat-val">online</div>' +
+        '<div class="stat-delta">timeout 5 s</div>' +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="stat-label">Push</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(pushStateLabel) + '</div>' +
+        (pushDelta ? ('<div class="stat-delta">' + escHtmlForecastInspector(pushDelta) + '</div>') : '') +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="stat-label">Pull-Slots</div>' +
+        '<div class="stat-val">' + slots.length + '</div>' +
+        (pullDelta ? ('<div class="stat-delta">' + escHtmlForecastInspector(pullDelta) + '</div>') : '') +
+      '</div>';
+  }
+
+  if (meta) meta.textContent = slots.length + ' Slots · 24 h';
+
+  if (tbody) {
+    if (!slots.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">Kein Plan von EOS empfangen.</td></tr>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i] || {};
+      var when = formatBerlinTimeForecastInspector(s.ts_utc);
+      var pushCell = push.ok ? '✓' : '--';
+      var planCell = (s.planAction || '--') + ' · ' + formatPowerForecastInspector(s.planPowerW);
+      var statusCell = pull.ok ? 'ok' : 'Fehler';
+      html += '<tr>';
+      html += '<td>' + escHtmlForecastInspector(when) + '</td>';
+      html += '<td>' + escHtmlForecastInspector(pushCell) + '</td>';
+      html += '<td>' + escHtmlForecastInspector(planCell) + '</td>';
+      html += '<td>' + escHtmlForecastInspector(statusCell) + '</td>';
+      html += '</tr>';
+    }
+    tbody.innerHTML = html;
+  }
+}
 function renderStage2BacktestResult(_payload) { /* Plan 19-06 */ }
 
 function isInspectorProActive() {
