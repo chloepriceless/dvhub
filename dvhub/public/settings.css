@@ -2391,3 +2391,163 @@ body.dv-modal-open {
   text-decoration: none;
 }
 .license-shop-link:hover { color: var(--accent-pro); }
+
+/* =========================================================================
+   Phase 19: Forecast Inspector
+   Hybrid layout — config-group sections with Summary stats + collapsible
+   Detail-Tabelle. Pro-gated sections (B3 B4 B5) overlay a blur + upgrade
+   banner per UI-SPEC §"Pro-Gating".
+   ========================================================================= */
+
+/* Inspector section — extends config-group */
+.config-group[data-inspector] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-3);
+}
+
+/* Poll-state pill — LIVE / LÄDT … / PAUSIERT — TAB VERDECKT / FEHLER */
+.inspector-poll-state {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+  color: var(--text-dim);
+}
+.inspector-poll-state[data-state="live"]    { color: var(--green); border-color: rgba(62,224,160,.28); background: rgba(62,224,160,.08); }
+.inspector-poll-state[data-state="loading"] { color: var(--cyan);  border-color: rgba(52,219,255,.28); background: rgba(52,219,255,.08); }
+.inspector-poll-state[data-state="paused"]  { color: var(--text-dim); }
+.inspector-poll-state[data-state="error"]   { color: var(--red); border-color: rgba(255,93,93,.28); background: rgba(255,93,93,.08); }
+
+/* Sparkline wrapper (only B1 + B2 render — Claude's Discretion locked) */
+.config-group[data-inspector] .inspector-sparkline { padding: 0 14px; }
+
+/* Collapsible details — chevron rotation pattern mirrors index.css sma-details-root */
+.inspector-details { display: block; }
+.inspector-details[open] .inspector-details-chevron { transform: rotate(180deg); }
+.inspector-details-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  padding: var(--gap-2) var(--pad-card);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.inspector-details-summary::-webkit-details-marker { display: none; }
+.inspector-details-summary:hover { color: var(--text); background: var(--row-hover); }
+.inspector-details-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+.inspector-details-label { color: var(--text); font-weight: 500; }
+.inspector-details-meta  { color: var(--text-dim); margin-right: auto; }
+.inspector-details-chevron { font-size: 12px; color: var(--text-dim); transition: transform .2s ease; }
+
+/* Detail-table mobile horizontal scroll (D-04b) */
+.inspector-details-body { padding: 0; }
+.data-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+.data-table-scroll > .data-table { min-width: 600px; }
+
+/* Row-state utility classes for data anomalies (Phase 18-01i/j/k provider bugs) */
+.data-table tr.data-row--warning td { background: rgba(255,212,33,.06); }
+.data-table tr.data-row--error   td { color: var(--red); }
+
+/* Stat-card numeric formatting (tabular-nums for visual alignment) */
+.config-group[data-inspector] .stat-val { font-variant-numeric: tabular-nums; }
+
+/* Banner utility used by per-section inline error/loading banners */
+.config-banner.u-hidden { display: none; }
+
+/* Pro-gating — blur underlying section + overlay upgrade banner. License-active
+   state removes [data-pro-gated] at runtime (settings.js applyProGateState). */
+.config-group[data-pro-gated="true"] { position: relative; overflow: hidden; }
+.config-group[data-pro-gated="true"] .pro-gate-overlay { position: relative; isolation: isolate; }
+.config-group[data-pro-gated="true"] .pro-gate-content {
+  filter: blur(6px) saturate(.85);
+  opacity: .55;
+  pointer-events: none;
+  user-select: none;
+}
+.pro-gate-banner {
+  position: absolute;
+  inset: 50% 24px auto 24px;
+  transform: translateY(-50%);
+  z-index: 2;
+  background: var(--bg-1);
+  border: 1px solid var(--glass-brd-strong);
+  border-left: 3px solid var(--accent-pro);
+  border-radius: var(--r-lg);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-md), 0 0 24px var(--accent-pro-glow);
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto;
+}
+.pro-gate-banner-kicker {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent-pro);
+  margin-bottom: 8px;
+}
+.pro-gate-banner-lock {
+  font-size: 28px;
+  line-height: 1;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 0 8px var(--accent-pro-glow));
+}
+.pro-gate-banner-title {
+  font-family: var(--f-brand);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+.pro-gate-banner-body {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0 0 16px;
+}
+.pro-gate-banner-cta {
+  background: linear-gradient(135deg, var(--accent-pro), var(--violet));
+  color: #fff;
+  border: none;
+}
+.pro-gate-banner-cta:hover { filter: brightness(1.08); }
+.pro-gate-banner-cta:focus-visible {
+  outline: 2px solid var(--accent-pro);
+  outline-offset: 3px;
+}
+
+/* Backtest form (B5 Plan 19-06) — explicit-submit, not 30s-polling */
+.backtest-form-row { display: flex; align-items: center; gap: var(--gap-3); flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .backtest-form-row { flex-direction: column; align-items: stretch; gap: var(--gap-2); }
+  .backtest-form-row .config-input,
+  .backtest-form-row .btn { width: 100%; }
+}
+
+/* Reduced motion — disable chevron transition + blur transition */
+@media (prefers-reduced-motion: reduce) {
+  .config-group[data-pro-gated="true"] .pro-gate-content { transition: none; }
+  .inspector-details-chevron { transition: none; }
+}

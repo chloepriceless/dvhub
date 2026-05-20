@@ -123,6 +123,7 @@
 
             <div class="sa-nav-group">System</div>
             <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9670;</span>Status</button>
+            <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Forecast</button>
             <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
             <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
@@ -391,6 +392,176 @@
 
           </div><!-- /.config-grid -->
         </section><!-- /#tab-system -->
+
+        <!-- Phase 19: Forecast Inspector (operator-facing read-only diagnostic tab) -->
+        <section id="tab-forecast" class="settings-tab-panel" hidden>
+          <header class="sa-section-head">
+            <h2>Forecast</h2>
+            <p class="sub">Operator-Inspektor pro Forecast-Quelle, ML-Korrektur, EOS-Output und SMA-Stage-2-Plan. Read-only &mdash; Tabellen zeigen, was tats&auml;chlich geliefert wird.</p>
+          </header>
+
+          <div id="optimizerColdBanner" class="config-banner warn" hidden role="status" aria-live="polite"></div>
+
+          <div class="config-grid">
+
+            <!-- B1 PV-Provider (Plan 19-02) -->
+            <div class="config-group" data-accent="blue" data-inspector="pv-providers">
+              <div class="config-group-kicker">
+                <span class="kicker-label">PV-PROVIDER</span>
+                <span class="inspector-poll-state" data-state="loading">L&Auml;DT &hellip;</span>
+              </div>
+              <p class="sub">Pro Provider die n&auml;chsten 24h, plus Ensemble-Output und aktive Gewichte.</p>
+              <div class="panel-stats inspector-summary" id="inspector-summary-pv-providers"></div>
+              <div class="inspector-sparkline"><div class="ml-spark-wrap"><canvas data-inspector-spark="pv-ensemble"></canvas></div></div>
+              <div class="config-banner u-hidden" data-inspector-banner="pv-providers"></div>
+              <details class="inspector-details">
+                <summary class="inspector-details-summary" aria-controls="inspector-table-pv-providers">
+                  <span class="inspector-details-label">Detail-Tabelle</span>
+                  <span class="inspector-details-meta" data-inspector-meta="pv-providers">--</span>
+                  <span class="inspector-details-chevron" aria-hidden="true">&#9662;</span>
+                </summary>
+                <div class="inspector-details-body" id="inspector-table-pv-providers">
+                  <div class="data-table-scroll" tabindex="0">
+                    <table class="data-table dv-log-table">
+                      <thead><tr><th scope="col">Slot</th><th scope="col">solcast</th><th scope="col">forecast_solar</th><th scope="col">open_meteo</th><th scope="col">pvnode</th><th scope="col">vrm</th><th scope="col">Ensemble</th></tr></thead>
+                      <tbody data-inspector-tbody="pv-providers"><tr><td colspan="7">Lade Daten &hellip;</td></tr></tbody>
+                    </table>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <!-- B2 Load-Forecast (Plan 19-03) -->
+            <div class="config-group" data-accent="cyan" data-inspector="load">
+              <div class="config-group-kicker">
+                <span class="kicker-label">LOAD-FORECAST</span>
+                <span class="inspector-poll-state" data-state="loading">L&Auml;DT &hellip;</span>
+              </div>
+              <p class="sub">sql_weekday Wochentagsmittel vs StatsForecast vs Actual, 96 Slots &agrave; 15 min.</p>
+              <div class="panel-stats inspector-summary" id="inspector-summary-load"></div>
+              <div class="inspector-sparkline"><div class="ml-spark-wrap"><canvas data-inspector-spark="load-sf"></canvas></div></div>
+              <div class="config-banner u-hidden" data-inspector-banner="load"></div>
+              <details class="inspector-details">
+                <summary class="inspector-details-summary" aria-controls="inspector-table-load">
+                  <span class="inspector-details-label">Detail-Tabelle</span>
+                  <span class="inspector-details-meta" data-inspector-meta="load">--</span>
+                  <span class="inspector-details-chevron" aria-hidden="true">&#9662;</span>
+                </summary>
+                <div class="inspector-details-body" id="inspector-table-load">
+                  <div class="data-table-scroll" tabindex="0">
+                    <table class="data-table dv-log-table">
+                      <thead><tr><th scope="col">Slot</th><th scope="col">sql_weekday</th><th scope="col">sql_weekday_fallback</th><th scope="col">statsforecast</th><th scope="col">Actual</th></tr></thead>
+                      <tbody data-inspector-tbody="load"><tr><td colspan="5">Lade Daten &hellip;</td></tr></tbody>
+                    </table>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <!-- B3 ML-Korrektur (Plan 19-04, Pro) -->
+            <div class="config-group" data-accent="purple" data-inspector="ml-correction" data-pro-gated="true">
+              <div class="pro-gate-overlay">
+                <div class="pro-gate-content" aria-hidden="true">
+                  <div class="config-group-kicker">
+                    <span class="kicker-label">ML-KORREKTUR &middot; PRO</span>
+                    <span class="inspector-poll-state" data-state="paused">--</span>
+                  </div>
+                  <p class="sub">Was das ML-Modell jetzt sagen w&uuml;rde &mdash; auch bei ML off. Shadow-Mode-Output pro Slot.</p>
+                  <div class="panel-stats inspector-summary"></div>
+                  <details class="inspector-details">
+                    <summary class="inspector-details-summary"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
+                    <div class="inspector-details-body"><div class="data-table-scroll"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Raw PV</th><th scope="col">ML-Korrigiert</th><th scope="col">Delta</th><th scope="col">Modell</th></tr></thead><tbody><tr><td colspan="5">--</td></tr></tbody></table></div></div>
+                  </details>
+                </div>
+                <div class="pro-gate-banner card" role="region" aria-labelledby="proGate-ml-title">
+                  <div class="pro-gate-banner-kicker">PRO-FEATURE</div>
+                  <div class="pro-gate-banner-lock" aria-hidden="true">&#128274;</div>
+                  <h3 id="proGate-ml-title" class="pro-gate-banner-title">ML-Korrektur-Inspector ist Teil von DVhub-Pro</h3>
+                  <p class="pro-gate-banner-body">Eine aktive Pro-Lizenz schaltet diese Diagnose-Tabelle frei.</p>
+                  <button type="button" class="btn primary pro-gate-banner-cta" data-pro-feature="forecast-inspector-ml" aria-label="Pro-Feature gesperrt &mdash; Klick &ouml;ffnet Lizenz-Aktivierung">Lizenz aktivieren</button>
+                </div>
+              </div>
+              <div class="inspector-live-scaffold" hidden data-inspector="ml-correction">
+                <div class="config-group-kicker">
+                  <span class="kicker-label">ML-KORREKTUR &middot; PRO</span>
+                  <span class="inspector-poll-state" data-state="loading">L&Auml;DT &hellip;</span>
+                </div>
+                <p class="sub">Was das ML-Modell jetzt sagen w&uuml;rde &mdash; auch bei ML off. Shadow-Mode-Output pro Slot.</p>
+                <div class="panel-stats inspector-summary" id="inspector-summary-ml-correction"></div>
+                <div class="config-banner u-hidden" data-inspector-banner="ml-correction"></div>
+                <details class="inspector-details">
+                  <summary class="inspector-details-summary" aria-controls="inspector-table-ml-correction"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta" data-inspector-meta="ml-correction">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
+                  <div class="inspector-details-body" id="inspector-table-ml-correction"><div class="data-table-scroll" tabindex="0"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Raw PV</th><th scope="col">ML-Korrigiert</th><th scope="col">Delta</th><th scope="col">Modell</th></tr></thead><tbody data-inspector-tbody="ml-correction"><tr><td colspan="5">Lade Daten &hellip;</td></tr></tbody></table></div></div>
+                </details>
+              </div>
+            </div>
+
+            <!-- B4 EOS-Output (Plan 19-05, Pro) -->
+            <div class="config-group" data-accent="purple" data-inspector="eos" data-pro-gated="true">
+              <div class="pro-gate-overlay">
+                <div class="pro-gate-content" aria-hidden="true">
+                  <div class="config-group-kicker"><span class="kicker-label">EOS-OUTPUT &middot; PRO</span><span class="inspector-poll-state" data-state="paused">--</span></div>
+                  <p class="sub">Push- und Pull-Schedule pro Slot, wie sie an die Hardware gehen.</p>
+                  <div class="panel-stats inspector-summary"></div>
+                  <details class="inspector-details"><summary class="inspector-details-summary"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary><div class="inspector-details-body"><div class="data-table-scroll"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Push Power-W</th><th scope="col">Pull Plan</th><th scope="col">Status</th></tr></thead><tbody><tr><td colspan="4">--</td></tr></tbody></table></div></div></details>
+                </div>
+                <div class="pro-gate-banner card" role="region" aria-labelledby="proGate-eos-title">
+                  <div class="pro-gate-banner-kicker">PRO-FEATURE</div>
+                  <div class="pro-gate-banner-lock" aria-hidden="true">&#128274;</div>
+                  <h3 id="proGate-eos-title" class="pro-gate-banner-title">EOS-Output-Inspector ist Teil von DVhub-Pro</h3>
+                  <p class="pro-gate-banner-body">Eine aktive Pro-Lizenz schaltet diese Diagnose-Tabelle frei.</p>
+                  <button type="button" class="btn primary pro-gate-banner-cta" data-pro-feature="forecast-inspector-eos" aria-label="Pro-Feature gesperrt &mdash; Klick &ouml;ffnet Lizenz-Aktivierung">Lizenz aktivieren</button>
+                </div>
+              </div>
+              <div class="inspector-live-scaffold" hidden data-inspector="eos">
+                <div class="config-group-kicker"><span class="kicker-label">EOS-OUTPUT &middot; PRO</span><span class="inspector-poll-state" data-state="loading">L&Auml;DT &hellip;</span></div>
+                <p class="sub">Push- und Pull-Schedule pro Slot, wie sie an die Hardware gehen.</p>
+                <div class="panel-stats inspector-summary" id="inspector-summary-eos"></div>
+                <div class="config-banner u-hidden" data-inspector-banner="eos"></div>
+                <details class="inspector-details"><summary class="inspector-details-summary" aria-controls="inspector-table-eos"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta" data-inspector-meta="eos">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary><div class="inspector-details-body" id="inspector-table-eos"><div class="data-table-scroll" tabindex="0"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Push Power-W</th><th scope="col">Pull Plan</th><th scope="col">Status</th></tr></thead><tbody data-inspector-tbody="eos"><tr><td colspan="4">Lade Daten &hellip;</td></tr></tbody></table></div></div></details>
+              </div>
+            </div>
+
+            <!-- B5 Stage-2-Backtest (Plan 19-06, Pro) -->
+            <div class="config-group" data-accent="purple" data-inspector="stage2" data-pro-gated="true">
+              <div class="pro-gate-overlay">
+                <div class="pro-gate-content" aria-hidden="true">
+                  <div class="config-group-kicker"><span class="kicker-label">STAGE-2-BACKTEST &middot; PRO</span></div>
+                  <p class="sub">Vergangene Stage-2-Pl&auml;ne vs gefahrene Battery-Power, inklusive Operator-Override-Diff.</p>
+                  <form class="backtest-form"><div class="backtest-form-row"><label class="config-label">Datum</label><input type="date" class="config-input" disabled /><button type="button" class="btn primary" disabled>Backtest auswerten</button></div></form>
+                </div>
+                <div class="pro-gate-banner card" role="region" aria-labelledby="proGate-stage2-title">
+                  <div class="pro-gate-banner-kicker">PRO-FEATURE</div>
+                  <div class="pro-gate-banner-lock" aria-hidden="true">&#128274;</div>
+                  <h3 id="proGate-stage2-title" class="pro-gate-banner-title">Stage-2-Backtest ist Teil von DVhub-Pro</h3>
+                  <p class="pro-gate-banner-body">Eine aktive Pro-Lizenz schaltet diese Diagnose-Tabelle frei.</p>
+                  <button type="button" class="btn primary pro-gate-banner-cta" data-pro-feature="forecast-inspector-stage2" aria-label="Pro-Feature gesperrt &mdash; Klick &ouml;ffnet Lizenz-Aktivierung">Lizenz aktivieren</button>
+                </div>
+              </div>
+              <div class="inspector-live-scaffold" hidden data-inspector="stage2">
+                <div class="config-group-kicker"><span class="kicker-label">STAGE-2-BACKTEST &middot; PRO</span></div>
+                <p class="sub">Vergangene Stage-2-Pl&auml;ne vs gefahrene Battery-Power, inklusive Operator-Override-Diff.</p>
+                <form class="backtest-form" id="backtestForm">
+                  <div class="backtest-form-row">
+                    <label class="config-label" for="backtestDate">Datum</label>
+                    <input id="backtestDate" type="date" class="config-input" aria-describedby="backtestDateHint" />
+                    <button id="backtestSubmitBtn" type="button" class="btn primary">Backtest auswerten</button>
+                  </div>
+                  <span id="backtestDateHint" class="config-row-hint">Bis zu 30 Tage zur&uuml;ck. Backtest zeigt geplante Stage-2-Slots vs gefahrene Battery-Power vs Operator-Overrides.</span>
+                </form>
+                <div class="config-banner u-hidden" data-inspector-banner="stage2"></div>
+                <div class="backtest-result" id="backtestResult" hidden>
+                  <div class="panel-stats" id="inspector-summary-stage2"></div>
+                  <details class="inspector-details" open>
+                    <summary class="inspector-details-summary"><span class="inspector-details-label">Per-Slot-Diff</span><span class="inspector-details-meta" data-inspector-meta="stage2">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
+                    <div class="inspector-details-body" id="inspector-table-stage2"><div class="data-table-scroll" tabindex="0"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Stage-2 plante</th><th scope="col">Battery-Power gefahren</th><th scope="col">Operator-Override</th><th scope="col">Status</th></tr></thead><tbody data-inspector-tbody="stage2"><tr><td colspan="5">--</td></tr></tbody></table></div></div>
+                  </details>
+                </div>
+              </div>
+            </div>
+
+          </div><!-- /.config-grid -->
+        </section><!-- /#tab-forecast -->
 
         <section id="tab-ml" class="settings-tab-panel" hidden>
           <header class="sa-section-head"><h2>ML &amp; AI</h2><p class="sub">Modell-Status, Genauigkeits-Trend, Tier-Features, LLM.</p></header>
