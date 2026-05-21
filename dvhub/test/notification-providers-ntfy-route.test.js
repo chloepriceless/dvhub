@@ -65,7 +65,12 @@ describe('Plan 20-01: ntfy.sh dedicated endpoints (static)', () => {
     const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/ntfy['"]\s*&&\s*req\.method\s*===\s*['"]POST['"][\s\S]*?return\s+json\(res,\s*200,\s*\{\s*ok:\s*true\s*\}\)/);
     assert.ok(m, 'POST handler block must end with ok:true');
     assert.match(m[0], /body\.token\s*===\s*['"]\*\*\*['"]/, "POST must check body.token === '***'");
-    assert.match(m[0], /prev\.ntfy.*\|\|.*['"]{2}/, 'POST must fall back to prev.ntfy.token or ""');
+    // The keep-existing fallback resolves to the stored ntfy.token via a `prev`
+    // alias of next.notifications.providers.ntfy (or via a direct prev.ntfy.token
+    // lookup in the legacy combined endpoint). Either shape must fall back to ''
+    // when the previous value is missing.
+    assert.match(m[0], /prev(\.ntfy)?\.token\s*\|\|\s*['"]{2}/,
+      'POST must fall back to prev.token (or prev.ntfy.token) or ""');
   });
 
   it('POST handler length-clips topicUrl + token to documented caps', () => {

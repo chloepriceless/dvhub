@@ -880,6 +880,39 @@ export function createApiRoutes(ctx) {
   const RATE_LIMIT_WINDOW_MS = 60_000;
   const RATE_LIMIT_MAX_REQUESTS = 120;     // 120 req/min per IP for external (2/s avg)
   const LAN_RATE_LIMIT_MAX_REQUESTS = 600; // 600 req/min for LAN (10/s avg) — compromised IoT protection
+
+  // Phase 20 D-05: per-provider per-token-hash rate-limit (separate from
+  // the global per-IP rateLimitBuckets above — different concern: this
+  // protects upstream API calls from spam, not auth/config endpoints).
+  // 5 calls/min per (providerName, sha256(token).slice(0,16)).
+  const providerRateBuckets = new Map();
+  const PROVIDER_RATE_WINDOW_MS = 60_000;
+  const PROVIDER_RATE_MAX_CALLS = 5;
+  const PROVIDER_RATE_MAX_KEYS = 1_000;
+  function checkProviderRateLimit(providerName, tokenForHash) {
+    const hash = crypto.createHash('sha256').update(String(tokenForHash || '')).digest('hex').slice(0, 16);
+    const key = `${providerName}:${hash}`;
+    const now = Date.now();
+    let b = providerRateBuckets.get(key);
+    if (!b) {
+      if (providerRateBuckets.size >= PROVIDER_RATE_MAX_KEYS) {
+        const firstKey = providerRateBuckets.keys().next().value;
+        if (firstKey !== undefined) providerRateBuckets.delete(firstKey);
+      }
+      b = { windowStart: now, count: 0 };
+      providerRateBuckets.set(key, b);
+    }
+    if (now - b.windowStart > PROVIDER_RATE_WINDOW_MS) {
+      b.windowStart = now;
+      b.count = 0;
+    }
+    b.count++;
+    if (b.count > PROVIDER_RATE_MAX_CALLS) {
+      const retryAfter = Math.ceil((b.windowStart + PROVIDER_RATE_WINDOW_MS - now) / 1000);
+      return { ok: false, retry_after_s: retryAfter };
+    }
+    return { ok: true };
+  }
   // Plan 08-04 Task 1 Step 6: collapse the key space so IPv6-rotation attackers
   // cannot make each request land in a new bucket. v4 addresses stay full, v6
   // collapses to /64 prefix (which is the smallest externally-routable block).
@@ -2195,6 +2228,92 @@ export function createApiRoutes(ctx) {
         total: topics.length,
         topics
       });
+    }
+
+    // === Phase 20-01: dedicated ntfy endpoints (D-12 server-side merge) ===
+    // GET / POST / POST-test live here, adjacent to the legacy combined endpoint
+    // below. Migration plan: 20-02..06 add Telegram/Pushover/Uptime-Kuma/VRM/
+    // Solcast/pvnode counterparts; the legacy endpoint stays until 20-06 is
+    // closed (kept for shape-stability and a deprecation window).
+    if (url.pathname === '/api/notifications/providers/ntfy' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const ntfy = raw.notifications?.providers?.ntfy || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!ntfy.enabled,
+        topicUrl: ntfy.topicUrl || '',
+        token: ntfy.token ? '***' : ''     // D-13: redacted, never raw
+      });
+    }
+
+    if (url.pathname === '/api/notifications/providers/ntfy' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.notifications = (next.notifications && typeof next.notifications === 'object') ? next.notifications : {};
+      next.notifications.providers = (next.notifications.providers && typeof next.notifications.providers === 'object')
+        ? next.notifications.providers : {};
+      const prev = next.notifications.providers.ntfy || {};
+      // D-13 '***' sentinel: keep existing token.
+      const token = (body.token === '***') ? (prev.token || '') : clip(body.token, 256);
+      next.notifications.providers.ntfy = {
+        enabled: !!body.enabled,
+        topicUrl: clip(body.topicUrl, 512),
+        ...(token ? { token: token } : {})
+      };
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('ntfy_provider_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('ntfy_provider_saved', {
+        enabled: !!body.enabled,
+        topicUrlSet: !!body.topicUrl,
+        tokenSet: !!token
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/notifications/providers/ntfy/test' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+
+      // Pitfall 2: empty form value means "use stored". Same '***' sentinel
+      // semantics applied to the TEST path.
+      const stored = ctx.getRawCfg?.().notifications?.providers?.ntfy || {};
+      const topicUrl = (body?.topicUrl && body.topicUrl !== '***') ? body.topicUrl : (stored.topicUrl || '');
+      const token = (body?.token && body.token !== '***') ? body.token : (stored.token || '');
+      if (!topicUrl) return json(res, 400, { ok: false, error: 'missing_topicurl' });
+
+      // 5/min per (provider, token-hash). When no token, hash the URL so the
+      // bucket key is still stable per-config.
+      const rl = checkProviderRateLimit('ntfy', token || topicUrl);
+      if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
+
+      try {
+        const { createNtfyProvider } = await import('./services/notifications/providers/ntfy.js');
+        const provider = createNtfyProvider({ topicUrl, token });
+        const result = await provider.notify({
+          level: 'info',
+          title: 'DVhub Test',
+          body: 'Test-Nachricht von DVhub — ' + new Date().toISOString()
+        });
+        pushLog('notification_test_send', { provider: 'ntfy', ok: result.ok, error: result.error }, actorContext(req));
+        return json(res, result.ok ? 200 : 502, result);
+      } catch (e) {
+        pushLog('notification_test_send_error', { provider: 'ntfy', error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma

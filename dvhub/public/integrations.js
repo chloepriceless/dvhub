@@ -1210,6 +1210,87 @@
     }
   });
 
+  // === Phase 20-01: ntfy.sh Tab Wiring (first migration provider into the new dv-drawer) ===
+  async function loadNtfyTab() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/notifications/providers/ntfy');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      var enabledEl = el('notif-ntfy-enabled');
+      if (enabledEl) enabledEl.checked = !!data.enabled;
+      var urlEl = el('notif-ntfy-topicurl');
+      if (urlEl) urlEl.value = data.topicUrl || '';
+      var tokEl = el('notif-ntfy-token');
+      // '***' = stored, keep field empty; placeholder explains.
+      if (tokEl) tokEl.value = (data.token && data.token !== '***') ? data.token : '';
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ ntfy laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectNtfyBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedToken = (el('notif-ntfy-token') && el('notif-ntfy-token').value) || '';
+    return {
+      enabled: !!(el('notif-ntfy-enabled') && el('notif-ntfy-enabled').checked),
+      topicUrl: (el('notif-ntfy-topicurl') && el('notif-ntfy-topicurl').value.trim()) || '',
+      // empty input → '***' sentinel (= keep-existing). Non-empty → actual value.
+      token: typedToken ? typedToken.trim() : '***'
+    };
+  }
+  async function saveNtfyTab(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/notifications/providers/ntfy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectNtfyBody())
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
+        // Re-load so the token field returns to the empty placeholder (D-13).
+        await loadNtfyTab();
+      } else {
+        showDrawerToast('notifications', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  // Per-tab button handler delegation. The Notifications card-open delegation
+  // above already routes the .conn-card click into the unified drawer dispatcher;
+  // this handler reacts to the same click ONE microtask later to load the ntfy
+  // tab (because the drawer's onOpen does not yet know about per-tab loaders —
+  // that wiring lands in plans 20-02..04 as the other tabs are added).
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="notifications"]')) {
+      setTimeout(loadNtfyTab, 0);
+    }
+    var saveBtn = e.target.closest('#notif-ntfy-save');
+    if (saveBtn) { saveNtfyTab(saveBtn); return; }
+    var testBtn = e.target.closest('#notif-ntfy-test');
+    if (testBtn) {
+      handleTestSend(
+        testBtn,
+        'notifications',
+        '/api/notifications/providers/ntfy/test',
+        collectNtfyBody,
+        function () { return '✓ Test-Nachricht gesendet (ntfy).'; },
+        null
+      );
+      return;
+    }
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);
