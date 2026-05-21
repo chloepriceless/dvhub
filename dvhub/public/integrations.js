@@ -1390,6 +1390,114 @@
     }
   });
 
+  // === Phase 20-03: Pushover Tab Wiring ===
+  // Mirrors the Telegram pattern above (D-13 '***' sentinel on BOTH appToken
+  // and userKey, D-16 CSP-clean DOM updates, D-12 dedicated server-side-merge
+  // endpoint). Adds a pre-submit 30-character alphanumeric validation for both
+  // fields per UI-SPEC § Form-Validation Display (lines 743-744).
+  async function loadPushoverTab() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/notifications/providers/pushover');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      var enabledEl = el('notif-pushover-enabled');
+      if (enabledEl) enabledEl.checked = !!data.enabled;
+      var appEl = el('notif-pushover-apptoken');
+      // '***' = stored, keep field empty; placeholder explains.
+      if (appEl) appEl.value = (data.appToken && data.appToken !== '***') ? data.appToken : '';
+      var userEl = el('notif-pushover-userkey');
+      if (userEl) userEl.value = (data.userKey && data.userKey !== '***') ? data.userKey : '';
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Pushover laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectPushoverBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedApp = (el('notif-pushover-apptoken') && el('notif-pushover-apptoken').value) || '';
+    var typedUser = (el('notif-pushover-userkey') && el('notif-pushover-userkey').value) || '';
+    return {
+      enabled: !!(el('notif-pushover-enabled') && el('notif-pushover-enabled').checked),
+      // empty input → '***' sentinel (= keep-existing). Non-empty → actual value.
+      appToken: typedApp ? typedApp.trim() : '***',
+      userKey: typedUser ? typedUser.trim() : '***'
+    };
+  }
+  async function savePushoverTab(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    // Pre-submit length validation (30 alphanumeric chars) per UI-SPEC
+    // § Form-Validation Display (lines 743-744). Skip the regex when the
+    // field is empty AND we have a stored value (the '***' sentinel will
+    // keep it on the server); otherwise enforce ^[A-Za-z0-9]{30}$.
+    var banner = document.getElementById('notif-pushover-banner');
+    var enabled = !!(document.getElementById('notif-pushover-enabled') && document.getElementById('notif-pushover-enabled').checked);
+    var appTyped = ((document.getElementById('notif-pushover-apptoken') || {}).value || '').trim();
+    var userTyped = ((document.getElementById('notif-pushover-userkey') || {}).value || '').trim();
+    var errors = [];
+    if (enabled && appTyped && !/^[A-Za-z0-9]{30}$/.test(appTyped)) {
+      errors.push('App-Token muss 30 alphanumerische Zeichen lang sein.');
+    }
+    if (enabled && userTyped && !/^[A-Za-z0-9]{30}$/.test(userTyped)) {
+      errors.push('User-Key muss 30 alphanumerische Zeichen lang sein.');
+    }
+    if (errors.length) {
+      if (banner) {
+        banner.textContent = errors.join(' ');
+        banner.hidden = false;
+      }
+      return;
+    }
+    if (banner) banner.hidden = true;
+
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/notifications/providers/pushover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectPushoverBody())
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
+        // Re-load so the token fields return to the empty placeholder (D-13).
+        await loadPushoverTab();
+      } else {
+        showDrawerToast('notifications', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  // Per-tab button handler delegation. The Notifications card-open delegation
+  // also loads the Pushover tab so the operator sees the live values on the
+  // default tab without an additional fetch when switching.
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="notifications"]')) {
+      setTimeout(loadPushoverTab, 0);
+    }
+    var saveBtn = e.target.closest('#notif-pushover-save');
+    if (saveBtn) { savePushoverTab(saveBtn); return; }
+    var testBtn = e.target.closest('#notif-pushover-test');
+    if (testBtn) {
+      handleTestSend(
+        testBtn,
+        'notifications',
+        '/api/notifications/providers/pushover/test',
+        collectPushoverBody,
+        function () { return '✓ Test-Nachricht gesendet (Pushover).'; },
+        null
+      );
+      return;
+    }
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);

@@ -195,7 +195,27 @@
         <div class="dv-drawer-body">
           <section role="tabpanel" id="dv-panel-notif-pushover"
                    aria-labelledby="dv-tab-notif-pushover" class="dv-tabpanel">
-            <p class="dv-drawer-empty">Pushover-Tab wird in Plan 20-02 erg&auml;nzt.</p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="notif-pushover-enabled">
+              <span>Aktiviert</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">App-Token</span>
+              <input type="password" class="input mono" id="notif-pushover-apptoken"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false" maxlength="30">
+              <span class="field-hint">30 Zeichen, aus dem Application-Dashboard.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">User-Key</span>
+              <input type="password" class="input mono" id="notif-pushover-userkey"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false" maxlength="30">
+              <span class="field-hint">30 Zeichen, oben rechts im Pushover-Dashboard.</span>
+            </label>
+            <div class="dv-field-validation" id="notif-pushover-banner" hidden></div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="notif-pushover-test">&#x25B6; Test-Send</button>
+              <button type="button" class="btn sm primary" id="notif-pushover-save">Speichern</button>
+            </div>
           </section>
           <section role="tabpanel" id="dv-panel-notif-ntfy"
                    aria-labelledby="dv-tab-notif-ntfy" class="dv-tabpanel" hidden>
@@ -308,6 +328,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=12"></script>
+  <script src="/integrations.js?v=13"></script>
 </body>
 </html>
