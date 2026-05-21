@@ -267,7 +267,27 @@
           </section>
           <section role="tabpanel" id="dv-panel-notif-kuma"
                    aria-labelledby="dv-tab-notif-kuma" class="dv-tabpanel" hidden>
-            <p class="dv-drawer-empty">Uptime-Kuma-Tab wird in Plan 20-04 erg&auml;nzt.</p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="notif-kuma-enabled">
+              <span>Aktiviert</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Push-URL</span>
+              <input type="text" class="input mono" id="notif-kuma-pushurl"
+                     placeholder="https://uptime.example.com/api/push/..." autocomplete="off" spellcheck="false">
+              <span class="field-hint">Aus der Push-Monitor-Config in Uptime-Kuma.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Heartbeat-Intervall (s)</span>
+              <input type="number" class="input mono" id="notif-kuma-interval"
+                     placeholder="240" min="30" max="600" step="10" inputmode="numeric">
+              <span class="field-hint">Standard 240 s &mdash; Kuma-Monitor-Intervall muss &ge; 2&times; sein, sonst falsche DOWN-Meldung.</span>
+            </label>
+            <div class="dv-field-validation" id="notif-kuma-banner" hidden></div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="notif-kuma-test">&#x25B6; Test-Push</button>
+              <button type="button" class="btn sm primary" id="notif-kuma-save">Speichern</button>
+            </div>
           </section>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-notifications-toast" role="status" aria-live="polite" hidden>&mdash;</div>
@@ -328,6 +348,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=13"></script>
+  <script src="/integrations.js?v=14"></script>
 </body>
 </html>

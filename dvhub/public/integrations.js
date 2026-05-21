@@ -1498,6 +1498,110 @@
     }
   });
 
+  // === Phase 20-04: Uptime-Kuma Tab Wiring ===
+  // KRITISCH: writes to cfg.monitoring.* NOT cfg.notifications.providers.uptime-kuma
+  // (Pitfall 1 — Phase 09.4 gap-closure already cleaned this up once).
+  // Test-Push goes via a direct SSRF-guarded fetch in the backend
+  // (Pitfall 5 — ctx.monitoringAlertPush would no-op for unsaved URLs).
+  async function loadKumaTab() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/uptime-kuma');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      if (el('notif-kuma-enabled')) el('notif-kuma-enabled').checked = !!data.enabled;
+      // pushUrl is shown in clear per Phase 09.4-06 decision: the path-token
+      // is operator-set, never historically redacted, and the operator needs
+      // to see which monitor their heartbeat writes to.
+      if (el('notif-kuma-pushurl')) el('notif-kuma-pushurl').value = data.pushUrl || '';
+      if (el('notif-kuma-interval')) el('notif-kuma-interval').value = data.pushIntervalSec || 240;
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Uptime-Kuma laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectKumaBody() {
+    var el = function (id) { return document.getElementById(id); };
+    return {
+      enabled: !!(el('notif-kuma-enabled') && el('notif-kuma-enabled').checked),
+      pushUrl: ((el('notif-kuma-pushurl') && el('notif-kuma-pushurl').value) || '').trim(),
+      pushIntervalSec: Number((el('notif-kuma-interval') && el('notif-kuma-interval').value) || 240)
+    };
+  }
+  async function saveKumaTab(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var banner = document.getElementById('notif-kuma-banner');
+    var body = collectKumaBody();
+    var errors = [];
+    // Validation only runs when the integration is enabled — allows the operator
+    // to disable Kuma without losing their stored push-URL (Pitfall: validation
+    // would reject a now-disabled-but-still-stored URL on subsequent saves).
+    if (body.enabled) {
+      if (!/^https:\/\//.test(body.pushUrl) || body.pushUrl.indexOf('/api/push/') === -1) {
+        errors.push('Push-URL: https://<kuma>/api/push/<token>');
+      }
+      if (!(body.pushIntervalSec >= 30 && body.pushIntervalSec <= 600)) {
+        errors.push('Heartbeat-Intervall: 30 bis 600 Sekunden.');
+      }
+    }
+    if (errors.length) {
+      if (banner) {
+        banner.textContent = errors.join(' ');
+        banner.hidden = false;
+      }
+      return;
+    }
+    if (banner) banner.hidden = true;
+
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/uptime-kuma', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
+        await loadKumaTab();
+      } else {
+        showDrawerToast('notifications', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="notifications"]')) {
+      setTimeout(loadKumaTab, 0);
+    }
+    var saveBtn = e.target.closest('#notif-kuma-save');
+    if (saveBtn) { saveKumaTab(saveBtn); return; }
+    var testBtn = e.target.closest('#notif-kuma-test');
+    if (testBtn) {
+      handleTestSend(
+        testBtn,
+        'notifications',
+        '/api/integrations/uptime-kuma/test',
+        collectKumaBody,
+        function () { return '✓ Test-Push gesendet.'; },
+        function (data) {
+          // Map specific error codes to friendly German copy per UI-SPEC § Error Codes.
+          if (data && data.error === 'kuma_no_push_url') return '✗ Keine Push-URL gespeichert. Erst URL eintragen, dann testen.';
+          if (data && data.error === 'invalid_url') return '✗ Push-URL ungültig (https + Public-IP nötig).';
+          return '✗ Test-Push fehlgeschlagen: ' + (data && data.error ? data.error : 'unbekannt');
+        }
+      );
+      return;
+    }
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);
