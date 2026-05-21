@@ -912,8 +912,8 @@ ctx.notificationService = notificationService;
 // the 403 pro_required response shares the canonical header set.
 const licenseService = createLicenseService({
   state,
-  getCfg,
-  pushLog,
+  getCfg: ctx.getCfg,
+  pushLog: ctx.pushLog,
   appDir: __dirname,
   securityHeaders: SECURITY_HEADERS
 });
