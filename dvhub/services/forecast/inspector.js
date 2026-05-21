@@ -405,6 +405,42 @@ export function createInspector(ctx, deps = {}) {
       }));
     }
 
+    // Phase 19.1-07: coherence guard against the v1-collapse pattern flagged
+    // in Plan 16-05 D-01. Even with raw>0, the v1 lightgbm model can emit a
+    // suspiciously load-like output (~1 kW typical-day baseline) when feature
+    // drift compresses the prediction surface. Heuristic check on the delta:
+    //   - rawSum = total energy in the raw window (W * slot_count)
+    //   - corrSum = same for corrected
+    // If the corrected curve flattens the raw signal by >70% (i.e. corrSum < 0.3*rawSum
+    // when rawSum is meaningful — sunny midday) we flag low_confidence so the
+    // UI banner explains why the operator should not trust this prediction.
+    // This is a runtime SAFETY NET, not a fix — the real fix is retrain (Phase
+    // 19.1 retrain plan deferred until accuracy-tracker has more 7d-MAE data).
+    let coherenceFlag = null;
+    if (corrected && corrected.length > 0) {
+      const rawSum = raw.reduce((s, r) => s + (Number(r.power_w) || 0), 0);
+      const corrSum = corrected.reduce((s, c) => s + (Number(c.power_w) || 0), 0);
+      // Only run the check when rawSum is substantial (>1 kWh-equivalent across the
+      // window) — at night both sums are ~0 and noisy ratios mean nothing.
+      if (rawSum > 4000 && corrSum < rawSum * 0.3) {
+        coherenceFlag = 'collapsed_low';
+        pushLog('inspector_ml_correction_coherence_flag', {
+          rawSum: Math.round(rawSum),
+          corrSum: Math.round(corrSum),
+          ratio: rawSum > 0 ? Math.round((corrSum / rawSum) * 100) / 100 : null,
+          model: mlResult?.model || null,
+        });
+      } else if (rawSum > 4000 && corrSum > rawSum * 2.5) {
+        coherenceFlag = 'collapsed_high';
+        pushLog('inspector_ml_correction_coherence_flag', {
+          rawSum: Math.round(rawSum),
+          corrSum: Math.round(corrSum),
+          ratio: rawSum > 0 ? Math.round((corrSum / rawSum) * 100) / 100 : null,
+          model: mlResult?.model || null,
+        });
+      }
+    }
+
     const payload = {
       window: { from, to },
       raw,
@@ -412,9 +448,9 @@ export function createInspector(ctx, deps = {}) {
       delta,
       model: (mlResult && mlResult.model) || null,
       applied: !!(mlResult && mlResult.applied),
-      reason: (mlResult && mlResult.reason) || null,
+      reason: coherenceFlag ? coherenceFlag : ((mlResult && mlResult.reason) || null),
       mlEnabled,
-      meta: { inputModel, cacheHit: false },
+      meta: { inputModel, cacheHit: false, coherenceFlag },
     };
 
     // Cache only when applied — skipping caches for no_model / no_input avoids

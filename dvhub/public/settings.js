@@ -2970,6 +2970,14 @@ function renderMlCorrectionInspector(payload) {
       banner.classList.add('warn');
       banner.classList.remove('u-hidden');
       banner.textContent = 'PV-Input ist komplett 0 W (z. B. nachts oder fehlende Solcast-Konfiguration). ML-Korrektur übersprungen — feature-only-Prediction würde irreführende Werte zeigen.';
+    } else if (payload.reason === 'collapsed_low') {
+      banner.classList.add('error');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'ML-Modell-Output ist verdächtig niedrig (< 30 % der raw-PV-Summe). v1-collapse Pattern aus Plan 16-05 — Modell braucht Retrain. Korrektur-Vorschlag NICHT vertrauen.';
+    } else if (payload.reason === 'collapsed_high') {
+      banner.classList.add('error');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'ML-Modell-Output ist verdächtig hoch (> 250 % der raw-PV-Summe). Feature-Drift oder Unit-Mismatch — Korrektur-Vorschlag NICHT vertrauen.';
     } else {
       banner.classList.add('u-hidden');
       banner.textContent = '';
