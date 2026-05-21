@@ -223,7 +223,27 @@
           </section>
           <section role="tabpanel" id="dv-panel-notif-telegram"
                    aria-labelledby="dv-tab-notif-telegram" class="dv-tabpanel" hidden>
-            <p class="dv-drawer-empty">Telegram-Tab wird in Plan 20-03 erg&auml;nzt.</p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="notif-telegram-enabled">
+              <span>Aktiviert</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Bot-Token</span>
+              <input type="password" class="input mono" id="notif-telegram-bottoken"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Vom @BotFather erhalten.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Chat-ID</span>
+              <input type="text" class="input mono" id="notif-telegram-chatid"
+                     placeholder="z.B. 123456789" inputmode="numeric" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Numerisch &mdash; von @userinfobot oder Gruppe via /getId.</span>
+            </label>
+            <div class="dv-field-validation" id="notif-telegram-banner" hidden></div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="notif-telegram-test">&#x25B6; Test-Send</button>
+              <button type="button" class="btn sm primary" id="notif-telegram-save">Speichern</button>
+            </div>
           </section>
           <section role="tabpanel" id="dv-panel-notif-kuma"
                    aria-labelledby="dv-tab-notif-kuma" class="dv-tabpanel" hidden>
