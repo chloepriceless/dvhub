@@ -63,6 +63,7 @@
     "/api/ml/accuracy",
     "/api/ml/status",
     "/api/notifications/providers/ntfy",
+    "/api/notifications/providers/pushover",
     "/api/notifications/providers/telegram",
     "/api/optimizer/runs/latest",
     "/api/schedule",

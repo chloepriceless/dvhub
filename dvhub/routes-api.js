@@ -2401,6 +2401,97 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // === Phase 20-03: Pushover dedicated endpoints (D-12 server-side-merge; D-13 redaction) ===
+    if (url.pathname === '/api/notifications/providers/pushover' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const po = raw.notifications?.providers?.pushover || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!po.enabled,
+        // D-13 + T-20-03-01: appToken AND userKey are in REDACTED_PATHS.
+        // Emit '***' when set, '' when unset; UI shows placeholder
+        // "leer lassen = unverändert" when empty.
+        appToken: po.appToken ? '***' : '',
+        userKey: po.userKey ? '***' : ''
+      });
+    }
+
+    if (url.pathname === '/api/notifications/providers/pushover' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.notifications = (next.notifications && typeof next.notifications === 'object') ? next.notifications : {};
+      next.notifications.providers = (next.notifications.providers && typeof next.notifications.providers === 'object')
+        ? next.notifications.providers : {};
+      const prev = next.notifications.providers.pushover || {};
+      // D-13 '***' sentinel applied to BOTH appToken AND userKey.
+      // Length clip = 64 (Pushover spec = 30 chars; generous bound, parallel to
+      // telegram chatId clip).
+      const appToken = (body.appToken === '***') ? (prev.appToken || '') : clip(body.appToken, 64);
+      const userKey  = (body.userKey  === '***') ? (prev.userKey  || '') : clip(body.userKey,  64);
+      next.notifications.providers.pushover = {
+        enabled: !!body.enabled,
+        ...(appToken ? { appToken } : {}),
+        ...(userKey  ? { userKey  } : {})
+      };
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('pushover_provider_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('pushover_provider_saved', {
+        enabled: !!body.enabled,
+        appTokenSet: !!appToken,
+        userKeySet: !!userKey
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/notifications/providers/pushover/test' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+
+      // Pitfall 2: empty form value means "use stored". Same '***' sentinel
+      // semantics applied to the TEST path.
+      const stored = ctx.getRawCfg?.().notifications?.providers?.pushover || {};
+      const appToken = (body?.appToken && body.appToken !== '***') ? body.appToken : (stored.appToken || '');
+      const userKey  = (body?.userKey  && body.userKey  !== '***') ? body.userKey  : (stored.userKey  || '');
+      if (!appToken || !userKey) return json(res, 400, { ok: false, error: 'missing_credentials' });
+
+      // 5/min per (provider, token-hash). Hash the app token for the bucket key.
+      const rl = checkProviderRateLimit('pushover', appToken);
+      if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
+
+      try {
+        const { createPushoverProvider } = await import('./services/notifications/providers/pushover.js');
+        const provider = createPushoverProvider({ appToken, userKey });
+        // T-20-03-04 escalation guard: HARD-CODED level: 'info' (priority 0).
+        // pushover.js maps level === 'critical' → priority:1 (urgent, bypasses
+        // operator's Pushover quiet hours); test-sends must stay non-urgent
+        // regardless of what the operator submits via body.
+        const result = await provider.notify({
+          level: 'info',
+          title: 'DVhub Test',
+          body: 'Test-Nachricht von DVhub — ' + new Date().toISOString()
+        });
+        pushLog('notification_test_send', { provider: 'pushover', ok: result.ok, error: result.error }, actorContext(req));
+        return json(res, result.ok ? 200 : 502, result);
+      } catch (e) {
+        pushLog('notification_test_send_error', { provider: 'pushover', error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma
     // config for the editor page (Phase 09.4 D-07/D-08; gap-closure Gap 3).
     // Gap 3: the Uptime Kuma section now reflects the `monitoring` block
