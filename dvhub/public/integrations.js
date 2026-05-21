@@ -80,6 +80,16 @@
       category: 'Victron · History Import',
       logo: 'VR',
       accent: 'orange'
+    },
+    // Phase 20-06 (D-09/D-10/D-11): Solcast + pvnode credentials aggregated
+    // into a single Sammelkarte. Click opens #dv-drawer-forecast with two
+    // tabs (pvnode default, Solcast).
+    {
+      key: 'forecast-providers',
+      label: 'PV-Forecast-Provider',
+      category: 'Wetter & Solarprognose',
+      logo: 'FP',
+      accent: 'violet'
     }
   ];
 
@@ -348,6 +358,19 @@
         if (!data || !data.enabled) return 'disabled';
         if (!data.vrmTokenSet) return 'stale';
         return 'online';
+      case 'forecast-providers': {
+        // Phase 20-06 D-09: aggregated card. data comes from
+        // /api/integrations/status.forecastProviders subtree (per-provider
+        // booleans). Disabled = neither provider configured. Online = both
+        // providers configured. Stale = exactly one configured (UI hint:
+        // "Teilweise konfiguriert" — operator may want both for redundancy).
+        if (!data) return 'disabled';
+        var solcastOn = !!(data.solcast && data.solcast.apiKeySet);
+        var pvnodeOn  = !!(data.pvnode  && data.pvnode.apiKeySet);
+        if (!solcastOn && !pvnodeOn) return 'disabled';
+        if (solcastOn && pvnodeOn) return 'online';
+        return 'stale';
+      }
       default: return 'disabled';
     }
   }
@@ -469,6 +492,16 @@
         // Phase 20-05: identity-header reflects only the Portal-ID (token always redacted).
         // esc() wraps it (T-20-05-07 XSS mitigation — Portal-ID is operator-typed string).
         return data && data.vrmPortalId ? ('Portal ID: ' + esc(String(data.vrmPortalId))) : null;
+      case 'forecast-providers': {
+        // Phase 20-06: identity-header counts configured providers; never echos
+        // any apiKey or siteId (T-20-06-01 — booleans only).
+        var s = !!(data && data.solcast && data.solcast.apiKeySet);
+        var p = !!(data && data.pvnode  && data.pvnode.apiKeySet);
+        if (s && p) return '2 Provider konfiguriert';
+        if (s) return 'Solcast konfiguriert';
+        if (p) return 'pvnode konfiguriert';
+        return null;
+      }
       default:
         return null;
     }
@@ -1741,6 +1774,183 @@
     if (saveBtn) { saveVrmDrawer(saveBtn); return; }
     var rmBtn = e.target.closest('#vrm-remove');
     if (rmBtn) { removeVrmCreds(rmBtn); return; }
+  });
+
+  // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===
+  // Loads/saves cfg.forecast.solcast.* and cfg.forecast.pvnode.* via dedicated
+  // /api/forecast/providers/{solcast,pvnode} server-side-merge endpoints. Each
+  // tab has its own probe-button that hits the matching /probe endpoint and
+  // renders the upstream sample (time + watts) into a sample-block. All apiKey
+  // fields use the canonical '***' keep-existing sentinel (D-13).
+  async function loadForecastTabs() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var sRes = await apiFetch('/api/forecast/providers/solcast');
+      if (sRes.ok) {
+        var s = await sRes.json();
+        if (s && s.ok) {
+          // '***' = stored, leave field empty (placeholder explains keep-existing).
+          if (el('fc-solcast-apikey')) el('fc-solcast-apikey').value = (s.apiKey && s.apiKey !== '***') ? s.apiKey : '';
+          if (el('fc-solcast-siteid')) el('fc-solcast-siteid').value = s.siteId || '';
+        }
+      }
+      var pRes = await apiFetch('/api/forecast/providers/pvnode');
+      if (pRes.ok) {
+        var p = await pRes.json();
+        if (p && p.ok) {
+          if (el('fc-pvnode-apikey')) el('fc-pvnode-apikey').value = (p.apiKey && p.apiKey !== '***') ? p.apiKey : '';
+          if (el('fc-pvnode-nowcast')) el('fc-pvnode-nowcast').checked = !!p.nowcastEnabled;
+        }
+      }
+    } catch (e) {
+      showDrawerToast('forecast', 'err', '✗ Forecast-Provider laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectSolcastBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedKey = (el('fc-solcast-apikey') && el('fc-solcast-apikey').value) || '';
+    return {
+      // Empty typed-key → '***' sentinel = keep-existing (T-20-06-07).
+      apiKey: typedKey ? typedKey.trim() : '***',
+      siteId: ((el('fc-solcast-siteid') && el('fc-solcast-siteid').value) || '').trim()
+    };
+  }
+  function collectPvnodeBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedKey = (el('fc-pvnode-apikey') && el('fc-pvnode-apikey').value) || '';
+    return {
+      apiKey: typedKey ? typedKey.trim() : '***',
+      nowcastEnabled: !!(el('fc-pvnode-nowcast') && el('fc-pvnode-nowcast').checked)
+    };
+  }
+  function showProviderSample(provider, sample) {
+    var block = document.getElementById('fc-' + provider + '-sample');
+    var timeEl = document.getElementById('fc-' + provider + '-sample-time');
+    var wattsEl = document.getElementById('fc-' + provider + '-sample-watts');
+    if (!block || !timeEl || !wattsEl) return;
+    if (!sample) {
+      block.hidden = true;
+      return;
+    }
+    // textContent only — never innerHTML for upstream values (T-20-06-09 CSP).
+    try {
+      var d = new Date(sample.ts);
+      timeEl.textContent = isNaN(d.getTime())
+        ? String(sample.ts || '')
+        : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+    } catch (_) { timeEl.textContent = String(sample.ts || ''); }
+    wattsEl.textContent = (sample.watts != null ? sample.watts : 0) + ' W';
+    block.hidden = false;
+  }
+  async function saveProviderTab(provider, buttonEl, bodyBuilder, endpoint) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var banner = document.getElementById('fc-' + provider + '-banner');
+    var body = bodyBuilder();
+    // Pre-submit validation per UI-SPEC § Form-Validation Display.
+    var errors = [];
+    if (provider === 'solcast') {
+      // apiKey == '***' (= keep-existing): skip length check.
+      if (body.apiKey !== '***' && body.apiKey && body.apiKey.length < 20) errors.push('API-Key muss mindestens 20 Zeichen haben.');
+      // UUID v4 / generic UUID format (8-4-4-4-12 hex).
+      if (body.siteId && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(body.siteId)) {
+        errors.push('Site-ID im UUID-Format erwartet (8-4-4-4-12 Hex-Zeichen).');
+      }
+    } else if (provider === 'pvnode') {
+      if (body.apiKey !== '***' && body.apiKey && body.apiKey.length < 20) errors.push('API-Key muss mindestens 20 Zeichen haben.');
+    }
+    if (errors.length) {
+      if (banner) { banner.textContent = errors.join(' '); banner.hidden = false; }
+      return;
+    }
+    if (banner) banner.hidden = true;
+
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('forecast', 'ok', '✓ Gespeichert.');
+        // Re-load so the apiKey field returns to the empty placeholder (D-13).
+        await loadForecastTabs();
+      } else {
+        showDrawerToast('forecast', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('forecast', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    // Open-on-card-click — load both tabs (one /probe, two /providers GET).
+    if (e.target.closest('.conn-card[data-system="forecast-providers"]')) {
+      setTimeout(loadForecastTabs, 0);
+    }
+    // Empty-State CTA — explicit stopPropagation so the card-click delegation
+    // above (which routes to openDvDrawer + setTimeout(loadForecastTabs)) does
+    // NOT double-fire (T-20-06-08 Pitfall). preventDefault for good measure.
+    var cta = e.target.closest('[data-action="open-forecast-drawer"]');
+    if (cta) {
+      e.stopPropagation();
+      e.preventDefault();
+      var inst = getOrCreateDrawer('forecast');
+      if (inst) inst.open();
+      setTimeout(loadForecastTabs, 0);
+      return;
+    }
+    // Save + Probe button handlers.
+    var sSave = e.target.closest('#fc-solcast-save');
+    if (sSave) { saveProviderTab('solcast', sSave, collectSolcastBody, '/api/forecast/providers/solcast'); return; }
+    var pSave = e.target.closest('#fc-pvnode-save');
+    if (pSave) { saveProviderTab('pvnode', pSave, collectPvnodeBody, '/api/forecast/providers/pvnode'); return; }
+    var sProbe = e.target.closest('#fc-solcast-probe');
+    if (sProbe) {
+      handleTestSend(
+        sProbe,
+        'forecast',
+        '/api/forecast/providers/solcast/probe',
+        collectSolcastBody,
+        function (data) {
+          showProviderSample('solcast', data && data.sample);
+          if (data && data.sample) {
+            var d = new Date(data.sample.ts);
+            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+            return '✓ Solcast-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + '.';
+          }
+          return '✓ Solcast-Probe OK (kein Sample im Fenster).';
+        },
+        null
+      );
+      return;
+    }
+    var pProbe = e.target.closest('#fc-pvnode-probe');
+    if (pProbe) {
+      handleTestSend(
+        pProbe,
+        'forecast',
+        '/api/forecast/providers/pvnode/probe',
+        collectPvnodeBody,
+        function (data) {
+          showProviderSample('pvnode', data && data.sample);
+          if (data && data.sample) {
+            var d = new Date(data.sample.ts);
+            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+            return '✓ pvnode-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + '.';
+          }
+          return '✓ pvnode-Probe OK (kein Sample im Fenster).';
+        },
+        null
+      );
+      return;
+    }
   });
 
   // Start polling
