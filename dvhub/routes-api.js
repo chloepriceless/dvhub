@@ -913,6 +913,61 @@ export function createApiRoutes(ctx) {
     }
     return { ok: true };
   }
+
+  // Phase 20-04: SSRF guard for Uptime-Kuma push-URL. Verbatim from
+  // server.js:1426-1441 (kept in-sync — the production heartbeat at
+  // startMonitoringHeartbeat uses the same predicate). Reject http, localhost,
+  // RFC1918, and link-local so a typed-pushUrl cannot be used to pivot into
+  // internal networks from DVhub. Applied at BOTH save-time (defence in depth)
+  // AND test-push time (operator's unsaved URL).
+  function isAllowedHeartbeatUrl(raw) {
+    try {
+      const u = new URL(String(raw || ''));
+      if (u.protocol !== 'https:') return false;
+      const host = u.hostname.toLowerCase();
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
+      const parts = host.split('.').map(Number);
+      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
+        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16/12
+        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168/16
+        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254/16 link-local
+      }
+      return true;
+    } catch { return false; }
+  }
+
+  // Phase 20-04: One-shot Kuma push for the test-push path. Replicates the
+  // fetch shape from server.js:1475-1496 but uses a CALLER-PROVIDED pushUrl
+  // (so an operator's unsaved form value works — Pitfall 5). Does NOT touch
+  // the production heartbeat timer; the periodic ping continues independently.
+  // Returns {ok, error?} — never throws.
+  async function kumaPushOnce({ pushUrl, msg, signingKey, hostname, appVersion, status }) {
+    if (!isAllowedHeartbeatUrl(pushUrl)) return { ok: false, error: 'invalid_url' };
+    try {
+      const ts = Date.now();
+      const payload = `${msg}|${ts}|${hostname}|${appVersion}`;
+      const sig = signingKey
+        ? 'sha256=' + crypto.createHmac('sha256', signingKey).update(payload).digest('hex')
+        : 'unsigned';
+      const sep = pushUrl.includes('?') ? '&' : '?';
+      const kumaStatus = status === 'down' ? 'down' : 'up';
+      const res = await fetch(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          'x-dvhub-signature': sig,
+          'x-dvhub-ts': String(ts),
+          'x-dvhub-host': hostname,
+          'x-dvhub-version': appVersion
+        }
+      });
+      if (!res.ok) return { ok: false, error: `kuma_http_${res.status}` };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message || 'fetch_failed' };
+    }
+  }
+
   // Plan 08-04 Task 1 Step 6: collapse the key space so IPv6-rotation attackers
   // cannot make each request land in a new bucket. v4 addresses stay full, v6
   // collapses to /64 prefix (which is the smallest externally-routable block).
@@ -2490,6 +2545,108 @@ export function createApiRoutes(ctx) {
         pushLog('notification_test_send_error', { provider: 'pushover', error: e.message });
         return json(res, 500, { ok: false, error: e.message });
       }
+    }
+
+    // === Phase 20-04: Uptime-Kuma dedicated endpoints (D-12 server-side-merge) ===
+    // KRITISCH: writes to cfg.monitoring.* — NEVER cfg.notifications.providers.uptime-kuma
+    // (Pitfall 1 — Phase 09.4 gap-closure cleaned that up; the heartbeat code in
+    // server.js:1442-1496 reads ONLY cfg.monitoring.{pushUrl,pushIntervalSec,signingKey},
+    // so writing to notifications.providers.uptime-kuma would create a dead-config
+    // branch that the UI shows but the heartbeat ignores). saveAndApplyConfig
+    // already triggers startMonitoringHeartbeat() reload (server.js:411).
+    if (url.pathname === '/api/integrations/uptime-kuma' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const mon = raw.monitoring || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!mon.enabled,
+        // pushUrl emitted in clear per Phase 09.4-06 decision (the path-token
+        // is operator-set, never historically redacted, and operator needs to
+        // see which monitor their heartbeat writes to). config-redaction.js
+        // does not list monitoring.pushUrl in REDACTED_PATHS — consistent.
+        pushUrl: mon.pushUrl || '',
+        pushIntervalSec: typeof mon.pushIntervalSec === 'number' ? mon.pushIntervalSec : 240
+      });
+    }
+
+    if (url.pathname === '/api/integrations/uptime-kuma' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const pushUrl = clip(body.pushUrl, 512);
+      // SSRF guard at save-time (defence in depth — T-20-04-01). Only enforced
+      // when the integration is being enabled WITH a URL — allows operator to
+      // disable Kuma without erasing the stored URL (Pitfall: validation
+      // would otherwise reject a now-disabled-but-still-stored URL).
+      if (body.enabled && pushUrl && !isAllowedHeartbeatUrl(pushUrl)) {
+        return json(res, 400, { ok: false, error: 'invalid_url' });
+      }
+      // Server-side clamp [30, 600] per T-20-04-07 — operator-friendly (UI
+      // also enforces min=30 max=600 attrs); reject would force a re-type.
+      const interval = Math.max(30, Math.min(600, Number(body.pushIntervalSec) || 240));
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.monitoring = (next.monitoring && typeof next.monitoring === 'object') ? next.monitoring : {};
+      next.monitoring.enabled = !!body.enabled;
+      next.monitoring.pushUrl = pushUrl;
+      next.monitoring.pushIntervalSec = interval;
+      try {
+        // saveAndApplyConfig() in server.js calls startMonitoringHeartbeat()
+        // which reads the new monitoring.* values, so no extra reload needed.
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('uptime_kuma_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('uptime_kuma_saved', {
+        enabled: !!body.enabled,
+        pushUrlSet: !!pushUrl,
+        interval
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/integrations/uptime-kuma/test' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+
+      const cfg = ctx.getRawCfg?.() || {};
+      const stored = cfg.monitoring || {};
+      // Pitfall 2 + Pitfall 5 combined: prefer the operator's typed (unsaved)
+      // URL, fall back to the stored one. This is why we do NOT use
+      // ctx.monitoringAlertPush — that helper closes over the saved URL only.
+      const pushUrl = (body?.pushUrl && String(body.pushUrl).trim()) || stored.pushUrl || '';
+      if (!pushUrl) return json(res, 400, { ok: false, error: 'kuma_no_push_url' });
+
+      // Rate-limit per-pushUrl (the URL token IS the credential). 5/min via
+      // the shared checkProviderRateLimit utility.
+      const rl = checkProviderRateLimit('uptime-kuma', pushUrl);
+      if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
+
+      // Mirror what server.js startMonitoringHeartbeat reads — same payload shape.
+      // signingKey is stored under monitoring.signingKey; missing key → 'unsigned'
+      // header (Kuma ignores it, that's fine for the basic push endpoint).
+      const signingKey = cfg.monitoring?.signingKey || '';
+      const hostname = cfg.hostname || cfg.identity?.hostname || 'dvhub';
+      const appVersion = ctx.getAppVersion?.()?.version || process.env.DVHUB_VERSION || 'unknown';
+
+      const result = await kumaPushOnce({
+        pushUrl,
+        msg: 'DVhub Test — ' + new Date().toISOString(),
+        signingKey,
+        hostname,
+        appVersion,
+        status: 'up'
+      });
+      pushLog('kuma_test_push', { ok: result.ok, error: result.error }, actorContext(req));
+      return json(res, result.ok ? 200 : (result.error === 'invalid_url' ? 400 : 502), result);
     }
 
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma

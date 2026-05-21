@@ -157,18 +157,32 @@ describe('Plan 20-04: Uptime-Kuma dedicated endpoints (static)', () => {
     assert.ok(m);
     assert.match(m[0], /kumaPushOnce\s*\(\s*\{/,
       'test endpoint must invoke kumaPushOnce (direct SSRF-guarded fetch with current form URL)');
-    assert.doesNotMatch(m[0], /ctx\.monitoringAlertPush/,
-      "must NOT use ctx.monitoringAlertPush — it no-ops when pushUrl isn't yet saved (Pitfall 5)");
+    // Pitfall 5: must NOT INVOKE ctx.monitoringAlertPush. Allow comments that
+    // explain why — strip comments before checking (regex would otherwise
+    // match the documentation text we WANT in the source).
+    const code = m[0].replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.doesNotMatch(code, /ctx\.monitoringAlertPush\s*\(/,
+      "must NOT call ctx.monitoringAlertPush() — it no-ops when pushUrl isn't yet saved (Pitfall 5)");
     assert.match(m[0], /new Date\(\)\.toISOString\(\)/, 'test-push message must include iso timestamp');
     assert.match(m[0], /pushLog\(\s*['"]kuma_test_push['"]/, 'must pushLog("kuma_test_push", ...)');
   });
 
-  it("routes-api.js does NOT write next.notifications.providers['uptime-kuma'] anywhere (Pitfall 1 — T-20-04-05 strict guard)", () => {
+  it("routes-api.js does NOT WRITE next.notifications.providers['uptime-kuma'] anywhere (Pitfall 1 — T-20-04-05 strict guard)", () => {
     const src = readRoutes();
-    assert.doesNotMatch(src, /next\.notifications\.providers\[\s*['"]uptime-kuma['"]\s*\]/,
-      "routes-api.js must never write next.notifications.providers['uptime-kuma'] — that branch is dead-code per Phase 09.4 gap-closure");
-    assert.doesNotMatch(src, /next\.notifications\.providers\.uptime-kuma\b/,
-      'routes-api.js must never write next.notifications.providers.uptime-kuma');
+    // Strip comments — legitimate prose in `//` and `/* */` blocks references
+    // the dead branch by name for context (Phase 09.4 gap-closure history).
+    const code = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    // Bare-property write: `next.notifications.providers.uptime-kuma = ...`.
+    // (Won't actually be valid JS — `uptime-kuma` is not a valid identifier —
+    // but a typo could still appear; guard anyway.)
+    assert.doesNotMatch(code, /next\.notifications\.providers\.uptime-kuma\s*=/,
+      'routes-api.js must never WRITE next.notifications.providers.uptime-kuma');
+    // Bracket-property WRITE only — the existing `delete next.notifications.providers["uptime-kuma"]`
+    // at the legacy ntfy POST is a Phase 09.4 cleanup scrub, NOT a write, and
+    // is intentional (it prevents a stale provider object from spawning a 2nd
+    // heartbeat). The strict guard targets assignment, not deletion.
+    assert.doesNotMatch(code, /next\.notifications\.providers\[\s*['"]uptime-kuma['"]\s*\]\s*=/,
+      "routes-api.js must never WRITE next.notifications.providers['uptime-kuma'] (assignment) — Pitfall 1");
   });
 });
 
