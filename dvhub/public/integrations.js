@@ -1291,6 +1291,105 @@
     }
   });
 
+  // === Phase 20-02: Telegram Tab Wiring ===
+  // Mirrors the ntfy pattern above (D-13 '***' sentinel, D-16 CSP-clean
+  // DOM updates, D-12 dedicated server-side-merge endpoint). Adds a
+  // pre-submit numeric validation for the chatId field per UI-SPEC
+  // § Form-Validation Display.
+  async function loadTelegramTab() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/notifications/providers/telegram');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      var enabledEl = el('notif-telegram-enabled');
+      if (enabledEl) enabledEl.checked = !!data.enabled;
+      var tokEl = el('notif-telegram-bottoken');
+      // '***' = stored, keep field empty; placeholder explains.
+      if (tokEl) tokEl.value = (data.botToken && data.botToken !== '***') ? data.botToken : '';
+      var chatEl = el('notif-telegram-chatid');
+      if (chatEl) chatEl.value = (data.chatId && data.chatId !== '***') ? data.chatId : '';
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Telegram laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectTelegramBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedToken = (el('notif-telegram-bottoken') && el('notif-telegram-bottoken').value) || '';
+    var typedChat = (el('notif-telegram-chatid') && el('notif-telegram-chatid').value) || '';
+    return {
+      enabled: !!(el('notif-telegram-enabled') && el('notif-telegram-enabled').checked),
+      // empty input → '***' sentinel (= keep-existing). Non-empty → actual value.
+      botToken: typedToken ? typedToken.trim() : '***',
+      chatId: typedChat ? typedChat.trim() : '***'
+    };
+  }
+  async function saveTelegramTab(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    // Pre-submit chatId numeric validation (UI-SPEC § Form-Validation Display).
+    // Skip validation when chatId is empty AND we have a stored value (the
+    // '***' sentinel will keep it on the server); otherwise enforce ^-?\d+$.
+    var banner = document.getElementById('notif-telegram-banner');
+    var enabled = !!(document.getElementById('notif-telegram-enabled') && document.getElementById('notif-telegram-enabled').checked);
+    var chatTyped = ((document.getElementById('notif-telegram-chatid') && document.getElementById('notif-telegram-chatid').value) || '').trim();
+    if (enabled && chatTyped && !/^-?\d+$/.test(chatTyped)) {
+      if (banner) {
+        banner.textContent = 'Chat-ID muss numerisch sein (z.B. 123456789 oder -1001234567890 für Gruppen).';
+        banner.hidden = false;
+      }
+      return;
+    }
+    if (banner) banner.hidden = true;
+
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/notifications/providers/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectTelegramBody())
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
+        // Re-load so the token field returns to the empty placeholder (D-13).
+        await loadTelegramTab();
+      } else {
+        showDrawerToast('notifications', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  // Per-tab button handler delegation. The Notifications card-open delegation
+  // earlier also loads the Telegram tab, so the operator sees the live values
+  // immediately when switching to that tab (no extra fetch on tab activate).
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="notifications"]')) {
+      setTimeout(loadTelegramTab, 0);
+    }
+    var saveBtn = e.target.closest('#notif-telegram-save');
+    if (saveBtn) { saveTelegramTab(saveBtn); return; }
+    var testBtn = e.target.closest('#notif-telegram-test');
+    if (testBtn) {
+      handleTestSend(
+        testBtn,
+        'notifications',
+        '/api/notifications/providers/telegram/test',
+        collectTelegramBody,
+        function () { return '✓ Test-Nachricht gesendet (Telegram).'; },
+        null
+      );
+      return;
+    }
+  });
+
   // Start polling
   fetchStatus();
   setInterval(fetchStatus, POLL_INTERVAL_MS);
