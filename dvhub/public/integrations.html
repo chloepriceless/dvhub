@@ -356,11 +356,56 @@
         <div class="dv-drawer-body">
           <section role="tabpanel" id="dv-panel-fc-pvnode"
                    aria-labelledby="dv-tab-fc-pvnode" class="dv-tabpanel">
-            <p class="dv-drawer-empty">pvnode-Tab wird in Plan 20-06 erg&auml;nzt.</p>
+            <label class="dv-field">
+              <span class="field-label">API-Key</span>
+              <input type="password" class="input mono" id="fc-pvnode-apikey"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Aus pvnode.com &rarr; Account &rarr; API. <strong>Free-Tarif: 40 Aufrufe/Monat &mdash; sparsam testen.</strong></span>
+            </label>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="fc-pvnode-nowcast">
+              <span>Nowcast aktivieren</span>
+            </label>
+            <span class="field-hint">Verwende den 15-min Nowcast-Endpoint (verbraucht zus&auml;tzliches Request-Budget).</span>
+            <div class="dv-field-validation" id="fc-pvnode-banner" hidden></div>
+            <div class="dv-sample-block" id="fc-pvnode-sample" hidden>
+              <span class="dv-sample-kicker">LETZTE PR&Uuml;FUNG</span>
+              <div class="dv-sample-row">
+                <span class="dv-sample-time mono" id="fc-pvnode-sample-time"></span>
+                <span class="dv-sample-watts mono" id="fc-pvnode-sample-watts"></span>
+              </div>
+            </div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="fc-pvnode-probe">&#x25B6; Probe-Anfrage</button>
+              <button type="button" class="btn sm primary" id="fc-pvnode-save">Speichern</button>
+            </div>
           </section>
           <section role="tabpanel" id="dv-panel-fc-solcast"
                    aria-labelledby="dv-tab-fc-solcast" class="dv-tabpanel" hidden>
-            <p class="dv-drawer-empty">Solcast-Tab wird in Plan 20-06 erg&auml;nzt.</p>
+            <label class="dv-field">
+              <span class="field-label">API-Key</span>
+              <input type="password" class="input mono" id="fc-solcast-apikey"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Aus solcast.com &rarr; API-Toolkit &rarr; API-Keys. <strong>Solcast erlaubt 10 Aufrufe/Tag &mdash; Test ist ein echter API-Call.</strong></span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Site-ID</span>
+              <input type="text" class="input mono" id="fc-solcast-siteid"
+                     placeholder="00000000-0000-0000-0000-000000000000" autocomplete="off" spellcheck="false">
+              <span class="field-hint">UUID deiner Rooftop-Site bei Solcast.</span>
+            </label>
+            <div class="dv-field-validation" id="fc-solcast-banner" hidden></div>
+            <div class="dv-sample-block" id="fc-solcast-sample" hidden>
+              <span class="dv-sample-kicker">LETZTE PR&Uuml;FUNG</span>
+              <div class="dv-sample-row">
+                <span class="dv-sample-time mono" id="fc-solcast-sample-time"></span>
+                <span class="dv-sample-watts mono" id="fc-solcast-sample-watts"></span>
+              </div>
+            </div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="fc-solcast-probe">&#x25B6; Probe-Anfrage</button>
+              <button type="button" class="btn sm primary" id="fc-solcast-save">Speichern</button>
+            </div>
           </section>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-forecast-toast" role="status" aria-live="polite" hidden>&mdash;</div>
@@ -370,6 +415,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=15"></script>
+  <script src="/integrations.js?v=16"></script>
 </body>
 </html>

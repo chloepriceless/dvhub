@@ -2233,6 +2233,24 @@ export function createApiRoutes(ctx) {
           enabled: !!(getCfg().telemetry?.historyImport?.enabled),
           vrmPortalId: getCfg().telemetry?.historyImport?.vrmPortalId || null,
           vrmTokenSet: !!(getCfg().telemetry?.historyImport?.vrmToken)
+        },
+        // Phase 20-06 (D-09, T-20-06-01): per-provider booleans feeding the
+        // Forecast-Provider Sammelkarte. NEVER emit raw apiKey OR siteId —
+        // the UI only needs the boolean *Set markers + nowcastEnabled flag.
+        // Aggregated card consumes these via getSystemStatus('forecast-providers')
+        // and buildIdentityLine('forecast-providers').
+        forecastProviders: {
+          solcast: {
+            enabled: !!(getCfg().forecast?.solcast?.enabled),
+            apiKeySet: !!(getCfg().forecast?.solcast?.apiKey),
+            siteIdSet: !!(getCfg().forecast?.solcast?.siteId)
+          },
+          pvnode: {
+            // pvnode has no schema enabled flag — derive from apiKey presence.
+            enabled: !!(getCfg().forecast?.pvnode?.apiKey),
+            apiKeySet: !!(getCfg().forecast?.pvnode?.apiKey),
+            nowcastEnabled: !!(getCfg().forecast?.pvnode?.nowcastEnabled)
+          }
         }
       };
       return json(res, 200, payload);
@@ -2715,6 +2733,197 @@ export function createApiRoutes(ctx) {
         tokenSet: !!token
       }, actorContext(req));
       return json(res, 200, { ok: true });
+    }
+
+    // === Phase 20-06: Solcast credential endpoints (D-09/D-10/D-12) ===
+    // Consumes cfg.forecast.solcast.{enabled, apiKey, siteId}. GET emits '***'
+    // for apiKey (D-13 — never raw); siteId is emitted in clear (D-10 — not a
+    // secret, just a Rooftop-Site UUID). POST does a dedicated server-side
+    // merge to avoid the POST /api/config foot-gun. '***' = keep-existing
+    // (T-20-06-07); empty string (or missing) = explicit delete-path.
+    if (url.pathname === '/api/forecast/providers/solcast' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const s = raw.forecast?.solcast || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!s.enabled,
+        apiKey: s.apiKey ? '***' : '',      // D-13 — never raw
+        siteId: s.siteId || ''              // D-10 — NOT a secret, emitted in clear
+      });
+    }
+
+    if (url.pathname === '/api/forecast/providers/solcast' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.forecast = (next.forecast && typeof next.forecast === 'object') ? next.forecast : {};
+      next.forecast.solcast = (next.forecast.solcast && typeof next.forecast.solcast === 'object')
+        ? next.forecast.solcast : {};
+      const prev = next.forecast.solcast;
+      // '***' sentinel: keep existing (T-20-06-07). Empty: delete via branch below.
+      const apiKey = (body.apiKey === '***')
+        ? (prev.apiKey || '')
+        : clip(body.apiKey, 256);
+      // body.enabled === undefined → preserve previous; otherwise coerce to bool.
+      next.forecast.solcast.enabled = (body.enabled === undefined) ? !!prev.enabled : !!body.enabled;
+      next.forecast.solcast.siteId = clip(body.siteId, 64);
+      if (apiKey) {
+        next.forecast.solcast.apiKey = apiKey;
+      } else {
+        delete next.forecast.solcast.apiKey;
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('solcast_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('solcast_saved', {
+        enabled: next.forecast.solcast.enabled,
+        apiKeySet: !!apiKey,
+        siteIdSet: !!next.forecast.solcast.siteId
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/forecast/providers/solcast/probe' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      const stored = ctx.getRawCfg?.()?.forecast?.solcast || {};
+      // Body apiKey wins; '***' or empty → fall back to stored ('***' keep-existing
+      // semantics consistent with the save path).
+      const apiKey = (body && body.apiKey && body.apiKey !== '***') ? body.apiKey : (stored.apiKey || '');
+      const siteId = (body && body.siteId) || stored.siteId || '';
+      if (!apiKey || !siteId) return json(res, 400, { ok: false, error: 'missing_credentials' });
+      // T-20-06-03: per-provider 5/min rate-limit (separate from per-IP) so a
+      // misconfigured form can't burn the 10/day Solcast quota in one minute.
+      const rl = checkProviderRateLimit('solcast', apiKey);
+      if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
+      try {
+        const { probeSolcast } = await import('./services/forecast/solcast-client.js');
+        const result = await probeSolcast({ apiKey, siteId });
+        pushLog('forecast_provider_probe', {
+          provider: 'solcast', ok: result.ok, error: result.error
+        }, actorContext(req));
+        return json(res, result.ok ? 200 : 502, result);
+      } catch (e) {
+        pushLog('forecast_provider_probe_error', { provider: 'solcast', error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // === Phase 20-06: pvnode credential endpoints (D-09/D-10/D-12) ===
+    // Consumes cfg.forecast.pvnode.{apiKey, nowcastEnabled}. pvnode has no
+    // explicit `enabled` flag in the schema — the production client treats
+    // "apiKey present" as enabled, so we mirror that on GET.
+    if (url.pathname === '/api/forecast/providers/pvnode' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const p = raw.forecast?.pvnode || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!p.apiKey,                // derived (no schema enabled flag)
+        apiKey: p.apiKey ? '***' : '',      // D-13 — never raw
+        nowcastEnabled: !!p.nowcastEnabled
+      });
+    }
+
+    if (url.pathname === '/api/forecast/providers/pvnode' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.forecast = (next.forecast && typeof next.forecast === 'object') ? next.forecast : {};
+      next.forecast.pvnode = (next.forecast.pvnode && typeof next.forecast.pvnode === 'object')
+        ? next.forecast.pvnode : {};
+      const prev = next.forecast.pvnode;
+      const apiKey = (body.apiKey === '***')
+        ? (prev.apiKey || '')
+        : clip(body.apiKey, 256);
+      next.forecast.pvnode.nowcastEnabled = !!body.nowcastEnabled;
+      if (apiKey) {
+        next.forecast.pvnode.apiKey = apiKey;
+      } else {
+        delete next.forecast.pvnode.apiKey;
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('pvnode_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('pvnode_saved', {
+        apiKeySet: !!apiKey,
+        nowcastEnabled: next.forecast.pvnode.nowcastEnabled
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/forecast/providers/pvnode/probe' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      const cfg = ctx.getRawCfg?.() || {};
+      const stored = cfg.forecast?.pvnode || {};
+      const apiKey = (body && body.apiKey && body.apiKey !== '***') ? body.apiKey : (stored.apiKey || '');
+      if (!apiKey) return json(res, 400, { ok: false, error: 'missing_apikey' });
+      // Geometry source: cfg.forecast.location.{latitude,longitude} is the
+      // canonical pvnode-client lookup (with sma-automation fallback). For the
+      // probe we read the same source; slope/orientation come from the LARGEST
+      // configured pvPlant (highest kwp), or fall back to sensible defaults
+      // (south-facing 30° tilt). This keeps the probe representative of the
+      // production fetch geometry.
+      const lat = Number(
+        cfg.forecast?.location?.latitude
+        ?? cfg.schedule?.smallMarketAutomation?.location?.latitude
+        ?? 48.5
+      );
+      const lon = Number(
+        cfg.forecast?.location?.longitude
+        ?? cfg.schedule?.smallMarketAutomation?.location?.longitude
+        ?? 9.5
+      );
+      let slope = 30;
+      let orientation = 180;
+      const plants = Array.isArray(cfg.userEnergyPricing?.pvPlants) ? cfg.userEnergyPricing.pvPlants : [];
+      // Largest configured plane wins for a representative probe.
+      const biggest = plants
+        .filter(p => Number(p?.kwp) > 0
+          && Number.isFinite(Number(p?.tiltDeg))
+          && Number.isFinite(Number(p?.azimuthDeg)))
+        .sort((a, b) => Number(b.kwp) - Number(a.kwp))[0];
+      if (biggest) {
+        slope = Number(biggest.tiltDeg);
+        orientation = Number(biggest.azimuthDeg);
+      }
+      const rl = checkProviderRateLimit('pvnode', apiKey);
+      if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
+      try {
+        const { probePvnode } = await import('./services/forecast/pvnode-client.js');
+        const result = await probePvnode({ apiKey, lat, lon, slope, orientation });
+        pushLog('forecast_provider_probe', {
+          provider: 'pvnode', ok: result.ok, error: result.error
+        }, actorContext(req));
+        return json(res, result.ok ? 200 : 502, result);
+      } catch (e) {
+        pushLog('forecast_provider_probe_error', { provider: 'pvnode', error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma

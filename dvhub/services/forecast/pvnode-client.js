@@ -452,3 +452,62 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
     get isConfigured() { return Boolean(getCfg().forecast?.pvnode?.apiKey); }
   };
 }
+
+/**
+ * Phase 20-06 (D-11): single-shot probe for the credential editor.
+ *
+ * Operator clicks "Probe-Anfrage" on the pvnode tab of the Forecast-Provider
+ * drawer; this helper performs a minimal upstream call (forecastDays=1) to
+ * verify the apiKey + plant geometry round-trip. The pvnode free tier is
+ * 40 calls/MONTH (Pitfall 4) — 10× tighter than Solcast — so the UI also
+ * shows a "Free-Tarif: 40 Aufrufe/Monat — sparsam testen" warning.
+ *
+ * IMPORTANT: this helper is intentionally state-free —
+ *   - does NOT use pRetry (a single one-off operator click, not a fetch loop)
+ *   - does NOT increment pvnodeQuota (the operator triggered this — they own
+ *     the 40/month budget; the route-layer checkProviderRateLimit caps
+ *     accidental spam)
+ *   - does NOT mutate cachedData or lastFetchAt on the production client
+ *   - does NOT persist to the forecast-store
+ *
+ * Always resolves with `{ok, sample?, error?}` — never throws (T-20-06-06).
+ *
+ * @param {{ apiKey:string, lat:number, lon:number, slope?:number, orientation?:number }} args
+ * @returns {Promise<{ok:boolean, sample?:{ts:string|null, watts:number}|null, error?:string}>}
+ */
+export async function probePvnode({ apiKey, lat, lon, slope = 30, orientation = 180 }) {
+  if (!apiKey) return { ok: false, error: 'missing_apikey' };
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    slope: String(slope),
+    orientation: String(orientation),
+    forecastDays: '1',
+    timezone: 'utc'
+  });
+  const url = `${PVNODE_BASE}/forecast/?${params.toString()}`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000)
+    });
+    if (!res.ok) return { ok: false, error: `pvnode HTTP ${res.status}` };
+    const data = await res.json();
+    // Field-name-tolerant shape (mirrors extractPowerSeries above): data[]
+    // is the documented shape; forecast[] is a known alternate.
+    const first = Array.isArray(data?.data) ? data.data[0]
+                : Array.isArray(data?.forecast) ? data.forecast[0]
+                : null;
+    if (!first) return { ok: true, sample: null };
+    return {
+      ok: true,
+      sample: {
+        ts: first.ts || first.datetime || first.timestamp || null,
+        watts: Math.round(first.power_w || first.power || first.watts || 0)
+      }
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
