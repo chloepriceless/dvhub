@@ -51,6 +51,7 @@
     "/api/integrations/health",
     "/api/integrations/mqtt/topics",
     "/api/integrations/status",
+    "/api/integrations/uptime-kuma",
     "/api/license/activate",
     "/api/license/remove",
     "/api/license/revalidate",
