@@ -2800,10 +2800,12 @@ function renderPvProvidersInspector(payload) {
   renderInspectorSparkline(canvas, sparkPoints, '#34dbff', 'rgba(52,219,255,0.10)');
 }
 
-// Plan 19-03 — fixed column order for the B2 Load-Forecast table. The
-// sql_weekday vs sql_weekday_fallback distinction is preserved verbatim so
-// operators see the Phase-18-01k cold-start signal in the table itself.
-var LOAD_INSPECTOR_MODEL_COLUMNS = ['sql_weekday', 'sql_weekday_fallback', 'statsforecast'];
+// Plan 19.1-05 — table shows ONE 'sql_weekday' column that merges real-rollup
+// (model='sql_weekday') and cold-start fallback (model='sql_weekday_fallback').
+// Per-slot the renderer prefers the real value if present, else falls back to
+// the fallback row, AND tags the cell as cold-start so the visual warning
+// surfaces only where it's still active. statsforecast keeps its own column.
+var LOAD_INSPECTOR_MODEL_COLUMNS = ['sql_weekday', 'statsforecast'];
 
 function renderLoadInspector(payload) {
   if (!payload || !payload.models) return;
@@ -2811,21 +2813,34 @@ function renderLoadInspector(payload) {
   var actual = payload.actual || [];
   var fallbackActive = !!(payload.meta && payload.meta.sqlWeekdayFallbackActive);
 
-  // 1. Union of timestamps across all model columns + actual (sorted ascending).
+  // 19.1-05: collect timestamps from ALL model rows (incl. fallback) + actual.
+  var SQL_BACKING_KEYS = ['sql_weekday', 'sql_weekday_fallback'];
   var tsSet = {};
-  LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
+  SQL_BACKING_KEYS.concat(['statsforecast']).forEach(function (m) {
     (models[m] || []).forEach(function (s) { tsSet[s.ts_utc] = true; });
   });
   actual.forEach(function (a) { tsSet[a.ts_utc] = true; });
   var ts = Object.keys(tsSet).sort();
 
-  // 2. Slot → {model: power_w, actual: power_w} lookup so each row indexes O(1).
+  // 2. Slot → {column: power_w, actual: power_w, isColdStart: bool} lookup.
+  //    For the merged 'sql_weekday' column, prefer real-rollup over fallback
+  //    per slot and remember which one provided the value (isColdStart flag
+  //    drives the per-cell warning tint).
   var byTs = {};
-  LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
-    (models[m] || []).forEach(function (s) {
-      if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
-      byTs[s.ts_utc][m] = s.power_w;
-    });
+  (models.statsforecast || []).forEach(function (s) {
+    if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
+    byTs[s.ts_utc].statsforecast = s.power_w;
+  });
+  (models.sql_weekday_fallback || []).forEach(function (s) {
+    if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
+    byTs[s.ts_utc].sql_weekday = s.power_w;
+    byTs[s.ts_utc].isColdStart = true;
+  });
+  // Real-rollup wins over fallback for the same ts.
+  (models.sql_weekday || []).forEach(function (s) {
+    if (!byTs[s.ts_utc]) byTs[s.ts_utc] = {};
+    byTs[s.ts_utc].sql_weekday = s.power_w;
+    byTs[s.ts_utc].isColdStart = false;
   });
   actual.forEach(function (a) {
     if (!byTs[a.ts_utc]) byTs[a.ts_utc] = {};
@@ -2857,9 +2872,9 @@ function renderLoadInspector(payload) {
   var meta = document.querySelector('[data-inspector-meta="load"]');
   if (meta) meta.textContent = ts.length + ' Slots · 24 h';
 
-  // 5. Detail-Tabelle — 1 row per slot, 3 forecast cols + 1 actual col.
-  // sql_weekday_fallback column gets .data-row--warning on every row when
-  // meta.sqlWeekdayFallbackActive — Phase 18-01k cold-start visual signal.
+  // 5. Detail-Tabelle — 1 row per slot, 2 forecast cols + 1 actual col.
+  // 19.1-05: per-cell warning tint on 'sql_weekday' only when THAT slot came
+  // from the fallback (isColdStart=true), not all slots.
   var tbody = document.querySelector('[data-inspector-tbody="load"]');
   if (tbody) {
     var html = '';
@@ -2870,9 +2885,9 @@ function renderLoadInspector(payload) {
       html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(t)) + '</td>';
       LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
         var v = slot[m];
-        if (m === 'sql_weekday_fallback' && fallbackActive) {
-          html += '<td class="data-row--warning" title="Fallback-Wert 800 W aktiv. Siehe Phase 18-01k.">' +
-            escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        if (m === 'sql_weekday' && slot.isColdStart) {
+          html += '<td class="data-row--warning" title="Kaltstart-Fallback (zu wenig History &lt; 4 Wochen, Konstante 800 W). Siehe Phase 18-01k.">' +
+            escHtmlForecastInspector(formatPowerForecastInspector(v)) + ' ⚠</td>';
         } else {
           html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
         }
@@ -2881,7 +2896,7 @@ function renderLoadInspector(payload) {
       html += '</tr>';
     }
     if (!ts.length) {
-      html = '<tr><td colspan="5" class="dv-log-empty">Keine Load-Forecast-Daten — sql_weekday und sf laden gerade.</td></tr>';
+      html = '<tr><td colspan="4" class="dv-log-empty">Keine Load-Forecast-Daten — sql_weekday und sf laden gerade.</td></tr>';
     }
     tbody.innerHTML = html;
   }

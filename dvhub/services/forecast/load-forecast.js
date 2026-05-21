@@ -298,6 +298,37 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   }
 
   /**
+   * Compute SQL-weekday rollup and persist as 'sql_weekday' (real rollup) or
+   * 'sql_weekday_fallback' (cold-start constant). Returns the produced slots
+   * + cold-start flag so callers can use them as the active forecast when
+   * statsforecast is unavailable.
+   *
+   * Phase 19.1-05: extracted from runForecast so it can run as a SHADOW
+   * alongside statsforecast — the operator wants to see sql_weekday values
+   * in the load Inspector for comparison even when statsforecast is the
+   * promoted active source.
+   */
+  async function computeAndPersistSqlWeekday(defaultPowerW) {
+    const sql = buildLoadForecastQuery();
+    const result = await getDb().query(sql, [new Date().toISOString()]);
+    const sqlRows = result.rows;
+    const now = new Date();
+    const slots = formatLoadSlots(sqlRows, defaultPowerW, now);
+    const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
+    const sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
+    const persistModel = sqlColdStart ? 'sql_weekday_fallback' : 'sql_weekday';
+    for (const slot of slots) {
+      await store.insertLoadForecast({
+        model: persistModel,
+        ts_utc: slot.ts_utc,
+        power_w: slot.power_w,
+        confidence: slot.confidence
+      });
+    }
+    return { slots, confidence, sqlColdStart, persistModel };
+  }
+
+  /**
    * Execute the load forecast: try StatsForecast, fall back to SQL rollup.
    */
   async function runForecast() {
@@ -333,50 +364,41 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
         confidence,
         source
       });
+
+      // Phase 19.1-05: run SQL-weekday as SHADOW for the Inspector comparison
+      // table. Fire-and-forget — failures do not affect the active forecast.
+      // Logs separately so success/failure of the shadow is observable in
+      // the /api/log ring.
+      computeAndPersistSqlWeekday(defaultPowerW)
+        .then(r => pushLog('load_forecast_shadow_sql_weekday', {
+          slots: r.slots.length, model: r.persistModel, coldStart: r.sqlColdStart
+        }))
+        .catch(err => pushLog('load_forecast_shadow_sql_weekday_error', { error: err.message }));
       return;
     }
 
-    // SQL rollup fallback
+    // SQL rollup fallback (statsforecast unavailable — SQL takes over as active).
+    // Variables declared at function scope so the VRM fallback block below
+    // (which has been here since Phase 07 FORE-12) can read sqlColdStart +
+    // sqlSucceeded — same semantics as the pre-19.1-05 version.
     let sqlSucceeded = false;
     let sqlColdStart = false;
     try {
-      const sql = buildLoadForecastQuery();
-      const result = await getDb().query(sql, [new Date().toISOString()]);
-      const sqlRows = result.rows;
-
-      const now = new Date();
-      const slots = formatLoadSlots(sqlRows, defaultPowerW, now);
-
-      // Determine confidence from slots (all slots share same confidence)
-      const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
-      sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
-
-      // Phase 18-01k: distinguish 'sql_weekday' (real rollup, isColdStart=false)
-      // from 'sql_weekday_fallback' (constant defaultPowerW, isColdStart=true).
-      // Phase 19 B2 Inspector reads load_forecasts.model and shows the operator
-      // whether the served curve is genuine weekday-mean or a fallback constant.
-      const persistModel = sqlColdStart ? 'sql_weekday_fallback' : 'sql_weekday';
-      for (const slot of slots) {
-        await store.insertLoadForecast({
-          model: persistModel,
-          ts_utc: slot.ts_utc,
-          power_w: slot.power_w,
-          confidence: slot.confidence
-        });
-      }
-
-      // Update state
-      state.forecast.load.data = slots;
-      state.forecast.load.lastFetchAt = now.toISOString();
-      state.forecast.load.confidence = confidence;
-      ctx.bumpForecastVersion?.();
+      const r = await computeAndPersistSqlWeekday(defaultPowerW);
       sqlSucceeded = true;
+      sqlColdStart = r.sqlColdStart;
+
+      // Update state with SQL slots as the active forecast.
+      state.forecast.load.data = r.slots;
+      state.forecast.load.lastFetchAt = new Date().toISOString();
+      state.forecast.load.confidence = r.confidence;
+      ctx.bumpForecastVersion?.();
 
       pushLog('load_forecast_updated', {
-        slots: slots.length,
-        confidence,
-        coldStart: sqlColdStart,
-        model: persistModel
+        slots: r.slots.length,
+        confidence: r.confidence,
+        coldStart: r.sqlColdStart,
+        model: r.persistModel
       });
     } catch (err) {
       pushLog('load_forecast_error', { error: err.message });
