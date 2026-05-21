@@ -731,6 +731,13 @@
   line-height: 1.5;
   padding: 16px 4px;
 }
+/* Phase 20-05: VRM drawer intro copy (small muted explainer above the form). */
+.dv-drawer-intro {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+  margin: 0;
+}
 
 /* ===== Phase 20: Tabs Component (D-02) ===== */
 .dv-tabs {

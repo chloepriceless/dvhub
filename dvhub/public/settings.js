@@ -1203,7 +1203,15 @@ const HIDDEN_FIELD_PATHS = [
   'telemetry.database.port',
   'telemetry.database.name',
   'telemetry.database.user',
-  'telemetry.database.password'
+  'telemetry.database.password',
+  // Phase 20-05 (T-20-05-10 single editor): the VRM credential fields are
+  // edited via the dedicated /integrations VRM-drawer. The schema entries in
+  // config-model.js are kept (validation + loadHistoryImportStatus still
+  // resolve against them); hiding them here removes the duplicate auto-form
+  // rows under /settings#tab-system so operators only have one canonical
+  // editor surface.
+  'telemetry.historyImport.vrmPortalId',
+  'telemetry.historyImport.vrmToken'
 ];
 
 function renderDestinationGrid(destinationId) {

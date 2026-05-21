@@ -2225,6 +2225,14 @@ export function createApiRoutes(ctx) {
           providers: Object.entries(getCfg().notifications?.providers || {})
             .filter(([name]) => name !== 'uptime-kuma')
             .map(([name, v]) => ({ name, enabled: !!v.enabled }))
+        },
+        // Phase 20-05 (D-08, T-20-05-02): VRM credentials payload feeding the
+        // /integrations VRM conn-card. NEVER emit the raw vrmToken — the UI
+        // only needs the boolean vrmTokenSet for the status-detection switch.
+        vrm: {
+          enabled: !!(getCfg().telemetry?.historyImport?.enabled),
+          vrmPortalId: getCfg().telemetry?.historyImport?.vrmPortalId || null,
+          vrmTokenSet: !!(getCfg().telemetry?.historyImport?.vrmToken)
         }
       };
       return json(res, 200, payload);
@@ -2647,6 +2655,66 @@ export function createApiRoutes(ctx) {
       });
       pushLog('kuma_test_push', { ok: result.ok, error: result.error }, actorContext(req));
       return json(res, result.ok ? 200 : (result.error === 'invalid_url' ? 400 : 502), result);
+    }
+
+    // === Phase 20-05: VRM credential endpoints (D-06/D-12) ===
+    // Consumes the Phase 18-05 backend single-source cfg.telemetry.historyImport.*.
+    // GET emits '***' for vrmToken (D-13 — never the raw value); POST does a
+    // dedicated server-side merge into telemetry.historyImport to avoid the
+    // POST /api/config foot-gun (which would overwrite the whole config root).
+    // '***' = keep-existing; empty string (or missing) = explicit delete-path
+    // for the stored vrmToken (T-20-05-05).
+    if (url.pathname === '/api/integrations/vrm' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const h = raw.telemetry?.historyImport || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!h.enabled,
+        vrmPortalId: h.vrmPortalId || '',
+        vrmToken: h.vrmToken ? '***' : ''     // D-13 — never raw
+      });
+    }
+
+    if (url.pathname === '/api/integrations/vrm' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.telemetry = (next.telemetry && typeof next.telemetry === 'object') ? next.telemetry : {};
+      next.telemetry.historyImport = (next.telemetry.historyImport && typeof next.telemetry.historyImport === 'object')
+        ? next.telemetry.historyImport : {};
+      const prev = next.telemetry.historyImport;
+      // '***' sentinel: keep existing (T-20-05-05). Empty string (or non-'***'
+      // empty): explicit delete via the branch below.
+      const token = (body.vrmToken === '***')
+        ? (prev.vrmToken || '')
+        : clip(body.vrmToken, 512);
+      next.telemetry.historyImport.enabled = !!body.enabled;
+      next.telemetry.historyImport.provider = 'vrm';
+      next.telemetry.historyImport.vrmPortalId = clip(body.vrmPortalId, 64);
+      if (token) {
+        next.telemetry.historyImport.vrmToken = token;
+      } else {
+        delete next.telemetry.historyImport.vrmToken;
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('vrm_credentials_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('vrm_credentials_saved', {
+        enabled: !!body.enabled,
+        portalIdSet: !!body.vrmPortalId,
+        tokenSet: !!token
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
     }
 
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma

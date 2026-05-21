@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/integrations.css?v=6" />
+  <link rel="stylesheet" href="/integrations.css?v=7" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -305,7 +305,29 @@
           </div>
         </header>
         <div class="dv-drawer-body" id="dv-drawer-vrm-body">
-          <p class="dv-drawer-empty">VRM-Drawer wird in Plan 20-05 erg&auml;nzt.</p>
+          <p class="dv-drawer-intro">
+            Credentials f&uuml;r den Victron VRM History-Import. Token wird verschl&uuml;sselt gespeichert
+            und niemals im Klartext zur&uuml;ckgegeben.
+          </p>
+          <label class="dv-field-row">
+            <input type="checkbox" class="dv-field-check" id="vrm-enabled">
+            <span>VRM-History-Import aktiviert</span>
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Portal-ID</span>
+            <input type="text" class="input mono" id="vrm-portalid" placeholder="z.B. abc123def456" autocomplete="off" spellcheck="false">
+            <span class="field-hint">Aus deinem VRM-Account: Settings &rarr; Installations &rarr; Portal-ID kopieren.</span>
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Access-Token</span>
+            <input type="password" class="input mono" id="vrm-token" placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
+            <span class="field-hint">VRM Access-Token (Settings &rarr; Profile &rarr; Access Tokens).</span>
+          </label>
+          <div class="dv-field-validation" id="vrm-banner" hidden></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm" id="vrm-remove">Credentials entfernen</button>
+            <button type="button" class="btn sm primary" id="vrm-save">Speichern</button>
+          </div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-vrm-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
@@ -348,6 +370,6 @@
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=14"></script>
+  <script src="/integrations.js?v=15"></script>
 </body>
 </html>

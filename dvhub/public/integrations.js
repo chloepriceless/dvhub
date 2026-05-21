@@ -71,6 +71,15 @@
       category: 'Push · Provider',
       logo: 'No',
       accent: 'green'
+    },
+    // Phase 20-05 (D-06): VRM credentials get their own conn-card next to
+    // Victron. Click opens #dv-drawer-vrm via the unified delegation.
+    {
+      key: 'vrm',
+      label: 'VRM Cloud',
+      category: 'Victron · History Import',
+      logo: 'VR',
+      accent: 'orange'
     }
   ];
 
@@ -333,6 +342,12 @@
       case 'loxone': return data.configured ? 'online' : 'disabled';
       case 'devices': return data.total > 0 ? 'online' : 'disabled';
       case 'notifications': return data.enabled ? 'online' : 'disabled';
+      case 'vrm':
+        // Phase 20-05 D-08: VRM card status. data comes from /api/integrations/status.vrm
+        // subtree, which emits {enabled, vrmPortalId, vrmTokenSet}. Never a raw token.
+        if (!data || !data.enabled) return 'disabled';
+        if (!data.vrmTokenSet) return 'stale';
+        return 'online';
       default: return 'disabled';
     }
   }
@@ -450,6 +465,10 @@
         return data.serial || data.host || (data.firmware ? ('FW ' + data.firmware) : null);
       case 'luox':
         return data.identifier || (data.firmware ? ('FW ' + data.firmware) : null);
+      case 'vrm':
+        // Phase 20-05: identity-header reflects only the Portal-ID (token always redacted).
+        // esc() wraps it (T-20-05-07 XSS mitigation — Portal-ID is operator-typed string).
+        return data && data.vrmPortalId ? ('Portal ID: ' + esc(String(data.vrmPortalId))) : null;
       default:
         return null;
     }
@@ -1600,6 +1619,128 @@
       );
       return;
     }
+  });
+
+  // === Phase 20-05: VRM Drawer Wiring (D-06/D-12/D-13) ===
+  // Loads/saves cfg.telemetry.historyImport.{vrmPortalId,vrmToken,enabled,provider}
+  // via the dedicated /api/integrations/vrm endpoint (server-side merge so it never
+  // collides with config.json branches written by other surfaces). 'Credentials
+  // entfernen' uses window.dvConfirm before clearing the stored token.
+  async function loadVrmDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/vrm');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      if (el('vrm-enabled')) el('vrm-enabled').checked = !!data.enabled;
+      if (el('vrm-portalid')) el('vrm-portalid').value = data.vrmPortalId || '';
+      // Token redacted to '***' when stored — leave the field empty so the
+      // placeholder "leer lassen = unverändert" explains the keep-existing
+      // sentinel (D-13).
+      if (el('vrm-token')) el('vrm-token').value = (data.vrmToken && data.vrmToken !== '***') ? data.vrmToken : '';
+    } catch (e) {
+      showDrawerToast('vrm', 'err', '✗ VRM laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectVrmBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedToken = (el('vrm-token') && el('vrm-token').value) || '';
+    return {
+      enabled: !!(el('vrm-enabled') && el('vrm-enabled').checked),
+      vrmPortalId: ((el('vrm-portalid') && el('vrm-portalid').value) || '').trim(),
+      // Empty typed-token → '***' sentinel = keep existing on backend (T-20-05-05).
+      vrmToken: typedToken ? typedToken.trim() : '***'
+    };
+  }
+  async function saveVrmDrawer(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    // Pre-submit validation per UI-SPEC § Form-Validation Display.
+    var banner = document.getElementById('vrm-banner');
+    var body = collectVrmBody();
+    var errors = [];
+    if (body.enabled) {
+      if (!/^[A-Za-z0-9]{12,}$/.test(body.vrmPortalId)) errors.push('Portal-ID ist alphanumerisch und mindestens 12 Zeichen lang.');
+      // vrmToken: '***' (= keep existing) OK; non-empty must be ≥ 20 chars
+      if (body.vrmToken !== '***' && body.vrmToken.length < 20) errors.push('Token muss mindestens 20 Zeichen haben.');
+    }
+    if (errors.length) {
+      if (banner) {
+        banner.textContent = errors.join(' ');
+        banner.hidden = false;
+      }
+      return;
+    }
+    if (banner) banner.hidden = true;
+
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/vrm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('vrm', 'ok', '✓ Gespeichert.');
+        await loadVrmDrawer();
+      } else {
+        showDrawerToast('vrm', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('vrm', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  async function removeVrmCreds(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var ok = false;
+    try {
+      ok = await window.dvConfirm(
+        'Damit wird der History-Import deaktiviert und der gespeicherte Token gelöscht. Du kannst die Credentials jederzeit wieder eingeben.',
+        { title: 'VRM-Credentials entfernen?', okLabel: 'Entfernen', cancelLabel: 'Abbrechen', variant: 'danger' }
+      );
+    } catch (_) { return; }
+    if (!ok) return;
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird entfernt …';
+    try {
+      // Explicitly send '' for the token so the server-side merge deletes it
+      // (NOT '***' which would keep-existing).
+      var res = await apiFetch('/api/integrations/vrm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false, vrmPortalId: '', vrmToken: '' })
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('vrm', 'ok', '✓ VRM-Credentials entfernt.');
+        await loadVrmDrawer();
+      } else {
+        showDrawerToast('vrm', 'err', '✗ Entfernen fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('vrm', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="vrm"]')) {
+      setTimeout(loadVrmDrawer, 0);
+    }
+    var saveBtn = e.target.closest('#vrm-save');
+    if (saveBtn) { saveVrmDrawer(saveBtn); return; }
+    var rmBtn = e.target.closest('#vrm-remove');
+    if (rmBtn) { removeVrmCreds(rmBtn); return; }
   });
 
   // Start polling
