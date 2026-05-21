@@ -4006,7 +4006,9 @@ export function createApiRoutes(ctx) {
       const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
       state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
       pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
-      ctx.persistConfig();
+      // Phase 19.1-03: tag this snapshot as operator_manual so Stage-2 Backtest
+      // can distinguish operator-initiated rule edits from automation writes.
+      ctx.persistConfig('operator_manual');
       return json(res, 200, { ok: true, count: state.schedule.rules.length });
     }
 
@@ -4030,7 +4032,8 @@ export function createApiRoutes(ctx) {
         state.schedule.config.defaultFeedExcessDcPv = v;
       }
       pushLog('schedule_config_updated', { config: state.schedule.config });
-      ctx.persistConfig();
+      // Phase 19.1-03: tag config edits as operator_manual too.
+      ctx.persistConfig('operator_manual');
       return json(res, 200, { ok: true, config: state.schedule.config });
     }
 

@@ -431,7 +431,13 @@ function saveAndApplyConfig(nextRawConfig) {
 // timestamped `config.backup-YYYY-MM-DDTHH-MM-SS.json` sibling before each
 // overwrite (10-file retention). Operators can roll back a bad save without
 // git access. See config-model.js saveConfigFile for the implementation.
-function persistConfig() {
+// Phase 19.1-03: persistConfig now takes an optional source tag so the
+// schedule_snapshots audit trail can distinguish manual operator edits
+// (via POST /api/schedule/{rules,config}) from automation-side writes
+// (Stage-1/Stage-2 planner, schedule-eval cleanups). Default 'config_persist'
+// preserves backward compat for the ~7 callers in market-automation-builder
+// and schedule-eval that do not pass an explicit tag.
+function persistConfig(source = 'config_persist') {
   try {
     const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
@@ -446,7 +452,7 @@ function persistConfig() {
       defaultGridSetpointW: state.schedule.config.defaultGridSetpointW,
       defaultChargeCurrentA: state.schedule.config.defaultChargeCurrentA,
       defaultFeedExcessDcPv: state.schedule.config.defaultFeedExcessDcPv,
-      source: 'config_persist'
+      source
     }));
   } catch (e) {
     pushLog('config_persist_error', { error: e.message }, 'error');
