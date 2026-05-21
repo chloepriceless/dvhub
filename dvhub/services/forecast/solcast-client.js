@@ -217,3 +217,48 @@ export function createSolcastClient(ctx, { store }) {
 
   return { fetchPvForecast, getRemainingCalls, _incrementCallCount, _resetForNewDay };
 }
+
+/**
+ * Phase 20-06 (D-11): single-shot probe for the credential editor.
+ *
+ * Operator clicks the "Probe-Anfrage" button on the Solcast tab of the
+ * Forecast-Provider drawer; this helper performs a minimal upstream call
+ * (hours=1 instead of the production hours=72) so the response is small.
+ * The call STILL counts as 1 against the daily 10-call quota — see
+ * Pitfall 3; the UI surfaces a "Solcast erlaubt 10 Aufrufe/Tag" warning
+ * on the tab.
+ *
+ * IMPORTANT: this helper is intentionally state-free — it does NOT mutate
+ * the production client's `callsToday` counter, does NOT persist to the
+ * forecast-store, and does NOT bump the forecast version. Anti-DoS rate
+ * limiting is enforced at the route layer (checkProviderRateLimit).
+ *
+ * Always resolves with `{ok, sample?, error?}` — never throws (T-20-06-06).
+ *
+ * @param {{ apiKey: string, siteId: string }} args
+ * @returns {Promise<{ok:boolean, sample?:{ts:string, watts:number}|null, error?:string}>}
+ */
+export async function probeSolcast({ apiKey, siteId }) {
+  if (!apiKey || !siteId) return { ok: false, error: 'missing_credentials' };
+  const url = `${SOLCAST_BASE}/${siteId}/forecasts?format=json&hours=1`;
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!res.ok) return { ok: false, error: `Solcast HTTP ${res.status}` };
+    const data = await res.json();
+    const first = (data && Array.isArray(data.forecasts)) ? data.forecasts[0] : null;
+    if (!first) return { ok: true, sample: null };
+    return {
+      ok: true,
+      sample: {
+        ts: first.period_end,
+        // Solcast emits kW; convert to W for the UI sample-block.
+        watts: Math.round((first.pv_estimate || 0) * 1000)
+      }
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
