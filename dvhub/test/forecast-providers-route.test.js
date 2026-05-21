@@ -2,8 +2,11 @@
 //
 // Static + behavioural checks for the 6 new dedicated forecast-provider
 // endpoints (GET/POST/probe × 2 providers) PLUS the /api/integrations/status
-// extension that adds a `forecastProviders` subtree with booleans only
-// (apiKeySet — NEVER the raw apiKey; T-20-06-01).
+// extension that adds a 'forecast-providers' subtree with booleans only
+// (apiKeySet — NEVER the raw apiKey; T-20-06-01). Key uses kebab-case to
+// match SYSTEMS[*].key in integrations.js and the data-system attribute
+// (20-VERIFICATION gap 1 fix — payload key was camelCase `forecastProviders`
+// before, which made the conn-card status render as 'disabled' forever).
 //
 // Strategy mirrors integrations-vrm-route.test.js (Plan 20-05):
 //   1. Static regex assertions against routes-api.js — handler shape, auth
@@ -187,29 +190,33 @@ describe('Plan 20-06: /api/forecast/providers/pvnode GET/POST', () => {
   });
 });
 
-describe('Plan 20-06: /api/integrations/status forecastProviders subtree (T-20-06-01 boolean-only)', () => {
-  it('/status payload includes forecastProviders subtree', () => {
+describe("Plan 20-06: /api/integrations/status 'forecast-providers' subtree (T-20-06-01 boolean-only)", () => {
+  it("/status payload includes 'forecast-providers' subtree (kebab-case key — matches SYSTEMS[*].key)", () => {
     const src = readRoutes();
     const m = src.match(/\/api\/integrations\/status['"][\s\S]*?return\s+json\(res,\s*200,\s*payload\s*\)/);
     assert.ok(m);
-    assert.match(m[0], /forecastProviders:\s*\{[\s\S]*?\}/);
+    assert.match(m[0], /'forecast-providers':\s*\{[\s\S]*?\}/);
+    // Guard against regression to the original camelCase key that left the
+    // conn-card stuck at status='disabled' (20-VERIFICATION gap 1).
+    assert.doesNotMatch(m[0], /\bforecastProviders:\s*\{/,
+      "payload key must be kebab-case 'forecast-providers' to match data-system attribute");
   });
 
-  it('forecastProviders subtree contains solcast + pvnode sub-objects with apiKeySet booleans', () => {
+  it("'forecast-providers' subtree contains solcast + pvnode sub-objects with apiKeySet booleans", () => {
     const src = readRoutes();
     const m = src.match(/\/api\/integrations\/status['"][\s\S]*?return\s+json\(res,\s*200,\s*payload\s*\)/);
     assert.ok(m);
-    const fp = m[0].match(/forecastProviders:\s*\{([\s\S]*?)\n\s*\}\s*\n/);
-    assert.ok(fp, 'forecastProviders subtree must close with a brace');
+    const fp = m[0].match(/'forecast-providers':\s*\{([\s\S]*?)\n\s*\}\s*\n/);
+    assert.ok(fp, "'forecast-providers' subtree must close with a brace");
     assert.match(fp[1], /solcast:\s*\{[\s\S]*?apiKeySet:/);
     assert.match(fp[1], /pvnode:\s*\{[\s\S]*?apiKeySet:/);
   });
 
-  it('forecastProviders subtree NEVER emits raw apiKey/siteId values', () => {
+  it("'forecast-providers' subtree NEVER emits raw apiKey/siteId values", () => {
     const src = readRoutes();
     const m = src.match(/\/api\/integrations\/status['"][\s\S]*?return\s+json\(res,\s*200,\s*payload\s*\)/);
     assert.ok(m);
-    const fp = m[0].match(/forecastProviders:\s*\{([\s\S]*?)\n\s*\}\s*\n/);
+    const fp = m[0].match(/'forecast-providers':\s*\{([\s\S]*?)\n\s*\}\s*\n/);
     assert.ok(fp);
     // Anti-leak: only key:boolean expressions (must NOT have `apiKey:` as a
     // value-emitting key alone — only `apiKeySet:`).

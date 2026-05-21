@@ -360,7 +360,7 @@
         return 'online';
       case 'forecast-providers': {
         // Phase 20-06 D-09: aggregated card. data comes from
-        // /api/integrations/status.forecastProviders subtree (per-provider
+        // /api/integrations/status['forecast-providers'] subtree (per-provider
         // booleans). Disabled = neither provider configured. Online = both
         // providers configured. Stale = exactly one configured (UI hint:
         // "Teilweise konfiguriert" — operator may want both for redundancy).

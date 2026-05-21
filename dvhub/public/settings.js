@@ -1219,7 +1219,15 @@ const HIDDEN_FIELD_PATHS = [
   // power-user fallback (siteId is not a secret per D-10; the booleans
   // are pure flags).
   'forecast.solcast.apiKey',
-  'forecast.pvnode.apiKey'
+  'forecast.pvnode.apiKey',
+  // Phase 20-04 (single-editor follow-up, 20-VERIFICATION gap 2): monitoring
+  // pushUrl + interval are edited via the /integrations Uptime-Kuma drawer.
+  // The schema rows remain in config-model.js (still validated/persisted) so
+  // hiding them here removes the duplicate auto-form rows under
+  // /settings#tab-system, matching the VRM (20-05) and Solcast/pvnode (20-06)
+  // treatment.
+  'monitoring.pushUrl',
+  'monitoring.pushIntervalSec'
 ];
 
 function renderDestinationGrid(destinationId) {

@@ -2238,8 +2238,11 @@ export function createApiRoutes(ctx) {
         // Forecast-Provider Sammelkarte. NEVER emit raw apiKey OR siteId —
         // the UI only needs the boolean *Set markers + nowcastEnabled flag.
         // Aggregated card consumes these via getSystemStatus('forecast-providers')
-        // and buildIdentityLine('forecast-providers').
-        forecastProviders: {
+        // and buildIdentityLine('forecast-providers'). Payload key MUST match
+        // SYSTEMS[*].key in integrations.js (kebab-case to match the conn-card's
+        // data-system="forecast-providers" attribute) so renderAll's data[sys.key]
+        // lookup resolves the subtree (#20-VERIFICATION gap 1).
+        'forecast-providers': {
           solcast: {
             enabled: !!(getCfg().forecast?.solcast?.enabled),
             apiKeySet: !!(getCfg().forecast?.solcast?.apiKey),
