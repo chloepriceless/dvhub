@@ -105,6 +105,43 @@ export function createInspector(ctx, deps = {}) {
     for (const m of Object.keys(providers)) {
       providers[m].sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
     }
+
+    // Phase 19.1-08: forward-fill hourly providers across 15-min sub-slots.
+    // forecast_solar / open_meteo / vrm return hourly resolution → the 96-row
+    // Inspector table previously showed value only at :00 with :15/:30/:45 blank.
+    // Operators interpreted that as "spiky" PV at the hour mark when really it
+    // means the AVERAGE power across that whole hour. Now every hour's value
+    // is copied to its 4 child 15-min slots so the UI shows a flat run of
+    // identical values per hour — matches the data's actual semantics.
+    // Per-provider, detect the resolution (gap between first two slots) and
+    // skip forward-fill for providers already at 15-min granularity (solcast
+    // 30-min stays as-is because forward-filling only by 2x sub-slots is fine).
+    const QUARTER_MS = 15 * 60 * 1000;
+    const resolutionByProvider = {};
+    for (const m of Object.keys(providers)) {
+      const slots = providers[m];
+      if (slots.length < 2) continue;
+      const t0 = Date.parse(slots[0].ts_utc);
+      const t1 = Date.parse(slots[1].ts_utc);
+      if (!Number.isFinite(t0) || !Number.isFinite(t1)) continue;
+      const gap = t1 - t0;
+      resolutionByProvider[m] = gap;
+      if (gap <= QUARTER_MS) continue; // already 15-min, no fill needed
+      const filled = [];
+      const subSlots = Math.round(gap / QUARTER_MS); // 2 for 30-min, 4 for 1h
+      for (const s of slots) {
+        const baseTs = Date.parse(s.ts_utc);
+        for (let q = 0; q < subSlots; q++) {
+          filled.push({
+            ts_utc: new Date(baseTs + q * QUARTER_MS).toISOString(),
+            power_w: s.power_w,
+            confidence: s.confidence,
+          });
+        }
+      }
+      providers[m] = filled;
+    }
+
     const oldestFetchedAt = {};
     for (const m of Object.keys(fetchedByModel)) {
       oldestFetchedAt[m] = fetchedByModel[m].toISOString();
@@ -114,12 +151,26 @@ export function createInspector(ctx, deps = {}) {
       ? (state.forecast.pv.ensembleWeights || null)
       : null;
 
+    // 19.1-08: surface per-provider source-resolution (ms gap between consecutive
+    // upstream rows) so the frontend can show "Auflösung: 1h / 30min / 15min"
+    // badges. Forward-filled values now look identical at each 15-min slot but
+    // the operator should know they came from one hourly value, not 4 independent
+    // 15-min samples.
+    const resolutionMinByProvider = {};
+    for (const m of Object.keys(resolutionByProvider)) {
+      const gap = resolutionByProvider[m];
+      if (Number.isFinite(gap) && gap > 0) {
+        resolutionMinByProvider[m] = Math.round(gap / 60000);
+      }
+    }
+
     return {
       window: { from, to },
       providers,
       ensembleWeights,
       ensembleActive: !!ensembleWeights,
       oldestFetchedAt,
+      resolutionMinByProvider,
       meta: { rowCount: rows.length, modelCount: Object.keys(providers).length },
     };
   }

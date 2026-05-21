@@ -2741,6 +2741,15 @@ function renderPvProvidersInspector(payload) {
       return escHtmlForecastInspector(k) + ' ' + (isFinite(v) ? v.toFixed(2) : '?');
     }).join(' · ');
   }
+  // 19.1-08: build per-provider resolution badge line "open_meteo 60m · vrm 60m · forecast_solar 60m · solcast 30m"
+  var resolutionLine = '';
+  var resMap = payload.resolutionMinByProvider || {};
+  var resKeys = Object.keys(resMap);
+  if (resKeys.length) {
+    resolutionLine = resKeys.map(function (k) {
+      return escHtmlForecastInspector(k) + ' ' + escHtmlForecastInspector(String(resMap[k])) + 'm';
+    }).join(' · ');
+  }
   var summary = document.getElementById('inspector-summary-pv-providers');
   if (summary) {
     summary.innerHTML =
@@ -2752,7 +2761,7 @@ function renderPvProvidersInspector(payload) {
         '<div class="stat-delta">' + weightsLine + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Datenalter</div>' +
         '<div class="stat-val">' + escHtmlForecastInspector(relativeAgeHoursForecastInspector(oldestAcross)) + '</div>' +
-        '<div class="stat-delta"></div></div>';
+        '<div class="stat-delta" title="Auflösung der Originaldaten pro Provider — 60m/30m werden in der Tabelle auf 15m-Slots forward-gefüllt.">' + resolutionLine + '</div></div>';
   }
 
   // 5. Detail-meta — slot count + window length.
