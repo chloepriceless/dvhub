@@ -485,18 +485,25 @@ export function createMarketAutomationBuilder(ctx) {
     });
 
     // Only touch the HALTEN dcExportMode rule — never the locked LEEREN slots.
+    // Match by stage2Phase OR id-prefix as a backstop: prod observed in May 2026
+    // accumulated 189 duplicate sma-stage2-hold-* rules because legacy rules
+    // persisted from an older builder lack the stage2Phase field, so a stage2Phase-only
+    // filter never matched them and each replan appended one more (#stage2-halten-dup).
+    const isHaltenRule = (r) => r?.stage2Phase === 'HALTEN'
+      || (typeof r?.id === 'string' && r.id.startsWith('sma-stage2-hold-'));
     const rules = Array.isArray(state.schedule?.rules) ? state.schedule.rules : [];
-    const existingHold = rules.filter((r) => r?.stage2Phase === 'HALTEN');
+    const existingHold = rules.filter(isHaltenRule);
     const desiredHold = result.rules.filter((r) => r?.stage2Phase === 'HALTEN');
     let changed = false;
     // Drop a stale HALTEN rule when the phase is no longer HALTEN (abort/release).
     if (existingHold.length && !desiredHold.length) {
-      state.schedule.rules = rules.filter((r) => r?.stage2Phase !== 'HALTEN');
+      state.schedule.rules = rules.filter((r) => !isHaltenRule(r));
       changed = true;
     } else if (desiredHold.length) {
-      // (Re)install the HALTEN rule — replace any existing one.
+      // (Re)install the HALTEN rule — replace ALL existing ones (incl. legacy
+      // duplicates without stage2Phase).
       state.schedule.rules = [
-        ...rules.filter((r) => r?.stage2Phase !== 'HALTEN'),
+        ...rules.filter((r) => !isHaltenRule(r)),
         ...desiredHold
       ];
       changed = true;
