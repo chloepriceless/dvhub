@@ -310,6 +310,27 @@ export function createInspector(ctx, deps = {}) {
       };
     }
 
+    // Phase 19.1-02: guard against degenerate all-zero PV input. Solcast on a
+    // sub-scribed-without-key install returns flat zeros; the v1 ML model's
+    // feature-only prediction path (weather + time + system params, NO input
+    // PV) then emits ~1 kW typical-day values that look like load forecasts
+    // to the operator. Skip the predict and surface reason:'no_input_signal'
+    // — Inspector banner explains the diagnostic instead of misleading data.
+    const hasSignal = raw.some(r => Number(r.power_w) > 0);
+    if (!hasSignal) {
+      return {
+        window: { from, to },
+        raw,
+        corrected: null,
+        delta: null,
+        model: null,
+        applied: false,
+        reason: 'no_input_signal',
+        mlEnabled,
+        meta: { inputModel, cacheHit: false },
+      };
+    }
+
     // Adapt to mlService.correct input shape: [{start, powerW}]
     const slotsForMl = raw.map(r => ({ start: r.ts_utc, powerW: r.power_w }));
     let mlResult;

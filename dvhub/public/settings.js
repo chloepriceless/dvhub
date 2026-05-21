@@ -2942,6 +2942,10 @@ function renderMlCorrectionInspector(payload) {
       banner.classList.add('warn');
       banner.classList.remove('u-hidden');
       banner.textContent = 'Kein PV-Forecast-Input für die ML-Korrektur — prüfe PV-Provider-Tabelle.';
+    } else if (payload.reason === 'no_input_signal') {
+      banner.classList.add('warn');
+      banner.classList.remove('u-hidden');
+      banner.textContent = 'PV-Input ist komplett 0 W (z. B. nachts oder fehlende Solcast-Konfiguration). ML-Korrektur übersprungen — feature-only-Prediction würde irreführende Werte zeigen.';
     } else {
       banner.classList.add('u-hidden');
       banner.textContent = '';
