@@ -104,12 +104,18 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // Build per-provider DateTimeData payloads. EOS expects either
     // PydanticDateTimeData ({timestamps, values}) or PydanticDateTimeDataFrame.
     // Use DateTimeData (simpler shape) — anyOf accepts it.
+    // 19.1-01 hotfix: buildForecastResponse() may return slots whose .ts field
+    // is missing / NaN / not-yet-set. new Date(undefined).toISOString() throws
+    // RangeError('Invalid time value') — skip those slots instead of crashing
+    // the whole push call.
     function buildDateTimeData(slots, valueFn) {
       const timestamps = [];
       const values = [];
       for (const s of slots) {
-        const ts = new Date(s.ts).toISOString();
-        timestamps.push(ts);
+        if (!s) continue;
+        const d = new Date(s.ts);
+        if (Number.isNaN(d.getTime())) continue;
+        timestamps.push(d.toISOString());
         values.push(valueFn(s));
       }
       return { timestamps, values };
