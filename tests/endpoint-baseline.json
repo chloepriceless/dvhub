@@ -62,6 +62,7 @@
     "/api/meter/scan",
     "/api/ml/accuracy",
     "/api/ml/status",
+    "/api/notifications/providers/ntfy",
     "/api/optimizer/runs/latest",
     "/api/schedule",
     "/api/schedule/automation/config",

@@ -83,6 +83,162 @@
     return fetch(path, opts);
   }
 
+  // === Phase 20: Generic Drawer + Tabs + Toast Helpers (D-14) ===
+  // Used by #dv-drawer-mqtt (refactored), #dv-drawer-notifications, #dv-drawer-vrm,
+  // #dv-drawer-forecast. Per CONTEXT D-01/D-14 + UI-SPEC Component Inventory 1.
+
+  function createDvDrawer(opts) {
+    var root = opts && opts.root;
+    var backdrop = opts && opts.backdrop;
+    var onOpen = opts && opts.onOpen;
+    var onClose = opts && opts.onClose;
+    var escHandler = null;
+    var closeTimer = null;
+    var restoreFocusEl = null;
+
+    function isOpen() { return !!(root && root.classList.contains('is-open')); }
+
+    function open() {
+      if (!root) return;
+      // Cancel any pending close-hide so re-open during the 220ms window
+      // doesn't re-hide the freshly-opened drawer (Pitfall 6).
+      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+      // Single-drawer guarantee: close any other open .dv-drawer first.
+      var others = document.querySelectorAll('.dv-drawer.is-open');
+      for (var i = 0; i < others.length; i++) {
+        if (others[i] !== root) others[i].classList.remove('is-open');
+      }
+      // Snapshot trigger for return-focus on close.
+      restoreFocusEl = document.activeElement;
+      root.hidden = false;
+      if (backdrop) backdrop.hidden = false;
+      requestAnimationFrame(function () {
+        root.classList.add('is-open');
+        if (backdrop) backdrop.classList.add('is-open');
+        // Initial focus — first focusable inside drawer.
+        var first = root.querySelector('input:not([type="hidden"]), button:not([disabled]), [role="tab"][aria-selected="true"], select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (first) { try { first.focus(); } catch (_) {} }
+      });
+      if (!escHandler) {
+        escHandler = function (e) {
+          if (e.key === 'Escape' && isOpen()) { e.preventDefault(); close(); }
+        };
+        document.addEventListener('keydown', escHandler);
+      }
+      if (onOpen) { try { onOpen(); } catch (_) {} }
+    }
+
+    function close() {
+      if (!root) return;
+      if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
+      root.classList.remove('is-open');
+      if (backdrop) backdrop.classList.remove('is-open');
+      closeTimer = setTimeout(function () {
+        root.hidden = true;
+        if (backdrop) backdrop.hidden = true;
+        closeTimer = null;
+        if (restoreFocusEl && typeof restoreFocusEl.focus === 'function') {
+          try { restoreFocusEl.focus(); } catch (_) {}
+        }
+        restoreFocusEl = null;
+      }, 220);
+      if (onClose) { try { onClose(); } catch (_) {} }
+    }
+
+    return { open: open, close: close, isOpen: isOpen };
+  }
+
+  // Tab activation (ARIA APG pattern). One delegated tabKeyHandler per tablist;
+  // registration in the per-drawer init below.
+  function activateTab(tabId) {
+    var tab = document.getElementById(tabId);
+    if (!tab) return;
+    var tablist = tab.closest('[role="tablist"]');
+    if (!tablist) return;
+    var sibs = tablist.querySelectorAll('[role="tab"]');
+    for (var i = 0; i < sibs.length; i++) {
+      var t = sibs[i];
+      var on = t === tab;
+      t.classList.toggle('is-active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.setAttribute('tabindex', on ? '0' : '-1');
+      var panelId = t.dataset.panel || t.getAttribute('aria-controls');
+      if (panelId) {
+        var p = document.getElementById(panelId);
+        if (p) p.hidden = !on;
+      }
+    }
+    try { tab.focus(); } catch (_) {}
+  }
+
+  function tabKeyHandler(e) {
+    var allow = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
+    if (allow.indexOf(e.key) === -1) return;
+    var tab = e.target.closest && e.target.closest('[role="tab"]');
+    if (!tab) return;
+    var list = tab.closest('[role="tablist"]');
+    if (!list) return;
+    e.preventDefault();
+    var tabs = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));
+    var idx = tabs.indexOf(tab);
+    var next;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(idx + 1) % tabs.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(idx - 1 + tabs.length) % tabs.length];
+    else if (e.key === 'Home') next = tabs[0];
+    else if (e.key === 'End') next = tabs[tabs.length - 1];
+    if (next) activateTab(next.id);
+  }
+
+  function showDrawerToast(name, variant, msg) {
+    var toast = document.getElementById('dv-drawer-' + name + '-toast');
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.hidden = false;
+    toast.classList.remove('is-ok', 'is-err', 'is-warn');
+    if (variant) toast.classList.add('is-' + variant);
+    requestAnimationFrame(function () { toast.classList.add('show'); });
+    if (toast._dvTimer) clearTimeout(toast._dvTimer);
+    toast._dvTimer = setTimeout(function () {
+      toast.classList.remove('show');
+      setTimeout(function () { toast.hidden = true; }, 240);
+    }, 3000);
+  }
+
+  // Shared test-send/test-probe client helper (D-05).
+  // 5s minimum disable + button textContent swap + status feedback via toast.
+  async function handleTestSend(buttonEl, drawerName, endpoint, bodyBuilder, okMsgBuilder, errMsgBuilder) {
+    if (!buttonEl || buttonEl.disabled) return;
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gesendet …';
+    var startedAt = Date.now();
+    try {
+      var res = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyBuilder())
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.status === 429) {
+        showDrawerToast(drawerName, 'warn', '⏱ Zu viele Test-Sends. Erneut versuchen in ' + (data.retry_after_s || 60) + ' s.');
+      } else if (res.ok && data.ok) {
+        showDrawerToast(drawerName, 'ok', okMsgBuilder ? okMsgBuilder(data) : '✓ Test-Nachricht gesendet.');
+      } else {
+        showDrawerToast(drawerName, 'err', errMsgBuilder ? errMsgBuilder(data, res) : ('✗ Test fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status))));
+      }
+    } catch (e) {
+      showDrawerToast(drawerName, 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      var elapsed = Date.now() - startedAt;
+      var remain = Math.max(0, 5000 - elapsed);
+      setTimeout(function () {
+        buttonEl.disabled = false;
+        buttonEl.textContent = origText;
+      }, remain);
+    }
+  }
+
   async function fetchStatus() {
     try {
       // Phase 09.2 (revised 2026-05-15): merge BOTH endpoints. /health gives
@@ -843,12 +999,12 @@
 
   function getMqttDrawerEls() {
     if (mqttDrawerEls) return mqttDrawerEls;
-    var drawer = document.getElementById('mqtt-drawer');
+    var drawer = document.getElementById('dv-drawer-mqtt');
     if (!drawer) return null; // drawer markup not on this page
     mqttDrawerEls = {
       drawer: drawer,
-      backdrop: document.getElementById('mqtt-drawer-backdrop'),
-      close: document.getElementById('mqtt-drawer-close'),
+      backdrop: document.getElementById('dv-drawer-mqtt-backdrop'),
+      close: document.getElementById('dv-drawer-mqtt-close'),
       pause: document.getElementById('mqtt-drawer-pause'),
       topics: document.getElementById('mqtt-drawer-topics'),
       meta: document.getElementById('mqtt-drawer-meta')
@@ -870,11 +1026,8 @@
     }
   }
 
-  // Escape-key close — mirrors dv-modal.js's keyHandler discipline: a named
-  // handler registered on open, removed on close so it never leaks.
-  function mqttDrawerKeyHandler(e) {
-    if (e.key === 'Escape') { e.preventDefault(); closeMqttDrawer(); }
-  }
+  // Phase 20 D-14: ESC handling now lives inside createDvDrawer's escHandler —
+  // the standalone mqttDrawerKeyHandler was removed during the refactor.
 
   async function pollMqttTopics() {
     var els = getMqttDrawerEls();
@@ -888,7 +1041,7 @@
       // explicit state rather than a blank table.
       if (data && data.connected === false) {
         if (els.meta) els.meta.textContent = 'MQTT nicht verbunden';
-        els.topics.innerHTML = '<p class="mqtt-drawer-empty">MQTT ist derzeit nicht verbunden. '
+        els.topics.innerHTML = '<p class="dv-drawer-empty">MQTT ist derzeit nicht verbunden. '
           + 'Sobald der Broker erreichbar ist, erscheinen hier die beobachteten Topics.</p>';
         return;
       }
@@ -900,7 +1053,7 @@
           : (total + ' Topics');
       }
       if (!topics.length) {
-        els.topics.innerHTML = '<p class="mqtt-drawer-empty">Noch keine Topics beobachtet — '
+        els.topics.innerHTML = '<p class="dv-drawer-empty">Noch keine Topics beobachtet — '
           + 'sobald Geräte auf dem Broker publizieren, erscheinen sie hier.</p>';
         return;
       }
@@ -947,61 +1100,195 @@
     applyMqttPauseState();
   }
 
+  // Phase 20 D-14: MQTT drawer now delegates open/close lifecycle to the
+  // generic createDvDrawer helper. The lifecycle hooks bind the MQTT-specific
+  // poll loop on open and stop it on close. mqttDrawerInstance is lazily
+  // created on first open so getMqttDrawerEls() (and therefore the markup
+  // lookup) does not run at module load.
+  var mqttDrawerInstance = null;
   function openMqttDrawer() {
     var els = getMqttDrawerEls();
     if (!els) return;
-    // Every open starts in the running state — a stale paused flag from a
-    // previous session would otherwise leave the drawer frozen on open.
     mqttDrawerPaused = false;
     applyMqttPauseState();
-    // Remove [hidden] first, then add .is-open on the next frame so the
-    // translateX transition actually animates (a [hidden]→.is-open switch in
-    // the same frame would jump straight to the open position).
-    els.drawer.hidden = false;
-    if (els.backdrop) els.backdrop.hidden = false;
-    requestAnimationFrame(function () {
-      els.drawer.classList.add('is-open');
-      if (els.backdrop) els.backdrop.classList.add('is-open');
-    });
-    pollMqttTopics();
-    startMqttPoll();
-    document.addEventListener('keydown', mqttDrawerKeyHandler);
+    if (!mqttDrawerInstance) {
+      mqttDrawerInstance = createDvDrawer({
+        root: els.drawer,
+        backdrop: els.backdrop,
+        onOpen: function () { pollMqttTopics(); startMqttPoll(); },
+        onClose: function () { stopMqttPoll(); }
+      });
+    }
+    mqttDrawerInstance.open();
   }
-
   function closeMqttDrawer() {
-    var els = getMqttDrawerEls();
-    stopMqttPoll();
-    document.removeEventListener('keydown', mqttDrawerKeyHandler);
-    if (!els) return;
-    els.drawer.classList.remove('is-open');
-    if (els.backdrop) els.backdrop.classList.remove('is-open');
-    // Re-add [hidden] only after the slide-out transition finishes so it
-    // animates (matches the 220ms ≥ .2s CSS transition).
-    setTimeout(function () {
-      els.drawer.hidden = true;
-      if (els.backdrop) els.backdrop.hidden = true;
-    }, 220);
+    if (mqttDrawerInstance) mqttDrawerInstance.close();
   }
 
-  // Trigger delegation — a SECOND document click listener mirroring the
-  // [data-status-filter] pattern above. A click anywhere on the MQTT card
-  // opens the drawer, EXCEPT on the card's Logs/Konfig <a> links (let those
-  // navigate). The drawer's own close button + backdrop also route here.
+  // === Phase 20: Unified Drawer Trigger Delegation ===
+  // ONE document-level click listener handles backdrop-click, close-button,
+  // and conn-card → drawer routing. ESC is handled per-drawer via
+  // createDvDrawer's escHandler (registered on open, removed on close).
+  var dvDrawerInstances = {};   // name → instance, lazily initialised by per-drawer code
+  function getOrCreateDrawer(name) {
+    if (dvDrawerInstances[name]) return dvDrawerInstances[name];
+    var root = document.getElementById('dv-drawer-' + name);
+    var backdrop = document.getElementById('dv-drawer-' + name + '-backdrop');
+    if (!root) return null;
+    var inst = createDvDrawer({ root: root, backdrop: backdrop });
+    dvDrawerInstances[name] = inst;
+    return inst;
+  }
+
   document.addEventListener('click', function (e) {
-    if (e.target.closest('#mqtt-drawer-pause')) {
-      toggleMqttPause();
+    // Inline element-specific intercepts that other handlers (pause/refresh) own.
+    if (e.target.closest('#mqtt-drawer-pause')) { toggleMqttPause(); return; }
+
+    // Close button — any element with .dv-drawer-close inside any .dv-drawer.
+    var closeBtn = e.target.closest('.dv-drawer-close');
+    if (closeBtn) {
+      var drawer = closeBtn.closest('.dv-drawer');
+      if (drawer && drawer.id.indexOf('dv-drawer-') === 0) {
+        var nameC = drawer.id.replace('dv-drawer-', '');
+        if (nameC === 'mqtt') { closeMqttDrawer(); return; }
+        var instC = getOrCreateDrawer(nameC);
+        if (instC) instC.close();
+        return;
+      }
+    }
+
+    // Backdrop click closes.
+    var bd = e.target.closest('.dv-drawer-backdrop');
+    if (bd && bd.id.indexOf('dv-drawer-') === 0) {
+      var nameB = bd.id.replace('dv-drawer-', '').replace(/-backdrop$/, '');
+      if (nameB === 'mqtt') { closeMqttDrawer(); return; }
+      var instB = getOrCreateDrawer(nameB);
+      if (instB) instB.close();
       return;
     }
-    if (e.target.closest('#mqtt-drawer-close') || e.target.closest('#mqtt-drawer-backdrop')) {
-      closeMqttDrawer();
+
+    // Inside any open .dv-drawer body — allow tab switching, otherwise ignore.
+    if (e.target.closest('.dv-drawer')) {
+      var tabBtn = e.target.closest('[role="tab"][data-panel]');
+      if (tabBtn) { activateTab(tabBtn.id); return; }
       return;
     }
-    // Inside the drawer itself — ignore (don't re-trigger).
-    if (e.target.closest('#mqtt-drawer')) return;
-    // A click on a card action link should navigate, not open the drawer.
+
+    // Action-link inside card should navigate, not open drawer.
     if (e.target.closest('a')) return;
-    var card = e.target.closest('.conn-card[data-system="mqtt"]');
-    if (card) { e.preventDefault(); openMqttDrawer(); }
+
+    // Card → drawer routing by data-system.
+    var mqttCard = e.target.closest('.conn-card[data-system="mqtt"]');
+    if (mqttCard) { e.preventDefault(); openMqttDrawer(); return; }
+    var notifCard = e.target.closest('.conn-card[data-system="notifications"]');
+    if (notifCard) {
+      e.preventDefault();
+      var inst = getOrCreateDrawer('notifications');
+      if (inst) inst.open();
+      return;
+    }
+    var vrmCard = e.target.closest('.conn-card[data-system="vrm"]');
+    if (vrmCard) {
+      e.preventDefault();
+      var inst2 = getOrCreateDrawer('vrm');
+      if (inst2) inst2.open();
+      return;
+    }
+    var fcCard = e.target.closest('.conn-card[data-system="forecast-providers"]');
+    if (fcCard) {
+      e.preventDefault();
+      var inst3 = getOrCreateDrawer('forecast');
+      if (inst3) inst3.open();
+      return;
+    }
+  });
+
+  // Wire tab keyboard navigation on every [role="tablist"] inside .dv-drawer.
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.closest && e.target.closest('.dv-drawer [role="tablist"]')) {
+      tabKeyHandler(e);
+    }
+  });
+
+  // === Phase 20-01: ntfy.sh Tab Wiring (first migration provider into the new dv-drawer) ===
+  async function loadNtfyTab() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/notifications/providers/ntfy');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      var enabledEl = el('notif-ntfy-enabled');
+      if (enabledEl) enabledEl.checked = !!data.enabled;
+      var urlEl = el('notif-ntfy-topicurl');
+      if (urlEl) urlEl.value = data.topicUrl || '';
+      var tokEl = el('notif-ntfy-token');
+      // '***' = stored, keep field empty; placeholder explains.
+      if (tokEl) tokEl.value = (data.token && data.token !== '***') ? data.token : '';
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ ntfy laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function collectNtfyBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var typedToken = (el('notif-ntfy-token') && el('notif-ntfy-token').value) || '';
+    return {
+      enabled: !!(el('notif-ntfy-enabled') && el('notif-ntfy-enabled').checked),
+      topicUrl: (el('notif-ntfy-topicurl') && el('notif-ntfy-topicurl').value.trim()) || '',
+      // empty input → '***' sentinel (= keep-existing). Non-empty → actual value.
+      token: typedToken ? typedToken.trim() : '***'
+    };
+  }
+  async function saveNtfyTab(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/notifications/providers/ntfy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectNtfyBody())
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
+        // Re-load so the token field returns to the empty placeholder (D-13).
+        await loadNtfyTab();
+      } else {
+        showDrawerToast('notifications', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('notifications', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  // Per-tab button handler delegation. The Notifications card-open delegation
+  // above already routes the .conn-card click into the unified drawer dispatcher;
+  // this handler reacts to the same click ONE microtask later to load the ntfy
+  // tab (because the drawer's onOpen does not yet know about per-tab loaders —
+  // that wiring lands in plans 20-02..04 as the other tabs are added).
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-card[data-system="notifications"]')) {
+      setTimeout(loadNtfyTab, 0);
+    }
+    var saveBtn = e.target.closest('#notif-ntfy-save');
+    if (saveBtn) { saveNtfyTab(saveBtn); return; }
+    var testBtn = e.target.closest('#notif-ntfy-test');
+    if (testBtn) {
+      handleTestSend(
+        testBtn,
+        'notifications',
+        '/api/notifications/providers/ntfy/test',
+        collectNtfyBody,
+        function () { return '✓ Test-Nachricht gesendet (ntfy).'; },
+        null
+      );
+      return;
+    }
   });
 
   // Start polling

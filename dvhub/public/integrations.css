@@ -616,15 +616,17 @@
 .emoji-cell.is-selected,
 .swatch-cell.is-selected { box-shadow: 0 0 0 2px var(--accent); }
 
-/* ===== MQTT Inspector drawer (Phase 09.4 D-03/D-04) ===== */
+/* ===== Generic Slide-Over Drawer (Phase 20 D-14; was .mqtt-drawer-* Phase 09.4 D-03/D-04) ===== */
 /* Slide-over panel anchored to the right edge. Visibility is driven entirely
    by the .is-open class + the [hidden] attribute (toggled by integrations.js)
    — there is NO style.display anywhere, so the CSP `style-src 'self'`
    directive (no 'unsafe-inline' since 09.1-07) is never tripped. The drawer
    carries its translateX transition at all times; integrations.js removes
    [hidden] one frame BEFORE adding .is-open so the slide animates in. Tokens
-   reuse the Aurora custom properties the .conn-card rules use — no hex. */
-.mqtt-drawer-backdrop {
+   reuse the Aurora custom properties the .conn-card rules use — the rgba
+   colour literals on backdrop, box-shadow and tinted state surfaces are the
+   approved exception list per UI-SPEC § Token Consumer Rules. */
+.dv-drawer-backdrop {
   position: fixed;
   inset: 0;
   z-index: 58;
@@ -633,11 +635,12 @@
   pointer-events: none;
   transition: opacity .2s ease;
 }
-.mqtt-drawer-backdrop.is-open {
+.dv-drawer-backdrop.is-open {
   opacity: 1;
   pointer-events: auto;
 }
-.mqtt-drawer {
+[data-theme="light"] .dv-drawer-backdrop { background: rgba(13, 25, 51, 0.45); }
+.dv-drawer {
   position: fixed;
   top: 0;
   right: 0;
@@ -656,15 +659,15 @@
   transition: transform .2s ease;
   overflow-y: auto;
 }
-.mqtt-drawer.is-open { transform: translateX(0); }
+.dv-drawer.is-open { transform: translateX(0); }
 
-.mqtt-drawer-head {
+.dv-drawer-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-.mqtt-drawer-head h2 {
+.dv-drawer-head h2 {
   font-family: var(--f-brand);
   font-size: 1.05rem;
   font-weight: 700;
@@ -673,7 +676,7 @@
 }
 /* Phase 09.4 gap-closure: pause/resume + close grouped at the drawer header
    right edge. Both reuse the Aurora .btn sm ghost token styling. */
-.mqtt-drawer-head-actions {
+.dv-drawer-head-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -687,18 +690,18 @@
   white-space: nowrap;
 }
 /* Paused affordance — the button reads as "active/engaged" while frozen. */
-.mqtt-drawer.is-paused #mqtt-drawer-pause {
+.dv-drawer.is-paused #mqtt-drawer-pause {
   color: var(--warn, #ffd421);
   border-color: rgba(255, 212, 33, 0.35);
 }
-#mqtt-drawer-close {
+.dv-drawer-close {
   flex-shrink: 0;
   font-size: 16px;
   line-height: 1;
   padding: 6px 11px;
 }
 
-.mqtt-drawer-meta {
+.dv-drawer-meta {
   margin: 0;
   font-family: var(--f-mono);
   font-size: 0.72rem;
@@ -708,25 +711,188 @@
 /* Visible "pausiert" indication while the poll loop is stopped — a pill that
    only renders when the drawer carries .is-paused. CSP-clean: pure class
    toggle, no inline style. */
-.mqtt-drawer-meta::after {
+.dv-drawer-meta::after {
   content: '';
 }
-.mqtt-drawer.is-paused .mqtt-drawer-meta::after {
+.dv-drawer.is-paused .dv-drawer-meta::after {
   content: ' · pausiert';
   color: var(--warn, #ffd421);
   font-weight: 600;
 }
 
-.mqtt-drawer-body {
+.dv-drawer-body {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.mqtt-drawer-empty {
+.dv-drawer-empty {
   font-size: 0.82rem;
   color: var(--text-2);
   line-height: 1.5;
   padding: 16px 4px;
+}
+
+/* ===== Phase 20: Tabs Component (D-02) ===== */
+.dv-tabs {
+  display: flex; flex-wrap: nowrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--glass-brd);
+  margin: 0; padding: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.dv-tabs::-webkit-scrollbar { display: none; }
+.dv-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 12px 14px;
+  min-height: 44px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .15s, border-color .15s;
+}
+.dv-tab:hover { color: var(--text); }
+.dv-tab:focus-visible {
+  outline: none;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent);
+}
+.dv-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.dv-tabpanel {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 0 0;
+}
+.dv-tabpanel[hidden] { display: none; }
+
+/* ===== Phase 20: Form-row helpers (.dv-field*) ===== */
+.dv-field {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.dv-field .field-label {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.dv-field .field-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.dv-field-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.dv-field-check { margin: 0; flex-shrink: 0; }
+.dv-drawer-actions {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* ===== Phase 20: Inline validation surfaces ===== */
+.input.is-invalid {
+  border-color: var(--red);
+  background: rgba(255, 93, 93, 0.06);
+}
+.input.is-invalid:focus {
+  box-shadow: 0 0 0 3px rgba(255, 93, 93, 0.25);
+}
+.dv-field-error {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--red);
+  margin-top: 4px;
+}
+.dv-field-error[hidden] { display: none; }
+.dv-field-validation {
+  background: rgba(255, 93, 93, 0.08);
+  border: 1px solid rgba(255, 93, 93, 0.3);
+  border-left: 3px solid var(--red);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--red);
+  line-height: 1.4;
+}
+.dv-field-validation[hidden] { display: none; }
+.dv-field-validation.is-warning {
+  background: rgba(255, 212, 33, 0.08);
+  border-color: rgba(255, 212, 33, 0.3);
+  border-left-color: var(--warn);
+  color: var(--warn);
+}
+
+/* ===== Phase 20: In-drawer toast ===== */
+.dv-drawer-toast {
+  position: sticky; bottom: 0;
+  margin-top: auto;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+}
+.dv-drawer-toast.show {
+  opacity: 1; transform: translateY(0); pointer-events: auto;
+}
+.dv-drawer-toast.is-ok { border-color: rgba(62,224,160,.5); color: var(--green); }
+.dv-drawer-toast.is-err { border-color: rgba(255,93,93,.5); color: var(--red); }
+.dv-drawer-toast.is-warn { border-color: rgba(255,212,33,.5); color: var(--warn); }
+.dv-drawer-toast[hidden] { display: none; }
+
+/* ===== Phase 20: Sample-block (forecast probe result preview) ===== */
+.dv-sample-block {
+  background: var(--glass);
+  border: 1px solid var(--glass-brd);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.dv-sample-kicker {
+  font-family: var(--f-mono); font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.dv-sample-row { display: flex; gap: 12px; align-items: baseline; }
+.dv-sample-time { font-size: 12px; color: var(--text-2); }
+.dv-sample-watts { font-size: 14px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ===== Phase 20: Empty-state block ===== */
+.dv-empty-state {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 0;
+}
+.dv-empty-headline { font-size: 14px; font-weight: 600; color: var(--text); margin: 0; }
+.dv-empty-body { font-size: 12px; line-height: 1.5; color: var(--text-2); margin: 0; }
+
+/* ===== Phase 20: Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+  .dv-drawer { transition: none; }
+  .dv-drawer-backdrop { transition: none; }
+  .dv-drawer-toast { transition: none; }
 }
 
 /* Topic row — a simple flex column, NOT a repeat(N,minmax(0,1fr)) auto-grid
