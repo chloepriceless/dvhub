@@ -2479,14 +2479,31 @@ body.dv-modal-open {
 
 /* Pro-gating — blur underlying section + overlay upgrade banner. License-active
    state removes [data-pro-gated] at runtime (settings.js applyProGateState). */
-.config-group[data-pro-gated="true"] { position: relative; overflow: hidden; }
+.config-group[data-pro-gated="true"] {
+  position: relative;
+  overflow: hidden;
+  /* Phase 19.1-04: min-height ensures the absolutely-positioned .pro-gate-banner
+     (~280px including lock icon + title + body + CTA padding) fits inside the
+     section without clipping. Previously short Inspector sections (e.g. empty
+     ML-Korrektur with no rows yet) collapsed to <200px and the banner top/bottom
+     got cropped by the overflow:hidden rule. */
+  min-height: 320px;
+}
 .config-group[data-pro-gated="true"] .pro-gate-overlay { position: relative; isolation: isolate; }
 .config-group[data-pro-gated="true"] .pro-gate-content {
   filter: blur(6px) saturate(.85);
   opacity: .55;
   pointer-events: none;
   user-select: none;
+  /* Reserve vertical room for the blurred preview so it doesn't collapse to
+     nothing on first paint (before any inspector data has arrived). */
+  min-height: 280px;
 }
+/* License-active: hide the entire pro-gate overlay (content preview + banner)
+   so the .inspector-live-scaffold can occupy the section cleanly. Without this
+   rule the .pro-gate-banner (position:absolute) lingers on top of the live
+   table even after applyProGateState() removes [data-pro-gated]. */
+.config-group:not([data-pro-gated="true"]) .pro-gate-overlay { display: none; }
 .pro-gate-banner {
   position: absolute;
   inset: 50% 24px auto 24px;
