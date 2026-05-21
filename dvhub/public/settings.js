@@ -3143,6 +3143,17 @@ function renderStage2BacktestResult(payload) {
     var deviationDelta = (s.deviationCount && s.deviationCount > 0)
       ? '<div class="stat-delta">+' + escHtmlForecastInspector(s.deviationCount) + ' Abweichungen</div>'
       : '';
+    // 19.1-06: operator-edit timeline badge. snapshotTimeline lists every
+    // schedule_snapshots row of the day with its source; operatorEditCount
+    // is the number tagged 'operator_manual'. Tooltip shows HH:MM of each.
+    var editTimeline = payload.snapshotTimeline || [];
+    var operatorEdits = editTimeline.filter(function (e) { return e.source === 'operator_manual'; });
+    var editLine = '';
+    if (operatorEdits.length > 0) {
+      var timeStr = operatorEdits.map(function (e) { return formatBerlinTimeForecastInspector(e.ts); }).join(', ');
+      editLine = '<div class="stat-delta" title="Manuelle Schedule-Edits an: ' + escHtmlForecastInspector(timeStr) + '">' +
+        escHtmlForecastInspector(operatorEdits.length) + ' Operator-Edit' + (operatorEdits.length === 1 ? '' : 's') + ' heute</div>';
+    }
     summary.innerHTML =
       '<div class="stat-card"><div class="stat-label">Slots geplant</div>' +
       '<div class="stat-val">' + escHtmlForecastInspector(s.plannedCount || 0) + '</div></div>' +
@@ -3151,7 +3162,7 @@ function renderStage2BacktestResult(payload) {
       '<div class="stat-delta">' + escHtmlForecastInspector(pctLabel) + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Operator-Overrides</div>' +
       '<div class="stat-val">' + escHtmlForecastInspector(s.overrideCount || 0) + '</div>' +
-      deviationDelta + '</div>';
+      deviationDelta + editLine + '</div>';
   }
 
   var meta = document.querySelector('[data-inspector-meta="stage2"]');

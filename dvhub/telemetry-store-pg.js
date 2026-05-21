@@ -1322,23 +1322,33 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         throw new Error('invalid_date_format');
       }
+      // 19.1-06: return ALL snapshots of the day (sorted ascending by ts) so
+      // the Stage-2 Backtest can reconstruct the rule-state-over-time and pick
+      // up operator_manual edits that were later overwritten by automation.
+      // Soft cap LIMIT 500 — even at one snapshot per minute (highly unusual)
+      // that covers most of a day.
       const result = await pool.query(`
         SELECT id, ts_utc, rules_json, source
         FROM schedule_snapshots
         WHERE ts_utc >= $1::date AND ts_utc < ($1::date + INTERVAL '1 day')
-        ORDER BY ts_utc DESC
-        LIMIT 1
+        ORDER BY ts_utc ASC
+        LIMIT 500
       `, [date]);
       if (result.rows.length === 0) return null;
-      const row = result.rows[0];
-      let rules = [];
-      try { rules = JSON.parse(row.rules_json || '[]'); } catch (_) { rules = []; }
-      return {
-        id: Number(row.id),
-        ts: row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
-        rules: Array.isArray(rules) ? rules : [],
-        source: row.source,
-      };
+      const snapshots = result.rows.map(row => {
+        let rules = [];
+        try { rules = JSON.parse(row.rules_json || '[]'); } catch (_) { rules = []; }
+        return {
+          id: Number(row.id),
+          ts: row.ts_utc instanceof Date ? row.ts_utc.toISOString() : String(row.ts_utc),
+          rules: Array.isArray(rules) ? rules : [],
+          source: row.source,
+        };
+      });
+      // Back-compat: callers that expect the old single-snapshot shape get the
+      // latest snapshot's top-level fields PLUS .snapshots[] array of all rows.
+      const latest = snapshots[snapshots.length - 1];
+      return Object.assign({}, latest, { snapshots });
     },
     async close() {
       await pool.end();

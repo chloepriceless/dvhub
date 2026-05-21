@@ -649,24 +649,53 @@ export function createInspector(ctx, deps = {}) {
       return { ok: false, error: 'no_snapshot', date };
     }
 
-    const { planRules, overrideRules } = partitionRulesByStage2(snapshot.rules || []);
+    // 19.1-06: prefer multi-snapshot reconstruction when telemetry-store
+    // returned .snapshots[] (sorted ascending). Falls back to single-snapshot
+    // mode for back-compat (e.g. SQLite store still using LIMIT 1).
+    const allSnapshots = Array.isArray(snapshot.snapshots) ? snapshot.snapshots : [snapshot];
+
+    // Plan rules: use the LATEST snapshot's stage2 rules — Stage-2 plans rewrite
+    // the full automation rule-set on every regeneration, so the latest planning
+    // event is the source of truth for what Stage-2 INTENDED that day.
+    const latestSnapshot = allSnapshots[allSnapshots.length - 1];
+    const { planRules } = partitionRulesByStage2(latestSnapshot.rules || []);
+
+    // Override rules: merge across ALL snapshots' override rules. If the operator
+    // added a manual rule mid-day that was later overwritten by automation, the
+    // earlier snapshot still has it. Keying on the rule's startTs preserves
+    // per-slot lookup. operator_manual-tagged snapshots get priority for the
+    // .source field shown in the UI.
+    const overrideByTs = {};
+    const snapshotsByOverrideTs = {};  // for tracking which snapshot contributed
+    for (const snap of allSnapshots) {
+      const { overrideRules: snapOverrides } = partitionRulesByStage2(snap.rules || []);
+      for (const o of snapOverrides) {
+        let ts = null;
+        if (typeof o.startTs === 'number' && Number.isFinite(o.startTs)) {
+          ts = new Date(o.startTs).toISOString();
+        } else if (typeof o.startTs === 'string') {
+          ts = o.startTs;
+        }
+        if (!ts) continue;
+        // operator_manual snapshots always win over config_persist for the same ts
+        const existing = snapshotsByOverrideTs[ts];
+        if (!existing || (snap.source === 'operator_manual' && existing !== 'operator_manual')) {
+          overrideByTs[ts] = {
+            id: o.id || null,
+            source: o.source || null,
+            snapshotSource: snap.source || null,
+            snapshotTs: snap.ts,
+          };
+          snapshotsByOverrideTs[ts] = snap.source;
+        }
+      }
+    }
 
     // Build actual-by-ts map (key = ISO slot start)
     const actualByTs = {};
     for (const a of actuals) {
       const ts = typeof a.start === 'string' ? a.start : new Date(a.start).toISOString();
       actualByTs[ts] = Number(a.powerW);
-    }
-    // Build override-by-ts map — keyed on slot start; accepts epoch-ms OR ISO string
-    const overrideByTs = {};
-    for (const o of overrideRules) {
-      let ts = null;
-      if (typeof o.startTs === 'number' && Number.isFinite(o.startTs)) {
-        ts = new Date(o.startTs).toISOString();
-      } else if (typeof o.startTs === 'string') {
-        ts = o.startTs;
-      }
-      if (ts) overrideByTs[ts] = { id: o.id || null, source: o.source || null };
     }
 
     // Iterate Stage-2 plan rules — one output slot per rule
@@ -711,10 +740,22 @@ export function createInspector(ctx, deps = {}) {
       ? Math.round((matchedCount / plannedCount) * 1000) / 10
       : 0;
 
+    // 19.1-06: timeline of all snapshots that day, with their source tag, so the
+    // frontend can show "X operator edits today at HH:MM, HH:MM, ..." badge.
+    const snapshotTimeline = allSnapshots.map(s => ({
+      id: s.id,
+      ts: s.ts,
+      source: s.source || null,
+      ruleCount: Array.isArray(s.rules) ? s.rules.length : 0,
+    }));
+    const operatorEditCount = snapshotTimeline.filter(s => s.source === 'operator_manual').length;
+
     return {
       ok: true,
       date,
-      snapshot: { id: snapshot.id, ts: snapshot.ts },
+      snapshot: { id: latestSnapshot.id, ts: latestSnapshot.ts },
+      snapshotTimeline,
+      operatorEditCount,
       slots,
       summary: { plannedCount, matchedCount, overrideCount, deviationCount, matchedPct },
     };
