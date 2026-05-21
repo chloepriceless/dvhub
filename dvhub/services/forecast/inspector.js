@@ -490,8 +490,23 @@ export function createInspector(ctx, deps = {}) {
       priceSlotCount: slotCountOf(forecastPayload.price),
     } : { pvSlotCount: 0, loadSlotCount: 0, priceSlotCount: 0 };
 
+    // Phase 19.1-01: detect "EOS up but not configured for auto-optimization".
+    // EOS v0.3.0 returns HTTP 404 with body
+    //   {"detail":"Can not get the energy management plan.\nDid you configure automatic optimization?"}
+    // when /v1/energy-management/plan is hit on an unconfigured instance.
+    // The adapter today maps this to {ok:false, error:'EOS returned HTTP 404'}
+    // because httpRequest treats non-2xx as ok:false. When BOTH push and pull
+    // fail with HTTP 404 right after isAvailable returned true, surface this
+    // as the more actionable reason 'eos_not_configured' so the UI can render
+    // a helpful banner instead of a raw HTTP code.
+    const looksNotConfigured =
+      !pushOk && !pullOk &&
+      typeof pushError === 'string' && pushError.includes('404') &&
+      (pullError === null || (typeof pullError === 'string' && pullError.includes('404')));
+
     return {
       available: true,
+      reason: looksNotConfigured ? 'eos_not_configured' : null,
       window: { from, to },
       push: { ok: pushOk, payloadSummary, error: pushError },
       pull: { ok: pullOk, slots: pullSlots, error: pullError },

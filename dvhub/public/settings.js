@@ -3020,8 +3020,20 @@ function renderEosInspector(payload) {
     return;
   }
 
-  // available:true — clear banner if it was previously visible.
-  if (banner) {
+  // Phase 19.1-01: available:true + reason:'eos_not_configured' → EOS läuft,
+  // aber automatische Optimierung ist in EOS' eigener Config nicht aktiviert.
+  // Surfaced as a yellow .warn banner with actionable text pointing operator
+  // at the EOSdash port. Distinct from 'eos_off' which means the service is
+  // not running at all.
+  if (payload.reason === 'eos_not_configured') {
+    if (banner) {
+      banner.classList.remove('u-hidden');
+      banner.classList.remove('error');
+      banner.classList.add('warn');
+      banner.textContent = 'EOS läuft, aber automatische Optimierung ist in EOS nicht konfiguriert. Bitte EOSdash öffnen (Port 8503) und Optimierung aktivieren.';
+    }
+  } else if (banner) {
+    // available:true — clear banner if it was previously visible.
     banner.classList.add('u-hidden');
     banner.classList.remove('warn');
     banner.classList.remove('error');

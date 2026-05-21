@@ -87,49 +87,66 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * Convert DVhub forecast response to EOS prediction format and send via PUT.
    * Accepts output of buildForecastResponse() from Phase 01.
    *
+   * Phase 19.1-01: EOS v0.3.0 replaced PUT /v1/prediction/list with
+   * PUT /v1/prediction/import/{provider_id} (per-provider import). We now
+   * push three providers separately:
+   *   - PVForecastImport       (PV power, W)
+   *   - LoadImport             (load power, W)
+   *   - ElecPriceImport        (electricity price, €/Wh)
+   *
    * @param {object} forecastResponse - { pv: { slots }, price: { slots }, load: { slots } }
-   * @returns {Promise<{ ok: boolean, error?: string }>}
+   * @returns {Promise<{ ok: boolean, error?: string, perProvider?: object }>}
    */
   async function pushForecast(forecastResponse) {
-    const payload = {};
+    const perProvider = {};
+    const errors = [];
 
-    // PV forecast: array of [timestamp_epoch, watts] pairs
-    if (forecastResponse.pv?.slots?.length) {
-      payload.pv_forecast = forecastResponse.pv.slots.map(s => [
-        Math.floor(new Date(s.ts).getTime() / 1000),
-        Number(s.watts) || 0
-      ]);
-    }
-
-    // Price forecast: use fully-loaded prices for EOS (D-20) when enriched
-    if (forecastResponse.price?.slots?.length) {
-      const enrichedSlots = forecastResponse.price.slots;
-      if (enrichedSlots[0]?.importCtKwh != null) {
-        // Use pre-computed fully-loaded prices via toEosStrompreisArray
-        payload.strompreis_euro_pro_wh = toEosStrompreisArray(enrichedSlots);
-      } else {
-        // Fallback: raw ctKwh (backwards compat)
-        payload.price_forecast = enrichedSlots.map(s => [
-          Math.floor(new Date(s.ts).getTime() / 1000),
-          Number(s.ctKwh) || 0
-        ]);
+    // Build per-provider DateTimeData payloads. EOS expects either
+    // PydanticDateTimeData ({timestamps, values}) or PydanticDateTimeDataFrame.
+    // Use DateTimeData (simpler shape) — anyOf accepts it.
+    function buildDateTimeData(slots, valueFn) {
+      const timestamps = [];
+      const values = [];
+      for (const s of slots) {
+        const ts = new Date(s.ts).toISOString();
+        timestamps.push(ts);
+        values.push(valueFn(s));
       }
+      return { timestamps, values };
     }
 
-    // Load forecast: array of [timestamp_epoch, watts] pairs
+    // PV
+    if (forecastResponse.pv?.slots?.length) {
+      const body = buildDateTimeData(forecastResponse.pv.slots, s => Number(s.watts) || 0);
+      const res = await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body);
+      perProvider.pv = { ok: res.ok, error: res.error || null };
+      if (!res.ok) errors.push(`PV: ${res.error}`);
+    }
+
+    // Load
     if (forecastResponse.load?.slots?.length) {
-      payload.load_forecast = forecastResponse.load.slots.map(s => [
-        Math.floor(new Date(s.ts).getTime() / 1000),
-        Number(s.watts) || 0
-      ]);
+      const body = buildDateTimeData(forecastResponse.load.slots, s => Number(s.watts) || 0);
+      const res = await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body);
+      perProvider.load = { ok: res.ok, error: res.error || null };
+      if (!res.ok) errors.push(`Load: ${res.error}`);
     }
 
-    const result = await httpRequest('PUT', '/v1/prediction/list', payload);
-
-    if (!result.ok) {
-      return { ok: false, error: result.error };
+    // Price — convert to €/Wh; EOS ElecPriceImport expects ts+value pairs.
+    if (forecastResponse.price?.slots?.length) {
+      const enriched = forecastResponse.price.slots;
+      const valueFn = enriched[0]?.importCtKwh != null
+        ? s => (Number(s.importCtKwh) || 0) / 100000  // ct/kWh → €/Wh
+        : s => (Number(s.ctKwh) || 0) / 100000;
+      const body = buildDateTimeData(enriched, valueFn);
+      const res = await httpRequest('PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
+      perProvider.price = { ok: res.ok, error: res.error || null };
+      if (!res.ok) errors.push(`Price: ${res.error}`);
     }
-    return { ok: true };
+
+    if (errors.length > 0) {
+      return { ok: false, error: errors.join('; '), perProvider };
+    }
+    return { ok: true, perProvider };
   }
 
   /**
@@ -192,7 +209,9 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * @returns {Promise<boolean>}
    */
   async function isAvailable() {
-    const result = await httpRequest('GET', '/v1/');
+    // EOS Akkudoktor FastAPI exposes /v1/health (returns {status:"alive",...}).
+    // /v1/ returns 404 on EOS v0.3.0 (post-starlette<1.0 pin from Phase 18).
+    const result = await httpRequest('GET', '/v1/health');
     return result.ok;
   }
 
