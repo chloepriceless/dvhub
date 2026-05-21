@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
-  <link rel="stylesheet" href="/integrations.css?v=5" />
+  <link rel="stylesheet" href="/integrations.css?v=6" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -134,31 +134,160 @@
         </div>
       </section>
 
-      <!-- MQTT Inspector drawer (Phase 09.4 D-03/D-04). Static markup so the
-           drawer is never innerHTML-injected and needs no inline styling. The
-           slide-over animation lives entirely in integrations.css, toggled by
-           the .is-open class. integrations.js#openMqttDrawer() removes the
+      <!-- MQTT Inspector drawer (Phase 09.4 D-03/D-04; refactored to .dv-drawer-*
+           in Phase 20 D-14). Static markup so the drawer is never
+           innerHTML-injected and needs no inline styling. The slide-over
+           animation lives entirely in integrations.css, toggled by the
+           .is-open class. integrations.js#openMqttDrawer() removes the
            hidden attribute, then adds .is-open on the next frame so the
-           translateX transition runs; closeMqttDrawer() reverses it and stops
-           the topics poll loop. Opened by clicking the MQTT .conn-card. -->
-      <div class="mqtt-drawer-backdrop" id="mqtt-drawer-backdrop" hidden></div>
-      <aside class="mqtt-drawer" id="mqtt-drawer" role="dialog" aria-modal="true"
+           translateX transition runs; closeMqttDrawer() reverses it and
+           stops the topics poll loop. Opened by clicking the MQTT
+           .conn-card. The MQTT-specific content slots (pause button,
+           meta line, topics list) keep their original IDs so the topics
+           poll logic still finds them. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-mqtt-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-mqtt" role="dialog" aria-modal="true"
              aria-label="MQTT Topic Inspector" hidden>
-        <header class="mqtt-drawer-head">
+        <header class="dv-drawer-head">
           <h2>MQTT Inspector</h2>
-          <div class="mqtt-drawer-head-actions">
+          <div class="dv-drawer-head-actions">
             <button type="button" class="btn sm ghost" id="mqtt-drawer-pause" aria-pressed="false">&#x23F8; Pause</button>
-            <button type="button" class="btn sm ghost" id="mqtt-drawer-close" aria-label="Schlie&szlig;en">&times;</button>
+            <button type="button" class="btn sm ghost dv-drawer-close" id="dv-drawer-mqtt-close" aria-label="Schlie&szlig;en">&times;</button>
           </div>
         </header>
-        <p class="mqtt-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
-        <div class="mqtt-drawer-body" id="mqtt-drawer-topics"></div>
+        <p class="dv-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
+        <div class="dv-drawer-body" id="mqtt-drawer-topics"></div>
+      </aside>
+
+      <!-- Notifications config drawer (Phase 20 D-01/D-02). Static markup so the
+           drawer is never innerHTML-injected. Tab panels are wired by
+           subsequent plans 20-02 (Telegram), 20-03 (Pushover), 20-04 (Uptime
+           Kuma). ntfy is wired by this plan (20-01) as the first migration
+           provider. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-notifications-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-notifications" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-notifications-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-notifications-title">Notifications</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-notifications-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <nav class="dv-tabs" role="tablist" aria-label="Notification-Provider">
+          <button type="button" role="tab" class="dv-tab is-active"
+                  id="dv-tab-notif-pushover"
+                  aria-selected="true" aria-controls="dv-panel-notif-pushover"
+                  data-panel="dv-panel-notif-pushover" tabindex="0">Pushover</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-notif-ntfy"
+                  aria-selected="false" aria-controls="dv-panel-notif-ntfy"
+                  data-panel="dv-panel-notif-ntfy" tabindex="-1">ntfy.sh</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-notif-telegram"
+                  aria-selected="false" aria-controls="dv-panel-notif-telegram"
+                  data-panel="dv-panel-notif-telegram" tabindex="-1">Telegram</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-notif-kuma"
+                  aria-selected="false" aria-controls="dv-panel-notif-kuma"
+                  data-panel="dv-panel-notif-kuma" tabindex="-1">Uptime-Kuma</button>
+        </nav>
+        <div class="dv-drawer-body">
+          <section role="tabpanel" id="dv-panel-notif-pushover"
+                   aria-labelledby="dv-tab-notif-pushover" class="dv-tabpanel">
+            <p class="dv-drawer-empty">Pushover-Tab wird in Plan 20-02 erg&auml;nzt.</p>
+          </section>
+          <section role="tabpanel" id="dv-panel-notif-ntfy"
+                   aria-labelledby="dv-tab-notif-ntfy" class="dv-tabpanel" hidden>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="notif-ntfy-enabled">
+              <span>Aktiviert</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic-URL</span>
+              <input type="text" class="input mono" id="notif-ntfy-topicurl"
+                     placeholder="https://ntfy.sh/dvhub-..." autocomplete="off" spellcheck="false">
+              <span class="field-hint">https://-URL des ntfy-Topics.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Token (optional)</span>
+              <input type="password" class="input mono" id="notif-ntfy-token"
+                     placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Nur n&ouml;tig wenn das Topic Auth erfordert.</span>
+            </label>
+            <div class="dv-field-validation" id="notif-ntfy-banner" hidden></div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm" id="notif-ntfy-test">&#x25B6; Test-Send</button>
+              <button type="button" class="btn sm primary" id="notif-ntfy-save">Speichern</button>
+            </div>
+          </section>
+          <section role="tabpanel" id="dv-panel-notif-telegram"
+                   aria-labelledby="dv-tab-notif-telegram" class="dv-tabpanel" hidden>
+            <p class="dv-drawer-empty">Telegram-Tab wird in Plan 20-03 erg&auml;nzt.</p>
+          </section>
+          <section role="tabpanel" id="dv-panel-notif-kuma"
+                   aria-labelledby="dv-tab-notif-kuma" class="dv-tabpanel" hidden>
+            <p class="dv-drawer-empty">Uptime-Kuma-Tab wird in Plan 20-04 erg&auml;nzt.</p>
+          </section>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-notifications-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
+      <!-- VRM config drawer (Phase 20-05). Static markup; Plan 20-05 fills the form body. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-vrm-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-vrm" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-vrm-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-vrm-title">VRM (Victron Cloud)</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-vrm-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-vrm-body">
+          <p class="dv-drawer-empty">VRM-Drawer wird in Plan 20-05 erg&auml;nzt.</p>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-vrm-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
+      <!-- Forecast-Provider config drawer (Phase 20-06). Static markup; 2 tabs. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-forecast-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-forecast" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-forecast-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-forecast-title">PV-Forecast-Provider</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-forecast-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <nav class="dv-tabs" role="tablist" aria-label="Forecast-Provider">
+          <button type="button" role="tab" class="dv-tab is-active"
+                  id="dv-tab-fc-pvnode"
+                  aria-selected="true" aria-controls="dv-panel-fc-pvnode"
+                  data-panel="dv-panel-fc-pvnode" tabindex="0">pvnode</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-fc-solcast"
+                  aria-selected="false" aria-controls="dv-panel-fc-solcast"
+                  data-panel="dv-panel-fc-solcast" tabindex="-1">Solcast</button>
+        </nav>
+        <div class="dv-drawer-body">
+          <section role="tabpanel" id="dv-panel-fc-pvnode"
+                   aria-labelledby="dv-tab-fc-pvnode" class="dv-tabpanel">
+            <p class="dv-drawer-empty">pvnode-Tab wird in Plan 20-06 erg&auml;nzt.</p>
+          </section>
+          <section role="tabpanel" id="dv-panel-fc-solcast"
+                   aria-labelledby="dv-tab-fc-solcast" class="dv-tabpanel" hidden>
+            <p class="dv-drawer-empty">Solcast-Tab wird in Plan 20-06 erg&auml;nzt.</p>
+          </section>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-forecast-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
-  <script src="/integrations.js?v=11"></script>
+  <script src="/integrations.js?v=12"></script>
 </body>
 </html>
