@@ -44,8 +44,12 @@ function makeCtx(baseUrl) {
   };
 }
 
-// --- Test 1: pushForecast sends formatted data via PUT to /v1/prediction/list ---
-test('pushForecast sends formatted forecast data via PUT to /v1/prediction/list with correct Content-Type', async () => {
+// --- Test 1: pushForecast sends per-provider PUT to /v1/prediction/import/{provider} ---
+// Phase 19.1-01: EOS v0.3.0 replaced PUT /v1/prediction/list with per-provider
+// PUT /v1/prediction/import/{PVForecastImport,LoadImport,ElecPriceImport}.
+// Each call carries a PydanticDateTimeData {timestamps, values} body and
+// ?force_enable=true query param.
+test('pushForecast sends per-provider PUT to /v1/prediction/import with DateTimeData body', async () => {
   const mock = await createMockEos((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok' }));
@@ -78,13 +82,21 @@ test('pushForecast sends formatted forecast data via PUT to /v1/prediction/list 
     const result = await adapter.pushForecast(forecastResponse);
 
     assert.equal(result.ok, true);
-    assert.ok(mock.requests.length >= 1);
+    assert.ok(result.perProvider, 'Should return perProvider report');
+    assert.ok(mock.requests.length >= 3, 'Should fire 3 PUTs (pv/load/price)');
 
-    const predReq = mock.requests.find(r => r.url === '/v1/prediction/list');
-    assert.ok(predReq, 'Should send to /v1/prediction/list');
-    assert.equal(predReq.method, 'PUT');
-    assert.ok(predReq.body.pv_forecast, 'Should include pv_forecast');
-    assert.ok(Array.isArray(predReq.body.pv_forecast), 'pv_forecast should be array');
+    // Find each provider call. URLs include ?force_enable=true; strip query for match.
+    const stripQs = u => (u || '').split('?')[0];
+    const pvReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/PVForecastImport');
+    const loadReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/LoadImport');
+    const priceReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/ElecPriceImport');
+    assert.ok(pvReq, 'Should PUT PVForecastImport');
+    assert.ok(loadReq, 'Should PUT LoadImport');
+    assert.ok(priceReq, 'Should PUT ElecPriceImport');
+    assert.equal(pvReq.method, 'PUT');
+    assert.ok(Array.isArray(pvReq.body.timestamps), 'PV body should have timestamps array');
+    assert.ok(Array.isArray(pvReq.body.values), 'PV body should have values array');
+    assert.equal(pvReq.body.values.length, 2, 'PV body should carry 2 slots');
   } finally {
     await mock.close();
   }
@@ -215,8 +227,10 @@ test('httpRequest times out and returns { ok: false, error } (consistent error c
   try {
     // Use a very short timeout override for test speed
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`), { timeoutMs: 200 });
+    // 19.1-01: pushForecast now skips empty-slot sections, so we must supply
+    // at least one non-empty section to trigger the HTTP call that will time out.
     const result = await adapter.pushForecast({
-      pv: { slots: [] },
+      pv: { slots: [{ ts: '2026-04-03T12:00:00Z', watts: 1000 }] },
       price: { slots: [] },
       load: { slots: [] }
     });
