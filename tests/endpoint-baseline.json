@@ -25,6 +25,8 @@
     "/api/forecast/inspector/optimizer-cold",
     "/api/forecast/inspector/pv-providers",
     "/api/forecast/inspector/stage2?date=",
+    "/api/forecast/providers/pvnode",
+    "/api/forecast/providers/solcast",
     "/api/history/backfill/prices",
     "/api/history/backfill/vrm",
     "/api/history/export?view=",

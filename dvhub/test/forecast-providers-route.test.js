@@ -110,16 +110,19 @@ describe('Plan 20-06: /api/forecast/providers/solcast/probe POST', () => {
 
   it('Probe endpoint enforces per-provider rate-limit (5/min, T-20-06-03)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/solcast\/probe['"][\s\S]*?return\s+json\(res,\s*(\d+|result\.ok\s*\?\s*200\s*:\s*502)/);
-    assert.ok(m, 'probe handler must end with a json response');
-    assert.match(m[0], /checkProviderRateLimit\(['"]solcast['"]/,
+    // Match from the probe handler header to the next adjacent handler
+    // (`if (url.pathname === '/api/forecast/providers/pvnode'` — the next
+    // route handler block) so we capture the whole probe body.
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/solcast\/probe['"][\s\S]*?(?=url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode['"])/);
+    assert.ok(m, 'probe handler block must precede the pvnode handler');
+    assert.match(m[0], /checkProviderRateLimit\(\s*['"]solcast['"]/,
       "probe must call checkProviderRateLimit('solcast', apiKey)");
     assert.match(m[0], /rate_limited/);
   });
 
   it('Probe endpoint imports + calls probeSolcast helper from solcast-client', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/solcast\/probe['"][\s\S]*?\)\s*;\s*\}/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/solcast\/probe['"][\s\S]*?(?=url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode['"])/);
     assert.ok(m);
     assert.match(m[0], /probeSolcast/);
     assert.match(m[0], /solcast-client/);
@@ -163,19 +166,24 @@ describe('Plan 20-06: /api/forecast/providers/pvnode GET/POST', () => {
 
   it('Probe endpoint enforces per-provider rate-limit + imports probePvnode', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode\/probe['"][\s\S]*?probePvnode/);
-    assert.ok(m);
-    assert.match(m[0], /checkProviderRateLimit\(['"]pvnode['"]/);
+    // Match the pvnode probe block up to the next /api/integrations or
+    // /api/notifications handler (the next adjacent route block).
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode\/probe['"][\s\S]*?(?=url\.pathname\s*===\s*['"]\/api\/(integrations|notifications|forecast))/);
+    assert.ok(m, 'pvnode probe block must precede the next adjacent route handler');
+    assert.match(m[0], /probePvnode/);
+    assert.match(m[0], /checkProviderRateLimit\(\s*['"]pvnode['"]/);
     assert.match(m[0], /rate_limited/);
     assert.match(m[0], /pvnode-client/);
   });
 
   it('Probe endpoint reads lat/lon/slope/orientation from cfg before calling probePvnode', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode\/probe['"][\s\S]*?probePvnode\([\s\S]*?\)/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode\/probe['"][\s\S]*?(?=url\.pathname\s*===\s*['"]\/api\/(integrations|notifications|forecast))/);
     assert.ok(m);
     // Must read from cfg.forecast.location.* (schema is `latitude`, not `lat`).
     assert.match(m[0], /forecast(\?\.|\.)location/);
+    // Must call probePvnode in the matched block.
+    assert.match(m[0], /probePvnode\(/);
   });
 });
 
@@ -224,28 +232,23 @@ describe('Plan 20-06: settings.js HIDDEN_FIELD_PATHS (single-editor T-20-06)', (
 });
 
 describe('Plan 20-06: endpoint-baseline.json contains new forecast-provider URLs', () => {
+  // NOTE: only the GET-side URLs land in the baseline because the inventory
+  // gate scans for literal [Aa]piFetch('/api/...') call sites. The /probe
+  // URLs are passed as string arguments to handleTestSend(..., url, ...) /
+  // saveProviderTab(..., url) — NOT direct apiFetch calls — so the inventory
+  // never sees them. Plan 20-01 made the same choice for the notification
+  // /test endpoints (none of *_/test* land in baseline). Route registration
+  // is verified by the static-regex tests above, not by the URL inventory.
   it('includes /api/forecast/providers/solcast', () => {
     const b = readBaseline();
     assert.ok(b.urls.includes('/api/forecast/providers/solcast'),
       'baseline must list /api/forecast/providers/solcast');
   });
 
-  it('includes /api/forecast/providers/solcast/probe', () => {
-    const b = readBaseline();
-    assert.ok(b.urls.includes('/api/forecast/providers/solcast/probe'),
-      'baseline must list /api/forecast/providers/solcast/probe');
-  });
-
   it('includes /api/forecast/providers/pvnode', () => {
     const b = readBaseline();
     assert.ok(b.urls.includes('/api/forecast/providers/pvnode'),
       'baseline must list /api/forecast/providers/pvnode');
-  });
-
-  it('includes /api/forecast/providers/pvnode/probe', () => {
-    const b = readBaseline();
-    assert.ok(b.urls.includes('/api/forecast/providers/pvnode/probe'),
-      'baseline must list /api/forecast/providers/pvnode/probe');
   });
 });
 

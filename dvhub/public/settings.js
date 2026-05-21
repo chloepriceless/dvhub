@@ -1211,7 +1211,15 @@ const HIDDEN_FIELD_PATHS = [
   // rows under /settings#tab-system so operators only have one canonical
   // editor surface.
   'telemetry.historyImport.vrmPortalId',
-  'telemetry.historyImport.vrmToken'
+  'telemetry.historyImport.vrmToken',
+  // Phase 20-06 (single-editor): the Solcast + pvnode apiKey fields are
+  // edited via the dedicated /integrations Forecast-Provider drawer. The
+  // schema rows for forecast.solcast.enabled, forecast.solcast.siteId, and
+  // forecast.pvnode.nowcastEnabled stay visible in the auto-form as a
+  // power-user fallback (siteId is not a secret per D-10; the booleans
+  // are pure flags).
+  'forecast.solcast.apiKey',
+  'forecast.pvnode.apiKey'
 ];
 
 function renderDestinationGrid(destinationId) {
