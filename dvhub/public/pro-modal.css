@@ -1,0 +1,175 @@
+/* dvhub/public/pro-modal.css — Phase 17 Plan 17-06
+ *
+ * Aurora-tokenized styles for the Pro-Required-Modal + Family-nav lock-badge.
+ * Tokens consumed (declared in dvhub-app.css):
+ *   --accent-pro, --accent-pro-glow (Phase 17-01)
+ *   --violet, --bg-0, --bg-1, --glass, --glass-brd, --text, --text-dim,
+ *   --r-xl, --r-sm, --r-md, --f-mono, --f-brand, --gap-1, --gap-2, --gap-3,
+ *   --gap-4, --gap-5
+ *
+ * No hardcoded brand colors. Light-theme overrides only where the dark
+ * variant doesn't already cascade correctly via [data-theme="light"]
+ * token redeclaration (Aurora's pattern).
+ */
+
+/* ===== Pro-Required-Modal — overlay + dialog ===== */
+
+.pro-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 6, 16, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  padding: var(--gap-4, 16px);
+}
+
+[data-theme="light"] .pro-modal-overlay {
+  background: rgba(40, 50, 80, 0.34);
+}
+
+.pro-modal-overlay[hidden] {
+  display: none;
+}
+
+.pro-modal-dialog {
+  position: relative;
+  min-width: 360px;
+  max-width: 480px;
+  width: 100%;
+  padding: var(--gap-5, 20px);
+  background: var(--bg-1);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-xl, 18px);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.42),
+    0 0 0 1px var(--accent-pro-glow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-3, 12px);
+  outline: none;
+}
+
+.pro-modal-kicker {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-pro);
+}
+
+.pro-modal-title {
+  margin: 0;
+  font-family: var(--f-brand);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+  background: linear-gradient(135deg, var(--accent-pro), var(--violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.pro-modal-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.pro-modal-pitch {
+  /* Phase 17: empty slot. Phase 18+ fills with feature-list + pricing-hint.
+   * Hidden when empty so it doesn't add visual weight to the dialog. */
+  display: none;
+}
+
+.pro-modal-pitch:not(:empty) {
+  display: block;
+  padding: var(--gap-3, 12px);
+  border-left: 4px solid var(--accent-pro);
+  background: var(--glass);
+  border-radius: var(--r-sm, 6px);
+}
+
+.pro-modal-actions {
+  display: flex;
+  gap: var(--gap-2, 8px);
+  justify-content: flex-end;
+  margin-top: var(--gap-2, 8px);
+}
+
+.pro-modal-btn {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: var(--r-md, 10px);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.pro-modal-btn:focus-visible {
+  outline: 2px solid var(--accent-pro);
+  outline-offset: 2px;
+}
+
+.pro-modal-btn-secondary {
+  background: var(--glass);
+  color: var(--text-dim);
+  border-color: var(--glass-brd);
+}
+
+.pro-modal-btn-secondary:hover {
+  background: var(--bg-0);
+  color: var(--text);
+}
+
+.pro-modal-btn-primary {
+  background: linear-gradient(135deg, var(--accent-pro), var(--violet));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 18px var(--accent-pro-glow);
+}
+
+[data-theme="light"] .pro-modal-btn-primary {
+  color: #fff;
+}
+
+.pro-modal-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px var(--accent-pro-glow);
+}
+
+.pro-modal-btn-primary:active {
+  transform: translateY(0);
+}
+
+/* ===== Lock-badge on .topbar-nav a.is-locked ===== */
+
+.topbar-nav a.is-locked {
+  position: relative;
+  color: var(--text-dim);
+  opacity: 0.92;
+}
+
+.topbar-nav a.is-locked:hover {
+  color: var(--accent-pro);
+  opacity: 1;
+}
+
+.lock-badge {
+  display: inline-block;
+  margin-left: var(--gap-1, 4px);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  filter: drop-shadow(0 0 6px var(--accent-pro-glow));
+  user-select: none;
+  -webkit-user-select: none;
+}
