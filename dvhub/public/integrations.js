@@ -1318,14 +1318,23 @@
       buttonEl.textContent = origText;
     }
   }
-  // Per-tab button handler delegation. The Notifications card-open delegation
-  // above already routes the .conn-card click into the unified drawer dispatcher;
-  // this handler reacts to the same click ONE microtask later to load the ntfy
-  // tab (because the drawer's onOpen does not yet know about per-tab loaders —
-  // that wiring lands in plans 20-02..04 as the other tabs are added).
+  // Per-tab button handler delegation + SINGLE consolidated card-open loader
+  // (WR-04). The Notifications card-open click loads ALL four tabs in
+  // default-active-first order (Pushover is the visible tab per HTML
+  // aria-selected="true") so the operator sees live data immediately on the
+  // default tab and tab-switches don't re-fetch. The other three per-tab
+  // listeners (Telegram, Pushover, Kuma) no longer trigger their own
+  // setTimeout(loadXxxTab) on the card-open — they only handle save/test
+  // button clicks. This collapses 4 simultaneous GETs into a single
+  // coordinated load and 3 redundant pushLog entries per drawer open.
   document.addEventListener('click', function (e) {
     if (e.target.closest('.conn-card[data-system="notifications"]')) {
-      setTimeout(loadNtfyTab, 0);
+      setTimeout(function () {
+        loadPushoverTab();   // default-active tab — load first
+        loadNtfyTab();
+        loadTelegramTab();
+        loadKumaTab();
+      }, 0);
     }
     var saveBtn = e.target.closest('#notif-ntfy-save');
     if (saveBtn) { saveNtfyTab(saveBtn); return; }
@@ -1419,13 +1428,10 @@
       buttonEl.textContent = origText;
     }
   }
-  // Per-tab button handler delegation. The Notifications card-open delegation
-  // earlier also loads the Telegram tab, so the operator sees the live values
-  // immediately when switching to that tab (no extra fetch on tab activate).
+  // Per-tab button handler delegation. The consolidated card-open loader in
+  // the ntfy block above already triggers loadTelegramTab() once per drawer
+  // open (WR-04). This listener only handles the save/test button clicks.
   document.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-card[data-system="notifications"]')) {
-      setTimeout(loadTelegramTab, 0);
-    }
     var saveBtn = e.target.closest('#notif-telegram-save');
     if (saveBtn) { saveTelegramTab(saveBtn); return; }
     var testBtn = e.target.closest('#notif-telegram-test');
@@ -1527,13 +1533,11 @@
       buttonEl.textContent = origText;
     }
   }
-  // Per-tab button handler delegation. The Notifications card-open delegation
-  // also loads the Pushover tab so the operator sees the live values on the
-  // default tab without an additional fetch when switching.
+  // Per-tab button handler delegation. The consolidated card-open loader in
+  // the ntfy block above already triggers loadPushoverTab() (first, since
+  // Pushover is the default-active tab) once per drawer open (WR-04). This
+  // listener only handles the save/test button clicks.
   document.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-card[data-system="notifications"]')) {
-      setTimeout(loadPushoverTab, 0);
-    }
     var saveBtn = e.target.closest('#notif-pushover-save');
     if (saveBtn) { savePushoverTab(saveBtn); return; }
     var testBtn = e.target.closest('#notif-pushover-test');
@@ -1629,10 +1633,10 @@
       buttonEl.textContent = origText;
     }
   }
+  // The consolidated card-open loader in the ntfy block above already
+  // triggers loadKumaTab() once per drawer open (WR-04). This listener only
+  // handles the save/test button clicks.
   document.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-card[data-system="notifications"]')) {
-      setTimeout(loadKumaTab, 0);
-    }
     var saveBtn = e.target.closest('#notif-kuma-save');
     if (saveBtn) { saveKumaTab(saveBtn); return; }
     var testBtn = e.target.closest('#notif-kuma-test');

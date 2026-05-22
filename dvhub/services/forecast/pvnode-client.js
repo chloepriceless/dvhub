@@ -472,18 +472,21 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
  *
  * Always resolves with `{ok, sample?, error?}` — never throws (T-20-06-06).
  *
- * @param {{ apiKey:string, lat:number, lon:number, slope?:number, orientation?:number }} args
+ * @param {{ apiKey:string, lat:number, lon:number, slope?:number, orientation?:number, kwp?:number, nowcast?:boolean }} args
  * @returns {Promise<{ok:boolean, sample?:{ts:string|null, watts:number}|null, error?:string}>}
  */
-export async function probePvnode({ apiKey, lat, lon, slope = 30, orientation = 180 }) {
+export async function probePvnode({ apiKey, lat, lon, slope = 30, orientation = 180, kwp = 1, nowcast = false }) {
   if (!apiKey) return { ok: false, error: 'missing_apikey' };
-  const params = new URLSearchParams({
-    lat: String(lat),
-    lon: String(lon),
-    slope: String(slope),
-    orientation: String(orientation),
-    forecastDays: '1',
-    timezone: 'utc'
+  // WR-01: reuse buildQueryParams so the probe shape (latitude/longitude/
+  // forecast_days/pv_power_kw/nowcast/required_data/pv_only/timezone) matches
+  // the production fetch. The pre-fix probe used lat/lon/forecastDays which
+  // the api.pvnode.com openapi.json rejects with HTTP 422.
+  const params = buildQueryParams({
+    lat,
+    lon,
+    plants: [{ kwp, tiltDeg: slope, azimuthDeg: orientation }],
+    forecastDays: 1,
+    nowcast
   });
   const url = `${PVNODE_BASE}/forecast/?${params.toString()}`;
   try {
@@ -494,17 +497,23 @@ export async function probePvnode({ apiKey, lat, lon, slope = 30, orientation = 
     });
     if (!res.ok) return { ok: false, error: `pvnode HTTP ${res.status}` };
     const data = await res.json();
-    // Field-name-tolerant shape (mirrors extractPowerSeries above): data[]
-    // is the documented shape; forecast[] is a known alternate.
-    const first = Array.isArray(data?.data) ? data.data[0]
+    // WR-02: shape priority matches extractPowerSeries — forecasts[] plural is
+    // the documented production shape; data[] and forecast[] singular are kept
+    // as tolerant fallbacks. Field synonyms mirror the production extractor
+    // (timestamp/time/ts/ts_utc; power_w/power/watts).
+    const first = Array.isArray(data?.forecasts) ? data.forecasts[0]
+                : Array.isArray(data?.data) ? data.data[0]
                 : Array.isArray(data?.forecast) ? data.forecast[0]
+                : Array.isArray(data) ? data[0]
                 : null;
     if (!first) return { ok: true, sample: null };
+    const ts = first.timestamp ?? first.time ?? first.ts ?? first.ts_utc ?? first.datetime ?? null;
+    const pw = first.power_w ?? first.power ?? first.watts ?? 0;
     return {
       ok: true,
       sample: {
-        ts: first.ts || first.datetime || first.timestamp || null,
-        watts: Math.round(first.power_w || first.power || first.watts || 0)
+        ts,
+        watts: Math.round(Number(pw) || 0)
       }
     };
   } catch (e) {

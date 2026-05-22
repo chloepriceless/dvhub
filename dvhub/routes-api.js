@@ -2717,7 +2717,13 @@ export function createApiRoutes(ctx) {
         ? (prev.vrmToken || '')
         : clip(body.vrmToken, 512);
       next.telemetry.historyImport.enabled = !!body.enabled;
-      next.telemetry.historyImport.provider = 'vrm';
+      // WR-03: only claim the provider slot when actually enabling the import.
+      // Setting unconditionally would silently overwrite an operator's choice
+      // of a future second history-import provider (e.g. Solcast backfill) on
+      // every "Credentials entfernen" click.
+      if (body.enabled) {
+        next.telemetry.historyImport.provider = 'vrm';
+      }
       next.telemetry.historyImport.vrmPortalId = clip(body.vrmPortalId, 64);
       if (token) {
         next.telemetry.historyImport.vrmToken = token;
@@ -2903,6 +2909,7 @@ export function createApiRoutes(ctx) {
       );
       let slope = 30;
       let orientation = 180;
+      let kwp = 1;
       const plants = Array.isArray(cfg.userEnergyPricing?.pvPlants) ? cfg.userEnergyPricing.pvPlants : [];
       // Largest configured plane wins for a representative probe.
       const biggest = plants
@@ -2913,12 +2920,14 @@ export function createApiRoutes(ctx) {
       if (biggest) {
         slope = Number(biggest.tiltDeg);
         orientation = Number(biggest.azimuthDeg);
+        kwp = Number(biggest.kwp);
       }
+      const nowcast = !!stored.nowcastEnabled;
       const rl = checkProviderRateLimit('pvnode', apiKey);
       if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
       try {
         const { probePvnode } = await import('./services/forecast/pvnode-client.js');
-        const result = await probePvnode({ apiKey, lat, lon, slope, orientation });
+        const result = await probePvnode({ apiKey, lat, lon, slope, orientation, kwp, nowcast });
         pushLog('forecast_provider_probe', {
           provider: 'pvnode', ok: result.ok, error: result.error
         }, actorContext(req));

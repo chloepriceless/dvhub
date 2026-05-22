@@ -101,14 +101,17 @@ describe('Plan 20-05: /api/integrations/vrm POST (D-12 server-side-merge)', () =
     assert.match(m[0], /clip\(\s*body\.vrmToken\s*,\s*512\s*\)/, 'vrmToken must be clipped to 512');
   });
 
-  it('POST handler does server-side merge into cfg.telemetry.historyImport + sets provider=vrm', () => {
+  it('POST handler does server-side merge into cfg.telemetry.historyImport + sets provider=vrm only when enabling (WR-03)', () => {
     const src = readRoutes();
     const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/vrm['"]\s*&&\s*req\.method\s*===\s*['"]POST['"][\s\S]*?return\s+json\(res,\s*200,\s*\{\s*ok:\s*true\s*\}\)/);
     assert.ok(m);
     // Deep-clone + saveAndApplyConfig — canonical 09.4-06 pattern.
     assert.match(m[0], /JSON\.parse\(JSON\.stringify\(\s*ctx\.getRawCfg\(\)/);
     assert.match(m[0], /next\.telemetry\.historyImport\.enabled\s*=/);
-    assert.match(m[0], /next\.telemetry\.historyImport\.provider\s*=\s*['"]vrm['"]/);
+    // WR-03: provider='vrm' must be guarded by an `if (body.enabled)` so that
+    // the "Credentials entfernen" disable-path doesn't silently overwrite a
+    // future second history-import provider's claim.
+    assert.match(m[0], /if\s*\(\s*body\.enabled\s*\)\s*\{\s*\n\s*next\.telemetry\.historyImport\.provider\s*=\s*['"]vrm['"]/);
     assert.match(m[0], /next\.telemetry\.historyImport\.vrmPortalId\s*=/);
     assert.match(m[0], /ctx\.saveAndApplyConfig\s*\(\s*next\s*\)/);
     // Error path: must NOT include actorContext on save_error pushLog.

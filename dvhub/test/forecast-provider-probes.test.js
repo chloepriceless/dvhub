@@ -106,33 +106,65 @@ describe('Plan 20-06: probeSolcast (single-shot operator probe)', () => {
 });
 
 describe('Plan 20-06: probePvnode (single-shot operator probe)', () => {
-  it('resolves {ok:true, sample:{ts, watts}} on a non-empty data[] response', async () => {
+  it('resolves {ok:true, sample:{ts, watts}} on a non-empty forecasts[] response', async () => {
     let observedUrl = null;
     let observedHeaders = null;
     mockFetchOnce((url, opts) => {
       observedUrl = url;
       observedHeaders = opts && opts.headers;
+      // WR-02: forecasts[] plural is the production-documented shape.
       return jsonResponse(200, {
-        data: [
-          { ts: '2026-01-01T12:00:00Z', power_w: 1234 }
+        forecasts: [
+          { timestamp: '2026-01-01T12:00:00Z', power_w: 1234 }
         ]
       });
     });
-    const result = await probePvnode({ apiKey: 'pv-key-abcdefghijklmno', lat: 48.5, lon: 9.5, slope: 30, orientation: 180 });
+    const result = await probePvnode({
+      apiKey: 'pv-key-abcdefghijklmno',
+      lat: 48.5, lon: 9.5, slope: 30, orientation: 180, kwp: 7.5
+    });
     assert.equal(result.ok, true);
     assert.ok(result.sample);
     assert.equal(result.sample.ts, '2026-01-01T12:00:00Z');
     assert.equal(result.sample.watts, 1234);
     assert.match(observedUrl, /api\.pvnode\.com/, 'must hit api.pvnode.com');
-    assert.match(observedUrl, /lat=48\.5/);
-    assert.match(observedUrl, /lon=9\.5/);
+    // WR-01: URL params must match production buildQueryParams shape.
+    assert.match(observedUrl, /latitude=48\.5/);
+    assert.match(observedUrl, /longitude=9\.5/);
     assert.match(observedUrl, /slope=30/);
     assert.match(observedUrl, /orientation=180/);
-    assert.match(observedUrl, /forecastDays=1/, 'probe MUST use forecastDays=1 (minimise free-tier 40/mo)');
+    assert.match(observedUrl, /forecast_days=1/, 'probe MUST use forecast_days=1 (minimise free-tier 40/mo)');
+    assert.match(observedUrl, /pv_power_kw=7\.5/, 'probe MUST send pv_power_kw from configured plant');
+    assert.match(observedUrl, /nowcast=false/, 'probe defaults nowcast=false (cheaper than nowcast=true)');
+    assert.match(observedUrl, /pv_only=true/);
+    assert.match(observedUrl, /required_data=spec_watts/);
     assert.equal(observedHeaders.Authorization, 'Bearer pv-key-abcdefghijklmno');
   });
 
-  it('also accepts a forecast[] array shape and {datetime} field synonym', async () => {
+  it('honours nowcast=true when caller opts in', async () => {
+    let observedUrl = null;
+    mockFetchOnce((url) => {
+      observedUrl = url;
+      return jsonResponse(200, { forecasts: [{ timestamp: 't', power_w: 0 }] });
+    });
+    await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0, nowcast: true });
+    assert.match(observedUrl, /nowcast=true/);
+  });
+
+  it('also accepts data[] shape (backward-compat fallback)', async () => {
+    mockFetchOnce(() => jsonResponse(200, {
+      data: [
+        { ts: '2026-02-02T13:30:00Z', power: 567 }
+      ]
+    }));
+    const result = await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0 });
+    assert.equal(result.ok, true);
+    assert.ok(result.sample);
+    assert.equal(result.sample.ts, '2026-02-02T13:30:00Z');
+    assert.equal(result.sample.watts, 567);
+  });
+
+  it('also accepts forecast[] singular and {datetime} field synonym (backward-compat)', async () => {
     mockFetchOnce(() => jsonResponse(200, {
       forecast: [
         { datetime: '2026-02-02T13:30:00Z', power: 567 }
