@@ -437,27 +437,14 @@
 }
 .automation-plan-table tbody td:not(:first-child) { font-size: 12.5px; }
 .automation-plan-table thead th { font-size: 10.5px; }
-/* Bump ALL schedule-table inputs (not just automation rows) — the operator
-   could not read the time slots in the editable Optimizer-Schedule table.
-   `<input type=time>` honours font-size in Chrome/Firefox; use !important to
-   beat the global `.sched-tbl input { font-size:11px }` rule. */
-.sched-tbl input[type=time] {
-  font-size: 15px !important;
-  font-weight: 600 !important;
-  letter-spacing: .01em;
-  padding: 6px 8px !important;
-  min-width: 96px;
-}
-.sched-tbl input[type=number] {
-  font-size: 13.5px !important;
-  padding: 6px 8px !important;
-}
-/* Disabled-row visibility (already bumped opacity .82 earlier today) —
-   ensure the colour stays sharp at the new size on automation rows. */
+/* Operator correction: size was fine before — the COLOUR was too dark.
+   Keep the original 11/11.5 px sizing, just brighten disabled-row inputs
+   so the time-slot values are readable on the dark glass background. */
 .sched-tbl tr.sched-row-automation input[disabled],
 .sched-tbl tr.sched-row-user[data-auto-managed="true"] input[disabled] {
   color: var(--text) !important;
-  opacity: .88 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: var(--text) !important; /* Safari/Chrome: input[disabled] dims text via this property, ignoring `color` */
 }
 
 /* ─── SMA panel — own card with yellow accent stripe ─── */
