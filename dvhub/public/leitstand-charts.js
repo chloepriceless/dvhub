@@ -367,7 +367,15 @@
         borderWidth: ds.width,
         borderDash: ds.dash,
         pointRadius: 0,
-        tension: 0.3,
+        // tension:0 — straight segments between data points; tension:0.3 was
+        // producing visual peak-position drift because the spline overshoots
+        // between sparse (30/60-min) forecast slots vs the dense (15-min)
+        // actual slots, making peaks appear shifted relative to the X-axis.
+        tension: 0,
+        // spanGaps:false — draw a gap rather than connecting across null
+        // entries, so the padded historical/null sections (see below) are
+        // visually clear, not interpolated through.
+        spanGaps: false,
         fill: false
       };
     });
@@ -549,6 +557,22 @@
           return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
         })
       : [];
+
+    // Operator complaint 2026-05-22: the Basis-Prognose line (rawPv) starts
+    // only at "jetzt" because rawPv.slots are forecast-only (future). That
+    // made the line look "displaced" to the right of the Ist line which
+    // extends 12h into the past. Pad mergedData (and mlData) backwards with
+    // the pastForecast values so the Basis-Prognose / ML-korrigiert lines
+    // span the full chart range, overlapping the Ist line in the past for
+    // direct visual comparison.
+    if (pastForecastData.length > 0) {
+      var firstMergedTs = mergedData.length > 0 ? mergedData[0].x : Infinity;
+      var firstMlTs = mlData.length > 0 ? mlData[0].x : Infinity;
+      var pastForMerged = pastForecastData.filter(function (p) { return p.x < firstMergedTs; });
+      var pastForMl = pastForecastData.filter(function (p) { return p.x < firstMlTs; });
+      mergedData = pastForMerged.concat(mergedData);
+      mlData = pastForMl.concat(mlData);
+    }
 
     // Last-Prognose: future load slots from the same /api/forecast response.
     // Folded in here so we don't need a second "PV vs Ist" chart that duplicated the same data.
