@@ -2196,7 +2196,7 @@ function addScheduleRow(opts = {}) {
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="5" ${disabled} /></label></td>
-    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="DC-PV einspeisen statt laden" /></td>
+    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="100% Einspeisung — Grid-Setpoint folgt der aktuellen PV-Leistung (AC+DC, minus Puffer), Akku-Nettostrom bleibt ~0 A. OvervoltageFeedIn wird NICHT angefasst (das macht nur die DV-Vermarktung)." /></td>
     <td>${isAutomation ? (isOptimizer
       ? '<span class="sched-auto-badge sched-badge-optimizer" title="Vom Optimizer verwaltet">Optimizer' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>'
       : '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>')

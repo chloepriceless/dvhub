@@ -10,7 +10,8 @@ import {
   estimateWindowPvKwh,
   computePreEmptyTargetSoc,
   preEmptySlotSetpointW,
-  resolveStage2Phase
+  resolveStage2Phase,
+  computeFreigabeChargeThrottle
 } from '../predictive-pre-empty.js';
 
 const SLOT_MS = 15 * 60 * 1000;
@@ -288,3 +289,123 @@ test('resolveStage2Phase aborts HALTEN when the forecast degrades', () => {
   assert.ok(typeof r.reason === 'string' && /degrad|abort|halten/i.test(r.reason),
     `reason should indicate the Halten abort, got ${r.reason}`);
 });
+
+// --- computeFreigabeChargeThrottle (operator request 2026-05-22) ---
+
+test('computeFreigabeChargeThrottle spreads charge over window when PV exceeds need', () => {
+  // Battery at 50% on a 43 kWh pack, 4-slot window. Plenty of PV (40 kWh
+  // forecast) vs ~20 kWh refill need -> throttle should activate.
+  const windowEndTs = BASE_TS + 4 * SLOT_MS;
+  const pv = [0,1,2,3].map(i => pvSlotAt(i, 10000, 0.5)); // 10 kW per slot = 10 kWh total (since 15min slots), need 4x to reach 40
+  // Use bigger PV: 40 kW per slot = 10 kWh / slot * 4 slots = 40 kWh
+  const bigPv = [0,1,2,3].map(i => pvSlotAt(i, 40000, 0.5));
+  const load = [];
+  const r = computeFreigabeChargeThrottle({
+    now: BASE_TS,
+    windowEndTs,
+    currentSocPct: 50,
+    batteryCapacityKwh: 43,
+    pvSlots: bigPv,
+    loadSlots: load,
+    epexSlots: [0,1,2,3].map(i => slotAt(i, 5)),
+    batteryVoltageV: 55.2,
+    maxChargeCurrentA: 350,
+    inverterEfficiencyPct: 90
+  });
+  assert.equal(r.rules.length, 4, 'should emit one rule per remaining slot');
+  assert.equal(r.anchorTriggered, false, 'PV >> need => anchor should NOT trigger');
+  for (const slot of r.rules) {
+    assert.ok(slot.throttled, 'every positive-price slot should be throttled');
+    assert.ok(slot.chargeCurrentA >= 0 && slot.chargeCurrentA <= 350, `current within [0,350] got ${slot.chargeCurrentA}`);
+  }
+});
+
+test('computeFreigabeChargeThrottle releases anchor when PV cannot cover refill', () => {
+  // Battery at 10% (need ~34 kWh on a 43 kWh pack) but only 5 kWh forecast PV.
+  const windowEndTs = BASE_TS + 4 * SLOT_MS;
+  const weakPv = [0,1,2,3].map(i => pvSlotAt(i, 5000, 0.4)); // 5 kW * 15min = 1.25 kWh/slot = 5 kWh total
+  const r = computeFreigabeChargeThrottle({
+    now: BASE_TS,
+    windowEndTs,
+    currentSocPct: 10,
+    batteryCapacityKwh: 43,
+    pvSlots: weakPv,
+    loadSlots: [],
+    epexSlots: [0,1,2,3].map(i => slotAt(i, 5)),
+    batteryVoltageV: 55.2,
+    maxChargeCurrentA: 350,
+    inverterEfficiencyPct: 90
+  });
+  assert.equal(r.anchorTriggered, true, 'PV << need => Notfall-Anker must trigger');
+  assert.equal(r.rules.length, 0, 'anchor release => no throttle rules emitted');
+  assert.equal(r.reason, 'anchor_pv_insufficient');
+});
+
+test('computeFreigabeChargeThrottle releases throttle on negative-price slots', () => {
+  // 4-slot window: slots 0,2 negative-priced, slots 1,3 positive.
+  const windowEndTs = BASE_TS + 4 * SLOT_MS;
+  const pv = [0,1,2,3].map(i => pvSlotAt(i, 40000, 0.5));
+  const epex = [slotAt(0, -3), slotAt(1, 4), slotAt(2, -1), slotAt(3, 6)];
+  const r = computeFreigabeChargeThrottle({
+    now: BASE_TS,
+    windowEndTs,
+    currentSocPct: 50,
+    batteryCapacityKwh: 43,
+    pvSlots: pv,
+    loadSlots: [],
+    epexSlots: epex,
+    batteryVoltageV: 55.2,
+    maxChargeCurrentA: 350,
+    inverterEfficiencyPct: 90
+  });
+  assert.equal(r.rules.length, 4);
+  assert.equal(r.rules[0].throttled, false, 'slot 0 negative price => released');
+  assert.equal(r.rules[1].throttled, true,  'slot 1 positive price => throttled');
+  assert.equal(r.rules[2].throttled, false, 'slot 2 negative price => released');
+  assert.equal(r.rules[3].throttled, true,  'slot 3 positive price => throttled');
+  // Negative-price slots run at HW max.
+  assert.equal(r.rules[0].chargeCurrentA, 350);
+  assert.equal(r.rules[2].chargeCurrentA, 350);
+});
+
+test('computeFreigabeChargeThrottle aligns slot grid to quarter-hour boundary', () => {
+  // now sits 7 minutes into a quarter — the first slot must skip forward to
+  // the next quarter, not start off-grid like the LEEREN loop did (the bug we
+  // diagnosed on prod 2026-05-22 morning).
+  const now = BASE_TS + 7 * 60 * 1000; // BASE_TS + 0:07
+  const windowEndTs = BASE_TS + 4 * SLOT_MS;
+  const pv = [0,1,2,3].map(i => pvSlotAt(i, 40000, 0.5));
+  const r = computeFreigabeChargeThrottle({
+    now,
+    windowEndTs,
+    currentSocPct: 50,
+    batteryCapacityKwh: 43,
+    pvSlots: pv,
+    loadSlots: [],
+    epexSlots: [0,1,2,3].map(i => slotAt(i, 5)),
+    batteryVoltageV: 55.2,
+    maxChargeCurrentA: 350,
+    inverterEfficiencyPct: 90
+  });
+  assert.ok(r.rules.length > 0, 'must emit at least one rule');
+  const firstSlot = r.rules[0].slotTs;
+  assert.equal(firstSlot % SLOT_MS, 0, `first slotTs ${firstSlot} not aligned to quarter`);
+  assert.equal(firstSlot, BASE_TS + SLOT_MS, 'first slot should be the next quarter after BASE_TS');
+});
+
+test('computeFreigabeChargeThrottle emits no rules when SOC is already full', () => {
+  const r = computeFreigabeChargeThrottle({
+    now: BASE_TS,
+    windowEndTs: BASE_TS + 4 * SLOT_MS,
+    currentSocPct: 100,
+    batteryCapacityKwh: 43,
+    pvSlots: [pvSlotAt(0, 40000, 0.5)],
+    loadSlots: [],
+    epexSlots: [slotAt(0, 5)],
+    batteryVoltageV: 55.2,
+    maxChargeCurrentA: 100
+  });
+  assert.equal(r.rules.length, 0);
+  assert.equal(r.reason, 'already_full');
+});
+

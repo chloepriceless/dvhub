@@ -27,7 +27,8 @@ import {
   estimateWindowPvKwh,
   computePreEmptyTargetSoc,
   preEmptySlotSetpointW,
-  resolveStage2Phase
+  resolveStage2Phase,
+  computeFreigabeChargeThrottle
 } from './predictive-pre-empty.js';
 
 // --- Named exports (shared constants + helper) ---
@@ -440,7 +441,67 @@ export function createMarketAutomationBuilder(ctx) {
         stage2Phase: 'HALTEN'
       });
     }
-    // FREIGEBEN / IDLE: emit no Stage-2 rules.
+    let throttleSummary = null;
+    if (phase === 'FREIGEBEN') {
+      // Operator request 2026-05-22: spread the refill across the qualifying
+      // window so the battery hits 100% near the window-end, not midway
+      // through. Otherwise the inverter absorbs everything in two hours and
+      // the next two hours we feed in at near-zero ct/kWh — netzdienlicher to
+      // throttle AC charging and let displaced PV ride the still-favourable
+      // window prices to grid.
+      const pp2 = automationConfig.predictivePreEmpty || {};
+      const throttle = computeFreigabeChargeThrottle({
+        now,
+        windowEndTs: window.endTs,
+        currentSocPct,
+        batteryCapacityKwh,
+        pvSlots,
+        loadSlots,
+        epexSlots: state.epex?.data,
+        batteryVoltageV: toFiniteNumber(pp2.batteryVoltageV, 55.2),
+        maxChargeCurrentA: toFiniteNumber(pp2.maxChargeCurrentA, toFiniteNumber(cfg.schedule?.config?.defaultChargeCurrentA, 350)),
+        inverterEfficiencyPct: automationConfig?.inverterEfficiencyPct,
+        socFullPct: toFiniteNumber(pp2.socFullPct, 100)
+      });
+      for (const slot of throttle.rules) {
+        rules.push({
+          id: `sma-stage2-freigabe-${slot.slotTs}`,
+          enabled: true,
+          target: 'chargeCurrentA',
+          start: formatLocalHHMM(new Date(slot.slotTs), timeZone),
+          end: formatLocalHHMM(new Date(slot.slotEndTs), timeZone),
+          value: slot.chargeCurrentA,
+          activeDate: nowDateStr,
+          slotTs: slot.slotTs,
+          slotEndTs: slot.slotEndTs,
+          source: SMALL_MARKET_AUTOMATION_SOURCE,
+          autoManaged: true,
+          displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE,
+          stage2Phase: 'FREIGEBEN',
+          // Per-slot context for the inspector / UI tooltip.
+          stage2Throttled: slot.throttled,
+          stage2PriceCtKwh: slot.priceCtKwh,
+          stage2Reason: slot.reason
+        });
+        summarySlots.push({
+          ts: slot.slotTs,
+          chargeCurrentA: slot.chargeCurrentA,
+          priceCtKwh: slot.priceCtKwh,
+          throttled: slot.throttled,
+          mode: slot.reason
+        });
+      }
+      throttleSummary = {
+        emittedSlots: throttle.rules.length,
+        baseChargeRateA: throttle.baseChargeRateA,
+        remainingChargeKwh: Math.round(throttle.remainingChargeKwh * 100) / 100,
+        netPvAvailableKwh: Math.round(throttle.netPvAvailableKwh * 100) / 100,
+        slotsRemaining: throttle.slotsRemaining,
+        anchorTriggered: throttle.anchorTriggered,
+        reason: throttle.reason
+      };
+    }
+    // IDLE: emit no Stage-2 rules.
 
     // D-16: the stage2 summary object surfaced via planSummary.
     const stage2 = {
@@ -453,7 +514,8 @@ export function createMarketAutomationBuilder(ctx) {
       windowPvConfidence: pvEstimate.avgConfidence,
       forecastDegraded,
       holdStartTs,
-      slots: summarySlots
+      slots: summarySlots,
+      throttle: throttleSummary
     };
 
     // Persist the day-plan state so a mid-day restart recomputes the phase
@@ -516,16 +578,21 @@ export function createMarketAutomationBuilder(ctx) {
       sunTimesCache
     });
 
-    // Only touch the HALTEN dcExportMode rule — never the locked LEEREN slots.
-    // Match by stage2Phase OR id-prefix as a backstop: prod observed in May 2026
-    // accumulated 189 duplicate sma-stage2-hold-* rules because legacy rules
-    // persisted from an older builder lack the stage2Phase field, so a stage2Phase-only
-    // filter never matched them and each replan appended one more (#stage2-halten-dup).
+    // Only touch the HALTEN dcExportMode rule and the FREIGEBEN throttle rules —
+    // never the locked LEEREN slots. Match by stage2Phase OR id-prefix as a
+    // backstop: prod observed in May 2026 accumulated 189 duplicate
+    // sma-stage2-hold-* rules because legacy rules persisted from an older
+    // builder lack the stage2Phase field, so a stage2Phase-only filter never
+    // matched them and each replan appended one more (#stage2-halten-dup). The
+    // FREIGEBEN-throttle rules use the same id-prefix backstop.
     const isHaltenRule = (r) => r?.stage2Phase === 'HALTEN'
       || (typeof r?.id === 'string' && r.id.startsWith('sma-stage2-hold-'));
+    const isFreigabeRule = (r) => r?.stage2Phase === 'FREIGEBEN'
+      || (typeof r?.id === 'string' && r.id.startsWith('sma-stage2-freigabe-'));
     const rules = Array.isArray(state.schedule?.rules) ? state.schedule.rules : [];
     const existingHold = rules.filter(isHaltenRule);
     const desiredHold = result.rules.filter((r) => r?.stage2Phase === 'HALTEN');
+    const desiredFreigabe = result.rules.filter((r) => r?.stage2Phase === 'FREIGEBEN');
     let changed = false;
     // Drop a stale HALTEN rule when the phase is no longer HALTEN (abort/release).
     if (existingHold.length && !desiredHold.length) {
@@ -537,6 +604,18 @@ export function createMarketAutomationBuilder(ctx) {
       state.schedule.rules = [
         ...rules.filter((r) => !isHaltenRule(r)),
         ...desiredHold
+      ];
+      changed = true;
+    }
+    // Refresh FREIGEBEN throttle rules: always replace with the latest set so a
+    // PV-forecast degradation that trips the Notfall-Anker (zero desired rules)
+    // removes stale throttles, and a re-tightened forecast re-installs them.
+    const currentRules = Array.isArray(state.schedule?.rules) ? state.schedule.rules : [];
+    const existingFreigabe = currentRules.filter(isFreigabeRule);
+    if (existingFreigabe.length || desiredFreigabe.length) {
+      state.schedule.rules = [
+        ...currentRules.filter((r) => !isFreigabeRule(r)),
+        ...desiredFreigabe
       ];
       changed = true;
     }

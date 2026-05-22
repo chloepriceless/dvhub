@@ -1063,6 +1063,31 @@ function buildFieldDefinitions() {
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.predictivePreEmpty.maxChargeCurrentA',
+      label: 'Freigabe-Drossel: Hardware-Maximum (A, DC)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      empty: 'null',
+      help: 'Maximaler DC-Batterie-Ladestrom (Cerbo GX SystemSetup/MaxChargeCurrent). Die FREIGEBEN-Drossel rechnet die benötigte Restladung auf diese Obergrenze um. Default 350 A (~19 kW bei 55,2 V). Leer = nimmt schedule.config.defaultChargeCurrentA als Obergrenze.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
+      path: 'schedule.smallMarketAutomation.predictivePreEmpty.batteryVoltageV',
+      label: 'Freigabe-Drossel: Batterie-Spannung (V, DC)',
+      type: 'number',
+      min: 12,
+      max: 1000,
+      help: 'DC-Batteriespannung für die A↔W-Umrechnung im FREIGEBEN-Throttle. Standard 55,2 V (48-V-LiFePO4 voll). chargeCurrentA schreibt den Cerbo-MaxChargeCurrent — das ist DC-seitig (Battery), NICHT AC-seitig.'
+    },
+    {
+      section: 'schedule',
+      group: 'smallMarketAutomation',
+      groupLabel: 'Kleine Börsenautomatik',
+      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
       label: 'Akkukapazität (kWh)',
       type: 'number',
@@ -2458,7 +2483,9 @@ function sanitizePredictivePreEmpty(value, warnings) {
     ['akkuSoftLimitW', 0, 50000],
     ['confidenceFactorLow', 0, 1],
     ['confidenceFactorHigh', 0, 1],
-    ['haltenAbortDropPct', 5, 90]
+    ['haltenAbortDropPct', 5, 90],
+    ['maxChargeCurrentA', 0, 1000],
+    ['batteryVoltageV', 12, 1000]
   ];
   for (const [key, lo, hi] of bounded) {
     if (next[key] == null || next[key] === '') continue;

@@ -367,3 +367,151 @@ export function resolveStage2Phase({
   // Still before the hold deadline -> actively pre-emptying.
   return { phase: 'LEEREN', reason: 'pre_emptying' };
 }
+
+/**
+ * FREIGEBEN charge-throttle (operator request 2026-05-22).
+ *
+ * Once the qualifying window opens (FREIGEBEN) and PV is overwhelming, the
+ * battery hits 100% well before the price flips back above pvCtKwh. Instead of
+ * absorbing every watt at full inverter capacity and then dumping the rest to
+ * grid for two hours, throttle AC charging so the battery fills RIGHT AT the
+ * window-end. The displaced PV goes straight to grid through the same window's
+ * still-favourable prices.
+ *
+ * Behaviour:
+ *  - Rate-targeted: chargeCurrentA = remaining-capacity / remaining-window-time,
+ *    converted to amps via `batteryVoltageV` (the chargeCurrentA register writes
+ *    Cerbo-GX SystemSetup/MaxChargeCurrent which is the DC battery-side limit,
+ *    so the W↔A conversion uses BATTERY voltage, typically ~55.2 V on a 48 V
+ *    LiFePO4 pack). Clamped to [0, maxChargeCurrentA] (default 350 A → ~19 kW).
+ *  - Notfall-Anker: if forecast PV minus forecast house load in the remaining
+ *    window is LESS than the capacity we still need to fill, throttle is
+ *    released (return throttleActive=false) so we don't under-fill.
+ *  - Per-slot price guard: any slot with EPEX price < 0 ignores the throttle
+ *    (chargeCurrentA = maxChargeCurrentA) — negative prices mean "absorb every
+ *    free watt".
+ *  - Already full: if currentSocPct >= 100, no rules emitted.
+ *
+ * @returns {{rules:Array<{slotTs:number,slotEndTs:number,chargeCurrentA:number,priceCtKwh:number|null,throttled:boolean,reason:string}>,
+ *           remainingChargeKwh:number, netPvAvailableKwh:number,
+ *           slotsRemaining:number, baseChargeRateA:number,
+ *           anchorTriggered:boolean, reason:string}}
+ */
+export function computeFreigabeChargeThrottle({
+  now,
+  windowEndTs,
+  currentSocPct,
+  batteryCapacityKwh,
+  pvSlots,
+  loadSlots,
+  epexSlots,
+  batteryVoltageV = 55.2,
+  maxChargeCurrentA = 350,
+  inverterEfficiencyPct = 85,
+  socFullPct = 100
+} = {}) {
+  const nowTs = toFiniteNumber(now, null);
+  const endTs = toFiniteNumber(windowEndTs, null);
+  const socNow = toFiniteNumber(currentSocPct, 0);
+  const capacityKwh = toFiniteNumber(batteryCapacityKwh, 0);
+  const voltageV = Math.max(1, toFiniteNumber(batteryVoltageV, 55.2));
+  const hwMaxA = Math.max(0, toFiniteNumber(maxChargeCurrentA, 350));
+
+  const empty = (reason) => ({
+    rules: [],
+    remainingChargeKwh: 0,
+    netPvAvailableKwh: 0,
+    slotsRemaining: 0,
+    baseChargeRateA: hwMaxA,
+    anchorTriggered: false,
+    reason
+  });
+
+  if (nowTs == null || endTs == null || endTs <= nowTs) return empty('no_window');
+  if (capacityKwh <= 0) return empty('no_capacity');
+  if (socNow >= socFullPct) return empty('already_full');
+
+  // Quarter-aligned slot grid — fixes the off-quarter drift bug
+  // (#stage2-slot-grid-misalignment, 2026-05-22).
+  const firstSlotTs = Math.ceil(nowTs / STAGE2_SLOT_MS) * STAGE2_SLOT_MS;
+  if (firstSlotTs >= endTs) return empty('no_slots_in_window');
+
+  // Remaining capacity (kWh) to fill, using the same kWh<->SOC mapping the
+  // pre-empty target sizer uses (Don't-Hand-Roll the SOC math).
+  const acKwhPer100Pct = computeAvailableEnergyKwh({
+    batteryCapacityKwh: capacityKwh,
+    currentSocPct: 100,
+    minSocPct: 0,
+    inverterEfficiencyPct,
+    safetyMarginPct: 0
+  });
+  const acKwhPerPct = toFiniteNumber(acKwhPer100Pct, 0) / 100;
+  const remainingChargeKwh = Math.max(0, (socFullPct - socNow) * acKwhPerPct);
+
+  // Forecast-aware Notfall-Anker: how much net PV (PV minus house load) is left
+  // in the remaining window? If less than what we still need to charge, we MUST
+  // not throttle — release to full inverter capacity.
+  const pvSum = sumForecastSlotsKwh({ slots: pvSlots || [], fromTs: firstSlotTs, toTs: endTs, defaultDurationMin: 15 });
+  const loadSum = sumForecastSlotsKwh({ slots: loadSlots || [], fromTs: firstSlotTs, toTs: endTs, defaultDurationMin: 60 });
+  const netPvAvailableKwh = Math.max(0, toFiniteNumber(pvSum.totalKwh, 0) - toFiniteNumber(loadSum.totalKwh, 0));
+
+  const slotsRemaining = Math.max(1, Math.round((endTs - firstSlotTs) / STAGE2_SLOT_MS));
+  const slotHours = STAGE2_SLOT_MS / 3600000;
+
+  // Anchor: free-running charge if forecast doesn't cover the remaining gap.
+  // Small headroom (5%) keeps us safe against forecast over-estimation.
+  const anchorTriggered = netPvAvailableKwh < remainingChargeKwh * 1.05;
+  if (anchorTriggered) {
+    return {
+      ...empty('anchor_pv_insufficient'),
+      remainingChargeKwh,
+      netPvAvailableKwh,
+      slotsRemaining,
+      anchorTriggered: true
+    };
+  }
+
+  // Base rate: spread the remaining charge evenly across remaining slots.
+  const wattsPerSlot = (remainingChargeKwh / slotsRemaining) / slotHours * 1000;
+  const baseChargeRateA = Math.min(hwMaxA, Math.max(0, wattsPerSlot / voltageV));
+
+  // Per-slot rule emission. EPEX lookup is a linear walk over the day's slots —
+  // O(slotsRemaining * epexSlots.length), which on a 24h day is < 100 * 96 ops.
+  const epex = Array.isArray(epexSlots) ? epexSlots : [];
+  const priceForSlot = (slotTs) => {
+    const slot = epex.find((s) => {
+      const ts = toFiniteNumber(s?.ts, null);
+      return ts != null && ts <= slotTs && ts + STAGE2_SLOT_MS > slotTs;
+    });
+    return slot ? toFiniteNumber(slot.ct_kwh, null) : null;
+  };
+
+  const rules = [];
+  for (let slotTs = firstSlotTs; slotTs < endTs; slotTs += STAGE2_SLOT_MS) {
+    const slotEndTs = slotTs + STAGE2_SLOT_MS;
+    const priceCtKwh = priceForSlot(slotTs);
+    // Negative-price guard: don't throttle a free-energy slot.
+    const throttled = !(priceCtKwh != null && priceCtKwh < 0);
+    const chargeCurrentA = throttled
+      ? Math.round(baseChargeRateA * 10) / 10
+      : Math.round(hwMaxA * 10) / 10;
+    rules.push({
+      slotTs,
+      slotEndTs,
+      chargeCurrentA,
+      priceCtKwh,
+      throttled,
+      reason: throttled ? 'rate_targeted' : 'negative_price_release'
+    });
+  }
+
+  return {
+    rules,
+    remainingChargeKwh,
+    netPvAvailableKwh,
+    slotsRemaining,
+    baseChargeRateA: Math.round(baseChargeRateA * 10) / 10,
+    anchorTriggered: false,
+    reason: 'throttle_emitted'
+  };
+}

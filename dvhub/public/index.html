@@ -255,7 +255,7 @@
       </div>
       <div class="schedule-flags">
         <label class="schedule-flag"><input type="checkbox" id="schedColGrid" checked> Grid-Spalte</label>
-        <label class="schedule-flag"><input type="checkbox" id="schedColCharge"> Charge-Spalte</label>
+        <label class="schedule-flag"><input type="checkbox" id="schedColCharge"> Charger-Leistung-Spalte</label>
       </div>
       <div id="automationPlanSummary" class="automation-plan-summary u-hidden">
         <div class="automation-plan-header">
@@ -277,8 +277,8 @@
         <table class="sched-tbl">
           <thead>
             <tr>
-              <th>Aktiv</th><th>Beginn</th><th>Ende</th><th class="num">Grid (W)</th><th class="num">Charge (A)</th>
-              <th class="num">STOP-SOC (%)</th><th title="DC-Export">DC-Export</th><th>Aktion</th>
+              <th>Aktiv</th><th>Beginn</th><th>Ende</th><th class="num">Grid (W)</th><th class="num" title="DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.">Charger-Leistung (A)</th>
+              <th class="num">STOP-SOC (%)</th><th title="Setzt Grid-Setpoint = -(PV-Total − Puffer), sodass die gesamte aktuelle PV-Leistung (AC+DC) ins Netz fließt und der Akku-Nettostrom ~0 A bleibt. OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).">100% Einspeisung</th><th>Aktion</th>
             </tr>
           </thead>
           <tbody id="scheduleRowsDash"></tbody>
