@@ -425,6 +425,27 @@
   font-family:var(--f-mono); font-size:10px; color:var(--text-2);
 }
 .automation-plan-table { margin:0; }
+/* Operator complaint 2026-05-22: time labels on the automation-plan rows
+   and the SMA-managed schedule rows are too small to read at a glance — at
+   the default 11/11.5 px the operator can't tell what time-windows the
+   auto-slots cover. Bump the time-column text + time-input font specifically
+   in automation contexts; leave the manual schedule rows alone. */
+.automation-plan-table tbody td:first-child {
+  font-family: var(--f-mono); font-size: 13.5px; font-weight: 600;
+  letter-spacing: .02em; color: var(--text);
+  white-space: nowrap; padding-top: 9px; padding-bottom: 9px;
+}
+.automation-plan-table tbody td:not(:first-child) { font-size: 12.5px; }
+.automation-plan-table thead th { font-size: 10.5px; }
+.sched-tbl tr.sched-row-automation td input[type=time],
+.sched-tbl tr.sched-row-user[data-auto-managed="true"] td input[type=time] {
+  font-size: 13px; font-weight: 600; letter-spacing: .01em;
+  padding: 5px 7px;
+}
+.sched-tbl tr.sched-row-automation td input[type=number],
+.sched-tbl tr.sched-row-user[data-auto-managed="true"] td input[type=number] {
+  font-size: 12.5px;
+}
 
 /* ─── SMA panel — own card with yellow accent stripe ─── */
 .sma-card {
