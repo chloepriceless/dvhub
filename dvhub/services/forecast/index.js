@@ -343,19 +343,26 @@ export function createForecastService(ctx) {
             end: end.toISOString()
           });
           if (Array.isArray(historicRows)) {
-            // Pick latest forecast per timestamp (multiple models may have written
-            // for the same slot — prefer 'combined' > 'solcast' > 'pvlib' > 'pvnode'
-            // > anything else, and within the same model the row with latest
-            // generated_at wins thanks to the ORDER BY ts_utc ASC + Map overwrite).
+            // Pick latest forecast per timestamp. Operator complaint 2026-05-22:
+            // solcast started persisting all-zero rows mid-morning, but the
+            // previous ranking ('combined' > 'solcast' > 'pvlib' > 'pvnode' >
+            // anything else) hard-preferred solcast=0 over vrm=15kW / open_meteo=
+            // 20kW that landed at rank 999 (ignored fallbacks). Result: the
+            // pastForecast line in the Forecast-Vergleich chart was a flat zero
+            // over the last 12h. Fix: non-zero rows ALWAYS win, then break ties
+            // by the (expanded) model rank so the live ML-source we trust most
+            // still wins among equally-valid forecasts.
             const modelRank = (m) => {
-              const idx = ['combined', 'solcast', 'pvlib', 'pvnode'].indexOf(m);
+              const idx = ['combined', 'solcast', 'vrm', 'open_meteo', 'forecast_solar', 'pvlib', 'pvnode'].indexOf(m);
               return idx === -1 ? 999 : idx;
             };
+            const rowScore = (row) =>
+              (Number(row.power_w) > 0 ? 0 : 1000) + modelRank(row.model);
             const byTs = new Map();
             for (const row of historicRows) {
               const key = new Date(row.ts_utc).toISOString();
               const prev = byTs.get(key);
-              if (!prev || modelRank(row.model) < modelRank(prev.model)) {
+              if (!prev || rowScore(row) < rowScore(prev)) {
                 byTs.set(key, row);
               }
             }
