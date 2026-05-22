@@ -614,6 +614,17 @@
     // — null values are explicit gaps where the source dataset had no data.
     forecastCompChart.data.datasets.forEach(function (ds) { ds.spanGaps = false; });
 
+    // ML disabled on prod 2026-05-22 (lightgbm v1 squashed daytime peaks to
+    // ~10-15% of the ensemble forecast — MAE 2658W vs 550W on the older
+    // models). With cfg.ml.mlEnabled=false, the backend returns
+    // forecastData.pv = forecastData.rawPv — they're byte-identical. Hiding
+    // the ML-korrigiert dataset prevents two overlapping identical lines and
+    // makes the chart's intent clear. When ML is re-enabled (model retrained
+    // / squash fixed), meta.mlActive flips back to true and the line returns.
+    var mlActive = !!(forecastData && forecastData.meta && forecastData.meta.mlActive);
+    var mlMeta = forecastCompChart.getDatasetMeta(2);
+    if (mlMeta) mlMeta.hidden = !mlActive;
+
     // Operator complaint 2026-05-22: the forecast chart's X-axis was sliding
     // with data extent (was: min(allTimestamps) - 1h → max(allTimestamps) + 1h)
     // so its left edge wandered every refresh as pastForecast/actual arrived
