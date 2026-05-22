@@ -320,7 +320,27 @@ export function createMarketAutomationBuilder(ctx) {
       forecastDegraded = relDropPct > haltenAbortDropPct;
     }
 
-    const targetReached = toFiniteNumber(currentSocPct, 0) <= targetSocPct + STAGE2_TARGET_TOLERANCE_PCT;
+    // Phase hysteresis (operator observation 2026-05-22 06:21–10:30): once SOC
+    // sits AT the target floor, the bare `<= target + tolerance` check flips
+    // targetReached on every SOC sample noise, causing HALTEN↔LEEREN to
+    // oscillate every tick (prod log showed 07:56:54 → 07:57:09 flip in 15s).
+    // Each flip wiped + re-emitted the LEEREN slots with a new off-quarter
+    // `now` start point, making the UI plan-display "blink".
+    //
+    // Fix: asymmetric thresholds keyed off the persisted phase.
+    //   - Entering HALTEN: SOC must DROP TO target + tolerance (standard).
+    //   - Leaving HALTEN: SOC must CLIMB ABOVE target + tolerance + hysteresis
+    //     (typically 2pp above the entry threshold).
+    // Persisted phase comes from `persisted?.phase` (already loaded above).
+    const STAGE2_TARGET_HYSTERESIS_PCT = 2;
+    const currentSocClamped = toFiniteNumber(currentSocPct, 0);
+    let targetReached;
+    if (persisted?.phase === 'HALTEN') {
+      // Stay in HALTEN until SOC clearly exceeds the entry threshold.
+      targetReached = currentSocClamped <= targetSocPct + STAGE2_TARGET_TOLERANCE_PCT + STAGE2_TARGET_HYSTERESIS_PCT;
+    } else {
+      targetReached = currentSocClamped <= targetSocPct + STAGE2_TARGET_TOLERANCE_PCT;
+    }
 
     // D-13: resolve the phase from the clock + plan inputs.
     const resolved = resolveStage2Phase({
@@ -366,7 +386,14 @@ export function createMarketAutomationBuilder(ctx) {
 
     if (phase === 'LEEREN') {
       // One gridSetpointW discharge rule per morning slot in [now, holdStartTs].
-      for (let slotTs = now; slotTs < holdStartTs; slotTs += SLOT_DURATION_MS) {
+      // Quarter-align the slot grid (operator observation 2026-05-22): when
+      // the planner ran mid-quarter (e.g. 06:21), slots were emitted at
+      // 06:21–06:36, 06:36–06:51 etc. — off the wall-clock quarter that the
+      // UI grid expects. Skipping forward to the next :00/:15/:30/:45 costs
+      // at most one slot of latency on the first iteration but yields stable
+      // boundaries that match the existing FREIGEBEN-throttle grid exactly.
+      const firstSlotTs = Math.ceil(now / SLOT_DURATION_MS) * SLOT_DURATION_MS;
+      for (let slotTs = firstSlotTs; slotTs < holdStartTs; slotTs += SLOT_DURATION_MS) {
         const setpoint = preEmptySlotSetpointW({
           pvForecastW: pvForecastForSlot(slotTs),
           expectedHouseLoadW: expectedHouseLoadForSlot(slotTs),
