@@ -621,6 +621,22 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const tooltip = document.getElementById('tooltip');
   if (!canvas || typeof Chart === 'undefined') return;
 
+  // Operator complaint 2026-05-22: the EPEX price chart spans whatever EPEX
+  // publishes (today + tomorrow once 14:00 cutoff passes — often a 48h window
+  // starting at today's midnight) while the forecast comparison chart below
+  // it shows a (now − 12h, now + 24h) window. Same Leitstand section, two
+  // different X-axis start points. Clip the price-chart data to the same
+  // (now − 12h, now + 24h) window so both timelines start and end at the
+  // same instant. The slot-selection / automation-overlay code below still
+  // operates on this same clipped array, so highlights line up correctly.
+  if (Array.isArray(data) && Number.isFinite(nowTs)) {
+    const _winFrom = nowTs - 12 * 3600000;
+    const _winTo = nowTs + 24 * 3600000;
+    data = data.filter((d) => {
+      const ts = Number(d?.ts);
+      return Number.isFinite(ts) && ts >= _winFrom && ts < _winTo;
+    });
+  }
   chartSelectionState.data = Array.isArray(data) ? data : [];
   chartSelectionState.barElements = [];
   chartSelectionState.hoveredIndex = null;

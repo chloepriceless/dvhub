@@ -541,20 +541,18 @@
     forecastCompChart.data.datasets[3].data = mergedData;        // Basis-Prognose
     forecastCompChart.data.datasets[4].data = loadData;          // Last-Prognose
 
-    // Compute X-axis range: span from earliest data point to latest, padded 1h each side
+    // Operator complaint 2026-05-22: the forecast chart's X-axis was sliding
+    // with data extent (was: min(allTimestamps) - 1h → max(allTimestamps) + 1h)
+    // so its left edge wandered every refresh as pastForecast/actual arrived
+    // and dropped off. That made it impossible to visually compare against
+    // the EPEX price chart sitting directly above it, which uses today's
+    // midnight as a stable left edge. Lock the forecast chart to the
+    // (now − 12h, now + 24h) window its subtitle already advertises so the
+    // coordinate system is deterministic on each refresh.
     var nowMs = Date.now();
-    var allTimestamps = []
-      .concat(actualData.map(function (d) { return d.x; }))
-      .concat(pastForecastData.map(function (d) { return d.x; }))
-      .concat(mlData.map(function (d) { return d.x; }))
-      .concat(mergedData.map(function (d) { return d.x; }))
-      .concat(loadData.map(function (d) { return d.x; }))
-      .filter(function (t) { return t > 0; });
-    var dataMin = allTimestamps.length ? Math.min.apply(null, allTimestamps) : nowMs - 12 * 3600000;
-    var dataMax = allTimestamps.length ? Math.max.apply(null, allTimestamps) : nowMs + 24 * 3600000;
     var xScale = forecastCompChart.options.scales.x;
-    xScale.min = dataMin - 3600000;
-    xScale.max = dataMax + 3600000;
+    xScale.min = nowMs - 12 * 3600000;
+    xScale.max = nowMs + 24 * 3600000;
     var ann = forecastCompChart.options.plugins.annotation;
     if (ann && ann.annotations && ann.annotations.nowLine) {
       ann.annotations.nowLine.xMin = nowMs;
