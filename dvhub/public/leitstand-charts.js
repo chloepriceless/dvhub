@@ -537,68 +537,82 @@
       return;
     }
 
-    // Build time-based {x, y} data arrays (W -> kW, x = ms timestamp): [actual, ml, merged]
-    var mlData = pvSlots.map(function (s) {
-      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
-    });
-    var mergedData = rawPvSlots.map(function (s) {
-      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
-    });
-    // "Actual" measured PV from /api/forecast response.actual[] (Plan 01 wiring)
-    var actualData = Array.isArray(forecastData && forecastData.actual)
-      ? forecastData.actual.map(function (s) {
-          return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
-        })
-      : [];
-    // Historic forecast for the same 12h window — lets users see Prognose vs Ist
-    // overlapping on the time axis (without this, Ist and Prognose are time-disjoint).
-    var pastForecastData = Array.isArray(forecastData && forecastData.pastForecast)
-      ? forecastData.pastForecast.map(function (s) {
-          return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
-        })
-      : [];
+    // ─── REBUILD 2026-05-22: common 15-min grid ──────────────────────────
+    // Operator complaint after 4 iterations: forecast lines still appear
+    // visually shifted relative to the Ist line. Root cause: each dataset
+    // arrived from /api/forecast at its own native resolution (actual:15min,
+    // pastForecast:30min, pv/rawPv:30min, load:60min). Chart.js drew each
+    // line through its own stützpunkte, so peaks landed at different X
+    // positions depending on which dataset happened to have a slot at the
+    // exact peak time.
+    //
+    // Solution: project ALL datasets onto a shared 15-min grid spanning the
+    // chart's locked window (now-12h ... now+24h). Every line then has the
+    // SAME 144 x-coordinates; comparisons happen at identical X-pixels.
+    var SLOT_MS = 15 * 60 * 1000;
+    var nowMsRebuild = Date.now();
+    var gridFrom = Math.floor((nowMsRebuild - 12 * 3600000) / SLOT_MS) * SLOT_MS;
+    var gridTo   = Math.ceil ((nowMsRebuild + 24 * 3600000) / SLOT_MS) * SLOT_MS;
+    var gridTs   = [];
+    for (var t = gridFrom; t < gridTo; t += SLOT_MS) gridTs.push(t);
 
-    // Operator complaint 2026-05-22: the Basis-Prognose line (rawPv) starts
-    // only at "jetzt" because rawPv.slots are forecast-only (future). That
-    // made the line look "displaced" to the right of the Ist line which
-    // extends 12h into the past. Pad mergedData (and mlData) backwards with
-    // the pastForecast values so the Basis-Prognose / ML-korrigiert lines
-    // span the full chart range, overlapping the Ist line in the past for
-    // direct visual comparison.
-    if (pastForecastData.length > 0) {
-      var firstMergedTs = mergedData.length > 0 ? mergedData[0].x : Infinity;
-      var firstMlTs = mlData.length > 0 ? mlData[0].x : Infinity;
-      var pastForMerged = pastForecastData.filter(function (p) { return p.x < firstMergedTs; });
-      var pastForMl = pastForecastData.filter(function (p) { return p.x < firstMlTs; });
-      // No bridge point — earlier attempt copied past.last.y onto
-      // (future.first - 1ms) which produced a sharp VERTICAL stroke at the
-      // jetzt-marker when past.last and future.first had different values
-      // (the forecast usually re-baselines between snapshots). spanGaps:true
-      // on these two datasets (set further below) lets Chart.js draw a clean
-      // diagonal interpolation across the past-future boundary instead.
-      mergedData = pastForMerged.concat(mergedData);
-      mlData = pastForMl.concat(mlData);
+    // Map slot-array -> sorted [{x, y}] in kW.
+    function toPoints(slots) {
+      if (!Array.isArray(slots)) return [];
+      var pts = slots.map(function (s) {
+        return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
+      }).filter(function (p) { return Number.isFinite(p.x); });
+      pts.sort(function (a, b) { return a.x - b.x; });
+      return pts;
     }
 
-    // Last-Prognose: future load slots from the same /api/forecast response.
-    // Folded in here so we don't need a second "PV vs Ist" chart that duplicated the same data.
-    var loadSlots = forecastData && forecastData.load && forecastData.load.slots ? forecastData.load.slots : [];
-    var loadData = loadSlots.map(function (s) {
-      return { x: new Date(s.start).getTime(), y: (s.powerW || 0) / 1000 };
-    });
+    // Resample a sorted-points array to the shared 15-min grid using linear
+    // interpolation. Returns null outside the source range (so the line
+    // doesn't extend beyond where the dataset actually has data).
+    function resample(points) {
+      if (points.length === 0) return gridTs.map(function (ts) { return { x: ts, y: null }; });
+      var firstTs = points[0].x;
+      var lastTs = points[points.length - 1].x;
+      var i = 0;
+      return gridTs.map(function (ts) {
+        if (ts < firstTs || ts > lastTs) return { x: ts, y: null };
+        while (i < points.length - 1 && points[i + 1].x < ts) i++;
+        if (points[i].x === ts) return { x: ts, y: points[i].y };
+        if (i >= points.length - 1) return { x: ts, y: points[i].y };
+        var a = points[i], b = points[i + 1];
+        var ratio = (ts - a.x) / (b.x - a.x);
+        return { x: ts, y: a.y + ratio * (b.y - a.y) };
+      });
+    }
+
+    var actualPoints    = toPoints(forecastData && forecastData.actual);
+    var pastFcPoints    = toPoints(forecastData && forecastData.pastForecast);
+    var mlRawPoints     = toPoints(pvSlots);
+    var mergedRawPoints = toPoints(rawPvSlots);
+    var loadRawPoints   = toPoints(forecastData && forecastData.load && forecastData.load.slots);
+
+    // Stitch past+future for the forecast lines so they span the chart.
+    var mlAllPoints     = pastFcPoints.concat(mlRawPoints.filter(function (p) {
+      return pastFcPoints.length === 0 || p.x > pastFcPoints[pastFcPoints.length - 1].x;
+    }));
+    var mergedAllPoints = pastFcPoints.concat(mergedRawPoints.filter(function (p) {
+      return pastFcPoints.length === 0 || p.x > pastFcPoints[pastFcPoints.length - 1].x;
+    }));
+
+    var actualData       = resample(actualPoints);
+    var pastForecastData = resample(pastFcPoints);
+    var mlData           = resample(mlAllPoints);
+    var mergedData       = resample(mergedAllPoints);
+    var loadData         = resample(loadRawPoints);
 
     forecastCompChart.data.datasets[0].data = actualData;        // Ist (gemessen)
     forecastCompChart.data.datasets[1].data = pastForecastData;  // Prognose (historisch)
     forecastCompChart.data.datasets[2].data = mlData;            // ML-korrigiert
     forecastCompChart.data.datasets[3].data = mergedData;        // Basis-Prognose
     forecastCompChart.data.datasets[4].data = loadData;          // Last-Prognose
-    // Forecast lines (ML + Basis-Prognose) span the past-future boundary —
-    // allow Chart.js to interpolate across the (typically 15-30 min) gap at
-    // "jetzt" between pastForecast's last entry and rawPv's first entry.
-    // Other datasets (actual, pastForecast, load) keep spanGaps:false from
-    // initForecastComparisonChart() so their explicit gaps stay visible.
-    forecastCompChart.data.datasets[2].spanGaps = true;
-    forecastCompChart.data.datasets[3].spanGaps = true;
+    // With common 15-min grid + linear interpolation, spanGaps is irrelevant
+    // — null values are explicit gaps where the source dataset had no data.
+    forecastCompChart.data.datasets.forEach(function (ds) { ds.spanGaps = false; });
 
     // Operator complaint 2026-05-22: the forecast chart's X-axis was sliding
     // with data extent (was: min(allTimestamps) - 1h → max(allTimestamps) + 1h)
