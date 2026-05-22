@@ -570,8 +570,21 @@
       var firstMlTs = mlData.length > 0 ? mlData[0].x : Infinity;
       var pastForMerged = pastForecastData.filter(function (p) { return p.x < firstMergedTs; });
       var pastForMl = pastForecastData.filter(function (p) { return p.x < firstMlTs; });
-      mergedData = pastForMerged.concat(mergedData);
-      mlData = pastForMl.concat(mlData);
+      // Operator follow-up 2026-05-22: padding alone left a visible gap at
+      // the "jetzt" line (last pastForecast = 13:00, first rawPv = 13:30).
+      // With spanGaps:false the line broke right at the now-marker —
+      // visually the future part looked "displaced" from the historic part.
+      // Bridge: copy the last pastForecast value to a synthetic point
+      // sitting exactly at (firstFuture - 1ms), so the line draws straight
+      // through the now-boundary without an interpolation across a hole.
+      var bridgeForMerged = (pastForMerged.length > 0 && mergedData.length > 0 && mergedData[0].x - pastForMerged[pastForMerged.length - 1].x > 60000)
+        ? [{ x: mergedData[0].x - 1, y: pastForMerged[pastForMerged.length - 1].y }]
+        : [];
+      var bridgeForMl = (pastForMl.length > 0 && mlData.length > 0 && mlData[0].x - pastForMl[pastForMl.length - 1].x > 60000)
+        ? [{ x: mlData[0].x - 1, y: pastForMl[pastForMl.length - 1].y }]
+        : [];
+      mergedData = pastForMerged.concat(bridgeForMerged, mergedData);
+      mlData = pastForMl.concat(bridgeForMl, mlData);
     }
 
     // Last-Prognose: future load slots from the same /api/forecast response.
