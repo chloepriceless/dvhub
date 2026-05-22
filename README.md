@@ -749,6 +749,190 @@ System. Verdichtete Übersicht der Arbeit seit 0.4.0:
 
 ---
 
+## License Gating (DVhub Pro)
+
+> Phase 17 (License Gating) führt einen optionalen Pro-Layer auf Basis eines
+> selbst gehosteten **Keygen CE** ein. DVhub bleibt vollständig in der ECL-1.0
+> nutzbar (siehe nächster Abschnitt); ausgewählte Komfort-Features sind hinter
+> eine aktive DVhub-Pro-Lizenz gestellt. Die folgende Sektion beschreibt das
+> Aktivierungs-Flow, die Architektur, was in Phase 17 + 19 tatsächlich gegated
+> ist, Troubleshooting und die Operator-Verifizierung.
+
+### Activation flow
+
+1. Lizenzschlüssel via Shop bestellen: **https://shop.dvhub.de**. Du erhältst
+   per E-Mail einen Schlüssel im Format `DVHB-XXXX-XXXX-XXXX-XXXX`.
+2. DVhub öffnen → **Einstellungen → Lizenz** (oder direkt `/settings.html#license`).
+3. Schlüssel ins Feld **Lizenzschlüssel** einfügen → **Aktivieren** klicken.
+4. DVhub kontaktiert **https://license.dvhub.de** (selbst gehosteter Keygen CE)
+   und validiert den Schlüssel. Bei Erfolg flippt der Status-Chip auf **Aktiv**,
+   die Pro-Features sind freigeschaltet, und die Family-Nav verliert ihr 🔒 Icon.
+5. DVhub revalidiert die Lizenz im Hintergrund alle ~6h automatisch (Poller).
+   Manuelle Revalidation: **Jetzt prüfen** Button in derselben Sektion.
+6. Lizenz entfernen: **Lizenz entfernen** (rotes Knopf-Variante). Der Status
+   springt zurück auf **Keine Lizenz**, die Pro-Routes liefern wieder
+   `403 pro_required`, die Family-Nav bekommt das 🔒 Icon zurück.
+
+Beispiel via curl (Headless-Aktivierung, z. B. für CI/Provisioning):
+
+```bash
+curl -X POST http://127.0.0.1/api/license/activate \
+  -H "Authorization: Bearer ${DVHUB_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "<TEST-LICENSE-KEY>"}'
+```
+
+### Architecture
+
+| Layer | Wo | Was |
+|---|---|---|
+| **Polar** | https://polar.sh | Bezahlung / Bestellung; sendet bei Order-Complete einen Webhook an Keygen, der einen License-Record erzeugt. Polar ist NICHT Source-of-Truth für die Aktivierung — nur für den Kauf. |
+| **Keygen CE** | https://license.dvhub.de | Selbst gehosteter Keygen Community Edition. Source-of-Truth für Aktivierung, Suspend, Expire, Schemes (`active`/`invalid`/`expired`/`suspended`). Floating-Modell (siehe unten) — KEIN Machine-Pinning. |
+| **DVhub License-Service** | `dvhub/services/license/` | Pollt Keygen alle ~6h, persistiert den letzten bekannten Status, liefert eine LAN-freundliche API. Auto-Send Notification über den konfigurierten Notification-Provider (ntfy/Pushover/Telegram/Uptime-Kuma) wenn der Status auf `suspended`/`expired` flippt (D-28). |
+| **DVhub Pro-Gate** | `dvhub/routes-api.js` `requirePro()` | Wrapper um `licenseService.requirePro(req, res, featureName)`. LAN-Requests werden bypasst (Familien-Tablet im selben WLAN braucht keine Auth); WAN-Requests erfordern aktive Lizenz. Liefert `403 { error: 'pro_required', feature }` wenn nicht aktiv. |
+| **Frontend** | `dvhub/public/pro-modal.{js,css}` + `dvhub/public/settings.{html,js,css}` | Pro-Required-Modal mit feature-spezifischer deutscher Microcopy + Lock-Badge auf der Family-Nav, beide nur sichtbar wenn Status ≠ `active`. |
+
+**Persistenz:** `${DV_DATA_DIR}/license_state.json` (auf prod typischerweise
+`/var/lib/dvhub/license_state.json`, Mode `0600`, owner `dvhub:dvhub`). Schema:
+
+```json
+{
+  "status": "active|invalid|expired|suspended|none",
+  "last_check_ok_at": "2026-05-22T03:00:00Z",
+  "key_fingerprint": "AB12CD34",
+  "license_id": "uuid-from-keygen",
+  "license_key": "<TEST-LICENSE-KEY>",
+  "polar_customer_id": "cus_xxx",
+  "subscription_until": "2027-05-22T00:00:00Z",
+  "scheme_name": "DVhub-Pro-12mo"
+}
+```
+
+⚠ `license_key` lebt nur im File (für die Auto-Revalidation). Die HTTP-API
+`GET /api/license/state` redacted das Feld vor jeder Antwort — der Klar-Schlüssel
+verlässt den Server NIE über die Wire. Das Feld `key_fingerprint` ist ein
+8-Hex-Char SHA256-Prefix, gedacht für die UI-Anzeige ohne den Schlüssel preiszugeben.
+
+**Config-Slot** (in `config.json`):
+
+```json
+{
+  "licensing": {
+    "keygenAccount": "your-keygen-account-slug"
+  }
+}
+```
+
+Fallback: `process.env.KEYGEN_ACCOUNT`. Wenn keiner gesetzt ist, liefert
+`POST /api/license/activate` einen `503 { error: 'keygen_account_not_configured' }`
+mit einer klaren Toast-Meldung in der Settings-UI.
+
+**Floating-Modell** (R-3 Akzeptanz-Kriterium #14): Ein Lizenz-Schlüssel kann
+auf beliebig vielen DVhub-Instanzen gleichzeitig aktiv sein, solange dieselbe
+natürliche Person sie betreibt. Keygen CE verzichtet bewusst auf Machine-Pinning
+für Phase 17 — der Operator soll dieselbe Lizenz auf Test-LXC, Prod-LXC und
+Backup-Pi parallel nutzen können, ohne pro Gerät eine separate Lizenz zu kaufen.
+Floating-Proof siehe **Operator-Verifizierung** unten.
+
+**Offline-Survival** (R-4 Akzeptanz-Kriterium #4): Wenn `license.dvhub.de` down
+oder DNS-blackholed ist, läuft DVhub weiter mit dem zuletzt persistierten
+`status: active`. Die Revalidation loggt `server_error`, der Status wird NICHT
+geflippt, die Family-Dashboard bleibt erreichbar. Sobald Keygen wieder antwortet
+kehrt der Poller zum Normalbetrieb zurück. Dies verhindert, dass ein
+Keygen-Ausfall den Operator vom eigenen Energie-Dashboard aussperrt.
+
+### Gated features in Phase 17 + 19
+
+| Feature-Name (intern) | Phase | UI-Surface | Was passiert ohne Lizenz |
+|---|---|---|---|
+| `family-dashboard` | 17-04 (8 Routes) | `/family` + 7 `/api/family/*` Routes | 403 + Lock-Badge auf Top-Nav + Klick öffnet Pro-Modal |
+| `forecast-inspector-ml` | 19-01 | Settings → Forecast → B3 ML-Korrektur-Inspector | 403 + Pro-Banner inline in der Section + CTA öffnet Pro-Modal |
+| `forecast-inspector-eos` | 19-01 | Settings → Forecast → B4 EOS-Output-Inspector | dito |
+| `forecast-inspector-stage2` | 19-01 | Settings → Forecast → B5 SMA-Stage-2 Plan-Inspector + Backtest | dito |
+
+> Anmerkung: Die ursprüngliche Phase-17-Planung sah nur `family-dashboard` als
+> Pro-Feature vor. Phase 19 hat 3 weitere Inspector-Subsections hinzugefügt;
+> die `ALLOWED_FEATURES` Whitelist im `pro-modal.js` wurde 2026-05-22 entsprechend
+> erweitert (siehe `[Phase 17 closure]` in STATE.md).
+
+**Pro-Roadmap (Phase 18+):** weitere Pro-Kandidaten stehen in ROADMAP.md unter
+Phase 21+22 (EOS-Inspector + EOS-Config-Editor) und im Backlog (Phase 999.x).
+Neue Pro-Features fügt sich an, indem sie:
+1. `requirePro(req, res, '<feature-name>')` an die jeweilige Route hängen.
+2. Eine Eintrag in `FEATURE_BODY` in `dvhub/public/pro-modal.js` ergänzen
+   (deutsche Microcopy für das Modal).
+3. Den Feature-Namen in `ALLOWED_FEATURES` aufnehmen.
+
+### Troubleshooting
+
+**Lizenz-Aktivierung schlägt fehl mit `keygen_account_not_configured`:**
+Der Config-Slot `licensing.keygenAccount` ist leer und `KEYGEN_ACCOUNT` env-var
+ist nicht gesetzt. Schreib den Account-Slug aus deinem Keygen-Setup in
+`/etc/dvhub/config.json` oder setze die env-var im systemd-unit.
+
+**Lizenz-Aktivierung schlägt fehl mit `server_error`:**
+DVhub kann `license.dvhub.de` nicht erreichen. Check DNS:
+`getent hosts license.dvhub.de`. Check connectivity:
+`curl -v https://license.dvhub.de/v1/accounts/<your-account>/licenses`.
+Wenn Keygen tatsächlich down ist und du bereits aktiviert bist: kein Problem,
+die Offline-Survival hält dich aktiv (siehe Architecture).
+
+**Family-Dashboard liefert `403 pro_required` obwohl Lizenz aktiv:**
+Check `GET /api/license/state` — wenn `status: active` zurückkommt, aber das
+Family-API trotzdem 403 liefert, ist meistens ein Bearer-Token-Problem oder
+LAN-Bypass-Mismatch. Family-Routes haben LAN-Bypass: Aus dem WLAN sollten sie
+ohne Auth-Header funktionieren. Aus dem WAN ist Bearer + aktive Lizenz Pflicht.
+
+**Lock-Badge erscheint nicht obwohl Lizenz `none`:**
+Das Lock-Badge wird per `DOMContentLoaded` auf `.topbar-nav a[href="/family"]`
+gemountet. Wenn die Family-Nav-Link Markup auf einer Custom-Page abweicht
+(anderer href, andere Top-Nav-Class), greift der Selektor nicht. Per Design
+**fail-open** — Server-side 403 fängt unautorisierte Requests trotzdem ab;
+nur die freundliche UX fehlt dann.
+
+**`license_state.json` versehentlich gelöscht:**
+DVhub re-bootstrappt beim nächsten Start mit `status: none`. Der Operator
+muss erneut über die Settings-UI aktivieren — der Schlüssel selbst (im File
+`license_key` Feld) ist verloren und muss aus der E-Mail-Bestätigung neu
+geholt werden. Backup-Strategie: `license_state.json` sollte in dein
+`/var/lib/dvhub/` Backup-Set (siehe Installation im Detail).
+
+**Test-Setup für Dev/Staging:** Dev-Instanzen können einen "Bypass" einrichten,
+indem `license_state.json` manuell mit `{"status": "active", "license_key": null}`
+geschrieben wird. Die Revalidation skipt früh bei `license_key: null`. Wird
+intern bereits für die DVhub-Dev-Box genutzt.
+
+### Operator-Verifizierung
+
+Manuelle Akzeptanz-Proofs, die automatisierte Tests nicht abdecken können:
+
+1. **Floating-Proof (R-3 #14):** Aktiviere denselben Test-Lizenzschlüssel
+   `<TEST-LICENSE-KEY>` auf zwei separaten DVhub-LXC-Instanzen. Verifiziere
+   per Aditus (Keygen-Dashboard), dass **kein Machine-Pinning** entstanden ist
+   (License-Record zeigt 0 Machines). Screenshots dieser Verifikation liegen
+   unter `.planning/phases/17-…/screenshots/floating-proof-{instance-1,instance-2,aditus}.png`.
+
+2. **Offline-Survival (R-4 #4):** DNS-blackhole `license.dvhub.de` (z. B. via
+   `/etc/hosts` Eintrag auf `127.0.0.2`) und starte `dvhub.service` neu.
+   Verifiziere:
+   - `journalctl -u dvhub | grep license` zeigt `server_error` auf der
+     ersten Revalidation
+   - `curl http://127.0.0.1/api/license/state` zeigt `status: active` (unverändert)
+   - `/family` lädt normal im Browser
+   - `md5sum /var/lib/dvhub/license_state.json` ist **byte-unchanged** vor +
+     nach Restart
+   Screenshots + Log-Excerpt liegen unter
+   `.planning/phases/17-…/screenshots/offline-survival-{log,ui}.{txt,png}`.
+
+3. **Auto-Revoke-Notification (D-28, optional):** Wenn ein Notification-Provider
+   konfiguriert ist (ntfy / Pushover / Telegram), suspende die Lizenz in
+   Aditus. Innerhalb von ~6h sollte eine Push-Nachricht eintreffen
+   ("DVhub-Pro-Lizenz suspended — Pro-Features sind nicht mehr verfügbar").
+   Screenshot liegt unter `.planning/phases/17-…/screenshots/ntfy-revoke.png`
+   (falls Provider verfügbar).
+
+---
+
 ## Lizenz
 
 DVhub steht unter der **Energy Community License (ECL-1.0)** — siehe
