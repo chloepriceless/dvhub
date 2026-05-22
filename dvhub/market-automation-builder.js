@@ -234,13 +234,25 @@ export function createMarketAutomationBuilder(ctx) {
     // D-06: sun-derived day bounds. Stage 2 computes its own daytime window and
     // does NOT inherit the SMA searchWindow config (10-WAVE0-FINDINGS decision).
     const nowDateStr = berlinDateString(new Date(now), cfg.epex?.timezone || timeZone);
+    const prevDateStr = berlinDateString(new Date(now - 86400000), cfg.epex?.timezone || timeZone);
     const todaySun = readSunTimesForDate({ cache: sunTimesCache?.cache, dateKey: nowDateStr });
+    const prevDaySun = readSunTimesForDate({ cache: sunTimesCache?.cache, dateKey: prevDateStr });
     const sunriseMs = todaySun?.sunriseTs ? new Date(todaySun.sunriseTs).getTime() : null;
     const sunsetMs = todaySun?.sunsetTs ? new Date(todaySun.sunsetTs).getTime() : null;
+    const prevSunsetMs = prevDaySun?.sunsetTs ? new Date(prevDaySun.sunsetTs).getTime() : null;
     if (sunriseMs == null || sunsetMs == null) {
       return idle('no_sun_times');
     }
     const dayBounds = { startTs: sunriseMs, endTs: sunsetMs };
+
+    // Stage-2 LEEREN runs overnight (now → holdStartTs ≤ sunriseMs). The dynamic
+    // SOC floor needs the PRECEDING evening's sunset and the COMING sunrise so
+    // the floor ramps correctly over the dark hours; using today's same-day
+    // (sunrise,sunset) pair would short-circuit to automationMin because the
+    // dynamic-floor function requires sunrise > sunset (lib/small-market-automation.js
+    // computeDynamicAutomationMinSocPct line 289).
+    const leerenSunsetTs = prevSunsetMs ?? (sunriseMs - 12 * 3600000);
+    const leerenSunriseTs = sunriseMs;
 
     // D-04 / D-07: detect the qualifying negative/below-PV-cost EPEX window.
     const window = detectQualifyingWindow(state.epex?.data, pvGenerationCostCtKwh, dayBounds);
@@ -366,6 +378,21 @@ export function createMarketAutomationBuilder(ctx) {
         if (!(setpoint.gridSetpointW <= 0)) continue;
         const start = new Date(slotTs);
         const end = new Date(slotTs + SLOT_DURATION_MS);
+        // Per-slot dynamic SOC floor mirrors Stage-1 (line 860): linear ramp
+        // from automationMinSocPct at the preceding sunset to globalMin one
+        // hour after the coming sunrise. Stage-2's value-add is still intact —
+        // it drains MORE than Stage-1 would in isolation because Stage-2 keeps
+        // re-arming new LEEREN slots whenever SOC has not yet reached the floor
+        // at the *current* slot's time — but the floor itself stays the same
+        // ramp Stage-1 respects so the battery cannot dive past the user's
+        // configured safety floor (#stage2-leeren-respect-dynamic-floor).
+        const leerenSlotFloorSocPct = Math.round(computeDynamicAutomationMinSocPct({
+          automationMinSocPct: automationConfig?.minSocPct ?? 30,
+          globalMinSocPct: hardFloorSocPct,
+          sunsetTs: leerenSunsetTs,
+          sunriseTs: leerenSunriseTs,
+          nowTs: slotTs
+        }) * 10) / 10;
         rules.push({
           id: `sma-stage2-leeren-${slotTs}`,
           enabled: true,
@@ -379,9 +406,14 @@ export function createMarketAutomationBuilder(ctx) {
           source: SMALL_MARKET_AUTOMATION_SOURCE,
           autoManaged: true,
           displayTone: SMALL_MARKET_AUTOMATION_DISPLAY_TONE,
-          // D-10 / Pitfall 4: per-slot stop floor is the global HARD floor, NOT
-          // the static minSocPct — Stage 2 is allowed to drain to the hard floor.
-          stopSocPct: hardFloorSocPct,
+          // Stage-2 LEEREN now respects the same dynamic floor as Stage-1.
+          // Operator concern (#2026-05-22): the previous `hardFloorSocPct` (5%)
+          // drained the 43 kWh battery from 27% → 5% in a single 00:00 slot.
+          // The dynamic floor stops descent at the user-configured automation
+          // minSocPct at sunset and ramps down to the hardware hard min over
+          // the night, matching the Stage-1 contract the operator already
+          // tunes via `schedule.smallMarketAutomation.minSocPct`.
+          stopSocPct: leerenSlotFloorSocPct,
           stage2Phase: 'LEEREN'
         });
         summarySlots.push({

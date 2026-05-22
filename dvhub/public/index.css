@@ -387,8 +387,20 @@
 
 /* SMA-managed rows highlighted yellow */
 .sched-tbl tr.sched-row-automation td {
-  background:rgba(255,212,33,.05);
-  box-shadow:inset 2px 0 0 var(--yellow);
+  background:rgba(255,212,33,.12);
+  box-shadow:inset 3px 0 0 var(--yellow);
+}
+/* Operator complaint 2026-05-22: the global `.sched-tbl input[disabled]
+   { opacity:.32 }` rule made the start/end time and value inputs on
+   automation-managed rows almost unreadable against the dark glass
+   background. SMA + Optimizer rows are read-only on purpose, but the
+   operator still needs to see the schedule. Restore legibility while
+   keeping the "not interactive" affordance (cursor:not-allowed and
+   the yellow row tint already signal that). */
+.sched-tbl tr.sched-row-automation input[disabled],
+.sched-tbl tr.sched-row-user[data-auto-managed="true"] input[disabled] {
+  opacity:.82;
+  color:var(--text);
 }
 
 .schedule-controls {
