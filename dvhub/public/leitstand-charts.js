@@ -378,14 +378,36 @@
       data: { datasets: datasets },
       options: JSON.parse(JSON.stringify(getChartDefaults()))
     };
-    // Linear X axis with ms timestamps (no date adapter needed) — 12h back + 24h ahead
+    // Linear X axis with ms timestamps (no date adapter needed) — 12h back + 24h ahead.
+    // Operator complaint 2026-05-22 (screenshot): the auto-generated tick labels
+    // landed at irregular non-clock-aligned positions ("10:30, 16:30, 19:00,
+    // 22:00, ...") because Chart.js' linear scale picks "nice" step sizes in
+    // raw ms space (e.g. 9_000_000 ms ≈ 2.5h) that do not snap to wall-clock
+    // hours. With irregular labels, a data peak at e.g. 12:15 visually sits
+    // far from any clean "12:00" tick — operator perceives it as a
+    // horizontal offset between data and X axis.
+    // Force ticks onto integer hourly boundaries via afterBuildTicks: every 3h
+    // from the first :00 boundary after min — gives the operator a stable,
+    // predictable axis that lines up with the actual time labels.
     config.options.scales.x = {
       type: 'linear',
       min: nowMs - 12 * 3600000,
       max: nowMs + 24 * 3600000,
       grid: { color: _aur('--chart-grid', 'rgba(90, 106, 138, 0.15)') },
+      afterBuildTicks: function (axis) {
+        var xmin = axis.min;
+        var xmax = axis.max;
+        var d = new Date(xmin);
+        d.setMinutes(0, 0, 0);
+        if (d.getTime() < xmin) d.setHours(d.getHours() + 1);
+        var step = 3 * 3600000;
+        var ticks = [];
+        for (var t = d.getTime(); t <= xmax; t += step) {
+          ticks.push({ value: t });
+        }
+        axis.ticks = ticks;
+      },
       ticks: {
-        maxTicksLimit: 12,
         maxRotation: 0,
         color: _aur('--chart-axis', '#5a6a8a'),
         font: { family: 'JetBrains Mono', size: 10 },
