@@ -2606,7 +2606,7 @@ function setInspectorPollState(slug, state) {
 }
 
 function setAllInspectorPollState(state) {
-  ['pv-providers', 'load', 'ml-correction', 'eos'].forEach(function (s) { setInspectorPollState(s, state); });
+  ['pv-providers', 'load', 'eos'].forEach(function (s) { setInspectorPollState(s, state); });
 }
 
 function renderOptimizerColdBanner(payload) {
@@ -2942,107 +2942,10 @@ function renderLoadInspector(payload) {
   var canvas = document.querySelector('canvas[data-inspector-spark="load-sf"]');
   renderInspectorSparkline(canvas, sparkData, '#1f8dff', 'rgba(31,141,255,0.10)');
 }
-// Plan 19-04 (B3 ML Shadow Correction) — renders summary + banner + table.
-// Payload shape (from inspector.js getMlCorrection):
-//   { raw, corrected, delta, model, applied, reason, mlEnabled,
-//     meta: { inputModel, cacheHit } }
-// or, on hard failure: { ok:false, error, window } — caller handles ok:false
-// separately (this function only fleshes a successful envelope).
-function renderMlCorrectionInspector(payload) {
-  if (!payload) return;
-  var raw = payload.raw || [];
-  var corrected = payload.corrected || [];
-  var delta = payload.delta || [];
-
-  // 1. Summary-Karten — Modell · Angewandt (mit Shadow-Mode-Delta) · Input-Modell.
-  var summary = document.getElementById('inspector-summary-ml-correction');
-  if (summary) {
-    var modelLabel = payload.model || 'kein Modell';
-    var appliedLabel = payload.applied ? 'ja' : 'nein';
-    var inputModelLabel = (payload.meta && payload.meta.inputModel) || '--';
-    summary.innerHTML =
-      '<div class="stat-card"><div class="stat-label">Modell</div>' +
-        '<div class="stat-val">' + escHtmlForecastInspector(modelLabel) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Angewandt</div>' +
-        '<div class="stat-val">' + escHtmlForecastInspector(appliedLabel) + '</div>' +
-        (payload.mlEnabled ? '' : '<div class="stat-delta">ML in Settings off — Shadow-Mode</div>') +
-        '</div>' +
-      '<div class="stat-card"><div class="stat-label">Input-Modell</div>' +
-        '<div class="stat-val">' + escHtmlForecastInspector(inputModelLabel) + '</div></div>';
-  }
-
-  // 2. Inline-Banner — reason-aware state messaging.
-  //    no_model → kein ML-Modell auf Disk (Operator muss trainieren/laden)
-  //    python_unavailable → ml_predict.py spawn fehlgeschlagen
-  //    no_input → keine PV-Forecast-Rows im Fenster (Phase 18-01i Sanity-Check)
-  var banner = document.querySelector('[data-inspector-banner="ml-correction"]');
-  if (banner) {
-    banner.classList.remove('warn', 'error');
-    if (payload.reason === 'no_model') {
-      banner.classList.add('warn');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'Kein ML-Modell geladen. Trainiere oder lade ein Modell unter Settings → ML & AI.';
-    } else if (payload.reason === 'python_unavailable') {
-      banner.classList.add('error');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'Python ML-Pipeline nicht verfügbar.';
-    } else if (payload.reason === 'no_input') {
-      banner.classList.add('warn');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'Kein PV-Forecast-Input für die ML-Korrektur — prüfe PV-Provider-Tabelle.';
-    } else if (payload.reason === 'no_input_signal') {
-      banner.classList.add('warn');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'PV-Input ist komplett 0 W (z. B. nachts oder fehlende Solcast-Konfiguration). ML-Korrektur übersprungen — feature-only-Prediction würde irreführende Werte zeigen.';
-    } else if (payload.reason === 'collapsed_low') {
-      banner.classList.add('error');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'ML-Modell-Output ist verdächtig niedrig (< 30 % der raw-PV-Summe). v1-collapse Pattern aus Plan 16-05 — Modell braucht Retrain. Korrektur-Vorschlag NICHT vertrauen.';
-    } else if (payload.reason === 'collapsed_high') {
-      banner.classList.add('error');
-      banner.classList.remove('u-hidden');
-      banner.textContent = 'ML-Modell-Output ist verdächtig hoch (> 250 % der raw-PV-Summe). Feature-Drift oder Unit-Mismatch — Korrektur-Vorschlag NICHT vertrauen.';
-    } else {
-      banner.classList.add('u-hidden');
-      banner.textContent = '';
-    }
-  }
-
-  // 3. Detail-meta — slot count.
-  var meta = document.querySelector('[data-inspector-meta="ml-correction"]');
-  if (meta) meta.textContent = raw.length + ' Slots · 24 h';
-
-  // 4. Detail-Tabelle — Slot | Raw PV | ML-Korrigiert | Delta | Modell.
-  //    Empty-state colspan=5 (5 columns). Delta cell gets a +N/−N prefix so
-  //    operators see direction at a glance without colour cues.
-  var tbody = document.querySelector('[data-inspector-tbody="ml-correction"]');
-  if (tbody) {
-    if (!raw.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="dv-log-empty">Keine Daten — siehe Banner oben.</td></tr>';
-      return;
-    }
-    var html = '';
-    for (var i = 0; i < raw.length; i++) {
-      var r = raw[i];
-      var c = corrected[i];
-      var d = delta[i];
-      html += '<tr>';
-      html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(r.ts_utc)) + '</td>';
-      html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(r.power_w)) + '</td>';
-      html += '<td>' + escHtmlForecastInspector(c ? formatPowerForecastInspector(c.power_w) : '--') + '</td>';
-      if (d && d.delta_w != null && isFinite(Number(d.delta_w))) {
-        var dw = Number(d.delta_w);
-        var deltaStr = (dw > 0 ? '+' : '') + Math.round(dw) + ' W';
-        html += '<td>' + escHtmlForecastInspector(deltaStr) + '</td>';
-      } else {
-        html += '<td>--</td>';
-      }
-      html += '<td>' + escHtmlForecastInspector(payload.model || '--') + '</td>';
-      html += '</tr>';
-    }
-    tbody.innerHTML = html;
-  }
-}
+// renderMlCorrectionInspector ENTFERNT 2026-05-22 — ML global deaktiviert
+// (cfg.ml.mlEnabled=false, siehe Memory [[ml-disabled-2026-05-22]]). Der
+// HTML-Block in settings.html ist auch raus. Re-Aktivierung über SEED-001
+// wenn Backlog #999.17 (lightgbm-Squash) gefixt ist.
 // Phase 19 Plan 19-05 — B4 EOS-Output Inspector renderer.
 //
 // Consumes the GET /api/forecast/inspector/eos envelope built by
@@ -3329,12 +3232,7 @@ function pollOnceForecastInspector() {
   }).catch(function () { setInspectorPollState('load', 'error'); });
 
   if (isInspectorProActive()) {
-    apiFetch('/api/forecast/inspector/ml-correction' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
-      if (j && j.ok) { renderMlCorrectionInspector(j); setInspectorPollState('ml-correction', 'live'); }
-      else if (j && j.error === 'not_implemented') { setInspectorPollState('ml-correction', 'loading'); }
-      else { setInspectorPollState('ml-correction', 'error'); }
-    }).catch(function () { setInspectorPollState('ml-correction', 'error'); });
-
+    // B3 ML-Korrektur Inspector ENTFERNT 2026-05-22 (lightgbm squash, ML global off).
     apiFetch('/api/forecast/inspector/eos' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
       if (j && j.ok) { renderEosInspector(j); setInspectorPollState('eos', 'live'); }
       else if (j && j.error === 'not_implemented') { setInspectorPollState('eos', 'loading'); }
@@ -3357,7 +3255,7 @@ function stopInspectorPoll() {
 
 function applyProGateState() {
   var active = isInspectorProActive();
-  ['ml-correction', 'eos', 'stage2'].forEach(function (slug) {
+  ['eos', 'stage2'].forEach(function (slug) {
     var section = document.querySelector('.config-group[data-inspector="' + slug + '"]');
     if (!section) return;
     var liveScaffold = section.querySelector('.inspector-live-scaffold[data-inspector="' + slug + '"]');

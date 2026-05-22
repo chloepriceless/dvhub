@@ -398,7 +398,7 @@
         <section id="tab-forecast" class="settings-tab-panel" hidden>
           <header class="sa-section-head">
             <h2>Forecast</h2>
-            <p class="sub">Operator-Inspektor pro Forecast-Quelle, ML-Korrektur, EOS-Output und SMA-Stage-2-Plan. Read-only &mdash; Tabellen zeigen, was tats&auml;chlich geliefert wird.</p>
+            <p class="sub">Operator-Inspektor pro Forecast-Quelle, EOS-Output und SMA-Stage-2-Plan. Read-only &mdash; Tabellen zeigen, was tats&auml;chlich geliefert wird.</p>
           </header>
 
           <div id="optimizerColdBanner" class="config-banner warn" hidden role="status" aria-live="polite"></div>
@@ -459,43 +459,9 @@
               </details>
             </div>
 
-            <!-- B3 ML-Korrektur (Plan 19-04, Pro) -->
-            <div class="config-group" data-accent="purple" data-inspector="ml-correction" data-pro-gated="true">
-              <div class="pro-gate-overlay">
-                <div class="pro-gate-content" aria-hidden="true">
-                  <div class="config-group-kicker">
-                    <span class="kicker-label">ML-KORREKTUR &middot; PRO</span>
-                    <span class="inspector-poll-state" data-state="paused">--</span>
-                  </div>
-                  <p class="sub">Was das ML-Modell jetzt sagen w&uuml;rde &mdash; auch bei ML off. Shadow-Mode-Output pro Slot.</p>
-                  <div class="panel-stats inspector-summary"></div>
-                  <details class="inspector-details">
-                    <summary class="inspector-details-summary"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
-                    <div class="inspector-details-body"><div class="data-table-scroll"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Raw PV</th><th scope="col">ML-Korrigiert</th><th scope="col">Delta</th><th scope="col">Modell</th></tr></thead><tbody><tr><td colspan="5">--</td></tr></tbody></table></div></div>
-                  </details>
-                </div>
-                <div class="pro-gate-banner card" role="region" aria-labelledby="proGate-ml-title">
-                  <div class="pro-gate-banner-kicker">PRO-FEATURE</div>
-                  <div class="pro-gate-banner-lock" aria-hidden="true">&#128274;</div>
-                  <h3 id="proGate-ml-title" class="pro-gate-banner-title">ML-Korrektur-Inspector ist Teil von DVhub-Pro</h3>
-                  <p class="pro-gate-banner-body">Eine aktive Pro-Lizenz schaltet diese Diagnose-Tabelle frei.</p>
-                  <button type="button" class="btn primary pro-gate-banner-cta" data-pro-feature="forecast-inspector-ml" aria-label="Pro-Feature gesperrt &mdash; Klick &ouml;ffnet Lizenz-Aktivierung">Lizenz aktivieren</button>
-                </div>
-              </div>
-              <div class="inspector-live-scaffold" hidden data-inspector="ml-correction">
-                <div class="config-group-kicker">
-                  <span class="kicker-label">ML-KORREKTUR &middot; PRO</span>
-                  <span class="inspector-poll-state" data-state="loading">L&Auml;DT &hellip;</span>
-                </div>
-                <p class="sub">Was das ML-Modell jetzt sagen w&uuml;rde &mdash; auch bei ML off. Shadow-Mode-Output pro Slot.</p>
-                <div class="panel-stats inspector-summary" id="inspector-summary-ml-correction"></div>
-                <div class="config-banner u-hidden" data-inspector-banner="ml-correction"></div>
-                <details class="inspector-details">
-                  <summary class="inspector-details-summary" aria-controls="inspector-table-ml-correction"><span class="inspector-details-label">Detail-Tabelle</span><span class="inspector-details-meta" data-inspector-meta="ml-correction">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
-                  <div class="inspector-details-body" id="inspector-table-ml-correction"><div class="data-table-scroll" tabindex="0"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Raw PV</th><th scope="col">ML-Korrigiert</th><th scope="col">Delta</th><th scope="col">Modell</th></tr></thead><tbody data-inspector-tbody="ml-correction"><tr><td colspan="5">Lade Daten &hellip;</td></tr></tbody></table></div></div>
-                </details>
-              </div>
-            </div>
+            <!-- B3 ML-Korrektur ENTFERNT 2026-05-22: lightgbm v1 squashed daytime peaks
+                 (#999.17). ML global deaktiviert (cfg.ml.mlEnabled=false). Re-aktivierung
+                 erst nach Backlog #999.17 Fix — siehe seed SEED-001. -->
 
             <!-- B4 EOS-Output (Plan 19-05, Pro) -->
             <div class="config-group" data-accent="purple" data-inspector="eos" data-pro-gated="true">
