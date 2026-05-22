@@ -3132,27 +3132,80 @@ function renderEosInspector(payload) {
 
   if (meta) meta.textContent = slots.length + ' Slots · 24 h';
 
-  if (tbody) {
-    if (!slots.length) {
-      tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">Kein Plan von EOS empfangen.</td></tr>';
-      return;
+  // Phase 21 — Operator request 2026-05-22: render 4 tables in the details
+  // body (push PV / Load / Price + pull Plan) so the operator can see what
+  // we send to EOS for each endpoint AND what comes back, all in one place.
+  // The container `#inspector-table-eos` previously held a single 4-column
+  // table — we now own it entirely and replace its innerHTML with four
+  // separate scrollable sub-tables.
+  var detailsBody = document.getElementById('inspector-table-eos');
+  if (!detailsBody) return;
+
+  var providers = push.providers || {};
+
+  function buildProviderTable(label, endpoint, provider) {
+    var rows = (provider && Array.isArray(provider.rows)) ? provider.rows : [];
+    var unit = (provider && provider.unit) || '';
+    var truncated = provider && provider.truncated;
+    var total = provider && provider.totalCount != null ? provider.totalCount : rows.length;
+    var header = '<h4 class="eos-subtbl-title">' + escHtmlForecastInspector(label) +
+      ' <span class="eos-subtbl-endpoint">' + escHtmlForecastInspector(endpoint) + '</span>' +
+      ' <span class="eos-subtbl-count">' + total + (truncated ? (' (zeige ' + rows.length + ')') : '') + ' Slots</span>' +
+      '</h4>';
+    if (!rows.length) {
+      return header + '<div class="eos-subtbl-empty">Keine Daten gesendet.</div>';
     }
-    var html = '';
-    for (var i = 0; i < slots.length; i++) {
-      var s = slots[i] || {};
-      var when = formatBerlinTimeForecastInspector(s.ts_utc);
-      var pushCell = push.ok ? '✓' : '--';
-      var planCell = (s.planAction || '--') + ' · ' + formatPowerForecastInspector(s.planPowerW);
-      var statusCell = pull.ok ? 'ok' : 'Fehler';
-      html += '<tr>';
-      html += '<td>' + escHtmlForecastInspector(when) + '</td>';
-      html += '<td>' + escHtmlForecastInspector(pushCell) + '</td>';
-      html += '<td>' + escHtmlForecastInspector(planCell) + '</td>';
-      html += '<td>' + escHtmlForecastInspector(statusCell) + '</td>';
-      html += '</tr>';
+    var trs = '';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      var when = formatBerlinTimeForecastInspector(r.ts_utc);
+      var val = (typeof r.value === 'number' && isFinite(r.value)) ? r.value.toFixed(unit === 'ct/kWh' ? 2 : 0) : '--';
+      trs += '<tr><td>' + escHtmlForecastInspector(when) + '</td><td class="num">' +
+        escHtmlForecastInspector(val) + ' ' + escHtmlForecastInspector(unit) + '</td></tr>';
     }
-    tbody.innerHTML = html;
+    return header +
+      '<div class="data-table-scroll eos-subtbl-scroll" tabindex="0">' +
+        '<table class="data-table dv-log-table">' +
+          '<thead><tr><th scope="col">Zeit (lokal)</th><th scope="col" class="num">Wert</th></tr></thead>' +
+          '<tbody>' + trs + '</tbody>' +
+        '</table>' +
+      '</div>';
   }
+
+  function buildPullTable(slotsArr, pullOk, pullError) {
+    var header = '<h4 class="eos-subtbl-title">PULL · Plan ' +
+      '<span class="eos-subtbl-endpoint">GET /v1/energy-management/plan</span>' +
+      ' <span class="eos-subtbl-count">' + slotsArr.length + ' Slots</span></h4>';
+    if (!pullOk && pullError) {
+      return header + '<div class="eos-subtbl-empty error">Fehler: ' + escHtmlForecastInspector(pullError) + '</div>';
+    }
+    if (!slotsArr.length) {
+      return header + '<div class="eos-subtbl-empty">Kein Plan von EOS empfangen.</div>';
+    }
+    var trs = '';
+    for (var i = 0; i < slotsArr.length; i++) {
+      var s = slotsArr[i] || {};
+      var when = formatBerlinTimeForecastInspector(s.ts_utc);
+      var planCell = (s.planAction || '--') + ' · ' + formatPowerForecastInspector(s.planPowerW);
+      trs += '<tr><td>' + escHtmlForecastInspector(when) + '</td>' +
+             '<td>' + escHtmlForecastInspector(planCell) + '</td></tr>';
+    }
+    return header +
+      '<div class="data-table-scroll eos-subtbl-scroll" tabindex="0">' +
+        '<table class="data-table dv-log-table">' +
+          '<thead><tr><th scope="col">Zeit (lokal)</th><th scope="col">Plan-Aktion · Leistung</th></tr></thead>' +
+          '<tbody>' + trs + '</tbody>' +
+        '</table>' +
+      '</div>';
+  }
+
+  detailsBody.innerHTML =
+    '<div class="eos-subtbl-grid">' +
+      '<div class="eos-subtbl">' + buildProviderTable('PUSH · PV-Forecast', 'PUT /v1/prediction/import/PVForecastImport', providers.pv) + '</div>' +
+      '<div class="eos-subtbl">' + buildProviderTable('PUSH · Last-Forecast', 'PUT /v1/prediction/import/LoadImport', providers.load) + '</div>' +
+      '<div class="eos-subtbl">' + buildProviderTable('PUSH · Strompreis', 'PUT /v1/prediction/import/ElecPriceImport', providers.price) + '</div>' +
+      '<div class="eos-subtbl">' + buildPullTable(slots, pull.ok, pull.error) + '</div>' +
+    '</div>';
 }
 // Plan 19-06: Renders the B5 Stage-2 Backtest result envelope (3 stat-cards +
 // per-slot diff table). Inputs match the getStage2 envelope shape:

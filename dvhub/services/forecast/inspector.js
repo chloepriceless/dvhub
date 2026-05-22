@@ -592,11 +592,49 @@ export function createInspector(ctx, deps = {}) {
       if (section && Array.isArray(section.slots)) return section.slots.length;
       return 0;
     }
+    function slotsOf(section) {
+      if (Array.isArray(section)) return section;
+      if (section && Array.isArray(section.slots)) return section.slots;
+      return [];
+    }
     const payloadSummary = forecastPayload ? {
       pvSlotCount: slotCountOf(forecastPayload.pv),
       loadSlotCount: slotCountOf(forecastPayload.load),
       priceSlotCount: slotCountOf(forecastPayload.price),
     } : { pvSlotCount: 0, loadSlotCount: 0, priceSlotCount: 0 };
+
+    // Phase 21 — Operator request 2026-05-22: expose ACTUAL push data per
+    // EOS provider endpoint, not just counts. The UI needs to show what
+    // we're sending so the operator can verify the EOS integration end-
+    // to-end. Mirror the (PV|Load|Price) → DateTimeData transformation
+    // the adapter performs in pushForecast (eos-adapter.js:100-156),
+    // capped to PAYLOAD_PREVIEW_LIMIT rows per provider to keep the
+    // /api/forecast/inspector/eos response bounded.
+    const PAYLOAD_PREVIEW_LIMIT = 200;
+    function previewProvider(section, valueFn, unit) {
+      const slots = slotsOf(section).slice(0, PAYLOAD_PREVIEW_LIMIT);
+      const rows = [];
+      for (const s of slots) {
+        if (!s) continue;
+        const ts = s.ts != null ? s.ts : s.start;
+        const d = ts instanceof Date ? ts : new Date(ts);
+        if (!Number.isFinite(d.getTime())) continue;
+        rows.push({ ts_utc: d.toISOString(), value: valueFn(s) });
+      }
+      return { rows, unit, truncated: slotCountOf(section) > PAYLOAD_PREVIEW_LIMIT, totalCount: slotCountOf(section) };
+    }
+    const providers = forecastPayload ? {
+      pv: previewProvider(forecastPayload.pv, function (s) { return Number(s.watts != null ? s.watts : (s.powerW != null ? s.powerW : 0)) || 0; }, 'W'),
+      load: previewProvider(forecastPayload.load, function (s) { return Number(s.watts != null ? s.watts : (s.powerW != null ? s.powerW : 0)) || 0; }, 'W'),
+      price: previewProvider(forecastPayload.price, function (s) {
+        // EOS expects €/Wh; we surface ct/kWh for human readability.
+        if (s.importCtKwh != null) return Number(s.importCtKwh) || 0;
+        if (s.ctKwh != null) return Number(s.ctKwh) || 0;
+        return 0;
+      }, 'ct/kWh'),
+    } : { pv: { rows: [], unit: 'W', truncated: false, totalCount: 0 },
+          load: { rows: [], unit: 'W', truncated: false, totalCount: 0 },
+          price: { rows: [], unit: 'ct/kWh', truncated: false, totalCount: 0 } };
 
     // Phase 19.1-01: detect "EOS up but not configured for auto-optimization".
     // EOS v0.3.0 returns HTTP 404 with body
@@ -616,9 +654,9 @@ export function createInspector(ctx, deps = {}) {
       available: true,
       reason: looksNotConfigured ? 'eos_not_configured' : null,
       window: { from, to },
-      push: { ok: pushOk, payloadSummary, error: pushError },
+      push: { ok: pushOk, payloadSummary, providers, error: pushError },
       pull: { ok: pullOk, slots: pullSlots, error: pullError },
-      meta: { timeoutMs: 5000 },
+      meta: { timeoutMs: 5000, previewLimit: PAYLOAD_PREVIEW_LIMIT },
     };
   }
 
