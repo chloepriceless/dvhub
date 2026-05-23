@@ -169,25 +169,56 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 
   /**
-   * Convert EOS plan format (hourly entries) to array of 15-min slots.
-   * Each hourly entry becomes 4x 15-min slots with same power.
+   * Phase 21 hotfix (2026-05-23): EOS v0.3.0 plan shape changed —
+   *   {id, generated_at, instructions:[{execution_time, actuator_id,
+   *    operation_mode_id, operation_mode_factor, type:'FRBCInstruction'}]}
+   * was {result:[{start_time, battery_power}]}. Convert FRBC battery
+   * instructions back to a (ts, powerW) slot stream so the inspector can
+   * keep rendering the same table.
    *
-   * @param {Array<{ start_time: string, battery_power: number }>} planEntries
-   * @returns {Array<{ ts: number, endTs: number, powerW: number, confidence: number }>}
+   * power mapping (sign = battery perspective: + = charging, - = discharging):
+   *   FORCED_CHARGE    → +factor × maxChargeW
+   *   FORCED_DISCHARGE → -factor × maxDischargeW
+   *   IDLE / SELF_CONSUMPTION / NON_EXPORT → 0  (no scheduled grid forcing)
+   *   anything else → 0  (display-only; the rate is informational)
    */
-  function convertEosPlanToSlots(planEntries) {
+  function planActionToPowerW(opMode, factor, maxChargeW, maxDischargeW) {
+    const f = Number(factor);
+    if (!Number.isFinite(f)) return 0;
+    switch (opMode) {
+      case 'FORCED_CHARGE':    return +f * (Number(maxChargeW) || 0);
+      case 'FORCED_DISCHARGE': return -f * (Number(maxDischargeW) || 0);
+      default:                  return 0;
+    }
+  }
+  function convertEosPlanToSlots(planEntries, ctxCfg) {
     const slots = [];
+    const maxChargeW    = ctxCfg?.optimizer?.maxChargeW    || 5000;
+    const maxDischargeW = ctxCfg?.optimizer?.maxDischargeW || 5000;
 
     for (const entry of planEntries) {
-      const baseTs = new Date(entry.start_time + 'Z').getTime();
-      const powerW = Number(entry.battery_power) || 0;
+      if (!entry) continue;
+      // Only battery FRBC instructions go into the schedule. EV / appliance
+      // instructions are filtered out — they're a separate concern.
+      if (entry.type !== 'FRBCInstruction') continue;
+      if (entry.actuator_id && !String(entry.actuator_id).startsWith('battery')) continue;
 
-      // Split hourly entry into 4x 15-min slots
+      // execution_time arrives with explicit offset (e.g. "+02:00") — let
+      // Date parse it; do NOT append 'Z' (which broke 19.1-01 timezone math).
+      const baseTs = new Date(entry.execution_time).getTime();
+      if (!Number.isFinite(baseTs)) continue;
+      const powerW = planActionToPowerW(entry.operation_mode_id, entry.operation_mode_factor, maxChargeW, maxDischargeW);
+      const action = entry.operation_mode_id || 'IDLE';
+
+      // Split hourly entry into 4x 15-min slots so the inspector merge-table
+      // (settings.js eos-merged-table) joins cleanly on ts_utc with PV/Load/
+      // Price (which arrive at 15-min cadence).
       for (let q = 0; q < 4; q++) {
         slots.push({
           ts: baseTs + q * QUARTER_HOUR_MS,
           endTs: baseTs + (q + 1) * QUARTER_HOUR_MS,
           powerW,
+          planAction: action,
           confidence: EOS_DEFAULT_CONFIDENCE
         });
       }
@@ -196,12 +227,6 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return slots;
   }
 
-  /**
-   * Pull optimized schedule from EOS. Validates response structure (pinned to v0.3.0).
-   * Returns null on ANY error (per research pitfall 3: defensive validation).
-   *
-   * @returns {Promise<Array<{ ts: number, endTs: number, powerW: number, confidence: number }>|null>}
-   */
   async function pullSchedule() {
     const result = await httpRequest('GET', '/v1/energy-management/plan');
 
@@ -209,14 +234,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       return null;
     }
 
-    // Validate v0.3.0 structure: must contain 'result' key with array
     const plan = result.data;
-    if (!plan || !Array.isArray(plan.result)) {
-      return null;
-    }
+    // Phase 21 hotfix: EOS v0.3.0 actually returns `instructions`, not the
+    // documented `result` array. Accept either for forward/backward compat.
+    const entries = Array.isArray(plan?.instructions) ? plan.instructions
+                  : Array.isArray(plan?.result)       ? plan.result
+                  : null;
+    if (!entries) return null;
 
     try {
-      return convertEosPlanToSlots(plan.result);
+      return convertEosPlanToSlots(entries, getCfg());
     } catch {
       return null;
     }

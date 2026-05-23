@@ -115,11 +115,19 @@ test('pushForecast sends per-provider PUT to /v1/prediction/import with ts-keyed
 });
 
 // --- Test 2: pullSchedule GETs /v1/energy-management/plan and returns parsed schedule ---
+// Phase 21 (2026-05-23): EOS v0.3.0 plan shape changed — top-level key
+// `instructions` (was `result`) and per-entry FRBCInstruction shape with
+// operation_mode_id + factor (was start_time + battery_power). The adapter
+// translates FORCED_CHARGE/DISCHARGE to ±factor × maxChargeW.
 test('pullSchedule GETs /v1/energy-management/plan and returns parsed schedule', async () => {
   const eosPlan = {
-    result: [
-      { start_time: '2026-04-03T12:00:00', battery_power: 2000 },
-      { start_time: '2026-04-03T13:00:00', battery_power: -1500 }
+    id: 'plan-genetic@2026-04-03T12:00:00Z',
+    generated_at: '2026-04-03T12:00:00Z',
+    instructions: [
+      { type: 'FRBCInstruction', actuator_id: 'battery1', execution_time: '2026-04-03T12:00:00Z',
+        operation_mode_id: 'FORCED_CHARGE',    operation_mode_factor: 1.0 },
+      { type: 'FRBCInstruction', actuator_id: 'battery1', execution_time: '2026-04-03T13:00:00Z',
+        operation_mode_id: 'FORCED_DISCHARGE', operation_mode_factor: 0.5 }
     ]
   };
 
@@ -133,13 +141,12 @@ test('pullSchedule GETs /v1/energy-management/plan and returns parsed schedule',
     const slots = await adapter.pullSchedule();
 
     assert.ok(Array.isArray(slots), 'pullSchedule should return an array');
-    assert.ok(slots.length > 0, 'Should have slots');
-    // Each hourly entry is split into 4x 15-min slots
-    assert.equal(slots.length, 8, 'Two hourly entries -> 8x 15-min slots');
+    assert.equal(slots.length, 8, 'Two hourly FRBC entries -> 8x 15-min slots');
     assert.ok(typeof slots[0].ts === 'number', 'Slot should have numeric ts');
     assert.ok(typeof slots[0].endTs === 'number', 'Slot should have numeric endTs');
     assert.ok(typeof slots[0].powerW === 'number', 'Slot should have numeric powerW');
     assert.equal(slots[0].confidence, 0.7, 'Confidence should be 0.7 for EOS');
+    assert.equal(slots[0].planAction, 'FORCED_CHARGE', 'planAction surfaces operation_mode_id');
   } finally {
     await mock.close();
   }
@@ -177,11 +184,15 @@ test('pullSchedule returns null when EOS returns malformed JSON', async () => {
   }
 });
 
-// --- Test 5: convertEosPlanToSlots converts EOS plan format to 15-min slot array ---
+// --- Test 5: convertEosPlanToSlots converts EOS FRBC plan to 15-min slot array ---
+// Phase 21: FORCED_CHARGE at factor 0.5 with the makeCtx maxChargeW=5000
+// fallback (no optimizer config supplied) → 0.5 × 5000 = 2500 W per slot.
 test('convertEosPlanToSlots converts EOS plan format to array of { ts, endTs, powerW, confidence }', async () => {
   const eosPlan = {
-    result: [
-      { start_time: '2026-04-03T12:00:00', battery_power: 2000 }
+    id: 'plan-x',
+    instructions: [
+      { type: 'FRBCInstruction', actuator_id: 'battery1', execution_time: '2026-04-03T12:00:00Z',
+        operation_mode_id: 'FORCED_CHARGE', operation_mode_factor: 0.5 }
     ]
   };
 
@@ -199,7 +210,8 @@ test('convertEosPlanToSlots converts EOS plan format to array of { ts, endTs, po
     const baseTs = new Date('2026-04-03T12:00:00Z').getTime();
     assert.equal(slots[0].ts, baseTs);
     assert.equal(slots[0].endTs, baseTs + 15 * 60_000);
-    assert.equal(slots[0].powerW, 2000);
+    assert.equal(slots[0].powerW, 2500, '0.5 × default maxChargeW (5000) = 2500');
+    assert.equal(slots[0].planAction, 'FORCED_CHARGE');
     assert.equal(slots[0].confidence, 0.7);
 
     assert.equal(slots[1].ts, baseTs + 15 * 60_000);
