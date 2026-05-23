@@ -2611,13 +2611,13 @@ body.dv-modal-open {
 .inspector-status.status-DEVIATION td { background: rgba(255, 93, 93, 0.04); }
 
 /* ─── EOS Inspector: 4-sub-table grid (Phase 21 — operator request 2026-05-22) */
-/* Operator request 2026-05-23: EOS sub-tables should fill the full
-   Inspector card width — break out of the parent's inline padding/max-
-   width by using full-bleed margins and let the grid stretch edge to
-   edge. The viewport-width math (100vw minus typical Settings-page
-   chrome ~120px each side) gives the tables room without overflowing
-   the page; sub-1200px viewports drop back to single-column. */
-.inspector-details-body { padding: 0 !important; overflow-x: auto; }
+/* Operator request 2026-05-23: EOS-Output card spans the full grid row
+   (.config-group--full added to the markup) so the 4 sub-tables get the
+   full settings-page width. The inner grid adapts:
+   - ≥1280px viewport: 4 columns (one per provider/plan)
+   - 900–1279px: 2 columns
+   - <900px: 1 column */
+.inspector-details-body { padding: 0; overflow-x: auto; }
 .eos-subtbl-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2626,19 +2626,9 @@ body.dv-modal-open {
   width: 100%;
 }
 @media (min-width: 1280px) {
-  /* Stretch beyond the card's natural max-width when viewport allows.
-     Negative-margin trick pulls the grid back to the page padding edge. */
-  #inspector-table-eos {
-    width: calc(100vw - 80px);
-    max-width: 100vw;
-    margin-left: calc(50% - 50vw + 40px);
-    margin-right: calc(50% - 50vw + 40px);
-  }
-  .eos-subtbl-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
+  .eos-subtbl-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .eos-subtbl-grid { grid-template-columns: 1fr; }
 }
 .eos-subtbl {

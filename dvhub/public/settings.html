@@ -464,8 +464,10 @@
                  (#999.17). ML global deaktiviert (cfg.ml.mlEnabled=false). Re-aktivierung
                  erst nach Backlog #999.17 Fix — siehe seed SEED-001. -->
 
-            <!-- B4 EOS-Output (Plan 19-05, Pro) -->
-            <div class="config-group" data-accent="purple" data-inspector="eos" data-pro-gated="true">
+            <!-- B4 EOS-Output (Plan 19-05, Pro) — full row width (2 col span) so
+                 the 4 sub-tables (PV/Load/Price push + Plan pull) breathe.
+                 Operator request 2026-05-23. -->
+            <div class="config-group config-group--full" data-accent="purple" data-inspector="eos" data-pro-gated="true">
               <div class="pro-gate-overlay">
                 <div class="pro-gate-content" aria-hidden="true">
                   <div class="config-group-kicker"><span class="kicker-label">EOS-OUTPUT &middot; PRO</span><span class="inspector-poll-state" data-state="paused">--</span></div>
