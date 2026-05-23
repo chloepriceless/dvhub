@@ -57,10 +57,10 @@
     },
     {
       key: 'devices',
-      label: 'Smart Plugs',
-      category: 'Energie · Devices',
-      logo: 'SP',
-      accent: 'yellow'
+      label: 'Shelly',
+      category: 'Energie · Shelly HTTP',
+      logo: 'Sh',
+      accent: 'orange'
     },
     {
       key: 'notifications',
@@ -2233,6 +2233,180 @@
       body.innerHTML = '<p class="dv-drawer-empty">Ladevorgänge laden fehlgeschlagen: ' + esc(e.message) + '</p>';
     }
   }
+  // === Phase 21 (2026-05-23): Shelly device-list drawer ===
+  // GET /api/family/shelly-devices for the saved rows; POST same path to
+  // replace. Live status (online/power) is merged in from /api/integrations/
+  // status `devices.list` (already polled by fetchStatus) — keeps the rows
+  // mockup-faithful when DVhub has just been restarted and the adapter hasn't
+  // produced a sample yet.
+  var shellyRows = []; // working state: array of {id, name, host, pollIntervalSec, enabled}
+  function shellyRowHtml(row, idx, liveByHost) {
+    var live = liveByHost && row.host ? liveByHost[row.host.replace(/:\d+$/, '')] : null;
+    var statusLabel = '—';
+    var statusClass = 'is-unknown';
+    if (live) {
+      statusLabel = live.online
+        ? (live.powerW != null ? (Math.round(live.powerW) + ' W') : 'Online')
+        : 'Offline';
+      statusClass = live.online ? 'is-online' : 'is-offline';
+    }
+    return '<div class="shelly-row" data-idx="' + idx + '">'
+      + '<input type="text" class="input shelly-in" data-k="name" value="' + esc(row.name || '') + '" placeholder="Waschmaschine" maxlength="80" />'
+      + '<input type="text" class="input mono shelly-in" data-k="host" value="' + esc(row.host || '') + '" placeholder="192.168.x.x" maxlength="128" spellcheck="false" autocomplete="off" />'
+      + '<input type="number" class="input mono shelly-in" data-k="poll" value="' + (row.pollIntervalSec || 10) + '" min="2" max="3600" step="1" inputmode="numeric" />'
+      + '<span class="shelly-status ' + statusClass + '">' + esc(statusLabel) + '</span>'
+      + '<button type="button" class="btn sm ghost shelly-del" data-idx="' + idx + '" aria-label="Entfernen">&times;</button>'
+      + '</div>';
+  }
+  function renderShellyRows(liveByHost) {
+    var body = document.getElementById('shelly-list-body');
+    if (!body) return;
+    if (!shellyRows.length) {
+      body.innerHTML = '<p class="dv-drawer-empty">Noch keine Shelly-Geräte konfiguriert. „+ Gerät hinzufügen" um zu starten.</p>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < shellyRows.length; i++) html += shellyRowHtml(shellyRows[i], i, liveByHost);
+    body.innerHTML = html;
+  }
+  async function loadShellyDrawer() {
+    try {
+      var r = await apiFetch('/api/family/shelly-devices');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      var src = (d && Array.isArray(d.devices)) ? d.devices : [];
+      shellyRows = src.map(function (x) {
+        return {
+          id: x.id || '',
+          name: x.name || '',
+          host: (x.shelly && x.shelly.host) || '',
+          pollIntervalSec: (x.shelly && x.shelly.pollIntervalSec) || 10,
+          enabled: x.enabled !== false
+        };
+      });
+      // Overlay live online/power from /api/integrations/status devices.list.
+      var liveByHost = {};
+      try {
+        var s = await apiFetch('/api/integrations/status');
+        if (s.ok) {
+          var sd = await s.json();
+          var list = (sd && sd.devices && Array.isArray(sd.devices.list)) ? sd.devices.list : [];
+          for (var i = 0; i < list.length; i++) {
+            var dev = list[i];
+            if (dev && dev.host) liveByHost[String(dev.host).replace(/:\d+$/, '')] = dev;
+          }
+        }
+      } catch (_) { /* live overlay is best-effort */ }
+      renderShellyRows(liveByHost);
+    } catch (e) {
+      var body = document.getElementById('shelly-list-body');
+      if (body) body.innerHTML = '<p class="dv-drawer-empty">Laden fehlgeschlagen: ' + esc(e.message) + '</p>';
+    }
+  }
+  function readShellyRowsFromDom() {
+    var nodes = document.querySelectorAll('#shelly-list-body .shelly-row');
+    var rows = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var idx = Number(n.dataset.idx);
+      var existing = (Number.isFinite(idx) && shellyRows[idx]) ? shellyRows[idx] : {};
+      var get = function (k) {
+        var el = n.querySelector('.shelly-in[data-k="' + k + '"]');
+        return el ? el.value : '';
+      };
+      rows.push({
+        id: existing.id || '',
+        name: (get('name') || '').trim(),
+        host: (get('host') || '').trim(),
+        pollIntervalSec: Number(get('poll')) || 10,
+        enabled: existing.enabled !== false
+      });
+    }
+    return rows;
+  }
+  async function saveShellyDrawer(buttonEl) {
+    var rows = readShellyRowsFromDom();
+    var body = {
+      devices: rows.map(function (r) {
+        return {
+          id: r.id || undefined,
+          name: r.name,
+          adapter: 'shelly-http',
+          enabled: r.enabled,
+          shelly: { host: r.host, pollIntervalSec: r.pollIntervalSec }
+        };
+      })
+    };
+    var banner = document.getElementById('shelly-banner');
+    if (banner) { banner.hidden = true; banner.classList.remove('error'); banner.textContent = ''; }
+    if (buttonEl) { buttonEl.disabled = true; var orig = buttonEl.textContent; buttonEl.textContent = 'Speichere …'; }
+    try {
+      var res = await apiFetch('/api/family/shelly-devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        shellyRows = (data.devices || []).map(function (x) {
+          return {
+            id: x.id || '', name: x.name || '',
+            host: (x.shelly && x.shelly.host) || '',
+            pollIntervalSec: (x.shelly && x.shelly.pollIntervalSec) || 10,
+            enabled: x.enabled !== false
+          };
+        });
+        renderShellyRows(null);
+        showDrawerToast('shelly', 'ok', data.restartRequired
+          ? '✓ Gespeichert. Service wird neu gestartet — Seite in ~10 s neu laden.'
+          : '✓ ' + shellyRows.length + ' Shelly-Gerät(e) gespeichert.');
+      } else if (banner && Array.isArray(data.details) && data.details.length) {
+        banner.classList.add('error');
+        banner.innerHTML = '<strong>Validierung fehlgeschlagen:</strong><br>' + data.details.map(esc).join('<br>');
+        banner.hidden = false;
+      } else {
+        showDrawerToast('shelly', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('shelly', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var devCard = e.target.closest('.conn-card[data-system="devices"]');
+    if (devCard) {
+      e.preventDefault();
+      var inst = getOrCreateDrawer('shelly');
+      if (inst) inst.open();
+      setTimeout(loadShellyDrawer, 0);
+      return;
+    }
+    var addBtn = e.target.closest('#shelly-add');
+    if (addBtn) {
+      // Persist any in-progress edits before re-render so the operator doesn't
+      // lose typing when they click + multiple times in a row.
+      shellyRows = readShellyRowsFromDom();
+      shellyRows.push({ id: '', name: '', host: '', pollIntervalSec: 10, enabled: true });
+      renderShellyRows(null);
+      return;
+    }
+    var saveBtn = e.target.closest('#shelly-save');
+    if (saveBtn) { saveShellyDrawer(saveBtn); return; }
+    var delBtn = e.target.closest('.shelly-del');
+    if (delBtn) {
+      // Persist DOM edits, splice the target index, re-render.
+      shellyRows = readShellyRowsFromDom();
+      var idx = Number(delBtn.dataset.idx);
+      if (Number.isFinite(idx)) {
+        shellyRows.splice(idx, 1);
+        renderShellyRows(null);
+      }
+      return;
+    }
+  });
+
   async function saveTeslaConfig(buttonEl) {
     var el = function (id) { return document.getElementById(id); };
     var body = {

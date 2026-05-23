@@ -2216,6 +2216,82 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true, tesla: patch });
     }
 
+    // Phase 21 (2026-05-23): Shelly device-list editor for the integrations
+    // drawer. Replaces the shelly-http slice of cfg.devices in one POST while
+    // preserving mqtt-generic entries. SSRF guard mirrors the adapter's
+    // PRIVATE_IP_RE — same regex on both sides so the operator gets a clear
+    // 422 instead of a silent shelly_ssrf_blocked event on next start.
+    if (url.pathname === '/api/family/shelly-devices' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const list = Array.isArray(getCfg().devices) ? getCfg().devices : [];
+      return json(res, 200, { ok: true, devices: list.filter(d => d && d.adapter === 'shelly-http') });
+    }
+    if (url.pathname === '/api/family/shelly-devices' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (!body || !Array.isArray(body.devices)) {
+        return json(res, 400, { ok: false, error: 'devices_array_required' });
+      }
+      if (body.devices.length > 50) {
+        return json(res, 400, { ok: false, error: 'too_many_devices' });
+      }
+      // Private-IP allowlist mirrors services/devices/adapters/shelly-http.js
+      // (PRIVATE_IP_RE). Hostnames OTHER than `localhost` are rejected so a
+      // resolver-based SSRF can't smuggle an external target through.
+      const PRIVATE_IP_RE = /^(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|127\.0\.0\.1|localhost)$/;
+      const cleaned = [];
+      const seenIds = new Set();
+      const validationErrors = [];
+      for (let i = 0; i < body.devices.length; i++) {
+        const raw = body.devices[i];
+        if (!raw || typeof raw !== 'object') continue;
+        const name = String(raw.name || '').trim().slice(0, 80);
+        const rawHost = String(raw.shelly?.host || raw.host || '').trim().slice(0, 128);
+        const hostOnly = rawHost.replace(/:\d+$/, '');
+        const poll = Number(raw.shelly?.pollIntervalSec || raw.pollIntervalSec);
+        if (!name) { validationErrors.push(`Zeile ${i + 1}: Name fehlt`); continue; }
+        if (!rawHost) { validationErrors.push(`Zeile ${i + 1}: Host fehlt`); continue; }
+        if (!PRIVATE_IP_RE.test(hostOnly)) {
+          validationErrors.push(`Zeile ${i + 1}: ${rawHost} ist keine private IP (SSRF-Schutz)`);
+          continue;
+        }
+        let id = String(raw.id || '').trim().slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!id || seenIds.has(id)) id = 'shelly_' + Date.now().toString(36) + cleaned.length;
+        seenIds.add(id);
+        cleaned.push({
+          id,
+          name,
+          adapter: 'shelly-http',
+          enabled: raw.enabled !== false,
+          shelly: {
+            host: rawHost,
+            pollIntervalSec: Number.isFinite(poll) ? Math.max(2, Math.min(3600, Math.floor(poll))) : 10
+          }
+        });
+      }
+      if (validationErrors.length) {
+        return json(res, 422, { ok: false, error: 'validation_failed', details: validationErrors });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      const existing = Array.isArray(next.devices) ? next.devices : [];
+      // Keep any non-shelly-http adapters untouched; replace only the shelly slice.
+      next.devices = existing.filter(d => d && d.adapter !== 'shelly-http').concat(cleaned);
+      let result;
+      try { result = ctx.saveAndApplyConfig(next); }
+      catch (e) {
+        pushLog('family_shelly_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('family_shelly_saved', { count: cleaned.length, restartRequired: !!(result && result.restartRequired) }, actorContext(req));
+      return json(res, 200, {
+        ok: true,
+        devices: cleaned,
+        restartRequired: !!(result && result.restartRequired)
+      });
+    }
+
     // Phase 21 (2026-05-23): MQTT-hub broker configuration via the integrations
     // drawer. Sibling of /api/family/tesla-config — merge-server-side so a
     // partial body doesn't wipe other mqtt.* fields. Password follows the

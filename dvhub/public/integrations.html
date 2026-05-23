@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=23" />
+  <link rel="stylesheet" href="/integrations.css?v=24" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -571,12 +571,50 @@
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-tesla-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
+
+      <!-- Shelly drawer (Phase 21, 2026-05-23). Single tab — device list editor.
+           Each row = one shelly-http device (id auto-generated server-side if
+           missing). Save endpoint POST /api/family/shelly-devices replaces the
+           shelly-http slice of cfg.devices while keeping non-shelly adapters
+           (mqtt-generic) intact. SSRF guard enforces private-IP-only hosts. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-shelly-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-shelly" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-shelly-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-shelly-title">Shelly-Ger&auml;te</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-shelly-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body">
+          <p class="dv-drawer-intro">
+            DVhub pollt Shelly Gen-2 Switches per HTTP-RPC (<code>/rpc/Switch.GetStatus?id=0</code>) und
+            historisiert <code>apower</code> + <code>aenergy.total</code>. Nur private IPs erlaubt
+            (192.168.x.x, 10.x.x.x, 172.16&ndash;31.x.x, 127.0.0.1).
+          </p>
+          <div class="shelly-list-head">
+            <span class="shelly-col shelly-col-name">Name</span>
+            <span class="shelly-col shelly-col-host">Host (IP[:Port])</span>
+            <span class="shelly-col shelly-col-poll">Poll&nbsp;(s)</span>
+            <span class="shelly-col shelly-col-status">Status</span>
+            <span class="shelly-col shelly-col-del">&nbsp;</span>
+          </div>
+          <div id="shelly-list-body"></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm ghost" id="shelly-add">+ Ger&auml;t hinzuf&uuml;gen</button>
+            <button type="button" class="btn sm primary" id="shelly-save">Speichern</button>
+          </div>
+          <div class="dv-field-validation" id="shelly-banner" hidden></div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-shelly-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=23"></script>
+  <script src="/integrations.js?v=24"></script>
 </body>
 </html>
