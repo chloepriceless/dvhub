@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=7" />
+  <link rel="stylesheet" href="/integrations.css?v=21" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -411,12 +411,100 @@
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-forecast-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
+
+      <!-- TeslaMate drawer (Phase 21, 2026-05-23). 3 tabs: Einstellungen,
+           Live-Snapshot, Ladevorg&auml;nge. Snapshot + sessions are populated by
+           JS on drawer open (no SSR). Save path = POST /api/family/tesla-config
+           (merge endpoint, not /api/config). -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-tesla-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-tesla" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-tesla-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-tesla-title">TeslaMate</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-tesla-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <nav class="dv-tabs" role="tablist" aria-label="TeslaMate">
+          <button type="button" role="tab" class="dv-tab is-active"
+                  id="dv-tab-tesla-settings"
+                  aria-selected="true" aria-controls="dv-panel-tesla-settings"
+                  data-panel="dv-panel-tesla-settings" tabindex="0">Einstellungen</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-tesla-snapshot"
+                  aria-selected="false" aria-controls="dv-panel-tesla-snapshot"
+                  data-panel="dv-panel-tesla-snapshot" tabindex="-1">Live-Snapshot</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-tesla-sessions"
+                  aria-selected="false" aria-controls="dv-panel-tesla-sessions"
+                  data-panel="dv-panel-tesla-sessions" tabindex="-1">Ladevorg&auml;nge</button>
+        </nav>
+        <div class="dv-drawer-body">
+          <section role="tabpanel" id="dv-panel-tesla-settings"
+                   aria-labelledby="dv-tab-tesla-settings" class="dv-tabpanel">
+            <p class="dv-drawer-intro">
+              TeslaMate liefert Live-SoC, Ladeleistung und Standort &uuml;ber MQTT in DVhub.
+              EV-Daten flie&szlig;en in die Family-Kachel und das EOS-Optimierungsmodell ein.
+            </p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="tesla-enabled">
+              <span>TeslaMate-Integration aktiviert</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Anzeige-Name</span>
+              <input type="text" class="input" id="tesla-name" placeholder="Tesla" maxlength="64" autocomplete="off">
+              <span class="field-hint">Wird in Family-Tile + Integrations-Karte angezeigt.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Car-ID</span>
+              <input type="number" class="input mono" id="tesla-carid" min="1" max="99" step="1" inputmode="numeric" placeholder="1">
+              <span class="field-hint">TeslaMate-interne ID (in MQTT-Topics: <code>teslamate/cars/&lt;id&gt;/...</code>) &mdash; meist 1.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Snapshot-Intervall (s)</span>
+              <input type="number" class="input mono" id="tesla-interval" min="30" max="3600" step="10" inputmode="numeric" placeholder="300">
+              <span class="field-hint">Wie oft der aktuelle Stand in <code>timeseries_samples</code> historisiert wird.</span>
+            </label>
+            <div class="dv-field-validation" id="tesla-banner" hidden></div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm primary" id="tesla-save">Speichern</button>
+            </div>
+          </section>
+          <section role="tabpanel" id="dv-panel-tesla-snapshot"
+                   aria-labelledby="dv-tab-tesla-snapshot" class="dv-tabpanel" hidden>
+            <div class="dv-snapshot-grid" id="tesla-snapshot-grid">
+              <p class="dv-drawer-empty" id="tesla-snapshot-empty">Lade Live-Snapshot &hellip;</p>
+            </div>
+            <p class="dv-drawer-meta" id="tesla-snapshot-meta" role="status" aria-live="polite">&mdash;</p>
+          </section>
+          <section role="tabpanel" id="dv-panel-tesla-sessions"
+                   aria-labelledby="dv-tab-tesla-sessions" class="dv-tabpanel" hidden>
+            <div class="dv-drawer-meta-row">
+              <label class="dv-inline">
+                <span>Zeitraum</span>
+                <select class="input" id="tesla-sessions-days">
+                  <option value="1">1 Tag</option>
+                  <option value="7" selected>7 Tage</option>
+                  <option value="14">14 Tage</option>
+                  <option value="31">31 Tage</option>
+                </select>
+              </label>
+              <button type="button" class="btn sm ghost" id="tesla-sessions-refresh">&#x21BB; Aktualisieren</button>
+            </div>
+            <div id="tesla-sessions-body">
+              <p class="dv-drawer-empty">Lade Ladevorg&auml;nge &hellip;</p>
+            </div>
+          </section>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-tesla-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
     </main>
   </div>
 
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=16"></script>
+  <script src="/integrations.js?v=21"></script>
 </body>
 </html>

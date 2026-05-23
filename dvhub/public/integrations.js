@@ -23,13 +23,10 @@
       logo: 'MD',
       accent: 'yellow'
     },
-    {
-      key: 'luox',
-      label: 'LUOX',
-      category: 'Direktvermarkter · VPN',
-      logo: 'L',
-      accent: 'violet'
-    },
+    // LUOX-Karte entfernt 2026-05-23 (Operator-Request): keine LUOX-Hardware
+    // bei diesem Operator. Backend (`luox` in /api/integrations/status, plus
+    // identity-handling für künftige Operatoren) bleibt für Aktivierung
+    // intakt — nur die UI-Karte verschwindet aus der Integrations-Übersicht.
     {
       key: 'mqtt',
       label: 'MQTT Hub',
@@ -1253,6 +1250,19 @@
       if (inst3) inst3.open();
       return;
     }
+    // Phase 21 (2026-05-23): TeslaMate card → drawer (Einstellungen + Live +
+    // Ladevorgänge). loadTeslaSettings/Snapshot are queued via setTimeout(0)
+    // so the drawer animation paints before the GET kicks off.
+    var teslaCard = e.target.closest('.conn-card[data-system="tesla"]');
+    if (teslaCard) {
+      e.preventDefault();
+      var inst4 = getOrCreateDrawer('tesla');
+      if (inst4) inst4.open();
+      setTimeout(loadTeslaSettings, 0);
+      setTimeout(loadTeslaSnapshot, 0);
+      setTimeout(function () { loadTeslaSessions(7); }, 0);
+      return;
+    }
   });
 
   // Wire tab keyboard navigation on every [role="tablist"] inside .dv-drawer.
@@ -1954,6 +1964,189 @@
         null
       );
       return;
+    }
+  });
+
+  // === Phase 21 (2026-05-23): TeslaMate Drawer Wiring ===
+  // Settings tab → /api/integrations/status (read cfg.integrations.tesla) +
+  // POST /api/family/tesla-config (merge endpoint, NEVER /api/config).
+  // Live tab → same status response, render tesla.state fields.
+  // Sessions tab → GET /api/family/tesla-sessions?days=N, render table.
+  async function loadTeslaSettings() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var r = await apiFetch('/api/integrations/status');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json();
+      var t = (data && data.tesla) || {};
+      // Settings are echoed back by the status endpoint (Phase 21 adds the
+      // 3 config fields alongside the existing `enabled` boolean).
+      if (el('tesla-enabled')) el('tesla-enabled').checked = !!t.enabled;
+      if (el('tesla-name')) el('tesla-name').value = (t.config && t.config.name) || '';
+      if (el('tesla-carid')) el('tesla-carid').value = (t.config && Number.isFinite(t.config.teslamateCarId)) ? t.config.teslamateCarId : 1;
+      if (el('tesla-interval')) el('tesla-interval').value = (t.config && Number.isFinite(t.config.snapshotIntervalSec)) ? t.config.snapshotIntervalSec : 300;
+    } catch (e) {
+      showDrawerToast('tesla', 'err', '✗ Konfiguration laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  function teslaSnapshotKvLine(label, value, unit) {
+    // CSP-safe escape via esc() — TeslaMate publishes operator-set names and
+    // free-form geofences, so every value goes through esc() before innerHTML.
+    var v = (value == null || value === '') ? '—' : esc(String(value));
+    var u = unit ? (' ' + esc(unit)) : '';
+    return '<div class="dv-snapshot-row"><span class="dv-snapshot-label">' + esc(label) + '</span><span class="dv-snapshot-value mono">' + v + u + '</span></div>';
+  }
+  async function loadTeslaSnapshot() {
+    var grid = document.getElementById('tesla-snapshot-grid');
+    var meta = document.getElementById('tesla-snapshot-meta');
+    if (!grid) return;
+    try {
+      var r = await apiFetch('/api/integrations/status');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json();
+      var t = (data && data.tesla) || {};
+      var s = t.state || {};
+      var html = ''
+        + teslaSnapshotKvLine('Name', s.name || s.display_name)
+        + teslaSnapshotKvLine('Status', s.state)
+        + teslaSnapshotKvLine('Geofence', s.geofence)
+        + teslaSnapshotKvLine('Akku-SoC', s.battery_level, '%')
+        + teslaSnapshotKvLine('Nutzbarer SoC', s.usable_battery_level, '%')
+        + teslaSnapshotKvLine('Ziel-SoC', s.charge_limit_soc, '%')
+        + teslaSnapshotKvLine('Reichweite', s.rated_battery_range_km, 'km')
+        + teslaSnapshotKvLine('Schätz-Reichweite', s.est_battery_range_km, 'km')
+        + teslaSnapshotKvLine('Lade-Status', s.charging_state)
+        + teslaSnapshotKvLine('Ladeleistung', s.charger_power, 'kW')
+        + teslaSnapshotKvLine('Ladestrom', s.charger_actual_current, 'A')
+        + teslaSnapshotKvLine('Ladespannung', s.charger_voltage, 'V')
+        + teslaSnapshotKvLine('Geladene Energie', s.charge_energy_added, 'kWh')
+        + teslaSnapshotKvLine('Stecker', s.plugged_in)
+        + teslaSnapshotKvLine('Innentemperatur', s.inside_temp, '°C');
+      grid.innerHTML = html;
+      if (meta) {
+        if (t.lastUpdate) {
+          var d = new Date(t.lastUpdate);
+          meta.textContent = isNaN(d.getTime()) ? 'Letztes Update: —' : ('Letztes Update: ' + d.toLocaleString());
+        } else {
+          meta.textContent = 'Noch keine Daten von TeslaMate empfangen.';
+        }
+      }
+    } catch (e) {
+      grid.innerHTML = '<p class="dv-drawer-empty">Snapshot fehlgeschlagen: ' + esc(e.message) + '</p>';
+    }
+  }
+  function fmtSessionTs(iso) {
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso || '—');
+      return d.toLocaleString();
+    } catch (_) { return String(iso || '—'); }
+  }
+  async function loadTeslaSessions(days) {
+    var body = document.getElementById('tesla-sessions-body');
+    if (!body) return;
+    body.innerHTML = '<p class="dv-drawer-empty">Lade Ladevorgänge …</p>';
+    try {
+      var r = await apiFetch('/api/family/tesla-sessions?days=' + encodeURIComponent(days));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json();
+      var sessions = (data && Array.isArray(data.sessions)) ? data.sessions : [];
+      if (!sessions.length) {
+        body.innerHTML = '<p class="dv-drawer-empty">Keine Ladevorgänge im gewählten Zeitraum.</p>';
+        return;
+      }
+      // Aggregate header — total energy + count.
+      var totalKwh = 0;
+      for (var i = 0; i < sessions.length; i++) totalKwh += Number(sessions[i].energyKwh) || 0;
+      var html = '<p class="dv-drawer-meta">' + sessions.length + ' Sessions · ' + totalKwh.toFixed(1) + ' kWh geladen</p>';
+      html += '<table class="dv-sessions-table"><thead><tr>'
+        + '<th>Start</th><th class="num">Dauer</th><th class="num">kWh</th>'
+        + '<th class="num">⌀ kW</th><th class="num">Peak kW</th><th class="num">SoC</th>'
+        + '</tr></thead><tbody>';
+      for (var j = 0; j < sessions.length; j++) {
+        var s = sessions[j];
+        var socRange = (s.socStartPct != null && s.socEndPct != null)
+          ? (s.socStartPct + ' → ' + s.socEndPct + ' %')
+          : '—';
+        html += '<tr>'
+          + '<td>' + esc(fmtSessionTs(s.startTs)) + '</td>'
+          + '<td class="num mono">' + s.durationMin + ' min</td>'
+          + '<td class="num mono">' + (Number(s.energyKwh) || 0).toFixed(2) + '</td>'
+          + '<td class="num mono">' + (Math.round((s.avgPowerW || 0) / 100) / 10).toFixed(1) + '</td>'
+          + '<td class="num mono">' + (Math.round((s.peakPowerW || 0) / 100) / 10).toFixed(1) + '</td>'
+          + '<td class="num mono">' + esc(socRange) + '</td>'
+          + '</tr>';
+      }
+      html += '</tbody></table>';
+      body.innerHTML = html;
+    } catch (e) {
+      body.innerHTML = '<p class="dv-drawer-empty">Ladevorgänge laden fehlgeschlagen: ' + esc(e.message) + '</p>';
+    }
+  }
+  async function saveTeslaConfig(buttonEl) {
+    var el = function (id) { return document.getElementById(id); };
+    var body = {
+      enabled: !!(el('tesla-enabled') && el('tesla-enabled').checked),
+      name: (el('tesla-name') && el('tesla-name').value || '').trim() || 'Tesla',
+      teslamateCarId: Number((el('tesla-carid') && el('tesla-carid').value) || 1),
+      snapshotIntervalSec: Number((el('tesla-interval') && el('tesla-interval').value) || 300)
+    };
+    if (!Number.isFinite(body.teslamateCarId) || body.teslamateCarId < 1 || body.teslamateCarId > 99) {
+      showDrawerToast('tesla', 'err', '✗ Car-ID muss zwischen 1 und 99 liegen.');
+      return;
+    }
+    if (!Number.isFinite(body.snapshotIntervalSec) || body.snapshotIntervalSec < 30 || body.snapshotIntervalSec > 3600) {
+      showDrawerToast('tesla', 'err', '✗ Snapshot-Intervall muss 30–3600 s sein.');
+      return;
+    }
+    if (buttonEl) { buttonEl.disabled = true; var orig = buttonEl.textContent; buttonEl.textContent = 'Speichere …'; }
+    try {
+      var res = await apiFetch('/api/family/tesla-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('tesla', 'ok', '✓ TeslaMate-Konfiguration gespeichert.');
+      } else {
+        showDrawerToast('tesla', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('tesla', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var saveBtn = e.target.closest('#tesla-save');
+    if (saveBtn) { saveTeslaConfig(saveBtn); return; }
+    var refreshBtn = e.target.closest('#tesla-sessions-refresh');
+    if (refreshBtn) {
+      var sel = document.getElementById('tesla-sessions-days');
+      var d = sel ? Number(sel.value) : 7;
+      loadTeslaSessions(Number.isFinite(d) ? d : 7);
+      return;
+    }
+    // Tab-switch into Sessions → reload with current days selection (cheap
+    // re-fetch keeps the table fresh on every visit without a poll loop).
+    var sessionsTab = e.target.closest('#dv-tab-tesla-sessions');
+    if (sessionsTab) {
+      var sel2 = document.getElementById('tesla-sessions-days');
+      var d2 = sel2 ? Number(sel2.value) : 7;
+      setTimeout(function () { loadTeslaSessions(Number.isFinite(d2) ? d2 : 7); }, 0);
+      return;
+    }
+    // Tab-switch into Live → re-pull snapshot (TeslaMate updates push into
+    // /api/integrations/status; one re-fetch on tab show is enough).
+    var snapTab = e.target.closest('#dv-tab-tesla-snapshot');
+    if (snapTab) { setTimeout(loadTeslaSnapshot, 0); return; }
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'tesla-sessions-days') {
+      var d = Number(e.target.value);
+      loadTeslaSessions(Number.isFinite(d) ? d : 7);
     }
   });
 

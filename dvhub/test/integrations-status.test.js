@@ -57,7 +57,11 @@ describe('/api/integrations/status — D-09 identity keys', () => {
     const idx = src.indexOf(anchor);
     assert.ok(idx >= 0, 'the /api/integrations/status handler exists in routes-api.js');
 
-    const handlerSlice = src.slice(idx, idx + 1200);
+    // Window grew from 1200 → 2000 in Phase 21 (2026-05-23) when the tesla
+    // block gained an operator-facing `config` echo (name/carId/intervalSec)
+    // for the integrations-page drawer. Pure marker test — bigger window
+    // doesn't weaken the contract, the three identity keys still must exist.
+    const handlerSlice = src.slice(idx, idx + 2000);
     assert.ok(
       handlerSlice.includes('victron'),
       'D-09: handler exposes a victron identity object (RED until 09.4-02)'

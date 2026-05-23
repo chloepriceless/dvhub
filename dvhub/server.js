@@ -106,6 +106,7 @@ import { createInspector } from './services/forecast/inspector.js';
 // path (T-19-05 mitigation — Pitfall 7 in 19-RESEARCH). The optimizer pipeline
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
+import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
@@ -969,6 +970,14 @@ const inspector = createInspector(ctx, {
 });
 ctx.inspector = inspector;
 
+// Phase 21 (2026-05-23): push DVhub battery + inverter settings into EOS so
+// the genetic optimizer plans for the real 43-kWh / 18-kW hardware instead of
+// its 8-kWh / 5-kW bootstrap defaults. Wired into ctx.saveAndApplyConfig below
+// (auto-sync on every config save) and the boot start() block (one-shot
+// reconcile after EOS first becomes reachable).
+const eosConfigSync = createEosConfigSync(ctx);
+ctx.eosConfigSync = eosConfigSync;
+
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
 ctx.needsSetup = () => loadedConfig.needsSetup;
@@ -990,7 +999,19 @@ ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
 ctx.saveAndApplyConfig = (incomingConfig) => {
-  return saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+  const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+  // Phase 21: fire-and-forget EOS reconcile so the genetic optimizer always
+  // sees the operator's current battery + inverter limits. Triggers on every
+  // /api/config-style write (optimizer settings, pricing, mispel.pvKwp …);
+  // schedule-only writes from persistConfig() bypass this wrapper which is
+  // fine — they never touch the synced fields.
+  if (eosConfigSync) {
+    eosConfigSync.sync().catch((err) => {
+      try { pushLog('eos_config_sync_error', { phase: 'after_save', error: err?.message || String(err) }); }
+      catch { /* never block save on telemetry */ }
+    });
+  }
+  return result;
 };
 ctx.scheduleServiceRestart = () => scheduleServiceRestart();
 ctx.runServiceCommand = (args) => runServiceCommand(args);
@@ -1426,6 +1447,15 @@ if (IS_RUNTIME_PROCESS) {
   });
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
+  // Phase 21 (2026-05-23): one-shot EOS reconcile after boot. Waits 15 s so
+  // EOSdash/EOS has time to come up (systemd unit dependency is loose); after
+  // that the on-save hook in ctx.saveAndApplyConfig keeps it in sync. Failure
+  // is non-fatal — pushLog records it and the next config save retries.
+  setTimeout(() => {
+    eosConfigSync.sync().catch((err) => {
+      pushLog('eos_config_sync_error', { phase: 'boot', error: err?.message || String(err) });
+    });
+  }, 15000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(() => {
     startAutomaticMarketValueBackfill().catch(err => {

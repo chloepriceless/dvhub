@@ -976,3 +976,77 @@
   .mte-row .mte-color-cell  { grid-area: color; }
   .mte-row .mte-del { grid-area: del; }
 }
+
+/* ===== Phase 21 (2026-05-23): TeslaMate drawer — snapshot + sessions ===== */
+.dv-snapshot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+.dv-snapshot-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  min-width: 0;
+}
+.dv-snapshot-label {
+  font-size: 12px;
+  color: var(--text-muted, #8b95a7);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.dv-snapshot-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #d8e0ee);
+  text-align: right;
+  word-break: break-word;
+}
+.dv-drawer-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 12px;
+  flex-wrap: wrap;
+}
+.dv-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #8b95a7);
+}
+.dv-inline .input { width: auto; min-width: 100px; }
+.dv-sessions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dv-sessions-table th,
+.dv-sessions-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.dv-sessions-table th {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted, #8b95a7);
+  background: rgba(255, 255, 255, 0.02);
+}
+.dv-sessions-table th.num,
+.dv-sessions-table td.num { text-align: right; }
+.dv-sessions-table tr:hover td { background: rgba(255, 255, 255, 0.04); }
+@media (max-width: 640px) {
+  .dv-snapshot-grid { grid-template-columns: 1fr; }
+  .dv-sessions-table { font-size: 11px; }
+  .dv-sessions-table th,
+  .dv-sessions-table td { padding: 4px 6px; }
+}

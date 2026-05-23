@@ -3039,80 +3039,90 @@ function renderEosInspector(payload) {
 
   if (meta) meta.textContent = slots.length + ' Slots · 24 h';
 
-  // Phase 21 — Operator request 2026-05-22: render 4 tables in the details
-  // body (push PV / Load / Price + pull Plan) so the operator can see what
-  // we send to EOS for each endpoint AND what comes back, all in one place.
-  // The container `#inspector-table-eos` previously held a single 4-column
-  // table — we now own it entirely and replace its innerHTML with four
-  // separate scrollable sub-tables.
+  // Phase 21 (operator request 2026-05-23): the four sub-tables (PUSH PV /
+  // Load / Price + PULL Plan) are merged into a SINGLE table joined on
+  // ts_utc. One row per timestamp, columns:
+  //   Zeit · PV-Push W · Last-Push W · Preis ct/kWh · Plan-Aktion · Leistung
+  // pull slots are already 15-min aligned by eos-adapter.convertEosPlanToSlots
+  // (hourly entries split into 4×15-min), so the join is exact — no gaps in
+  // the plan column other than where EOS itself returned nothing.
   var detailsBody = document.getElementById('inspector-table-eos');
   if (!detailsBody) return;
 
   var providers = push.providers || {};
+  var pushOk = providers.pv || providers.load || providers.price;
 
-  function buildProviderTable(label, endpoint, provider) {
-    var rows = (provider && Array.isArray(provider.rows)) ? provider.rows : [];
-    var unit = (provider && provider.unit) || '';
-    var truncated = provider && provider.truncated;
-    var total = provider && provider.totalCount != null ? provider.totalCount : rows.length;
-    var header = '<h4 class="eos-subtbl-title">' + escHtmlForecastInspector(label) +
-      ' <span class="eos-subtbl-endpoint">' + escHtmlForecastInspector(endpoint) + '</span>' +
-      ' <span class="eos-subtbl-count">' + total + (truncated ? (' (zeige ' + rows.length + ')') : '') + ' Slots</span>' +
-      '</h4>';
-    if (!rows.length) {
-      return header + '<div class="eos-subtbl-empty">Keine Daten gesendet.</div>';
-    }
-    var trs = '';
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i] || {};
-      var when = formatBerlinTimeForecastInspector(r.ts_utc);
-      var val = (typeof r.value === 'number' && isFinite(r.value)) ? r.value.toFixed(unit === 'ct/kWh' ? 2 : 0) : '--';
-      trs += '<tr><td>' + escHtmlForecastInspector(when) + '</td><td class="num">' +
-        escHtmlForecastInspector(val) + ' ' + escHtmlForecastInspector(unit) + '</td></tr>';
-    }
-    return header +
-      '<div class="data-table-scroll eos-subtbl-scroll" tabindex="0">' +
-        '<table class="data-table dv-log-table">' +
-          '<thead><tr><th scope="col">Zeit (lokal)</th><th scope="col" class="num">Wert</th></tr></thead>' +
-          '<tbody>' + trs + '</tbody>' +
-        '</table>' +
-      '</div>';
+  // Render-time aggregation summary so the operator still sees push slot
+  // counts at a glance now that the per-section headers are gone.
+  var pvRows = (providers.pv && Array.isArray(providers.pv.rows)) ? providers.pv.rows : [];
+  var loadRows = (providers.load && Array.isArray(providers.load.rows)) ? providers.load.rows : [];
+  var priceRows = (providers.price && Array.isArray(providers.price.rows)) ? providers.price.rows : [];
+  var summaryLine = 'PUSH: PV ' + pvRows.length + ' · Last ' + loadRows.length + ' · Preis ' + priceRows.length +
+    '  ·  PULL: Plan ' + slots.length + ' Slots';
+
+  if (!pushOk && !slots.length) {
+    detailsBody.innerHTML = '<div class="eos-subtbl-empty">Weder Push- noch Pull-Daten verfügbar.</div>';
+    return;
   }
 
-  function buildPullTable(slotsArr, pullOk, pullError) {
-    var header = '<h4 class="eos-subtbl-title">PULL · Plan ' +
-      '<span class="eos-subtbl-endpoint">GET /v1/energy-management/plan</span>' +
-      ' <span class="eos-subtbl-count">' + slotsArr.length + ' Slots</span></h4>';
-    if (!pullOk && pullError) {
-      return header + '<div class="eos-subtbl-empty error">Fehler: ' + escHtmlForecastInspector(pullError) + '</div>';
-    }
-    if (!slotsArr.length) {
-      return header + '<div class="eos-subtbl-empty">Kein Plan von EOS empfangen.</div>';
-    }
-    var trs = '';
-    for (var i = 0; i < slotsArr.length; i++) {
-      var s = slotsArr[i] || {};
-      var when = formatBerlinTimeForecastInspector(s.ts_utc);
-      var planCell = (s.planAction || '--') + ' · ' + formatPowerForecastInspector(s.planPowerW);
-      trs += '<tr><td>' + escHtmlForecastInspector(when) + '</td>' +
-             '<td>' + escHtmlForecastInspector(planCell) + '</td></tr>';
-    }
-    return header +
-      '<div class="data-table-scroll eos-subtbl-scroll" tabindex="0">' +
-        '<table class="data-table dv-log-table">' +
-          '<thead><tr><th scope="col">Zeit (lokal)</th><th scope="col">Plan-Aktion · Leistung</th></tr></thead>' +
-          '<tbody>' + trs + '</tbody>' +
-        '</table>' +
-      '</div>';
+  // Build ts_utc → row map. We use the ISO string as the join key so the
+  // four sources (which all serialise via Date#toISOString) match exactly.
+  var byTs = new Map();
+  function ensure(ts) {
+    if (!byTs.has(ts)) byTs.set(ts, { ts: ts, pv: null, load: null, price: null, planAction: null, planPowerW: null });
+    return byTs.get(ts);
+  }
+  for (var i = 0; i < pvRows.length; i++) if (pvRows[i] && pvRows[i].ts_utc) ensure(pvRows[i].ts_utc).pv = pvRows[i].value;
+  for (var j = 0; j < loadRows.length; j++) if (loadRows[j] && loadRows[j].ts_utc) ensure(loadRows[j].ts_utc).load = loadRows[j].value;
+  for (var k = 0; k < priceRows.length; k++) if (priceRows[k] && priceRows[k].ts_utc) ensure(priceRows[k].ts_utc).price = priceRows[k].value;
+  for (var p = 0; p < slots.length; p++) {
+    var sp = slots[p] || {};
+    if (!sp.ts_utc) continue;
+    var rowP = ensure(sp.ts_utc);
+    rowP.planAction = sp.planAction;
+    rowP.planPowerW = sp.planPowerW;
+  }
+  var allTs = Array.from(byTs.keys()).sort();
+
+  function fmtNum(v, digits) {
+    if (typeof v !== 'number' || !isFinite(v)) return '–';
+    return v.toFixed(digits);
+  }
+  function fmtPlanCell(action, powerW) {
+    if (!action && (powerW == null || !isFinite(powerW))) return '–';
+    var label = action || '–';
+    var power = (typeof powerW === 'number' && isFinite(powerW)) ? formatPowerForecastInspector(powerW) : '';
+    return power ? (label + ' · ' + power) : label;
   }
 
+  var trs = '';
+  for (var x = 0; x < allTs.length; x++) {
+    var ts = allTs[x];
+    var r = byTs.get(ts);
+    var when = formatBerlinTimeForecastInspector(ts);
+    trs += '<tr>' +
+      '<td>' + escHtmlForecastInspector(when) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.pv, 0)) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.load, 0)) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.price, 2)) + '</td>' +
+      '<td>' + escHtmlForecastInspector(fmtPlanCell(r.planAction, r.planPowerW)) + '</td>' +
+      '</tr>';
+  }
   detailsBody.innerHTML =
-    '<div class="eos-subtbl-grid">' +
-      '<div class="eos-subtbl">' + buildProviderTable('PUSH · PV-Forecast', 'PUT /v1/prediction/import/PVForecastImport', providers.pv) + '</div>' +
-      '<div class="eos-subtbl">' + buildProviderTable('PUSH · Last-Forecast', 'PUT /v1/prediction/import/LoadImport', providers.load) + '</div>' +
-      '<div class="eos-subtbl">' + buildProviderTable('PUSH · Strompreis', 'PUT /v1/prediction/import/ElecPriceImport', providers.price) + '</div>' +
-      '<div class="eos-subtbl">' + buildPullTable(slots, pull.ok, pull.error) + '</div>' +
-    '</div>';
+    '<div class="eos-merged-meta">' + escHtmlForecastInspector(summaryLine) + '</div>' +
+    '<div class="data-table-scroll eos-merged-scroll" tabindex="0">' +
+      '<table class="data-table dv-log-table eos-merged-table">' +
+        '<thead><tr>' +
+          '<th scope="col">Zeit (lokal)</th>' +
+          '<th scope="col" class="num">PV-Push (W)</th>' +
+          '<th scope="col" class="num">Last-Push (W)</th>' +
+          '<th scope="col" class="num">Preis (ct/kWh)</th>' +
+          '<th scope="col">Plan-Aktion · Leistung</th>' +
+        '</tr></thead>' +
+        '<tbody>' + trs + '</tbody>' +
+      '</table>' +
+    '</div>' +
+    (pull.ok ? '' : ('<div class="eos-subtbl-empty error">PULL-Fehler: ' + escHtmlForecastInspector(pull.error || 'unbekannt') + '</div>'));
 }
 // renderStage2BacktestResult ENTFERNT 2026-05-23 — Backtest-Karte aus Settings
 // raus. Backend (getStage2 / /api/forecast/inspector/stage2) bleibt intakt

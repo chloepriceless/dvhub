@@ -2067,6 +2067,147 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // Phase 21 (2026-05-23): aggregated Tesla charge sessions for the
+    // Teslamate drawer on /integrations. Groups raw `tesla_charger_power`
+    // samples into contiguous sessions (gap > 10 min → new session) and
+    // computes start/end timestamps, duration, peak/avg power, energy added
+    // (trapezoidal integration of the power curve) and SoC start/end from
+    // `tesla_battery_level` snapshots taken at session boundaries.
+    if (url.pathname === '/api/family/tesla-sessions' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
+      if (!ctx.telemetryStore?.querySeries) {
+        return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      }
+      const rawDays = parseInt(url.searchParams.get('days'), 10);
+      const days = Number.isFinite(rawDays) ? Math.max(1, Math.min(31, rawDays)) : 7;
+      const now = new Date();
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const start = new Date(end.getTime() - days * 86400000);
+      try {
+        const rows = await ctx.telemetryStore.querySeries({
+          seriesKeys: ['tesla_charger_power', 'tesla_battery_level'],
+          start,
+          end,
+          maxResolution: 900,
+        });
+        const power = rows.filter(r => r.key === 'tesla_charger_power' && Number.isFinite(r.value));
+        const soc = rows.filter(r => r.key === 'tesla_battery_level' && Number.isFinite(r.value));
+        // Session detection: contiguous power > 100 W with gaps < 10 min.
+        const SESSION_GAP_MS = 10 * 60 * 1000;
+        const SESSION_POWER_W = 100;
+        const sessions = [];
+        let cur = null;
+        for (const p of power) {
+          const ts = new Date(p.ts).getTime();
+          if (!Number.isFinite(ts)) continue;
+          const charging = p.value >= SESSION_POWER_W;
+          if (charging) {
+            if (!cur || (ts - cur.lastTs) > SESSION_GAP_MS) {
+              if (cur) sessions.push(cur);
+              cur = { startTs: ts, lastTs: ts, samples: [{ ts, w: p.value }], peakW: p.value };
+            } else {
+              cur.samples.push({ ts, w: p.value });
+              cur.lastTs = ts;
+              if (p.value > cur.peakW) cur.peakW = p.value;
+            }
+          } else if (cur && (ts - cur.lastTs) > SESSION_GAP_MS) {
+            sessions.push(cur);
+            cur = null;
+          }
+        }
+        if (cur) sessions.push(cur);
+        // Helper: find last SOC sample ≤ t, first sample ≥ t.
+        function socAt(t, mode /* 'before' | 'after' */) {
+          if (!soc.length) return null;
+          if (mode === 'before') {
+            let last = null;
+            for (const s of soc) {
+              const st = new Date(s.ts).getTime();
+              if (st <= t) last = s.value;
+              else break;
+            }
+            return last;
+          }
+          for (const s of soc) {
+            const st = new Date(s.ts).getTime();
+            if (st >= t) return s.value;
+          }
+          return null;
+        }
+        // Trapezoidal integration: ∫ P dt in Wh. Samples are spaced ~minutes
+        // in practice, so this is more accurate than peak × duration.
+        function integrateWh(samples) {
+          if (samples.length < 2) return 0;
+          let wh = 0;
+          for (let i = 1; i < samples.length; i++) {
+            const dtHours = (samples[i].ts - samples[i - 1].ts) / 3_600_000;
+            wh += ((samples[i].w + samples[i - 1].w) / 2) * dtHours;
+          }
+          return wh;
+        }
+        const out = sessions.map((s) => {
+          const durMs = s.lastTs - s.startTs;
+          const wh = integrateWh(s.samples);
+          const avgW = s.samples.length ? s.samples.reduce((a, x) => a + x.w, 0) / s.samples.length : 0;
+          return {
+            startTs: new Date(s.startTs).toISOString(),
+            endTs: new Date(s.lastTs).toISOString(),
+            durationMin: Math.round(durMs / 60000),
+            energyKwh: Number((wh / 1000).toFixed(2)),
+            peakPowerW: Math.round(s.peakW),
+            avgPowerW: Math.round(avgW),
+            socStartPct: socAt(s.startTs, 'before'),
+            socEndPct: socAt(s.lastTs, 'after'),
+            sampleCount: s.samples.length,
+          };
+        }).reverse(); // newest first
+        return json(res, 200, { ok: true, days, sessions: out });
+      } catch (e) {
+        pushLog('family_tesla_sessions_error', { error: e.message });
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // Phase 21 (2026-05-23): dedicated merge endpoint for the Teslamate
+    // drawer. Sibling of /api/family/mqtt-tiles — same merge-server-side
+    // pattern to avoid the partial-POST-replaces-config trap (memory
+    // feedback_config_save_replaces). Accepts {enabled, teslamateCarId,
+    // snapshotIntervalSec, name}; everything else is ignored.
+    if (url.pathname === '/api/family/tesla-config' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object_required' });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.integrations = (next.integrations && typeof next.integrations === 'object') ? next.integrations : {};
+      const cur = (next.integrations.tesla && typeof next.integrations.tesla === 'object') ? next.integrations.tesla : {};
+      const patch = { ...cur };
+      if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+      if (Number.isFinite(body.teslamateCarId)) {
+        patch.teslamateCarId = Math.max(1, Math.min(99, Math.floor(body.teslamateCarId)));
+      }
+      if (Number.isFinite(body.snapshotIntervalSec)) {
+        patch.snapshotIntervalSec = Math.max(30, Math.min(3600, Math.floor(body.snapshotIntervalSec)));
+      }
+      if (typeof body.name === 'string') patch.name = String(body.name).slice(0, 64).trim() || 'Tesla';
+      next.integrations.tesla = patch;
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('family_tesla_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('family_tesla_config_saved', {
+        enabled: patch.enabled,
+        carId: patch.teslamateCarId,
+        intervalSec: patch.snapshotIntervalSec,
+      }, actorContext(req));
+      return json(res, 200, { ok: true, tesla: patch });
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Phase 17 Plan 03: License management endpoints.
     // POST /api/license/activate   — operator submits a new key
@@ -2185,7 +2326,8 @@ export function createApiRoutes(ctx) {
         tesla: {
           enabled: getCfg().integrations?.tesla?.enabled ?? false,
           state: ctx.teslamateService?.getState() || null,
-          lastUpdate: ctx.teslamateService?.lastUpdateAt || null
+          lastUpdate: ctx.teslamateService?.lastUpdateAt || null,
+          config: { name: getCfg().integrations?.tesla?.name || 'Tesla', teslamateCarId: getCfg().integrations?.tesla?.teslamateCarId ?? 1, snapshotIntervalSec: getCfg().integrations?.tesla?.snapshotIntervalSec ?? 300 }
         },
         homeAssistant: {
           haDiscovery: mqttCfg.haDiscovery?.enabled ?? false,
