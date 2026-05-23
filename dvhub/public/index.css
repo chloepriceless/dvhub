@@ -350,6 +350,15 @@
   font-family:var(--f-mono); font-size:9.5px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--text-dim); font-weight:500;
   background:var(--glass);
+  /* Operator complaint 2026-05-23: renamed headers ("Charger-Leistung (A)",
+     "100% Einspeisung") are longer than the originals ("Charge (A)",
+     "DC-Export") and pushed the Schedule table beyond the Steuerung card
+     edge. Allow wrap inside the th so the table can sit inside the card
+     even on narrower viewports. */
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.2;
+  vertical-align: bottom;
 }
 .sched-tbl td { color:var(--text); font-variant-numeric:tabular-nums; }
 .sched-tbl td.num, .sched-tbl th.num {
