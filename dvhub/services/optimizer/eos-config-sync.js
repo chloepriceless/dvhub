@@ -156,25 +156,23 @@ export function createEosConfigSync(ctx) {
     const batteries = buildEosBatteries(cfg);
     const inverters = buildEosInverters(cfg);
 
-    // Phase 21 (2026-05-23): also flip every EOS provider to the Import
-    // variant so EOS consumes the forecasts DVhub pushes via eos-adapter
-    // (PVForecastImport/LoadImport/ElecPriceImport/FeedInTariffImport). Plus
-    // ems.mode → OPTIMIZATION so the genetic algo runs every 300 s instead
-    // of staying dormant (DISABLED) waiting for a manual trigger. When the
-    // operator turns off the EOS bridge (eosProxy.enabled=false) the sync
-    // doesn't run at all (see early-return above), so this won't fight
-    // anyone who explicitly wants EOS in pull-only mode.
-    const tariffMode = String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase();
-    const feedInProvider = tariffMode === 'spot' ? 'FeedInTariffImport' : 'FeedInTariffFixed';
-
+    // Phase 21 hotfix (2026-05-23): provider auto-flip REVERTED. The
+    // earlier idea (auto-set elecprice/load/pvforecast/feedintariff providers
+    // to their *Import variants + ems.mode='OPTIMIZATION') hit an upstream
+    // EOS bug: /v1/prediction/import/{provider_id} returns 200 OK but the
+    // PUT body is silently dropped before reaching storage (Pydantic Union
+    // validation captures the body as a model, then json.dumps fails inside
+    // the handler — verified by reading /v1/prediction/series?key=... and
+    // finding 0 entries after every successful PUT). Flipping providers
+    // without working imports left EOS running OPTIMIZATION with empty data
+    // → bullshit plans. Until the EOS handler is patched OR we switch to
+    // file-based import (writing JSON files + setting
+    // *.provider_settings.*Import.import_file_path), we only sync the
+    // device hardware spec (battery + inverter capacities). Provider choice
+    // + ems.mode stay operator-owned via EOSdash.
     const tasks = [
-      { section: 'devices/batteries',      body: batteries },
-      { section: 'devices/inverters',      body: inverters },
-      { section: 'pvforecast/provider',    body: 'PVForecastImport' },
-      { section: 'load/provider',          body: 'LoadImport' },
-      { section: 'elecprice/provider',     body: 'ElecPriceImport' },
-      { section: 'feedintariff/provider',  body: feedInProvider },
-      { section: 'ems/mode',               body: 'OPTIMIZATION' },
+      { section: 'devices/batteries', body: batteries },
+      { section: 'devices/inverters', body: inverters },
     ];
 
     const applied = [];

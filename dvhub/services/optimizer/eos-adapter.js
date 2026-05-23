@@ -114,29 +114,42 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const perProvider = {};
     const errors = [];
 
-    // Phase 21 hotfix (2026-05-23): EOS v0.3.0 PUT /v1/prediction/import/{id}
-    // returns HTTP 400 "Object of type PydanticDateTimeData is not JSON
-    // serializable" when the body is the documented {timestamps, values}
-    // (PydanticDateTimeData) shape — and HTTP 500 on PydanticDateTimeDataFrame.
-    // The only shape that actually returns 200 is a plain dict mapping
-    // ISO-string timestamps to numeric values. Empirically verified against
-    // the live prod EOS (curl probe 2026-05-23). The OpenAPI's anyOf:[{},null]
-    // schema is meaningless — pick what the implementation actually accepts.
-    // Skip slots with missing/NaN ts so a single bad row doesn't kill the push.
-    function buildDateTimeData(slots, valueFn) {
-      const out = {};
-      for (const s of slots) {
-        if (!s) continue;
-        const d = new Date(s.ts);
-        if (Number.isNaN(d.getTime())) continue;
-        out[d.toISOString()] = valueFn(s);
+    // Phase 21 (2026-05-23 rewrite): the {ISO_TS: value} dict shape returned
+    // HTTP 200 but data NEVER reached the provider — EOS' import_from_json
+    // tries dataframe → datetimedata → simple-dict-with-record-keys in turn,
+    // and our ts-keyed dict matched none (no record key matched a prefix in
+    // the simple-dict branch), so each PUT no-op'd silently. Verified empty:
+    //   curl /v1/prediction/series?key=pvforecast_ac_power → 0 entries
+    // after 200-OK pushes.
+    //
+    // Correct shape per EOS dataabc.py:1670 example + PydanticDateTimeData:
+    //   { start_datetime: ISO, interval: "15 minutes",
+    //     "<provider_record_key>": [value, value, …] }
+    //
+    // Per-provider record key:
+    //   PVForecastImport      → pvforecast_ac_power     (W)
+    //   LoadImport            → loadforecast_power_w    (W)
+    //   ElecPriceImport       → elecprice_marketprice_kwh (€/kWh)
+    //   FeedInTariffImport    → feed_in_tariff_kwh      (€/kWh)
+    function buildDateTimeData(slots, recordKey, valueFn) {
+      const validSlots = slots.filter(s => s && !Number.isNaN(new Date(s.ts).getTime()));
+      if (!validSlots.length) return null;
+      const values = validSlots.map(valueFn);
+      const start = new Date(validSlots[0].ts).toISOString();
+      // Derive interval from the first two slot timestamps. Default to
+      // 15 minutes when only one slot exists.
+      let intervalLabel = '15 minutes';
+      if (validSlots.length >= 2) {
+        const delta = new Date(validSlots[1].ts).getTime() - new Date(validSlots[0].ts).getTime();
+        const minutes = Math.max(1, Math.round(delta / 60000));
+        intervalLabel = minutes + ' minutes';
       }
-      return out;
+      return { start_datetime: start, interval: intervalLabel, [recordKey]: values };
     }
 
     // PV
     if (forecastResponse.pv?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.pv.slots, s => Number(s.watts) || 0);
+      const body = buildDateTimeData(forecastResponse.pv.slots, 'pvforecast_ac_power', s => Number(s.watts) || 0);
       const res = await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body);
       perProvider.pv = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`PV: ${res.error}`);
@@ -144,35 +157,41 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 
     // Load
     if (forecastResponse.load?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.load.slots, s => Number(s.watts) || 0);
+      const body = buildDateTimeData(forecastResponse.load.slots, 'loadforecast_power_w', s => Number(s.watts) || 0);
       const res = await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body);
       perProvider.load = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`Load: ${res.error}`);
     }
 
-    // Price — EOS ElecPrice expects €/kWh (see EOS' own default
-    // `feed_in_tariff_kwh: 0.078` = 7.8 ct/kWh). The pre-2026-05-23 code
-    // divided by 100000 (= €/Wh), which made every price look 1000× too
-    // small and silently corrupted the genetic optimizer's revenue math.
-    // Correct conversion: ct/kWh ÷ 100 → €/kWh.
+    // Price — EOS' writable storage key is elecprice_marketprice_wh (€/Wh).
+    // The _kwh variant is a computed property (= _wh × 1000). So values
+    // MUST be in €/Wh = ct/kWh ÷ 100000. Per probe of EOS Python internals
+    // (record_keys_writable check), only _wh is accepted by import_from_dict.
     if (forecastResponse.price?.slots?.length) {
       const enriched = forecastResponse.price.slots;
       const valueFn = enriched[0]?.importCtKwh != null
-        ? s => (Number(s.importCtKwh) || 0) / 100   // ct/kWh → €/kWh
-        : s => (Number(s.ctKwh) || 0) / 100;
-      const body = buildDateTimeData(enriched, valueFn);
+        ? s => (Number(s.importCtKwh) || 0) / 100000   // ct/kWh → €/Wh
+        : s => (Number(s.ctKwh) || 0) / 100000;
+      const body = buildDateTimeData(enriched, 'elecprice_marketprice_wh', valueFn);
       const res = await httpRequest('PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
       perProvider.price = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`Price: ${res.error}`);
     }
 
-    // Phase 21 (2026-05-23): FeedInTariffImport push — without this, EOS
-    // reuses its static FeedInTariffFixed (default 7.8 ct/kWh) and can't
-    // discriminate "einspeisen vs. speichern" on spot-dynamic days.
-    // Reads tariff config from cfg.optimizer.tariff:
-    //   feedInMode='spot' → feedIn = importCtKwh × feedInSpotFactor (operator
-    //     gets spot price × factor for every kWh fed back)
-    //   feedInMode='fixed' / unset → skip the push (EOS keeps FeedInTariffFixed)
+    // FeedInTariffImport — only when feedInMode='spot'. Writable storage key
+    // is feed_in_tariff_wh (€/Wh). See FeedInTariffDataRecord.record_keys_
+    // writable in EOS source — feed_in_tariff_kwh is computed-only.
+    //
+    // Note (2026-05-23): upstream EOS' /v1/prediction/import/{id} handler
+    // currently silently drops every PUT (Pydantic-Union validation captures
+    // the body as a model, json.dumps then fails inside the handler — patched
+    // locally at /opt/dvhub/eos/.../server/eos.py:983 to use model_dump_json()).
+    // Even with the patch, import_from_dict appears to no-op for non-trivial
+    // reasons (provider state / ems_start_datetime alignment) — push.ok=true
+    // but /v1/prediction/series returns 0 rows. Until that's solved end-to-end,
+    // EOS keeps using its own internal providers (ElecPriceAkkudoktor etc.) and
+    // this push code only stages the right shape for when the upstream
+    // ingestion bug is properly fixed.
     if (forecastResponse.price?.slots?.length) {
       const cfg = getCfg();
       const tariff = cfg?.optimizer?.tariff || {};
@@ -181,9 +200,9 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         const factor = Number.isFinite(Number(tariff.feedInSpotFactor)) ? Number(tariff.feedInSpotFactor) : 1.0;
         const enriched = forecastResponse.price.slots;
         const feedFn = enriched[0]?.importCtKwh != null
-          ? s => ((Number(s.importCtKwh) || 0) * factor) / 100   // ct/kWh × factor → €/kWh
-          : s => ((Number(s.ctKwh) || 0) * factor) / 100;
-        const body = buildDateTimeData(enriched, feedFn);
+          ? s => ((Number(s.importCtKwh) || 0) * factor) / 100000   // ct/kWh × factor → €/Wh
+          : s => ((Number(s.ctKwh) || 0) * factor) / 100000;
+        const body = buildDateTimeData(enriched, 'feed_in_tariff_wh', feedFn);
         const res = await httpRequest('PUT', '/v1/prediction/import/FeedInTariffImport?force_enable=true', body);
         perProvider.feedIn = { ok: res.ok, error: res.error || null };
         if (!res.ok) errors.push(`FeedIn: ${res.error}`);

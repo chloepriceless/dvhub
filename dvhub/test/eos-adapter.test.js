@@ -49,13 +49,12 @@ function makeCtx(baseUrl) {
 // PUT /v1/prediction/import/{PVForecastImport,LoadImport,ElecPriceImport}.
 // Each call carries a PydanticDateTimeData {timestamps, values} body and
 // ?force_enable=true query param.
-// Phase 21 (2026-05-23): EOS v0.3.0 doesn't actually accept the documented
-// {timestamps, values} shape — its OpenAPI declares anyOf:[{},null] but the
-// implementation only successfully imports a dict {ISO_TS: value}. The
-// adapter now emits the dict shape (eos-adapter.js buildDateTimeData) — and
-// includes ?force_enable=true via url.search (was being stripped by the
-// http.request path:url.pathname call, silently returning 404).
-test('pushForecast sends per-provider PUT to /v1/prediction/import with ts-keyed dict body', async () => {
+// Phase 21 (2026-05-23 v3): EOS' writable storage keys are per-provider
+// record names (pvforecast_ac_power, loadforecast_power_w,
+// elecprice_marketprice_wh, feed_in_tariff_wh). The body shape is
+// PydanticDateTimeData: {start_datetime, interval, <recordKey>: [values]}.
+// Plus ?force_enable=true via url.search.
+test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', async () => {
   const mock = await createMockEos((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok' }));
@@ -102,13 +101,15 @@ test('pushForecast sends per-provider PUT to /v1/prediction/import with ts-keyed
     assert.ok(loadReq, 'Should PUT LoadImport');
     assert.ok(priceReq, 'Should PUT ElecPriceImport');
     assert.equal(pvReq.method, 'PUT');
-    assert.ok((pvReq.url || '').includes('force_enable=true'), 'PV PUT must carry ?force_enable=true (path:url.pathname+url.search bug fix)');
+    assert.ok((pvReq.url || '').includes('force_enable=true'), 'PV PUT must carry ?force_enable=true');
     assert.equal(typeof pvReq.body, 'object', 'PV body must be a dict');
     assert.ok(!Array.isArray(pvReq.body), 'PV body must be a plain dict, not array');
-    const pvKeys = Object.keys(pvReq.body);
-    assert.equal(pvKeys.length, 2, 'PV body should carry 2 ts→watts entries');
-    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(pvKeys[0]), 'PV body keys should be ISO timestamps');
-    assert.equal(typeof pvReq.body[pvKeys[0]], 'number', 'PV body values should be numbers');
+    assert.ok(typeof pvReq.body.start_datetime === 'string', 'PV body has start_datetime');
+    assert.ok(typeof pvReq.body.interval === 'string', 'PV body has interval');
+    assert.ok(Array.isArray(pvReq.body.pvforecast_ac_power), 'PV body keyed by pvforecast_ac_power');
+    assert.equal(pvReq.body.pvforecast_ac_power.length, 2);
+    assert.ok(Array.isArray(loadReq.body.loadforecast_power_w), 'Load body keyed by loadforecast_power_w');
+    assert.ok(Array.isArray(priceReq.body.elecprice_marketprice_wh), 'Price body keyed by elecprice_marketprice_wh');
   } finally {
     await mock.close();
   }
