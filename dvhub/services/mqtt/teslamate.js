@@ -323,7 +323,11 @@ export function createTeslamateSubscriber(hub, ctx) {
   function handleMessage(topic, payloadBuffer) {
     const cfg = getTeslaConfig();
     const carId = cfg.teslamateCarId || 1;
-    const prefix = `teslamate/cars/${carId}/`;
+    // Phase 21 (2026-05-23): the topic root is configurable so DVhub can sit
+    // alongside a TeslaMate that publishes under a non-default base (e.g.
+    // `home/teslamate/cars/...`). Default keeps the upstream-canonical value.
+    const base = (cfg.topicPrefix && String(cfg.topicPrefix).trim()) || 'teslamate/cars';
+    const prefix = `${base.replace(/\/+$/, '')}/${carId}/`;
 
     if (!topic.startsWith(prefix)) return;
 
@@ -410,7 +414,8 @@ export function createTeslamateSubscriber(hub, ctx) {
     await seedCacheFromStore();
 
     const carId = cfg.teslamateCarId || 1;
-    const topic = `teslamate/cars/${carId}/#`;
+    const base = (cfg.topicPrefix && String(cfg.topicPrefix).trim()) || 'teslamate/cars';
+    const topic = `${base.replace(/\/+$/, '')}/${carId}/#`;
     hub.subscribe(topic, handleMessage);
 
     // Set up periodic snapshot persistence
@@ -424,7 +429,7 @@ export function createTeslamateSubscriber(hub, ctx) {
     // Prevent timer from keeping Node.js alive
     if (snapshotTimer.unref) snapshotTimer.unref();
 
-    pushLog('teslamate_connected', { carId });
+    pushLog('teslamate_connected', { carId, topic });
   }
 
   function close() {
@@ -438,10 +443,22 @@ export function createTeslamateSubscriber(hub, ctx) {
     return Object.freeze({ ...cache });
   }
 
+  // Phase 21 (2026-05-23): expose the effective subscription topic so the
+  // /api/integrations/status payload can show the operator exactly where
+  // DVhub is listening (broker URL comes from the MQTT hub, prefix+carId
+  // come from this service).
+  function getSubscriptionTopic() {
+    const cfg = getTeslaConfig();
+    const carId = cfg.teslamateCarId || 1;
+    const base = (cfg.topicPrefix && String(cfg.topicPrefix).trim()) || 'teslamate/cars';
+    return `${base.replace(/\/+$/, '')}/${carId}/#`;
+  }
+
   return {
     start,
     close,
     getState,
+    getSubscriptionTopic,
     get lastUpdateAt() { return lastUpdateAt; }
   };
 }

@@ -386,60 +386,127 @@
          : 'dot-muted';
   }
 
-  // Build the 4 stat tiles per system. Phase 09.4-04 (D-01): buildStats()
-  // ALWAYS returns the 4 tracker tiles (Latency / Uptime|Sample / Errors·24h /
-  // Last-data). Identity fields no longer render as tiles — they move to a
-  // header subtitle line via buildIdentityLine() below. The /health + /status
-  // merge already happens in fetchStatus() so the same merged `data` object
-  // carries both data.latencyMs and data.broker. The defensive fmt* accessors
-  // return '—' (em-dash) when a system has not yet been observed by the tracker.
+  // Phase 21 (2026-05-23) rewrite: each integration picks its 4 most-useful
+  // stats from whatever is actually in the status payload — no more 4×"—"
+  // when latency/uptime/errors aren't tracked yet. Live-tracked metrics
+  // (Latency / Errors · 24h) only appear when present; otherwise we fall
+  // back to identity-style values (broker / topic count / SoC / portal-ID).
+  // A stat with a missing value still shows '—' (single dash, not full row)
+  // so the slot stays the same width across cards.
+  function pickFirst(fn, data, fallback) {
+    var v = fn(data);
+    return v == null ? (fallback != null ? fallback : '—') : v;
+  }
+  function fmtBool(v, on, off) {
+    if (v === true) return on || 'Ja';
+    if (v === false) return off || 'Nein';
+    return '—';
+  }
+  function fmtNumUnit(v, digits, unit) {
+    if (v == null || !Number.isFinite(Number(v))) return '—';
+    return Number(v).toFixed(digits) + (unit ? (' ' + unit) : '');
+  }
+  function fmtBrokerHost(url) {
+    if (!url) return '—';
+    if (url === 'embedded') return 'embedded';
+    try {
+      var u = new URL(url);
+      return u.host || url;
+    } catch (_) { return String(url); }
+  }
   function buildStats(key, data) {
+    data = data || {};
     switch (key) {
-      case 'victron':
-      case 'mid':
-      case 'luox':
-      case 'tesla':
-        return [
-          { label: 'Latency', value: fmtLatency(data.latencyMs) },
-          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-          { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
-        ];
       case 'mqtt':
         return [
-          { label: 'Latency', value: fmtLatency(data.latencyMs) },
-          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
-          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
-          { label: 'Last data', value: fmtRel(data.lastSampleAt) }
+          { label: 'Status', value: fmtBool(data.connected, 'Verbunden', 'Offline') },
+          { label: 'Topics', value: fmtCount(data.topicCount) },
+          { label: 'Broker', value: fmtBrokerHost(data.broker) },
+          { label: data.latencyMs != null ? 'Latency' : 'Mode',
+            value: data.latencyMs != null ? fmtLatency(data.latencyMs) : (data.embedded ? 'Embedded' : 'Extern') }
         ];
+      case 'tesla': {
+        var s = data.state || {};
+        return [
+          { label: 'SoC', value: fmtNumUnit(s.batteryLevel, 0, '%') },
+          { label: 'Ladeleistung', value: fmtNumUnit(s.chargerPower, 1, 'kW') },
+          { label: 'Reichweite', value: fmtNumUnit(s.ratedRangeKm, 0, 'km') },
+          { label: 'Letztes Update', value: fmtRel(data.lastUpdate) }
+        ];
+      }
       case 'homeAssistant':
         return [
+          { label: 'Auto-Discovery', value: fmtBool(data.haDiscovery, 'Aktiv', 'Aus') },
+          { label: 'Topics', value: fmtCount(data.topicsPublished) },
           { label: 'Latency', value: fmtLatency(data.latencyMs) },
-          { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
           { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
+        ];
+      case 'victron':
+        return [
+          { label: 'Host', value: data.host || '—' },
+          { label: 'Modell', value: data.modelId || '—' },
+          { label: 'Firmware', value: data.firmware || '—' },
+          { label: 'Status', value: fmtBool(data.host != null, 'Konfiguriert', 'Nicht konfiguriert') }
+        ];
+      case 'mid':
+        return [
+          { label: 'Seriennr.', value: data.serial || '—' },
+          { label: 'Host', value: data.host || '—' },
+          { label: 'Firmware', value: data.firmware || '—' },
+          { label: 'Status', value: fmtBool(!!(data.serial || data.host), 'Konfiguriert', 'Nicht konfiguriert') }
+        ];
+      case 'luox':
+        return [
+          { label: 'Identifier', value: data.identifier || '—' },
+          { label: 'Firmware', value: data.firmware || '—' },
+          { label: 'Status', value: fmtBool(!!data.identifier, 'Konfiguriert', 'Nicht konfiguriert') },
+          { label: '—', value: '—' }
         ];
       case 'loxone':
         return [
+          { label: 'Status', value: fmtBool(data.configured, 'Konfiguriert', 'Nicht konfiguriert') },
           { label: 'Latency', value: fmtLatency(data.latencyMs) },
-          { label: 'Uptime', value: fmtUptime(data.uptimeSec) },
           { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
           { label: 'Last sync', value: fmtRel(data.lastSampleAt) }
         ];
-      case 'devices':
+      case 'devices': {
+        var total = Number(data.total) || 0;
+        var online = Number(data.online) || 0;
         return [
-          { label: 'Latency', value: fmtLatency(data.latencyMs) },
+          { label: 'Online', value: total > 0 ? (online + ' / ' + total) : '0 / 0' },
+          { label: 'Total', value: fmtCount(total) },
           { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
           { label: 'Last sample', value: fmtRel(data.lastSampleAt) }
         ];
-      case 'notifications':
+      }
+      case 'notifications': {
+        var p = Array.isArray(data.providers) ? data.providers : [];
+        var on = p.filter(function (x) { return typeof x === 'string' ? true : !!(x && x.enabled); }).length;
         return [
-          { label: 'Latency', value: fmtLatency(data.latencyMs) },
-          { label: 'Sample', value: fmtSampleRate(data.sampleIntervalHistogramMs) },
-          { label: 'Errors · 24h', value: fmtCount(data.errors24h) },
+          { label: 'Aktiv', value: p.length ? (on + ' / ' + p.length) : '0 / 0' },
+          { label: 'Provider', value: p.length ? String(p.length) : '—' },
+          { label: 'Status', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
           { label: 'Last send', value: fmtRel(data.lastSampleAt) }
         ];
+      }
+      case 'vrm':
+        return [
+          { label: 'Portal-ID', value: data.vrmPortalId || '—' },
+          { label: 'Token', value: fmtBool(data.vrmTokenSet, 'Hinterlegt', 'Fehlt') },
+          { label: 'Import', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
+          { label: 'Last import', value: fmtRel(data.lastImportAt) }
+        ];
+      case 'forecast-providers': {
+        var solOn = !!(data.solcast && data.solcast.apiKeySet);
+        var pvOn = !!(data.pvnode && data.pvnode.apiKeySet);
+        var configuredN = (solOn ? 1 : 0) + (pvOn ? 1 : 0);
+        return [
+          { label: 'Konfiguriert', value: configuredN + ' / 2' },
+          { label: 'Solcast', value: solOn ? 'OK' : '—' },
+          { label: 'pvnode', value: pvOn ? (data.pvnode && data.pvnode.nowcastEnabled ? 'OK · Nowcast' : 'OK') : '—' },
+          { label: 'Last fetch', value: fmtRel(data.lastFetchAt) }
+        ];
+      }
       default:
         return [
           { label: '—', value: '—' },
@@ -1164,12 +1231,86 @@
       mqttDrawerInstance = createDvDrawer({
         root: els.drawer,
         backdrop: els.backdrop,
-        onOpen: function () { pollMqttTopics(); startMqttPoll(); },
+        onOpen: function () { pollMqttTopics(); startMqttPoll(); loadMqttSettings(); },
         onClose: function () { stopMqttPoll(); }
       });
     }
     mqttDrawerInstance.open();
   }
+  // Phase 21 (2026-05-23): pre-fill the MQTT Einstellungen-Tab from the
+  // status payload (mqtt.config — see routes-api.js). Password stays empty
+  // (placeholder explains keep-existing) so the '***' / '' contract is
+  // operator-visible.
+  async function loadMqttSettings() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var r = await apiFetch('/api/integrations/status');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      var c = (d && d.mqtt && d.mqtt.config) || {};
+      if (el('mqtt-broker-url')) el('mqtt-broker-url').value = c.brokerUrl || '';
+      if (el('mqtt-username')) el('mqtt-username').value = c.username || '';
+      if (el('mqtt-embedded')) el('mqtt-embedded').checked = !!c.embedded;
+      if (el('mqtt-topic-prefix')) el('mqtt-topic-prefix').value = (c.topicPrefix === 'dvhub') ? '' : (c.topicPrefix || '');
+      if (el('mqtt-password')) {
+        el('mqtt-password').value = '';
+        el('mqtt-password').placeholder = c.passwordSet ? 'leer lassen = unverändert' : 'kein Passwort gespeichert';
+      }
+    } catch (e) {
+      showDrawerToast('mqtt', 'err', '✗ MQTT-Settings laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  async function saveMqttSettings(buttonEl) {
+    var el = function (id) { return document.getElementById(id); };
+    var pwInput = el('mqtt-password');
+    var body = {
+      brokerUrl: ((el('mqtt-broker-url') && el('mqtt-broker-url').value) || '').trim(),
+      username: ((el('mqtt-username') && el('mqtt-username').value) || '').trim(),
+      // Empty input = '***' (keep existing) — operator clears explicitly via
+      // a typed space-then-backspace OR by clicking Speichern with truly
+      // empty value below. We use the placeholder text to remind them.
+      password: pwInput ? pwInput.value : '***',
+      embedded: !!(el('mqtt-embedded') && el('mqtt-embedded').checked),
+      topicPrefix: ((el('mqtt-topic-prefix') && el('mqtt-topic-prefix').value) || '').trim()
+    };
+    // If the input is empty AND there's a stored password, treat as "keep".
+    // Without this guard, an operator who only changes the URL would wipe
+    // their stored password silently.
+    if (pwInput && pwInput.value === '') {
+      body.password = (pwInput.placeholder.indexOf('unverändert') >= 0) ? '***' : '';
+    }
+    if (!body.embedded && !body.brokerUrl) {
+      showDrawerToast('mqtt', 'err', '✗ Broker-URL fehlt (oder Embedded aktivieren).');
+      return;
+    }
+    var banner = el('mqtt-restart-banner');
+    if (banner) banner.hidden = false;
+    if (buttonEl) { buttonEl.disabled = true; var orig = buttonEl.textContent; buttonEl.textContent = 'Speichere …'; }
+    try {
+      var res = await apiFetch('/api/family/mqtt-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('mqtt', 'ok', data.restartRequired
+          ? '✓ Gespeichert. Service wird neu gestartet — Seite in ~10 s neu laden.'
+          : '✓ MQTT-Konfiguration gespeichert.');
+      } else {
+        showDrawerToast('mqtt', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('mqtt', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var saveBtn = e.target.closest('#mqtt-save');
+    if (saveBtn) { saveMqttSettings(saveBtn); return; }
+  });
   function closeMqttDrawer() {
     if (mqttDrawerInstance) mqttDrawerInstance.close();
   }
@@ -1985,6 +2126,15 @@
       if (el('tesla-name')) el('tesla-name').value = (t.config && t.config.name) || '';
       if (el('tesla-carid')) el('tesla-carid').value = (t.config && Number.isFinite(t.config.teslamateCarId)) ? t.config.teslamateCarId : 1;
       if (el('tesla-interval')) el('tesla-interval').value = (t.config && Number.isFinite(t.config.snapshotIntervalSec)) ? t.config.snapshotIntervalSec : 300;
+      // Phase 21: topic-prefix override (empty input = default 'teslamate/cars').
+      if (el('tesla-prefix')) {
+        var pref = (t.config && t.config.topicPrefix) || '';
+        el('tesla-prefix').value = (pref === 'teslamate/cars') ? '' : pref;
+      }
+      // Phase 21: read-only broker info block — shows WHERE DVhub is listening
+      // for TeslaMate data so the operator doesn't have to guess.
+      if (el('tesla-broker-url')) el('tesla-broker-url').textContent = t.broker || '—';
+      if (el('tesla-sub-topic')) el('tesla-sub-topic').textContent = t.subscriptionTopic || '—';
     } catch (e) {
       showDrawerToast('tesla', 'err', '✗ Konfiguration laden fehlgeschlagen: ' + e.message);
     }
@@ -2089,7 +2239,9 @@
       enabled: !!(el('tesla-enabled') && el('tesla-enabled').checked),
       name: (el('tesla-name') && el('tesla-name').value || '').trim() || 'Tesla',
       teslamateCarId: Number((el('tesla-carid') && el('tesla-carid').value) || 1),
-      snapshotIntervalSec: Number((el('tesla-interval') && el('tesla-interval').value) || 300)
+      snapshotIntervalSec: Number((el('tesla-interval') && el('tesla-interval').value) || 300),
+      // Empty string = clear override → backend falls back to 'teslamate/cars'.
+      topicPrefix: ((el('tesla-prefix') && el('tesla-prefix').value) || '').trim()
     };
     if (!Number.isFinite(body.teslamateCarId) || body.teslamateCarId < 1 || body.teslamateCarId > 99) {
       showDrawerToast('tesla', 'err', '✗ Car-ID muss zwischen 1 und 99 liegen.');
@@ -2142,6 +2294,14 @@
     // /api/integrations/status; one re-fetch on tab show is enough).
     var snapTab = e.target.closest('#dv-tab-tesla-snapshot');
     if (snapTab) { setTimeout(loadTeslaSnapshot, 0); return; }
+    // "Broker ändern → MQTT-Hub-Karte" — open the MQTT inspector drawer from
+    // inside the Tesla drawer. e.preventDefault for the href="#" anchor.
+    var openMqtt = e.target.closest('[data-action="open-mqtt-drawer"]');
+    if (openMqtt) {
+      e.preventDefault();
+      openMqttDrawer();
+      return;
+    }
   });
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'tesla-sessions-days') {

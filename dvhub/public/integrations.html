@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=21" />
+  <link rel="stylesheet" href="/integrations.css?v=23" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -148,16 +148,69 @@
            poll logic still finds them. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-mqtt-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-mqtt" role="dialog" aria-modal="true"
-             aria-label="MQTT Topic Inspector" hidden>
+             aria-label="MQTT Hub" hidden>
         <header class="dv-drawer-head">
-          <h2>MQTT Inspector</h2>
+          <h2>MQTT Hub</h2>
           <div class="dv-drawer-head-actions">
             <button type="button" class="btn sm ghost" id="mqtt-drawer-pause" aria-pressed="false">&#x23F8; Pause</button>
             <button type="button" class="btn sm ghost dv-drawer-close" id="dv-drawer-mqtt-close" aria-label="Schlie&szlig;en">&times;</button>
           </div>
         </header>
-        <p class="dv-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
-        <div class="dv-drawer-body" id="mqtt-drawer-topics"></div>
+        <nav class="dv-tabs" role="tablist" aria-label="MQTT-Hub">
+          <button type="button" role="tab" class="dv-tab is-active"
+                  id="dv-tab-mqtt-settings"
+                  aria-selected="true" aria-controls="dv-panel-mqtt-settings"
+                  data-panel="dv-panel-mqtt-settings" tabindex="0">Einstellungen</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-mqtt-topics"
+                  aria-selected="false" aria-controls="dv-panel-mqtt-topics"
+                  data-panel="dv-panel-mqtt-topics" tabindex="-1">Live-Topics</button>
+        </nav>
+        <div class="dv-drawer-body">
+          <section role="tabpanel" id="dv-panel-mqtt-settings"
+                   aria-labelledby="dv-tab-mqtt-settings" class="dv-tabpanel">
+            <p class="dv-drawer-intro">
+              MQTT-Broker f&uuml;r alle DVhub-MQTT-Verbraucher (TeslaMate-Subscriber, HA-Discovery,
+              MQTT-Tiles, Topic-Inspector). &Auml;nderungen wirken erst nach Service-Restart.
+            </p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="mqtt-embedded">
+              <span>Embedded-Broker verwenden (kein externer)</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Broker-URL</span>
+              <input type="text" class="input mono" id="mqtt-broker-url"
+                     placeholder="mqtt://host:1883" autocomplete="off" spellcheck="false" maxlength="256">
+              <span class="field-hint">z.B. <code>mqtt://192.168.1.34:1883</code>. Nur relevant wenn Embedded aus ist.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Benutzername (optional)</span>
+              <input type="text" class="input mono" id="mqtt-username" autocomplete="off" spellcheck="false" maxlength="128">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Passwort (optional)</span>
+              <input type="password" class="input mono" id="mqtt-password" placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false" maxlength="256">
+              <span class="field-hint">Im Klartext gespeichert in <code>/etc/dvhub/config.json</code>. Leer = bestehender Wert bleibt.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic-Prefix (DVhub-Publish)</span>
+              <input type="text" class="input mono" id="mqtt-topic-prefix" placeholder="dvhub" autocomplete="off" spellcheck="false" maxlength="64">
+              <span class="field-hint">Pr&auml;fix unter dem DVhub eigene Status-Topics publisht. Nur DVhub-Side, kein Effekt auf TeslaMate.</span>
+            </label>
+            <div class="dv-field-validation warn" id="mqtt-restart-banner" hidden>
+              Speichern startet den DVhub-Service neu (~10 s Ausfall). Browser bitte nach 10 s neu laden.
+            </div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm primary" id="mqtt-save">Speichern</button>
+            </div>
+          </section>
+          <section role="tabpanel" id="dv-panel-mqtt-topics"
+                   aria-labelledby="dv-tab-mqtt-topics" class="dv-tabpanel" hidden>
+            <p class="dv-drawer-meta" id="mqtt-drawer-meta" role="status" aria-live="polite">&mdash;</p>
+            <div class="dv-drawer-body" id="mqtt-drawer-topics"></div>
+          </section>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-mqtt-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
       <!-- Notifications config drawer (Phase 20 D-01/D-02). Static markup so the
@@ -447,6 +500,20 @@
               TeslaMate liefert Live-SoC, Ladeleistung und Standort &uuml;ber MQTT in DVhub.
               EV-Daten flie&szlig;en in die Family-Kachel und das EOS-Optimierungsmodell ein.
             </p>
+            <div class="dv-info-box" id="tesla-broker-info">
+              <div class="dv-info-row">
+                <span class="dv-info-label">MQTT-Broker</span>
+                <span class="dv-info-value mono" id="tesla-broker-url">&mdash;</span>
+              </div>
+              <div class="dv-info-row">
+                <span class="dv-info-label">Subscription</span>
+                <span class="dv-info-value mono" id="tesla-sub-topic">&mdash;</span>
+              </div>
+              <p class="dv-info-hint">
+                TeslaMate teilt sich den DVhub-MQTT-Hub. Broker &auml;ndern &rarr;
+                <a href="#" data-action="open-mqtt-drawer">MQTT-Hub-Karte</a>.
+              </p>
+            </div>
             <label class="dv-field-row">
               <input type="checkbox" class="dv-field-check" id="tesla-enabled">
               <span>TeslaMate-Integration aktiviert</span>
@@ -459,7 +526,12 @@
             <label class="dv-field">
               <span class="field-label">Car-ID</span>
               <input type="number" class="input mono" id="tesla-carid" min="1" max="99" step="1" inputmode="numeric" placeholder="1">
-              <span class="field-hint">TeslaMate-interne ID (in MQTT-Topics: <code>teslamate/cars/&lt;id&gt;/...</code>) &mdash; meist 1.</span>
+              <span class="field-hint">TeslaMate-interne ID (in MQTT-Topics: <code>&lt;prefix&gt;/&lt;id&gt;/...</code>) &mdash; meist 1.</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic-Prefix</span>
+              <input type="text" class="input mono" id="tesla-prefix" placeholder="teslamate/cars" maxlength="128" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Nur &auml;ndern wenn TeslaMate unter einem nicht-Standard-Prefix publisht (z.B. <code>home/teslamate/cars</code>). Leer = Default.</span>
             </label>
             <label class="dv-field">
               <span class="field-label">Snapshot-Intervall (s)</span>
@@ -505,6 +577,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=21"></script>
+  <script src="/integrations.js?v=23"></script>
 </body>
 </html>

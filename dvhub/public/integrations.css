@@ -1050,3 +1050,45 @@
   .dv-sessions-table th,
   .dv-sessions-table td { padding: 4px 6px; }
 }
+
+/* Phase 21 (2026-05-23): read-only info block inside drawer panels (used by
+   the Teslamate drawer for "Broker + Subscription"). Visually distinct from
+   editable .dv-field entries — slightly indented + tinted so the operator
+   recognises it as state, not input. */
+.dv-info-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0 14px;
+}
+.dv-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 3px 0;
+  min-width: 0;
+}
+.dv-info-label {
+  font-size: 11px;
+  color: var(--text-muted, #8b95a7);
+  flex-shrink: 0;
+}
+.dv-info-value {
+  font-size: 12px;
+  color: var(--text-primary, #d8e0ee);
+  text-align: right;
+  word-break: break-all;
+  min-width: 0;
+}
+.dv-info-hint {
+  font-size: 11px;
+  color: var(--text-muted, #8b95a7);
+  margin: 8px 0 0;
+  font-style: italic;
+}
+.dv-info-hint a {
+  color: var(--accent, #4b7bec);
+  text-decoration: underline;
+}

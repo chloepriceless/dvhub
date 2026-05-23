@@ -2193,6 +2193,14 @@ export function createApiRoutes(ctx) {
         patch.snapshotIntervalSec = Math.max(30, Math.min(3600, Math.floor(body.snapshotIntervalSec)));
       }
       if (typeof body.name === 'string') patch.name = String(body.name).slice(0, 64).trim() || 'Tesla';
+      // Phase 21 (2026-05-23): optional topic-prefix override for non-default
+      // TeslaMate deployments. Strip leading/trailing slashes + reject wildcard
+      // chars; empty string clears the override (falls back to default).
+      if (typeof body.topicPrefix === 'string') {
+        const tp = body.topicPrefix.trim().replace(/^\/+|\/+$/g, '').replace(/[+#]/g, '');
+        if (tp.length === 0) delete patch.topicPrefix;
+        else patch.topicPrefix = tp.slice(0, 128);
+      }
       next.integrations.tesla = patch;
       try {
         ctx.saveAndApplyConfig(next);
@@ -2206,6 +2214,78 @@ export function createApiRoutes(ctx) {
         intervalSec: patch.snapshotIntervalSec,
       }, actorContext(req));
       return json(res, 200, { ok: true, tesla: patch });
+    }
+
+    // Phase 21 (2026-05-23): MQTT-hub broker configuration via the integrations
+    // drawer. Sibling of /api/family/tesla-config — merge-server-side so a
+    // partial body doesn't wipe other mqtt.* fields. Password follows the
+    // canonical '***' = keep-existing / '' = clear contract (matching VRM).
+    if (url.pathname === '/api/family/mqtt-config' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object_required' });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      const cur = (next.mqtt && typeof next.mqtt === 'object') ? next.mqtt : {};
+      const patch = { ...cur };
+      if (typeof body.brokerUrl === 'string') {
+        const url2 = body.brokerUrl.trim();
+        if (url2.length === 0) {
+          delete patch.brokerUrl; // empty = clear; embedded broker takes over
+        } else if (!/^mqtts?:\/\//i.test(url2)) {
+          return json(res, 400, { ok: false, error: 'invalid_broker_url_scheme' });
+        } else {
+          patch.brokerUrl = url2.slice(0, 256);
+        }
+      }
+      if (typeof body.username === 'string') {
+        const u = body.username.trim().slice(0, 128);
+        if (u) patch.username = u; else delete patch.username;
+      }
+      // Password contract: '' = clear, '***' = keep existing, anything else = new value.
+      if (typeof body.password === 'string') {
+        const p = body.password;
+        if (p === '') delete patch.password;
+        else if (p !== '***') patch.password = p.slice(0, 256);
+      }
+      if (typeof body.embedded === 'boolean') {
+        patch.embeddedBroker = (patch.embeddedBroker && typeof patch.embeddedBroker === 'object') ? patch.embeddedBroker : {};
+        patch.embeddedBroker.enabled = body.embedded;
+        if (!Number.isFinite(patch.embeddedBroker.port)) patch.embeddedBroker.port = 1883;
+      }
+      if (typeof body.topicPrefix === 'string') {
+        const tp = body.topicPrefix.trim().replace(/[+#\s]/g, '').slice(0, 64);
+        if (tp) patch.topicPrefix = tp; else delete patch.topicPrefix;
+      }
+      next.mqtt = patch;
+      let result;
+      try {
+        result = ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('family_mqtt_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('family_mqtt_config_saved', {
+        brokerUrl: patch.brokerUrl ? redactUrlCreds(patch.brokerUrl) : null,
+        embedded: !!(patch.embeddedBroker && patch.embeddedBroker.enabled),
+        usernameSet: !!patch.username,
+        passwordSet: !!patch.password,
+        restartRequired: !!(result && result.restartRequired)
+      }, actorContext(req));
+      return json(res, 200, {
+        ok: true,
+        restartRequired: !!(result && result.restartRequired),
+        mqtt: {
+          brokerUrl: patch.brokerUrl ? redactUrlCreds(patch.brokerUrl) : '',
+          embedded: !!(patch.embeddedBroker && patch.embeddedBroker.enabled),
+          username: patch.username || '',
+          passwordSet: !!patch.password,
+          topicPrefix: patch.topicPrefix || 'dvhub'
+        }
+      });
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -2321,13 +2401,25 @@ export function createApiRoutes(ctx) {
           // can still display "which broker am I on" without exposing credentials.
           broker: mqttCfg.brokerUrl ? redactUrlCreds(mqttCfg.brokerUrl) : 'embedded',
           embedded: !mqttCfg.brokerUrl,
-          topicCount: ctx.mqttPublisher?.topicCount ?? 0
+          topicCount: ctx.mqttPublisher?.topicCount ?? 0,
+          // Phase 21 (2026-05-23): operator-settable knobs for the MQTT drawer.
+          // brokerUrl is echoed verbatim (without password — redactUrlCreds);
+          // username is plain text; passwordSet is a boolean (never the value).
+          config: {
+            brokerUrl: mqttCfg.brokerUrl ? redactUrlCreds(mqttCfg.brokerUrl) : '',
+            embedded: !!(mqttCfg.embeddedBroker && mqttCfg.embeddedBroker.enabled),
+            username: mqttCfg.username || '',
+            passwordSet: !!mqttCfg.password,
+            topicPrefix: mqttCfg.topicPrefix || 'dvhub'
+          }
         },
         tesla: {
           enabled: getCfg().integrations?.tesla?.enabled ?? false,
           state: ctx.teslamateService?.getState() || null,
           lastUpdate: ctx.teslamateService?.lastUpdateAt || null,
-          config: { name: getCfg().integrations?.tesla?.name || 'Tesla', teslamateCarId: getCfg().integrations?.tesla?.teslamateCarId ?? 1, snapshotIntervalSec: getCfg().integrations?.tesla?.snapshotIntervalSec ?? 300 }
+          broker: mqttCfg.brokerUrl ? redactUrlCreds(mqttCfg.brokerUrl) : 'embedded',
+          subscriptionTopic: ctx.teslamateService?.getSubscriptionTopic?.() || null,
+          config: { name: getCfg().integrations?.tesla?.name || 'Tesla', teslamateCarId: getCfg().integrations?.tesla?.teslamateCarId ?? 1, snapshotIntervalSec: getCfg().integrations?.tesla?.snapshotIntervalSec ?? 300, topicPrefix: getCfg().integrations?.tesla?.topicPrefix || 'teslamate/cars' }
         },
         homeAssistant: {
           haDiscovery: mqttCfg.haDiscovery?.enabled ?? false,
