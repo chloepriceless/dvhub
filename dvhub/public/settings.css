@@ -2636,6 +2636,29 @@ body.dv-modal-open {
   border-radius: var(--r-md);
   padding: 10px 12px;
   background: rgba(20, 28, 46, 0.35);
+  min-width: 0; /* let grid track shrink — prevents intrinsic-min overflow */
+}
+/* Force the inner table to fit the sub-card width — no horizontal scroll.
+   table-layout:fixed + word-break:keep-all (numeric column) means cells
+   shrink rather than push the row wider than its track. */
+.eos-subtbl-scroll table {
+  table-layout: fixed;
+  width: 100%;
+}
+.eos-subtbl-scroll td, .eos-subtbl-scroll th {
+  padding: 3px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Numeric "Wert" column gets the right slice; time column takes what's left. */
+.eos-subtbl-scroll th:first-child, .eos-subtbl-scroll td:first-child {
+  width: 42%;
+}
+.eos-subtbl-scroll th.num, .eos-subtbl-scroll td.num {
+  text-align: right;
+  font-family: var(--f-mono);
 }
 .eos-subtbl-title {
   margin: 0 0 8px;
