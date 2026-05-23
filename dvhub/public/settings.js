@@ -602,7 +602,19 @@ function deletePath(obj, path) {
 }
 
 function fmtTs(ts) {
-  return ts ? new Date(ts).toLocaleString('de-DE') : '-';
+  // Phase 21 (2026-05-23): lock to Europe/Berlin so operators get appliance-
+  // local times regardless of their browser TZ. de-DE locale formats as
+  // "23.05.2026, 14:32:05".
+  if (!ts) return '-';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '-';
+    return new Intl.DateTimeFormat('de-DE', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      timeZone: 'Europe/Berlin', hour12: false,
+    }).format(d);
+  } catch (_) { return '-'; }
 }
 
 function fieldId(path) {
@@ -1498,7 +1510,7 @@ function renderEpexPriceSourceInfo() {
       const epex = status?.epex || {};
       const data = epex.data || [];
       const bzn = config?.epex?.bzn || status?.config?.epex?.bzn || 'DE-LU';
-      const updatedAt = epex.updatedAt ? new Date(epex.updatedAt).toLocaleString('de-DE') : '-';
+      const updatedAt = fmtTs(epex.updatedAt);
       const datapoints = data.length;
       const hoursAvailable = Math.round(datapoints * 0.25); // 15min slots → hours
       // Telemetry bounds for overall price history
@@ -2029,7 +2041,7 @@ async function checkSystemUpdates() {
     if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
     if (data.totalCount === 0) {
       banner.innerHTML = '<span class="sa-text-ok">System ist aktuell — keine Updates verfügbar.</span>';
-      if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
+      if (meta) meta.textContent = `Geprüft: ${fmtTs(data.checkedAt)}`;
       return;
     }
     const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheits-Updates)` : '';
@@ -2045,7 +2057,7 @@ async function checkSystemUpdates() {
       list.innerHTML = html;
     }
     if (actions) actions.style.display = '';
-    if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
+    if (meta) meta.textContent = `Geprüft: ${fmtTs(data.checkedAt)}`;
   } catch (e) {
     banner.textContent = 'Fehler beim Prüfen: ' + e.message;
   }

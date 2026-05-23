@@ -300,6 +300,36 @@
     return Math.floor(delta / 86400000) + 'd';
   }
 
+  // Phase 21 (2026-05-23): unified Berlin-time helpers. The DVhub appliance
+  // runs in Europe/Berlin and operators expect every clock displayed in that
+  // timezone — regardless of what timezone their browser/phone is set to.
+  // d.getHours()/getMinutes() return BROWSER-local time, so a phone in
+  // London or a laptop accessed via VPN from a different TZ would show
+  // off-by-one clocks. These helpers lock to Europe/Berlin explicitly.
+  function fmtBerlinTime(ts) {
+    if (!ts) return '—';
+    try {
+      var d = new Date(ts);
+      if (isNaN(d.getTime())) return '—';
+      return new Intl.DateTimeFormat('de-DE', {
+        hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Berlin', hour12: false
+      }).format(d);
+    } catch (_) { return '—'; }
+  }
+  function fmtBerlinDateTime(ts) {
+    if (!ts) return '—';
+    try {
+      var d = new Date(ts);
+      if (isNaN(d.getTime())) return '—';
+      return new Intl.DateTimeFormat('de-DE', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Berlin', hour12: false
+      }).format(d);
+    } catch (_) { return '—'; }
+  }
+
   // Phase 09.2 D-17 revised: format helpers for per-system health-tracker
   // values. All return '—' (em-dash) for null/undefined so cards stay
   // mockup-faithful when a system has not yet been observed by the tracker.
@@ -1988,12 +2018,8 @@
       return;
     }
     // textContent only — never innerHTML for upstream values (T-20-06-09 CSP).
-    try {
-      var d = new Date(sample.ts);
-      timeEl.textContent = isNaN(d.getTime())
-        ? String(sample.ts || '')
-        : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
-    } catch (_) { timeEl.textContent = String(sample.ts || ''); }
+    // Phase 21 (2026-05-23): timezone-locked to Berlin via fmtBerlinTime.
+    timeEl.textContent = fmtBerlinTime(sample.ts);
     wattsEl.textContent = (sample.watts != null ? sample.watts : 0) + ' W';
     block.hidden = false;
   }
@@ -2076,9 +2102,7 @@
         function (data) {
           showProviderSample('solcast', data && data.sample);
           if (data && data.sample) {
-            var d = new Date(data.sample.ts);
-            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
-            return '✓ Solcast-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + '.';
+            return '✓ Solcast-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + fmtBerlinTime(data.sample.ts) + '.';
           }
           return '✓ Solcast-Probe OK (kein Sample im Fenster).';
         },
@@ -2096,9 +2120,7 @@
         function (data) {
           showProviderSample('pvnode', data && data.sample);
           if (data && data.sample) {
-            var d = new Date(data.sample.ts);
-            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
-            return '✓ pvnode-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + '.';
+            return '✓ pvnode-Probe OK: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + fmtBerlinTime(data.sample.ts) + '.';
           }
           return '✓ pvnode-Probe OK (kein Sample im Fenster).';
         },
@@ -2121,9 +2143,7 @@
           showProviderSample('eos', data && data.sample);
           var n = (data && data.slotCount) || 0;
           if (data && data.sample) {
-            var d = new Date(data.sample.ts);
-            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
-            return '✓ EOS-Akkudoktor: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + ' (' + n + ' Slots im Horizon).';
+            return '✓ EOS-Akkudoktor: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + fmtBerlinTime(data.sample.ts) + ' (' + n + ' Slots im Horizon).';
           }
           return '✓ EOS-Akkudoktor OK, aber kein nutzbares Sample.';
         },
@@ -2223,23 +2243,18 @@
         + teslaSnapshotKvLine('Innentemperatur', s.inside_temp, '°C');
       grid.innerHTML = html;
       if (meta) {
-        if (t.lastUpdate) {
-          var d = new Date(t.lastUpdate);
-          meta.textContent = isNaN(d.getTime()) ? 'Letztes Update: —' : ('Letztes Update: ' + d.toLocaleString());
-        } else {
-          meta.textContent = 'Noch keine Daten von TeslaMate empfangen.';
-        }
+        meta.textContent = t.lastUpdate
+          ? 'Letztes Update: ' + fmtBerlinDateTime(t.lastUpdate)
+          : 'Noch keine Daten von TeslaMate empfangen.';
       }
     } catch (e) {
       grid.innerHTML = '<p class="dv-drawer-empty">Snapshot fehlgeschlagen: ' + esc(e.message) + '</p>';
     }
   }
   function fmtSessionTs(iso) {
-    try {
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return String(iso || '—');
-      return d.toLocaleString();
-    } catch (_) { return String(iso || '—'); }
+    // Phase 21 (2026-05-23): Berlin-locked via fmtBerlinDateTime so charge
+    // sessions table reads as "23.05.2026, 14:32" regardless of browser TZ.
+    return fmtBerlinDateTime(iso);
   }
   async function loadTeslaSessions(days) {
     var body = document.getElementById('tesla-sessions-body');
