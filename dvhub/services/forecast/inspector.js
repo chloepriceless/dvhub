@@ -843,6 +843,16 @@ export function createInspector(ctx, deps = {}) {
   // only flags isStale=true at ≥2d to avoid drifting two thresholds across
   // the stack.
   async function getOptimizerCold() {
+    // Phase 21 (2026-05-23): when the operator has intentionally disabled the
+    // optimizer (cfg.optimizer.enabled=false — current prod state per memory
+    // [[optimizer-reenabled]]), the "optimizer cold for N days" banner is
+    // noise, not signal. Short-circuit with daysSinceLastRun=null so both
+    // banner renderers (family.js + settings.js) hit their early-return and
+    // hide the badge. When the operator re-enables the optimizer the warning
+    // automatically returns.
+    if (getCfg()?.optimizer?.enabled === false) {
+      return { lastRunAt: null, daysSinceLastRun: null, isStale: false, reason: 'optimizer_disabled' };
+    }
     const telemetryStore = getTelemetryStore();
     if (!telemetryStore || typeof telemetryStore.getLatestOptimizerRun !== 'function') {
       return { lastRunAt: null, daysSinceLastRun: null, isStale: true, reason: 'telemetry_unavailable' };
