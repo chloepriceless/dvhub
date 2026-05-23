@@ -49,7 +49,13 @@ function makeCtx(baseUrl) {
 // PUT /v1/prediction/import/{PVForecastImport,LoadImport,ElecPriceImport}.
 // Each call carries a PydanticDateTimeData {timestamps, values} body and
 // ?force_enable=true query param.
-test('pushForecast sends per-provider PUT to /v1/prediction/import with DateTimeData body', async () => {
+// Phase 21 (2026-05-23): EOS v0.3.0 doesn't actually accept the documented
+// {timestamps, values} shape — its OpenAPI declares anyOf:[{},null] but the
+// implementation only successfully imports a dict {ISO_TS: value}. The
+// adapter now emits the dict shape (eos-adapter.js buildDateTimeData) — and
+// includes ?force_enable=true via url.search (was being stripped by the
+// http.request path:url.pathname call, silently returning 404).
+test('pushForecast sends per-provider PUT to /v1/prediction/import with ts-keyed dict body', async () => {
   const mock = await createMockEos((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok' }));
@@ -85,7 +91,9 @@ test('pushForecast sends per-provider PUT to /v1/prediction/import with DateTime
     assert.ok(result.perProvider, 'Should return perProvider report');
     assert.ok(mock.requests.length >= 3, 'Should fire 3 PUTs (pv/load/price)');
 
-    // Find each provider call. URLs include ?force_enable=true; strip query for match.
+    // Find each provider call. URLs MUST include ?force_enable=true after
+    // the 2026-05-23 hotfix — without it EOS won't enable the *Import
+    // provider on the fly and returns 404.
     const stripQs = u => (u || '').split('?')[0];
     const pvReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/PVForecastImport');
     const loadReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/LoadImport');
@@ -94,9 +102,13 @@ test('pushForecast sends per-provider PUT to /v1/prediction/import with DateTime
     assert.ok(loadReq, 'Should PUT LoadImport');
     assert.ok(priceReq, 'Should PUT ElecPriceImport');
     assert.equal(pvReq.method, 'PUT');
-    assert.ok(Array.isArray(pvReq.body.timestamps), 'PV body should have timestamps array');
-    assert.ok(Array.isArray(pvReq.body.values), 'PV body should have values array');
-    assert.equal(pvReq.body.values.length, 2, 'PV body should carry 2 slots');
+    assert.ok((pvReq.url || '').includes('force_enable=true'), 'PV PUT must carry ?force_enable=true (path:url.pathname+url.search bug fix)');
+    assert.equal(typeof pvReq.body, 'object', 'PV body must be a dict');
+    assert.ok(!Array.isArray(pvReq.body), 'PV body must be a plain dict, not array');
+    const pvKeys = Object.keys(pvReq.body);
+    assert.equal(pvKeys.length, 2, 'PV body should carry 2 ts→watts entries');
+    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(pvKeys[0]), 'PV body keys should be ISO timestamps');
+    assert.equal(typeof pvReq.body[pvKeys[0]], 'number', 'PV body values should be numbers');
   } finally {
     await mock.close();
   }

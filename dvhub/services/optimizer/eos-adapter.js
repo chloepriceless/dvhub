@@ -43,7 +43,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         const req = http.request({
           hostname: url.hostname,
           port: url.port || 8503,
-          path: url.pathname,
+          // Phase 21 hotfix (2026-05-23): include url.search so
+          // `?force_enable=true` reaches EOS. Without this the import
+          // endpoints returned 404 because the per-provider flag stayed
+          // off — silently broke every push since Phase 19.1-01.
+          path: url.pathname + url.search,
           method,
           headers,
           timeout: timeoutMs
@@ -101,24 +105,24 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const perProvider = {};
     const errors = [];
 
-    // Build per-provider DateTimeData payloads. EOS expects either
-    // PydanticDateTimeData ({timestamps, values}) or PydanticDateTimeDataFrame.
-    // Use DateTimeData (simpler shape) — anyOf accepts it.
-    // 19.1-01 hotfix: buildForecastResponse() may return slots whose .ts field
-    // is missing / NaN / not-yet-set. new Date(undefined).toISOString() throws
-    // RangeError('Invalid time value') — skip those slots instead of crashing
-    // the whole push call.
+    // Phase 21 hotfix (2026-05-23): EOS v0.3.0 PUT /v1/prediction/import/{id}
+    // returns HTTP 400 "Object of type PydanticDateTimeData is not JSON
+    // serializable" when the body is the documented {timestamps, values}
+    // (PydanticDateTimeData) shape — and HTTP 500 on PydanticDateTimeDataFrame.
+    // The only shape that actually returns 200 is a plain dict mapping
+    // ISO-string timestamps to numeric values. Empirically verified against
+    // the live prod EOS (curl probe 2026-05-23). The OpenAPI's anyOf:[{},null]
+    // schema is meaningless — pick what the implementation actually accepts.
+    // Skip slots with missing/NaN ts so a single bad row doesn't kill the push.
     function buildDateTimeData(slots, valueFn) {
-      const timestamps = [];
-      const values = [];
+      const out = {};
       for (const s of slots) {
         if (!s) continue;
         const d = new Date(s.ts);
         if (Number.isNaN(d.getTime())) continue;
-        timestamps.push(d.toISOString());
-        values.push(valueFn(s));
+        out[d.toISOString()] = valueFn(s);
       }
-      return { timestamps, values };
+      return out;
     }
 
     // PV
