@@ -78,6 +78,15 @@ class FeedInTariffEnergyCharts(FeedInTariffProvider):
         )
         factor = (cfg_settings.spot_factor if cfg_settings else None) or 1.0
 
+        # DVhub fork: ElecPriceEnergyCharts._parse_data adds charges_kwh and VAT
+        # to its series when elecprice.charges_kwh > 0 (DV operators use this to
+        # surface the real-world Bezugskosten so the genetic algo doesn't think
+        # buy-price ≈ sell-price). Feed-in stays SPOT — so we reverse-engineer:
+        #   spot_wh = price_wh / vat_rate − charges_wh   (when charges > 0)
+        # At charges_kwh=0 this is a no-op and behaviour is unchanged.
+        charges_wh = (self.config.elecprice.charges_kwh or 0) / 1000
+        vat_rate = (self.config.elecprice.vat_rate or 1.19) if charges_wh > 0 else 1.0
+
         # Iterate the elec provider's per-slot records and mirror each spot
         # price into feed_in_tariff_wh × factor. Both series share the same
         # storage backend (PredictionDataRecord) so this is a constant-time
@@ -87,6 +96,11 @@ class FeedInTariffEnergyCharts(FeedInTariffProvider):
             price_wh = getattr(record, "elecprice_marketprice_wh", None)
             if price_wh is None:
                 continue
-            self.update_value(record.date_time, "feed_in_tariff_wh", price_wh * factor)
+            # Unwind charges+VAT to recover the pure spot price.
+            spot_wh = price_wh / vat_rate - charges_wh if charges_wh > 0 else price_wh
+            self.update_value(record.date_time, "feed_in_tariff_wh", spot_wh * factor)
             mirrored += 1
-        logger.debug(f"FeedInTariffEnergyCharts: mirrored {mirrored} slots, factor={factor}")
+        logger.debug(
+            f"FeedInTariffEnergyCharts: mirrored {mirrored} slots, "
+            f"factor={factor}, charges_kwh={charges_wh*1000}, vat_rate={vat_rate}"
+        )

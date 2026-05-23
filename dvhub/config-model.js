@@ -840,6 +840,21 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'optimizer',
       groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Genauigkeit/Geschwindigkeit der EOS-Optimierung. 15 Minuten matches EPEX-Day-Ahead seit 2024 \u2014 empfohlen f\u00fcr Direktvermarktung.',
+      path: 'optimizer.eosOptimizationIntervalSec',
+      label: 'EOS Slot-Aufl\u00f6sung',
+      type: 'select',
+      options: [
+        { value: 900, label: '15 Minuten (Direktvermarktung, EPEX-konform)' },
+        { value: 1800, label: '30 Minuten' },
+        { value: 3600, label: '1 Stunde (Standard, schnellste Optimierung)' }
+      ],
+      help: 'Slot-Aufl\u00f6sung f\u00fcr den EOS-Genetic-Algorithmus. 15min liefert die feinste Granularit\u00e4t f\u00fcr Spot-Arbitrage, ben\u00f6tigt aber 4\u00d7 mehr Rechenzeit. F\u00fcr DV \u00fcblicherweise 900s.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
       groupDescription: 'Einspeiseverg\u00fctung: Bestimmt wie der Optimizer den Verkaufserl\u00f6s bewertet.',
       path: 'optimizer.tariff.feedInMode',
       label: 'Einspeise-Modus',

@@ -32,10 +32,35 @@ function splitRoundTripEff(rt) {
 }
 
 /**
+ * Whether the operator is currently licensed for grid-arbitrage charging
+ * (Netzbezug zum Akku-Laden). Allowed only with MisPel "pauschal" or
+ * "abgrenzung" mode and the operator's explicit allowGridCharge consent.
+ *
+ * Without this gate the genetic algo MUST NOT see AC charge rates — otherwise
+ * it would happily pencil in grid→battery transfers that are §14a-illegal
+ * for vanilla self-consumption operators.
+ *
+ * @param {object} cfg
+ * @returns {boolean}
+ */
+function isGridArbitrageLicensed(cfg) {
+  const allow = cfg?.optimizer?.allowGridCharge === true;
+  const mispelMode = cfg?.optimizer?.mispel?.mode;
+  return allow && (mispelMode === 'pauschal' || mispelMode === 'abgrenzung');
+}
+
+/**
  * Build the EOS batteries array from a DVhub config object. Returns a single
  * battery entry — DVhub only ever models one home-battery bank. Keeps the
  * EOS measurement_key_* fields untouched (EOS regenerates them itself when
  * device_id is preserved).
+ *
+ * charge_rates encodes whether AC-from-grid charging is a legal option in
+ * the genetic search space:
+ *   - Arbitrage-licensed → full 11-step grid [0.0 … 1.0] so the algo can pick
+ *     partial charge powers when night-spot < day-spot − charges_kwh.
+ *   - Otherwise → [1.0] only; combined with the discharge_hours_bin encoding
+ *     this leaves Idle and DC-from-PV-Charge as the only positive states.
  *
  * @param {object} cfg - DVhub raw config (from getCfg()).
  * @returns {Array<object>}
@@ -50,6 +75,8 @@ export function buildEosBatteries(cfg) {
   const markupPct = Number(costs.batteryLossMarkupPct) || 0;
   const levelisedEurKwh = (baseCt / 100) * (1 + markupPct / 100);
 
+  const chargeRates = isGridArbitrageLicensed(cfg) ? DEFAULT_CHARGE_RATES : [1.0];
+
   return [{
     device_id: BATTERY_DEVICE_ID,
     capacity_wh: Number(opt.batteryCapacityWh) || 8000,
@@ -60,10 +87,53 @@ export function buildEosBatteries(cfg) {
     // DVhub has no min_charge_power_w setting — leave EOS default (50 W is
     // a sane modulation floor for most hybrid inverters; configurable later).
     min_charge_power_w: 50,
-    charge_rates: DEFAULT_CHARGE_RATES,
+    charge_rates: chargeRates,
     min_soc_percentage: Number(opt.minSocPct) || 0,
     max_soc_percentage: Number(opt.maxSocPct) || 100,
   }];
+}
+
+/**
+ * Build the EOS elecprice section. When the operator has configured the
+ * dynamicComponents (Netzentgelte + Abgaben + Energie-Markup), surface their
+ * sum as `charges_kwh` so the genetic algo prices grid imports at the real
+ * Endkundenpreis instead of pure spot. Without this, EOS would systematically
+ * under-estimate the cost of grid charging and over-recommend it.
+ *
+ * @param {object} cfg
+ * @returns {object|null} { charges_kwh, vat_rate } or null when not in dynamic mode.
+ */
+export function buildEosElecprice(cfg) {
+  const pricing = cfg?.userEnergyPricing;
+  if (pricing?.mode !== 'dynamic') return null;
+  const dc = pricing.dynamicComponents || {};
+  const sumCtKwh =
+    (Number(dc.energyMarkupCtKwh) || 0) +
+    (Number(dc.gridChargesCtKwh) || 0) +
+    (Number(dc.leviesAndFeesCtKwh) || 0);
+  if (sumCtKwh <= 0) return null; // nothing meaningful to push
+  const vatPct = Number(dc.vatPct);
+  const vatRate = Number.isFinite(vatPct) && vatPct > 0 ? 1 + vatPct / 100 : 1.19;
+  return {
+    charges_kwh: Number((sumCtKwh / 100).toFixed(6)),
+    vat_rate: Number(vatRate.toFixed(4)),
+  };
+}
+
+/**
+ * Build the EOS optimization section. interval=900 (15-min slots) is enabled
+ * by the DVhub fork's genetic-slot-math refactor (see eos-patches/apply.sh
+ * Phase A) and gives DV operators the EPEX day-ahead-2024 resolution. Default
+ * stays 3600 for safety; operators opt-in via optimizer.eosOptimizationIntervalSec.
+ *
+ * @param {object} cfg
+ * @returns {object}
+ */
+export function buildEosOptimization(cfg) {
+  const opt = cfg?.optimizer || {};
+  const intervalSec = Number(opt.eosOptimizationIntervalSec);
+  const interval = [900, 1800, 3600].includes(intervalSec) ? intervalSec : 3600;
+  return { interval };
 }
 
 /**
@@ -155,6 +225,8 @@ export function createEosConfigSync(ctx) {
 
     const batteries = buildEosBatteries(cfg);
     const inverters = buildEosInverters(cfg);
+    const elecprice = buildEosElecprice(cfg);
+    const optimization = buildEosOptimization(cfg);
 
     // Phase 21 hotfix (2026-05-23): provider auto-flip REVERTED. The
     // earlier idea (auto-set elecprice/load/pvforecast/feedintariff providers
@@ -170,10 +242,22 @@ export function createEosConfigSync(ctx) {
     // *.provider_settings.*Import.import_file_path), we only sync the
     // device hardware spec (battery + inverter capacities). Provider choice
     // + ems.mode stay operator-owned via EOSdash.
+    //
+    // Phase 22 (2026-05-24): added optimization.interval (15-min slots) and
+    // elecprice.charges_kwh (Bezugs-Aufschlag for grid-import pricing).
+    // These hit field-level PUT endpoints (PUT /v1/config/{path}) one value
+    // at a time — the section-level shape only works for {device,inverter}.
     const tasks = [
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
+      { section: 'optimization/interval', body: optimization.interval },
     ];
+    if (elecprice) {
+      tasks.push(
+        { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },
+        { section: 'elecprice/vat_rate', body: elecprice.vat_rate },
+      );
+    }
 
     const applied = [];
     const errors = {};

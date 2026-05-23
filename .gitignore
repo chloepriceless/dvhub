@@ -47,3 +47,4 @@ config.backup-*.json
 dvhub/config.backup-*.json
 # Setup-wizard bootstrap token (server.js writes this at boot when needsSetup=true)
 dvhub/bootstrap.token
+eos-vendor/
