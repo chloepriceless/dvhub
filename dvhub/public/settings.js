@@ -3100,11 +3100,39 @@ function renderEosInspector(payload) {
     if (typeof v !== 'number' || !isFinite(v)) return '–';
     return v.toFixed(digits);
   }
-  function fmtPlanCell(action, powerW) {
-    if (!action && (powerW == null || !isFinite(powerW))) return '–';
-    var label = action || '–';
-    var power = (typeof powerW === 'number' && isFinite(powerW)) ? formatPowerForecastInspector(powerW) : '';
-    return power ? (label + ' · ' + power) : label;
+  // Phase 21 (2026-05-24): operator-friendly translation of EOS' raw
+  // operation_mode_id codes into actionable labels. Gates FORCED_CHARGE-
+  // without-PV behind cfg.optimizer.allowGridCharge so a recommendation to
+  // load from grid only shows actionable when the operator opted-in.
+  var allowGridCharge = !!(payload && payload.operator && payload.operator.allowGridCharge);
+  function buildPlanCell(action, powerW, pvW) {
+    if (!action) return { html: '–', cls: '' };
+    var power = (typeof powerW === 'number' && isFinite(powerW))
+      ? formatPowerForecastInspector(Math.abs(powerW)) : '';
+    var hasPv = (typeof pvW === 'number' && pvW > 100);
+    var suffix = power ? ' · ' + power : '';
+    switch (action) {
+      case 'FORCED_DISCHARGE':
+        return { html: '⚡ Einspeisen' + suffix, cls: 'plan-export' };
+      case 'FORCED_CHARGE':
+        if (hasPv) return { html: '☀ PV-Laden' + suffix, cls: 'plan-pv-charge' };
+        if (allowGridCharge) return { html: '⤵ Aus Netz laden' + suffix, cls: 'plan-grid-charge' };
+        return { html: '⚠ EOS: Netzbezug — Setting nicht aktiv', cls: 'plan-grid-disabled' };
+      case 'NON_EXPORT':
+        return { html: '⊘ Eigenverbrauch (keine Einspeisung)', cls: 'plan-self' };
+      case 'SELF_CONSUMPTION':
+        return { html: '⊜ Eigenverbrauch', cls: 'plan-self' };
+      case 'IDLE':
+        return { html: '– Nichts tun', cls: 'plan-idle' };
+      case 'PEAK_SHAVING':
+        return { html: '↧ Peak-Shaving' + suffix, cls: 'plan-peak' };
+      case 'GRID_SUPPORT_IMPORT':
+        return { html: '↥ Grid-Support (Bezug)' + suffix, cls: 'plan-grid-charge' };
+      case 'GRID_SUPPORT_EXPORT':
+        return { html: '↥ Grid-Support (Einspeisung)' + suffix, cls: 'plan-export' };
+      default:
+        return { html: action + suffix, cls: '' };
+    }
   }
 
   var trs = '';
@@ -3112,12 +3140,13 @@ function renderEosInspector(payload) {
     var ts = allTs[x];
     var r = byTs.get(ts);
     var when = formatBerlinTimeForecastInspector(ts);
+    var cell = buildPlanCell(r.planAction, r.planPowerW, r.pv);
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(fmtNum(r.pv, 0)) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(fmtNum(r.load, 0)) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(fmtNum(r.price, 2)) + '</td>' +
-      '<td>' + escHtmlForecastInspector(fmtPlanCell(r.planAction, r.planPowerW)) + '</td>' +
+      '<td class="' + cell.cls + '">' + escHtmlForecastInspector(cell.html) + '</td>' +
       '</tr>';
   }
   detailsBody.innerHTML =

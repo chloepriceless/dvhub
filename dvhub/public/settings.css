@@ -2759,6 +2759,18 @@ body.dv-modal-open {
   .eos-merged-table th, .eos-merged-table td { padding: 3px 5px; font-size: 10.5px; }
 }
 
+/* Phase 21 (2026-05-24): EOS plan-cell color coding — operator-actionable
+   labels for the merged-table "Plan-Aktion · Leistung" column. Green = earn
+   money (export), blue = consume (idle/self), violet = charge from PV,
+   orange = charge from grid (if allowed), grey-italic = grid-charge gated. */
+.eos-merged-table td.plan-export        { color: #26de81; font-weight: 600; }
+.eos-merged-table td.plan-self          { color: #4b7bec; }
+.eos-merged-table td.plan-idle          { color: var(--text-dim); font-style: italic; }
+.eos-merged-table td.plan-pv-charge     { color: #a55eea; font-weight: 600; }
+.eos-merged-table td.plan-grid-charge   { color: #F7B731; font-weight: 600; }
+.eos-merged-table td.plan-grid-disabled { color: var(--text-dim); font-style: italic; opacity: 0.7; }
+.eos-merged-table td.plan-peak          { color: #fd9644; }
+
 /* EOSdash iframe — Phase 21 (operator request 2026-05-23) */
 .eos-open-link { margin-top: 6px; }
 .eos-iframe-wrap {

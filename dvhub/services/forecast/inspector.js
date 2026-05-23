@@ -650,12 +650,20 @@ export function createInspector(ctx, deps = {}) {
       typeof pushError === 'string' && pushError.includes('404') &&
       (pullError === null || (typeof pullError === 'string' && pullError.includes('404')));
 
+    // Phase 21 (2026-05-24): expose the operator-side grid-charge consent so
+    // the inspector UI can gate "EOS empfiehlt Netzbezug" recommendations.
+    // EOS will recommend FORCED_CHARGE at low-spot hours; whether the operator
+    // actually executes that depends on cfg.optimizer.allowGridCharge — when
+    // false, the cell renders muted with a "Setting nicht aktiv" hint.
+    const allowGridCharge = getCfg()?.optimizer?.allowGridCharge === true;
+
     return {
       available: true,
       reason: looksNotConfigured ? 'eos_not_configured' : null,
       window: { from, to },
       push: { ok: pushOk, payloadSummary, providers, error: pushError },
       pull: { ok: pullOk, slots: pullSlots, error: pullError },
+      operator: { allowGridCharge },
       meta: { timeoutMs: 5000, previewLimit: PAYLOAD_PREVIEW_LIMIT },
     };
   }
