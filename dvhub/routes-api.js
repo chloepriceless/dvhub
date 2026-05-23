@@ -3101,6 +3101,13 @@ export function createApiRoutes(ctx) {
         results.batteries = await putEos('/devices/batteries', [battery]);
         results.max_batteries = await putEos('/devices/max_batteries', 1);
       }
+      // Provider-Konfiguration: EOS soll die Werte verwenden, die unser
+      // EOS-Adapter via PUT /v1/prediction/import/* schon regelmäßig pusht.
+      // Ohne das stehen die provider auf null und EOS hat keine Daten-Quelle.
+      results.pv_provider    = await putEos('/pvforecast/provider', 'PVForecastImport');
+      results.load_provider  = await putEos('/load/provider',       'LoadImport');
+      results.price_provider = await putEos('/elecprice/provider',  'ElecPriceImport');
+
       // EMS Mode: schalte automatische Optimierung scharf.
       results.ems_mode = await putEos('/ems/mode', 'OPTIMIZATION');
 
