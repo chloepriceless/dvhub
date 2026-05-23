@@ -2666,3 +2666,21 @@ body.dv-modal-open {
   font-style: italic;
 }
 .eos-subtbl-empty.error { color: var(--chart-negative, #ef4444); font-style: normal; }
+
+/* EOSdash iframe — Phase 21 (operator request 2026-05-23) */
+.eos-open-link { margin-top: 6px; }
+.eos-iframe-wrap {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  overflow: hidden;
+  height: calc(100vh - 260px);
+  min-height: 600px;
+}
+.eos-iframe-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}

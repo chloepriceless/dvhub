@@ -126,6 +126,7 @@
             <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9670;</span>Status</button>
             <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Forecast</button>
             <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>ML &amp; AI</button>
+            <button class="settings-tab" data-tab="eos" type="button"><span class="sa-ico">&#9881;</span>EOS</button>
             <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
 
@@ -580,6 +581,25 @@
 
           </div><!-- /.config-grid -->
         </section><!-- /#tab-ml -->
+
+        <section id="tab-eos" class="settings-tab-panel" hidden>
+          <header class="sa-section-head">
+            <h2>EOS &mdash; Konfiguration</h2>
+            <p class="sub">
+              EOSdash-Web-UI von Akkudoktor-EOS &mdash; eingebettet via DVhub-Reverse-Proxy.
+              Hier konfigurierst du die automatische Optimierung (Akku-Parameter, EV, Tarife).
+              Sobald &laquo;automatic optimization&raquo; aktiviert ist, liefert der EOS-Pull-Plan im
+              <a href="#forecast">Forecast-Inspector</a> echte Daten.
+            </p>
+            <p class="sub eos-open-link">
+              <a href="/eosdash/" target="_blank" rel="noopener" class="btn ghost sm">In neuem Tab &ouml;ffnen</a>
+            </p>
+          </header>
+          <div class="eos-iframe-wrap">
+            <iframe id="eosdashFrame" src="/eosdash/" title="EOSdash &mdash; Akkudoktor EOS Konfiguration"
+                    referrerpolicy="no-referrer" loading="lazy"></iframe>
+          </div>
+        </section><!-- /#tab-eos -->
 
         <section id="tab-vpn" class="settings-tab-panel" data-tab-content="vpn" hidden>
           <header class="sa-section-head"><h2>VPN</h2><p class="sub">Sicherer Fernzugriff: OpenVPN / WireGuard / IPSec.</p></header>

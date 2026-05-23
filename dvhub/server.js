@@ -124,6 +124,7 @@ import { createLlmService } from './services/llm/index.js';
 // poller) chains after notificationService.start() so on-revoke notifications
 // reach configured providers.
 import { createLicenseService } from './services/license/index.js';
+import { createEosdashProxy, isEosdashRequest } from './services/eosdash-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1093,6 +1094,12 @@ function scheduleServiceRestart() {
   helper.unref();
 }
 
+// Phase 21 (operator request 2026-05-23) — EOSdash reverse-proxy.
+// Forwards /eosdash/* → 127.0.0.1:8504/*, injects <base href="/eosdash/">
+// into HTML responses so htmx and other relative URLs route back through
+// the proxy. Lets us iframe EOSdash from a DVhub Settings tab.
+const eosdashProxy = createEosdashProxy(ctx);
+
 const web = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -1143,6 +1150,16 @@ const web = http.createServer(async (req, res) => {
     if (allowedOrigin && url.pathname.startsWith('/api/')) {
       res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
       res.setHeader('Vary', 'Origin');
+    }
+
+    // EOSdash reverse-proxy (Phase 21 — 2026-05-23): expose the EOS
+    // configuration UI (bound to 127.0.0.1:8504) through DVhub so the
+    // operator can configure EOS auto-optimization without an SSH tunnel.
+    // Gated by LAN-trust + Bearer-token like the rest of DVhub (checkAuth
+    // semantics are inherited via the same web listener context).
+    if (isEosdashRequest(url.pathname)) {
+      eosdashProxy(req, res);
+      return;
     }
 
     // All routes handled by routes-api.js
