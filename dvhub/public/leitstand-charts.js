@@ -481,6 +481,9 @@
 
     getComparisonDatasets().forEach(function (ds, i) {
       var item = document.createElement('span');
+      // Tag with the dataset index so updateForecastComparison can find and
+      // hide this legend item when its dataset is disabled (e.g. ML off).
+      item.dataset.dsIndex = String(i);
       item.style.display = 'inline-flex';
       item.style.alignItems = 'center';
       item.style.gap = '4px';
@@ -618,12 +621,21 @@
     // ~10-15% of the ensemble forecast — MAE 2658W vs 550W on the older
     // models). With cfg.ml.mlEnabled=false, the backend returns
     // forecastData.pv = forecastData.rawPv — they're byte-identical. Hiding
-    // the ML-korrigiert dataset prevents two overlapping identical lines and
-    // makes the chart's intent clear. When ML is re-enabled (model retrained
-    // / squash fixed), meta.mlActive flips back to true and the line returns.
+    // the ML-korrigiert dataset AND its legend entry prevents two overlapping
+    // identical lines and removes the "ML-korrigiert" chip from the legend.
+    // When ML is re-enabled (model retrained / squash fixed), meta.mlActive
+    // flips back to true and both line + legend chip return automatically.
     var mlActive = !!(forecastData && forecastData.meta && forecastData.meta.mlActive);
+    if (!mlActive) {
+      // Empty the data so even if the meta.hidden flag is ignored somewhere,
+      // there are simply no points to plot.
+      forecastCompChart.data.datasets[2].data = [];
+    }
     var mlMeta = forecastCompChart.getDatasetMeta(2);
     if (mlMeta) mlMeta.hidden = !mlActive;
+    // Hide the ML chip in our custom legend (built via buildComparisonLegend).
+    var mlLegendItem = document.querySelector('#forecastCompLegend [data-ds-index="2"]');
+    if (mlLegendItem) mlLegendItem.style.display = mlActive ? 'inline-flex' : 'none';
 
     // Operator complaint 2026-05-22: the forecast chart's X-axis was sliding
     // with data extent (was: min(allTimestamps) - 1h → max(allTimestamps) + 1h)
