@@ -3248,6 +3248,43 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // Phase 21 (2026-05-23): EOS-Akkudoktor PV-forecast read-back. EOS hosts
+    // its own PVForecastAkkudoktor provider locally — this endpoint fetches
+    // its current series and returns the first non-zero sample so the
+    // operator can sanity-check it against Solcast/pvnode. Read-only — no
+    // config writes; the EOS provider is configured INSIDE EOSdash.
+    if (url.pathname === '/api/forecast/providers/eos-akkudoktor/probe' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const eosUrl = ctx.getRawCfg?.()?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      try {
+        const reqUrl2 = new URL('/v1/prediction/series?key=pvforecast_ac_power', eosUrl);
+        const fetchRes = await fetch(reqUrl2.toString(), { signal: AbortSignal.timeout(8000) });
+        if (!fetchRes.ok) {
+          return json(res, 502, { ok: false, error: 'eos_http_' + fetchRes.status });
+        }
+        const data = await fetchRes.json();
+        const series = (data && data.data && typeof data.data === 'object') ? data.data : {};
+        // Pick the first sample whose timestamp is >= now (skips back-fill
+        // history); fall back to the absolute first if nothing future.
+        const now = Date.now();
+        const entries = Object.entries(series)
+          .map(([ts, w]) => ({ ts, ms: Date.parse(ts), watts: Number(w) }))
+          .filter(e => Number.isFinite(e.ms) && Number.isFinite(e.watts));
+        const future = entries.filter(e => e.ms >= now);
+        const sample = future.length ? future[0] : (entries[0] || null);
+        const slotCount = entries.length;
+        return json(res, 200, {
+          ok: true,
+          provider: 'eos-akkudoktor',
+          slotCount,
+          sample: sample ? { ts: sample.ts, watts: Math.round(sample.watts) } : null
+        });
+      } catch (e) {
+        pushLog('forecast_provider_probe_error', { provider: 'eos-akkudoktor', error: e.message });
+        return json(res, 502, { ok: false, error: e.message || 'eos_unreachable' });
+      }
+    }
+
     // GET /api/integrations/notification-providers — ntfy provider + Uptime Kuma
     // config for the editor page (Phase 09.4 D-07/D-08; gap-closure Gap 3).
     // Gap 3: the Uptime Kuma section now reflects the `monitoring` block

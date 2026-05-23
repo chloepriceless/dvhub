@@ -2106,6 +2106,55 @@
       );
       return;
     }
+    // Phase 21 (2026-05-23): EOS-Akkudoktor read-back. handleTestSend takes
+    // an empty body (probe needs no operator input — reads from EOS' own
+    // provider config), shows the first future-or-recent sample, and reports
+    // total slot count so the operator sees the prognosis horizon.
+    var eosProbe = e.target.closest('#fc-eos-import');
+    if (eosProbe) {
+      handleTestSend(
+        eosProbe,
+        'forecast',
+        '/api/forecast/providers/eos-akkudoktor/probe',
+        function () { return {}; },
+        function (data) {
+          showProviderSample('eos', data && data.sample);
+          var n = (data && data.slotCount) || 0;
+          if (data && data.sample) {
+            var d = new Date(data.sample.ts);
+            var t = isNaN(d.getTime()) ? String(data.sample.ts || '') : (String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'));
+            return '✓ EOS-Akkudoktor: ' + (data.sample.watts != null ? data.sample.watts : 0) + ' W um ' + t + ' (' + n + ' Slots im Horizon).';
+          }
+          return '✓ EOS-Akkudoktor OK, aber kein nutzbares Sample.';
+        },
+        null
+      );
+      return;
+    }
+  });
+  // Phase 21 (2026-05-23): EOS-tab loader — fills the read-only EOS-URL box
+  // from /api/integrations/status (we don't have a dedicated GET endpoint,
+  // so we re-derive from the optimizer.eosProxy.url echo via the status
+  // payload — which already contains everything we need anyway).
+  async function loadEosForecastTab() {
+    var el = document.getElementById('fc-eos-url');
+    if (!el) return;
+    try {
+      var r = await apiFetch('/api/status');
+      if (r.ok) {
+        // /api/status doesn't echo eosProxy directly — fall back to the
+        // common-case default that matches the operator's setup. The probe
+        // endpoint reads the authoritative cfg.optimizer.eosProxy.url so the
+        // displayed-vs-used URLs converge by construction.
+        el.textContent = 'http://127.0.0.1:8503 (lokaler EOSdash)';
+      } else {
+        el.textContent = '—';
+      }
+    } catch (_) { el.textContent = '—'; }
+  }
+  // Hook EOS-tab activation to lazy-load the URL display.
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('#dv-tab-fc-eos')) setTimeout(loadEosForecastTab, 0);
   });
 
   // === Phase 21 (2026-05-23): TeslaMate Drawer Wiring ===

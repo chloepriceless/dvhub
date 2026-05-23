@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=24" />
+  <link rel="stylesheet" href="/integrations.css?v=25" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -406,6 +406,10 @@
                   id="dv-tab-fc-solcast"
                   aria-selected="false" aria-controls="dv-panel-fc-solcast"
                   data-panel="dv-panel-fc-solcast" tabindex="-1">Solcast</button>
+          <button type="button" role="tab" class="dv-tab"
+                  id="dv-tab-fc-eos"
+                  aria-selected="false" aria-controls="dv-panel-fc-eos"
+                  data-panel="dv-panel-fc-eos" tabindex="-1">EOS-Akkudoktor</button>
         </nav>
         <div class="dv-drawer-body">
           <section role="tabpanel" id="dv-panel-fc-pvnode"
@@ -420,7 +424,14 @@
               <input type="checkbox" class="dv-field-check" id="fc-pvnode-nowcast">
               <span>Nowcast aktivieren</span>
             </label>
-            <span class="field-hint">Verwende den 15-min Nowcast-Endpoint (verbraucht zus&auml;tzliches Request-Budget).</span>
+            <span class="field-hint">
+              Nowcast = h&ouml;here Aufl&ouml;sung (15 min statt 60 min) f&uuml;r die n&auml;chsten ~1&ndash;2 h.
+              Einziger Knopf &mdash; keine weiteren Felder konfigurierbar.
+              Kosten: pro Refresh-Aufruf wird ein zus&auml;tzlicher Request aus dem pvnode-Budget verbraucht
+              (Free-Tarif: 40/Monat &rarr; bei 15-min-Refresh in &lt; 1 Tag aufgebraucht).
+              W&auml;hrend l&auml;ngerer Backfill-L&auml;ufe wird Nowcast automatisch pausiert
+              (siehe <code>services/forecast/pvnode-backfill.js</code>) &mdash; danach wieder aktiv.
+            </span>
             <div class="dv-field-validation" id="fc-pvnode-banner" hidden></div>
             <div class="dv-sample-block" id="fc-pvnode-sample" hidden>
               <span class="dv-sample-kicker">LETZTE PR&Uuml;FUNG</span>
@@ -459,6 +470,40 @@
             <div class="dv-drawer-actions">
               <button type="button" class="btn sm" id="fc-solcast-probe">&#x25B6; Probe-Anfrage</button>
               <button type="button" class="btn sm primary" id="fc-solcast-save">Speichern</button>
+            </div>
+          </section>
+          <section role="tabpanel" id="dv-panel-fc-eos"
+                   aria-labelledby="dv-tab-fc-eos" class="dv-tabpanel" hidden>
+            <p class="dv-drawer-intro">
+              EOS (Akkudoktor) liefert eine eigene PV-Prognose &uuml;ber den lokal mitlaufenden
+              <code>PVForecastAkkudoktor</code>-Provider. Diese Daten werden &uuml;ber DVhub
+              <strong>nicht</strong> automatisch in den Ensemble einbezogen &mdash; der Button
+              unten l&auml;dt sie nur zum Vergleichen mit Solcast/pvnode.
+            </p>
+            <div class="dv-info-box">
+              <div class="dv-info-row">
+                <span class="dv-info-label">EOS-URL</span>
+                <span class="dv-info-value mono" id="fc-eos-url">&mdash;</span>
+              </div>
+              <div class="dv-info-row">
+                <span class="dv-info-label">EOS-Provider</span>
+                <span class="dv-info-value mono">PVForecastAkkudoktor</span>
+              </div>
+              <p class="dv-info-hint">
+                Konfiguration des Providers in <code>EOSdash</code> selbst
+                (<a href="/eosdash/" target="_blank" rel="noopener">EOSdash &ouml;ffnen</a>).
+              </p>
+            </div>
+            <div class="dv-field-validation" id="fc-eos-banner" hidden></div>
+            <div class="dv-sample-block" id="fc-eos-sample" hidden>
+              <span class="dv-sample-kicker">LETZTE PR&Uuml;FUNG</span>
+              <div class="dv-sample-row">
+                <span class="dv-sample-time mono" id="fc-eos-sample-time"></span>
+                <span class="dv-sample-watts mono" id="fc-eos-sample-watts"></span>
+              </div>
+            </div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm primary" id="fc-eos-import">&#x21E9; EOS-Forecast jetzt abrufen</button>
             </div>
           </section>
         </div>
@@ -615,6 +660,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=24"></script>
+  <script src="/integrations.js?v=25"></script>
 </body>
 </html>
