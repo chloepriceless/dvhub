@@ -489,43 +489,11 @@
               </div>
             </div>
 
-            <!-- B5 Stage-2-Backtest (Plan 19-06, Pro) -->
-            <div class="config-group" data-accent="purple" data-inspector="stage2" data-pro-gated="true">
-              <div class="pro-gate-overlay">
-                <div class="pro-gate-content" aria-hidden="true">
-                  <div class="config-group-kicker"><span class="kicker-label">STAGE-2-BACKTEST &middot; PRO</span></div>
-                  <p class="sub">Vergangene Stage-2-Pl&auml;ne vs gefahrene Battery-Power, inklusive Operator-Override-Diff.</p>
-                  <form class="backtest-form"><div class="backtest-form-row"><label class="config-label">Datum</label><input type="date" class="config-input" disabled /><button type="button" class="btn primary" disabled>Backtest auswerten</button></div></form>
-                </div>
-                <div class="pro-gate-banner card" role="region" aria-labelledby="proGate-stage2-title">
-                  <div class="pro-gate-banner-kicker">PRO-FEATURE</div>
-                  <div class="pro-gate-banner-lock" aria-hidden="true">&#128274;</div>
-                  <h3 id="proGate-stage2-title" class="pro-gate-banner-title">Stage-2-Backtest ist Teil von DVhub-Pro</h3>
-                  <p class="pro-gate-banner-body">Eine aktive Pro-Lizenz schaltet diese Diagnose-Tabelle frei.</p>
-                  <button type="button" class="btn primary pro-gate-banner-cta" data-pro-feature="forecast-inspector-stage2" aria-label="Pro-Feature gesperrt &mdash; Klick &ouml;ffnet Lizenz-Aktivierung">Lizenz aktivieren</button>
-                </div>
-              </div>
-              <div class="inspector-live-scaffold" hidden data-inspector="stage2">
-                <div class="config-group-kicker"><span class="kicker-label">STAGE-2-BACKTEST &middot; PRO</span></div>
-                <p class="sub">Vergangene Stage-2-Pl&auml;ne vs gefahrene Battery-Power, inklusive Operator-Override-Diff.</p>
-                <form class="backtest-form" id="backtestForm">
-                  <div class="backtest-form-row">
-                    <label class="config-label" for="backtestDate">Datum</label>
-                    <input id="backtestDate" type="date" class="config-input" aria-describedby="backtestDateHint" />
-                    <button id="backtestSubmitBtn" type="button" class="btn primary">Backtest auswerten</button>
-                  </div>
-                  <span id="backtestDateHint" class="config-row-hint">Bis zu 30 Tage zur&uuml;ck. Backtest zeigt geplante Stage-2-Slots vs gefahrene Battery-Power vs Operator-Overrides.</span>
-                </form>
-                <div class="config-banner u-hidden" data-inspector-banner="stage2"></div>
-                <div class="backtest-result" id="backtestResult" hidden>
-                  <div class="panel-stats" id="inspector-summary-stage2"></div>
-                  <details class="inspector-details" open>
-                    <summary class="inspector-details-summary"><span class="inspector-details-label">Per-Slot-Diff</span><span class="inspector-details-meta" data-inspector-meta="stage2">--</span><span class="inspector-details-chevron" aria-hidden="true">&#9662;</span></summary>
-                    <div class="inspector-details-body" id="inspector-table-stage2"><div class="data-table-scroll" tabindex="0"><table class="data-table dv-log-table"><thead><tr><th scope="col">Slot</th><th scope="col">Stage-2 plante</th><th scope="col">Battery-Power gefahren</th><th scope="col">Operator-Override</th><th scope="col">Status</th></tr></thead><tbody data-inspector-tbody="stage2"><tr><td colspan="5">--</td></tr></tbody></table></div></div>
-                  </details>
-                </div>
-              </div>
-            </div>
+            <!-- B5 Stage-2-Backtest ENTFERNT 2026-05-23 — Operator hatte
+                 wenig Mehrwert davon, Stage-2-Verhalten wird im Audit-Log
+                 + Leitstand-Charts schon ausreichend sichtbar. Backend-
+                 Route + getStage2() in services/forecast/inspector.js
+                 bleiben intakt, falls Re-Aktivierung gewünscht. -->
 
           </div><!-- /.config-grid -->
         </section><!-- /#tab-forecast -->

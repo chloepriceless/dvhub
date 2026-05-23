@@ -3110,93 +3110,9 @@ function renderEosInspector(payload) {
       '<div class="eos-subtbl">' + buildPullTable(slots, pull.ok, pull.error) + '</div>' +
     '</div>';
 }
-// Plan 19-06: Renders the B5 Stage-2 Backtest result envelope (3 stat-cards +
-// per-slot diff table). Inputs match the getStage2 envelope shape:
-//   { ok, date, snapshot:{id,ts}, slots:[…], summary:{plannedCount, matchedCount,
-//     overrideCount, deviationCount, matchedPct} }
-//
-// XSS mitigation: every interpolated value passes through escHtmlForecastInspector
-// before innerHTML. Status pill class binding uses an inline allow-list of 4
-// values (MATCHED|OVERRIDE|DEVIATION|NEUTRAL) — no user input flows into class
-// names from the server.
-function renderStage2BacktestResult(payload) {
-  if (!payload || payload.ok === false) return;
-
-  var summary = document.getElementById('inspector-summary-stage2');
-  if (summary) {
-    var s = payload.summary || {};
-    var pctLabel = (s.matchedPct != null && isFinite(s.matchedPct))
-      ? Number(s.matchedPct).toFixed(1) + ' %'
-      : '--';
-    var deviationDelta = (s.deviationCount && s.deviationCount > 0)
-      ? '<div class="stat-delta">+' + escHtmlForecastInspector(s.deviationCount) + ' Abweichungen</div>'
-      : '';
-    // 19.1-06: operator-edit timeline badge. snapshotTimeline lists every
-    // schedule_snapshots row of the day with its source; operatorEditCount
-    // is the number tagged 'operator_manual'. Tooltip shows HH:MM of each.
-    var editTimeline = payload.snapshotTimeline || [];
-    var operatorEdits = editTimeline.filter(function (e) { return e.source === 'operator_manual'; });
-    var editLine = '';
-    if (operatorEdits.length > 0) {
-      var timeStr = operatorEdits.map(function (e) { return formatBerlinTimeForecastInspector(e.ts); }).join(', ');
-      editLine = '<div class="stat-delta" title="Manuelle Schedule-Edits an: ' + escHtmlForecastInspector(timeStr) + '">' +
-        escHtmlForecastInspector(operatorEdits.length) + ' Operator-Edit' + (operatorEdits.length === 1 ? '' : 's') + ' heute</div>';
-    }
-    summary.innerHTML =
-      '<div class="stat-card"><div class="stat-label">Slots geplant</div>' +
-      '<div class="stat-val">' + escHtmlForecastInspector(s.plannedCount || 0) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Wie geplant gefahren</div>' +
-      '<div class="stat-val">' + escHtmlForecastInspector(s.matchedCount || 0) + '</div>' +
-      '<div class="stat-delta">' + escHtmlForecastInspector(pctLabel) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Operator-Overrides</div>' +
-      '<div class="stat-val">' + escHtmlForecastInspector(s.overrideCount || 0) + '</div>' +
-      deviationDelta + editLine + '</div>';
-  }
-
-  var meta = document.querySelector('[data-inspector-meta="stage2"]');
-  if (meta) {
-    meta.textContent = (payload.slots || []).length + ' Slots · 15 min';
-  }
-
-  var tbody = document.querySelector('[data-inspector-tbody="stage2"]');
-  if (!tbody) return;
-  var slots = payload.slots || [];
-  if (!slots.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="dv-log-empty">Keine Stage-2-Slots an diesem Tag.</td></tr>';
-    return;
-  }
-  // Status class allow-list — only these 4 values are ever applied as a class
-  // suffix; anything else falls through to NEUTRAL (defense in depth against a
-  // future envelope drift).
-  var STATUS_ALLOW = { MATCHED: 1, OVERRIDE: 1, DEVIATION: 1, NEUTRAL: 1 };
-  var html = '';
-  for (var i = 0; i < slots.length; i++) {
-    var slot = slots[i] || {};
-    var slotLabel = formatBerlinTimeForecastInspector(slot.ts_utc);
-    var planAction = slot.planAction || '--';
-    var planPower = formatPowerForecastInspector(slot.planPowerW);
-    var planCell = planAction + ' (' + planPower + ')';
-    var actualCell = slot.actualPowerW != null
-      ? formatPowerForecastInspector(slot.actualPowerW)
-      : '--';
-    var overrideCell = '--';
-    if (slot.override && (slot.override.id || slot.override.source)) {
-      overrideCell = (slot.override.id || '') +
-        (slot.override.source ? ' · ' + slot.override.source : '');
-    }
-    var statusRaw = slot.status || 'NEUTRAL';
-    var statusKey = STATUS_ALLOW[statusRaw] ? statusRaw : 'NEUTRAL';
-    var rowClass = 'inspector-status status-' + statusKey;
-    html += '<tr class="' + rowClass + '">';
-    html += '<td>' + escHtmlForecastInspector(slotLabel) + '</td>';
-    html += '<td>' + escHtmlForecastInspector(planCell) + '</td>';
-    html += '<td>' + escHtmlForecastInspector(actualCell) + '</td>';
-    html += '<td>' + escHtmlForecastInspector(overrideCell) + '</td>';
-    html += '<td><span class="status-pill">' + escHtmlForecastInspector(statusKey) + '</span></td>';
-    html += '</tr>';
-  }
-  tbody.innerHTML = html;
-}
+// renderStage2BacktestResult ENTFERNT 2026-05-23 — Backtest-Karte aus Settings
+// raus. Backend (getStage2 / /api/forecast/inspector/stage2) bleibt intakt
+// falls Re-Aktivierung gewünscht.
 
 function isInspectorProActive() {
   var cache = window._licenseStateCache;
@@ -3255,7 +3171,7 @@ function stopInspectorPoll() {
 
 function applyProGateState() {
   var active = isInspectorProActive();
-  ['eos', 'stage2'].forEach(function (slug) {
+  ['eos'].forEach(function (slug) {
     var section = document.querySelector('.config-group[data-inspector="' + slug + '"]');
     if (!section) return;
     var liveScaffold = section.querySelector('.inspector-live-scaffold[data-inspector="' + slug + '"]');
@@ -3288,115 +3204,7 @@ function bindProGateCta() {
   });
 }
 
-function bindBacktestForm() {
-  // Phase 19 Plan 19-06 — full B5 Stage-2 Backtest submit flow.
-  //
-  // Submit pattern is EXPLICIT (D-08): operator clicks "Backtest auswerten",
-  // one apiFetch fires, result populates. NOT polled (unlike B1..B4 which
-  // poll every 30s). The button doubles as the date-changed trigger — picking
-  // a different date and clicking re-runs cleanly.
-  //
-  // Failure modes (banner copy per UI-SPEC §B5):
-  //   - 403 inactive    → "Pro-Lizenz erforderlich. Bitte unter 'Lizenz' aktivieren."
-  //   - 400 invalid     → "Datum außerhalb der Retention-Grenze (30 Tage) oder ungültiges Format."
-  //   - no_snapshot     → "Kein Stage-2-Plan für YYYY-MM-DD — Optimizer war an diesem Tag nicht aktiv oder Retention abgelaufen."
-  //   - 5xx / throw     → "Backtest konnte nicht geladen werden. Versuche es erneut."
-  //   - network         → "Netzwerkfehler beim Backtest. Versuche es erneut."
-
-  var form = document.getElementById('backtestForm');
-  if (!form) return;
-  if (window._backtestFormBound) return;
-  window._backtestFormBound = true;
-
-  form.addEventListener('submit', function (e) { e.preventDefault(); });
-
-  var btn = document.getElementById('backtestSubmitBtn');
-  var dateInput = document.getElementById('backtestDate');
-  var resultDiv = document.getElementById('backtestResult');
-  var banner = document.querySelector('[data-inspector-banner="stage2"]');
-
-  // Date input constraints: min = 30 days ago, max = yesterday, default = yesterday
-  if (dateInput) {
-    var today = new Date();
-    var yesterday = new Date(today.getTime() - 86400000);
-    var thirtyAgo = new Date(today.getTime() - 30 * 86400000);
-    var fmt = function (d) {
-      return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-    };
-    if (!dateInput.value) dateInput.value = fmt(yesterday);
-    if (!dateInput.min) dateInput.min = fmt(thirtyAgo);
-    if (!dateInput.max) dateInput.max = fmt(yesterday);
-  }
-
-  function setBacktestBanner(kind, message) {
-    if (!banner) return;
-    banner.classList.remove('u-hidden', 'warn', 'error', 'info', 'ok');
-    if (kind === 'warn') banner.classList.add('warn');
-    else if (kind === 'error') banner.classList.add('error');
-    else if (kind === 'info') banner.classList.add('info');
-    banner.textContent = message;
-  }
-
-  function hideBanner() {
-    if (!banner) return;
-    banner.classList.add('u-hidden');
-    banner.textContent = '';
-  }
-
-  function setBusy(busy) {
-    if (btn) {
-      btn.disabled = busy;
-      btn.textContent = busy ? 'Wird ausgewertet …' : 'Backtest auswerten';
-    }
-    if (dateInput) dateInput.disabled = busy;
-  }
-
-  if (!btn) return;
-  btn.addEventListener('click', function () {
-    var dateValue = dateInput && dateInput.value;
-    if (!dateValue || !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-      setBacktestBanner('warn', 'Bitte ein gültiges Datum auswählen.');
-      return;
-    }
-    hideBanner();
-    if (resultDiv) resultDiv.hidden = true;
-    setBusy(true);
-    apiFetch('/api/forecast/inspector/stage2?date=' + encodeURIComponent(dateValue))
-      .then(function (r) {
-        return r.json().then(function (j) { return { status: r.status, body: j }; });
-      })
-      .then(function (resp) {
-        var j = resp.body || {};
-        if (resp.status === 403) {
-          setBacktestBanner('error', 'Pro-Lizenz erforderlich. Bitte unter "Lizenz" aktivieren.');
-          return;
-        }
-        if (resp.status === 400 || j.error === 'invalid_date') {
-          setBacktestBanner('warn', 'Datum außerhalb der Retention-Grenze (30 Tage) oder ungültiges Format.');
-          return;
-        }
-        if (j.ok === false && j.error === 'no_snapshot') {
-          setBacktestBanner('warn', 'Kein Stage-2-Plan für ' + dateValue + ' — Optimizer war an diesem Tag nicht aktiv oder Retention abgelaufen.');
-          return;
-        }
-        if (j.ok === false) {
-          setBacktestBanner('error', 'Backtest konnte nicht geladen werden. Versuche es erneut.');
-          return;
-        }
-        renderStage2BacktestResult(j);
-        if (resultDiv) resultDiv.hidden = false;
-      })
-      .catch(function () {
-        setBacktestBanner('error', 'Netzwerkfehler beim Backtest. Versuche es erneut.');
-      })
-      .then(function () {
-        // .finally — but written as .then for older browsers (settings.js targets
-        // ES5 syntax — see lines 2628-2630 escHtml using array index instead of
-        // optional chaining etc.).
-        setBusy(false);
-      });
-  });
-}
+// bindBacktestForm ENTFERNT 2026-05-23 — Backtest-Karte aus Settings raus.
 
 function initForecastTab() {
   if (typeof apiFetch !== 'function') return;
@@ -3413,7 +3221,6 @@ function initForecastTab() {
   }).then(function () {
     applyProGateState();
     bindProGateCta();
-    bindBacktestForm();
     startInspectorPoll();
   });
 
