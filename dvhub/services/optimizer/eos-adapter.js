@@ -59,6 +59,15 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
               resolve({ ok: false, error: `EOS returned HTTP ${res.statusCode}` });
               return;
             }
+            // Phase 21 hotfix (2026-05-23): EOS' import endpoints reply
+            // 200 OK with content-length:0 (no body) — JSON.parse('')
+            // then surfaces as a false "invalid JSON" error. Empty body
+            // on a 2xx = success; only complain when content is present
+            // but unparseable.
+            if (chunks.length === 0) {
+              resolve({ ok: true, data: null });
+              return;
+            }
             try {
               const data = JSON.parse(chunks);
               resolve({ ok: true, data });
