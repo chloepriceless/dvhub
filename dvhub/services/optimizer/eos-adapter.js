@@ -150,16 +150,44 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       if (!res.ok) errors.push(`Load: ${res.error}`);
     }
 
-    // Price — convert to €/Wh; EOS ElecPriceImport expects ts+value pairs.
+    // Price — EOS ElecPrice expects €/kWh (see EOS' own default
+    // `feed_in_tariff_kwh: 0.078` = 7.8 ct/kWh). The pre-2026-05-23 code
+    // divided by 100000 (= €/Wh), which made every price look 1000× too
+    // small and silently corrupted the genetic optimizer's revenue math.
+    // Correct conversion: ct/kWh ÷ 100 → €/kWh.
     if (forecastResponse.price?.slots?.length) {
       const enriched = forecastResponse.price.slots;
       const valueFn = enriched[0]?.importCtKwh != null
-        ? s => (Number(s.importCtKwh) || 0) / 100000  // ct/kWh → €/Wh
-        : s => (Number(s.ctKwh) || 0) / 100000;
+        ? s => (Number(s.importCtKwh) || 0) / 100   // ct/kWh → €/kWh
+        : s => (Number(s.ctKwh) || 0) / 100;
       const body = buildDateTimeData(enriched, valueFn);
       const res = await httpRequest('PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
       perProvider.price = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`Price: ${res.error}`);
+    }
+
+    // Phase 21 (2026-05-23): FeedInTariffImport push — without this, EOS
+    // reuses its static FeedInTariffFixed (default 7.8 ct/kWh) and can't
+    // discriminate "einspeisen vs. speichern" on spot-dynamic days.
+    // Reads tariff config from cfg.optimizer.tariff:
+    //   feedInMode='spot' → feedIn = importCtKwh × feedInSpotFactor (operator
+    //     gets spot price × factor for every kWh fed back)
+    //   feedInMode='fixed' / unset → skip the push (EOS keeps FeedInTariffFixed)
+    if (forecastResponse.price?.slots?.length) {
+      const cfg = getCfg();
+      const tariff = cfg?.optimizer?.tariff || {};
+      const mode = String(tariff.feedInMode || 'fixed').toLowerCase();
+      if (mode === 'spot') {
+        const factor = Number.isFinite(Number(tariff.feedInSpotFactor)) ? Number(tariff.feedInSpotFactor) : 1.0;
+        const enriched = forecastResponse.price.slots;
+        const feedFn = enriched[0]?.importCtKwh != null
+          ? s => ((Number(s.importCtKwh) || 0) * factor) / 100   // ct/kWh × factor → €/kWh
+          : s => ((Number(s.ctKwh) || 0) * factor) / 100;
+        const body = buildDateTimeData(enriched, feedFn);
+        const res = await httpRequest('PUT', '/v1/prediction/import/FeedInTariffImport?force_enable=true', body);
+        perProvider.feedIn = { ok: res.ok, error: res.error || null };
+        if (!res.ok) errors.push(`FeedIn: ${res.error}`);
+      }
     }
 
     if (errors.length > 0) {

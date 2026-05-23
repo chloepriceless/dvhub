@@ -156,9 +156,25 @@ export function createEosConfigSync(ctx) {
     const batteries = buildEosBatteries(cfg);
     const inverters = buildEosInverters(cfg);
 
+    // Phase 21 (2026-05-23): also flip every EOS provider to the Import
+    // variant so EOS consumes the forecasts DVhub pushes via eos-adapter
+    // (PVForecastImport/LoadImport/ElecPriceImport/FeedInTariffImport). Plus
+    // ems.mode → OPTIMIZATION so the genetic algo runs every 300 s instead
+    // of staying dormant (DISABLED) waiting for a manual trigger. When the
+    // operator turns off the EOS bridge (eosProxy.enabled=false) the sync
+    // doesn't run at all (see early-return above), so this won't fight
+    // anyone who explicitly wants EOS in pull-only mode.
+    const tariffMode = String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase();
+    const feedInProvider = tariffMode === 'spot' ? 'FeedInTariffImport' : 'FeedInTariffFixed';
+
     const tasks = [
-      { section: 'devices/batteries', body: batteries },
-      { section: 'devices/inverters', body: inverters },
+      { section: 'devices/batteries',      body: batteries },
+      { section: 'devices/inverters',      body: inverters },
+      { section: 'pvforecast/provider',    body: 'PVForecastImport' },
+      { section: 'load/provider',          body: 'LoadImport' },
+      { section: 'elecprice/provider',     body: 'ElecPriceImport' },
+      { section: 'feedintariff/provider',  body: feedInProvider },
+      { section: 'ems/mode',               body: 'OPTIMIZATION' },
     ];
 
     const applied = [];
