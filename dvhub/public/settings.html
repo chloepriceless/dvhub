@@ -586,15 +586,32 @@
           <header class="sa-section-head">
             <h2>EOS &mdash; Konfiguration</h2>
             <p class="sub">
-              EOSdash-Web-UI von Akkudoktor-EOS &mdash; eingebettet via DVhub-Reverse-Proxy.
-              Hier konfigurierst du die automatische Optimierung (Akku-Parameter, EV, Tarife).
-              Sobald &laquo;automatic optimization&raquo; aktiviert ist, liefert der EOS-Pull-Plan im
-              <a href="#forecast">Forecast-Inspector</a> echte Daten.
-            </p>
-            <p class="sub eos-open-link">
-              <a href="/eosdash/" target="_blank" rel="noopener" class="btn ghost sm">In neuem Tab &ouml;ffnen</a>
+              Akkudoktor-EOS f&uuml;r Optimierungsplanung. Die meisten Parameter
+              (Batterie, Standort, Effizienz) hast du bereits in DVhub gepflegt
+              &mdash; ein Klick auf &laquo;Mit DVhub-Werten synchronisieren&raquo; schreibt sie
+              in die EOS-Konfiguration und aktiviert den Optimierungs-Modus.
+              Feintuning (z.B. Genetic-Algorithmus-Parameter) kann anschlie&szlig;end
+              in der eingebetteten EOSdash-UI gemacht werden.
             </p>
           </header>
+          <div class="eos-sync-panel card">
+            <div class="eos-sync-row">
+              <div class="eos-sync-text">
+                <strong>Aus DVhub synchronisieren</strong>
+                <p class="sub">
+                  Pusht Standort (Lat/Lon), Batterie (Kapazit&auml;t, Min-SOC,
+                  Max-Ladeleistung, Effizienz, aktueller SOC) und setzt
+                  <code>ems.mode = OPTIMIZATION</code> in EOS.
+                </p>
+              </div>
+              <button id="eosSyncBtn" type="button" class="btn primary">Mit DVhub-Werten synchronisieren</button>
+            </div>
+            <div id="eosSyncResult" class="eos-sync-result u-hidden"></div>
+            <div class="eos-sync-row eos-sync-row-secondary">
+              <a href="/eosdash/" target="_blank" rel="noopener" class="btn ghost sm">EOSdash in neuem Tab &ouml;ffnen</a>
+              <a href="#forecast" class="btn ghost sm">Forecast-Inspector pr&uuml;fen</a>
+            </div>
+          </div>
           <div class="eos-iframe-wrap">
             <iframe id="eosdashFrame" src="/eosdash/" title="EOSdash &mdash; Akkudoktor EOS Konfiguration"
                     referrerpolicy="no-referrer" loading="lazy"></iframe>

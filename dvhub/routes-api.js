@@ -3051,6 +3051,64 @@ export function createApiRoutes(ctx) {
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
 
+    // Phase 21 (operator request 2026-05-23): EOS Konfigurations-Sync.
+    // Liest die EOS-relevanten DVhub-Settings (Batterie, Standort, EMS-Mode)
+    // und PUTet sie via /v1/config/* in die EOS-Instanz. Damit muss der
+    // Operator die meisten EOS-Parameter nicht doppelt pflegen.
+    if (url.pathname === '/api/eos/sync-from-dvhub' && req.method === 'POST') {
+      const cfg = getCfg();
+      const sma = cfg.schedule?.smallMarketAutomation || {};
+      const battCapKwh = Number(sma.batteryCapacityKwh) || null;
+      const minSocPct = Number(sma.minSocPct) || 5;
+      const effPct = Number(sma.inverterEfficiencyPct ?? 90);
+      const maxChargeW = Number(cfg.optimizer?.maxChargeW ?? 5000);
+      const lat = Number(sma.location?.latitude);
+      const lon = Number(sma.location?.longitude);
+      const curSoc = Number(state.victron?.soc);
+      const eosBase = cfg.optimizer?.eosProxy?.url || 'http://localhost:8503';
+
+      async function putEos(path, value) {
+        try {
+          const resp = await fetch(`${eosBase}/v1/config${path}`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(value)
+          });
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            return { ok: false, status: resp.status, body: body.slice(0, 200) };
+          }
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }
+
+      const results = {};
+      if (Number.isFinite(lat)) results.latitude = await putEos('/general/latitude', lat);
+      if (Number.isFinite(lon)) results.longitude = await putEos('/general/longitude', lon);
+      if (battCapKwh && battCapKwh > 0) {
+        const battery = {
+          device_id: 'dvhub_battery',
+          capacity_wh: Math.round(battCapKwh * 1000),
+          charging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),
+          discharging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),
+          max_charge_power_w: Math.round(Math.abs(maxChargeW)),
+          min_soc_percentage: Math.round(minSocPct),
+          max_soc_percentage: 100,
+          initial_soc_percentage: Number.isFinite(curSoc) ? Math.round(curSoc) : 50
+        };
+        results.batteries = await putEos('/devices/batteries', [battery]);
+        results.max_batteries = await putEos('/devices/max_batteries', 1);
+      }
+      // EMS Mode: schalte automatische Optimierung scharf.
+      results.ems_mode = await putEos('/ems/mode', 'OPTIMIZATION');
+
+      const allOk = Object.values(results).every((r) => r && r.ok);
+      pushLog('eos_sync_from_dvhub', { ok: allOk, fields: Object.keys(results) });
+      return json(res, allOk ? 200 : 207, { ok: allOk, results });
+    }
+
     // EMHASS -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/emhass' && req.method === 'GET') return json(res, 200, emhassState());
 

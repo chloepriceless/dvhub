@@ -14,6 +14,7 @@
     "/api/control/write",
     "/api/costs",
     "/api/discovery/systems?manufacturer=",
+    "/api/eos/sync-from-dvhub",
     "/api/epex/refresh",
     "/api/family/mqtt-tiles",
     "/api/family/tesla-history",

@@ -2674,8 +2674,8 @@ body.dv-modal-open {
   border-radius: var(--r-md);
   background: var(--bg-elev);
   overflow: hidden;
-  height: calc(100vh - 260px);
-  min-height: 600px;
+  height: calc(100vh - 360px);
+  min-height: 480px;
 }
 .eos-iframe-wrap iframe {
   width: 100%;
@@ -2684,3 +2684,17 @@ body.dv-modal-open {
   display: block;
   background: #fff;
 }
+.eos-sync-panel { padding: 14px 16px; margin-bottom: 14px; }
+.eos-sync-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.eos-sync-row-secondary { margin-top: 10px; gap: 8px; }
+.eos-sync-text { flex: 1; min-width: 280px; }
+.eos-sync-text p.sub { margin: 4px 0 0; font-size: 12px; }
+.eos-sync-text code { font-family: var(--f-mono); font-size: 11px; padding: 1px 5px; background: var(--glass); border-radius: 3px; }
+.eos-sync-result {
+  margin-top: 10px; padding: 10px 12px; border-radius: 6px;
+  font-family: var(--f-mono); font-size: 11.5px; white-space: pre-wrap;
+  border: 1px solid var(--hairline);
+}
+.eos-sync-result.ok    { color: #4CE36C; border-color: rgba(76,227,108,0.3); background: rgba(76,227,108,0.06); }
+.eos-sync-result.warn  { color: #FFD32E; border-color: rgba(255,211,46,0.3); background: rgba(255,211,46,0.06); }
+.eos-sync-result.error { color: rgba(255,108,99,0.95); border-color: rgba(255,108,99,0.3); background: rgba(255,108,99,0.06); }

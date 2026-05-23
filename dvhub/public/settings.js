@@ -2507,6 +2507,10 @@ function initSettingsPage() {
       if (target === 'forecast') {
         setTimeout(function () { try { initForecastTab(); } catch (_) {} }, 0);
       }
+      // Phase 21: EOS tab — bind the sync button on first activation.
+      if (target === 'eos') {
+        setTimeout(function () { try { initEosTab(); } catch (_) {} }, 0);
+      }
     });
 
     // Restore tab from URL hash on load.
@@ -3718,5 +3722,50 @@ function renderMaeSparkline(data) {
     if (target && typeof target.scrollIntoView === 'function') {
       try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* noop */ }
     }
+  }
+
+  // Phase 21 (operator request 2026-05-23) — EOS-Settings-Sync.
+  // Hängt sich an den "Mit DVhub-Werten synchronisieren"-Button im neuen
+  // Settings → EOS-Tab. Beim Klick: POST /api/eos/sync-from-dvhub, das
+  // backend pusht DVhubs Batterie/Standort/EMS-Mode in die EOS-Config.
+  function initEosTab() {
+    if (window._eosTabInit) return;
+    window._eosTabInit = true;
+    var btn = document.getElementById('eosSyncBtn');
+    var result = document.getElementById('eosSyncResult');
+    var iframe = document.getElementById('eosdashFrame');
+    if (!btn || !result) return;
+    btn.addEventListener('click', async function () {
+      btn.disabled = true;
+      var prevLabel = btn.textContent;
+      btn.textContent = 'Synchronisiere ...';
+      result.classList.remove('u-hidden', 'ok', 'warn', 'error');
+      result.textContent = '';
+      try {
+        var resp = await apiFetch('/api/eos/sync-from-dvhub', { method: 'POST' });
+        var body = await resp.json().catch(function () { return null; });
+        if (!body) {
+          result.classList.add('error');
+          result.textContent = 'Antwort konnte nicht gelesen werden (HTTP ' + resp.status + ').';
+          return;
+        }
+        var lines = [];
+        for (var k in (body.results || {})) {
+          var r = body.results[k];
+          lines.push((r && r.ok ? '✓' : '✗') + ' ' + k +
+            (r && !r.ok ? ' — ' + (r.body || r.error || 'HTTP ' + r.status) : ''));
+        }
+        result.classList.add(body.ok ? 'ok' : 'warn');
+        result.textContent = (body.ok ? 'Sync erfolgreich:' : 'Sync mit Warnungen:') + '\n' + lines.join('\n');
+        // Reload the iframe to surface the new config in EOSdash.
+        if (iframe) iframe.src = iframe.src;
+      } catch (e) {
+        result.classList.add('error');
+        result.textContent = 'Netzwerkfehler beim Sync: ' + (e && e.message ? e.message : e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prevLabel;
+      }
+    });
   }
 })();
