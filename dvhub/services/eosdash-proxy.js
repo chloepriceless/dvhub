@@ -23,17 +23,11 @@ const EOSDASH_PORT = 8504;
 const PROXY_PREFIX = '/eosdash';
 const TIMEOUT_MS = 30_000;
 
-function injectBase(buf) {
-  const html = buf.toString('utf8');
-  // Insert <base> as the FIRST child of <head> so subsequent relative URLs
-  // are resolved against /eosdash/. If <head> is missing (shouldn't happen
-  // for EOSdash), fall through unchanged.
-  const headIdx = html.search(/<head\b[^>]*>/i);
-  if (headIdx === -1) return buf;
-  const headEnd = html.indexOf('>', headIdx) + 1;
-  const inject = '<base href="/eosdash/">';
-  return Buffer.from(html.slice(0, headEnd) + inject + html.slice(headEnd), 'utf8');
-}
+// injectBase removed 2026-05-23: with the corrected path mapping (no prefix
+// strip on /eosdash/<sub>), EOSdash's absolute /eosdash/* paths already
+// resolve correctly through the proxy. A <base> tag would only affect
+// RELATIVE URLs, and adding one risks breaking edge-case relative paths
+// inside EOSdash's HTML.
 
 export function isEosdashRequest(pathname) {
   return pathname === PROXY_PREFIX || pathname.startsWith(PROXY_PREFIX + '/');
@@ -44,9 +38,20 @@ export function createEosdashProxy(ctx) {
 
   return function handleEosdashRequest(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    // Strip /eosdash prefix; preserve query string and trailing slash.
-    let upstreamPath = url.pathname.slice(PROXY_PREFIX.length) || '/';
-    if (upstreamPath === '') upstreamPath = '/';
+    // EOSdash path mapping is asymmetric:
+    //   `/`                     → root page (200)
+    //   `/eosdash/<sub>`        → htmx subpages (200) — already prefixed!
+    //   `/eosdash` or `/eosdash/` → 404 (no upstream route)
+    // So: the iframe's entry-point request (`/eosdash/`) must be rewritten
+    // to `/`, while every other `/eosdash/...` is forwarded VERBATIM (no
+    // prefix strip) because upstream's htmx handlers already expect the
+    // /eosdash prefix.
+    let upstreamPath;
+    if (url.pathname === PROXY_PREFIX || url.pathname === PROXY_PREFIX + '/') {
+      upstreamPath = '/';
+    } else {
+      upstreamPath = url.pathname || '/';
+    }
     if (url.search) upstreamPath += url.search;
 
     // Build upstream headers — drop Host (will be set by http.request) and
@@ -68,8 +73,6 @@ export function createEosdashProxy(ctx) {
       timeout: TIMEOUT_MS,
     }, (upstreamRes) => {
       const status = upstreamRes.statusCode || 502;
-      const contentType = String(upstreamRes.headers['content-type'] || '');
-      const isHtml = contentType.includes('text/html');
       const responseHeaders = { ...upstreamRes.headers };
       // Allow iframe embedding from the DVhub origin.
       delete responseHeaders['x-frame-options'];
@@ -77,31 +80,11 @@ export function createEosdashProxy(ctx) {
       delete responseHeaders.connection;
       delete responseHeaders['transfer-encoding'];
 
-      if (!isHtml) {
-        // Stream verbatim — fast path for assets/JSON.
-        res.writeHead(status, responseHeaders);
-        upstreamRes.pipe(res);
-        return;
-      }
-
-      // Buffer HTML, inject <base>, send.
-      const chunks = [];
-      upstreamRes.on('data', (chunk) => chunks.push(chunk));
-      upstreamRes.on('end', () => {
-        const original = Buffer.concat(chunks);
-        const modified = injectBase(original);
-        // Content-Length must reflect modified body length.
-        responseHeaders['content-length'] = String(modified.length);
-        res.writeHead(status, responseHeaders);
-        res.end(modified);
-      });
-      upstreamRes.on('error', (e) => {
-        pushLog('eosdash_proxy_error', { phase: 'upstream_response', error: e.message });
-        if (!res.headersSent) {
-          res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
-        }
-        try { res.end('EOSdash proxy: upstream response error'); } catch { /* ignore */ }
-      });
+      // Stream all responses verbatim — no body modification needed since
+      // EOSdash's internal paths are already absolute /eosdash/* URLs and
+      // we forward them 1:1 (see path-mapping comment above).
+      res.writeHead(status, responseHeaders);
+      upstreamRes.pipe(res);
     });
 
     upstreamReq.on('error', (e) => {
