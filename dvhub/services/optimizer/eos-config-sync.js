@@ -160,12 +160,28 @@ export function buildEosOptimization(cfg) {
  * @returns {{generations: number, individuals: number}}
  */
 export function pickGeneticSizing(intervalSec) {
-  // 2026-05-24 prod measurement: at 192 slots × 100 gen × 200 ind on the
-  // operator's hardware the genetic loop ran >6min and starved ems.interval
-  // (300s default). Drop further to keep the cycle ≤ 90s.
-  if (intervalSec === 900) return { generations: 40, individuals: 120 };
-  if (intervalSec === 1800) return { generations: 150, individuals: 200 };
-  return { generations: 400, individuals: 300 }; // hourly — upstream defaults
+  // Operator preference 2026-05-24: at 15-min resolution we'd rather have a
+  // high-quality plan once an hour than a degraded plan every 5min. PV/load/
+  // spot inputs don't shift fast enough to warrant a sub-hourly refresh at
+  // this granularity. Hourly EMS-runs (see pickEmsIntervalSec) give the
+  // genetic algo enough wallclock for the full upstream sizing even at
+  // 192-slot horizons.
+  return { generations: 400, individuals: 300 };
+}
+
+/**
+ * EMS tick interval — how often the energy-management loop fires a fresh
+ * genetic optimization. At 15-min slot resolution a single run takes ~30-60
+ * min, so we slow the ticker to 3600s (= 1 run/hour) so the loop never
+ * stomps on itself. Hourly slot resolution keeps the EOS default 300s.
+ *
+ * @param {number} intervalSec  the slot resolution from buildEosOptimization
+ * @returns {number}             ems.interval in seconds
+ */
+export function pickEmsIntervalSec(intervalSec) {
+  if (intervalSec === 900) return 3600;
+  if (intervalSec === 1800) return 1800;
+  return 300; // hourly — upstream default
 }
 
 /**
@@ -280,12 +296,14 @@ export function createEosConfigSync(ctx) {
     // elecprice.charges_kwh (Bezugs-Aufschlag for grid-import pricing).
     // These hit field-level PUT endpoints (PUT /v1/config/{path}) one value
     // at a time — the section-level shape only works for {device,inverter}.
+    const emsIntervalSec = pickEmsIntervalSec(optimization.interval);
     const tasks = [
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
       { section: 'optimization/interval', body: optimization.interval },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
+      { section: 'ems/interval', body: emsIntervalSec },
     ];
     if (elecprice) {
       tasks.push(

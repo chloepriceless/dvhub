@@ -14,6 +14,7 @@ import {
   buildEosElecprice,
   buildEosOptimization,
   pickGeneticSizing,
+  pickEmsIntervalSec,
 } from '../services/optimizer/eos-config-sync.js';
 
 const STD_CFG = {
@@ -129,13 +130,23 @@ test('buildEosInverters: passes max_ac_charge_power_w from optimizer.maxChargeW'
   assert.equal(inv.battery_id, 'battery1');
 });
 
-test('pickGeneticSizing: shrinks at 15-min to keep wallclock < ems.interval', () => {
-  // hourly stays at upstream defaults
+test('pickGeneticSizing: full upstream sizing at all resolutions', () => {
+  // Operator preference: full-quality plan + slower EMS-tick beats a degraded
+  // plan with a faster tick at sub-hourly slot resolutions. ems.interval
+  // scales out so the genetic loop never overlaps with the next tick.
   assert.deepEqual(pickGeneticSizing(3600), { generations: 400, individuals: 300 });
-  // 30-min: modest shrink
-  assert.deepEqual(pickGeneticSizing(1800), { generations: 150, individuals: 200 });
-  // 15-min: aggressive shrink so genetic finishes inside the EMS tick
-  assert.deepEqual(pickGeneticSizing(900), { generations: 40, individuals: 120 });
-  // unknown interval falls back to hourly sizing
+  assert.deepEqual(pickGeneticSizing(1800), { generations: 400, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900),  { generations: 400, individuals: 300 });
   assert.deepEqual(pickGeneticSizing(7200), { generations: 400, individuals: 300 });
+});
+
+test('pickEmsIntervalSec: stretches at finer slot resolutions', () => {
+  // hourly: stay at EOS upstream default 300s
+  assert.equal(pickEmsIntervalSec(3600), 300);
+  // 30-min: 1800s tick
+  assert.equal(pickEmsIntervalSec(1800), 1800);
+  // 15-min: stretch to 3600s — one high-quality run per hour
+  assert.equal(pickEmsIntervalSec(900), 3600);
+  // unknown interval: hourly default
+  assert.equal(pickEmsIntervalSec(7200), 300);
 });
