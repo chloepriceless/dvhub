@@ -72,18 +72,24 @@ test('priceSlotsToEosFormat: ct/kWh → EUR/Wh conversion', () => {
   assert.equal(out[2].powerW.toFixed(8), '-0.00005100');
 });
 
-test('buildDataFrameBody: PydanticDateTimeDataFrame contract', () => {
+test('buildDataFrameBody: PydanticDateTimeDataFrame contract (datetime-first)', () => {
   const slots = [
     { start: '2026-05-24T12:00:00.000Z', powerW: 1000 },
     { start: '2026-05-24T12:15:00.000Z', powerW: 1500 },
   ];
   const body = buildDataFrameBody('pvforecast_ac_power', slots, 'Europe/Berlin');
   assert.equal(typeof body.data, 'object');
-  assert.deepEqual(Object.keys(body.data), ['pvforecast_ac_power']);
+  // Outer keys are datetimes (NOT columns) — see schema in core/pydantic.py
+  assert.deepEqual(
+    Object.keys(body.data).sort(),
+    ['2026-05-24T12:00:00Z', '2026-05-24T12:15:00Z'],
+  );
+  // Inner is {column: value}
+  assert.deepEqual(body.data['2026-05-24T12:00:00Z'], { pvforecast_ac_power: 1000 });
+  assert.deepEqual(body.data['2026-05-24T12:15:00Z'], { pvforecast_ac_power: 1500 });
   assert.equal(body.dtypes.pvforecast_ac_power, 'float64');
   assert.equal(body.tz, 'Europe/Berlin');
   assert.deepEqual(body.datetime_columns, []);
-  assert.equal(body.data.pvforecast_ac_power['2026-05-24T12:15:00Z'], 1500);
 });
 
 test('createEosForecastBridge.push: skips when eosProxy.enabled=false', async () => {

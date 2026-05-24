@@ -101,14 +101,28 @@ function priceSlotsToEosFormat(slots) {
 /**
  * Build the DataFrame payload for a single EOS *Import provider.
  *
+ * EOS' PydanticDateTimeDataFrame schema (core/pydantic.py:995) is keyed
+ * datetime-first, then column:
+ *   data: { "<iso8601>": { "<column>": <value>, ... }, ... }
+ * NOT column-first. A column-first shape ("data: {<column>: {<datetime>:
+ * value}}") deserializes silently as 0 rows — the field_validator treats the
+ * datetime strings as "columns" and the cross-check `next(iter(values))`
+ * sees them as the column-set; the dataframe then has zero rows because the
+ * inner dicts are empty after column-stripping.
+ *
  * @param {string} columnKey   - EOS canonical series key (e.g. "pvforecast_ac_power")
  * @param {Array<{start: string, powerW: number}>} slots
  * @param {string} tz          - default "Europe/Berlin"
  * @returns {object}             PydanticDateTimeDataFrame body
  */
 function buildDataFrameBody(columnKey, slots, tz = 'Europe/Berlin') {
+  const timeMap = slotsToTimeMap(slots);
+  const data = {};
+  for (const [iso, value] of Object.entries(timeMap)) {
+    data[iso] = { [columnKey]: value };
+  }
   return {
-    data: { [columnKey]: slotsToTimeMap(slots) },
+    data,
     dtypes: { [columnKey]: 'float64' },
     tz,
     datetime_columns: [],
