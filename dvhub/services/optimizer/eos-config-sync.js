@@ -304,6 +304,13 @@ export function createEosConfigSync(ctx) {
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
       { section: 'ems/interval', body: emsIntervalSec },
+      // Phase 22.1 (2026-05-24): point EOS at the *Import providers so
+      // eos-forecast-bridge can stream DVhub's native 15-min PV ensemble,
+      // load model and EnergyCharts spot cache. VRM/EnergyCharts pulls on
+      // EOS' side stop firing once these are set — single source of truth.
+      { section: 'pvforecast/provider', body: 'PVForecastImport' },
+      { section: 'load/provider', body: 'LoadImport' },
+      { section: 'elecprice/provider', body: 'ElecPriceImport' },
     ];
     if (elecprice) {
       tasks.push(

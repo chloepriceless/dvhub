@@ -107,6 +107,7 @@ import { createInspector } from './services/forecast/inspector.js';
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
+import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
@@ -977,6 +978,13 @@ ctx.inspector = inspector;
 // reconcile after EOS first becomes reachable).
 const eosConfigSync = createEosConfigSync(ctx);
 ctx.eosConfigSync = eosConfigSync;
+// Phase 22.1 (2026-05-24): bridges DVhub's 15-min ensemble PV forecast,
+// EnergyCharts spot cache and hour-of-day load model into EOS via the
+// *Import providers. ctx.eosConfigSync switches EOS to those providers; this
+// bridge feeds them. push()/start() are wired into the boot path and the
+// saveAndApplyConfig hook below so the data lands BEFORE the provider flip.
+const eosForecastBridge = createEosForecastBridge(ctx);
+ctx.eosForecastBridge = eosForecastBridge;
 
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
@@ -1006,10 +1014,22 @@ ctx.saveAndApplyConfig = (incomingConfig) => {
   // schedule-only writes from persistConfig() bypass this wrapper which is
   // fine — they never touch the synced fields.
   if (eosConfigSync) {
-    eosConfigSync.sync().catch((err) => {
-      try { pushLog('eos_config_sync_error', { phase: 'after_save', error: err?.message || String(err) }); }
-      catch { /* never block save on telemetry */ }
-    });
+    // Push DVhub forecasts BEFORE the provider-flip so EOS' *Import series
+    // are already populated when config-sync points elecprice/load/pvforecast
+    // at them. Without this ordering EOS would briefly see empty series
+    // and bail out of the next genetic run.
+    (async () => {
+      try { if (eosForecastBridge) await eosForecastBridge.push(); }
+      catch (e) {
+        try { pushLog('eos_forecast_bridge_error', { phase: 'after_save', error: e?.message || String(e) }); }
+        catch { /* swallow */ }
+      }
+      try { await eosConfigSync.sync(); }
+      catch (e) {
+        try { pushLog('eos_config_sync_error', { phase: 'after_save', error: e?.message || String(e) }); }
+        catch { /* never block save on telemetry */ }
+      }
+    })();
   }
   return result;
 };
@@ -1447,14 +1467,28 @@ if (IS_RUNTIME_PROCESS) {
   });
   optimizer.start().catch(err => console.error('Optimizer service start error:', err.message));
   familyService.start().catch(err => console.error('Family service start error:', err.message));
-  // Phase 21 (2026-05-23): one-shot EOS reconcile after boot. Waits 15 s so
-  // EOSdash/EOS has time to come up (systemd unit dependency is loose); after
-  // that the on-save hook in ctx.saveAndApplyConfig keeps it in sync. Failure
-  // is non-fatal — pushLog records it and the next config save retries.
-  setTimeout(() => {
-    eosConfigSync.sync().catch((err) => {
-      pushLog('eos_config_sync_error', { phase: 'boot', error: err?.message || String(err) });
-    });
+  // Phase 21 (2026-05-23) + Phase 22.1 (2026-05-24): one-shot EOS reconcile
+  // after boot. Waits 15 s so EOSdash/EOS has time to come up (systemd unit
+  // dependency is loose); after that the on-save hook keeps it in sync.
+  // Ordering: push forecasts FIRST so the *Import series exist when
+  // config-sync points the providers at them; then start the hourly bridge
+  // timer so subsequent EMS ticks always see <=1h-old DVhub data.
+  setTimeout(async () => {
+    try { await eosForecastBridge.push(); }
+    catch (err) {
+      try { pushLog('eos_forecast_bridge_error', { phase: 'boot', error: err?.message || String(err) }); }
+      catch { /* swallow */ }
+    }
+    try { await eosConfigSync.sync(); }
+    catch (err) {
+      try { pushLog('eos_config_sync_error', { phase: 'boot', error: err?.message || String(err) }); }
+      catch { /* swallow */ }
+    }
+    try { eosForecastBridge.start(); }
+    catch (err) {
+      try { pushLog('eos_forecast_bridge_error', { phase: 'start', error: err?.message || String(err) }); }
+      catch { /* swallow */ }
+    }
   }, 15000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
   setInterval(() => {
