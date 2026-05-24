@@ -13,6 +13,7 @@ import {
   buildEosInverters,
   buildEosElecprice,
   buildEosOptimization,
+  pickGeneticSizing,
 } from '../services/optimizer/eos-config-sync.js';
 
 const STD_CFG = {
@@ -126,4 +127,15 @@ test('buildEosInverters: passes max_ac_charge_power_w from optimizer.maxChargeW'
   const inv = buildEosInverters(STD_CFG)[0];
   assert.equal(inv.max_ac_charge_power_w, 18000);
   assert.equal(inv.battery_id, 'battery1');
+});
+
+test('pickGeneticSizing: shrinks at 15-min to keep wallclock < ems.interval', () => {
+  // hourly stays at upstream defaults
+  assert.deepEqual(pickGeneticSizing(3600), { generations: 400, individuals: 300 });
+  // 30-min: modest shrink
+  assert.deepEqual(pickGeneticSizing(1800), { generations: 150, individuals: 200 });
+  // 15-min: aggressive shrink so genetic finishes inside the EMS tick
+  assert.deepEqual(pickGeneticSizing(900), { generations: 40, individuals: 120 });
+  // unknown interval falls back to hourly sizing
+  assert.deepEqual(pickGeneticSizing(7200), { generations: 400, individuals: 300 });
 });

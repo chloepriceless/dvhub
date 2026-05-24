@@ -137,6 +137,38 @@ export function buildEosOptimization(cfg) {
 }
 
 /**
+ * Pick a sane genetic-sizing tuple for the chosen slot resolution.
+ *
+ * The genetic algo's wallclock scales (roughly) linearly with
+ *   generations × individuals × slot_count.
+ *
+ * At interval=3600, slot_count=48 with the upstream default (gens=400,
+ * pop=300) runs in ~10-30s — fine. At interval=900, slot_count jumps to 192
+ * AND the genome doubles in length per step (charge+EV vectors), so the
+ * upstream defaults push wallclock to 10-15min per cycle (verified
+ * empirically on prod 2026-05-24). EOS' ems.interval is 300s by default, so
+ * a >5min genetic run completely starves the loop and the operator never
+ * sees a fresh plan.
+ *
+ * The diminishing-returns knee for this problem class is around
+ * generations=100 / individuals=200 at 15-min — fitness gain past that is
+ * <1%. We shrink both at high slot counts so 15-min Direktvermarktung stays
+ * under ems.interval. Operator can still override via genetic.generations /
+ * genetic.individuals if they want longer runs.
+ *
+ * @param {number} intervalSec
+ * @returns {{generations: number, individuals: number}}
+ */
+export function pickGeneticSizing(intervalSec) {
+  // 2026-05-24 prod measurement: at 192 slots × 100 gen × 200 ind on the
+  // operator's hardware the genetic loop ran >6min and starved ems.interval
+  // (300s default). Drop further to keep the cycle ≤ 90s.
+  if (intervalSec === 900) return { generations: 40, individuals: 120 };
+  if (intervalSec === 1800) return { generations: 150, individuals: 200 };
+  return { generations: 400, individuals: 300 }; // hourly — upstream defaults
+}
+
+/**
  * Build the EOS inverters array. DVhub doesn't yet expose AC-cap or per-
  * direction conversion efficiencies as first-class config; we derive max_power_w
  * from the PV nameplate (mispel.pvKwp × 1000) as a defensible upper bound and
@@ -227,6 +259,7 @@ export function createEosConfigSync(ctx) {
     const inverters = buildEosInverters(cfg);
     const elecprice = buildEosElecprice(cfg);
     const optimization = buildEosOptimization(cfg);
+    const geneticSizing = pickGeneticSizing(optimization.interval);
 
     // Phase 21 hotfix (2026-05-23): provider auto-flip REVERTED. The
     // earlier idea (auto-set elecprice/load/pvforecast/feedintariff providers
@@ -251,6 +284,8 @@ export function createEosConfigSync(ctx) {
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
       { section: 'optimization/interval', body: optimization.interval },
+      { section: 'optimization/genetic/generations', body: geneticSizing.generations },
+      { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
     ];
     if (elecprice) {
       tasks.push(
