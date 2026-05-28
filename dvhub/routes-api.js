@@ -230,6 +230,9 @@ export const SECURITY_HEADERS = {
 // industrial setpoint is ~50 kW; 100 kW is headroom).
 export const MAX_GRID_SETPOINT_W = 100_000;
 export const MAX_MINSOC_PCT = 100;
+// MaxDischargePower cap: 0 = no discharge (hold), positive = AC discharge limit in W,
+// -1 = unlimited (Victron sentinel). Bound matches realistic residential inverter sizes.
+export const MAX_BATTERY_DISCHARGE_W = 30_000;
 // /api/telemetry/series cap — (endMs-startMs)/stepMs * seriesCount must stay below this
 // to protect the Pi from range-explosion DoS queries. Raised from 50k to 1.5M so
 // granular Explorer queries up to 5s × ~17d × 5 keys (or 10s × 30d × 5 keys)
@@ -763,6 +766,7 @@ export function createApiRoutes(ctx) {
     '/api/integration/loxone',
     '/api/integration/eos',
     '/api/integration/emhass',
+    '/api/integration/evcc',
     '/api/optimizer/status',
     '/api/log/dv-signals',
     '/api/telemetry/series',
@@ -1795,6 +1799,11 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary());
+
+    if (url.pathname === '/api/integration/evcc' && req.method === 'GET') {
+      const status = ctx.evccIntegration?.getStatus?.() || { enabled: false, error: 'evcc integration not initialised' };
+      return json(res, 200, status);
+    }
 
     if (url.pathname === '/api/integration/home-assistant' && req.method === 'GET') return json(res, 200, await integrationState());
 
@@ -5247,7 +5256,7 @@ export function createApiRoutes(ctx) {
       const body = await readJsonBody(req, res);
       if (body === null) return;
       const target = String(body.target || '');
-      const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct']);
+      const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct', 'maxDischargeW']);
       if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
       const value = Number(body.value);
       // Plan 08-04 Task 1 Step 2: numeric bounds before applyControlTarget so an
@@ -5268,6 +5277,11 @@ export function createApiRoutes(ctx) {
       // feedExcessDcPv is a boolean flag at the Modbus layer (0/1); anything else is a bug.
       if (target === 'feedExcessDcPv' && value !== 0 && value !== 1) {
         return json(res, 400, { ok: false, error: 'feed_excess_flag_must_be_0_or_1' });
+      }
+      // maxDischargeW: 0 = hold, positive = AC discharge cap in W (bounded by inverter spec),
+      // -1 = unlimited (Victron sentinel for "remove the cap"). Reject anything else.
+      if (target === 'maxDischargeW' && value !== -1 && (value < 0 || value > MAX_BATTERY_DISCHARGE_W)) {
+        return json(res, 400, { ok: false, error: 'max_discharge_out_of_range', max: MAX_BATTERY_DISCHARGE_W });
       }
       ctx.assertValidRuntimeCommand('control_write', { target, value });
       state.schedule.manualOverride[target] = { value, at: Date.now() };

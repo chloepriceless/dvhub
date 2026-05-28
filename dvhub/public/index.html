@@ -187,6 +187,7 @@
         <div class="rail-row"><span class="l">Aktiver Grid Setpoint</span><strong class="v" id="activeGridSetpoint">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Aktiver Charge Current</span><strong class="v" id="activeChargeCurrent">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Aktiver Minimum-SOC</span><strong class="v" id="activeMinSoc">&mdash;</strong></div>
+        <div class="rail-row" title="Max. AC-Entladeleistung der Batterie. 0 = halten, -1 = unbegrenzt, sonst Cap in Watt. Setzt Cerbo Settings/CGwacs/MaxDischargePower."><span class="l">Max Discharge</span><strong class="v" id="activeMaxDischarge">&mdash;</strong></div>
         <div class="rail-row"><span class="l">DC-Einspeisung</span><strong class="v" id="activeDcFeed">&mdash;</strong></div>
         <div class="rail-row rail-row-span-2"><span class="l">Letzter Write</span><strong class="v" id="lastControlWrite">&mdash;</strong></div>
 
@@ -198,6 +199,10 @@
         <div class="ctrl-row">
           <label class="ctrl-label">Charge (A)<input id="manualChargeValue" class="input mono" type="number" value="100"></label>
           <button id="manualChargeBtn" class="btn primary sm" type="button">Senden</button>
+        </div>
+        <div class="ctrl-row" title="Max AC-Entladeleistung. 0 = Hold (Akku darf nichts raushauen), -1 = unbegrenzt, positiver Wert = Cap in Watt.">
+          <label class="ctrl-label">Max Discharge (W)<input id="manualMaxDischargeValue" class="input mono" type="number" min="-1" max="30000" step="100" value="-1"></label>
+          <button id="manualMaxDischargeBtn" class="btn primary sm" type="button">Senden</button>
         </div>
 
         <p class="card-title ctrl-section-head">Standards</p>

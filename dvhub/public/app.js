@@ -1765,18 +1765,31 @@ function renderDashboardStatus(status) {
     const ag = sch.active?.gridSetpointW;
     const ac = sch.active?.chargeCurrentA;
     const am = sch.active?.minSocPct;
+    const amd = sch.active?.maxDischargeW;
     const lwG = sch.lastWrite?.gridSetpointW;
     const lwC = sch.lastWrite?.chargeCurrentA;
     const lwM = sch.lastWrite?.minSocPct;
+    const lwMD = sch.lastWrite?.maxDischargeW;
     setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
     setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
     setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
+    // Max Discharge: prominent so the operator sees the cap before manually changing it.
+    // 0 = Hold (no discharge), -1 = unlimited (default), positive = AC cap in W.
+    let mdLabel = '-';
+    let mdClass = null;
+    if (amd?.value != null) {
+      if (Number(amd.value) === 0) { mdLabel = `HOLD (${amd.source || '-'})`; mdClass = 'off'; }
+      else if (Number(amd.value) === -1) { mdLabel = `unbegrenzt (${amd.source || '-'})`; }
+      else { mdLabel = `${amd.value} W (${amd.source || '-'})`; mdClass = 'ok'; }
+    }
+    setText('activeMaxDischarge', mdLabel, mdClass);
     const adc = sch.active?.feedExcessDcPv;
     setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
     const lwParts = [];
     if (lwG?.at) lwParts.push(`Grid: ${lwG.value} @ ${fmtTs(lwG.at)}`);
     if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
     if (lwM?.at) lwParts.push(`MinSOC: ${lwM.value} @ ${fmtTs(lwM.at)}`);
+    if (lwMD?.at) lwParts.push(`MaxDis: ${lwMD.value} @ ${fmtTs(lwMD.at)}`);
     setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
     applyScheduleRowStates(status.now);
     updateChartComparisonSummary(status.userEnergyPricing);
@@ -1985,6 +1998,27 @@ async function manualWriteCharge() {
   const out = await res.json();
   if (!res.ok || !out.ok) return setControlMsg(`Charge Write Fehler: ${out.error || res.status}`, true);
   setControlMsg(`Charge Current geschrieben: ${value} A`);
+  await requestDashboardRefresh();
+}
+
+async function manualWriteMaxDischarge() {
+  const value = Number(document.getElementById('manualMaxDischargeValue')?.value);
+  if (!Number.isFinite(value)) return setControlMsg('Max Discharge: Ungültiger Wert', true);
+  // Operator sanity check — prevents accidentally typing 24000 when the inverter
+  // is rated 18 kW. Only triggers above 15 kW; -1 / 0 / typical caps pass silently.
+  if (value > 15000) {
+    const proceed = window.confirm(`Max Discharge auf ${value} W setzen? Wert liegt über typischer Wechselrichter-Größe — Tippfehler?`);
+    if (!proceed) return;
+  }
+  const res = await apiFetch('/api/control/write', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: 'maxDischargeW', value })
+  });
+  const out = await res.json();
+  if (!res.ok || !out.ok) return setControlMsg(`Max Discharge Write Fehler: ${out.error || res.status}`, true);
+  const label = value === 0 ? 'HOLD' : value === -1 ? 'unbegrenzt' : `${value} W`;
+  setControlMsg(`Max Discharge geschrieben: ${label}`);
   await requestDashboardRefresh();
 }
 
@@ -2699,6 +2733,7 @@ function initDashboard() {
   document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => addScheduleRow());
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
+  document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);
   document.getElementById('minSocRow')?.addEventListener('click', toggleMinSocEditor);
   document.getElementById('minSocRow')?.addEventListener('keydown', handleMinSocRowKeydown);
   document.getElementById('minSocSlider')?.addEventListener('input', (event) => {

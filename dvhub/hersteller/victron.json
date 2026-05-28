@@ -31,7 +31,8 @@
   "controlWrite": {
     "gridSetpointW": { "enabled": true, "fc": 6, "address": 2700, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
     "chargeCurrentA": { "enabled": true, "fc": 6, "address": 2705, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
-    "minSocPct": { "enabled": true, "fc": 6, "address": 2901, "writeType": "uint16", "signed": false, "scale": 0.1, "offset": 0, "wordOrder": "be" }
+    "minSocPct": { "enabled": true, "fc": 6, "address": 2901, "writeType": "uint16", "signed": false, "scale": 0.1, "offset": 0, "wordOrder": "be" },
+    "maxDischargeW": { "enabled": true, "fc": 6, "address": 2704, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" }
   },
   "dvControl": {
     "enabled": true,

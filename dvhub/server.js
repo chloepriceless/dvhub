@@ -39,6 +39,7 @@ import {
   createMarketAutomationBuilder
 } from './market-automation-builder.js';
 import { createScheduleEvaluator } from './schedule-eval.js';
+import { createEvccIntegration } from './evcc-integration.js';
 import {
   buildSunTimesCacheKey,
   isSunTimesCacheStale,
@@ -865,6 +866,8 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
+const evccIntegration = createEvccIntegration(ctx);
+ctx.evccIntegration = evccIntegration;
 const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
 
@@ -1457,6 +1460,7 @@ if (IS_RUNTIME_PROCESS) {
   initTransport();
   poller.start();
   scheduler.start();
+  evccIntegration.start();
   epex.start();
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
   telemetryReady.then(() => {

@@ -2140,7 +2140,11 @@ export function createDefaultConfig() {
     controlWrite: {
       gridSetpointW: { enabled: true, fc: 6, address: 2700, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
-      minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' }
+      minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' },
+      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
+      // 0 = no discharge (hold), positive int = cap in W, -1 (0xFFFF) = unlimited.
+      // Same register evcc batteryDischargeControl writes; see docs/research/inverter-control-landscape-eu.csv.
+      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' }
     },
     dvControl: {
       enabled: true,
@@ -2189,6 +2193,15 @@ export function createDefaultConfig() {
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
+      // Erwartete Jahresproduktion in kWh — Basis fuer die Abregelungs-Karte
+      // (Vergleich Soll vs. Ist). null = Schaetzung aus Anlagenleistung × 900
+      // kWh/kWp (Deutschland-Schnitt). Setzen wenn deine Ausrichtung deutlich
+      // davon abweicht — z.B. 25000 bei einer 29.7 kWp-Anlage mit Ost-West
+      // statt Sued.
+      pvPotentialKwhAnnual: null,
+      // Monatliche Verteilung der Jahres-PV-Erzeugung in Prozent (Summe ≈ 100).
+      // Default = typische deutsche Verteilung (HTW Berlin / Fraunhofer-Referenz).
+      pvMonthlyDistributionPct: [2.5, 4.5, 7.5, 11.0, 14.0, 14.5, 14.0, 12.0, 9.5, 6.0, 3.0, 1.5],
       dvCostMonthlyEur: 8.50,
       dynamicComponents: {
         energyMarkupCtKwh: 0,
@@ -2266,6 +2279,18 @@ export function createDefaultConfig() {
     },
     optimizer: {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 }
+    },
+    // evcc integration. Polls evcc /api/state and writes maxDischargeW=holdValueW (default 0 = HOLD)
+    // when an EV is charging, releases (-1 = unlimited) when charging stops. Edge-triggered, so it
+    // never fights with manual operator writes or other schedule rules between transitions.
+    // Set holdValueW to a positive number (e.g. 8000) if you want a cap instead of full hold.
+    evcc: {
+      enabled: false,
+      url: 'http://192.168.1.21:7070',
+      pollIntervalMs: 15000,
+      requestTimeoutMs: 5000,
+      holdValueW: 0,
+      releaseValueW: -1
     },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
@@ -2827,6 +2852,7 @@ function resetLegacyPlaceholderRegisters(raw, warnings) {
   resetEntry('controlWrite.gridSetpointW');
   resetEntry('controlWrite.chargeCurrentA');
   resetEntry('controlWrite.minSocPct');
+  resetEntry('controlWrite.maxDischargeW');
 
   const dvFeedReset = resetEntry('dvControl.feedExcessDcPv');
   const dvAcReset = resetEntry('dvControl.dontFeedExcessAcPv');
