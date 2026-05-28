@@ -282,6 +282,20 @@ html, body { max-width: 100%; overflow-x: hidden; }
   font-family: var(--f-mono); font-size: 10.5px; color: var(--text-dim);
   letter-spacing: .02em;
 }
+/* Pill-Badge fuer Klarstellungen in der DV-Detail-Zeile (z.B. "Foerderfaehig").
+   Kontextuell genauso platzsparend wie history-point-badge, aber mit eigener,
+   gedaempfter Akzentfarbe damit es nicht mit Warnungen verwechselt wird. */
+.dv-detail-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 1px 6px; margin-left: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan, var(--blue, #4af)) 18%, transparent);
+  color: var(--text);
+  font-family: var(--f-base, inherit);
+  font-size: 9.5px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
 
 @media (max-width: 900px) {
   .dv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

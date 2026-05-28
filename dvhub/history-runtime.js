@@ -673,6 +673,67 @@ function applyPvFullLoadHours({ kpis, pricingConfig }) {
   };
 }
 
+// Erwartete PV-Erzeugung fuer den View-Zeitraum berechnen.
+// Soll-Wert = pvPotentialKwhAnnual × Σ Monats-Anteil im Zeitraum.
+// Liefert null wenn weder ein Annual-Potential noch eine kWp-basierte Schaetzung
+// moeglich ist (kein pvPlants).
+//
+// view='all' bekommt KEINE Schaetzung — wir wissen nicht ob das Anlagenleistungs-
+// Profil ueber die Jahre konstant war (Erweiterungen, Stilllegungen). Lieber
+// "nicht verfuegbar" als irreführend.
+function computeExpectedPvKwh({ view, range, pricingConfig }) {
+  if (view === 'all') return null;
+  const annualPotential = (() => {
+    const raw = Number(pricingConfig?.pvPotentialKwhAnnual);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    // Fallback: kWp × 900 (Deutschland-Schnitt fuer ohne-spezifische-Daten)
+    const kwp = summarizeConfiguredPvCapacity(pricingConfig?.pvPlants);
+    return Number.isFinite(kwp) && kwp > 0 ? kwp * 900 : null;
+  })();
+  if (annualPotential == null) return null;
+
+  const distArr = Array.isArray(pricingConfig?.pvMonthlyDistributionPct)
+    && pricingConfig.pvMonthlyDistributionPct.length === 12
+    ? pricingConfig.pvMonthlyDistributionPct.map((v) => Number(v) || 0)
+    : [2.5, 4.5, 7.5, 11.0, 14.0, 14.5, 14.0, 12.0, 9.5, 6.0, 3.0, 1.5];
+  const distSum = distArr.reduce((a, b) => a + b, 0) || 100;
+
+  const start = range?.startDate ? parseDateOnly(range.startDate) : null;
+  const endExcl = range?.endDateExclusive ? parseDateOnly(range.endDateExclusive) : null;
+  if (!start || !endExcl) return null;
+
+  // Tagesaufgeloeste Iteration: pro Tag = Monatsanteil / Tage-in-Monat.
+  // So funktioniert auch eine Wochenansicht die ueber zwei Monate laeuft sauber.
+  let expectedKwh = 0;
+  let cursor = range.startDate;
+  while (cursor < range.endDateExclusive) {
+    const p = parseDateOnly(cursor);
+    if (!p) break;
+    const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate();
+    const monthIdx = p.month - 1; // 0..11
+    const monthShare = (distArr[monthIdx] || 0) / distSum;
+    expectedKwh += (annualPotential * monthShare) / daysInMonth;
+    cursor = addDays(cursor, 1);
+  }
+  return round2(expectedKwh);
+}
+
+function applyCurtailmentEstimate({ view, range, kpis, pricingConfig }) {
+  const expectedPvKwh = computeExpectedPvKwh({ view, range, pricingConfig });
+  if (expectedPvKwh == null) {
+    return { ...kpis, expectedPvKwh: null, curtailedPvKwh: null };
+  }
+  const actualPvKwh = Number(kpis?.pvKwh || 0);
+  // Negative Werte = mehr produziert als erwartet (gutes Wetter etc.) → 0
+  // setzen, "Abregelung" ist konzeptionell nur die Lücke nach unten.
+  const curtailedPvKwh = round2(Math.max(0, expectedPvKwh - actualPvKwh));
+  return {
+    ...kpis,
+    expectedPvKwh,
+    curtailedPvKwh
+  };
+}
+
 function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, applicableValueSummary }) {
   if (view !== 'year') {
     return { kpis, meta };
@@ -1661,6 +1722,43 @@ export function createHistoryRuntime({
       pricingConfig,
       weightedApplicableValueCtKwh
     });
+
+    // DV-Recompute: dvRevenueEur wurde weiter oben mit der Slot-Summe
+    // marketPremiumCtTotal berechnet, BEVOR applyAnnualMarketPremium die
+    // Jahres-Fallback-Prämie hochzieht (für Monate ohne konfigurierten
+    // Monatsmarktwert). Spalte 1 der DV-Karte zeigt aber den finalen
+    // marketPremiumEur. Damit beide Spalten sich gegenseitig erklären,
+    // recompute dvRevenueEur/-CtKwh/-Excess/-NetAdvantage hier mit dem
+    // finalen marketPremiumEur.
+    if (view === 'week' || view === 'month' || view === 'year') {
+      const finalK = periodPremiumApplied.kpis;
+      const finalMarketPremiumEur = Number(finalK.marketPremiumEur || 0);
+      const dvExportKwh = Number(finalK.exportKwh || 0);
+      const dvRevenueEur = round2(Number(finalK.exportRevenueEur || 0) + finalMarketPremiumEur);
+      const dvRevenueCtKwh = dvExportKwh > 0 ? round2((dvRevenueEur / dvExportKwh) * 100) : null;
+      const dvExcessEur = finalK.hypSurplusFeedInEur != null
+        ? round2(dvRevenueEur - Number(finalK.hypSurplusFeedInEur))
+        : null;
+      const dvNetAdvantageEur = dvExcessEur != null && finalK.dvCostEur != null
+        ? round2(dvExcessEur - Number(finalK.dvCostEur))
+        : null;
+      Object.assign(finalK, { dvRevenueEur, dvRevenueCtKwh, dvExcessEur, dvNetAdvantageEur });
+    }
+    // Abregelungs-Schaetzung: erwartete vs. tatsaechliche PV-Erzeugung.
+    // Schreibt expectedPvKwh / curtailedPvKwh ins finalK direkt (statt eines
+    // neuen kpis-Spreads, weil periodPremiumApplied.kpis bereits die Quelle ist).
+    const curtailKpis = applyCurtailmentEstimate({
+      view,
+      range,
+      kpis: periodPremiumApplied.kpis,
+      pricingConfig
+    });
+    if (curtailKpis.expectedPvKwh != null || curtailKpis.curtailedPvKwh != null) {
+      Object.assign(periodPremiumApplied.kpis, {
+        expectedPvKwh: curtailKpis.expectedPvKwh,
+        curtailedPvKwh: curtailKpis.curtailedPvKwh
+      });
+    }
     const rows = solarApplied.rows;
     const charts = view === 'day'
       ? buildDayCharts(slots)

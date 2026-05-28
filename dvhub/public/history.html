@@ -179,15 +179,44 @@
           </div>
         </article>
 
-        <!-- 6: Gesamtbilanz -->
-        <article class="card calc-card" id="historyKpiBilanzCard" data-accent="bilanz">
-          <div class="calc-head"><span class="calc-kicker">Gesamtbilanz</span></div>
-          <div id="historyKpiGrossReturn" class="calc-total">-</div>
+        <!-- 6a: Abgeregelte Energie — Soll vs. Ist und Potential-Erlös.
+             Soll = pvPotentialKwhAnnual (oder kWp × 900) × Monatsanteil des Zeitraums.
+             Ist  = kpis.pvKwh.
+             Abregelung = max(0, Soll − Ist).
+             Pot. Erlös = Abregelung × Marktwert (Monats- oder JMW). -->
+        <article class="card calc-card" id="historyKpiCurtailmentCard" data-accent="curtail">
+          <div class="calc-head"><span class="calc-kicker">Abgeregelte Energie</span></div>
+          <div id="historyKpiCurtailedKwh" class="calc-total">-</div>
           <div class="calc-rows">
+            <div class="calc-row-line"><span>Erwartet (Soll)</span><strong id="historyKpiExpectedPv">-</strong></div>
+            <div class="calc-row-line"><span>Tats&auml;chlich (Ist)</span><strong id="historyKpiActualPv">-</strong></div>
+            <div class="calc-row-line"><span id="historyKpiCurtailedRevenueLabel">Pot. Erl&ouml;s (Marktwert)</span><strong id="historyKpiCurtailedRevenue">-</strong></div>
+          </div>
+        </article>
+
+        <!-- 6: Gesamtbilanz (mit Einnahmen-Toggle) -->
+        <article class="card calc-card" id="historyKpiBilanzCard" data-accent="bilanz">
+          <div class="calc-head">
+            <span class="calc-kicker" id="historyBilanzLabel">Gesamtbilanz</span>
+            <button id="historyBilanzToggle" type="button" class="calc-toggle">Einnahmen</button>
+          </div>
+          <div id="historyKpiGrossReturn" class="calc-total">-</div>
+          <!-- Default: Bilanz-Modus (Einnahmen minus Ausgaben) -->
+          <div id="historyBilanzDefault" class="calc-rows">
             <div class="calc-row-line"><span>Vermiedene Kosten</span><strong id="historyKpiBilanzAvoided" class="ok">-</strong></div>
             <div class="calc-row-line"><span>Netto Cashflow</span><strong id="historyKpiBilanzNet" class="ok">-</strong></div>
             <div class="calc-row-line"><span>PV-Gestehung</span><strong id="historyKpiBilanzPvCost" class="warn">-</strong></div>
             <div class="calc-row-line"><span>Akku-Verschleiss</span><strong id="historyKpiBilanzBatCost" class="warn">-</strong></div>
+          </div>
+          <!-- Gesamteinnahmen-Modus: Bruttoeinnahmen vor Kosten -->
+          <div id="historyBilanzIncome" class="calc-rows" hidden>
+            <div class="calc-row-line"><span>Energieeinnahmen</span><strong id="historyKpiBilanzExportRevenue" class="ok">-</strong></div>
+            <div class="calc-row-line"><span>Vermiedene Kosten</span><strong id="historyKpiBilanzAvoidedB" class="ok">-</strong></div>
+            <!-- Marktwert-Erlös: nur im Monats/Jahres/Alles-View. Label spiegelt die Quelle (offizieller JMW / vorläufiger JMW / Monatsmarktwert). -->
+            <div class="calc-row-line" id="historyKpiBilanzMarketRow" hidden>
+              <span id="historyKpiBilanzMarketLabel">Marktwert-Erlös</span>
+              <strong id="historyKpiBilanzMarketRevenue" class="acc">-</strong>
+            </div>
           </div>
         </article>
       </section>
@@ -206,16 +235,24 @@
             <div class="dv-label" id="historyPremiumScopeLabel">Marktpr&auml;mie</div>
             <div id="historyKpiMarketPremium" class="dv-value">-</div>
             <div class="calc-row-line"><span id="historyPremiumMarketValueLabel">Monatsmarktwert</span><strong id="historyKpiAnnualMarketValue">-</strong></div>
+            <!-- Anzulegender Wert ist Rechnungsgrundlage der Marktprämie (AW − Marktwert × eligible kWh). -->
+            <div class="calc-row-line"><span>Anzulegender Wert</span><strong id="historyKpiPremiumApplicableValue">-</strong></div>
             <div class="calc-row-line"><span>f&ouml;rderf&auml;hige Einspeisung</span><strong id="historyKpiPremiumEligibleExport">-</strong></div>
             <div class="calc-row-line"><span id="historyPremiumRateLabel">Marktpr&auml;mie ct/kWh</span><strong id="historyKpiMarketPremiumRate">-</strong></div>
             <p id="historyPremiumHint" class="dv-hint" hidden></p>
           </div>
-          <!-- 2: Tatsächlich (DV) -->
+          <!-- 2: Tatsächlich (DV).
+               Reihenfolge so dass die Rechnung selbsterklärend wird:
+                 Börsenerlös € + Marktprämie € = Tatsächlich €
+                 ∅ Börse ct/kWh + Marktprämie ct/kWh ≈ ∅ kombiniert ct/kWh
+                 (Rundungs-Differenzen weil unterschiedliche kWh-Basen). -->
           <div class="dv-section">
             <div class="dv-label">Tats&auml;chlich (DV)</div>
             <div id="historyKpiDvRevenue" class="dv-value">-</div>
             <div class="calc-row-line"><span>B&ouml;rsenerl&ouml;s</span><strong id="historyKpiDvSpotRevenue">-</strong></div>
+            <div class="calc-row-line"><span>+ Marktpr&auml;mie</span><strong id="historyKpiDvMarketPremiumEur">-</strong></div>
             <div class="calc-row-line"><span>&empty;&nbsp;B&ouml;rse ct/kWh</span><strong id="historyKpiDvSpotRate">-</strong></div>
+            <div class="calc-row-line"><span>+ Marktpr&auml;mie ct/kWh</span><strong id="historyKpiDvMarketPremiumRate">-</strong></div>
             <div class="calc-row-line"><span>&empty;&nbsp;kombiniert ct/kWh</span><strong id="historyKpiDvRevenueRate">-</strong></div>
             <div class="calc-row-line"><span id="historyKpiDvMarketValueLabel">Tats&auml;chlicher Monatsmarktwert</span><strong id="historyKpiDvMarketValue">-</strong></div>
             <div class="calc-row-line"><span>Anzulegender Wert</span><strong id="historyKpiDvApplicableValue">-</strong></div>

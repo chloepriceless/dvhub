@@ -226,17 +226,133 @@ function renderKpis(summary) {
     }
   }
 
-  // Karte 6: Gesamtbilanz
-  setText('historyKpiGrossReturn', fmtEur(gross));
+  // Karte 6: Gesamtbilanz + Gesamteinnahmen-Toggle
+  // Default-Modus: gross (Einnahmen − PV-Gestehung − Akku-Verschleiss).
+  // Income-Modus: nur Brutto-Einnahmen (Energieeinnahmen + Vermiedene Kosten),
+  // plus Marktwert-Erlös in Monat/Jahr/Alles-View.
+  const exportRevenueEur = round2(Number(kpis?.exportRevenueEur || 0));
   setText('historyKpiBilanzAvoided', fmtEur(avoided));
   setText('historyKpiBilanzNet', fmtEur(net));
   setText('historyKpiBilanzPvCost', fmtEur(-Math.abs(pvCost)));
   setText('historyKpiBilanzBatCost', fmtEur(-Math.abs(batCost)));
+  setText('historyKpiBilanzExportRevenue', fmtEur(exportRevenueEur));
+  setText('historyKpiBilanzAvoidedB', fmtEur(avoided));
 
-  // Gesamtbilanz Karte: grün bei positiv, orange bei negativ
+  // Marktwert-Erlös (nur Monat/Jahr/Alles). Quelle:
+  //   - month: periodMarketValueCtKwh (Monatsmarktwert, falls verfügbar) ODER Fallback
+  //            auf annualMarketValueCtKwh (vorläufiger JMW aus laufenden Monatswerten)
+  //   - year (laufendes Jahr): derived_monthly_running JMW (Fallback aus Monaten)
+  //   - year (Vorjahr): official_annual JMW
+  //   - all: Backend liefert aggregated value falls implementiert; sonst Anzeige "noch nicht verfügbar"
+  // Wir vertrauen der Backend-Auflösung (history-runtime.js: applyPeriodPremiumDisplay)
+  // und nutzen `periodMarketValueCtKwh` mit Fallback auf `annualMarketValueCtKwh`.
+  const summaryView = String(summary?.view || '');
+  const showMarketRow = summaryView === 'month' || summaryView === 'year' || summaryView === 'all';
+  const marketRow = document.getElementById('historyKpiBilanzMarketRow');
+  if (marketRow) marketRow.hidden = !showMarketRow;
+  // Fallback-Kaskade für den Marktwert (ct/kWh) auf der Bilanz-Karte.
+  // User-Vorgabe (2026-05-28): NUR offizielle Werte oder daraus abgeleitet.
+  // KEINE eigene Berechnung aus eigenen Börsenerlösen, weil das deine
+  // PV-Glockenkurve enthält statt der bundesweiten.
+  // Reihenfolge:
+  //   1. yearAnnualMv (cached) — annualMarketValueCtKwh aus Year-View-Fetch,
+  //      vom Backend abgeleitet als gewichteter Schnitt der bisher
+  //      veröffentlichten Monatsmarktwerte (source 'derived_monthly_weighted')
+  //   2. periodMarketValueCtKwh — offizieller Monatswert / Jahreswert
+  //   3. annualMarketValueCtKwh — offizieller JMW oder aus Monatswerten abgeleitet
+  //   sonst → "noch nicht verfügbar"
+  const selfYearCached = window._historySelfYearMvCache?.[String(summary?.range?.startDate || '').slice(0,4)];
+  let mvCtKwh = null;
+  let mvSource = 'none';
+  if (hasFiniteNumber(selfYearCached)) {
+    mvCtKwh = Number(selfYearCached);
+    mvSource = 'year_derived';
+  } else if (hasFiniteNumber(kpis?.periodMarketValueCtKwh)) {
+    mvCtKwh = Number(kpis.periodMarketValueCtKwh);
+    mvSource = 'period_official';
+  } else if (hasFiniteNumber(kpis?.annualMarketValueCtKwh)) {
+    mvCtKwh = Number(kpis.annualMarketValueCtKwh);
+    mvSource = 'annual_official';
+  }
+  const premiumKwh = kpis?.premiumEligibleExportKwh;
+  let marketRevenueEur = 0;
+  let marketRevenueAvailable = false;
+  if (showMarketRow) {
+    if (mvCtKwh != null && hasFiniteNumber(premiumKwh) && Number(premiumKwh) > 0) {
+      marketRevenueEur = round2(mvCtKwh * Number(premiumKwh) / 100);
+      marketRevenueAvailable = true;
+      setText('historyKpiBilanzMarketRevenue', fmtEur(marketRevenueEur));
+    } else {
+      setText('historyKpiBilanzMarketRevenue', 'noch nicht verfügbar');
+    }
+    // Label macht transparent, ob der Wert offiziell oder aus Monatswerten abgeleitet ist.
+    let mvLabel = 'Marktwert-Erlös';
+    if (mvSource === 'year_derived') {
+      mvLabel = 'Marktwert-Erlös (JMW laufend, aus Monatsmarktwerten)';
+    } else if (mvSource === 'period_official') {
+      mvLabel = summaryView === 'month' ? 'Marktwert-Erlös (Monatsmarktwert)' : 'Marktwert-Erlös (Jahresmarktwert)';
+    } else if (mvSource === 'annual_official') {
+      mvLabel = 'Marktwert-Erlös (Jahresmarktwert)';
+    }
+    setText('historyKpiBilanzMarketLabel', mvLabel);
+
+    // Wenn wir im Monatsview sind und der year-derived-Cache noch nicht da ist,
+    // fire-and-forget einen Year-View-Fetch — wir lesen daraus `annualMarketValueCtKwh`,
+    // das vom Backend als gewichteter Schnitt der bisher veröffentlichten
+    // Monatsmarktwerte berechnet wird (source `derived_monthly_weighted`).
+    if (summaryView === 'month' && mvSource !== 'year_derived') {
+      const yr = String(summary?.range?.startDate || '').slice(0,4);
+      if (yr && /^\d{4}$/.test(yr)) {
+        if (!window._historySelfYearMvCache) window._historySelfYearMvCache = {};
+        if (!window._historySelfYearMvInflight) window._historySelfYearMvInflight = {};
+        if (window._historySelfYearMvCache[yr] === undefined && !window._historySelfYearMvInflight[yr]) {
+          window._historySelfYearMvInflight[yr] = true;
+          fetch(`/api/history/summary?view=year&date=${yr}-06-15`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+              const yk = d?.kpis;
+              // Nur den vom Backend abgeleiteten Wert übernehmen — kein hypFullFeedIn,
+              // keine eigene Spot-Integration.
+              const v = hasFiniteNumber(yk?.annualMarketValueCtKwh)
+                ? Number(yk.annualMarketValueCtKwh)
+                : null;
+              window._historySelfYearMvCache[yr] = v;
+              window._historySelfYearMvInflight[yr] = false;
+              if (historyState.lastSummary) {
+                try { renderKpis(historyState.lastSummary); } catch {}
+              }
+            })
+            .catch(() => { window._historySelfYearMvInflight[yr] = false; });
+        }
+      }
+    }
+  }
+
+  const incomeBase = round2(exportRevenueEur + avoided);
+  const incomeWithMarket = round2(incomeBase + (marketRevenueAvailable ? marketRevenueEur : 0));
+
+  // Cache erweitern für beide Toggles (Marktwert + Bilanz/Einnahmen)
+  window._historyKpiCache = {
+    ...window._historyKpiCache,
+    exportRevenueEur,
+    incomeBase,
+    incomeWithMarket,
+    marketRevenueEur: marketRevenueAvailable ? marketRevenueEur : 0,
+    marketRevenueAvailable,
+    showMarketRow,
+    gross
+  };
+
+  // Anzeige des Big-Numbers: respektiert den aktuellen Bilanz-Toggle-Modus.
+  const bilanzToggle = document.getElementById('historyBilanzToggle');
+  const incomeMode = bilanzToggle && bilanzToggle.dataset.mode === 'income';
+  const displayedTotal = incomeMode ? incomeWithMarket : gross;
+  setText('historyKpiGrossReturn', fmtEur(displayedTotal));
+
+  // Karte: grün bei positiv, orange bei negativ (für aktuell angezeigten Wert)
   const bilanzCard = document.getElementById('historyKpiBilanzCard');
   if (bilanzCard) {
-    const isPositive = gross >= 0;
+    const isPositive = displayedTotal >= 0;
     bilanzCard.dataset.accent = isPositive ? 'green' : 'orange';
     const bilanzValue = document.getElementById('historyKpiGrossReturn');
     if (bilanzValue) bilanzValue.style.color = isPositive ? 'var(--flow-green)' : 'var(--flow-orange)';
@@ -248,6 +364,40 @@ function renderKpis(summary) {
   const netValue = document.getElementById('historyKpiNet');
   if (netValue) netValue.style.color = net >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
 
+  // Karte 6a: Abgeregelte Energie.
+  // Backend liefert kpis.expectedPvKwh / kpis.curtailedPvKwh — daraus zusammen
+  // mit der Marktwert-Fallback-Kaskade (mvCtKwh / mvSource oben) den Pot. Erlös
+  // rechnen. Karte versteckt sich wenn Soll-Daten fehlen (z.B. view='all').
+  const expectedPv = hasFiniteNumber(kpis?.expectedPvKwh) ? Number(kpis.expectedPvKwh) : null;
+  const actualPvKwh = hasFiniteNumber(kpis?.pvKwh) ? Number(kpis.pvKwh) : null;
+  const curtailedKwh = hasFiniteNumber(kpis?.curtailedPvKwh) ? Number(kpis.curtailedPvKwh) : null;
+  const curtailedRevenueEur = (curtailedKwh != null && mvCtKwh != null)
+    ? (curtailedKwh * mvCtKwh) / 100
+    : null;
+  const curtailCard = document.getElementById('historyKpiCurtailmentCard');
+  if (curtailCard) {
+    const visible = expectedPv != null;
+    curtailCard.style.display = visible ? '' : 'none';
+    if (visible) {
+      setText('historyKpiCurtailedKwh', curtailedKwh != null ? fmtKwh(curtailedKwh) : '-');
+      setText('historyKpiExpectedPv', expectedPv != null ? fmtKwh(expectedPv) : '-');
+      setText('historyKpiActualPv', actualPvKwh != null ? fmtKwh(actualPvKwh) : '-');
+      let revLabel = 'Pot. Erlös (Marktwert)';
+      if (mvSource === 'year_derived') revLabel = 'Pot. Erlös (JMW laufend)';
+      else if (mvSource === 'period_official') revLabel = summaryView === 'month' ? 'Pot. Erlös (Monatsmarktwert)' : 'Pot. Erlös (Jahresmarktwert)';
+      else if (mvSource === 'annual_official') revLabel = 'Pot. Erlös (Jahresmarktwert)';
+      setText('historyKpiCurtailedRevenueLabel', revLabel);
+      setText('historyKpiCurtailedRevenue',
+        curtailedRevenueEur != null ? fmtEur(curtailedRevenueEur) : 'noch nicht verfügbar');
+      // Akzent: orange wenn >5 % Abregelung, sonst grün.
+      const ratio = expectedPv > 0 ? (curtailedKwh / expectedPv) : 0;
+      const isHigh = ratio > 0.05;
+      curtailCard.dataset.accent = isHigh ? 'orange' : 'green';
+      const totalEl = document.getElementById('historyKpiCurtailedKwh');
+      if (totalEl) totalEl.style.color = isHigh ? 'var(--flow-orange)' : 'var(--flow-green)';
+    }
+  }
+
   // DV-Card: now hosts 4 columns — Marktprämie (1), Tatsächlich DV (2),
   // Hypothetisch EEG (3), Vergleich (4). The Marktprämie column is
   // available on week/month/year; DV-comparison columns 2-4 require
@@ -255,9 +405,13 @@ function renderKpis(summary) {
   // Card is shown if EITHER set of data exists; columns that don't
   // apply for the current view just show '-' per the existing pattern.
   const view = String(summary?.view || '');
-  const premiumVisible = view === 'week' || view === 'month' || view === 'year';
-  const dvVisible = (view === 'week' || view === 'month' || view === 'year')
-    && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null);
+  // 'all'-Ansicht zeigt die DV-Karte immer, auch wenn einzelne Jahre noch keine
+  // offiziellen Werte haben — Felder die fehlen erscheinen als "noch nicht
+  // verfügbar" (statt die ganze Karte zu verstecken).
+  const premiumVisible = view === 'week' || view === 'month' || view === 'year' || view === 'all';
+  const dvVisible = view === 'all'
+    || ((view === 'week' || view === 'month' || view === 'year')
+        && (kpis?.dvRevenueEur != null || kpis?.hypFullFeedInEur != null));
   const cardVisible = premiumVisible || dvVisible;
 
   const dvCard = document.getElementById('historyDvCard');
@@ -281,14 +435,53 @@ function renderKpis(summary) {
   } else if (view === 'year') {
     premiumScopeLabel = 'Marktprämie · Jahr';
     if (displaySource === 'configured_monthly') marketValueLabel = 'Monatsmarktwert (gewichtet)';
+  } else if (view === 'all') {
+    premiumScopeLabel = 'Marktprämie · Gesamt';
+    marketValueLabel = 'Jahresmarktwert (Ø)';
   }
   setText('historyPremiumScopeLabel', premiumScopeLabel);
   setText('historyPremiumMarketValueLabel', marketValueLabel);
   setText('historyPremiumRateLabel', 'Marktprämie ct/kWh');
 
-  const periodMv = summary?.kpis?.periodMarketValueCtKwh ?? summary?.kpis?.annualMarketValueCtKwh;
+  // DV-Karte Spalte 1 ("Monatsmarktwert"-Feld):
+  //
+  // KEINE eigene Berechnung aus eigenen Slots — der offizielle Marktwert wird
+  // mit bundesweiter PV-Glockenkurve gewichtet. Quellen:
+  //
+  // Monatsansicht: nur offizieller Monatsmarktwert; sonst "noch nicht
+  // verfügbar" (wird typischerweise um den 10. des Folgemonats veröffentlicht).
+  //
+  // Jahres-/Alles-Ansicht: offizieller JMW oder vom Backend aus veröffentlichten
+  // Monatsmarktwerten gewichtet abgeleitet (`derived_monthly_weighted`).
+  let dvCardMv = null;
+  let dvCardMvSource = 'none';
+  if (view === 'month') {
+    if (hasFiniteNumber(summary?.kpis?.periodMarketValueCtKwh)) {
+      dvCardMv = Number(summary.kpis.periodMarketValueCtKwh);
+      dvCardMvSource = 'official_period';
+    }
+  } else {
+    if (hasFiniteNumber(selfYearCached)) {
+      dvCardMv = Number(selfYearCached);
+      dvCardMvSource = 'year_derived';
+    } else if (hasFiniteNumber(summary?.kpis?.periodMarketValueCtKwh)) {
+      dvCardMv = Number(summary.kpis.periodMarketValueCtKwh);
+      dvCardMvSource = 'official_period';
+    } else if (hasFiniteNumber(summary?.kpis?.annualMarketValueCtKwh)) {
+      dvCardMv = Number(summary.kpis.annualMarketValueCtKwh);
+      dvCardMvSource = 'official_annual';
+    }
+  }
+  if (dvCardMvSource === 'year_derived') {
+    setText('historyPremiumMarketValueLabel', 'JMW (laufend, aus Monatsmarktwerten)');
+  }
   setText('historyKpiAnnualMarketValue',
-    hasFiniteNumber(periodMv) ? fmtCt(periodMv) : 'noch nicht verfügbar');
+    hasFiniteNumber(dvCardMv) ? fmtCt(dvCardMv) : 'noch nicht verfügbar');
+  // Anzulegender Wert = Rechnungsgrundlage der Marktprämie (Spalte 1). Wird ebenfalls
+  // in der Spalte "Tatsächlich DV" angezeigt — doppelt, aber kontextuell sinnvoll.
+  setText('historyKpiPremiumApplicableValue',
+    hasFiniteNumber(summary?.kpis?.weightedApplicableValueCtKwh)
+      ? fmtCt(summary.kpis.weightedApplicableValueCtKwh) : 'noch nicht verfügbar');
   setText('historyKpiPremiumEligibleExport',
     hasFiniteNumber(summary?.kpis?.premiumEligibleExportKwh)
       ? fmtKwh(summary.kpis.premiumEligibleExportKwh) : 'noch nicht verfügbar');
@@ -326,30 +519,73 @@ function renderKpis(summary) {
     //    (exportKwh × Spotpreis) — vergleichbar mit einer "normalen"
     //    Einspeisevergütung.
     //  - ⌀ kombiniert: effektiver ct/kWh inkl. Netzbetreiber-Marktprämie.
-    setText('historyKpiDvRevenue', fmtEur(kpis.dvRevenueEur));
     const dvExportKwh = Number(kpis?.exportKwh || 0);
     const spotRevenueEur = Number(kpis?.exportRevenueEur || 0);
     const spotRateCtKwh = dvExportKwh > 0 ? (spotRevenueEur / dvExportKwh) * 100 : null;
+
+    // Effektive DV-Zahlen — bevorzugt Backend-Werte, fallback auf laufenden
+    // JMW (selfYearCached vom Year-View-Fetch, abgeleitet aus den
+    // veröffentlichten Monatsmarktwerten) wenn der offizielle Monatsmarktwert
+    // für den aktuellen Monat noch nicht da ist (typisch vor dem 10. des
+    // Folgemonats).
+    let effDvRevenueEur = hasFiniteNumber(kpis?.dvRevenueEur) ? Number(kpis.dvRevenueEur) : null;
+    let effDvRevenueCtKwh = hasFiniteNumber(kpis?.dvRevenueCtKwh) ? Number(kpis.dvRevenueCtKwh) : null;
+    let effMarketPremiumEur = hasFiniteNumber(kpis?.marketPremiumEur) ? Number(kpis.marketPremiumEur) : null;
+    let effMarketPremiumCtKwh = hasFiniteNumber(kpis?.marketPremiumCtKwh) ? Number(kpis.marketPremiumCtKwh) : null;
+    let effMarketValueCt = hasFiniteNumber(kpis?.periodMarketValueCtKwh)
+      ? Number(kpis.periodMarketValueCtKwh)
+      : (hasFiniteNumber(kpis?.annualMarketValueCtKwh) ? Number(kpis.annualMarketValueCtKwh) : null);
+    let effMarketValueLabel = view === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
+    let usedYearFallback = false;
+
+    if (view === 'month'
+        && !hasFiniteNumber(effMarketValueCt)
+        && hasFiniteNumber(selfYearCached)
+        && hasFiniteNumber(kpis?.weightedApplicableValueCtKwh)
+        && hasFiniteNumber(kpis?.premiumEligibleExportKwh)) {
+      const mv = Number(selfYearCached);
+      const aw = Number(kpis.weightedApplicableValueCtKwh);
+      const eligibleKwh = Number(kpis.premiumEligibleExportKwh);
+      effMarketValueCt = mv;
+      effMarketValueLabel = 'Marktwert (JMW laufend, aus Monatsmarktwerten)';
+      effMarketPremiumCtKwh = aw - mv;
+      effMarketPremiumEur = (effMarketPremiumCtKwh * eligibleKwh) / 100;
+      effDvRevenueEur = spotRevenueEur + effMarketPremiumEur;
+      effDvRevenueCtKwh = dvExportKwh > 0 ? (effDvRevenueEur / dvExportKwh) * 100 : null;
+      usedYearFallback = true;
+    }
+
+    setText('historyKpiDvRevenue', hasFiniteNumber(effDvRevenueEur) ? fmtEur(effDvRevenueEur) : '-');
     setText('historyKpiDvSpotRevenue', fmtEur(spotRevenueEur));
     setText('historyKpiDvSpotRate', hasFiniteNumber(spotRateCtKwh) ? fmtCt(spotRateCtKwh) : '-');
-    setText('historyKpiDvRevenueRate', fmtCt(kpis.dvRevenueCtKwh));
-
-    const dvMarketValueCt = kpis?.periodMarketValueCtKwh ?? kpis?.annualMarketValueCtKwh;
-    const dvMarketLabel = view === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
-    setText('historyKpiDvMarketValueLabel', dvMarketLabel);
-    setText('historyKpiDvMarketValue', hasFiniteNumber(dvMarketValueCt) ? fmtCt(dvMarketValueCt) : 'noch nicht verfügbar');
+    setText('historyKpiDvRevenueRate', hasFiniteNumber(effDvRevenueCtKwh) ? fmtCt(effDvRevenueCtKwh) : '-');
+    setText('historyKpiDvMarketPremiumEur',
+      hasFiniteNumber(effMarketPremiumEur) ? fmtEur(effMarketPremiumEur) : 'noch nicht verfügbar');
+    setText('historyKpiDvMarketPremiumRate',
+      hasFiniteNumber(effMarketPremiumCtKwh) ? fmtCt(effMarketPremiumCtKwh) : 'noch nicht verfügbar');
+    setText('historyKpiDvMarketValueLabel', effMarketValueLabel);
+    setText('historyKpiDvMarketValue', hasFiniteNumber(effMarketValueCt) ? fmtCt(effMarketValueCt) : 'noch nicht verfügbar');
     setText('historyKpiDvApplicableValue', hasFiniteNumber(kpis?.weightedApplicableValueCtKwh) ? fmtCt(kpis.weightedApplicableValueCtKwh) : '-');
 
-    setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
-    setText('historyKpiHypSurplusFeedIn', fmtEur(kpis.hypSurplusFeedInEur));
-    // Detail sub-lines: "Rate × kWh-Basis" — what the Euro total actually
-    // multiplied. negPriceEligible*Kwh is "neg-price hours excluded" per
-    // §51 EEG (no feed-in compensation paid during negative spot prices).
+    // Volleinspeisung: per Definition kein Eigenverbrauch -> jede PV-kWh waere
+    // grundsaetzlich verguetet. ABER §51 EEG gilt auch hier: in zusammenhaengenden
+    // Negativpreis-15min-Bloecken faellt die Verguetung weg.
+    // -> Basis = negPriceEligiblePvKwh (alle PV-Slots ausserhalb §51-Bloecke).
+    // Das ist konzeptionell die "Foerderfaehige Einspeisemenge" fuer Volleinspeisung
+    // (PV-basiert) — analog zu premiumEligibleExportKwh fuer Ueberschuss-DV
+    // (export-basiert). Backend-EUR-Summe kpis.hypFullFeedInEur ist genau so
+    // gerechnet (negPriceEligiblePvKwh × evFullCtKwh), passt 1:1 zur Anzeige.
     const fullRate = kpis?.hypFullFeedInCtKwh;
     const fullKwh = kpis?.negPriceEligiblePvKwh;
-    setText('historyKpiHypFullDetail',
+    setText('historyKpiHypFullFeedIn', fmtEur(kpis.hypFullFeedInEur));
+    // Foerderfaehig-Badge an die kWh-Anzeige: macht klar dass die kWh-Basis
+    // bereits §51-bereinigt ist (PV-kWh ohne Negativpreis-Bloecke), nicht die
+    // volle pvKwh. setHtml statt setText weil wir hier eine span einbetten —
+    // alle interpolierten Werte (fmtCt, fmtKwh) sind streng nummerische
+    // Formatter, keine User-Eingabe, daher kein XSS-Risiko.
+    setHtml('historyKpiHypFullDetail',
       hasFiniteNumber(fullRate) && hasFiniteNumber(fullKwh)
-        ? `${fmtCt(fullRate)} × ${fmtKwh(fullKwh)}`
+        ? `${fmtCt(fullRate)} × ${fmtKwh(fullKwh)} <span class="dv-detail-badge" title="PV-Erzeugung ohne §51-Negativpreis-Blöcke">Förderfähig</span>`
         : ' ');
     const surplusRate = kpis?.hypSurplusFeedInCtKwh;
     const surplusKwh = kpis?.negPriceEligibleExportKwh;
@@ -358,22 +594,41 @@ function renderKpis(summary) {
         ? `${fmtCt(surplusRate)} × ${fmtKwh(surplusKwh)}`
         : ' ');
 
-    // DV-Mehrerlös: grün positiv / orange negativ
+    // DV-Mehrerlös und Netto-Vorteil neu rechnen wenn Fallback aktiv ist —
+    // sonst zeigen wir die Backend-Werte, die mit den eigentlichen kpis-DV-Zahlen
+    // konsistent sind.
+    const hypSurplusEur = hasFiniteNumber(kpis?.hypSurplusFeedInEur) ? Number(kpis.hypSurplusFeedInEur) : null;
+    const dvCostEur = hasFiniteNumber(kpis?.dvCostEur) ? Number(kpis.dvCostEur) : null;
+    let effDvExcessEur;
+    let effDvNetAdvantageEur;
+    if (usedYearFallback) {
+      effDvExcessEur = hasFiniteNumber(effDvRevenueEur) && hasFiniteNumber(hypSurplusEur)
+        ? effDvRevenueEur - hypSurplusEur
+        : null;
+      effDvNetAdvantageEur = hasFiniteNumber(effDvExcessEur) && hasFiniteNumber(dvCostEur)
+        ? effDvExcessEur - dvCostEur
+        : null;
+    } else {
+      effDvExcessEur = hasFiniteNumber(kpis?.dvExcessEur) ? Number(kpis.dvExcessEur) : null;
+      effDvNetAdvantageEur = hasFiniteNumber(kpis?.dvNetAdvantageEur) ? Number(kpis.dvNetAdvantageEur) : null;
+    }
+
     const dvExcessEl = document.getElementById('historyKpiDvExcess');
     if (dvExcessEl) {
-      dvExcessEl.textContent = fmtEur(kpis.dvExcessEur);
-      dvExcessEl.style.color = (kpis.dvExcessEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
+      dvExcessEl.textContent = hasFiniteNumber(effDvExcessEur) ? fmtEur(effDvExcessEur) : '-';
+      dvExcessEl.style.color = (effDvExcessEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
     }
-    setText('historyKpiDvCost', fmtEur(kpis.dvCostEur ?? 0));
+    setText('historyKpiDvCost', hasFiniteNumber(dvCostEur) ? fmtEur(dvCostEur) : '-');
     const dvNetEl = document.getElementById('historyKpiDvNetAdvantage');
     if (dvNetEl) {
-      dvNetEl.textContent = fmtEur(kpis.dvNetAdvantageEur);
-      dvNetEl.style.color = (kpis.dvNetAdvantageEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
+      dvNetEl.textContent = hasFiniteNumber(effDvNetAdvantageEur) ? fmtEur(effDvNetAdvantageEur) : '-';
+      dvNetEl.style.color = (effDvNetAdvantageEur ?? 0) >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
     }
   } else {
     // Reset DV-only columns to placeholders when DV data is unavailable
     // (premium columns shown, but no dvRevenue/hypFeedIn for this period)
     for (const id of ['historyKpiDvRevenue', 'historyKpiDvSpotRevenue', 'historyKpiDvSpotRate', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
+                       'historyKpiDvMarketPremiumEur', 'historyKpiDvMarketPremiumRate',
                        'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
       setText(id, '-');
     }
@@ -2075,7 +2330,7 @@ function initHistoryPage() {
       if (label) label.textContent = marketMode ? 'Vermiedene Kosten (Marktwert)' : 'Vermiedene Kosten';
       marketToggle.textContent = marketMode ? 'Bezugspreis' : 'Marktwert';
       marketToggle.style.opacity = marketMode ? '1' : '0.6';
-      // Update Vermiedene Kosten + Gesamtbilanz
+      // Update Vermiedene Kosten + Gesamtbilanz / Gesamteinnahmen
       const c = window._historyKpiCache;
       if (c) {
         const avoidedVal = marketMode ? round2(c.avoided - c.oppCost) : c.avoided;
@@ -2083,17 +2338,72 @@ function initHistoryPage() {
         const adjustedGross = round2(c.net + savedMoney);
         setText('historyKpiAvoided', fmtEur(avoidedVal));
         setText('historyKpiBilanzAvoided', fmtEur(avoidedVal));
-        setText('historyKpiGrossReturn', fmtEur(adjustedGross));
-        // Update Gesamtbilanz accent color
+        setText('historyKpiBilanzAvoidedB', fmtEur(avoidedVal));
+        // Big-number depends on the active Bilanz-Toggle-Modus.
+        const bilanzToggleEl = byId('historyBilanzToggle');
+        const incomeMode = bilanzToggleEl && bilanzToggleEl.dataset.mode === 'income';
+        const adjustedIncome = round2(c.exportRevenueEur + avoidedVal + (c.marketRevenueAvailable ? c.marketRevenueEur : 0));
+        const displayed = incomeMode ? adjustedIncome : adjustedGross;
+        setText('historyKpiGrossReturn', fmtEur(displayed));
+        // Update Karten-Akzent
         const bilanzCard = byId('historyKpiBilanzCard');
         if (bilanzCard) {
-          const pos = adjustedGross >= 0;
+          const pos = displayed >= 0;
           bilanzCard.dataset.accent = pos ? 'green' : 'orange';
           const bv = byId('historyKpiGrossReturn');
           if (bv) bv.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
           const bk = bilanzCard.querySelector('.calc-kicker');
           if (bk) bk.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
         }
+      }
+    });
+  }
+
+  // Bilanz/Einnahmen toggle on Gesamtbilanz card.
+  // Switches between "Gesamtbilanz" (Einnahmen − Kosten) and "Gesamteinnahmen"
+  // (nur Brutto-Einnahmen: Energieeinnahmen + Vermiedene Kosten + optional
+  // Marktwert-Erlös in Monat/Jahr/Alles-View).
+  const bilanzToggle = byId('historyBilanzToggle');
+  if (bilanzToggle) {
+    bilanzToggle.dataset.mode = 'gross'; // 'gross' = Bilanz, 'income' = Gesamteinnahmen
+    bilanzToggle.addEventListener('click', function() {
+      const next = bilanzToggle.dataset.mode === 'income' ? 'gross' : 'income';
+      bilanzToggle.dataset.mode = next;
+      const defPanel = byId('historyBilanzDefault');
+      const incPanel = byId('historyBilanzIncome');
+      const label = byId('historyBilanzLabel');
+      const isIncome = next === 'income';
+      if (defPanel) defPanel.hidden = isIncome;
+      if (incPanel) incPanel.hidden = !isIncome;
+      if (label) label.textContent = isIncome ? 'Gesamteinnahmen' : 'Gesamtbilanz';
+      bilanzToggle.textContent = isIncome ? 'Bilanz' : 'Einnahmen';
+      bilanzToggle.style.opacity = isIncome ? '1' : '0.6';
+
+      // Big-Number umschalten — berücksichtigt den aktuellen Vermiedene-Kosten-Toggle
+      // (falls dort gerade auf Marktwert umgeschaltet ist, übernehmen wir den
+      // gleichen avoided-Wert wie die Karte 4 ihn anzeigt).
+      const c = window._historyKpiCache;
+      if (!c) return;
+      const marketToggleEl = byId('historyMarketToggle');
+      const marketMode = marketToggleEl && marketToggleEl.textContent === 'Bezugspreis';
+      const avoidedVal = marketMode ? round2(c.avoided - c.oppCost) : c.avoided;
+      let displayed;
+      if (isIncome) {
+        displayed = round2(c.exportRevenueEur + avoidedVal + (c.marketRevenueAvailable ? c.marketRevenueEur : 0));
+      } else {
+        const savedMoney = round2(avoidedVal - c.pvCost - c.batCost);
+        displayed = round2(c.net + savedMoney);
+      }
+      setText('historyKpiGrossReturn', fmtEur(displayed));
+
+      const bilanzCard = byId('historyKpiBilanzCard');
+      if (bilanzCard) {
+        const pos = displayed >= 0;
+        bilanzCard.dataset.accent = pos ? 'green' : 'orange';
+        const bv = byId('historyKpiGrossReturn');
+        if (bv) bv.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
+        const bk = bilanzCard.querySelector('.calc-kicker');
+        if (bk) bk.style.color = pos ? 'var(--flow-green)' : 'var(--flow-orange)';
       }
     });
   }
