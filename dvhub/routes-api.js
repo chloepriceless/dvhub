@@ -3455,7 +3455,11 @@ export function createApiRoutes(ctx) {
           charging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),
           discharging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),
           max_charge_power_w: Math.round(Math.abs(maxChargeW)),
-          min_soc_percentage: Math.round(minSocPct),
+          // EOS min_soc = DVhub's hard floor (live Victron BMS minSocPct, def 5),
+          // matching eos-config-sync.js. NOT sma.minSocPct (30) — that would make
+          // EOS import from grid to hold 30% overnight instead of riding the
+          // battery down and refilling via PV (operator request 2026-05-29).
+          min_soc_percentage: Math.round(Number.isFinite(Number(state.victron?.minSocPct)) ? Number(state.victron.minSocPct) : 5),
           max_soc_percentage: 100,
           initial_soc_percentage: Number.isFinite(curSoc) ? Math.round(curSoc) : 50
         };

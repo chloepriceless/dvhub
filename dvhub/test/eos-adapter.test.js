@@ -357,3 +357,38 @@ test('getOptimizationSolution returns null when EOS has no solution (404)', asyn
     await mock.close();
   }
 });
+
+// --- Test 11: convertEosPlanToSlots fills variable gaps (15-min change-points) ---
+// After the geneticsolution.py 15-min fix, EOS emits an instruction only when
+// the mode CHANGES, on the 15-min grid. Each instruction must hold until the
+// NEXT one (not a blind 4x split); the trailing one fills to valid_until.
+test('pullSchedule fills 15-min change-point instructions until next / valid_until', async () => {
+  const eosPlan = {
+    id: 'plan-15min',
+    valid_until: '2026-04-03T12:45:00Z',
+    instructions: [
+      { type: 'FRBCInstruction', actuator_id: 'battery1', execution_time: '2026-04-03T12:00:00Z',
+        operation_mode_id: 'FORCED_CHARGE', operation_mode_factor: 1.0 },
+      { type: 'FRBCInstruction', actuator_id: 'battery1', execution_time: '2026-04-03T12:15:00Z',
+        operation_mode_id: 'FORCED_DISCHARGE', operation_mode_factor: 1.0 },
+    ],
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(eosPlan));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullSchedule();
+    // 12:00→12:15 = 1 CHARGE slot; 12:15→12:45 (valid_until) = 2 DISCHARGE slots.
+    assert.equal(slots.length, 3, '1 charge + 2 discharge 15-min slots');
+    assert.equal(slots[0].planAction, 'FORCED_CHARGE');
+    assert.equal(slots[1].planAction, 'FORCED_DISCHARGE');
+    assert.equal(slots[2].planAction, 'FORCED_DISCHARGE');
+    // No overlap: timestamps strictly increase by 15 min.
+    assert.equal(slots[1].ts - slots[0].ts, 15 * 60_000);
+    assert.equal(slots[2].ts - slots[1].ts, 15 * 60_000);
+  } finally {
+    await mock.close();
+  }
+});

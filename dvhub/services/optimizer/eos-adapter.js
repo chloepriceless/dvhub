@@ -245,39 +245,61 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       default:                  return 0;
     }
   }
-  function convertEosPlanToSlots(planEntries, ctxCfg) {
-    const slots = [];
+  function convertEosPlanToSlots(planEntries, ctxCfg, planEndTs) {
     const maxChargeW    = ctxCfg?.optimizer?.maxChargeW    || 5000;
     const maxDischargeW = ctxCfg?.optimizer?.maxDischargeW || 5000;
 
+    // Collect battery FRBC instructions only (EV / appliance are a separate
+    // concern), as {baseTs, powerW, action}, then sort by time.
+    const entries = [];
     for (const entry of planEntries) {
       if (!entry) continue;
-      // Only battery FRBC instructions go into the schedule. EV / appliance
-      // instructions are filtered out — they're a separate concern.
       if (entry.type !== 'FRBCInstruction') continue;
       if (entry.actuator_id && !String(entry.actuator_id).startsWith('battery')) continue;
-
-      // execution_time arrives with explicit offset (e.g. "+02:00") — let
-      // Date parse it; do NOT append 'Z' (which broke 19.1-01 timezone math).
+      // execution_time arrives with explicit offset (e.g. "+02:00") — let Date
+      // parse it; do NOT append 'Z' (which broke 19.1-01 timezone math).
       const baseTs = new Date(entry.execution_time).getTime();
       if (!Number.isFinite(baseTs)) continue;
-      const powerW = planActionToPowerW(entry.operation_mode_id, entry.operation_mode_factor, maxChargeW, maxDischargeW);
-      const action = entry.operation_mode_id || 'IDLE';
+      entries.push({
+        baseTs,
+        powerW: planActionToPowerW(entry.operation_mode_id, entry.operation_mode_factor, maxChargeW, maxDischargeW),
+        action: entry.operation_mode_id || 'IDLE',
+      });
+    }
+    entries.sort((a, b) => a.baseTs - b.baseTs);
+    if (!entries.length) return [];
 
-      // Split hourly entry into 4x 15-min slots so the inspector merge-table
-      // (settings.js eos-merged-table) joins cleanly on ts_utc with PV/Load/
-      // Price (which arrive at 15-min cadence).
-      for (let q = 0; q < 4; q++) {
+    // EOS emits an instruction only when the battery operation mode CHANGES, on
+    // the 15-min optimization grid (after the geneticsolution.py slot-resolution
+    // fix). Each instruction therefore holds until the NEXT one — fill that span
+    // at 15-min cadence. The old code blindly emitted 4 child slots per entry,
+    // which was correct only while EOS instructions were hourly; once EOS went
+    // 15-min, fixed-4 splitting overlapped consecutive instructions and mis-timed
+    // the schedule. The trailing instruction fills to the plan's valid_until
+    // (planEndTs) when known, else by the last observed inter-instruction gap.
+    const slots = [];
+    const MAX_SLOTS = 8 * 24 * 4; // safety cap: 8 days of 15-min slots
+    for (let i = 0; i < entries.length; i++) {
+      const cur = entries[i];
+      let end;
+      if (i + 1 < entries.length) {
+        end = entries[i + 1].baseTs;
+      } else if (Number.isFinite(planEndTs) && planEndTs > cur.baseTs) {
+        end = planEndTs;
+      } else {
+        const lastGap = entries.length >= 2 ? (cur.baseTs - entries[entries.length - 2].baseTs) : QUARTER_HOUR_MS * 4;
+        end = cur.baseTs + (lastGap > 0 ? lastGap : QUARTER_HOUR_MS * 4);
+      }
+      for (let t = cur.baseTs; t < end && slots.length < MAX_SLOTS; t += QUARTER_HOUR_MS) {
         slots.push({
-          ts: baseTs + q * QUARTER_HOUR_MS,
-          endTs: baseTs + (q + 1) * QUARTER_HOUR_MS,
-          powerW,
-          planAction: action,
-          confidence: EOS_DEFAULT_CONFIDENCE
+          ts: t,
+          endTs: t + QUARTER_HOUR_MS,
+          powerW: cur.powerW,
+          planAction: cur.action,
+          confidence: EOS_DEFAULT_CONFIDENCE,
         });
       }
     }
-
     return slots;
   }
 
@@ -296,8 +318,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
                   : null;
     if (!entries) return null;
 
+    // Pass the plan's validity end so the trailing instruction fills to the
+    // real horizon end (15-min cadence) rather than a heuristic gap.
+    const planEndTs = (plan && plan.valid_until) ? new Date(plan.valid_until).getTime() : undefined;
+
     try {
-      return convertEosPlanToSlots(entries, getCfg());
+      return convertEosPlanToSlots(entries, getCfg(), planEndTs);
     } catch {
       return null;
     }
@@ -329,6 +355,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const sol = res.data;
     const data = sol.solution && sol.solution.data ? sol.solution.data : null;
     if (!data || typeof data !== 'object') return null;
+    // EOS' prediction frame (same 15-min time index as the solution) carries the
+    // PV/load forecast EOS actually optimised against — surface PV so the card
+    // can show "what EOS predicts for PV", not just the resulting dispatch.
+    const pred = (sol.prediction && sol.prediction.data && typeof sol.prediction.data === 'object')
+      ? sol.prediction.data : {};
 
     // Datetime-keyed rows. Sort by timestamp (object key order is not guaranteed
     // across JSON parses). Derive the battery SoC key dynamically — the device id
@@ -343,10 +374,13 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const numOrNull = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
     const allRows = tsKeys.map((ts) => {
       const r = data[ts] || {};
+      const pr = pred[ts] || {};
       const socFactor = socKey != null ? r[socKey] : undefined;
       return {
         ts_utc: new Date(ts).toISOString(),
         socPct: numOrNull(socFactor) != null ? Math.round(socFactor * 100) : null,
+        pvWh: numOrNull(pr.pvforecast_ac_energy_wh),
+        loadWh: numOrNull(pr.loadforecast_energy_wh),
         gridConsumptionWh: numOrNull(r.grid_consumption_energy_wh),
         gridFeedinWh: numOrNull(r.grid_feedin_energy_wh),
         costsAmt: numOrNull(r.costs_amt),

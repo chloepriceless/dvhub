@@ -65,7 +65,7 @@ function isGridArbitrageLicensed(cfg) {
  * @param {object} cfg - DVhub raw config (from getCfg()).
  * @returns {Array<object>}
  */
-export function buildEosBatteries(cfg) {
+export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
   const costs = cfg?.userEnergyPricing?.costs || {};
@@ -88,7 +88,10 @@ export function buildEosBatteries(cfg) {
     // a sane modulation floor for most hybrid inverters; configurable later).
     min_charge_power_w: 50,
     charge_rates: chargeRates,
-    min_soc_percentage: Number(opt.minSocPct) || 0,
+    // min_soc defaults to the soft optimizer floor, but the sync passes DVhub's
+    // hard floor (Victron BMS minSocPct) so EOS may discharge as deep as DVhub
+    // does (avoids overnight grid-import to hold an artificially high floor).
+    min_soc_percentage: Number.isFinite(Number(opts.minSocPct)) ? Number(opts.minSocPct) : (Number(opt.minSocPct) || 0),
     max_soc_percentage: Number(opt.maxSocPct) || 100,
   }];
 }
@@ -259,7 +262,7 @@ function eosHttpRequest(baseUrl, method, path, body) {
  * @returns {{ sync: () => Promise<{ok: boolean, applied: string[], errors: object}> }}
  */
 export function createEosConfigSync(ctx) {
-  const { getCfg, pushLog } = ctx;
+  const { getCfg, pushLog, state } = ctx;
 
   async function sync() {
     const cfg = getCfg();
@@ -271,7 +274,15 @@ export function createEosConfigSync(ctx) {
       return { ok: true, applied: [], errors: {}, skipped: 'eosProxy.enabled=false' };
     }
 
-    const batteries = buildEosBatteries(cfg);
+    // EOS min_soc should be DVhub's HARD floor (the live Victron BMS minSocPct,
+    // = the absolute level DVhub itself discharges to, default 5%), NOT the soft
+    // optimizer.minSocPct (10%). With min_soc=10 EOS hits 10% overnight and then
+    // *imports from grid* to hold it instead of riding the battery down to 5%
+    // and refilling via PV in the morning (operator request 2026-05-29).
+    const hardFloorSocPct = Number(state?.victron?.minSocPct);
+    const eosMinSocPct = Number.isFinite(hardFloorSocPct) ? hardFloorSocPct : 5;
+
+    const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(cfg);
     const elecprice = buildEosElecprice(cfg);
     const optimization = buildEosOptimization(cfg);
