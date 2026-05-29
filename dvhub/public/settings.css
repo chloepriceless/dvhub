@@ -2746,7 +2746,7 @@ body.dv-modal-open {
 .settings-aurora .eos-merged-table th,
 .settings-aurora .eos-merged-table td {
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0;
   white-space: nowrap;
 }
@@ -2759,7 +2759,7 @@ body.dv-modal-open {
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 .settings-aurora .eos-merged-table th.num,
@@ -2774,7 +2774,7 @@ body.dv-modal-open {
 @media (max-width: 720px) {
   .eos-merged-scroll { max-height: 360px; }
   .settings-aurora .eos-merged-table th,
-  .settings-aurora .eos-merged-table td { padding: 2px 5px; font-size: 10px; }
+  .settings-aurora .eos-merged-table td { padding: 2px 5px; font-size: 11px; }
 }
 
 /* Phase 21 (2026-05-24): EOS plan-cell color coding — operator-actionable
