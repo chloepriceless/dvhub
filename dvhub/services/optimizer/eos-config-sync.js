@@ -226,13 +226,24 @@ export function buildEosInverters(cfg) {
   const opt = cfg?.optimizer || {};
   const pvKwp = Number(opt?.mispel?.pvKwp);
   const maxPowerW = Number.isFinite(pvKwp) && pvKwp > 0 ? pvKwp * 1000 : 10000;
+  // Grid→battery (AC) charging is §14a-illegal for vanilla self-consumption
+  // operators, so HARD-DISABLE it unless grid-arbitrage is licensed
+  // (allowGridCharge + MisPel pauschal/abgrenzung). max_ac_charge_power_w=0
+  // makes EOS' simulate() set ac_charging_possible=False → ac_charge_hours are
+  // zeroed, so the genetic can never pencil in a grid→battery transfer.
+  // IMPORTANT: this only blocks the AC (grid) charge path. PV→battery charging
+  // goes through the inverter's DC-surplus path (process_energy + dc_charge),
+  // which is untouched — the battery still charges from PV, just never from the
+  // grid. The charge_rates gate in buildEosBatteries alone was insufficient
+  // ([1.0] still left a factor-1.0 AC-charge state in the genetic search).
+  const gridChargeAllowed = isGridArbitrageLicensed(cfg);
   return [{
     device_id: INVERTER_DEVICE_ID,
     max_power_w: maxPowerW,
     battery_id: BATTERY_DEVICE_ID,
     ac_to_dc_efficiency: 1.0,
     dc_to_ac_efficiency: 1.0,
-    max_ac_charge_power_w: Number(opt.maxChargeW) || null,
+    max_ac_charge_power_w: gridChargeAllowed ? (Number(opt.maxChargeW) || null) : 0,
   }];
 }
 
