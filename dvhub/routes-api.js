@@ -3445,7 +3445,12 @@ export function createApiRoutes(ctx) {
       if (Number.isFinite(lon)) results.longitude = await putEos('/general/longitude', lon);
       if (battCapKwh && battCapKwh > 0) {
         const battery = {
-          device_id: 'dvhub_battery',
+          // MUST be 'battery1' to match the inverter's battery_id (set from
+          // EOS.config.json / eos-config-sync.js BATTERY_DEVICE_ID). A divergent
+          // id (was 'dvhub_battery') leaves inverter1.battery_id='battery1'
+          // dangling → EOS aborts every optimization with
+          // "Battery ID mismatch - battery1 is configured; got dvhub_battery".
+          device_id: 'battery1',
           capacity_wh: Math.round(battCapKwh * 1000),
           charging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),
           discharging_efficiency: Math.max(0.5, Math.min(1, effPct / 100)),

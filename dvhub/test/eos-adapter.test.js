@@ -63,23 +63,28 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
   try {
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
 
+    // Slot shape MUST match buildForecastResponse() output exactly:
+    // pv/load → { start: ISO, powerW }, price → { start: ISO, ctKwh }.
+    // (Earlier this mock used { ts, watts }, a shape the real forecast service
+    // never emits — so the test passed while production PUT a null body and EOS
+    // returned HTTP 400 for every provider.)
     const forecastResponse = {
       pv: {
         slots: [
-          { ts: '2026-04-03T12:00:00Z', watts: 3000 },
-          { ts: '2026-04-03T13:00:00Z', watts: 2500 }
+          { start: '2026-04-03T12:00:00Z', powerW: 3000 },
+          { start: '2026-04-03T13:00:00Z', powerW: 2500 }
         ]
       },
       price: {
         slots: [
-          { ts: '2026-04-03T12:00:00Z', ctKwh: 15.2 },
-          { ts: '2026-04-03T13:00:00Z', ctKwh: 18.5 }
+          { start: '2026-04-03T12:00:00Z', ctKwh: 15.2 },
+          { start: '2026-04-03T13:00:00Z', ctKwh: 18.5 }
         ]
       },
       load: {
         slots: [
-          { ts: '2026-04-03T12:00:00Z', watts: 800 },
-          { ts: '2026-04-03T13:00:00Z', watts: 900 }
+          { start: '2026-04-03T12:00:00Z', powerW: 800 },
+          { start: '2026-04-03T13:00:00Z', powerW: 900 }
         ]
       }
     };
@@ -108,8 +113,16 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
     assert.ok(typeof pvReq.body.interval === 'string', 'PV body has interval');
     assert.ok(Array.isArray(pvReq.body.pvforecast_ac_power), 'PV body keyed by pvforecast_ac_power');
     assert.equal(pvReq.body.pvforecast_ac_power.length, 2);
+    // Lock the actual values — guards the null-body / wrong-field-name regression.
+    assert.deepEqual(pvReq.body.pvforecast_ac_power, [3000, 2500], 'PV values from slot.powerW');
     assert.ok(Array.isArray(loadReq.body.loadforecast_power_w), 'Load body keyed by loadforecast_power_w');
+    assert.deepEqual(loadReq.body.loadforecast_power_w, [800, 900], 'Load values from slot.powerW');
     assert.ok(Array.isArray(priceReq.body.elecprice_marketprice_wh), 'Price body keyed by elecprice_marketprice_wh');
+    // ct/kWh → €/Wh : 15.2 / 100000 = 0.000152 (float-tolerant)
+    const priceVals = priceReq.body.elecprice_marketprice_wh;
+    assert.equal(priceVals.length, 2);
+    assert.ok(Math.abs(priceVals[0] - 0.000152) < 1e-9, 'Price[0] = ctKwh/100000');
+    assert.ok(Math.abs(priceVals[1] - 0.000185) < 1e-9, 'Price[1] = ctKwh/100000');
   } finally {
     await mock.close();
   }
@@ -255,7 +268,7 @@ test('httpRequest times out and returns { ok: false, error } (consistent error c
     // 19.1-01: pushForecast now skips empty-slot sections, so we must supply
     // at least one non-empty section to trigger the HTTP call that will time out.
     const result = await adapter.pushForecast({
-      pv: { slots: [{ ts: '2026-04-03T12:00:00Z', watts: 1000 }] },
+      pv: { slots: [{ start: '2026-04-03T12:00:00Z', powerW: 1000 }] },
       price: { slots: [] },
       load: { slots: [] }
     });
@@ -275,4 +288,72 @@ test('isAvailable() returns false when EOS is not reachable (connection refused)
   const adapter = createEosAdapter(makeCtx('http://127.0.0.1:19999'));
   const available = await adapter.isAvailable();
   assert.equal(available, false, 'Should return false when connection is refused');
+});
+
+// --- Test 9: getOptimizationSolution parses EOS output into compact rows + KPIs ---
+// EOS' /v1/energy-management/optimization/solution returns an OptimizationSolution
+// with a datetime-keyed `solution.data` frame + KPI totals. The adapter projects
+// it to { rows:[{ts_utc,socPct,gridConsumptionWh,gridFeedinWh,costsAmt,revenueAmt}],
+// kpis, slotMinutes, ... }. SoC key is derived dynamically (battery1_soc_factor).
+test('getOptimizationSolution parses solution.data into rows + KPIs', async () => {
+  const solution = {
+    generated_at: '2026-05-29T02:32:58+02:00',
+    valid_from: '2026-05-29T02:00:00+02:00',
+    valid_until: '2026-05-30T02:00:00+02:00',
+    total_costs_amt: 5.62,
+    total_revenues_amt: 8.71,
+    total_losses_energy_wh: 9551.0,
+    solution: {
+      data: {
+        '2026-05-29T02:00:00+02:00': {
+          battery1_soc_factor: 0.13, grid_consumption_energy_wh: 815, grid_feedin_energy_wh: 0,
+          costs_amt: 0.124, revenue_amt: 0.0, ev11_soc_factor: 0.7,
+        },
+        '2026-05-29T02:15:00+02:00': {
+          battery1_soc_factor: 0.18, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 120,
+          costs_amt: 0.0, revenue_amt: 0.03, ev11_soc_factor: 0.7,
+        },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const out = await adapter.getOptimizationSolution();
+    assert.ok(out, 'should return parsed solution');
+    assert.equal(out.rows.length, 2);
+    assert.equal(out.slotMinutes, 15, 'derives 15-min spacing');
+    // SoC factor -> percent, from the BATTERY key (not ev11)
+    assert.equal(out.rows[0].socPct, 13);
+    assert.equal(out.rows[1].socPct, 18);
+    assert.equal(out.rows[0].gridConsumptionWh, 815);
+    assert.equal(out.rows[1].gridFeedinWh, 120);
+    assert.equal(out.rows[0].costsAmt, 0.124);
+    assert.equal(out.rows[1].revenueAmt, 0.03);
+    assert.equal(out.kpis.totalCostsAmt, 5.62);
+    assert.equal(out.kpis.totalRevenuesAmt, 8.71);
+    assert.equal(out.kpis.totalLossesWh, 9551.0);
+    assert.equal(out.totalCount, 2);
+    assert.equal(out.truncated, false);
+  } finally {
+    await mock.close();
+  }
+});
+
+// --- Test 10: getOptimizationSolution returns null on 404 (no solution yet) ---
+test('getOptimizationSolution returns null when EOS has no solution (404)', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ detail: 'Can not get the optimization solution.' }));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const out = await adapter.getOptimizationSolution();
+    assert.equal(out, null);
+  } finally {
+    await mock.close();
+  }
 });

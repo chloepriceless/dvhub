@@ -7,6 +7,7 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
+import http from 'node:http';
 
 import {
   slotsToTimeMap,
@@ -14,7 +15,59 @@ import {
   priceSlotsToEosFormat,
   buildDataFrameBody,
   createEosForecastBridge,
+  SOC_KEY_RE,
+  EV_SOC_KEY_RE,
 } from '../services/optimizer/eos-forecast-bridge.js';
+
+/**
+ * Minimal mock EOS server. Captures { method, url } per request and lets the
+ * handler reply. Body is parsed as JSON only when present (the SoC measurement
+ * PUT carries everything on the query string with no body).
+ */
+function createMockEos(handler) {
+  const requests = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        requests.push({ method: req.method, url: req.url });
+        handler(req, res);
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: server.address().port,
+        requests,
+        close: () => new Promise((r) => server.close(r)),
+      });
+    });
+  });
+}
+
+// A handler that 200-OKs every EOS endpoint the bridge touches.
+function okHandler(req, res) {
+  if (req.method === 'GET' && req.url.startsWith('/v1/measurement/keys')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([
+      'battery1-soc-factor',
+      'battery1-power-l1-w',
+      'ev11-soc-factor',
+      'date_time',
+    ]));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+function forecastSlots() {
+  return {
+    pv: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 1000 }] },
+    load: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 500 }] },
+    price: { slots: [{ start: '2026-05-24T12:00:00.000Z', ctKwh: 20 }] },
+  };
+}
 
 test('slotsToTimeMap: ISO key + W value, skips null/NaN', () => {
   const slots = [
@@ -130,4 +183,91 @@ test('createEosForecastBridge.push: handles forecast-build exception', async () 
   assert.equal(res.ok, false);
   assert.ok(res.errors.build);
   assert.match(res.errors.build, /VRM down/);
+});
+
+test('SoC key classification: battery vs EV', () => {
+  assert.ok(SOC_KEY_RE.test('battery1-soc-factor'));
+  assert.ok(SOC_KEY_RE.test('ev11-soc-factor'));
+  assert.ok(!SOC_KEY_RE.test('battery1-power-l1-w'));
+  // EV keys match the EV regex; battery keys must NOT (else real SoC leaks to EV)
+  assert.ok(EV_SOC_KEY_RE.test('ev11-soc-factor'));
+  assert.ok(EV_SOC_KEY_RE.test('ev1-soc-factor'));
+  assert.ok(!EV_SOC_KEY_RE.test('battery1-soc-factor'));
+});
+
+test('push forwards live battery SoC as factor; skips EV when absent', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 16 } }, // 16% → factor 0.16, no EV SoC
+    };
+    const bridge = createEosForecastBridge(ctx);
+    const res = await bridge.push();
+
+    const socPuts = mock.requests.filter(
+      (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
+    );
+    // battery pushed, EV skipped (no evSocPct)
+    assert.equal(socPuts.length, 1);
+    assert.match(socPuts[0].url, /key=battery1-soc-factor/);
+    assert.match(socPuts[0].url, /value=0\.16(&|$)/);
+    // SoC must be stamped at the top of an hour (EOS seeds at ems.start_datetime
+    // = HH:00); a minute/second-precise "now" would be missed → SoC defaults 0.
+    const dtMatch = decodeURIComponent(socPuts[0].url).match(/datetime=([^&]+)/);
+    assert.ok(dtMatch, 'datetime present');
+    assert.match(dtMatch[1], /T\d\d:00:00Z$/, 'datetime floored to top of hour');
+    assert.ok(res.pushed.some((p) => p.startsWith('battery1-soc-factor=0.16')));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('push forwards EV SoC when state provides evSocPct', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50, evSocPct: 80 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+
+    const socPuts = mock.requests.filter(
+      (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
+    );
+    assert.equal(socPuts.length, 2);
+    assert.ok(socPuts.some((r) => /key=battery1-soc-factor/.test(r.url) && /value=0\.5(&|$)/.test(r.url)));
+    assert.ok(socPuts.some((r) => /key=ev11-soc-factor/.test(r.url) && /value=0\.8(&|$)/.test(r.url)));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('push skips SoC cleanly when no live battery SoC in state', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: {} }, // no soc
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+
+    const socPuts = mock.requests.filter(
+      (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
+    );
+    assert.equal(socPuts.length, 0);
+    // measurement/keys should not even be queried when there's no SoC to push
+    const keyGets = mock.requests.filter((r) => r.url.startsWith('/v1/measurement/keys'));
+    assert.equal(keyGets.length, 0);
+  } finally {
+    await mock.close();
+  }
 });

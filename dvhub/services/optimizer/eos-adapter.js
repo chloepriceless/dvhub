@@ -131,16 +131,23 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     //   LoadImport            → loadforecast_power_w    (W)
     //   ElecPriceImport       → elecprice_marketprice_kwh (€/kWh)
     //   FeedInTariffImport    → feed_in_tariff_kwh      (€/kWh)
+    // buildForecastResponse() slots are keyed { start: ISO, powerW: W } for
+    // pv/load and { start: ISO, ctKwh } for price (services/forecast/index.js:
+    // 195/199/217/221/173). Earlier this code read s.ts / s.watts, which don't
+    // exist on those slots — every filter dropped 100% of slots, buildDateTimeData
+    // returned null, and httpRequest then PUT a `null` body → EOS replied
+    // HTTP 400 "Invalid JSON string 'null'" for every provider. Read the real
+    // field names (start, powerW, ctKwh) so the body is populated.
     function buildDateTimeData(slots, recordKey, valueFn) {
-      const validSlots = slots.filter(s => s && !Number.isNaN(new Date(s.ts).getTime()));
+      const validSlots = slots.filter(s => s && !Number.isNaN(new Date(s.start).getTime()));
       if (!validSlots.length) return null;
       const values = validSlots.map(valueFn);
-      const start = new Date(validSlots[0].ts).toISOString();
+      const start = new Date(validSlots[0].start).toISOString();
       // Derive interval from the first two slot timestamps. Default to
       // 15 minutes when only one slot exists.
       let intervalLabel = '15 minutes';
       if (validSlots.length >= 2) {
-        const delta = new Date(validSlots[1].ts).getTime() - new Date(validSlots[0].ts).getTime();
+        const delta = new Date(validSlots[1].start).getTime() - new Date(validSlots[0].start).getTime();
         const minutes = Math.max(1, Math.round(delta / 60000));
         intervalLabel = minutes + ' minutes';
       }
@@ -149,7 +156,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 
     // PV
     if (forecastResponse.pv?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.pv.slots, 'pvforecast_ac_power', s => Number(s.watts) || 0);
+      const body = buildDateTimeData(forecastResponse.pv.slots, 'pvforecast_ac_power', s => Number(s.powerW) || 0);
       const res = await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body);
       perProvider.pv = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`PV: ${res.error}`);
@@ -157,7 +164,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 
     // Load
     if (forecastResponse.load?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.load.slots, 'loadforecast_power_w', s => Number(s.watts) || 0);
+      const body = buildDateTimeData(forecastResponse.load.slots, 'loadforecast_power_w', s => Number(s.powerW) || 0);
       const res = await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body);
       perProvider.load = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`Load: ${res.error}`);
@@ -297,6 +304,79 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 
   /**
+   * Fetch EOS' optimization SOLUTION — the optimizer's OUTPUT (predicted SoC
+   * trajectory, grid flows, per-slot costs), distinct from pullSchedule() which
+   * returns only the dispatch instructions. GET /v1/energy-management/optimization/
+   * solution returns an OptimizationSolution with a `solution` DateTimeDataFrame
+   * (datetime-keyed rows) + KPI totals.
+   *
+   * Returns a compact, frontend-ready shape or null when no solution exists
+   * (e.g. EOS hasn't optimised yet → HTTP 404). NEVER throws.
+   *
+   * @param {number} [previewLimit=300]
+   * @returns {Promise<null | {
+   *   generatedAt: string|null, validFrom: string|null, validUntil: string|null,
+   *   slotMinutes: number|null,
+   *   kpis: { totalCostsAmt: number|null, totalRevenuesAmt: number|null, totalLossesWh: number|null },
+   *   rows: Array<{ ts_utc: string, socPct: number|null, gridConsumptionWh: number|null,
+   *                 gridFeedinWh: number|null, costsAmt: number|null, revenueAmt: number|null }>,
+   *   truncated: boolean, totalCount: number,
+   * }>}
+   */
+  async function getOptimizationSolution(previewLimit = 300) {
+    const res = await httpRequest('GET', '/v1/energy-management/optimization/solution');
+    if (!res.ok || !res.data) return null;
+    const sol = res.data;
+    const data = sol.solution && sol.solution.data ? sol.solution.data : null;
+    if (!data || typeof data !== 'object') return null;
+
+    // Datetime-keyed rows. Sort by timestamp (object key order is not guaranteed
+    // across JSON parses). Derive the battery SoC key dynamically — the device id
+    // is 'battery1' but a config-sync variant may register a different prefix; we
+    // want the battery's *_soc_factor, never the EV's.
+    const tsKeys = Object.keys(data).sort();
+    let socKey = null;
+    if (tsKeys.length) {
+      const sample = data[tsKeys[0]] || {};
+      socKey = Object.keys(sample).find(k => /_soc_factor$/.test(k) && !/(^|_)ev\d*_/.test(k)) || null;
+    }
+    const numOrNull = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+    const allRows = tsKeys.map((ts) => {
+      const r = data[ts] || {};
+      const socFactor = socKey != null ? r[socKey] : undefined;
+      return {
+        ts_utc: new Date(ts).toISOString(),
+        socPct: numOrNull(socFactor) != null ? Math.round(socFactor * 100) : null,
+        gridConsumptionWh: numOrNull(r.grid_consumption_energy_wh),
+        gridFeedinWh: numOrNull(r.grid_feedin_energy_wh),
+        costsAmt: numOrNull(r.costs_amt),
+        revenueAmt: numOrNull(r.revenue_amt),
+      };
+    });
+
+    let slotMinutes = null;
+    if (tsKeys.length >= 2) {
+      const delta = new Date(tsKeys[1]).getTime() - new Date(tsKeys[0]).getTime();
+      if (Number.isFinite(delta) && delta > 0) slotMinutes = Math.round(delta / 60000);
+    }
+
+    return {
+      generatedAt: sol.generated_at || null,
+      validFrom: sol.valid_from || null,
+      validUntil: sol.valid_until || null,
+      slotMinutes,
+      kpis: {
+        totalCostsAmt: numOrNull(sol.total_costs_amt),
+        totalRevenuesAmt: numOrNull(sol.total_revenues_amt),
+        totalLossesWh: numOrNull(sol.total_losses_energy_wh),
+      },
+      rows: allRows.slice(0, previewLimit),
+      truncated: allRows.length > previewLimit,
+      totalCount: allRows.length,
+    };
+  }
+
+  /**
    * Check if EOS is reachable and responding.
    *
    * @returns {Promise<boolean>}
@@ -308,5 +388,5 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return result.ok;
   }
 
-  return { pushForecast, pullSchedule, isAvailable };
+  return { pushForecast, pullSchedule, getOptimizationSolution, isAvailable };
 }

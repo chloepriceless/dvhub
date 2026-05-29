@@ -3051,103 +3051,72 @@ function renderEosInspector(payload) {
 
   if (meta) meta.textContent = slots.length + ' Slots · 24 h';
 
-  // Phase 21 (operator request 2026-05-23): the four sub-tables (PUSH PV /
-  // Load / Price + PULL Plan) are merged into a SINGLE table joined on
-  // ts_utc. One row per timestamp, columns:
-  //   Zeit · PV-Push W · Last-Push W · Preis ct/kWh · Plan-Aktion · Leistung
-  // pull slots are already 15-min aligned by eos-adapter.convertEosPlanToSlots
-  // (hourly entries split into 4×15-min), so the join is exact — no gaps in
-  // the plan column other than where EOS itself returned nothing.
+  // EOS OUTPUT view (operator request 2026-05-29): this card shows what EOS
+  // *delivers* — its optimised trajectory (predicted battery SoC, grid flows,
+  // per-slot costs) from /v1/energy-management/optimization/solution, at 15-min
+  // resolution. The input forecasts WE push (PV/Last/Preis) live in the
+  // PV-Provider card, so they are intentionally NOT repeated here.
   var detailsBody = document.getElementById('inspector-table-eos');
   if (!detailsBody) return;
 
-  var providers = push.providers || {};
-  var pushOk = providers.pv || providers.load || providers.price;
+  var output = payload.output || null;
+  var outRows = (output && Array.isArray(output.rows)) ? output.rows : [];
+  var kpis = (output && output.kpis) ? output.kpis : {};
 
-  // Render-time aggregation summary so the operator still sees push slot
-  // counts at a glance now that the per-section headers are gone.
-  var pvRows = (providers.pv && Array.isArray(providers.pv.rows)) ? providers.pv.rows : [];
-  var loadRows = (providers.load && Array.isArray(providers.load.rows)) ? providers.load.rows : [];
-  var priceRows = (providers.price && Array.isArray(providers.price.rows)) ? providers.price.rows : [];
-  var summaryLine = 'PUSH: PV ' + pvRows.length + ' · Last ' + loadRows.length + ' · Preis ' + priceRows.length +
-    '  ·  PULL: Plan ' + slots.length + ' Slots';
+  function eur(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) + ' €' : '–'; }
+  function kwh(v) { return (typeof v === 'number' && isFinite(v)) ? (v / 1000).toFixed(1) + ' kWh' : '–'; }
+  var slotLbl = (output && output.slotMinutes) ? (output.slotMinutes + '-min') : '';
+  var genLbl = (output && output.generatedAt) ? formatBerlinTimeForecastInspector(output.generatedAt) : '';
+  var summaryLine = outRows.length
+    ? ('EOS-Ergebnis: Kosten ' + eur(kpis.totalCostsAmt) + ' · Erlös ' + eur(kpis.totalRevenuesAmt) +
+       ' · Verluste ' + kwh(kpis.totalLossesWh) + '  ·  ' + outRows.length + ' Slots' +
+       (slotLbl ? ' (' + slotLbl + ')' : '') + (genLbl ? '  ·  Stand ' + genLbl : ''))
+    : '';
 
-  if (!pushOk && !slots.length) {
-    detailsBody.innerHTML = '<div class="eos-subtbl-empty">Weder Push- noch Pull-Daten verfügbar.</div>';
+  if (!outRows.length) {
+    var hint = push.ok
+      ? 'EOS hat noch kein Optimierungsergebnis geliefert (ein Lauf dauert ~6 Min). Nach dem nächsten EMS-Tick erscheint der Plan hier.'
+      : ('EOS-Push fehlgeschlagen: ' + escHtmlForecastInspector(push.error || 'unbekannt') + '. Ohne Eingangsdaten rechnet EOS keinen Plan.');
+    detailsBody.innerHTML = '<div class="eos-subtbl-empty">' + hint + '</div>';
     return;
   }
 
-  // Build ts_utc → row map. We use the ISO string as the join key so the
-  // four sources (which all serialise via Date#toISOString) match exactly.
-  var byTs = new Map();
-  function ensure(ts) {
-    if (!byTs.has(ts)) byTs.set(ts, { ts: ts, pv: null, load: null, price: null, planAction: null, planPowerW: null });
-    return byTs.get(ts);
+  // Battery action derived from EOS' own predicted SoC trajectory (Δ between
+  // consecutive 15-min slots). Clearer than the raw operation_mode_id.
+  function batteryCell(socPct, prevSocPct) {
+    if (typeof socPct !== 'number' || typeof prevSocPct !== 'number') return { html: '–', cls: '' };
+    var d = socPct - prevSocPct;
+    if (d >= 1) return { html: '↑ Laden', cls: 'plan-pv-charge' };
+    if (d <= -1) return { html: '↓ Entladen', cls: 'plan-export' };
+    return { html: '→ Halten', cls: 'plan-self' };
   }
-  for (var i = 0; i < pvRows.length; i++) if (pvRows[i] && pvRows[i].ts_utc) ensure(pvRows[i].ts_utc).pv = pvRows[i].value;
-  for (var j = 0; j < loadRows.length; j++) if (loadRows[j] && loadRows[j].ts_utc) ensure(loadRows[j].ts_utc).load = loadRows[j].value;
-  for (var k = 0; k < priceRows.length; k++) if (priceRows[k] && priceRows[k].ts_utc) ensure(priceRows[k].ts_utc).price = priceRows[k].value;
-  for (var p = 0; p < slots.length; p++) {
-    var sp = slots[p] || {};
-    if (!sp.ts_utc) continue;
-    var rowP = ensure(sp.ts_utc);
-    rowP.planAction = sp.planAction;
-    rowP.planPowerW = sp.planPowerW;
-  }
-  var allTs = Array.from(byTs.keys()).sort();
-
-  function fmtNum(v, digits) {
-    if (typeof v !== 'number' || !isFinite(v)) return '–';
-    return v.toFixed(digits);
-  }
-  // Phase 21 (2026-05-24): operator-friendly translation of EOS' raw
-  // operation_mode_id codes into actionable labels. Gates FORCED_CHARGE-
-  // without-PV behind cfg.optimizer.allowGridCharge so a recommendation to
-  // load from grid only shows actionable when the operator opted-in.
-  var allowGridCharge = !!(payload && payload.operator && payload.operator.allowGridCharge);
-  function buildPlanCell(action, powerW, pvW) {
-    if (!action) return { html: '–', cls: '' };
-    var power = (typeof powerW === 'number' && isFinite(powerW))
-      ? formatPowerForecastInspector(Math.abs(powerW)) : '';
-    var hasPv = (typeof pvW === 'number' && pvW > 100);
-    var suffix = power ? ' · ' + power : '';
-    switch (action) {
-      case 'FORCED_DISCHARGE':
-        return { html: '⚡ Einspeisen' + suffix, cls: 'plan-export' };
-      case 'FORCED_CHARGE':
-        if (hasPv) return { html: '☀ PV-Laden' + suffix, cls: 'plan-pv-charge' };
-        if (allowGridCharge) return { html: '⤵ Aus Netz laden' + suffix, cls: 'plan-grid-charge' };
-        return { html: '⚠ EOS: Netzbezug — Setting nicht aktiv', cls: 'plan-grid-disabled' };
-      case 'NON_EXPORT':
-        return { html: '⊘ Eigenverbrauch (keine Einspeisung)', cls: 'plan-self' };
-      case 'SELF_CONSUMPTION':
-        return { html: '⊜ Eigenverbrauch', cls: 'plan-self' };
-      case 'IDLE':
-        return { html: '– Nichts tun', cls: 'plan-idle' };
-      case 'PEAK_SHAVING':
-        return { html: '↧ Peak-Shaving' + suffix, cls: 'plan-peak' };
-      case 'GRID_SUPPORT_IMPORT':
-        return { html: '↥ Grid-Support (Bezug)' + suffix, cls: 'plan-grid-charge' };
-      case 'GRID_SUPPORT_EXPORT':
-        return { html: '↥ Grid-Support (Einspeisung)' + suffix, cls: 'plan-export' };
-      default:
-        return { html: action + suffix, cls: '' };
-    }
+  // Grid flow per slot: consumption (Bezug) vs feed-in (Einspeisung), Wh.
+  function gridCell(bezugWh, einspWh) {
+    var b = (typeof bezugWh === 'number' && bezugWh > 1) ? bezugWh : 0;
+    var e = (typeof einspWh === 'number' && einspWh > 1) ? einspWh : 0;
+    if (e > b) return { html: '↑ Einspeisung ' + Math.round(e) + ' Wh', cls: 'plan-export' };
+    if (b > 0) return { html: '↓ Bezug ' + Math.round(b) + ' Wh', cls: 'plan-grid-charge' };
+    return { html: '–', cls: '' };
   }
 
   var trs = '';
-  for (var x = 0; x < allTs.length; x++) {
-    var ts = allTs[x];
-    var r = byTs.get(ts);
-    var when = formatBerlinTimeForecastInspector(ts);
-    var cell = buildPlanCell(r.planAction, r.planPowerW, r.pv);
+  var prevSoc = null;
+  for (var x = 0; x < outRows.length; x++) {
+    var r = outRows[x];
+    var when = formatBerlinTimeForecastInspector(r.ts_utc);
+    var bat = batteryCell(r.socPct, prevSoc);
+    var grid = gridCell(r.gridConsumptionWh, r.gridFeedinWh);
+    // Net cost per slot in ct: costs minus revenue (negative = net earnings).
+    var costNum = (typeof r.costsAmt === 'number' ? r.costsAmt : 0) - (typeof r.revenueAmt === 'number' ? r.revenueAmt : 0);
+    var costStr = isFinite(costNum) ? (costNum * 100).toFixed(1) + ' ct' : '–';
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.pv, 0)) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.load, 0)) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(fmtNum(r.price, 2)) + '</td>' +
-      '<td class="' + cell.cls + '">' + escHtmlForecastInspector(cell.html) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
+      '<td class="' + bat.cls + '">' + escHtmlForecastInspector(bat.html) + '</td>' +
+      '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(costStr) + '</td>' +
       '</tr>';
+    if (r.socPct != null) prevSoc = r.socPct;
   }
   detailsBody.innerHTML =
     '<div class="eos-merged-meta">' + escHtmlForecastInspector(summaryLine) + '</div>' +
@@ -3155,15 +3124,17 @@ function renderEosInspector(payload) {
       '<table class="data-table dv-log-table eos-merged-table">' +
         '<thead><tr>' +
           '<th scope="col">Zeit (lokal)</th>' +
-          '<th scope="col" class="num">PV-Push (W)</th>' +
-          '<th scope="col" class="num">Last-Push (W)</th>' +
-          '<th scope="col" class="num">Preis (ct/kWh)</th>' +
-          '<th scope="col">Plan-Aktion · Leistung</th>' +
+          '<th scope="col" class="num">SoC</th>' +
+          '<th scope="col">Batterie</th>' +
+          '<th scope="col">Netz</th>' +
+          '<th scope="col" class="num">Kosten</th>' +
         '</tr></thead>' +
         '<tbody>' + trs + '</tbody>' +
       '</table>' +
     '</div>' +
-    (pull.ok ? '' : ('<div class="eos-subtbl-empty error">PULL-Fehler: ' + escHtmlForecastInspector(pull.error || 'unbekannt') + '</div>'));
+    (output && output.truncated
+      ? ('<div class="eos-subtbl-empty">… ' + (output.totalCount - outRows.length) + ' weitere Slots (Anzeige gekürzt)</div>')
+      : '');
 }
 // renderStage2BacktestResult ENTFERNT 2026-05-23 — Backtest-Karte aus Settings
 // raus. Backend (getStage2 / /api/forecast/inspector/stage2) bleibt intakt

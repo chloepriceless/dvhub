@@ -525,9 +525,16 @@ export function createInspector(ctx, deps = {}) {
     // adapter (per adapter-instance closure); we don't need to add a Promise.race
     // wrapper here. Each adapter call resolves to its own envelope and NEVER
     // throws (eos-adapter.js wraps errors as { ok:false, error } / null).
-    const [pushResult, pullResult] = await Promise.all([
+    // Also fetch EOS' optimization OUTPUT (solution: predicted SoC trajectory,
+    // grid flows, per-slot costs). Defensive: older/mock adapters may not expose
+    // getOptimizationSolution — fall back to a resolved null.
+    const solutionFetch = (eosAdapter && typeof eosAdapter.getOptimizationSolution === 'function')
+      ? eosAdapter.getOptimizationSolution().catch(() => null)
+      : Promise.resolve(null);
+    const [pushResult, pullResult, solutionResult] = await Promise.all([
       eosAdapter.pushForecast(forecastPayload),
       eosAdapter.pullSchedule(),
+      solutionFetch,
     ]);
 
     // pushResult shape: { ok:boolean, error?:string }
@@ -663,6 +670,9 @@ export function createInspector(ctx, deps = {}) {
       window: { from, to },
       push: { ok: pushOk, payloadSummary, providers, error: pushError },
       pull: { ok: pullOk, slots: pullSlots, error: pullError },
+      // EOS OUTPUT — the optimizer's predicted trajectory (SoC/grid/costs per
+      // 15-min slot) + KPI totals. null when EOS hasn't produced a solution yet.
+      output: solutionResult || null,
       operator: { allowGridCharge },
       meta: { timeoutMs: 5000, previewLimit: PAYLOAD_PREVIEW_LIMIT },
     };

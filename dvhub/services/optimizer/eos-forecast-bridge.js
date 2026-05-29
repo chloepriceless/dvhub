@@ -142,7 +142,10 @@ function eosHttpRequest(baseUrl, method, path, body) {
       const req = http.request({
         hostname: url.hostname,
         port: url.port || 8503,
-        path: url.pathname,
+        // Include url.search — the SoC measurement PUT passes datetime/key/
+        // value entirely on the query string. The forecast import PUTs carry
+        // no query string, so url.search is '' for them (unchanged behaviour).
+        path: url.pathname + url.search,
         method,
         headers,
         timeout: TIMEOUT_MS,
@@ -182,9 +185,77 @@ function eosHttpRequest(baseUrl, method, path, body) {
  * }}
  */
 export function createEosForecastBridge(ctx) {
-  const { getCfg, pushLog, forecastService } = ctx;
+  const { getCfg, pushLog, forecastService, state } = ctx;
 
   let tickHandle = null;
+
+  /**
+   * Push the current battery (and, when available, EV) State-of-Charge into
+   * EOS' own measurement series. The genetic optimizer seeds its run with the
+   * latest `*-soc-factor` measurement at ems.start_datetime
+   * (geneticparams.py:440 / :511); without it the start SoC defaults to 0 and
+   * any plan EOS produces is wrong (it "thinks" the battery is empty). DVhub
+   * already records SoC every poll as telemetry `battery_soc_pct` — this just
+   * forwards the live value to EOS.
+   *
+   * EOS measurement keys are device-derived (`battery1-soc-factor`,
+   * `ev11-soc-factor`). We discover them from /v1/measurement/keys instead of
+   * hard-coding device ids, so a device rename can't silently break the push.
+   *
+   * Value is the SoC *factor* (0..1) = percent / 100. Never throws.
+   *
+   * @param {string} baseUrl
+   * @returns {Promise<{pushed: string[], errors: object, skipped?: string}>}
+   */
+  async function pushSoc(baseUrl) {
+    const pushed = [];
+    const errors = {};
+
+    const socPct = Number(state?.victron?.soc);
+    if (!Number.isFinite(socPct)) {
+      return { pushed, errors, skipped: 'no live battery soc in state' };
+    }
+    const battFactor = Math.max(0, Math.min(1, socPct / 100));
+
+    // EV SoC is best-effort: DVhub does not reliably populate it. When absent
+    // we skip the EV key entirely (EOS then defaults that device to 0, which
+    // is a clean no-op, not a hard error).
+    const evPct = Number(state?.victron?.evSocPct);
+    const evFactor = Number.isFinite(evPct) ? Math.max(0, Math.min(1, evPct / 100)) : null;
+
+    const keysRes = await eosHttpRequest(baseUrl, 'GET', '/v1/measurement/keys');
+    if (!keysRes.ok || !Array.isArray(keysRes.data)) {
+      errors.soc = `could not read measurement keys: ${keysRes.error || 'unexpected shape'}`;
+      return { pushed, errors };
+    }
+    const socKeys = keysRes.data.filter((k) => /-soc-factor$/.test(String(k)));
+    // Stamp the SoC at the top of the current hour, NOT "now". EOS seeds the
+    // optimizer with the latest measurement at/<= ems.start_datetime, and that
+    // start is floored to the top of the current hour (observed plan
+    // valid_from=HH:00). A "now" timestamp lands AFTER start_datetime, so EOS
+    // looks back, misses it, and falls back to SoC=0 (empty battery) — the plan
+    // then optimises from a wrong start state. Berlin is a whole-hour offset,
+    // so flooring the UTC epoch to the hour aligns with local HH:00.
+    const nowIso = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
+      .toISOString()
+      .replace('.000Z', 'Z');
+
+    for (const key of socKeys) {
+      const isEv = /(^|[^a-z])ev\d*-soc-factor$/.test(key);
+      const value = isEv ? evFactor : battFactor;
+      if (value === null) continue; // EV with no live value — skip cleanly
+      // value rides as a query param (verified accepted by EOS 0.3.0); the
+      // endpoint takes datetime/key/value all on the query string, no body.
+      const path =
+        `/v1/measurement/value?datetime=${encodeURIComponent(nowIso)}` +
+        `&key=${encodeURIComponent(key)}&value=${value}`;
+      const res = await eosHttpRequest(baseUrl, 'PUT', path);
+      if (res.ok) pushed.push(`${key}=${value}`);
+      else errors[key] = res.error;
+    }
+
+    return { pushed, errors };
+  }
 
   /**
    * One push cycle: build the 3 payloads, PUT each. Sequential so that EOS'
@@ -262,9 +333,16 @@ export function createEosForecastBridge(ctx) {
       else errors[t.provider] = res.error;
     }
 
-    const okAll = pushed.length === tasks.length;
+    // Forward the live battery SoC so EOS seeds its optimizer with the real
+    // start state (not 0). Folded into the same cycle/cadence as the forecasts.
+    const socRes = await pushSoc(baseUrl);
+    for (const p of socRes.pushed) pushed.push(p);
+    Object.assign(errors, socRes.errors);
+
+    const okAll = pushed.length === tasks.length + socRes.pushed.length
+      && Object.keys(socRes.errors).length === 0;
     if (pushLog) {
-      pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors });
+      pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors, socSkipped: socRes.skipped });
     }
     return { ok: okAll, pushed, errors };
   }
@@ -303,3 +381,7 @@ export {
   priceSlotsToEosFormat,
   buildDataFrameBody,
 };
+
+// Internal regexes exported for unit-tests of the SoC key classification.
+export const SOC_KEY_RE = /-soc-factor$/;
+export const EV_SOC_KEY_RE = /(^|[^a-z])ev\d*-soc-factor$/;

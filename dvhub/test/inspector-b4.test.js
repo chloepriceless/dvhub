@@ -85,9 +85,9 @@ test('B4 getEos calls pushForecast AND pullSchedule when isAvailable=true', asyn
     ],
   });
   const forecastService = makeForecastService({
-    pv: { slots: [{ ts: '2026-05-20T10:00:00Z', watts: 5000 }, { ts: '2026-05-20T10:15:00Z', watts: 4800 }, { ts: '2026-05-20T10:30:00Z', watts: 4500 }] },
-    load: { slots: [{ ts: '2026-05-20T10:00:00Z', watts: 800 }, { ts: '2026-05-20T10:15:00Z', watts: 850 }] },
-    price: { slots: [{ ts: '2026-05-20T10:00:00Z', ctKwh: 12 }, { ts: '2026-05-20T10:15:00Z', ctKwh: 12 }, { ts: '2026-05-20T10:30:00Z', ctKwh: 13 }, { ts: '2026-05-20T10:45:00Z', ctKwh: 13 }] },
+    pv: { slots: [{ start: '2026-05-20T10:00:00Z', powerW: 5000 }, { start: '2026-05-20T10:15:00Z', powerW: 4800 }, { start: '2026-05-20T10:30:00Z', powerW: 4500 }] },
+    load: { slots: [{ start: '2026-05-20T10:00:00Z', powerW: 800 }, { start: '2026-05-20T10:15:00Z', powerW: 850 }] },
+    price: { slots: [{ start: '2026-05-20T10:00:00Z', ctKwh: 12 }, { start: '2026-05-20T10:15:00Z', ctKwh: 12 }, { start: '2026-05-20T10:30:00Z', ctKwh: 13 }, { start: '2026-05-20T10:45:00Z', ctKwh: 13 }] },
   });
   const inspector = createInspector(makeCtx(), { eosAdapter, forecastService });
   const out = await inspector.getEos({ from: 'a', to: 'b' });
