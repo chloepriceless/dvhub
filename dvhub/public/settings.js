@@ -3095,15 +3095,17 @@ function renderEosInspector(payload) {
     if (d >= 1) return pv ? { html: '☀ PV-Laden', cls: 'plan-pv-charge' }
                           : { html: '⤵ Netz-Laden', cls: 'plan-grid-charge' };
     if (d <= -1) return { html: '↓ Entladen', cls: 'plan-self' };
-    if (bezug) return { html: '⊘ Halten (Netz deckt Last)', cls: 'plan-grid-disabled' };
+    if (bezug) return { html: '⊘ Halten (Netz)', cls: 'plan-grid-disabled' };
     return { html: '→ Halten', cls: 'plan-self' };
   }
   // Grid flow per slot: consumption (Bezug) vs feed-in (Einspeisung), Wh.
+  // Label kept short (arrow + value) — direction is in the arrow, the
+  // "Bezug/Einspeisung" wording is already implied by the Handlung column.
   function gridCell(bezugWh, einspWh) {
     var b = (typeof bezugWh === 'number' && bezugWh > 1) ? bezugWh : 0;
     var e = (typeof einspWh === 'number' && einspWh > 1) ? einspWh : 0;
-    if (e > b) return { html: '↑ Einspeisung ' + Math.round(e) + ' Wh', cls: 'plan-export' };
-    if (b > 0) return { html: '↓ Bezug ' + Math.round(b) + ' Wh', cls: 'plan-grid-charge' };
+    if (e > b) return { html: '↑ ' + Math.round(e) + ' Wh', cls: 'plan-export' };
+    if (b > 0) return { html: '↓ ' + Math.round(b) + ' Wh', cls: 'plan-grid-charge' };
     return { html: '–', cls: '' };
   }
 

@@ -2717,26 +2717,29 @@ body.dv-modal-open {
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
 }
+/* Content-sized columns, then stretch to the card (operator request
+   2026-05-29): table-layout:auto sizes every column to exactly its content,
+   width:100% distributes the slack so the table fills the card. Each value
+   stays on one line (nowrap) → no column is wider than it needs to be. */
 .eos-merged-table {
-  table-layout: fixed;
+  table-layout: auto;
   width: 100%;
   min-width: 0;
 }
 /* The merged table also carries the generic .data-table class, which the
    detail-table mobile rule (.data-table-scroll > .data-table) forces to
-   min-width:600px. In the narrow (~400px) EOS card that 600px overflows and
-   clips the right-hand columns. Override it so all 8 columns fit with no
-   horizontal scroll. CSP forbids inline <style>/style=, so this MUST live in
-   the stylesheet (see settings.js renderEosInspector — 2026-05-29). */
+   min-width:600px. In the narrow (~400px) EOS card that 600px overflows.
+   Override it. CSP forbids inline <style>/style=, so this MUST live in the
+   stylesheet (see settings.js renderEosInspector — 2026-05-29). */
 .data-table-scroll > .eos-merged-table { min-width: 0; }
-.eos-merged-scroll { overflow-x: hidden; }
+/* Fallback only: if natural content still exceeds the card, scroll rather than
+   clip. Short cell labels (see gridCell/actionCell) keep it fitting normally. */
+.eos-merged-scroll { overflow-x: auto; }
 .eos-merged-table th,
 .eos-merged-table td {
-  padding: 3px 5px;
+  padding: 3px 6px;
   font-size: 9.5px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .eos-merged-table th {
   position: sticky;
@@ -2757,18 +2760,8 @@ body.dv-modal-open {
 }
 .eos-merged-table tbody tr:nth-child(odd) td { background: rgba(255, 255, 255, 0.02); }
 .eos-merged-table tbody tr:hover td { background: rgba(255, 255, 255, 0.05); }
-/* Column widths for the 8-column plan table (Zeit·SoC·Handlung·Netz·Preis·PV·
-   Last·Kosten). Sums to 100% so the fixed-layout table never exceeds the card.
-   Handlung + Netz carry text labels so they get the most room; numeric cols
-   are tight. Overflow ellipsis trims long labels at narrow widths. */
-.eos-merged-table th:nth-child(1), .eos-merged-table td:nth-child(1) { width: 13%; } /* Zeit */
-.eos-merged-table th:nth-child(2), .eos-merged-table td:nth-child(2) { width: 9%; }  /* SoC */
-.eos-merged-table th:nth-child(3), .eos-merged-table td:nth-child(3) { width: 19%; } /* Handlung */
-.eos-merged-table th:nth-child(4), .eos-merged-table td:nth-child(4) { width: 17%; } /* Netz */
-.eos-merged-table th:nth-child(5), .eos-merged-table td:nth-child(5) { width: 10%; } /* Preis */
-.eos-merged-table th:nth-child(6), .eos-merged-table td:nth-child(6) { width: 11%; } /* PV */
-.eos-merged-table th:nth-child(7), .eos-merged-table td:nth-child(7) { width: 11%; } /* Last */
-.eos-merged-table th:nth-child(8), .eos-merged-table td:nth-child(8) { width: 10%; } /* Kosten */
+/* No per-column widths: table-layout:auto sizes each to its content. Numeric
+   columns are right-aligned (th.num/td.num) for readability. */
 @media (max-width: 720px) {
   .eos-merged-scroll { max-height: 360px; }
   .eos-merged-table th, .eos-merged-table td { padding: 2px 4px; font-size: 9px; }
