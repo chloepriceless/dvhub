@@ -3144,13 +3144,13 @@ function renderEosInspector(payload) {
     '<div class="data-table-scroll eos-merged-scroll" tabindex="0">' +
       '<table class="data-table dv-log-table eos-merged-table">' +
         '<thead><tr>' +
-          '<th scope="col">Zeit (lokal)</th>' +
+          '<th scope="col">Zeit</th>' +
           '<th scope="col" class="num">SoC</th>' +
           '<th scope="col">Handlung</th>' +
           '<th scope="col">Netz</th>' +
           '<th scope="col" class="num">Preis</th>' +
-          '<th scope="col" class="num">PV (Wh)</th>' +
-          '<th scope="col" class="num">Last (Wh)</th>' +
+          '<th scope="col" class="num">PV</th>' +
+          '<th scope="col" class="num">Last</th>' +
           '<th scope="col" class="num">Kosten</th>' +
         '</tr></thead>' +
         '<tbody>' + trs + '</tbody>' +

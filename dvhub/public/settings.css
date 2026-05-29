@@ -2735,26 +2735,32 @@ body.dv-modal-open {
 /* Fallback only: if natural content still exceeds the card, scroll rather than
    clip. Short cell labels (see gridCell/actionCell) keep it fitting normally. */
 .eos-merged-scroll { overflow-x: auto; }
-.eos-merged-table th,
-.eos-merged-table td {
-  padding: 3px 6px;
+/* IMPORTANT: prefix with .settings-aurora so these win over
+   `.settings-aurora .data-table th/td` (specificity 0,2,1), which otherwise
+   forces padding:7px 8px and — the real column-bloat culprit —
+   letter-spacing:.22em on the headers. Matching specificity + later source
+   order lets these compact values apply. (operator feedback 2026-05-29) */
+.settings-aurora .eos-merged-table th,
+.settings-aurora .eos-merged-table td {
+  padding: 2px 6px;
   font-size: 9.5px;
+  letter-spacing: 0;
   white-space: nowrap;
 }
-.eos-merged-table th {
+.settings-aurora .eos-merged-table th {
   position: sticky;
   top: 0;
   z-index: 1;
   background: rgba(20, 28, 46, 0.92);
   backdrop-filter: blur(4px);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-size: 10.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 9.5px;
   color: var(--text-dim);
 }
-.eos-merged-table th.num,
-.eos-merged-table td.num {
+.settings-aurora .eos-merged-table th.num,
+.settings-aurora .eos-merged-table td.num {
   text-align: right;
   font-family: var(--f-mono);
 }
@@ -2764,7 +2770,8 @@ body.dv-modal-open {
    columns are right-aligned (th.num/td.num) for readability. */
 @media (max-width: 720px) {
   .eos-merged-scroll { max-height: 360px; }
-  .eos-merged-table th, .eos-merged-table td { padding: 2px 4px; font-size: 9px; }
+  .settings-aurora .eos-merged-table th,
+  .settings-aurora .eos-merged-table td { padding: 2px 4px; font-size: 9px; }
 }
 
 /* Phase 21 (2026-05-24): EOS plan-cell color coding — operator-actionable
