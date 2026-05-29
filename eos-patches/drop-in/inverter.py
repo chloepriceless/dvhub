@@ -25,6 +25,22 @@ _BATTERY_GRID_EXPORT_ENABLED = os.environ.get("EOS_BATTERY_GRID_EXPORT", "1") no
     "no",
 )
 
+# DVhub fork (2026-05-30): self-consumption priority. For a fixed-tariff operator
+# the grid import price is always higher than any spot feed-in, so covering the
+# house load from a charged battery beats both importing AND selling — at ANY
+# price level. With this on, Case 2 covers the load from the battery regardless
+# of the genetic's discharge gene (the gene then governs only grid export). This
+# is the robust, price-independent cure for "buys the night back from the grid
+# while the battery is charged" — replacing the brittle high-residual-value hack.
+# Disable (EOS_SELF_CONSUMPTION_PRIORITY=0, restart eos) for dynamic-tariff
+# operators where holding the battery through a cheap-import window can pay.
+_SELF_CONSUMPTION_PRIORITY = os.environ.get("EOS_SELF_CONSUMPTION_PRIORITY", "1") not in (
+    "0",
+    "false",
+    "False",
+    "no",
+)
+
 
 class Inverter:
     def __init__(
@@ -152,29 +168,36 @@ class Inverter:
             shortfall = consumption - generation
             available_ac_power = max(self.max_power_wh - generation, 0)
 
-            # Discharge battery to cover shortfall, if possible
+            # Discharge battery to cover shortfall, if possible.
             if self.battery:
-                # How much AC the battery is permitted to push this slot.
-                #   * Vanilla / export disabled: only enough to cover the load
-                #     shortfall (self-consumption).
-                #   * DVhub fork, export enabled AND the genetic flagged this
-                #     slot as discharge-allowed (battery.discharge_array[hour]>0):
-                #     let the battery push up to the FULL remaining inverter AC
-                #     headroom — load is served first, the surplus is sold to the
-                #     grid (arbitrage at the spot feed-in price). The genetic's
-                #     discharge gene therefore now decides *when* to dump to grid;
-                #     with a low battery residual value it concentrates discharge
-                #     in the evening price peak and drains overnight.
+                # Two independent decisions this slot:
+                #   1. SELF-CONSUMPTION (cover the house load from the battery).
+                #      For a fixed-tariff operator the grid import price (26.9 ct)
+                #      is ALWAYS higher than any spot feed-in (≤~18 ct), so using
+                #      stored energy for the load is unconditionally cheaper than
+                #      importing — independent of the day's price level. With
+                #      _SELF_CONSUMPTION_PRIORITY on we therefore cover the load
+                #      from the battery REGARDLESS of the genetic's discharge gene
+                #      (ignore_gate), down to the hard floor. This is what stops
+                #      the optimizer from buying the night back from the grid while
+                #      the battery still holds charge — robustly, not via a
+                #      brittle residual-value threshold tuned to a guessed price.
+                #   2. GRID EXPORT (sell surplus). Stays gated by the genetic's
+                #      discharge gene AND the overnight reserve: only the genuine
+                #      excess (what the battery won't need for self-consumption
+                #      before PV refills) is sold, and the GA picks WHEN — i.e. the
+                #      highest spot slots, whatever their absolute level.
                 # A SINGLE discharge_energy() call enforces the per-slot battery
                 # power cap (max_charge_power_w × slot_duration_h) and SoC floor
-                # across both roles, and `available_ac_power` caps total inverter
+                # across both roles; `available_ac_power` caps total inverter
                 # throughput — so the two never compound past either limit.
                 grid_export_allowed = (
                     _BATTERY_GRID_EXPORT_ENABLED
                     and self.battery.discharge_array[hour] > 0
                 )
+                cover_load = _SELF_CONSUMPTION_PRIORITY or grid_export_allowed
                 # Load coverage may always draw down to the hard floor.
-                load_ac = min(shortfall, available_ac_power)
+                load_ac = min(shortfall, available_ac_power) if cover_load else 0.0
                 if grid_export_allowed:
                     # Translate the overnight AC reserve into a SoC floor for the
                     # EXPORT branch, then the deliverable AC from the pool ABOVE
@@ -193,10 +216,12 @@ class Inverter:
                     target_ac = min(load_ac + export_ac_cap, available_ac_power)
                 else:
                     target_ac = load_ac
-                # Request more DC from battery to account for DC→AC conversion loss
+                # Request more DC from battery to account for DC→AC conversion loss.
+                # ignore_gate lets self-consumption bypass the discharge gene; when
+                # only export is allowed the gene already permits discharge anyway.
                 dc_request = target_ac / dc_to_ac_eff
                 total_discharge_dc, discharge_losses = self.battery.discharge_energy(
-                    dc_request, hour
+                    dc_request, hour, ignore_gate=cover_load
                 )
                 # Convert DC output to AC
                 total_discharge_ac = total_discharge_dc * dc_to_ac_eff

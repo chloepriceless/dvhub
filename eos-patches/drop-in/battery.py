@@ -121,8 +121,17 @@ class Battery:
         """Calculates the current state of charge in percentage."""
         return (self.soc_wh / self.capacity_wh) * 100
 
-    def discharge_energy(self, wh: float, hour: int) -> tuple[float, float]:
+    def discharge_energy(
+        self, wh: float, hour: int, ignore_gate: bool = False
+    ) -> tuple[float, float]:
         """Discharge energy from the battery.
+
+        DVhub fork: `ignore_gate=True` bypasses the per-slot discharge_array gate.
+        Used for self-consumption priority — covering the house load from a
+        charged battery is unconditionally cheaper than a grid import for a
+        fixed-tariff operator (import 26.9 ct > any spot feed-in), so the inverter
+        forces it regardless of the genetic's discharge gene (which then only
+        controls grid EXPORT timing). Default False keeps legacy gated behaviour.
 
         Discharge is limited by:
         * Requested delivered energy
@@ -141,7 +150,7 @@ class Battery:
                 losses_wh (float): Conversion losses [Wh].
 
         """
-        if self.discharge_array[hour] == 0:
+        if self.discharge_array[hour] == 0 and not ignore_gate:
             return 0.0, 0.0
 
         # Raw extractable energy above minimum SoC
