@@ -1,5 +1,6 @@
 """Genetic algorithm."""
 
+import os
 import random
 import time
 from typing import Any, Optional
@@ -23,6 +24,53 @@ from akkudoktoreos.optimization.genetic.geneticsolution import (
     GeneticSolution,
 )
 from akkudoktoreos.optimization.optimizationabc import OptimizationBase
+
+# DVhub fork (2026-05-29): overnight self-consumption reserve for the
+# battery→grid arbitrage discharge (Option B). Without it the optimizer empties
+# the battery into the evening price peak and buys the whole night's load back
+# from the grid. With it, grid-export discharge must leave enough charge to
+# cover the forecast net load (load − PV) until PV next covers load the next
+# morning. Self-consumption (covering load) is NOT limited — it consumes the
+# reserve through the night, ending near the floor as morning PV takes over.
+# EOS_OVERNIGHT_RESERVE=0 (then restart eos) disables it → sell to the floor.
+# EOS_OVERNIGHT_RESERVE_MARGIN pads the forecast against under-prediction.
+_OVERNIGHT_RESERVE_ENABLED = os.environ.get("EOS_OVERNIGHT_RESERVE", "1") not in (
+    "0",
+    "false",
+    "False",
+    "no",
+)
+try:
+    _OVERNIGHT_RESERVE_MARGIN = float(os.environ.get("EOS_OVERNIGHT_RESERVE_MARGIN", "1.1"))
+except (TypeError, ValueError):
+    _OVERNIGHT_RESERVE_MARGIN = 1.1
+
+
+def _compute_overnight_reserve(
+    load_array: np.ndarray,
+    pv_array: np.ndarray,
+    start_hour: int,
+    end_hour: int,
+    margin: float,
+) -> np.ndarray:
+    """Per-slot delivered-AC energy the battery must keep for self-consumption.
+
+    reserve[h] = margin × Σ max(load[j] − pv[j], 0) for j running from h+1 up to
+    (but not including) the next slot where PV covers load. Walked backwards so
+    each evening reserves exactly the energy needed to ride to the next morning.
+    """
+    reserve = np.zeros_like(load_array, dtype=float)
+    if not _OVERNIGHT_RESERVE_ENABLED:
+        return reserve
+    running = 0.0
+    for h in range(end_hour - 1, start_hour - 1, -1):
+        nxt = h + 1
+        if nxt >= end_hour or pv_array[nxt] >= load_array[nxt]:
+            running = 0.0  # morning reached (or horizon end) — no reserve beyond
+        else:
+            running += max(float(load_array[nxt]) - float(pv_array[nxt]), 0.0)
+        reserve[h] = running * margin
+    return reserve
 
 
 class GeneticSimulation(PydanticBaseModel):
@@ -311,6 +359,16 @@ class GeneticSimulation(PydanticBaseModel):
             # Default return if no home appliance is available
             home_appliance_wh_per_hour = np.full((total_hours), 0)
 
+        # DVhub fork: overnight self-consumption reserve for battery→grid export.
+        # Indexed by absolute slot like the load/PV arrays.
+        overnight_reserve_fast = _compute_overnight_reserve(
+            load_energy_array_fast,
+            pv_prediction_wh_fast,
+            start_hour,
+            end_hour,
+            _OVERNIGHT_RESERVE_MARGIN,
+        )
+
         for hour in range(start_hour, end_hour):
             hour_idx = hour - start_hour
 
@@ -353,7 +411,29 @@ class GeneticSimulation(PydanticBaseModel):
                     energy_consumption_grid_actual,
                     losses,
                     eigenverbrauch,
-                ) = inverter_fast.process_energy(energy_produced, consumption, hour)
+                ) = inverter_fast.process_energy(
+                    energy_produced,
+                    consumption,
+                    hour,
+                    export_reserve_ac_wh=float(overnight_reserve_fast[hour]),
+                )
+
+            # DVhub fork (2026-05-29): hard PV curtailment at negative feed-in
+            # price. When the feed-in tariff for this slot is < 0 the operator
+            # receives NO remuneration (no Marktprämie) for exported PV and may
+            # even pay — so exporting is a pure loss. Curtail the export instead:
+            # the surplus PV that the battery couldn't absorb is simply not fed in
+            # (counted as a loss/curtailment), never exported at a negative price.
+            # The optimizer then values these slots at revenue 0 (vs negative),
+            # so it stops planning loss-making negative-price feed-in. EOS is
+            # display-only, so the plan instructs zero export here and downstream
+            # automation curtails the PV. Operator rule: ANY price < 0 → no feed-in.
+            if (
+                energy_feedin_grid_actual > 0.0
+                and elect_revenue_per_hour_arr_fast[hour] < 0.0
+            ):
+                losses_wh_per_hour[hour_idx] += energy_feedin_grid_actual
+                energy_feedin_grid_actual = 0.0
 
             # AC PV Battery Charge
             if battery_fast:
@@ -451,6 +531,30 @@ class GeneticOptimization(OptimizationBase):
         cfg_pred = self.config.prediction
         return int(cfg_pred.hours * self.slots_per_hour)
 
+    def _start_day_slot(self) -> int:
+        """Slot index (from local midnight) of ems.start_datetime.
+
+        simulate()/evaluate() use the simulation's *start position* as a SLOT
+        index into the prediction/charge arrays (length == total_slots, slot 0
+        == 00:00 local), NOT as an hour-of-day. The legacy code passed the bare
+        hour (`start_datetime.hour`), which at 15-min resolution pointed 12
+        slots (=3 h) too early — the simulation result was then de-offset by
+        geneticsolution.py using start_day_slot, producing a 3 h shift between
+        the dispatch and its time/PV/price labels.
+
+        This MUST mirror geneticsolution.py's start_day_slot exactly (same tz
+        conversion + formula) so the serializer de-offsets the result with the
+        identical index. At interval=3600s slots_per_hour==1 and minute==0, so
+        it reduces to start_datetime.hour — byte-identical to legacy hourly. """
+        sd = self.ems.start_datetime
+        try:
+            sd = sd.in_timezone(self.config.general.timezone)
+        except Exception:
+            pass
+        sph = self.slots_per_hour
+        slot_minutes = max(1, 60 // sph)
+        return sd.hour * sph + sd.minute // slot_minutes
+
     def __init__(
         self,
         verbose: bool = False,
@@ -471,7 +575,19 @@ class GeneticOptimization(OptimizationBase):
         self.verbose = verbose
         self.fix_seed = fixed_seed
         self.optimize_ev = True
-        self.optimize_dc_charge = False
+        # DVhub fork (2026-05-29): DC-charge optimization ON. The GA gets a
+        # per-slot dc_allowed gene so it controls PV→battery charging timing:
+        # hold SoC low and SELL PV while feed-in prices are high (morning), then
+        # fill the battery from the cheapest (midday/negative) PV, reaching 100%
+        # for the evening peak. battery.charge_energy honours charge_array[hour]
+        # ==0 (surplus exports instead of charging). This now works correctly
+        # because (a) the active PV forecast is VRM (~112 kWh, realistic) not the
+        # under-predicting forecast_solar, and (b) the battery residual value
+        # (levelized_cost_of_storage_kwh → preis_euro_pro_wh_akku, set from
+        # userEnergyPricing.costs.batteryBaseCtKwh) now rewards ending full, so
+        # the GA targets 100% instead of selling everything cheap. Pairs with
+        # negative-price feed-in curtailment + grid-charge block.
+        self.optimize_dc_charge = True
         self.fitness_history: dict[str, Any] = {}
 
         # Set a fixed seed for random operations if provided or in debug mode
@@ -758,8 +874,11 @@ class GeneticOptimization(OptimizationBase):
             # discharge is set to 0 by default
             self.simulation.ev_charge_hours = np.full(self.total_slots, 0)
 
-        # Do the simulation and return result.
-        return self.simulation.simulate(self.ems.start_datetime.hour)
+        # Do the simulation and return result. simulate()'s argument is a SLOT
+        # index into the prediction/charge arrays, not an hour-of-day — pass the
+        # start_day_slot so 15-min runs don't dispatch 3 h too early (the bare
+        # hour was the cause of the SoC/grid-flow time shift). DVhub fork.
+        return self.simulation.simulate(self._start_day_slot())
 
     def evaluate(
         self,
@@ -1096,6 +1215,11 @@ class GeneticOptimization(OptimizationBase):
             raise ValueError(
                 f"Start hour not synced. EMS {self.ems.start_datetime.hour} vs. GENETIC {start_hour}."
             )
+        # start_hour stays the hour-of-day for the DEAP appliance-start gene
+        # bounds (attr_int/mutate_hour, 0..23). For everything that indexes the
+        # slot arrays (simulate result offset, evaluate's AC break-even loop) use
+        # the slot index so 15-min runs stay aligned with geneticsolution.py.
+        start_slot = self._start_day_slot()
 
         # Set the number of generations
         generations = ngen
@@ -1220,11 +1344,13 @@ class GeneticOptimization(OptimizationBase):
             home_appliance=dishwasher,
         )
 
-        # Setup the DEAP environment and optimization process
+        # Setup the DEAP environment and optimization process. setup_deap gets
+        # the hour-of-day (appliance gene bounds); evaluate gets the slot index
+        # (its AC break-even loop walks the slot arrays from "now").
         self.setup_deap_environment({"home_appliance": 1 if dishwasher else 0}, start_hour)
         self.toolbox.register(
             "evaluate",
-            lambda ind: self.evaluate(ind, parameters, start_hour, worst_case),
+            lambda ind: self.evaluate(ind, parameters, start_slot, worst_case),
         )
 
         start_time = time.time()
