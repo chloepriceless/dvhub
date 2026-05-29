@@ -3466,6 +3466,27 @@ export function createApiRoutes(ctx) {
         results.batteries = await putEos('/devices/batteries', [battery]);
         results.max_batteries = await putEos('/devices/max_batteries', 1);
       }
+      // EV optimization is opt-in (cfg.optimizer.eosOptimizeEv, default OFF) —
+      // mirrors eos-config-sync.js. OFF → EOS does not schedule EV charging from
+      // grid; the EV load is already in the LoadImport forecast.
+      const optimizeEv = cfg.optimizer?.eosOptimizeEv === true;
+      if (optimizeEv) {
+        results.electric_vehicles = await putEos('/devices/electric_vehicles', [{
+          device_id: 'ev11',
+          capacity_wh: Number(cfg.optimizer?.evCapacityWh) || 50000,
+          charging_efficiency: 0.88,
+          discharging_efficiency: 0.88,
+          max_charge_power_w: Number(cfg.optimizer?.evMaxChargeW) || 5000,
+          min_charge_power_w: 50,
+          charge_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+          min_soc_percentage: Number.isFinite(Number(cfg.optimizer?.evMinSocPct)) ? Number(cfg.optimizer.evMinSocPct) : 70,
+          max_soc_percentage: 100,
+        }]);
+        results.max_electric_vehicles = await putEos('/devices/max_electric_vehicles', 1);
+      } else {
+        results.max_electric_vehicles = await putEos('/devices/max_electric_vehicles', 0);
+        results.electric_vehicles = await putEos('/devices/electric_vehicles', []);
+      }
       // Provider-Konfiguration: EOS soll die Werte verwenden, die unser
       // EOS-Adapter via PUT /v1/prediction/import/* schon regelmäßig pusht.
       // Ohne das stehen die provider auf null und EOS hat keine Daten-Quelle.

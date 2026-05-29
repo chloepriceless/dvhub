@@ -13,6 +13,7 @@ import {
   buildEosInverters,
   buildEosElecprice,
   buildEosOptimization,
+  buildEosElectricVehicles,
   pickGeneticSizing,
   pickEmsIntervalSec,
 } from '../services/optimizer/eos-config-sync.js';
@@ -149,4 +150,18 @@ test('pickEmsIntervalSec: stretches at finer slot resolutions', () => {
   assert.equal(pickEmsIntervalSec(900), 3600);
   // unknown interval: hourly default
   assert.equal(pickEmsIntervalSec(7200), 300);
+});
+
+test('buildEosElectricVehicles returns one ev11 with config overrides', () => {
+  const def = buildEosElectricVehicles({});
+  assert.equal(def.length, 1);
+  assert.equal(def[0].device_id, 'ev11');
+  assert.equal(def[0].capacity_wh, 50000);
+  assert.equal(def[0].min_soc_percentage, 70);
+  assert.equal(def[0].charge_rates.length, 11);
+
+  const over = buildEosElectricVehicles({ optimizer: { evCapacityWh: 75000, evMaxChargeW: 11000, evMinSocPct: 50 } });
+  assert.equal(over[0].capacity_wh, 75000);
+  assert.equal(over[0].max_charge_power_w, 11000);
+  assert.equal(over[0].min_soc_percentage, 50);
 });

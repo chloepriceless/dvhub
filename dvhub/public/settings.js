@@ -3110,11 +3110,14 @@ function renderEosInspector(payload) {
     var costNum = (typeof r.costsAmt === 'number' ? r.costsAmt : 0) - (typeof r.revenueAmt === 'number' ? r.revenueAmt : 0);
     var costStr = isFinite(costNum) ? (costNum * 100).toFixed(1) + ' ct' : '–';
     var pvStr = (typeof r.pvWh === 'number' && isFinite(r.pvWh) && r.pvWh > 1) ? Math.round(r.pvWh) + ' Wh' : '–';
+    var loadStr = (typeof r.loadWh === 'number' && isFinite(r.loadWh) && r.loadWh > 0) ? Math.round(r.loadWh) + ' Wh' : '–';
+    var priceStr = (typeof r.priceCtKwh === 'number' && isFinite(r.priceCtKwh)) ? r.priceCtKwh.toFixed(1) + ' ct' : '–';
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(priceStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
-      '<td class="' + bat.cls + '">' + escHtmlForecastInspector(bat.html) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(loadStr) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
       '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(costStr) + '</td>' +
       '</tr>';
@@ -3126,9 +3129,10 @@ function renderEosInspector(payload) {
       '<table class="data-table dv-log-table eos-merged-table">' +
         '<thead><tr>' +
           '<th scope="col">Zeit (lokal)</th>' +
-          '<th scope="col" class="num">SoC</th>' +
+          '<th scope="col" class="num">Preis</th>' +
           '<th scope="col" class="num">PV (Wh)</th>' +
-          '<th scope="col">Batterie</th>' +
+          '<th scope="col" class="num">Last (Wh)</th>' +
+          '<th scope="col" class="num">SoC</th>' +
           '<th scope="col">Netz</th>' +
           '<th scope="col" class="num">Kosten</th>' +
         '</tr></thead>' +

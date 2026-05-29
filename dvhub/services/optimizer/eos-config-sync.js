@@ -97,6 +97,31 @@ export function buildEosBatteries(cfg, opts = {}) {
 }
 
 /**
+ * Build the EOS electric-vehicle device list (only used when the operator
+ * enables EV optimization via cfg.optimizer.eosOptimizeEv). Mirrors the EOS
+ * 'ev11' defaults; overridable via cfg.optimizer.ev{CapacityWh,MaxChargeW,
+ * MinSocPct}. Charge_rates are the 11-step grid so the genetic algo can pick a
+ * partial charge power per slot.
+ *
+ * @param {object} cfg
+ * @returns {Array<object>}
+ */
+export function buildEosElectricVehicles(cfg) {
+  const opt = cfg?.optimizer || {};
+  return [{
+    device_id: 'ev11',
+    capacity_wh: Number(opt.evCapacityWh) || 50000,
+    charging_efficiency: 0.88,
+    discharging_efficiency: 0.88,
+    max_charge_power_w: Number(opt.evMaxChargeW) || 5000,
+    min_charge_power_w: 50,
+    charge_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    min_soc_percentage: Number.isFinite(Number(opt.evMinSocPct)) ? Number(opt.evMinSocPct) : 70,
+    max_soc_percentage: 100,
+  }];
+}
+
+/**
  * Build the EOS elecprice section. When the operator has configured the
  * dynamicComponents (Netzentgelte + Abgaben + Energie-Markup), surface their
  * sum as `charges_kwh` so the genetic algo prices grid imports at the real
@@ -308,9 +333,27 @@ export function createEosConfigSync(ctx) {
     // These hit field-level PUT endpoints (PUT /v1/config/{path}) one value
     // at a time — the section-level shape only works for {device,inverter}.
     const emsIntervalSec = pickEmsIntervalSec(optimization.interval);
+    // EV optimization is opt-in via cfg.optimizer.eosOptimizeEv (default OFF,
+    // operator request 2026-05-29). When OFF, EOS gets max_electric_vehicles=0
+    // (geneticparams → electric_vehicle_params=None) so it does NOT schedule EV
+    // charging from the grid overnight — the operator charges the EV from PV
+    // during the day, and that load is already captured by the LoadImport
+    // forecast. When ON, EOS models the EV as a separately-optimised device.
+    const optimizeEv = cfg?.optimizer?.eosOptimizeEv === true;
+    const evTasks = optimizeEv
+      ? [
+          { section: 'devices/max_electric_vehicles', body: 1 },
+          { section: 'devices/electric_vehicles', body: buildEosElectricVehicles(cfg) },
+        ]
+      : [
+          { section: 'devices/max_electric_vehicles', body: 0 },
+          { section: 'devices/electric_vehicles', body: [] },
+        ];
+
     const tasks = [
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
+      ...evTasks,
       { section: 'optimization/interval', body: optimization.interval },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },

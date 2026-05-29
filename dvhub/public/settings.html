@@ -609,6 +609,16 @@
               <button id="eosSyncBtn" type="button" class="btn primary">Mit DVhub-Werten synchronisieren</button>
             </div>
             <div id="eosSyncResult" class="eos-sync-result u-hidden"></div>
+            <div class="config-row">
+              <span class="config-row-label">E-Auto in EOS-Optimierung ber&uuml;cksichtigen</span>
+              <input type="checkbox" data-path="optimizer.eosOptimizeEv" data-cfg="optimizer.eosOptimizeEv" id="eosOptimizeEv">
+            </div>
+            <p class="svc-meta-tight">
+              <strong>Aus</strong> (Standard): EOS plant nur die Hausbatterie &mdash; die E-Auto-Ladung
+              steckt bereits in der Last-Prognose. <strong>An</strong>: EOS optimiert die E-Auto-Ladung
+              separat als eigenes Ger&auml;t (kann Netzbezug f&uuml;r Laden nachts einplanen).
+              Wird beim Speichern automatisch nach EOS &uuml;bernommen.
+            </p>
             <div class="eos-sync-row eos-sync-row-secondary">
               <a href="/eosdash/" target="_blank" rel="noopener" class="btn ghost sm">EOSdash in neuem Tab &ouml;ffnen</a>
               <a href="#forecast" class="btn ghost sm">Forecast-Inspector pr&uuml;fen</a>
