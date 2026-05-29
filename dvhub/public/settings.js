@@ -3122,28 +3122,33 @@ function renderEosInspector(payload) {
     var priceStr = (typeof r.priceCtKwh === 'number' && isFinite(r.priceCtKwh)) ? r.priceCtKwh.toFixed(1) + ' ct' : '–';
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(priceStr) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
-      '<td class="num">' + escHtmlForecastInspector(loadStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
       '<td class="' + act.cls + '">' + escHtmlForecastInspector(act.html) + '</td>' +
       '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(priceStr) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(loadStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(costStr) + '</td>' +
       '</tr>';
     if (r.socPct != null) prevSoc = r.socPct;
   }
   detailsBody.innerHTML =
+    // Layout/compaction for all 8 columns lives in settings.css
+    // (.eos-merged-table + .eos-merged-scroll). CSP forbids inline <style> and
+    // style= attributes here — earlier inline attempts were silently blocked
+    // (style-src), which is why the cached 600px min-width kept clipping the
+    // table. Keep all styling in the stylesheet. (2026-05-29)
     '<div class="eos-merged-meta">' + escHtmlForecastInspector(summaryLine) + '</div>' +
     '<div class="data-table-scroll eos-merged-scroll" tabindex="0">' +
       '<table class="data-table dv-log-table eos-merged-table">' +
         '<thead><tr>' +
           '<th scope="col">Zeit (lokal)</th>' +
-          '<th scope="col" class="num">Preis</th>' +
-          '<th scope="col" class="num">PV (Wh)</th>' +
-          '<th scope="col" class="num">Last (Wh)</th>' +
           '<th scope="col" class="num">SoC</th>' +
           '<th scope="col">Handlung</th>' +
           '<th scope="col">Netz</th>' +
+          '<th scope="col" class="num">Preis</th>' +
+          '<th scope="col" class="num">PV (Wh)</th>' +
+          '<th scope="col" class="num">Last (Wh)</th>' +
           '<th scope="col" class="num">Kosten</th>' +
         '</tr></thead>' +
         '<tbody>' + trs + '</tbody>' +
