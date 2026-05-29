@@ -271,3 +271,43 @@ test('push skips SoC cleanly when no live battery SoC in state', async () => {
     await mock.close();
   }
 });
+
+test('push sends FeedInTariffImport (spot price × factor) only in spot mode', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'spot', feedInSpotFactor: 1 } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => ({
+        pv: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 1000 }] },
+        load: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 500 }] },
+        price: { slots: [{ start: '2026-05-24T12:00:00.000Z', ctKwh: 30 }, { start: '2026-05-24T12:15:00.000Z', ctKwh: -5 }] },
+      }) },
+      state: { victron: { soc: 50 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    const feedReq = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/FeedInTariffImport'));
+    assert.ok(feedReq, 'FeedInTariffImport pushed in spot mode');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('push does NOT send FeedInTariffImport in fixed mode', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'fixed' } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    const feedReq = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/FeedInTariffImport'));
+    assert.ok(!feedReq, 'no FeedInTariffImport in fixed mode');
+  } finally {
+    await mock.close();
+  }
+});

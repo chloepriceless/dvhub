@@ -366,6 +366,14 @@ export function createEosConfigSync(ctx) {
       { section: 'load/provider', body: 'LoadImport' },
       { section: 'elecprice/provider', body: 'ElecPriceImport' },
     ];
+    // In spot feed-in mode, point feedintariff at FeedInTariffImport so EOS
+    // values grid export at the spot price the bridge pushes (operator request
+    // 2026-05-29) — enables evening battery Vermarktung at peak prices instead
+    // of the flat EEG tariff. EOS-side planning only; the real plant is
+    // unaffected (primarySource=internal).
+    if (String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase() === 'spot') {
+      tasks.push({ section: 'feedintariff/provider', body: 'FeedInTariffImport' });
+    }
     if (elecprice) {
       tasks.push(
         { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },

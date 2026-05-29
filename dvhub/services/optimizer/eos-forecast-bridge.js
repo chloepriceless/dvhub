@@ -290,6 +290,20 @@ export function createEosForecastBridge(ctx) {
     const priceSlotsCt = forecast?.price?.slots || [];
     const tz = cfg?.optimizer?.timezone || 'Europe/Berlin';
 
+    // Feed-in tariff = spot price × feedInSpotFactor (€/Wh), pushed only in spot
+    // mode (operator request 2026-05-29). Without this EOS values feed-in at the
+    // flat EEG tariff (FeedInTariffEnergyCharts) and never discharges the battery
+    // to grid at the high evening spot — with it, EOS plans evening Vermarktung
+    // at peak prices and holds PV back from feed-in during negative windows.
+    const tariff = cfg?.optimizer?.tariff || {};
+    const feedInSpot = String(tariff.feedInMode || 'fixed').toLowerCase() === 'spot';
+    const feedInFactor = Number.isFinite(Number(tariff.feedInSpotFactor)) ? Number(tariff.feedInSpotFactor) : 1.0;
+    const feedInSlots = feedInSpot
+      ? priceSlotsCt
+          .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)))
+          .map((s) => ({ start: s.start, powerW: (Number(s.ctKwh) / 100 / 1000) * feedInFactor }))
+      : [];
+
     const tasks = [
       {
         provider: 'PVForecastImport',
@@ -315,6 +329,13 @@ export function createEosForecastBridge(ctx) {
         rows: priceSlotsCt.length,
       },
     ];
+    if (feedInSpot && feedInSlots.length) {
+      tasks.push({
+        provider: 'FeedInTariffImport',
+        body: buildDataFrameBody('feed_in_tariff_wh', feedInSlots, tz),
+        rows: feedInSlots.length,
+      });
+    }
 
     const pushed = [];
     const errors = {};
