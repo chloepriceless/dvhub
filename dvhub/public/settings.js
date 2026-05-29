@@ -3122,12 +3122,16 @@ function renderEosInspector(payload) {
     var pvStr = (typeof r.pvWh === 'number' && isFinite(r.pvWh) && r.pvWh > 1) ? Math.round(r.pvWh) + ' Wh' : '–';
     var loadStr = (typeof r.loadWh === 'number' && isFinite(r.loadWh) && r.loadWh > 0) ? Math.round(r.loadWh) + ' Wh' : '–';
     var priceStr = (typeof r.priceCtKwh === 'number' && isFinite(r.priceCtKwh)) ? r.priceCtKwh.toFixed(1) + ' ct' : '–';
+    // Spot / Börsenpreis = what export (Einspeisung) earns; shown next to the
+    // fixed import price so the buy-vs-sell gap per slot is visible.
+    var feedInStr = (typeof r.feedInCtKwh === 'number' && isFinite(r.feedInCtKwh)) ? r.feedInCtKwh.toFixed(1) + ' ct' : '–';
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
       '<td class="' + act.cls + '">' + escHtmlForecastInspector(act.html) + '</td>' +
       '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(priceStr) + '</td>' +
+      '<td class="num">' + escHtmlForecastInspector(feedInStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(loadStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(costStr) + '</td>' +
@@ -3148,7 +3152,8 @@ function renderEosInspector(payload) {
           '<th scope="col" class="num">SoC</th>' +
           '<th scope="col">Handlung</th>' +
           '<th scope="col">Netz</th>' +
-          '<th scope="col" class="num">Preis</th>' +
+          '<th scope="col" class="num">Bezug</th>' +
+          '<th scope="col" class="num">Börse</th>' +
           '<th scope="col" class="num">PV</th>' +
           '<th scope="col" class="num">Last</th>' +
           '<th scope="col" class="num">Kosten</th>' +

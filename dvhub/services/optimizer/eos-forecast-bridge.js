@@ -290,6 +290,27 @@ export function createEosForecastBridge(ctx) {
     const priceSlotsCt = forecast?.price?.slots || [];
     const tz = cfg?.optimizer?.timezone || 'Europe/Berlin';
 
+    // Import (Bezugs) price. In FIXED-tariff mode the operator pays a flat gross
+    // ct/kWh (e.g. 26.9 ct) regardless of spot, so push THAT — not the raw spot
+    // (~14 ct) the bridge would otherwise stream. Otherwise the GA prices grid
+    // imports far too cheaply, making self-consumption look barely better than
+    // selling, so it over-sells the battery at the evening peak and buys the
+    // night back from the grid. With the real import price, self-consumption
+    // (avoided ~26.9 ct) clearly beats feed-in (≤17 ct spot) and the battery
+    // covers the night instead. Feed-in/Vermarktung stays spot (handled below).
+    // 2026-05-30, operator request.
+    const pricing = cfg?.userEnergyPricing || {};
+    const fixedImportCt =
+      String(pricing.mode || '').toLowerCase() === 'fixed'
+        ? Number(pricing.fixedGrossImportCtKwh)
+        : NaN;
+    const importFixed = Number.isFinite(fixedImportCt) && fixedImportCt > 0;
+    const elecpriceSlots = importFixed
+      ? priceSlotsCt
+          .filter((s) => s && s.start)
+          .map((s) => ({ start: s.start, powerW: fixedImportCt / 100 / 1000 }))
+      : priceSlotsToEosFormat(priceSlotsCt);
+
     // Feed-in tariff = spot price × feedInSpotFactor (€/Wh), pushed only in spot
     // mode (operator request 2026-05-29). Without this EOS values feed-in at the
     // flat EEG tariff (FeedInTariffEnergyCharts) and never discharges the battery
@@ -321,12 +342,8 @@ export function createEosForecastBridge(ctx) {
       },
       {
         provider: 'ElecPriceImport',
-        body: buildDataFrameBody(
-          'elecprice_marketprice_wh',
-          priceSlotsToEosFormat(priceSlotsCt),
-          tz,
-        ),
-        rows: priceSlotsCt.length,
+        body: buildDataFrameBody('elecprice_marketprice_wh', elecpriceSlots, tz),
+        rows: elecpriceSlots.length,
       },
     ];
     if (feedInSpot && feedInSlots.length) {

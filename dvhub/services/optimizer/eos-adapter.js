@@ -381,9 +381,14 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         socPct: numOrNull(socFactor) != null ? Math.round(socFactor * 100) : null,
         pvWh: numOrNull(pr.pvforecast_ac_energy_wh),
         loadWh: numOrNull(pr.loadforecast_energy_wh),
-        // EOS' electricity price for this slot, €/kWh → ct/kWh (the spot price
-        // the optimizer actually priced grid import against).
+        // EOS' electricity price for this slot, €/kWh → ct/kWh. With fixed-tariff
+        // operators this is the flat Endkunden-Bezugspreis the optimizer prices
+        // grid IMPORT against (e.g. 26.9 ct).
         priceCtKwh: numOrNull(pr.elec_price_amt_kwh) != null ? pr.elec_price_amt_kwh * 100 : null,
+        // The spot / feed-in tariff for this slot, €/kWh → ct/kWh — what EOS
+        // values grid EXPORT (Einspeisung/Vermarktung) at. Shown next to the
+        // import price so the operator sees both sides (buy vs sell) per slot.
+        feedInCtKwh: numOrNull(pr.feed_in_tariff_amt_kwh) != null ? pr.feed_in_tariff_amt_kwh * 100 : null,
         gridConsumptionWh: numOrNull(r.grid_consumption_energy_wh),
         gridFeedinWh: numOrNull(r.grid_feedin_energy_wh),
         costsAmt: numOrNull(r.costs_amt),
