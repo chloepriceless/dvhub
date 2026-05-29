@@ -404,6 +404,25 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       };
       stateUpdated = true;
       ctx.bumpForecastVersion?.();
+    } else if (!stateUpdated && vrmResult.length > 0) {
+      // VRM PREFERRED over forecast_solar/open_meteo (2026-05-29): on this
+      // deployment solcast is unconfigured (0 kWh), pvlib/pvnode inactive, and
+      // forecast_solar under-predicts badly (~35 kWh vs VRM ~112 kWh for the
+      // actual 12.8 kWp system) while open_meteo over-predicts (~173 kWh).
+      // VRM is Victron's forecast for the REAL installed array — it matches the
+      // Leitstand daily total (readDailyTotals) and the operator's expectation.
+      // The previous order let forecast_solar win, so EOS + the chart ran on a
+      // ~3× too-low PV forecast (the battery could never plan to fill). Keep
+      // pvlib/solcast/pvnode ahead (they're better models WHEN configured), but
+      // prefer VRM to the two weather-only fallbacks.
+      state.forecast.pv = {
+        lastFetchAt: new Date().toISOString(),
+        model: 'vrm',
+        data: vrmResult,
+        confidence: 0.5
+      };
+      stateUpdated = true;
+      ctx.bumpForecastVersion?.();
     } else if (!stateUpdated && forecastSolarResult.length > 0) {
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
@@ -419,16 +438,6 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
         model: 'open_meteo',
         data: openMeteoResult,
         confidence: 0.3
-      };
-      stateUpdated = true;
-      ctx.bumpForecastVersion?.();
-    } else if (!stateUpdated && vrmResult.length > 0) {
-      // VRM as last fallback — always available if VRM token configured
-      state.forecast.pv = {
-        lastFetchAt: new Date().toISOString(),
-        model: 'vrm',
-        data: vrmResult,
-        confidence: 0.25
       };
       stateUpdated = true;
       ctx.bumpForecastVersion?.();
