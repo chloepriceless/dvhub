@@ -3081,13 +3081,21 @@ function renderEosInspector(payload) {
     return;
   }
 
-  // Battery action derived from EOS' own predicted SoC trajectory (Δ between
-  // consecutive 15-min slots). Clearer than the raw operation_mode_id.
-  function batteryCell(socPct, prevSocPct) {
-    if (typeof socPct !== 'number' || typeof prevSocPct !== 'number') return { html: '–', cls: '' };
-    var d = socPct - prevSocPct;
-    if (d >= 1) return { html: '↑ Laden', cls: 'plan-pv-charge' };
-    if (d <= -1) return { html: '↓ Entladen', cls: 'plan-export' };
+  // What EOS plans to DO per slot — derived from its own predicted SoC trajectory
+  // (Δ vs previous 15-min slot) combined with the grid flow + PV. Clearer than
+  // the raw operation_mode_id and works even though the solution frame reports
+  // dispatch implicitly via SoC/grid rather than a single action field.
+  function actionCell(r, prevSocPct) {
+    var soc = r.socPct;
+    var d = (typeof soc === 'number' && typeof prevSocPct === 'number') ? soc - prevSocPct : 0;
+    var feedin = (typeof r.gridFeedinWh === 'number' && r.gridFeedinWh > 1);
+    var bezug = (typeof r.gridConsumptionWh === 'number' && r.gridConsumptionWh > 1);
+    var pv = (typeof r.pvWh === 'number' && r.pvWh > 50);
+    if (feedin) return { html: '⚡ Einspeisen', cls: 'plan-export' };
+    if (d >= 1) return pv ? { html: '☀ PV-Laden', cls: 'plan-pv-charge' }
+                          : { html: '⤵ Netz-Laden', cls: 'plan-grid-charge' };
+    if (d <= -1) return { html: '↓ Entladen', cls: 'plan-self' };
+    if (bezug) return { html: '⊘ Halten (Netz deckt Last)', cls: 'plan-grid-disabled' };
     return { html: '→ Halten', cls: 'plan-self' };
   }
   // Grid flow per slot: consumption (Bezug) vs feed-in (Einspeisung), Wh.
@@ -3104,7 +3112,7 @@ function renderEosInspector(payload) {
   for (var x = 0; x < outRows.length; x++) {
     var r = outRows[x];
     var when = formatBerlinTimeForecastInspector(r.ts_utc);
-    var bat = batteryCell(r.socPct, prevSoc);
+    var act = actionCell(r, prevSoc);
     var grid = gridCell(r.gridConsumptionWh, r.gridFeedinWh);
     // Net cost per slot in ct: costs minus revenue (negative = net earnings).
     var costNum = (typeof r.costsAmt === 'number' ? r.costsAmt : 0) - (typeof r.revenueAmt === 'number' ? r.revenueAmt : 0);
@@ -3118,6 +3126,7 @@ function renderEosInspector(payload) {
       '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(loadStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
+      '<td class="' + act.cls + '">' + escHtmlForecastInspector(act.html) + '</td>' +
       '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(costStr) + '</td>' +
       '</tr>';
@@ -3133,6 +3142,7 @@ function renderEosInspector(payload) {
           '<th scope="col" class="num">PV (Wh)</th>' +
           '<th scope="col" class="num">Last (Wh)</th>' +
           '<th scope="col" class="num">SoC</th>' +
+          '<th scope="col">Handlung</th>' +
           '<th scope="col">Netz</th>' +
           '<th scope="col" class="num">Kosten</th>' +
         '</tr></thead>' +
