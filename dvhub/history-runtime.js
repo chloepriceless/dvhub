@@ -1,7 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
 // Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
 import { round2 } from './server-utils.js';
+// WS3 (2026-05-30): PVGIS-derived monthly expected production (real array
+// geometry) replaces the crude static monthly-distribution estimate.
+import { readCachedPvgisMonthly } from './pvgis-expected-production.js';
+
+const PVGIS_EXPECTED_CACHE_PATH = path.join(
+  process.env.DV_DATA_DIR || '.',
+  'reference-data',
+  'pvgis-expected-production.json',
+);
 
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const SUPPORTED_VIEWS = new Set(['day', 'week', 'month', 'year', 'all']);
@@ -683,6 +694,30 @@ function applyPvFullLoadHours({ kpis, pricingConfig }) {
 // "nicht verfuegbar" als irreführend.
 function computeExpectedPvKwh({ view, range, pricingConfig }) {
   if (view === 'all') return null;
+
+  // WS3: prefer the PVGIS-derived monthly expected production (real array
+  // geometry — tilt/azimuth per plane, incl. the north-string penalty). Falls
+  // back to the legacy pvPotentialKwhAnnual × static-distribution model when the
+  // PVGIS cache is absent/stale (no geometry, or PVGIS unreachable at refresh).
+  let pvgisMonthly = readCachedPvgisMonthly({
+    cachePath: PVGIS_EXPECTED_CACHE_PATH,
+    planes: pricingConfig?.pvPlants,
+  });
+  // PVGIS PVcalc is computed without site horizon shading, so for a site with
+  // hills/trees it overshoots the real yield. Use PVGIS for the geometry-
+  // accurate monthly SHAPE (relative orientation/north-penalty distribution)
+  // but calibrate the MAGNITUDE to the operator's known annual yield
+  // (pvPotentialKwhAnnual) when set — best of both. Without that figure, use
+  // PVGIS absolute.
+  if (pvgisMonthly) {
+    const annualSet = Number(pricingConfig?.pvPotentialKwhAnnual);
+    const pvgisAnnual = pvgisMonthly.reduce((a, b) => a + (Number(b) || 0), 0);
+    if (Number.isFinite(annualSet) && annualSet > 0 && pvgisAnnual > 0) {
+      const f = annualSet / pvgisAnnual;
+      pvgisMonthly = pvgisMonthly.map((v) => (Number(v) || 0) * f);
+    }
+  }
+
   const annualPotential = (() => {
     const raw = Number(pricingConfig?.pvPotentialKwhAnnual);
     if (Number.isFinite(raw) && raw > 0) return raw;
@@ -690,7 +725,7 @@ function computeExpectedPvKwh({ view, range, pricingConfig }) {
     const kwp = summarizeConfiguredPvCapacity(pricingConfig?.pvPlants);
     return Number.isFinite(kwp) && kwp > 0 ? kwp * 900 : null;
   })();
-  if (annualPotential == null) return null;
+  if (annualPotential == null && !pvgisMonthly) return null;
 
   const distArr = Array.isArray(pricingConfig?.pvMonthlyDistributionPct)
     && pricingConfig.pvMonthlyDistributionPct.length === 12
@@ -711,6 +746,12 @@ function computeExpectedPvKwh({ view, range, pricingConfig }) {
     if (!p) break;
     const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate();
     const monthIdx = p.month - 1; // 0..11
+    if (pvgisMonthly) {
+      // PVGIS kWh for this calendar month, spread evenly across its days.
+      expectedKwh += (Number(pvgisMonthly[monthIdx]) || 0) / daysInMonth;
+      cursor = addDays(cursor, 1);
+      continue;
+    }
     const monthShare = (distArr[monthIdx] || 0) / distSum;
     expectedKwh += (annualPotential * monthShare) / daysInMonth;
     cursor = addDays(cursor, 1);

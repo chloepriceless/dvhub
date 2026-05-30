@@ -33,6 +33,7 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
+import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
 import { REDACTED_PATHS, restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
@@ -321,6 +322,16 @@ let historyApi = null;
 let energyChartsMarketValueService = null;
 const applicableValueService = createBundesnetzagenturApplicableValueService({
   cachePath: APPLICABLE_VALUES_CACHE_PATH
+});
+// WS3 (2026-05-30): PVGIS expected-production cache for the curtailment KPI.
+const PVGIS_EXPECTED_CACHE_PATH = path.join(
+  DATA_DIR || __dirname,
+  'reference-data',
+  'pvgis-expected-production.json'
+);
+const pvgisExpectedProductionService = createPvgisExpectedProductionService({
+  cachePath: PVGIS_EXPECTED_CACHE_PATH,
+  getCfg: () => cfg
 });
 let liveTelemetryBuffer = null;
 let runtimeWorker = null;
@@ -1328,6 +1339,9 @@ const telemetryReady = (async () => {
     applicableValueService.refresh().catch((error) => {
       pushLog('applicable_value_refresh_error', { error: error.message });
     });
+    pvgisExpectedProductionService.refresh()
+      .then((r) => { if (r && r.ok === false && r.error) pushLog('pvgis_expected_refresh_skip', r); })
+      .catch((error) => { pushLog('pvgis_expected_refresh_error', { error: error.message }); });
     startAutomaticMarketValueBackfill();
   }
 })().catch(e => pushLog('telemetry_init_error', { error: e.message }));
