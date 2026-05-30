@@ -395,6 +395,24 @@ function renderKpis(summary) {
       curtailCard.dataset.accent = isHigh ? 'orange' : 'green';
       const totalEl = document.getElementById('historyKpiCurtailedKwh');
       if (totalEl) totalEl.style.color = isHigh ? 'var(--flow-orange)' : 'var(--flow-green)';
+
+      // §51 EEG Förder-Verlängerung (Solarspitzengesetz): betroffene Negativpreis-
+      // Viertelstunden hängen sich ans Ende des 20-Jahre-Förderzeitraums. Zeile
+      // nur einblenden wenn die Anlage §51-betroffen ist (rule != 'none').
+      const eegRow = document.getElementById('historyKpiEegExtensionRow');
+      if (eegRow) {
+        const negRule = kpis?.negPriceRule;
+        const extHours = hasFiniteNumber(kpis?.eegExtensionHours) ? Number(kpis.eegExtensionHours) : null;
+        const subject = negRule && negRule !== 'none' && extHours != null;
+        eegRow.style.display = subject ? '' : 'none';
+        if (subject) {
+          const months = hasFiniteNumber(kpis?.eegExtensionMonths) ? Number(kpis.eegExtensionMonths) : 0;
+          const monthSuffix = months >= 0.01
+            ? ` (~${months.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Mon.)`
+            : '';
+          setText('historyKpiEegExtension', `${fmtHours(extHours)}${monthSuffix}`);
+        }
+      }
     }
   }
 

@@ -624,6 +624,65 @@ test('history runtime aggregates export and premium-eligible energy without cumu
   assert.equal(year.kpis.premiumEligibleExportKwh, 1.01);
 });
 
+test('history runtime computes §51 EEG Förder-Verlängerung from negative-price slots (15min rule)', async () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          { ts: '2026-01-10T10:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+          { ts: '2026-01-10T10:15:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+          { ts: '2026-01-10T10:30:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+          { ts: '2026-01-10T10:45:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false }
+        ];
+      },
+      listPriceSlots() {
+        return [
+          // two negative quarter-hours → AW=0 → 2 × 15min = 0,5 h Verlängerung
+          { ts: '2026-01-10T10:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+          { ts: '2026-01-10T10:15:00.000Z', priceCtKwh: -1, priceEurMwh: -10 },
+          { ts: '2026-01-10T10:30:00.000Z', priceCtKwh: 5, priceEurMwh: 50 },
+          { ts: '2026-01-10T10:45:00.000Z', priceCtKwh: 6, priceEurMwh: 60 }
+        ];
+      }
+    },
+    // Commissioned under the Solarspitzengesetz (≥ 2025-02-25, ≥ 2 kWp) → 15min rule.
+    getPricingConfig: () => ({ ...pricingConfig, pvPlants: [{ kwp: 10, commissionedAt: '2025-03-01' }] }),
+    getSolarMarketValueSummary: () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: { 2026: 5.5 } }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: { '2025-03': 7.5 } }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15' });
+  assert.equal(month.kpis.negPriceRule, '15min');
+  assert.equal(month.kpis.eegExtensionHours, 0.5); // 2 negative quarter-hours × 0,25 h
+  assert.equal(month.kpis.eegExtensionMonths, 0); // 0,5 h / 730,5 → rundet auf 0 Monate
+});
+
+test('history runtime reports no §51 Förder-Verlängerung for plants not subject to §51 (rule none)', async () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots() {
+        return [
+          { ts: '2026-01-10T10:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false }
+        ];
+      },
+      listPriceSlots() {
+        return [{ ts: '2026-01-10T10:00:00.000Z', priceCtKwh: -3, priceEurMwh: -30 }];
+      }
+    },
+    // Commissioned 2014 → pre-2016 → no §51 curtailment regardless of negative prices.
+    getPricingConfig: () => ({ ...pricingConfig, pvPlants: [{ kwp: 10, commissionedAt: '2014-06-01' }] }),
+    getSolarMarketValueSummary: () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: { 2026: 5.5 } }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: {} }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15' });
+  assert.equal(month.kpis.negPriceRule, 'none');
+  assert.equal(month.kpis.eegExtensionHours, 0);
+  assert.equal(month.kpis.eegExtensionMonths, 0);
+});
+
 test('history runtime omits slot-level series payloads for annual responses', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),

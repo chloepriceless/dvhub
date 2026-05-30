@@ -1513,6 +1513,7 @@ export function createHistoryRuntime({
           marketPremiumCtKwh,
           negPriceEligiblePvKwh,
           negPriceEligibleExportKwh,
+          isNegPriceAffected,
           hypFullFeedInCtTotal,
           hypSurplusFeedInCtTotal,
           estimated: Boolean(slot.estimated),
@@ -1569,6 +1570,10 @@ export function createHistoryRuntime({
       marketPremiumCtKwh: null,
       negPriceEligiblePvKwh: totals.negPriceEligiblePvKwh + (slot.negPriceEligiblePvKwh || 0),
       negPriceEligibleExportKwh: totals.negPriceEligibleExportKwh + (slot.negPriceEligibleExportKwh || 0),
+      // §51-EEG: count of slots whose feed-in compensation is curtailed to 0 by
+      // negative prices — drives the Förder-Verlängerung KPI (see below). Plain
+      // integer; not in AGGREGATE_SUM_FIELDS so finalizeAggregateSums leaves it.
+      negPriceAffectedSlots: totals.negPriceAffectedSlots + (slot.isNegPriceAffected ? 1 : 0),
       hypFullFeedInCtTotal: slot.hypFullFeedInCtTotal != null
         ? (totals.hypFullFeedInCtTotal || 0) + slot.hypFullFeedInCtTotal
         : totals.hypFullFeedInCtTotal,
@@ -1620,9 +1625,24 @@ export function createHistoryRuntime({
       marketPremiumCtKwh: null,
       negPriceEligiblePvKwh: 0,
       negPriceEligibleExportKwh: 0,
+      negPriceAffectedSlots: 0,
       hypFullFeedInCtTotal: evFullCtKwh != null ? 0 : null,
       hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null
     }));
+
+    // §51 EEG (Solarspitzengesetz) Förder-Verlängerung. Jede negativ-bepreiste
+    // Viertelstunde, in der die EEG-Vergütung auf 0 gekürzt wird, verlängert den
+    // 20-Jahre-Anspruchszeitraum um genau diese Dauer (§51 Abs. 2 EEG 2023 i.d.F.
+    // Solarspitzengesetz). Der "Verlust" ist also aufgeschoben, nicht endgültig.
+    // Summe der betroffenen Slots × Slot-Dauer → Stunden; Monats-Näherung mit
+    // 730,5 h/Monat (8766 h/Jahr ÷ 12). negPriceRule='none' ⇒ Anlage nicht §51-
+    // betroffen ⇒ Karte blendet die Zeile aus (Frontend prüft die rule).
+    const eegExtensionSlotHours = SLOT_BUCKET_SECONDS / 3600; // 0,25 h bei 15-min Slots
+    const eegExtensionHours = round2(Number(kpis.negPriceAffectedSlots || 0) * eegExtensionSlotHours);
+    kpis.negPriceRule = negPriceRule.rule;
+    kpis.negPriceRuleDescription = negPriceRule.description || null;
+    kpis.eegExtensionHours = eegExtensionHours;
+    kpis.eegExtensionMonths = eegExtensionHours > 0 ? round2(eegExtensionHours / 730.5) : 0;
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.
