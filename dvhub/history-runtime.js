@@ -699,10 +699,11 @@ function computeExpectedPvKwh({ view, range, pricingConfig }) {
   // geometry — tilt/azimuth per plane, incl. the north-string penalty). Falls
   // back to the legacy pvPotentialKwhAnnual × static-distribution model when the
   // PVGIS cache is absent/stale (no geometry, or PVGIS unreachable at refresh).
-  let pvgisMonthly = readCachedPvgisMonthly({
-    cachePath: PVGIS_EXPECTED_CACHE_PATH,
-    planes: pricingConfig?.pvPlants,
-  });
+  // The PVGIS service keeps this cache consistent with the user's configured
+  // string geometry (forecast.pv.strings) on boot + every config save, so we
+  // just read it. Present ⇒ this user's array was resolved; absent ⇒ no
+  // geometry configured / PVGIS unreachable ⇒ legacy estimate.
+  let pvgisMonthly = readCachedPvgisMonthly({ cachePath: PVGIS_EXPECTED_CACHE_PATH });
   // PVGIS PVcalc is computed without site horizon shading, so for a site with
   // hills/trees it overshoots the real yield. Use PVGIS for the geometry-
   // accurate monthly SHAPE (relative orientation/north-penalty distribution)

@@ -56,10 +56,12 @@ export function pvgisInputsHash({ lat, lon, planes, lossPct }) {
 }
 
 /**
- * Which pvPlants entries carry enough geometry for a PVGIS lookup.
+ * Which plane entries carry enough geometry (kwp + tiltDeg + azimuthDeg) for a
+ * PVGIS lookup. Works on any array of {kwp,tiltDeg,azimuthDeg,...} — forecast.pv
+ * .strings AND userEnergyPricing.pvPlants share these field names.
  */
-export function planesWithGeometry(pvPlants) {
-  return (Array.isArray(pvPlants) ? pvPlants : []).filter(
+export function planesWithGeometry(planes) {
+  return (Array.isArray(planes) ? planes : []).filter(
     (p) =>
       p &&
       Number.isFinite(Number(p.kwp)) &&
@@ -67,6 +69,21 @@ export function planesWithGeometry(pvPlants) {
       Number.isFinite(Number(p.tiltDeg)) &&
       Number.isFinite(Number(p.azimuthDeg)),
   );
+}
+
+/**
+ * Universal geometry source: every DVhub user configures their string layout
+ * (label/kWp/tiltDeg/azimuthDeg per Dachfläche) in `forecast.pv.strings` via the
+ * Settings UI. Prefer that; fall back to userEnergyPricing.pvPlants geometry if
+ * a user only filled in the market-premium plants. Returns the geometried
+ * planes (possibly []), so changing an orientation in the settings changes the
+ * computed expected production for that user.
+ */
+export function resolvePlanesFromConfig(cfg) {
+  const strings = cfg?.forecast?.pv?.strings;
+  const fromStrings = planesWithGeometry(strings);
+  if (fromStrings.length > 0) return fromStrings;
+  return planesWithGeometry(cfg?.userEnergyPricing?.pvPlants);
 }
 
 /**
@@ -149,27 +166,29 @@ export async function computePvgisMonthlyProduction({ lat, lon, planes, lossPct 
 }
 
 /**
- * Read the cached monthly profile IF the array geometry still matches.
- * Synchronous — safe to call from the KPI hot path. Validates by recomputing
- * the hash against the CURRENT planes + the lat/lon/loss stored in the cache
- * (so the caller doesn't need the location — only the pvPlants). A plane
- * geometry change invalidates; a location change is handled by refresh().
- * Returns monthly[12] or null.
+ * Read the cached monthly profile. Synchronous — safe in the KPI hot path. The
+ * service (createPvgisExpectedProductionService) is the single owner that keeps
+ * this cache consistent with the current config (boot + on every config save),
+ * so the consumer just trusts it. Optionally pass `planes` to additionally
+ * require the cached geometry hash to match the current planes (used by the
+ * service's own skip-if-fresh check). Returns monthly[12] or null.
  */
-export function readCachedPvgisMonthly({ cachePath, planes }) {
+export function readCachedPvgisMonthly({ cachePath, planes } = {}) {
   try {
     if (!cachePath || !fs.existsSync(cachePath)) return null;
     const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    const geo = planesWithGeometry(planes);
-    if (geo.length === 0) return null;
     if (!Array.isArray(cached?.monthly) || cached.monthly.length !== 12) return null;
-    const wantHash = pvgisInputsHash({
-      lat: cached.lat,
-      lon: cached.lon,
-      planes: geo,
-      lossPct: cached.lossPct ?? DEFAULT_LOSS_PCT,
-    });
-    if (cached?.inputsHash !== wantHash) return null;
+    if (planes !== undefined) {
+      const geo = planesWithGeometry(planes);
+      if (geo.length === 0) return null;
+      const wantHash = pvgisInputsHash({
+        lat: cached.lat,
+        lon: cached.lon,
+        planes: geo,
+        lossPct: cached.lossPct ?? DEFAULT_LOSS_PCT,
+      });
+      if (cached?.inputsHash !== wantHash) return null;
+    }
     return cached.monthly;
   } catch {
     return null;
@@ -186,7 +205,7 @@ export function createPvgisExpectedProductionService({ cachePath, getCfg, fetchI
     const loc = cfg?.forecast?.location || {};
     const lat = Number(loc.latitude);
     const lon = Number(loc.longitude);
-    const planes = planesWithGeometry(cfg?.userEnergyPricing?.pvPlants);
+    const planes = resolvePlanesFromConfig(cfg);
     return { lat, lon, planes };
   }
 

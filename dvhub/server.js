@@ -1022,6 +1022,14 @@ ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
 ctx.saveAndApplyConfig = (incomingConfig) => {
   const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+  // WS3: recompute the PVGIS expected-production cache when the user changes
+  // their string geometry (forecast.pv.strings) or location — so a changed
+  // orientation immediately yields a new curtailment baseline. refresh() is a
+  // cache hit (no network) when the geometry hash is unchanged.
+  if (pvgisExpectedProductionService) {
+    pvgisExpectedProductionService.refresh()
+      .catch((e) => { try { pushLog('pvgis_expected_refresh_error', { phase: 'after_save', error: e?.message || String(e) }); } catch { /* swallow */ } });
+  }
   // Phase 21: fire-and-forget EOS reconcile so the genetic optimizer always
   // sees the operator's current battery + inverter limits. Triggers on every
   // /api/config-style write (optimizer settings, pricing, mispel.pvKwp …);
