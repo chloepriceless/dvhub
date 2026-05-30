@@ -396,6 +396,30 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       };
     });
 
+    // WS1 (2026-05-30): translate each EOS slot into the DVhub Victron grid
+    // setpoint it *would* command — display only, no write path. Convention
+    // (schedule-eval gridSetpointW / Victron ESS register 2700): positive =
+    // draw FROM grid (import/charge), negative = feed INTO grid (export/
+    // discharge), 0 = hold/self-consumption. Net grid power for the slot =
+    // (import − feed-in) energy / slot-hours. slotMinutes computed below, so
+    // derive hours per row from the global slot length once known.
+    const slotMinutesForSetpoint = (() => {
+      if (allRows.length >= 2) {
+        const d = new Date(tsKeys[1]).getTime() - new Date(tsKeys[0]).getTime();
+        if (Number.isFinite(d) && d > 0) return Math.round(d / 60000);
+      }
+      return 15;
+    })();
+    const slotHoursForSetpoint = slotMinutesForSetpoint / 60;
+    for (const row of allRows) {
+      const imp = row.gridConsumptionWh;
+      const exp = row.gridFeedinWh;
+      row.dvhubSetpointW =
+        (imp != null || exp != null) && slotHoursForSetpoint > 0
+          ? Math.round(((Number(imp) || 0) - (Number(exp) || 0)) / slotHoursForSetpoint)
+          : null;
+    }
+
     let slotMinutes = null;
     if (tsKeys.length >= 2) {
       const delta = new Date(tsKeys[1]).getTime() - new Date(tsKeys[0]).getTime();

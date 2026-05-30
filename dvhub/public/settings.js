@@ -3125,11 +3125,22 @@ function renderEosInspector(payload) {
     // Spot / Börsenpreis = what export (Einspeisung) earns; shown next to the
     // fixed import price so the buy-vs-sell gap per slot is visible.
     var feedInStr = (typeof r.feedInCtKwh === 'number' && isFinite(r.feedInCtKwh)) ? r.feedInCtKwh.toFixed(1) + ' ct' : '–';
+    // WS1: DVhub→Victron grid setpoint this slot WOULD command if EOS drove the
+    // battery (display only — EOS is still display-only, nothing is written).
+    // +W = Bezug/Laden (draw from grid), -W = Einspeisen/Entladen (feed grid).
+    var sp = r.dvhubSetpointW;
+    var spStr = '–', spCls = '';
+    if (typeof sp === 'number' && isFinite(sp)) {
+      if (sp <= -1) { spStr = '↑ ' + Math.abs(sp) + ' W'; spCls = 'plan-export'; }
+      else if (sp >= 1) { spStr = '↓ ' + sp + ' W'; spCls = 'plan-grid-charge'; }
+      else { spStr = '0 W'; spCls = 'plan-self'; }
+    }
     trs += '<tr>' +
       '<td>' + escHtmlForecastInspector(when) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(r.socPct != null ? (r.socPct + ' %') : '–') + '</td>' +
       '<td class="' + act.cls + '">' + escHtmlForecastInspector(act.html) + '</td>' +
       '<td class="' + grid.cls + '">' + escHtmlForecastInspector(grid.html) + '</td>' +
+      '<td class="' + spCls + ' num">' + escHtmlForecastInspector(spStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(priceStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(feedInStr) + '</td>' +
       '<td class="num">' + escHtmlForecastInspector(pvStr) + '</td>' +
@@ -3152,6 +3163,7 @@ function renderEosInspector(payload) {
           '<th scope="col" class="num">SoC</th>' +
           '<th scope="col">Handlung</th>' +
           '<th scope="col">Netz</th>' +
+          '<th scope="col" class="num">Sollwert</th>' +
           '<th scope="col" class="num">Bezug</th>' +
           '<th scope="col" class="num">Börse</th>' +
           '<th scope="col" class="num">PV</th>' +
