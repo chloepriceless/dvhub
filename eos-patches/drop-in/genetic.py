@@ -702,6 +702,71 @@ class GeneticOptimization(OptimizationBase):
 
         return creator.Individual(individual_components)
 
+    def _greedy_discharge_seed(self) -> Optional[list[int]]:
+        """DVhub fork (2026-05-31): build a price-ranked warm-start individual.
+
+        Charge from PV (DC) in every slot, and DISCHARGE (sell to grid) at the
+        globally HIGHEST feed-in-price slots — enough to empty the battery ~1.5×
+        over the horizon. This seeds the GA at the cherry-picking solution so it
+        escapes the "dump in a contiguous early block" local optimum: flipping
+        from evening-dump to hold-and-sell-at-the-morning/next-peak needs a
+        coordinated multi-gene jump (turn many evening slots OFF and many high-
+        price slots ON at once) that single-gene mutation cannot bridge — so more
+        generations alone don't help (verified gens 400 ≈ 1500). Seeding plants
+        that basin directly. Never throws; returns None to skip cleanly.
+        """
+        try:
+            if not self.battery or self.total_slots <= 0:
+                return None
+            len_bat = len(self.bat_possible_charge_values)
+            if len_bat <= 0:
+                return None
+            discharge_state = len_bat  # any value in [len_bat, 2*len_bat) decodes to discharge=1
+            dc_state = (3 * len_bat + 1) if self.optimize_dc_charge else 0
+            # Default: allow PV (DC) charging in every slot so the battery fills.
+            genes: list[int] = [dc_state] * self.total_slots
+
+            prices = np.asarray(self.elect_revenue_per_hour_arr, dtype=float)
+            if prices.shape[0] < self.total_slots:
+                return None
+            prices = prices[: self.total_slots]
+
+            usable_wh = self.battery.capacity_wh * max(
+                1.0 - (self.battery.min_soc_percentage / 100.0), 0.0
+            )
+            per_slot_wh = (
+                self.battery.max_charge_power_w
+                * self.slot_duration_h
+                * max(self.battery.discharging_efficiency, 1e-6)
+            )
+            if per_slot_wh <= 0:
+                return None
+            # ~1.5 batteries: covers one PV recharge across the horizon. The
+            # simulate() SoC floor caps any over-marking, so this only biases.
+            n_discharge = int(np.ceil(1.5 * usable_wh / per_slot_wh))
+            n_discharge = max(0, min(n_discharge, self.total_slots))
+
+            picked = 0
+            for idx in np.argsort(-prices):  # highest feed-in price first
+                if picked >= n_discharge:
+                    break
+                if prices[idx] <= 0:  # never seed a sale into a zero/negative-price slot
+                    break
+                genes[int(idx)] = discharge_state
+                picked += 1
+            if picked == 0:
+                return None
+
+            # Pad EV + appliance gene segments to match create_individual()'s layout.
+            if self.optimize_ev:
+                genes += [0] * self.total_slots
+            if self.opti_param.get("home_appliance", 0) > 0:
+                genes += [0]
+            return genes
+        except Exception as e:  # never break the optimization over a seeding hiccup
+            logger.debug("greedy discharge seed skipped: {}", e)
+            return None
+
     def merge_individual(
         self,
         discharge_hours_bin: np.ndarray,
@@ -1167,6 +1232,16 @@ class GeneticOptimization(OptimizationBase):
         if start_solution is not None:
             for _ in range(10):
                 population.insert(0, creator.Individual(start_solution))
+
+        # DVhub fork (2026-05-31): greedy price-ranked warm-start. Seeds the GA at
+        # the cherry-picking solution (sell at the globally highest feed-in slots,
+        # charge from PV otherwise) so it escapes the contiguous-evening-dump local
+        # optimum that mutation alone can't leave. A few copies, like the start
+        # solution, so eaMuPlusLambda's selection keeps it iff it actually scores.
+        greedy_seed = self._greedy_discharge_seed()
+        if greedy_seed is not None:
+            for _ in range(10):
+                population.insert(0, creator.Individual(greedy_seed))
 
         # Run the evolutionary algorithm
         pop, log = algorithms.eaMuPlusLambda(
