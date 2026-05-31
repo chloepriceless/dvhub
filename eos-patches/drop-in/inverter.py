@@ -163,6 +163,48 @@ class Inverter:
                     consumption + from_battery_ac
                 )  # Self-consumption is equal to the load
 
+                # DVhub fork (2026-05-31): Case-1 battery→grid CO-EXPORT.
+                # Vanilla EOS and the Option-B Case-2 fork only let the battery
+                # sell to grid when PV < load. But the morning high-price window
+                # coincides with the PV ramp (PV ≥ load ⇒ Case 1), locking the
+                # battery out of grid export EXACTLY when prices peak — so the GA
+                # was forced to dump the battery at the lower evening peak instead
+                # of holding it for the (higher) morning. Here the battery may
+                # ALSO sell in Case 1, additively, up to the inverter headroom
+                # left after PV export, gated by the SAME discharge gene and
+                # overnight reserve as Case 2. Charge-vs-discharge stays mutually
+                # exclusive via the charge gene (charge_array[hour]==0 when the GA
+                # wants to sell ⇒ no slot both charges and discharges). Negative-
+                # price curtailment is enforced globally in genetic.py. Shares the
+                # EOS_BATTERY_GRID_EXPORT gate with Case 2 (set =0 to revert).
+                # Co-export total stays ≤ max_power_wh (the AC grid-connection
+                # cap); the battery share is bounded by its own per-slot power cap
+                # inside discharge_energy(). Reverts byte-identically when the
+                # discharge gene is 0.
+                if (
+                    _BATTERY_GRID_EXPORT_ENABLED
+                    and self.battery
+                    and self.battery.discharge_array[hour] > 0
+                ):
+                    headroom_ac = max(self.max_power_wh - consumption - grid_export, 0.0)
+                    disch_eff = self.battery.discharging_efficiency
+                    if dc_to_ac_eff > 0 and disch_eff > 0 and export_reserve_ac_wh > 0:
+                        soc_reserve_wh = export_reserve_ac_wh / (dc_to_ac_eff * disch_eff)
+                    else:
+                        soc_reserve_wh = 0.0
+                    raw_unreserved_wh = max(
+                        self.battery.soc_wh - self.battery.min_soc_wh - soc_reserve_wh,
+                        0.0,
+                    )
+                    ac_unreserved = raw_unreserved_wh * disch_eff * dc_to_ac_eff
+                    export_ac = min(ac_unreserved, headroom_ac)
+                    if export_ac > 0:
+                        dc_request = export_ac / dc_to_ac_eff
+                        exp_dc, exp_losses = self.battery.discharge_energy(dc_request, hour)
+                        exp_ac = exp_dc * dc_to_ac_eff
+                        losses += exp_losses + (exp_dc - exp_ac)
+                        grid_export += exp_ac
+
         else:
             # Case 2: Insufficient generation, cover shortfall
             shortfall = consumption - generation

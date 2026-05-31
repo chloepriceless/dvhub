@@ -83,7 +83,15 @@ export function buildEosBatteries(cfg, opts = {}) {
     charging_efficiency: eff,
     discharging_efficiency: eff,
     levelized_cost_of_storage_kwh: Number(levelisedEurKwh.toFixed(6)),
-    max_charge_power_w: Number(opt.maxChargeW) || 5000,
+    // EOS uses ONE power cap for both charge and discharge (battery.py applies
+    // max_charge_power_w to discharge_energy too). The battery→grid export must
+    // never exceed the operator's AC discharge limit (maxDischargeW, e.g. 16 kW),
+    // because the inverter would otherwise over-pull the battery to hold a high
+    // AC setpoint when PV drops intra-slot. So prefer maxDischargeW as the EOS
+    // cap; charging is then modelled at the same (slightly lower) bound, which is
+    // immaterial (PV rarely charges >16 kW and grid charge is disabled). Falls
+    // back to maxChargeW, then a safe 5 kW default.
+    max_charge_power_w: Number(opt.maxDischargeW) || Number(opt.maxChargeW) || 5000,
     // DVhub has no min_charge_power_w setting — leave EOS default (50 W is
     // a sane modulation floor for most hybrid inverters; configurable later).
     min_charge_power_w: 50,
@@ -225,7 +233,16 @@ export function pickEmsIntervalSec(intervalSec) {
 export function buildEosInverters(cfg) {
   const opt = cfg?.optimizer || {};
   const pvKwp = Number(opt?.mispel?.pvKwp);
-  const maxPowerW = Number.isFinite(pvKwp) && pvKwp > 0 ? pvKwp * 1000 : 10000;
+  // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
+  // together). Prefer the operator's real AC grid-connection limit
+  // (inverterMaxPowerW, e.g. 29 kW); fall back to the PV nameplate (pvKwp×1000)
+  // as a defensible upper bound, then 10 kW. Using the connection cap keeps the
+  // battery→grid CO-EXPORT (inverter.py Case 1) from planning an unrealistically
+  // high combined feed-in.
+  const inverterMaxPowerW = Number(opt?.inverterMaxPowerW);
+  const maxPowerW = Number.isFinite(inverterMaxPowerW) && inverterMaxPowerW > 0
+    ? inverterMaxPowerW
+    : (Number.isFinite(pvKwp) && pvKwp > 0 ? pvKwp * 1000 : 10000);
   // Grid→battery (AC) charging is §14a-illegal for vanilla self-consumption
   // operators, so HARD-DISABLE it unless grid-arbitrage is licensed
   // (allowGridCharge + MisPel pauschal/abgrenzung). max_ac_charge_power_w=0

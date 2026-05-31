@@ -131,6 +131,23 @@ test('buildEosInverters: passes max_ac_charge_power_w from optimizer.maxChargeW'
   assert.equal(inv.battery_id, 'battery1');
 });
 
+test('buildEosInverters: max_power_w = inverterMaxPowerW (AC grid-connection cap) when set', () => {
+  const cfg = { optimizer: { ...STD_CFG.optimizer, inverterMaxPowerW: 29000, mispel: { pvKwp: 29.7 } } };
+  assert.equal(buildEosInverters(cfg)[0].max_power_w, 29000);
+});
+
+test('buildEosInverters: max_power_w falls back to pvKwp×1000 when inverterMaxPowerW unset', () => {
+  const cfg = { optimizer: { ...STD_CFG.optimizer, mispel: { pvKwp: 29.7 } } };
+  assert.equal(buildEosInverters(cfg)[0].max_power_w, 29700);
+});
+
+test('buildEosBatteries: max_charge_power_w prefers maxDischargeW (AC discharge cap) over maxChargeW', () => {
+  const cfg = { optimizer: { ...STD_CFG.optimizer, maxChargeW: 18000, maxDischargeW: 16000 } };
+  // EOS uses one power cap for both directions; the battery→grid export must
+  // honour the AC discharge limit, so maxDischargeW wins.
+  assert.equal(buildEosBatteries(cfg)[0].max_charge_power_w, 16000);
+});
+
 test('pickGeneticSizing: full upstream sizing at all resolutions', () => {
   // Operator preference: full-quality plan + slower EMS-tick beats a degraded
   // plan with a faster tick at sub-hourly slot resolutions. ems.interval
