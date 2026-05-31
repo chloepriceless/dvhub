@@ -2,7 +2,7 @@
 // Extracted from server.js (Phase 2, Plan 02).
 // Factory receives DI context; timer lifecycle via start()/stop().
 
-import { berlinDateString, addDays } from './server-utils.js';
+import { berlinDateString, addDays, localMinutesOfDay } from './server-utils.js';
 import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
 // Plan 09-07: shared safeInterval — catches sync throws AND awaited Promise
 // rejections from the ticker, logs via configured logger + pushLog, and the
@@ -62,6 +62,10 @@ export function createEpexFetcher(ctx) {
     if (!cfg.epex.enabled) return;
     const day = berlinDateString(new Date(), cfg.epex.timezone);
     const day2 = addDays(day, 1);
+    // Did we already hold tomorrow's day-ahead before this fetch? Used to fire
+    // the EOS bridge the instant tomorrow's prices first arrive (see below).
+    const hadTomorrowBefore = Array.isArray(state.epex?.data)
+      && state.epex.data.some((r) => r.day === day2);
     const bzn = cfg.epex.bzn || 'DE-LU';
     // Phase 09.2 D-04: outer-boundary timer for health-tracker. EPEX cadence
     // is hours, so ms-granularity (Date.now) is more than enough. Captured
@@ -86,6 +90,17 @@ export function createEpexFetcher(ctx) {
         resolutionSeconds: 3600
       })));
       pushLog('epex_refresh_ok', { count: data.length });
+      // Bridge-timing fix (2026-05-31): the moment tomorrow's day-ahead first
+      // lands, push it to EOS so the optimizer stops forward-filling a flat
+      // tomorrow (which makes it dump the battery tonight instead of holding for
+      // tomorrow's peak). Fire-and-forget; EOS re-optimizes on its next EMS tick.
+      const hasTomorrowNow = data.some((r) => r.day === day2);
+      if (hasTomorrowNow && !hadTomorrowBefore && ctx.eosForecastBridge) {
+        pushLog('epex_dayahead_arrived', { date: day2, triggering: 'eos_bridge_push' });
+        Promise.resolve(ctx.eosForecastBridge.push()).catch((err) => {
+          try { pushLog('eos_forecast_bridge_error', { phase: 'dayahead_arrived', error: err?.message || String(err) }); } catch { /* ignore */ }
+        });
+      }
       // Phase 09.2 D-04: record a successful EPEX fetch sample. Optional
       // chaining for the same boot-race reason as polling.js — initial
       // fetchEpexDay() can fire before telemetryReady IIFE completes and
@@ -241,12 +256,22 @@ export function createEpexFetcher(ctx) {
     // Initial fetch
     fetchEpexDay();
 
-    // EPEX refresh: check every 5 min
+    // EPEX refresh: check every 15 min (aligned to the 15-min slot cadence)
     const epexInterval = safeInterval('epex-fetch.refresh', () => {
       const cfg = getCfg();
-      const mustRefresh = !state.epex.date || state.epex.date !== berlinDateString(new Date(), cfg.epex.timezone);
-      if (mustRefresh || (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000) fetchEpexDay();
-    }, 5 * 60 * 1000);
+      const today = berlinDateString(new Date(), cfg.epex.timezone);
+      const mustRefresh = !state.epex.date || state.epex.date !== today;
+      const stale = (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000;
+      // Day-ahead for tomorrow publishes ~12:45 CET. The plain 6h-staleness
+      // check can delay tomorrow's prices by up to 6h, during which EOS ffills a
+      // flat tomorrow and dumps the battery tonight. After 13:00 Berlin, refresh
+      // every tick until tomorrow's rows are actually present (then fetchEpexDay
+      // pushes them to the EOS bridge — see above).
+      const tomorrow = addDays(today, 1);
+      const hasTomorrow = Array.isArray(state.epex.data) && state.epex.data.some((r) => r.day === tomorrow);
+      const dayAheadDue = localMinutesOfDay(new Date(), cfg.epex.timezone) >= 13 * 60 && !hasTomorrow;
+      if (mustRefresh || stale || dayAheadDue) fetchEpexDay();
+    }, 15 * 60 * 1000);
     timers.push(epexInterval);
 
     // VRM forecast: initial fetch after 10s delay
