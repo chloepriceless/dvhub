@@ -27,6 +27,23 @@ test('co-export trims battery share to stay within the 29 kW connection cap', ()
   assert.equal(r.gridSetpointW, -29000);
 });
 
+test('evening no-PV sell → battery-only export via gridSetpointW (NOT dcExportMode)', () => {
+  // 21:00: PV gone, EOS still feeds 4 kWh-equiv from the battery to grid.
+  const r = classifyEosSlotAction({ pvW: 0, feedinW: 4000, dischargeAllowed: true, socPct: 40 });
+  assert.equal(r.action, 'battery_export');
+  assert.equal(r.label, 'Akku einspeisen');
+  assert.equal(r.target, 'gridSetpointW'); // dcExportMode would do nothing at pvW≈0
+  assert.equal(r.gridSetpointW, -4000);
+  assert.equal(r.batteryExportW, 4000);
+});
+
+test('battery-only export is clamped to the 16 kW AC battery cap', () => {
+  const r = classifyEosSlotAction({ pvW: 0, feedinW: 25000, dischargeAllowed: true });
+  assert.equal(r.action, 'battery_export');
+  assert.equal(r.batteryExportW, 16000);
+  assert.equal(r.gridSetpointW, -16000);
+});
+
 test('pv-export: feed-in ≈ PV (battery net ~0) → dcExportMode, no battery share', () => {
   const r = classifyEosSlotAction({ pvW: 6000, feedinW: 6050, dischargeAllowed: true, bufferW: 100 });
   assert.equal(r.action, 'pv_export');

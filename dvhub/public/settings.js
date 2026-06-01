@@ -3093,6 +3093,7 @@ function renderEosInspector(payload) {
     if (typeof r.zeitplanAction === 'string') {
       switch (r.zeitplanAction) {
         case 'co_export':  return { html: '⚡ PV+Akku einspeisen', cls: 'plan-export' };
+        case 'battery_export': return { html: '⚡ Akku einspeisen', cls: 'plan-export' };
         case 'pv_export':  return { html: '⚡ PV-Überschuss', cls: 'plan-export' };
         case 'charge':     return { html: '☀ Akku lädt (PV)', cls: 'plan-pv-charge' };
         case 'grid_draw':  return { html: '⊘ Netzbezug', cls: 'plan-grid-disabled' };
@@ -3151,7 +3152,7 @@ function renderEosInspector(payload) {
     if (typeof sp === 'number' && isFinite(sp)) {
       if (sp <= -1) {
         spStr = '↑ ' + Math.abs(sp) + ' W';
-        if (r.zeitplanAction === 'co_export' && typeof r.zeitplanBatteryExportW === 'number' && r.zeitplanBatteryExportW > 0) {
+        if ((r.zeitplanAction === 'co_export' || r.zeitplanAction === 'battery_export') && typeof r.zeitplanBatteryExportW === 'number' && r.zeitplanBatteryExportW > 0) {
           spStr += ' (Akku ' + Math.round(r.zeitplanBatteryExportW) + ')';
         }
         spCls = 'plan-export';

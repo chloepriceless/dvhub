@@ -59,19 +59,38 @@ export function classifyEosSlotAction({
   const charging = (Number(dcChargeFactor) || 0) > 0;
   // Battery's grid-export share = feed-in beyond what PV alone supplies.
   const batteryShare = Math.max(0, feedin - pv);
+  const pvPresent = pv > EPS_W;
 
-  // PV + Akku zusammen einspeisen (the live-nachgeregelte co-export).
   if (dischargeAllowed && feedin > EPS_W && batteryShare > EPS_W) {
-    const co = computeCoExportSetpointW({
-      pvW: pv, batteryExportW: batteryShare,
-      socPct, stopSocPct, bufferW, akkuAcLimitW, connectionLimitW
-    });
+    if (pvPresent) {
+      // PV + Akku zusammen einspeisen — the live-nachgeregelte co-export.
+      // Lever = dcExportMode (it exports live PV; the battery share rides on
+      // top once the regulator is wired). Only valid WHILE PV is flowing.
+      const co = computeCoExportSetpointW({
+        pvW: pv, batteryExportW: batteryShare,
+        socPct, stopSocPct, bufferW, akkuAcLimitW, connectionLimitW
+      });
+      return {
+        action: 'co_export',
+        label: 'PV+Akku einspeisen',
+        target: 'dcExportMode',
+        batteryExportW: co.batteryShareW,
+        gridSetpointW: co.gridSetpointW
+      };
+    }
+    // Keine PV (z. B. abends) → reine Akku-Entladung ins Netz. dcExportMode wäre
+    // hier FALSCH (es exportiert PV und tut bei pvW≈0 nichts) — der richtige
+    // Hebel ist ein negativer gridSetpointW (Entladen/LEEREN), Akku-Anteil auf
+    // den AC-Cap geklemmt.
+    let share = Math.min(batteryShare, akkuAcLimitW);
+    if (share > connectionLimitW) share = connectionLimitW;
+    const exportW = Math.round(share);
     return {
-      action: 'co_export',
-      label: 'PV+Akku einspeisen',
-      target: 'dcExportMode',
-      batteryExportW: co.batteryShareW,
-      gridSetpointW: co.gridSetpointW
+      action: 'battery_export',
+      label: 'Akku einspeisen',
+      target: 'gridSetpointW',
+      batteryExportW: exportW,
+      gridSetpointW: exportW === 0 ? 0 : -exportW
     };
   }
 
