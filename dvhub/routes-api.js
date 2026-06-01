@@ -806,6 +806,7 @@ export function createApiRoutes(ctx) {
     // DB backup download (pg_dump) — GET-only LAN bypass, Bearer for external.
     // Same appliance-trust model as the raw exports above (whole-DB read).
     '/api/db/backup',
+    '/api/db/backup/status',
     // Phase 19 Plan 19-01 — Forecast Inspector (read-only diagnostic surface).
     // GET-only LAN bypass per appliance trust model (matches /api/forecast,
     // /api/integrations/health, /api/family/* pattern). External callers still
@@ -4446,6 +4447,22 @@ export function createApiRoutes(ctx) {
         pushLog
       });
       return;
+    }
+
+    // Scheduled-backup status (last run, target, retention). GET-only LAN bypass.
+    if (url.pathname === '/api/db/backup/status' && req.method === 'GET') {
+      if (!ctx.dbBackupScheduler) return json(res, 503, { ok: false, error: 'backup scheduler unavailable' });
+      return json(res, 200, { ok: true, status: ctx.dbBackupScheduler.getStatus() });
+    }
+
+    // Trigger the scheduled backup NOW (writes to the configured destinationDir).
+    // POST → not LAN-bypassed → external callers need Bearer; runs the same path
+    // as the daily job. Distinct from GET /api/db/backup (which streams to the
+    // browser); this one writes a file to the network target.
+    if (url.pathname === '/api/db/backup/run' && req.method === 'POST') {
+      if (!ctx.dbBackupScheduler) return json(res, 503, { ok: false, error: 'backup scheduler unavailable' });
+      const result = await ctx.dbBackupScheduler.runNow('manual');
+      return json(res, result.ok ? 200 : 500, result);
     }
 
     // --- Config POST / Import POST ---

@@ -74,6 +74,7 @@
           <button id="historyExportCsvBtn" class="btn ghost sm" type="button" title="Detail-Tabelle als CSV (Excel-kompatibel) exportieren">CSV-Export</button>
           <button id="historyDbBackupFullBtn" class="btn ghost sm" type="button" title="Komplette Datenbank als pg_dump-Backup (.dump, per pg_restore wiederherstellbar) herunterladen">DB-Backup</button>
           <button id="historyDbBackup15mBtn" class="btn ghost sm" type="button" title="Nur die 15-min-Energiewerte (energy_slots_15m) als .dump herunterladen">DB-Backup (15-min)</button>
+          <button id="historyDbBackupRunBtn" class="btn ghost sm" type="button" title="Das geplante Backup (Einstellungen → Geplantes Datenbank-Backup) jetzt sofort ins konfigurierte Zielverzeichnis schreiben — zum Testen des Netzwerk-Ziels">Geplantes Backup jetzt</button>
         </div>
       </header>
 
@@ -593,7 +594,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=17"></script>
+  <script src="/history.js?v=18"></script>
   <script src="/history-viz.js?v=5"></script>
 </body>
 </html>

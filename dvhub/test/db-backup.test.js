@@ -2,7 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { buildPgDumpArgs, backupFilename, streamPgDump, DB_BACKUP_SCOPES } from '../services/db-backup.js';
+import { buildPgDumpArgs, backupFilename, streamPgDump, selectBackupsToDelete, DB_BACKUP_SCOPES } from '../services/db-backup.js';
+
+test('selectBackupsToDelete keeps the N newest of a scope, oldest deleted first', () => {
+  const files = [
+    'dvhub-full-2026-05-01-0330.dump',
+    'dvhub-full-2026-05-02-0330.dump',
+    'dvhub-full-2026-05-03-0330.dump',
+    'dvhub-energy15m-2026-05-03-0330.dump', // other scope — never touched
+    'something-else.txt'
+  ];
+  assert.deepEqual(selectBackupsToDelete(files, 'full', 2), ['dvhub-full-2026-05-01-0330.dump']);
+  assert.deepEqual(selectBackupsToDelete(files, 'full', 3), []);
+  assert.deepEqual(selectBackupsToDelete(files, 'energy15m', 1), []);
+});
+
+test('selectBackupsToDelete with keep<=0 or invalid deletes NOTHING (safety)', () => {
+  const files = ['dvhub-full-2026-05-01-0330.dump', 'dvhub-full-2026-05-02-0330.dump'];
+  assert.deepEqual(selectBackupsToDelete(files, 'full', 0), []);
+  assert.deepEqual(selectBackupsToDelete(files, 'full', -3), []);
+  assert.deepEqual(selectBackupsToDelete(files, 'full', NaN), []);
+});
 
 test('full scope dumps the whole DB (no -t table filter)', () => {
   const r = buildPgDumpArgs({ scope: 'full', database: { host: '/var/run/postgresql', port: 5432, name: 'dvhub', user: 'dvhub' } });

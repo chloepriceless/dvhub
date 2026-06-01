@@ -2333,6 +2333,29 @@ function triggerDbBackup(scope) {
   );
 }
 
+// Trigger the *scheduled* backup right now — writes a .dump into the configured
+// destinationDir (Settings → Geplantes Datenbank-Backup). Lets the operator
+// validate the network target without waiting for the nightly run. POST is
+// LAN-trusted like config-save (isLocalNetworkRequest bypasses the token gate).
+async function triggerScheduledBackupNow() {
+  const btn = byId('historyDbBackupRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sichern …'; }
+  try {
+    const r = await apiFetch('/api/db/backup/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      const pruned = Array.isArray(j.pruned) && j.pruned.length ? ` (${j.pruned.length} alte gelöscht)` : '';
+      setBanner(`Backup ins Ziel geschrieben: ${j.file || ''}${pruned}`, 'success');
+    } else {
+      setBanner(`Geplantes Backup fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}`, 'error');
+    }
+  } catch (error) {
+    setBanner(`Geplantes Backup fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Geplantes Backup jetzt'; }
+  }
+}
+
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
@@ -2340,6 +2363,7 @@ function bindHistoryControls() {
   const exportBtn = byId('historyExportCsvBtn');
   const dbFullBtn = byId('historyDbBackupFullBtn');
   const db15Btn = byId('historyDbBackup15mBtn');
+  const dbRunBtn = byId('historyDbBackupRunBtn');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   if (view) view.addEventListener('change', loadHistorySummary);
@@ -2348,6 +2372,7 @@ function bindHistoryControls() {
   if (exportBtn) exportBtn.addEventListener('click', triggerCsvExport);
   if (dbFullBtn) dbFullBtn.addEventListener('click', () => triggerDbBackup('full'));
   if (db15Btn) db15Btn.addEventListener('click', () => triggerDbBackup('energy15m'));
+  if (dbRunBtn) dbRunBtn.addEventListener('click', triggerScheduledBackupNow);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }

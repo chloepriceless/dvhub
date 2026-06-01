@@ -652,6 +652,63 @@ function buildFieldDefinitions() {
     },
     {
       section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.enabled',
+      label: 'Geplantes Backup aktiv',
+      type: 'boolean',
+      help: 'Wenn aktiv, wird täglich zur eingestellten Uhrzeit ein pg_dump (Custom-Format, .dump) ins Zielverzeichnis geschrieben.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.scope',
+      label: 'Umfang',
+      type: 'select',
+      options: [
+        { value: 'full', label: 'Komplette Datenbank' },
+        { value: 'energy15m', label: 'Nur 15-min-Energiewerte' }
+      ],
+      help: 'Komplette DB (alles inkl. Roh-Telemetrie) oder nur die aggregierte 15-min-Tabelle energy_slots_15m.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.time',
+      label: 'Uhrzeit (täglich)',
+      type: 'time',
+      help: 'Lokale Uhrzeit (HH:MM), zu der das Backup täglich läuft. Standard: 03:30.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.destinationDir',
+      label: 'Zielverzeichnis',
+      type: 'text',
+      empty: 'blank',
+      help: 'Pfad, in den die .dump-Dateien geschrieben werden — z. B. ein gemounteter Netzwerk-Share (/mnt/nas/dvhub-backups). Das Verzeichnis muss für den dvhub-Dienst beschreibbar sein.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.retentionCount',
+      label: 'Aufbewahrung (Anzahl)',
+      type: 'number',
+      min: 1,
+      max: 365,
+      help: 'Wie viele der neuesten Backup-Dateien behalten werden. Ältere werden nach jedem Lauf gelöscht. Standard: 14.'
+    },
+    {
+      section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
       groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
@@ -2249,6 +2306,13 @@ export function createDefaultConfig() {
         vrmPortalId: '',
         vrmToken: ''
       }
+    },
+    dbBackup: {
+      enabled: false,
+      scope: 'full',
+      time: '03:30',
+      destinationDir: '',
+      retentionCount: 14
     },
     epex: {
       enabled: true,

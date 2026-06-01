@@ -131,3 +131,48 @@ export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, 
     }
   });
 }
+
+/**
+ * Run pg_dump straight to a file (for the scheduled backup-to-network-target).
+ * Uses pg_dump's own -f so nothing is buffered in node. Resolves with the
+ * outcome; never rejects.
+ *
+ * @returns {Promise<{ok:boolean, code:number|null, stderr:string, file:string}>}
+ */
+export function dumpToFile({ scope, database = {}, outFile, spawnFn = spawn } = {}) {
+  return new Promise((resolve) => {
+    const built = buildPgDumpArgs({ scope, database });
+    if (!built.ok) { resolve({ ok: false, code: null, stderr: built.error, file: outFile }); return; }
+    const args = [...built.args, '-f', outFile];
+    const env = { ...process.env };
+    if (database.password) env.PGPASSWORD = String(database.password);
+    let child;
+    try {
+      child = spawnFn('pg_dump', args, { env });
+    } catch (err) {
+      resolve({ ok: false, code: null, stderr: err.message, file: outFile });
+      return;
+    }
+    let stderr = '';
+    if (child.stderr) child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += d.toString(); });
+    child.on('error', (err) => resolve({ ok: false, code: null, stderr: err.message, file: outFile }));
+    child.on('close', (code) => resolve({ ok: code === 0, code, stderr, file: outFile }));
+  });
+}
+
+/**
+ * Pure: given a directory listing, pick the backup files to delete to keep only
+ * the `keep` newest for a scope. Filenames embed a sortable YYYY-MM-DD-HHMM
+ * stamp, so lexicographic sort == chronological. keep<=0 deletes NOTHING (a
+ * safety guard — never wipe every backup). Only ever matches this scope's own
+ * `dvhub-<kind>-*.dump` files, never anything else in the directory.
+ *
+ * @returns {string[]} filenames to delete (oldest first)
+ */
+export function selectBackupsToDelete(files, scope, keep) {
+  const kind = scope === 'energy15m' ? 'energy15m' : 'full';
+  const prefix = `dvhub-${kind}-`;
+  const matching = (files || []).filter((f) => f.startsWith(prefix) && f.endsWith('.dump')).sort();
+  if (!Number.isFinite(keep) || keep <= 0) return [];
+  return matching.length > keep ? matching.slice(0, matching.length - keep) : [];
+}

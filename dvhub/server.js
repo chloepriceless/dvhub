@@ -128,6 +128,7 @@ import { createLlmService } from './services/llm/index.js';
 // poller) chains after notificationService.start() so on-revoke notifications
 // reach configured providers.
 import { createLicenseService } from './services/license/index.js';
+import { createDbBackupScheduler } from './services/db-backup-scheduler.js';
 import { createEosdashProxy, isEosdashRequest } from './services/eosdash-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1342,6 +1343,12 @@ const telemetryReady = (async () => {
   // Factory is synchronous (no schema bootstrap per D-10) — reads ctx.db /
   // ctx.telemetryStore lazily on first request, by which time both are wired.
   ctx.historyVizApi = createHistoryVizAggregator(ctx);
+  // Scheduled DB backup to a network target (Settings → Geplantes DB-Backup).
+  // Created in every process so the routes can reach it, but the timer runs
+  // ONLY in the web/monolith process (where the run-now/status routes live) so
+  // a future web+runtime-worker split can't double-run the backup.
+  ctx.dbBackupScheduler = createDbBackupScheduler({ getCfg: ctx.getCfg, pushLog: ctx.pushLog });
+  if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
     applicableValueService.refresh().catch((error) => {
