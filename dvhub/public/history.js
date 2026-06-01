@@ -2314,17 +2314,40 @@ async function triggerCsvExport() {
   }
 }
 
+// Datenbank-Backup herunterladen. The endpoint streams a pg_dump (.dump) with
+// Content-Disposition: attachment, so a plain same-origin anchor click pulls it
+// straight to disk without buffering the (potentially large) dump in browser
+// memory. scope: 'full' (whole DB) | 'energy15m' (15-min energy table only).
+function triggerDbBackup(scope) {
+  const a = document.createElement('a');
+  a.href = `/api/db/backup?scope=${encodeURIComponent(scope)}`;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setBanner(
+    scope === 'energy15m'
+      ? 'DB-Backup (15-min-Werte) wird erstellt und heruntergeladen …'
+      : 'Voll-Datenbank-Backup wird erstellt und heruntergeladen (kann etwas dauern) …',
+    'success'
+  );
+}
+
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
   const backfill = byId('historyBackfillBtn');
   const exportBtn = byId('historyExportCsvBtn');
+  const dbFullBtn = byId('historyDbBackupFullBtn');
+  const db15Btn = byId('historyDbBackup15mBtn');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   if (view) view.addEventListener('change', loadHistorySummary);
   if (date) date.addEventListener('change', loadHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);
   if (exportBtn) exportBtn.addEventListener('click', triggerCsvExport);
+  if (dbFullBtn) dbFullBtn.addEventListener('click', () => triggerDbBackup('full'));
+  if (db15Btn) db15Btn.addEventListener('click', () => triggerDbBackup('energy15m'));
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }

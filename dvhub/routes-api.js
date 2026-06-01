@@ -14,6 +14,7 @@ import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } fro
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { createDefaultConfig } from './config-model.js';
+import { streamPgDump } from './services/db-backup.js';
 // L-11 (Plan 16-03): MESSAGE_TYPES is the single source of truth for the
 // /api/messages/generate type allowlist — see MESSAGE_TYPE_ALLOWLIST below.
 import { MESSAGE_TYPES } from './services/llm/message-types.js';
@@ -802,6 +803,9 @@ export function createApiRoutes(ctx) {
     '/api/history/raw',
     '/api/history/raw/export.csv',
     '/api/history/raw/export.parquet',
+    // DB backup download (pg_dump) — GET-only LAN bypass, Bearer for external.
+    // Same appliance-trust model as the raw exports above (whole-DB read).
+    '/api/db/backup',
     // Phase 19 Plan 19-01 — Forecast Inspector (read-only diagnostic surface).
     // GET-only LAN bypass per appliance trust model (matches /api/forecast,
     // /api/integrations/health, /api/family/* pattern). External callers still
@@ -4417,6 +4421,30 @@ export function createApiRoutes(ctx) {
         'content-length': Buffer.byteLength(body, 'utf8')
       });
       res.end(body);
+      return;
+    }
+
+    // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
+    // GET-only LAN bypass (appliance model, like /api/history/raw/export.*);
+    // external callers still need Bearer. scope=full | energy15m.
+    if (url.pathname === '/api/db/backup' && req.method === 'GET') {
+      const cfg = getCfg();
+      if (!cfg.telemetry?.enabled || !cfg.telemetry?.database) {
+        return json(res, 503, { ok: false, error: 'telemetry database disabled' });
+      }
+      const scope = url.searchParams.get('scope') || 'full';
+      // YYYY-MM-DD-HHMM stamp for the download filename.
+      const d = new Date();
+      const p2 = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+      streamPgDump({
+        scope,
+        database: cfg.telemetry.database,
+        res,
+        securityHeaders: SECURITY_HEADERS,
+        stamp,
+        pushLog
+      });
       return;
     }
 
