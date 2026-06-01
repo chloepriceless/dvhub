@@ -11,8 +11,10 @@
 // far more robust than an in-app transfer client.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { dumpToFile, selectBackupsToDelete, backupFilename, DB_BACKUP_SCOPES } from './db-backup.js';
+import { smbUpload, smbListBackups, smbDelete } from './smb-target.js';
 
 const TICK_MS = 60_000;
 
@@ -23,7 +25,11 @@ const TICK_MS = 60_000;
  */
 export function backupDueDay(cfg, now, lastRunDay) {
   const b = cfg && cfg.dbBackup;
-  if (!b || !b.enabled || !b.destinationDir) return null;
+  if (!b || !b.enabled) return null;
+  // Target must be configured: a local directory, or SMB host+share.
+  const targetType = b.targetType === 'smb' ? 'smb' : 'local';
+  const targetOk = targetType === 'smb' ? !!(b.smb && b.smb.host && b.smb.share) : !!b.destinationDir;
+  if (!targetOk) return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(b.time || '03:30'));
   if (!m) return null;
   const hh = Number(m[1]);
@@ -44,57 +50,87 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     return `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}-${p2(now.getHours())}${p2(now.getMinutes())}`;
   }
 
+  function ok(scope, reason, now, file, pruned) {
+    status.lastRunAt = now.toISOString();
+    status.lastReason = reason;
+    status.lastResult = 'ok';
+    status.lastError = null;
+    status.lastFile = file;
+    if (pushLog) pushLog('db_backup_scheduled_ok', { scope, reason, file, pruned: pruned ? pruned.length : 0 });
+    return { ok: true, file, pruned: pruned || [] };
+  }
+
+  function fail(scope, reason, now, error) {
+    status.lastRunAt = now.toISOString();
+    status.lastReason = reason;
+    status.lastResult = 'error';
+    status.lastError = (error || '').slice(0, 300);
+    status.lastFile = null;
+    if (pushLog) pushLog('db_backup_scheduled_failed', { scope, reason, error: status.lastError }, 'error');
+    return { ok: false, error: error || 'backup failed' };
+  }
+
+  // Backup into a local directory (which may itself be an OS-mounted share).
+  async function runLocal(cfg, b, scope, fileName, reason, now) {
+    const dir = b.destinationDir;
+    if (!dir) return { ok: false, error: 'no destinationDir configured' };
+    const outFile = path.join(dir, fileName);
+    fs.mkdirSync(dir, { recursive: true }); // surfaces a missing mount as a clear error
+    const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
+    if (!res.ok) {
+      try { if (fs.existsSync(outFile)) fs.unlinkSync(outFile); } catch { /* ignore */ }
+      return fail(scope, reason, now, res.stderr || 'pg_dump failed');
+    }
+    let pruned = [];
+    try {
+      const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, Number(b.retentionCount));
+      for (const f of toDelete) { try { fs.unlinkSync(path.join(dir, f)); pruned.push(f); } catch { /* ignore */ } }
+    } catch (err) { if (pushLog) pushLog('db_backup_prune_error', { scope, error: err.message }); }
+    return ok(scope, reason, now, outFile, pruned);
+  }
+
+  // Backup to an SMB/CIFS share via smbclient: dump to a temp file, push it,
+  // then prune old backups on the share. The temp file is always cleaned up.
+  async function runSmb(cfg, b, scope, fileName, reason, now) {
+    const smb = b.smb || {};
+    if (!smb.host || !smb.share) return { ok: false, error: 'SMB host/share not configured' };
+    const conn = { host: smb.host, share: smb.share, username: smb.username, password: smb.password, domain: smb.domain };
+    const subPath = smb.path || '';
+    const tmpFile = path.join(os.tmpdir(), fileName);
+    try {
+      const dump = await dumpToFile({ scope, database: cfg.telemetry.database, outFile: tmpFile, spawnFn });
+      if (!dump.ok) return fail(scope, reason, now, dump.stderr || 'pg_dump failed');
+      const up = await smbUpload({ conn, subPath, localFile: tmpFile, remoteName: fileName, spawnFn });
+      if (!up.ok) return fail(scope, reason, now, `SMB upload failed: ${(up.stderr || up.stdout || '').slice(0, 200)}`);
+      let pruned = [];
+      try {
+        const listed = await smbListBackups({ conn, subPath, spawnFn });
+        const toDelete = selectBackupsToDelete(listed.files, scope, Number(b.retentionCount));
+        if (toDelete.length) { await smbDelete({ conn, subPath, names: toDelete, spawnFn }); pruned = toDelete; }
+      } catch (err) { if (pushLog) pushLog('db_backup_prune_error', { scope, target: 'smb', error: err.message }); }
+      const remote = `//${smb.host}/${smb.share}${subPath ? '/' + String(subPath).replace(/^\/+/, '') : ''}/${fileName}`;
+      return ok(scope, reason, now, remote, pruned);
+    } finally {
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  }
+
   async function runNow(reason = 'manual') {
     if (running) return { ok: false, error: 'backup already running' };
     const cfg = getCfg();
     const b = cfg.dbBackup || {};
     const scope = DB_BACKUP_SCOPES.has(b.scope) ? b.scope : 'full';
-    const dir = b.destinationDir;
-    if (!dir) return { ok: false, error: 'no destinationDir configured' };
     if (!cfg.telemetry?.database) return { ok: false, error: 'telemetry database not configured' };
-
+    const targetType = b.targetType === 'smb' ? 'smb' : 'local';
     running = true;
     const now = nowFn();
     const fileName = backupFilename(scope, stamp(now));
-    const outFile = path.join(dir, fileName);
     try {
-      // Ensure the destination exists / is writable before dumping. A missing
-      // mount surfaces here as a clear error instead of a half-written file.
-      fs.mkdirSync(dir, { recursive: true });
-      const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
-      status.lastRunAt = now.toISOString();
-      status.lastReason = reason;
-      if (!res.ok) {
-        // Drop a possibly-truncated output so a partial file isn't kept.
-        try { if (fs.existsSync(outFile)) fs.unlinkSync(outFile); } catch { /* ignore */ }
-        status.lastResult = 'error';
-        status.lastError = (res.stderr || '').slice(0, 300);
-        status.lastFile = null;
-        if (pushLog) pushLog('db_backup_scheduled_failed', { scope, reason, code: res.code, stderr: status.lastError }, 'error');
-        return { ok: false, error: status.lastError || 'pg_dump failed', file: outFile };
-      }
-      status.lastResult = 'ok';
-      status.lastError = null;
-      status.lastFile = outFile;
-      // Retention prune (best-effort; failure here doesn't fail the backup).
-      let pruned = [];
-      try {
-        const keep = Number(b.retentionCount);
-        const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, keep);
-        for (const f of toDelete) { try { fs.unlinkSync(path.join(dir, f)); pruned.push(f); } catch { /* ignore */ } }
-      } catch (err) {
-        if (pushLog) pushLog('db_backup_prune_error', { scope, error: err.message });
-      }
-      if (pushLog) pushLog('db_backup_scheduled_ok', { scope, reason, file: fileName, pruned: pruned.length });
-      return { ok: true, file: outFile, pruned };
+      return targetType === 'smb'
+        ? await runSmb(cfg, b, scope, fileName, reason, now)
+        : await runLocal(cfg, b, scope, fileName, reason, now);
     } catch (err) {
-      status.lastRunAt = now.toISOString();
-      status.lastReason = reason;
-      status.lastResult = 'error';
-      status.lastError = err.message;
-      status.lastFile = null;
-      if (pushLog) pushLog('db_backup_scheduled_failed', { scope, reason, error: err.message }, 'error');
-      return { ok: false, error: err.message };
+      return fail(scope, reason, now, err.message);
     } finally {
       running = false;
     }
@@ -111,10 +147,17 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
 
   function getStatus() {
     const b = getCfg().dbBackup || {};
+    const targetType = b.targetType === 'smb' ? 'smb' : 'local';
+    const smb = b.smb || {};
     return {
       enabled: !!b.enabled,
       scope: DB_BACKUP_SCOPES.has(b.scope) ? b.scope : 'full',
       time: b.time || null,
+      targetType,
+      // Sanitised target for display (never the SMB password).
+      target: targetType === 'smb'
+        ? (smb.host && smb.share ? `//${smb.host}/${smb.share}${smb.path ? '/' + String(smb.path).replace(/^\/+/, '') : ''}` : null)
+        : (b.destinationDir || null),
       destinationDir: b.destinationDir || null,
       retentionCount: Number(b.retentionCount) || null,
       running,

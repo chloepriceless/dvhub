@@ -689,11 +689,92 @@ function buildFieldDefinitions() {
       group: 'dbBackup',
       groupLabel: 'Geplantes Datenbank-Backup',
       groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.targetType',
+      label: 'Ziel-Typ',
+      type: 'select',
+      options: [
+        { value: 'local', label: 'Lokales Verzeichnis' },
+        { value: 'smb', label: 'SMB / CIFS Netzwerk-Freigabe (NAS)' }
+      ],
+      help: 'Lokales Verzeichnis (auch ein OS-gemounteter Share) oder direkt eine SMB/CIFS-Freigabe (NAS) — dann werden die Felder unten genutzt.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
       path: 'dbBackup.destinationDir',
-      label: 'Zielverzeichnis',
+      label: 'Zielverzeichnis (lokal)',
       type: 'text',
       empty: 'blank',
-      help: 'Pfad, in den die .dump-Dateien geschrieben werden — z. B. ein gemounteter Netzwerk-Share (/mnt/nas/dvhub-backups). Das Verzeichnis muss für den dvhub-Dienst beschreibbar sein.'
+      help: 'Nur bei Ziel-Typ "Lokales Verzeichnis": Pfad, in den die .dump-Dateien geschrieben werden (z. B. /mnt/nas/dvhub-backups). Muss für den dvhub-Dienst beschreibbar sein.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.host',
+      label: 'SMB Server (Host/IP)',
+      type: 'text',
+      empty: 'blank',
+      help: 'Nur bei Ziel-Typ "SMB": Hostname oder IP der NAS/SMB-Freigabe (z. B. 192.168.1.10 oder nas.local).'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.share',
+      label: 'SMB Freigabe-Name',
+      type: 'text',
+      empty: 'blank',
+      help: 'Name der Freigabe (Share), z. B. "backups". Ohne führende Slashes.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.path',
+      label: 'SMB Unterordner (optional)',
+      type: 'text',
+      empty: 'blank',
+      help: 'Optionaler Unterordner innerhalb der Freigabe, z. B. "dvhub". Leer = Wurzel der Freigabe.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.username',
+      label: 'SMB Benutzer',
+      type: 'text',
+      empty: 'blank',
+      help: 'Benutzername für die SMB-Freigabe.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.password',
+      label: 'SMB Passwort',
+      type: 'text',
+      hidden: true,
+      empty: 'blank',
+      help: 'Passwort für die SMB-Freigabe. Wird nur serverseitig in einer temporären 0600-Auth-Datei genutzt, nie als Prozessargument.'
+    },
+    {
+      section: 'telemetry',
+      group: 'dbBackup',
+      groupLabel: 'Geplantes Datenbank-Backup',
+      groupDescription: 'Sichert die Datenbank täglich per pg_dump in ein Zielverzeichnis (z. B. einen ins OS gemounteten Netzwerk-Share NFS/SMB) und rotiert alte Backups.',
+      path: 'dbBackup.smb.domain',
+      label: 'SMB Domäne (optional)',
+      type: 'text',
+      empty: 'blank',
+      help: 'Optionale Windows-Domäne / Workgroup. Meist leer lassen.'
     },
     {
       section: 'telemetry',
@@ -2311,7 +2392,9 @@ export function createDefaultConfig() {
       enabled: false,
       scope: 'full',
       time: '03:30',
+      targetType: 'local',
       destinationDir: '',
+      smb: { host: '', share: '', path: '', username: '', password: '', domain: '' },
       retentionCount: 14
     },
     epex: {

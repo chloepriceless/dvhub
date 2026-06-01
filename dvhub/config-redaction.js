@@ -5,6 +5,7 @@ export const REDACTED_PATHS = Object.freeze([
   'apiToken',
   'telemetry.historyImport.vrmToken',
   'telemetry.database.password',
+  'dbBackup.smb.password',
   'forecast.solcast.apiKey',
   'forecast.pvnode.apiKey',
   'mqtt.username',

@@ -92,6 +92,77 @@ test('runNow refuses without destinationDir', async () => {
   assert.match(r.error, /destinationDir/);
 });
 
+test('backupDueDay accepts an SMB target (no destinationDir needed)', () => {
+  const at = new Date(2026, 5, 1, 3, 30, 0);
+  const smbCfg = {
+    telemetry: { database: { name: 'dvhub' } },
+    dbBackup: { enabled: true, scope: 'full', time: '03:30', targetType: 'smb', smb: { host: 'nas', share: 'backups' }, retentionCount: 14 }
+  };
+  assert.equal(backupDueDay(smbCfg, at, null), '2026-06-01');
+  // SMB selected but host/share missing → not due
+  const incomplete = { ...smbCfg, dbBackup: { ...smbCfg.dbBackup, smb: { host: '', share: '' } } };
+  assert.equal(backupDueDay(incomplete, at, null), null);
+});
+
+test('runNow SMB path: pg_dump → smb put → list → prune', async () => {
+  const calls = [];
+  // One fake spawn handling BOTH pg_dump and smbclient.
+  const spawnFn = (cmd, args) => {
+    calls.push({ cmd, args });
+    const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+    queueMicrotask(() => {
+      if (cmd === 'pg_dump') {
+        const fi = args.indexOf('-f');
+        if (fi >= 0) fs.writeFileSync(args[fi + 1], 'PGDMP-fake'); // dump temp file
+        c.emit('close', 0);
+      } else if (cmd === 'smbclient') {
+        const ci = args.indexOf('-c');
+        const command = ci >= 0 ? args[ci + 1] : '';
+        if (/\bls\b/.test(command)) {
+          // share already holds 3 older fulls → with new one + keep=2, prune 2 oldest
+          c.stdout.emit('data', Buffer.from([
+            'dvhub-full-2026-05-29-0330.dump A 7 ...',
+            'dvhub-full-2026-05-30-0330.dump A 7 ...',
+            'dvhub-full-2026-05-31-0330.dump A 7 ...',
+            'dvhub-full-2026-06-04-0330.dump A 7 ...'
+          ].join('\n')));
+        }
+        c.emit('close', 0);
+      } else { c.emit('close', 0); }
+    });
+    return c;
+  };
+  const sched = createDbBackupScheduler({
+    getCfg: () => ({
+      telemetry: { database: { name: 'dvhub' } },
+      dbBackup: { enabled: true, scope: 'full', time: '03:30', targetType: 'smb', retentionCount: 2,
+        smb: { host: 'nas', share: 'backups', path: 'dvhub', username: 'u', password: 'p' } }
+    }),
+    pushLog: () => {},
+    nowFn: () => new Date(2026, 5, 4, 3, 30, 0),
+    spawnFn
+  });
+  const r = await sched.runNow('manual');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.match(r.file, /^\/\/nas\/backups\/dvhub\/dvhub-full-2026-06-04-0330\.dump$/);
+  // pruned the 2 oldest (keep newest 2 of 4)
+  assert.deepEqual(r.pruned, ['dvhub-full-2026-05-29-0330.dump', 'dvhub-full-2026-05-30-0330.dump']);
+  // we invoked pg_dump + smbclient(put) + smbclient(ls) + smbclient(del)
+  assert.ok(calls.some(c => c.cmd === 'pg_dump'));
+  assert.ok(calls.some(c => c.cmd === 'smbclient' && /put /.test(c.args.join(' '))));
+  assert.ok(calls.some(c => c.cmd === 'smbclient' && /del /.test(c.args.join(' '))));
+});
+
+test('runNow SMB refuses when host/share missing', async () => {
+  const sched = createDbBackupScheduler({
+    getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { targetType: 'smb', smb: {} } }),
+    pushLog: () => {}
+  });
+  const r = await sched.runNow('manual');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /SMB host\/share/);
+});
+
 test('getStatus reflects config + last run', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvbk-'));
   const sched = createDbBackupScheduler({
