@@ -97,8 +97,11 @@ export function createHistoryVizAggregator(ctx) {
   //
   // anchorDate: YYYY-MM-DD. Returns ISO start/end in UTC, inclusive-start,
   // exclusive-end (matches telemetryStore.querySeries `ts_utc >= start AND
-  // < end` semantics). For 'month' / 'year' we use rolling fixed-day windows
-  // (30 / 365 days) — calendar-aligned variants land in a future plan.
+  // < end` semantics). 'month' / 'year' are CALENDAR-aligned and independent of
+  // the anchor's day-of-month — they mirror history-runtime.js normalizeViewRange
+  // so the viz charts and the /api/history/summary KPIs cover the same window.
+  // (Operator 2026-06-01: picking the 25th must still show all of May, not a
+  // rolling ~30-day window ending on the 25th.)
   function resolveRange(view, anchorDate) {
     const anchor = new Date(`${anchorDate}T00:00:00Z`);
     const DAY_MS = 86_400_000;
@@ -112,16 +115,16 @@ export function createHistoryVizAggregator(ctx) {
       start = new Date(anchor.getTime() - 6 * DAY_MS);
       end = new Date(anchor.getTime() + DAY_MS);
     } else if (view === 'month') {
-      // 30-day rolling window ending at the anchor day (inclusive)
-      start = new Date(anchor.getTime() - 29 * DAY_MS);
-      end = new Date(anchor.getTime() + DAY_MS);
-    } else if (view === 'year') {
-      // 12-month window ending at the anchor month
+      // Full calendar month containing the anchor (day-of-month ignored).
       const y = anchor.getUTCFullYear();
       const m = anchor.getUTCMonth(); // 0..11
-      // 11 calendar months before the anchor month + the anchor month itself = 12 months
-      start = new Date(Date.UTC(y, m - 11, 1));
+      start = new Date(Date.UTC(y, m, 1));
       end = new Date(Date.UTC(y, m + 1, 1));
+    } else if (view === 'year') {
+      // Full calendar year containing the anchor (month/day ignored).
+      const y = anchor.getUTCFullYear();
+      start = new Date(Date.UTC(y, 0, 1));
+      end = new Date(Date.UTC(y + 1, 0, 1));
     } else if (view === 'all') {
       // "Alle" — full history. Buckets are per calendar year (years are to
       // 'all' what months are to 'year'). Floor at a fixed early bound (no
