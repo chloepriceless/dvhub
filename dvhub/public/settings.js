@@ -3085,7 +3085,21 @@ function renderEosInspector(payload) {
   // (Δ vs previous 15-min slot) combined with the grid flow + PV. Clearer than
   // the raw operation_mode_id and works even though the solution frame reports
   // dispatch implicitly via SoC/grid rather than a single action field.
+  // The real Zeitplan-Hebel EOS' slot maps to (backend: eos-zeitplan-map.js) —
+  // the actual lever the kleine Börsenautomatik / Zeitplan would pull, so the
+  // operator can judge "macht EOS in der Vorhersage die richtigen Sachen?".
+  // Falls back to the old SoC-delta heuristic if the backend predates this.
   function actionCell(r, prevSocPct) {
+    if (typeof r.zeitplanAction === 'string') {
+      switch (r.zeitplanAction) {
+        case 'co_export':  return { html: '⚡ PV+Akku einspeisen', cls: 'plan-export' };
+        case 'pv_export':  return { html: '⚡ PV-Überschuss', cls: 'plan-export' };
+        case 'charge':     return { html: '☀ Akku lädt (PV)', cls: 'plan-pv-charge' };
+        case 'grid_draw':  return { html: '⊘ Netzbezug', cls: 'plan-grid-disabled' };
+        case 'hold':       return { html: '→ Halten', cls: 'plan-self' };
+        default:           return { html: escHtmlForecastInspector(r.zeitplanLabel || r.zeitplanAction), cls: 'plan-self' };
+      }
+    }
     var soc = r.socPct;
     var d = (typeof soc === 'number' && typeof prevSocPct === 'number') ? soc - prevSocPct : 0;
     var feedin = (typeof r.gridFeedinWh === 'number' && r.gridFeedinWh > 1);
@@ -3128,10 +3142,20 @@ function renderEosInspector(payload) {
     // WS1: DVhub→Victron grid setpoint this slot WOULD command if EOS drove the
     // battery (display only — EOS is still display-only, nothing is written).
     // +W = Bezug/Laden (draw from grid), -W = Einspeisen/Entladen (feed grid).
-    var sp = r.dvhubSetpointW;
+    // Prefer the Zeitplan-Hebel setpoint (what the lever would command); fall
+    // back to the raw net-grid setpoint for an older backend. For PV+Akku
+    // co-export, append the battery share so the operator sees how much of the
+    // export is battery (≤16 kW AC) vs PV.
+    var sp = (typeof r.zeitplanGridSetpointW === 'number') ? r.zeitplanGridSetpointW : r.dvhubSetpointW;
     var spStr = '–', spCls = '';
     if (typeof sp === 'number' && isFinite(sp)) {
-      if (sp <= -1) { spStr = '↑ ' + Math.abs(sp) + ' W'; spCls = 'plan-export'; }
+      if (sp <= -1) {
+        spStr = '↑ ' + Math.abs(sp) + ' W';
+        if (r.zeitplanAction === 'co_export' && typeof r.zeitplanBatteryExportW === 'number' && r.zeitplanBatteryExportW > 0) {
+          spStr += ' (Akku ' + Math.round(r.zeitplanBatteryExportW) + ')';
+        }
+        spCls = 'plan-export';
+      }
       else if (sp >= 1) { spStr = '↓ ' + sp + ' W'; spCls = 'plan-grid-charge'; }
       else { spStr = '0 W'; spCls = 'plan-self'; }
     }

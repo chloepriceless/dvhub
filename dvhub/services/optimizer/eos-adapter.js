@@ -3,6 +3,7 @@
 // Consistent { ok, error } contract -- NEVER throws (addresses Codex review concern).
 import http from 'node:http';
 import { toEosStrompreisArray } from './cost-model.js';
+import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -393,6 +394,10 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         gridFeedinWh: numOrNull(r.grid_feedin_energy_wh),
         costsAmt: numOrNull(r.costs_amt),
         revenueAmt: numOrNull(r.revenue_amt),
+        // Raw genetic intent factors — used below to classify the slot's
+        // Zeitplan lever; not surfaced directly.
+        _dischargeAllowedFactor: numOrNull(r.genetic_discharge_allowed_factor),
+        _dcChargeFactor: numOrNull(r.genetic_dc_charge_factor),
       };
     });
 
@@ -411,13 +416,42 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       return 15;
     })();
     const slotHoursForSetpoint = slotMinutesForSetpoint / 60;
+    // WS-EOS (2026-06-01): translate each EOS slot into the DVhub Zeitplan lever
+    // it would command — display only, no write path. The operator validates
+    // "macht EOS in der Vorhersage die richtigen Sachen?" by reading the per-slot
+    // action in the EOS-Übersicht. Levers mirror the kleine Börsenautomatik:
+    // dcExportMode (PV- / PV+Akku-Einspeisung) and gridSetpointW (Halten).
+    const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
+    const bufferW = Number(cfg?.dcExportMode?.bufferW) || 100;
+    const connectionLimitW = Number(cfg?.optimizer?.inverterMaxPowerW) || 29000;
+    const akkuAcLimitW = Number(cfg?.optimizer?.akkuAcLimitW) || 16000;
     for (const row of allRows) {
       const imp = row.gridConsumptionWh;
       const exp = row.gridFeedinWh;
+      // Keep the raw net-grid setpoint for the existing display column.
       row.dvhubSetpointW =
         (imp != null || exp != null) && slotHoursForSetpoint > 0
           ? Math.round(((Number(imp) || 0) - (Number(exp) || 0)) / slotHoursForSetpoint)
           : null;
+      // Wh → W for the slot, then classify into a Zeitplan lever.
+      const h = slotHoursForSetpoint > 0 ? slotHoursForSetpoint : 0.25;
+      const action = classifyEosSlotAction({
+        pvW: (Number(row.pvWh) || 0) / h,
+        feedinW: (Number(exp) || 0) / h,
+        importW: (Number(imp) || 0) / h,
+        dischargeAllowed: (row._dischargeAllowedFactor || 0) > 0,
+        dcChargeFactor: row._dcChargeFactor || 0,
+        socPct: row.socPct,
+        stopSocPct: null, // forecast preview — runtime applies the live floor
+        bufferW, akkuAcLimitW, connectionLimitW
+      });
+      row.zeitplanAction = action.action;
+      row.zeitplanLabel = action.label;
+      row.zeitplanTarget = action.target;
+      row.zeitplanBatteryExportW = action.batteryExportW;
+      row.zeitplanGridSetpointW = action.gridSetpointW;
+      delete row._dischargeAllowedFactor;
+      delete row._dcChargeFactor;
     }
 
     let slotMinutes = null;
