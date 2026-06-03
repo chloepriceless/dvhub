@@ -196,3 +196,51 @@ test('persistent override is NOT erased by a transient rule and resumes after it
   gw = gridWrites(writes);
   assert.equal(gw[gw.length - 1].value, -8000, 'persistent override resumes after rule');
 });
+
+// --- 4. Persistent-override SoC floor (safety, closes adversarial finding C) ----
+
+test('persistent discharge override is suppressed below the SoC floor', async () => {
+  const { evaluator, state, writes, logs } = makeCtx();
+  state.victron.soc = 8; // below default floor (10%)
+  state.schedule.manualOverride.gridSetpointW = { value: -16000, at: Date.now() - 400000, persistent: true };
+
+  await evaluator.evaluateSchedule();
+
+  const gw = gridWrites(writes);
+  assert.equal(gw[gw.length - 1].value, 0, 'discharge override held at 0 below SoC floor');
+  assert.equal(countLogs(logs, 'manual_override_soc_floor'), 1);
+});
+
+test('persistent discharge override applies above the SoC floor', async () => {
+  const { evaluator, state, writes } = makeCtx();
+  state.victron.soc = 50; // above floor
+  state.schedule.manualOverride.gridSetpointW = { value: -16000, at: Date.now() - 400000, persistent: true };
+
+  await evaluator.evaluateSchedule();
+
+  const gw = gridWrites(writes);
+  assert.equal(gw[gw.length - 1].value, -16000, 'override applied above floor');
+});
+
+test('persistent discharge override fail-safe holds when SoC is unknown', async () => {
+  const { evaluator, state, writes } = makeCtx();
+  state.victron.soc = undefined; // telemetry missing
+  state.schedule.manualOverride.gridSetpointW = { value: -16000, at: Date.now() - 400000, persistent: true };
+
+  await evaluator.evaluateSchedule();
+
+  const gw = gridWrites(writes);
+  assert.equal(gw[gw.length - 1].value, 0, 'fail-safe hold when SoC unknown');
+});
+
+test('persistent CHARGE override (positive) is not touched by the discharge floor', async () => {
+  const { evaluator, state, cfg, writes } = makeCtx();
+  cfg.optimizer.allowGridCharge = true; // positive setpoint needs charge permission
+  state.victron.soc = 5; // below floor, but this is a charge, not a discharge
+  state.schedule.manualOverride.gridSetpointW = { value: 5000, at: Date.now() - 400000, persistent: true };
+
+  await evaluator.evaluateSchedule();
+
+  const gw = gridWrites(writes);
+  assert.equal(gw[gw.length - 1].value, 5000, 'charge override unaffected by discharge SoC floor');
+});

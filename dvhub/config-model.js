@@ -930,6 +930,20 @@ function buildFieldDefinitions() {
       group: 'defaults',
       groupLabel: 'Zeitplan Basis',
       groupDescription: 'Globale Zeitplan-Parameter. Einzelregeln bleiben im Dashboard editierbar.',
+      path: 'schedule.manualOverrideMinSocPct',
+      label: 'Persistenter Override SoC-Floor (%)',
+      type: 'number',
+      default: 10,
+      min: 0,
+      max: 100,
+      step: 1,
+      help: 'Unter diesem SoC wird ein persistenter Entlade-Override (gridSetpointW < 0) unterdrückt (Hold), damit er den Akku nicht bis zum reinen Hardware-Minimum entleert.'
+    },
+    {
+      section: 'schedule',
+      group: 'defaults',
+      groupLabel: 'Zeitplan Basis',
+      groupDescription: 'Globale Zeitplan-Parameter. Einzelregeln bleiben im Dashboard editierbar.',
       path: 'schedule.defaultGridSetpointW',
       label: 'Default Grid Setpoint (W)',
       type: 'number',
@@ -2312,6 +2326,10 @@ export function createDefaultConfig() {
       // watchdog/reboot cannot silently drop it. Per-target override available
       // via controlWrite.<target>.keepaliveMs.
       controlKeepaliveMs: 0,
+      // T-0002 safety: SoC floor (%) for a PERSISTENT discharge override
+      // (gridSetpointW < 0). At/below this SoC the override is suppressed (hold)
+      // so it can never run the battery down to the bare hardware min-SoC.
+      manualOverrideMinSocPct: 10,
       defaultGridSetpointW: -40,
       defaultChargeCurrentA: null,
       defaultFeedExcessDcPv: 1,

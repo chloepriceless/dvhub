@@ -491,6 +491,34 @@ export function createScheduleEvaluator(ctx) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
 
+      // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
+      // A persistent override has no TTL and is invisible to both the per-rule
+      // stopSocPct floor (autoDisableStopSocScheduleRules — rules only) and the
+      // D-18 Akku clamp (gated on eff.rule.stage2Phase, but an override has
+      // rule:null). Left unguarded it would force-discharge down to the bare
+      // Victron hardware min-SoC — exactly the 2026-05-22 overnight-drain class.
+      // Floor it on measured SoC; fail-safe (suppress) when SoC is unknown.
+      // Scoped to persistent overrides only — normal overrides are TTL-bounded.
+      if (target === 'gridSetpointW'
+          && eff.source === 'manual_override_persistent'
+          && Number(eff.value) < 0) {
+        const floorPct = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
+        const socRaw = state.victron.soc;
+        const soc = Number(socRaw);
+        const socKnown = socRaw != null && Number.isFinite(soc);
+        if (!socKnown || soc <= floorPct) {
+          // Hold (0 = no forced grid setpoint → self-consumption), do not discharge.
+          await applyControlTarget('gridSetpointW', 0, 'manual_override_soc_floor');
+          if (!state.ctrl._persistOverrideSocFloorLogged) {
+            pushLog('manual_override_soc_floor', { soc: socKnown ? soc : null, floorPct, suppressed: Number(eff.value) });
+            state.ctrl._persistOverrideSocFloorLogged = true;
+          }
+          continue;
+        }
+        state.ctrl._persistOverrideSocFloorLogged = false;
+      }
+      // === end T-0002 persistent-override SoC floor ===========================
+
       // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
       if (target === 'gridSetpointW' && priceNegative) {
         const limit = Number(npp.gridSetpointW ?? -40);
