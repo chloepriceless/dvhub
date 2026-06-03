@@ -122,13 +122,32 @@ export function createScheduleEvaluator(ctx) {
       }
       return true;
     });
-    if (hit) { hit._wasActive = true; delete state.schedule.manualOverride[target]; return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit }; }
+    if (hit) {
+      hit._wasActive = true;
+      // A transient scheduled rule wins over a manual override, but must NOT
+      // erase a PERSISTENT override (T-0002) — that one resumes when the rule's
+      // window ends. Non-persistent overrides are still consumed as before.
+      const mo0 = state.schedule.manualOverride[target];
+      if (mo0 && mo0.persistent !== true) delete state.schedule.manualOverride[target];
+      return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit };
+    }
 
     const mo = state.schedule.manualOverride[target];
-    if (mo && (now - mo.at) < (cfg.schedule.manualOverrideTtlMs || 300000)) {
-      return { value: Number(mo.value), source: 'manual_override', rule: null };
+    if (mo) {
+      // T-0002 persistent override: a `persistent` override never expires — it
+      // holds X kW (e.g. a continuous feed-in setpoint) until explicitly cleared
+      // via POST /api/control/write {clear:true}. A normal override still expires
+      // after manualOverrideTtlMs.
+      const ttlMs = cfg.schedule.manualOverrideTtlMs || 300000;
+      if (mo.persistent === true || (now - mo.at) < ttlMs) {
+        return {
+          value: Number(mo.value),
+          source: mo.persistent === true ? 'manual_override_persistent' : 'manual_override',
+          rule: null
+        };
+      }
+      delete state.schedule.manualOverride[target];
     }
-    delete state.schedule.manualOverride[target];
 
     if (target === 'gridSetpointW' && state.schedule.config.defaultGridSetpointW != null) return { value: Number(state.schedule.config.defaultGridSetpointW), source: 'default', rule: null };
     if (target === 'chargeCurrentA' && state.schedule.config.defaultChargeCurrentA != null) return { value: Number(state.schedule.config.defaultChargeCurrentA), source: 'default', rule: null };
@@ -223,11 +242,46 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end EEG/§14a gate ===
 
+    // === T-0002 Reg-2700 keepalive ==========================================
+    // Victron's ESS AcPowerSetpoint (reg 2700) reverts if it is not re-asserted
+    // periodically (GX/Venus reboot, dbus/MQTT reconnect, internal watchdog).
+    // Without a keepalive an identical-value write is short-circuited forever,
+    // so a silently-lost setpoint would never be re-written. keepaliveMs > 0
+    // forces a re-write once that long has elapsed since the last REAL write.
+    // Config-driven and default-OFF (0) so existing setups behave identically:
+    //   per-target  controlWrite.<target>.keepaliveMs   (applies to any target)
+    //   global      schedule.controlKeepaliveMs         (gridSetpointW only — the
+    //               only register with a Venus-side watchdog; chargeCurrentA /
+    //               minSocPct are persistent settings that do not time out).
+    const keepaliveMs = Number(
+      conf.keepaliveMs
+      ?? (target === 'gridSetpointW' ? cfg.schedule?.controlKeepaliveMs : 0)
+      ?? 0
+    );
     const prev = state.schedule.lastWrite[target];
+    let isKeepalive = false;
     if (prev != null && Number(prev.value) === Number(value)) {
-      state.schedule.active[target] = { value, source, at: Date.now(), skipped: true };
-      return { ok: true, skipped: true };
+      const sinceLastWriteMs = Date.now() - (Number(prev.at) || 0);
+      if (!(keepaliveMs > 0 && sinceLastWriteMs >= keepaliveMs)) {
+        // Unchanged and no keepalive due → HOLD (skip the hardware write).
+        state.schedule.active[target] = {
+          value, source, at: Date.now(), skipped: true,
+          reason: 'unchanged', heldSinceMs: sinceLastWriteMs
+        };
+        // Transparency (T-0002): surface a held write once per (target,value)
+        // transition so the operator can see "held at X" without log spam.
+        if (state.schedule._lastSkipKey?.[target] !== String(value)) {
+          pushLog('control_write_skipped', { target, value, source, reason: 'unchanged', heldSinceMs: sinceLastWriteMs });
+          state.schedule._lastSkipKey = { ...(state.schedule._lastSkipKey || {}), [target]: String(value) };
+        }
+        return { ok: true, skipped: true, reason: 'unchanged', heldSinceMs: sinceLastWriteMs };
+      }
+      // keepalive due → fall through and re-assert the identical value.
+      isKeepalive = true;
     }
+    // A real write (changed value or keepalive) resets this target's skip throttle.
+    if (state.schedule._lastSkipKey) delete state.schedule._lastSkipKey[target];
+    // === end T-0002 keepalive ===============================================
 
     try {
       let encoded, words, fc;
@@ -262,9 +316,10 @@ export function createScheduleEvaluator(ctx) {
         writeType: encoded.writeType,
         fc,
         address: conf.address,
-        at: Date.now()
+        at: Date.now(),
+        keepalive: isKeepalive
       };
-      state.schedule.active[target] = { value, source, at: Date.now() };
+      state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
       pushLog('control_write', {
         target,
         value,
@@ -275,7 +330,8 @@ export function createScheduleEvaluator(ctx) {
         wordOrder: encoded.wordOrder,
         fc,
         address: conf.address,
-        source
+        source,
+        keepalive: isKeepalive
       });
       telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
         eventType: 'control_write',
@@ -292,7 +348,7 @@ export function createScheduleEvaluator(ctx) {
           address: conf.address
         }
       }));
-      return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address };
+      return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address, keepalive: isKeepalive };
     } catch (e) {
       pushLog('control_write_error', { target, value, source, error: e.message });
       telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({

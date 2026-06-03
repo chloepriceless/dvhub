@@ -909,7 +909,21 @@ function buildFieldDefinitions() {
       label: 'Manual Override TTL',
       type: 'number',
       default: 300000,
-      help: 'Wie lange ein manueller Override gilt (ms).'
+      help: 'Wie lange ein manueller Override gilt (ms). Persistente Overrides (persist:true) ignorieren dies.'
+    },
+    {
+      section: 'schedule',
+      group: 'defaults',
+      groupLabel: 'Zeitplan Basis',
+      groupDescription: 'Globale Zeitplan-Parameter. Einzelregeln bleiben im Dashboard editierbar.',
+      path: 'schedule.controlKeepaliveMs',
+      label: 'Grid-Setpoint Keepalive (ms)',
+      type: 'number',
+      default: 0,
+      min: 0,
+      max: 600000,
+      step: 1000,
+      help: 'Reg 2700 (ESS AcPowerSetpoint) periodisch neu schreiben, auch wenn unverändert (gegen Venus-Watchdog/Reboot-Verlust). 0 = aus.'
     },
     {
       section: 'schedule',
@@ -2293,6 +2307,11 @@ export function createDefaultConfig() {
     schedule: {
       timezone: 'Europe/Berlin',
       evaluateMs: 15000,
+      // T-0002 Reg-2700 keepalive: 0 = OFF (default). >0 = re-assert the ESS
+      // grid setpoint (reg 2700) every N ms even if unchanged, so a Venus-side
+      // watchdog/reboot cannot silently drop it. Per-target override available
+      // via controlWrite.<target>.keepaliveMs.
+      controlKeepaliveMs: 0,
       defaultGridSetpointW: -40,
       defaultChargeCurrentA: null,
       defaultFeedExcessDcPv: 1,

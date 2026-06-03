@@ -5333,6 +5333,13 @@ export function createApiRoutes(ctx) {
       const target = String(body.target || '');
       const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct', 'maxDischargeW']);
       if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
+      // T-0002: explicitly clear a (persistent or transient) manual override so
+      // the schedule falls back to its default/rule value on the next eval.
+      if (body.clear === true) {
+        delete state.schedule.manualOverride[target];
+        pushLog('control_override_cleared', { target }, actorContext(req));
+        return json(res, 200, { ok: true, cleared: true, target });
+      }
       const value = Number(body.value);
       // Plan 08-04 Task 1 Step 2: numeric bounds before applyControlTarget so an
       // attacker with a stolen token cannot push 1e308 into the ESS write pipeline.
@@ -5359,7 +5366,11 @@ export function createApiRoutes(ctx) {
         return json(res, 400, { ok: false, error: 'max_discharge_out_of_range', max: MAX_BATTERY_DISCHARGE_W });
       }
       ctx.assertValidRuntimeCommand('control_write', { target, value });
-      state.schedule.manualOverride[target] = { value, at: Date.now() };
+      // T-0002: persist:true makes the override survive manualOverrideTtlMs (and
+      // a transient scheduled-rule window) until explicitly cleared (clear:true).
+      state.schedule.manualOverride[target] = body.persist === true
+        ? { value, at: Date.now(), persistent: true }
+        : { value, at: Date.now() };
       const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
       // Plan 08-09 Task 2: every manual control write produces a durable
       // audit_log entry with full actor attribution AND (best-effort) a row
