@@ -16,7 +16,7 @@
 --   1. CREATE EXTENSION IF NOT EXISTS timescaledb
 --   2. Convert public.timeseries_samples to a hypertable (chunk_time_interval = 7 days)
 --   3. Compression policy (compress chunks older than 7 days)
---   4. Retention policy (drop chunks older than 45 days)
+--   4. Retention policy: INTENTIONALLY OMITTED (T-0078) — see step 4 below.
 --   5. 15-minute continuous aggregate (energy_slots_15m_cagg) + policy
 --   6. 1-hour continuous aggregate (energy_slots_1h_cagg) + policy
 --
@@ -53,12 +53,16 @@ SELECT add_compression_policy(
   if_not_exists => TRUE
 );
 
--- 4. Retention policy: drop chunks older than 45 days.
-SELECT add_retention_policy(
-  'timeseries_samples',
-  drop_after => INTERVAL '45 days',
-  if_not_exists => TRUE
-);
+-- 4. Retention policy: INTENTIONALLY OMITTED (T-0078, P0-4).
+-- A 45-day add_retention_policy used to live here. It drops chunks older than
+-- 45 days = permanent loss of granular telemetry, which violates the project's
+-- NEVER-DELETE-DATA rule. Migration 018 removes the policy, but a FRESH DB that
+-- ran 014 and then failed/stalled before 018 would carry an active culling policy
+-- in the meantime. Removing the add at the source means a fresh DB never creates
+-- the dropping policy at all (018 then idempotently no-ops via if_exists => TRUE).
+-- Compression (step 3 above) keeps indefinite retention cheap. If disk ever truly
+-- fills, ops can manually re-apply add_retention_policy with an explicit interval —
+-- a deliberate operator action, never a default.
 
 -- 5. 15-minute continuous aggregate (energy_slots_15m_cagg).
 CREATE MATERIALIZED VIEW IF NOT EXISTS energy_slots_15m_cagg
@@ -112,5 +116,5 @@ SELECT add_continuous_aggregate_policy(
 
 -- 7. Register migration (last statement — only inserted if all preceding ops succeeded).
 INSERT INTO schema_migrations (version, description, applied_at)
-VALUES (14, 'TimescaleDB: hypertable on timeseries_samples + 7d compression + 45d retention + 15m/1h CAggs', NOW())
+VALUES (14, 'TimescaleDB: hypertable on timeseries_samples + 7d compression + 15m/1h CAggs (no retention: T-0078)', NOW())
 ON CONFLICT (version) DO NOTHING;
