@@ -340,3 +340,37 @@ test('T-0075 2b: positive chargeCurrentA (charge) is NOT floored even below SoC 
   await evaluator.applyControlTarget('chargeCurrentA', 20, 'test');
   assert.equal(targetWrites(writes, 'chargeCurrentA').pop().value, 20, 'charge current unaffected by discharge floor');
 });
+
+// --- 7. T-0076 DV feed-in writer: cache state only after a successful write ----
+// _lastDvFeedIn must advance ONLY after the hardware write succeeds, else a failed
+// "block feed-in" on a negative price is never retried (keeps exporting).
+
+const dvFeedInCtx = (mqttWrite) => makeCtx({ mutate: ({ cfg, ctx }) => {
+  cfg.dvControl = { enabled: true, feedExcessDcPv: { enabled: true, address: 2707 } };
+  ctx.transport.mqttWrite = mqttWrite;
+} });
+
+test('T-0076: a failed DV feed-in write is NOT cached and is retried next cycle', async () => {
+  let attempts = 0;
+  const { evaluator, state } = dvFeedInCtx(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('modbus timeout'); // first write fails
+  });
+
+  await evaluator.applyDvVictronControl(false); // block feed-in (negative price) — write fails
+  assert.equal(state.ctrl._lastDvFeedIn, undefined, 'failed write must NOT advance the cache');
+
+  await evaluator.applyDvVictronControl(false); // same desired state → must retry, not short-circuit
+  assert.equal(attempts, 2, 'identical feedIn after a failed write retries the write');
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'successful retry advances the cache');
+});
+
+test('T-0076: after a successful write an identical feedIn short-circuits (no re-write)', async () => {
+  let attempts = 0;
+  const { evaluator, state } = dvFeedInCtx(async () => { attempts += 1; });
+
+  await evaluator.applyDvVictronControl(false); // writes once
+  await evaluator.applyDvVictronControl(false); // unchanged + last write ok → short-circuit
+  assert.equal(attempts, 1, 'no redundant re-write after a successful identical state');
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+});

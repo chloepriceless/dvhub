@@ -185,9 +185,16 @@ export function createScheduleEvaluator(ctx) {
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
     if (state.ctrl._lastDvFeedIn === feedIn) return;
-    state.ctrl._lastDvFeedIn = feedIn;
 
     const results = {};
+    // T-0076 (P0-2): advance the change-detection cache ONLY after the hardware
+    // write actually succeeds. The old code set _lastDvFeedIn BEFORE the await,
+    // so a failed write was cached as if applied and the next cycle short-circuited
+    // → the write was never retried. Worst case: a failed "block feed-in" (feedIn
+    // = false) on a negative price kept the DC/AC PV exporting against the price.
+    // Now any write failure leaves the cache at its previous value so the next
+    // call re-attempts. Partial success also re-attempts (idempotent re-write).
+    let allOk = true;
 
     // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
     if (dc.feedExcessDcPv?.enabled) {
@@ -206,6 +213,7 @@ export function createScheduleEvaluator(ctx) {
         pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
       } catch (e) {
         results.feedExcessDcPv = { ok: false, error: e.message };
+        allOk = false;
         pushLog('dv_victron_write_error', { register: 'feedExcessDcPv', error: e.message });
       }
     }
@@ -227,11 +235,14 @@ export function createScheduleEvaluator(ctx) {
         pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
       } catch (e) {
         results.dontFeedExcessAcPv = { ok: false, error: e.message };
+        allOk = false;
         pushLog('dv_victron_write_error', { register: 'dontFeedExcessAcPv', error: e.message });
       }
     }
 
     state.ctrl.dvControl = { feedIn, ...results, at: Date.now() };
+    // Cache the applied state only on a fully successful write (see above).
+    if (allOk) state.ctrl._lastDvFeedIn = feedIn;
   }
 
   async function applyControlTarget(target, value, source) {
