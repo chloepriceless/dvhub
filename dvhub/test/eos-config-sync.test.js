@@ -125,10 +125,23 @@ test('buildEosOptimization: rejects invalid intervals and falls back to 3600', (
   }
 });
 
-test('buildEosInverters: passes max_ac_charge_power_w from optimizer.maxChargeW', () => {
+test('buildEosInverters: max_ac_charge_power_w HARD-DISABLED to 0 when grid-arbitrage NOT licensed (§14a)', () => {
+  // T-0080: STD_CFG carries maxChargeW=18000 but no allowGridCharge/mispel, so AC
+  // grid→battery charging is §14a-illegal for a vanilla self-consumption operator.
+  // buildEosInverters must report 0 (a886317 hard-disable) so EOS' genetic can
+  // never pencil in a grid→battery transfer. This was a FALSE-NEGATIVE: the old
+  // assertion expected 18000, so a regression that re-enabled illegal grid-charge
+  // (dropping the gridChargeAllowed gate) would have passed unnoticed.
   const inv = buildEosInverters(STD_CFG)[0];
-  assert.equal(inv.max_ac_charge_power_w, 18000);
+  assert.equal(inv.max_ac_charge_power_w, 0);
   assert.equal(inv.battery_id, 'battery1');
+});
+
+test('buildEosInverters: max_ac_charge_power_w = maxChargeW when grid-arbitrage IS licensed', () => {
+  // Positive case: explicit allowGridCharge + a MisPel mode = the operator is
+  // licensed for grid arbitrage → the 18000 W AC-charge cap passes through.
+  const cfg = { optimizer: { ...STD_CFG.optimizer, allowGridCharge: true, mispel: { mode: 'pauschal' } } };
+  assert.equal(buildEosInverters(cfg)[0].max_ac_charge_power_w, 18000);
 });
 
 test('buildEosInverters: max_power_w = inverterMaxPowerW (AC grid-connection cap) when set', () => {
