@@ -133,7 +133,13 @@ export function createPoller(ctx) {
         state.victron[name] = pointFromRegs(regs, conf);
       }
       delete state.victron.errors[name];
-      state.victron.updatedAt = Date.now();
+      const _now = Date.now();
+      state.victron.updatedAt = _now;
+      // T-0075: per-Feld Timestamp des letzten ERFOLGS (NUR Erfolgs-Zweig).
+      // updatedAt allein ist "letzter Versuch" (auch im catch gesetzt) und taugt
+      // NICHT als Frische-Mass — ein eingefrorener SoC nach Comms-Ausfall behielte
+      // seinen Wert. fieldUpdatedAt reflektiert echte Aktualitaet je Feld.
+      (state.victron.fieldUpdatedAt ??= {})[name] = _now;
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
