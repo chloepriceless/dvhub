@@ -38,6 +38,9 @@ function makeCtx(overrides = {}) {
 
   const state = {
     victron: {
+      // SoC present + above the T-0075 hard floor so the universal discharge floor
+      // (added to applyControlTarget) does not clamp these D-18 setpoints.
+      soc: 50,
       // measured DC battery discharge (positive W) — the D-18 clamp input.
       batteryDischargeW: 0,
       batteryChargeW: 0,

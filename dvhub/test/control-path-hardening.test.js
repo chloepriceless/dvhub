@@ -244,3 +244,39 @@ test('persistent CHARGE override (positive) is not touched by the discharge floo
   const gw = gridWrites(writes);
   assert.equal(gw[gw.length - 1].value, 5000, 'charge override unaffected by discharge SoC floor');
 });
+
+// --- 5. T-0075 universal discharge floor in applyControlTarget (chokepoint) -----
+
+test('T-0075: fresh SoC above hard floor -> discharge applied', async () => {
+  const { evaluator, state, writes } = makeCtx();
+  state.victron.soc = 50;
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  const r = await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(r.ok, true);
+  assert.equal(gridWrites(writes).pop().value, -3000, 'discharge not clamped');
+});
+
+test('T-0075: SoC at/below hard floor -> clamped to 0', async () => {
+  const { evaluator, state, writes, logs } = makeCtx();
+  state.victron.soc = 3; // <= 5 default hard floor
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(gridWrites(writes).pop().value, 0, 'clamped to hold');
+  assert.equal(countLogs(logs, 'control_discharge_floor'), 1);
+});
+
+test('T-0075: STALE finite SoC (old success timestamp) -> clamped (fail-safe)', async () => {
+  const { evaluator, state, writes, logs } = makeCtx();
+  state.victron.soc = 50; // finite + above floor, but frozen/stale
+  state.victron.fieldUpdatedAt = { soc: Date.now() - 200000 }; // > 90s maxAge
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(gridWrites(writes).pop().value, 0, 'frozen-but-finite SoC fails safe');
+  assert.equal(logs.filter((l) => l.event === 'control_discharge_floor' && l.payload.reason === 'soc_stale').length, 1);
+});
+
+test('T-0075: unknown SoC (null) -> clamped (fail-safe)', async () => {
+  const { evaluator, state, writes } = makeCtx();
+  state.victron.soc = null;
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(gridWrites(writes).pop().value, 0, 'unknown SoC fails safe');
+});

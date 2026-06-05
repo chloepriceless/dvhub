@@ -242,6 +242,37 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end EEG/§14a gate ===
 
+    // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
+    // Chokepoint floor: EVERY discharge-direction gridSetpointW write (optimizer,
+    // schedule rule, manual, persistent override, EOS/EMHASS, negative-price) passes
+    // here. A discharge is suppressed when SoC is UNKNOWN, STALE, or at/below the hard
+    // floor. Closes T-0001 P0-1: the per-rule stopSoc + D-18 floors check only
+    // null/non-finite, NOT age — but polling.js keeps the last SoC on a failed read,
+    // so a frozen finite SoC would pass them (over-drain on a comms fault). soc's
+    // per-field success timestamp (fieldUpdatedAt.soc, set ONLY on a successful poll)
+    // gives real freshness. Fail-safe: unknown/stale telemetry => no forced discharge.
+    if (target === 'gridSetpointW' && Number(value) < 0) {
+      const socRaw = state.victron.soc;
+      const soc = Number(socRaw);
+      const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
+      const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+      const socAtMs = Number(state.victron.fieldUpdatedAt?.soc ?? 0);
+      const ageMs = Date.now() - socAtMs;
+      const unknown = socRaw == null || !Number.isFinite(soc);
+      // Only "stale" when we HAVE a success-timestamp that has aged out; a missing
+      // timestamp at runtime coincides with a cold-start null SoC (caught by unknown).
+      const stale = socAtMs > 0 && ageMs > maxAgeMs;
+      if (unknown || stale || soc <= floorPct) {
+        const reason = unknown ? 'soc_unknown' : stale ? 'soc_stale' : 'below_hard_floor';
+        pushLog('control_discharge_floor', {
+          target, requested: Number(value), soc: unknown ? null : soc,
+          ageMs: socAtMs ? ageMs : null, floorPct, reason
+        });
+        value = 0;
+      }
+    }
+    // === end T-0075 discharge floor ===
+
     // === T-0002 Reg-2700 keepalive ==========================================
     // Victron's ESS AcPowerSetpoint (reg 2700) reverts if it is not re-asserted
     // periodically (GX/Venus reboot, dbus/MQTT reconnect, internal watchdog).
