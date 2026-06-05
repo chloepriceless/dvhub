@@ -26,8 +26,16 @@ for pkg in openvpn wireguard-tools strongswan; do
 done
 if [[ -n "$NEEDED_PKGS" ]]; then
   echo "  Installiere fehlende Pakete:$NEEDED_PKGS"
-  apt-get update -qq
-  apt-get install -y $NEEDED_PKGS
+  # T-0077: NON-FATAL. This script runs as ExecStartPre on EVERY service start.
+  # apt hits the network; under `set -e` a failed apt (no network at an offline
+  # boot) would abort the whole hook. The packages are VPN tools (openvpn/wg/
+  # strongswan), not required for the core app to boot — best-effort, retry next run.
+  # The `if` condition suppresses `set -e` for these commands.
+  if apt-get update -qq && apt-get install -y $NEEDED_PKGS; then
+    echo "  Pakete: installiert"
+  else
+    echo "  WARN: Paket-Installation fehlgeschlagen (non-fatal, Netz?). VPN-Features ggf. bis zum naechsten erfolgreichen Lauf eingeschraenkt." >&2
+  fi
 else
   echo "  Pakete: OK"
 fi
@@ -119,11 +127,32 @@ SUDOERS
 chmod 440 "${SUDOERS_FILE}"
 echo "  Sudoers: OK"
 
-# ── 6. npm install ──
+# ── 6. npm install (Lockfile-Guard + non-fatal) ──
+# T-0077: this runs as ExecStartPre on EVERY service start. The old unconditional
+# `npm install` hit the npm registry on every boot under `set -e`, so a boot with
+# no network (Proxmox stop-mode backup reboot) failed the whole hook -> the service
+# refused to start (fleet-brick risk). Now: only when the dependency lockfile changed
+# since the last SUCCESSFUL install, and never fatal (the marker is only advanced on
+# success, so a failed/offline run simply retries next time).
 if [[ -f "$APP_DIR/package.json" ]]; then
   cd "$APP_DIR"
-  npm install --omit=dev 2>&1 | tail -1
-  echo "  npm install: OK"
+  LOCK_FILE="package-lock.json"
+  [[ -f "$APP_DIR/$LOCK_FILE" ]] || LOCK_FILE="package.json"
+  NPM_MARKER="$INSTALL_DIR/.npm-install-hash"
+  CURRENT_HASH="$(sha256sum "$APP_DIR/$LOCK_FILE" 2>/dev/null | awk '{print $1}')"
+  STORED_HASH="$(cat "$NPM_MARKER" 2>/dev/null || echo "")"
+  if [[ -d "$APP_DIR/node_modules" && -n "$CURRENT_HASH" && "$CURRENT_HASH" == "$STORED_HASH" ]]; then
+    echo "  npm install: uebersprungen (${LOCK_FILE} unveraendert)"
+  else
+    echo "  npm install (${LOCK_FILE} geaendert oder node_modules fehlt)..."
+    # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
+    if npm install --omit=dev; then
+      [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
+      echo "  npm install: OK"
+    else
+      echo "  WARN: npm install fehlgeschlagen (non-fatal, Netz?). Marker NICHT aktualisiert -> Retry beim naechsten Lauf." >&2
+    fi
+  fi
 fi
 
 # ── 7. Berechtigungen ──
@@ -144,13 +173,23 @@ fi
 # Phase 16 D-09: ensure the ExecStartPre hook is present in the LIVE unit file.
 # Existing prod boxes were installed before this hook existed, and a tar|ssh deploy
 # never re-runs install.sh — so post-update.sh must add the hook to the unit itself.
-# Idempotent: the grep guard means the sed insert runs at most once.
-EXPECTED_EXECSTARTPRE="ExecStartPre=+/usr/bin/bash ${INSTALL_DIR}/post-update.sh"
-if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^ExecStartPre=.*post-update\.sh' "$SERVICE_FILE"; then
-  echo "  ExecStartPre-Hook (D-09) wird eingefuegt..."
-  # Insert the ExecStartPre line immediately before the ExecStart= line.
-  sed -i "\|^ExecStart=|i ${EXPECTED_EXECSTARTPRE}" "$SERVICE_FILE"
-  SERVICE_CHANGED=1
+# T-0077: the hook MUST be non-fatal ('-+'). A box installed before T-0077 carries
+# the old fatal form ('+', no '-'); migrate it in place so a failed/offline
+# post-update can never block the service start. Idempotent: insert if absent,
+# rewrite only if the present line differs from the expected non-fatal form.
+EXPECTED_EXECSTARTPRE="ExecStartPre=-+/usr/bin/bash ${INSTALL_DIR}/post-update.sh"
+if [[ -f "$SERVICE_FILE" ]]; then
+  CURRENT_EXECSTARTPRE="$(grep -E '^ExecStartPre=.*post-update\.sh' "$SERVICE_FILE" | head -1 || echo "")"
+  if [[ -z "$CURRENT_EXECSTARTPRE" ]]; then
+    echo "  ExecStartPre-Hook (D-09) wird eingefuegt..."
+    # Insert the ExecStartPre line immediately before the ExecStart= line.
+    sed -i "\|^ExecStart=|i ${EXPECTED_EXECSTARTPRE}" "$SERVICE_FILE"
+    SERVICE_CHANGED=1
+  elif [[ "$CURRENT_EXECSTARTPRE" != "$EXPECTED_EXECSTARTPRE" ]]; then
+    echo "  ExecStartPre-Hook (T-0077) auf non-fatal (-+) migriert..."
+    sed -i "s|^ExecStartPre=.*post-update\.sh.*|${EXPECTED_EXECSTARTPRE}|" "$SERVICE_FILE"
+    SERVICE_CHANGED=1
+  fi
 fi
 
 if [[ "$SERVICE_CHANGED" -eq 1 ]]; then

@@ -681,8 +681,12 @@ Group=${SERVICE_USER}
 WorkingDirectory=${APP_DIR}
 # Phase 16 D-09: run post-update.sh on every service start so the sudoers block
 # stays current regardless of deploy mechanism (tar|ssh never triggers /api/admin/update/apply).
-# Leading '+' runs this ExecStartPre as root despite User=${SERVICE_USER}; post-update.sh requires root.
-ExecStartPre=+/usr/bin/bash ${INSTALL_DIR}/post-update.sh
+# Prefixes: '+' runs as root despite User=${SERVICE_USER} (post-update.sh requires root);
+# T-0077 '-' makes a non-zero exit NON-FATAL — a failed post-update (e.g. an offline
+# Proxmox stop-mode backup reboot where apt/npm can't reach the network) must NEVER
+# block ExecStart, or the box stays down until manual intervention. post-update.sh is
+# itself hardened so its network steps are non-fatal; the '-' is the belt-and-suspenders.
+ExecStartPre=-+/usr/bin/bash ${INSTALL_DIR}/post-update.sh
 ExecStart=/usr/bin/node ${APP_DIR}/server.js
 Environment=NODE_ENV=production
 Environment=DV_APP_CONFIG=${CONFIG_PATH}
