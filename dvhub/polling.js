@@ -180,7 +180,11 @@ export function createPoller(ctx) {
       const regs = await transport.mbRequest(conf);
       state.victron[name] = pointFromRegs(regs, conf);
       delete state.victron.errors[name];
-      state.victron.updatedAt = Date.now();
+      const _now = Date.now();
+      state.victron.updatedAt = _now;
+      // T-0075: per-field success timestamp (success branch only), mirroring
+      // pollPoint — real freshness for the dv-control readback fields too.
+      (state.victron.fieldUpdatedAt ??= {})[name] = _now;
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();

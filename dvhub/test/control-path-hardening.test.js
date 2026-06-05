@@ -280,3 +280,63 @@ test('T-0075: unknown SoC (null) -> clamped (fail-safe)', async () => {
   await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
   assert.equal(gridWrites(writes).pop().value, 0, 'unknown SoC fails safe');
 });
+
+// --- 6. T-0075 Teil 2b: floor extended to maxDischargeW + chargeCurrentA --------
+// The "discharge direction" is per-target and NOT uniform:
+//   gridSetpointW / chargeCurrentA: discharge = value < 0
+//   maxDischargeW: 0 = no discharge, positive = cap in W, -1 = unlimited → any != 0 enables.
+
+const targetWrites = (writes, t) => writes.filter((w) => w.target === t);
+const enableTargets = ({ cfg }) => {
+  cfg.controlWrite.maxDischargeW = { enabled: true, address: 104 };
+  cfg.controlWrite.chargeCurrentA = { enabled: true, address: 101 };
+};
+
+test('T-0075 2b: maxDischargeW cap applied when SoC fresh + above floor', async () => {
+  const { evaluator, state, writes } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = 50;
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  await evaluator.applyControlTarget('maxDischargeW', 4000, 'test');
+  assert.equal(targetWrites(writes, 'maxDischargeW').pop().value, 4000, 'cap not clamped when safe');
+});
+
+test('T-0075 2b: maxDischargeW positive cap clamped to 0 on STALE SoC', async () => {
+  const { evaluator, state, writes, logs } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = 50; // finite but frozen
+  state.victron.fieldUpdatedAt = { soc: Date.now() - 200000 };
+  await evaluator.applyControlTarget('maxDischargeW', 4000, 'test');
+  assert.equal(targetWrites(writes, 'maxDischargeW').pop().value, 0, 'stale → no discharge cap');
+  assert.equal(logs.filter((l) => l.event === 'control_discharge_floor' && l.payload.reason === 'soc_stale').length, 1);
+});
+
+test('T-0075 2b: maxDischargeW UNLIMITED (-1) clamped to 0 below hard floor', async () => {
+  const { evaluator, state, writes } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = 3; // <= 5 default hard floor
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  await evaluator.applyControlTarget('maxDischargeW', -1, 'test');
+  assert.equal(targetWrites(writes, 'maxDischargeW').pop().value, 0, 'unlimited discharge suppressed at floor');
+});
+
+test('T-0075 2b: maxDischargeW=0 (no discharge) is NOT a discharge write -> untouched, no floor log', async () => {
+  const { evaluator, state, writes, logs } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = null; // would clamp a real discharge, but 0 enables none
+  await evaluator.applyControlTarget('maxDischargeW', 0, 'test');
+  assert.equal(targetWrites(writes, 'maxDischargeW').pop().value, 0, 'hold passes through');
+  assert.equal(logs.filter((l) => l.event === 'control_discharge_floor').length, 0, 'no spurious floor log');
+});
+
+test('T-0075 2b: negative chargeCurrentA (discharge dir) clamped to 0 on stale SoC', async () => {
+  const { evaluator, state, writes } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = 50;
+  state.victron.fieldUpdatedAt = { soc: Date.now() - 200000 }; // stale
+  await evaluator.applyControlTarget('chargeCurrentA', -50, 'test');
+  assert.equal(targetWrites(writes, 'chargeCurrentA').pop().value, 0, 'discharge-direction current suppressed');
+});
+
+test('T-0075 2b: positive chargeCurrentA (charge) is NOT floored even below SoC floor', async () => {
+  const { evaluator, state, writes } = makeCtx({ mutate: enableTargets });
+  state.victron.soc = 3; // below floor, but charging is never an over-drain risk
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  await evaluator.applyControlTarget('chargeCurrentA', 20, 'test');
+  assert.equal(targetWrites(writes, 'chargeCurrentA').pop().value, 20, 'charge current unaffected by discharge floor');
+});

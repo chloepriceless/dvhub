@@ -86,6 +86,23 @@ export function localMinutesOfDay(date = new Date(), timezone = 'Europe/Berlin')
   return hh * 60 + mm;
 }
 
+// T-0075 telemetry-freshness helpers. polling.js stamps
+// state.victron.fieldUpdatedAt[field] ONLY in the success branch of a poll
+// (victron.updatedAt is set on every attempt incl. errors, so it is "last
+// attempt", not "last success"). These give a real per-field freshness signal.
+// A field is "stale" only when it HAS a success timestamp that has aged past
+// maxAgeMs — a missing timestamp (0) coincides with a cold-start null value and
+// is handled by the caller's null/unknown check, never treated as stale here.
+export function victronFieldAgeMs(state, field, nowMs = Date.now()) {
+  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
+  return at > 0 ? nowMs - at : null;
+}
+export function victronFieldStale(state, field, maxAgeMs, nowMs = Date.now()) {
+  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
+  const max = Number(maxAgeMs);
+  return at > 0 && Number.isFinite(max) && (nowMs - at) > max;
+}
+
 export function gridDirection(value, gridPositiveMeans = 'feed_in') {
   const v = Number(value) || 0;
   const positiveFeedIn = gridPositiveMeans !== 'grid_import';

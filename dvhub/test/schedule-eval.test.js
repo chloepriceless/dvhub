@@ -203,3 +203,73 @@ test('D-18: missing batteryDischargeW telemetry fails safe — setpoint held, st
   assert.equal(Number(written.value), -16000,
     'missing telemetry must hold the current Stage-2 setpoint, not no-op into an unbounded discharge');
 });
+
+// --- T-0075 Teil 2b: stale-telemetry fail-safes (D-18 + stop-SoC) -------------
+// batteryDischargeW is DERIVED from batteryPowerW, so D-18 freshness must key on
+// the real polled field batteryPowerW (else the check is a no-op). stop-SoC must
+// latch off on stale SoC rather than trusting a frozen-but-above-threshold value.
+
+test('T-0075 2b: D-18 stale batteryPowerW fails safe (finite discharge, stale source)', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state }) => {
+      // A finite discharge above the limit would normally BIND the clamp; but its
+      // source field batteryPowerW is stale → must hit the fail-safe path instead.
+      state.victron.batteryDischargeW = AKKU_HARD_LIMIT_W + HYSTERESIS_W + 4000;
+      state.victron.fieldUpdatedAt = { batteryPowerW: Date.now() - 200000 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const tm = findLog(logs, 'stage2_akku_telemetry_missing');
+  assert.equal(tm.length, 1, 'stale battery telemetry must hit the fail-safe path');
+  assert.equal(tm[0].payload.reason, 'stale', 'reason distinguishes stale from missing');
+  assert.equal(findLog(logs, 'stage2_akku_hard_limit_exceeded').length, 0,
+    'clamp must NOT bind on stale telemetry — fail safe instead');
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -16000,
+    'stale telemetry holds the setpoint, never an unbounded discharge');
+});
+
+test('T-0075 2b: stop-SoC rule latched OFF on stale SoC despite frozen value above threshold', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state }) => {
+      state.schedule.rules = [{
+        id: 'stopsoc-1', enabled: true, target: 'gridSetpointW',
+        start: '00:00', end: '23:59', value: -8000, source: 'manual', stopSocPct: 30
+      }];
+      state.victron.soc = 50;            // frozen ABOVE stopSocPct → would normally stay active
+      state.victron.batteryDischargeW = 0;
+      state.victron.fieldUpdatedAt = { soc: Date.now() - 200000 }; // stale
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  assert.equal(state.schedule.rules[0].enabled, false,
+    'stale SoC latches the in-window stop-SoC rule off (fail-safe)');
+  const ev = findLog(logs, 'schedule_stop_soc_reached');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].payload.reason, 'soc_stale');
+});
+
+test('T-0075 2b: stop-SoC rule stays active when SoC is fresh + above threshold (regression)', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state }) => {
+      state.schedule.rules = [{
+        id: 'stopsoc-1', enabled: true, target: 'gridSetpointW',
+        start: '00:00', end: '23:59', value: -8000, source: 'manual', stopSocPct: 30
+      }];
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = { soc: Date.now() }; // fresh
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  assert.equal(state.schedule.rules[0].enabled, true,
+    'fresh SoC above threshold keeps the stop-SoC rule active');
+  assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
+});

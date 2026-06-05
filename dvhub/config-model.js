@@ -876,6 +876,20 @@ function buildFieldDefinitions() {
       ],
       help: 'Art der PV-Anbindung. Bei reiner DC-Kopplung werden AC-PV-Register nicht abgefragt, bei reiner AC-Kopplung wird das DC-PV-Register \u00fcbersprungen.'
     },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.telemetryMaxAgeMs',
+      label: 'Telemetrie-Frische max. Alter (ms)',
+      type: 'number',
+      default: 90000,
+      min: 15000,
+      max: 600000,
+      step: 1000,
+      help: 'Maximales Alter eines erfolgreichen SoC-/Akku-Reads, bevor die Telemetrie als veraltet gilt. \u00c4ltere Werte unterdr\u00fccken jede erzwungene Entladung (Hold), damit ein eingefrorener Messwert nach einem Kommunikationsausfall den Akku nicht tiefentl\u00e4dt. ~3-6 Poll-Zyklen.'
+    },
 
     {
       section: 'schedule',
@@ -1092,6 +1106,20 @@ function buildFieldDefinitions() {
       max: 100,
       step: 1,
       help: 'Maximaler Ladestand \u2014 der Optimizer l\u00e4dt nie \u00fcber diesen Wert.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
+      path: 'optimizer.hardFloorSocPct',
+      label: 'Harter SoC-Floor (%)',
+      type: 'number',
+      default: 5,
+      min: 0,
+      max: 100,
+      step: 1,
+      help: 'Absoluter Sicherheits-Floor: Bei oder unter diesem SoC wird JEDE erzwungene Entladung im Steuerpfad unterdr\u00fcckt (Hold), egal welche Quelle (Optimizer/Regel/Override/EOS). Sollte nicht unter dem Hardware-Minimum (Victron minSoc) liegen. Standard 5 %.'
     },
     {
       section: 'schedule',
@@ -2279,6 +2307,9 @@ export function createDefaultConfig() {
       port: 502,
       unitId: 100,
       timeoutMs: 1000,
+      // T-0075: max age (ms) of a successful SoC/battery poll before telemetry is
+      // treated as stale and forced discharge is suppressed (chokepoint floor).
+      telemetryMaxAgeMs: 90000,
       mqtt: {
         broker: 'mqtt://192.168.1.19:1883',
         portalId: '',
@@ -2462,7 +2493,10 @@ export function createDefaultConfig() {
       llmMaxTokens: 200
     },
     optimizer: {
-      eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 }
+      eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
+      // T-0075: absolute SoC floor (%) below which the chokepoint discharge floor
+      // (applyControlTarget) suppresses ANY forced discharge, regardless of source.
+      hardFloorSocPct: 5
     },
     // evcc integration. Polls evcc /api/state and writes maxDischargeW=holdValueW (default 0 = HOLD)
     // when an EV is charging, releases (-1 = unlimited) when charging stops. Edge-triggered, so it

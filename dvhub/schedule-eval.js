@@ -3,7 +3,7 @@
 // Controls hardware via injected transport: applyDvVictronControl, applyControlTarget.
 // Evaluates schedule rules every ~15 seconds, writes control signals to Victron inverter.
 
-import { localMinutesOfDay } from './server-utils.js';
+import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale } from './server-utils.js';
 import {
   autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
@@ -21,6 +21,25 @@ import { safeInterval } from './services/safe-async.js';
 // change the setpoint, so a measured battery discharge hovering near the
 // limit cannot flap the Stage-2 LEEREN gridSetpointW every control cycle.
 const STAGE2_CLAMP_HYSTERESIS_W = 500;
+
+// T-0075: per-target classifier for the universal discharge floor. The "enables
+// battery discharge" direction is NOT uniform across write targets, so a naive
+// `value < 0` would be wrong for maxDischargeW. Returns the safe "no discharge"
+// hold value when `value` would enable/force battery discharge for `target`,
+// else null (= not a discharge-enabling write → the floor leaves it untouched).
+//   gridSetpointW (2700, int16): negative = grid export / discharge   → hold 0
+//   chargeCurrentA (2705, int16): charge current positive; negative = discharge
+//     direction (a positive charge command is never an over-drain risk)  → hold 0
+//   maxDischargeW (2704, int16): 0 = no discharge, positive = cap in W, -1 =
+//     unlimited; ANY non-zero value ENABLES discharge                    → hold 0
+// Verified against config-model.js controlWrite defaults (see T-0075-DESIGN E1).
+function dischargeFloorHold(target, value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+  if (target === 'gridSetpointW' || target === 'chargeCurrentA') return v < 0 ? 0 : null;
+  if (target === 'maxDischargeW') return v !== 0 ? 0 : null;
+  return null;
+}
 
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
@@ -243,32 +262,32 @@ export function createScheduleEvaluator(ctx) {
     // === end EEG/§14a gate ===
 
     // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
-    // Chokepoint floor: EVERY discharge-direction gridSetpointW write (optimizer,
-    // schedule rule, manual, persistent override, EOS/EMHASS, negative-price) passes
-    // here. A discharge is suppressed when SoC is UNKNOWN, STALE, or at/below the hard
-    // floor. Closes T-0001 P0-1: the per-rule stopSoc + D-18 floors check only
-    // null/non-finite, NOT age — but polling.js keeps the last SoC on a failed read,
-    // so a frozen finite SoC would pass them (over-drain on a comms fault). soc's
-    // per-field success timestamp (fieldUpdatedAt.soc, set ONLY on a successful poll)
-    // gives real freshness. Fail-safe: unknown/stale telemetry => no forced discharge.
-    if (target === 'gridSetpointW' && Number(value) < 0) {
+    // Chokepoint floor: EVERY discharge-enabling hardware write (optimizer,
+    // schedule rule, manual, persistent override, EOS/EMHASS, negative-price, and
+    // API-driven maxDischargeW/chargeCurrentA) passes here. A discharge is
+    // suppressed when SoC is UNKNOWN, STALE, or at/below the hard floor. Closes
+    // T-0001 P0-1: the per-rule stopSoc + D-18 floors check only null/non-finite,
+    // NOT age — but polling.js keeps the last SoC on a failed read, so a frozen
+    // finite SoC would pass them (over-drain on a comms fault). soc's per-field
+    // success timestamp (fieldUpdatedAt.soc, set ONLY on a successful poll, part 1
+    // 732ad07) gives real freshness. The "discharge direction" is per-target and
+    // NOT uniform (see dischargeFloorHold / T-0075-DESIGN E1). Fail-safe:
+    // unknown/stale telemetry => no forced/enabled discharge.
+    const safeHold = dischargeFloorHold(target, value);
+    if (safeHold !== null) {
       const socRaw = state.victron.soc;
       const soc = Number(socRaw);
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
-      const socAtMs = Number(state.victron.fieldUpdatedAt?.soc ?? 0);
-      const ageMs = Date.now() - socAtMs;
       const unknown = socRaw == null || !Number.isFinite(soc);
-      // Only "stale" when we HAVE a success-timestamp that has aged out; a missing
-      // timestamp at runtime coincides with a cold-start null SoC (caught by unknown).
-      const stale = socAtMs > 0 && ageMs > maxAgeMs;
+      const stale = victronFieldStale(state, 'soc', maxAgeMs);
       if (unknown || stale || soc <= floorPct) {
         const reason = unknown ? 'soc_unknown' : stale ? 'soc_stale' : 'below_hard_floor';
         pushLog('control_discharge_floor', {
           target, requested: Number(value), soc: unknown ? null : soc,
-          ageMs: socAtMs ? ageMs : null, floorPct, reason
+          ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
         });
-        value = 0;
+        value = safeHold;
       }
     }
     // === end T-0075 discharge floor ===
@@ -431,15 +450,22 @@ export function createScheduleEvaluator(ctx) {
     await ctx.regenerateSmallMarketAutomationRules({ now });
     state.schedule.lastEvalAt = now;
 
+    // T-0075: stale SoC telemetry latches active stop-SoC rules off (fail-safe),
+    // keyed on soc's per-field success timestamp — not the frozen value.
+    const stopSocStale = victronFieldStale(state, 'soc', Number(cfg.victron?.telemetryMaxAgeMs ?? 90000));
     const stopSocDisable = autoDisableStopSocScheduleRules({
       rules: state.schedule.rules,
       nowMin,
-      batterySocPct: state.victron.soc
+      batterySocPct: state.victron.soc,
+      socStale: stopSocStale
     });
     if (stopSocDisable.changed) {
       state.schedule.rules = stopSocDisable.rules;
       for (const ruleId of stopSocDisable.disabledRuleIds) {
-        pushLog('schedule_stop_soc_reached', { id: ruleId, target: 'gridSetpointW', soc: state.victron.soc });
+        pushLog('schedule_stop_soc_reached', {
+          id: ruleId, target: 'gridSetpointW', soc: state.victron.soc,
+          reason: stopSocStale ? 'soc_stale' : 'below_stop_soc'
+        });
       }
       persistConfig();
     }
@@ -598,6 +624,13 @@ export function createScheduleEvaluator(ctx) {
           cfg.schedule?.smallMarketAutomation?.predictivePreEmpty?.akkuHardLimitW ?? 20000
         );
         const measuredBatteryDischargeW = state.victron.batteryDischargeW;
+        // T-0075: batteryDischargeW is DERIVED from batteryPowerW (polling.js
+        // `Math.max(0, -batteryPowerW)`), so it carries no own success timestamp —
+        // key freshness on the real polled field batteryPowerW. A stale (frozen
+        // but finite) discharge reading would otherwise pass the null/non-finite
+        // guard below and let the clamp run on outdated telemetry.
+        const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+        const dischargeStale = victronFieldStale(state, 'batteryPowerW', maxAgeMs);
 
         // Note: Number(null) === 0 (finite), so a bare Number.isFinite check
         // would silently treat missing telemetry as a 0 W discharge. Reject
@@ -605,15 +638,18 @@ export function createScheduleEvaluator(ctx) {
         // hit the fail-safe path, never be read as "0 W, clamp not needed".
         if (
           measuredBatteryDischargeW == null ||
-          !Number.isFinite(Number(measuredBatteryDischargeW))
+          !Number.isFinite(Number(measuredBatteryDischargeW)) ||
+          dischargeStale
         ) {
-          // FAIL SAFE: telemetry missing/null/non-finite. Hold the current
+          // FAIL SAFE: telemetry missing/null/non-finite/stale. Hold the current
           // (already plan-time-clamped) setpoint — do NOT no-op into an
           // unbounded discharge. Log once per episode.
           if (!state.ctrl._stage2ClampTelemetryMissing) {
             pushLog('stage2_akku_telemetry_missing', {
               rule: eff.rule?.id || null,
-              eff: eff.value
+              eff: eff.value,
+              reason: dischargeStale ? 'stale' : 'missing',
+              ageMs: victronFieldAgeMs(state, 'batteryPowerW')
             });
             state.ctrl._stage2ClampTelemetryMissing = true;
           }
