@@ -33,6 +33,10 @@ if [[ -f "$SERVICE_FILE" ]]; then
     sed -i "s|^ExecStartPre=.*post-update\\.sh.*|\${EXPECTED_EXECSTARTPRE}|" "$SERVICE_FILE"
   fi
 fi
+# T-0077 P0-3 Auflage: bound a wedged ExecStartPre with an explicit start timeout.
+if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^TimeoutStartSec=' "$SERVICE_FILE"; then
+  sed -i "\\|^ExecStart=|a TimeoutStartSec=120" "$SERVICE_FILE"
+fi
 `;
 
 function runHook(unitContent) {
@@ -77,9 +81,28 @@ test('T-0077: a missing hook is inserted (non-fatal -+) immediately before ExecS
   assert.equal(preIdx + 1, execIdx, 'hook sits immediately before ExecStart');
 });
 
-test('T-0077: an already non-fatal hook is left unchanged (idempotent)', () => {
-  const before = UNIT(EXPECTED);
-  const after = runHook(before);
-  assert.equal(execStartPreLines(after).length, 1, 'no duplicate hook');
-  assert.equal(after, before, 'idempotent: byte-identical when already correct');
+test('T-0077: an already non-fatal hook is not duplicated/rewritten (ExecStartPre idempotent)', () => {
+  const after = runHook(UNIT(EXPECTED));
+  const pre = execStartPreLines(after);
+  assert.equal(pre.length, 1, 'no duplicate hook');
+  assert.equal(pre[0], EXPECTED, 'already-correct hook left as-is');
+});
+
+// --- T-0077 P0-3 Auflage: explicit start timeout ------------------------------
+
+const timeoutLines = (s) => s.split('\n').filter((l) => /^TimeoutStartSec=/.test(l));
+
+test('T-0077 P0-3: TimeoutStartSec=120 is inserted after ExecStart when absent', () => {
+  const after = runHook(UNIT(EXPECTED));
+  const lines = after.split('\n');
+  assert.deepEqual(timeoutLines(after), ['TimeoutStartSec=120'], 'exactly one timeout line');
+  const execIdx = lines.findIndex((l) => /^ExecStart=/.test(l));
+  const toIdx = lines.findIndex((l) => /^TimeoutStartSec=/.test(l));
+  assert.equal(toIdx, execIdx + 1, 'timeout sits immediately after ExecStart');
+});
+
+test('T-0077 P0-3: an existing TimeoutStartSec is not duplicated (idempotent)', () => {
+  const unit = UNIT(EXPECTED).replace('Restart=always', 'TimeoutStartSec=300\nRestart=always');
+  const after = runHook(unit);
+  assert.deepEqual(timeoutLines(after), ['TimeoutStartSec=300'], 'operator value kept, not duplicated');
 });

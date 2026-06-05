@@ -696,6 +696,14 @@ Environment=DV_SERVICE_USE_SUDO=1
 Environment=DV_DATA_DIR=${DATA_DIR}
 Restart=always
 RestartSec=3
+# T-0077 (P0-3, Hub-refute Auflage): the '-' prefix on ExecStartPre ignores a
+# non-zero EXIT code, but NOT a hang — without an explicit start timeout a
+# post-update.sh that wedges on a dead-but-accepting network (e.g. npm/apt
+# blocking) would hit systemd's default 90s start timeout and Restart=always
+# loops it. A bounded TimeoutStartSec lets a wedged start fail fast and cleanly
+# (the next boot's post-update is non-fatal anyway), so the node server still
+# comes up. 120s leaves headroom over post-update.sh's own internal timeouts.
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

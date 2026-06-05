@@ -192,6 +192,17 @@ if [[ -f "$SERVICE_FILE" ]]; then
   fi
 fi
 
+# T-0077 (P0-3, Hub-refute Auflage): ensure an explicit start timeout bounds a
+# WEDGED ExecStartPre (post-update.sh). The '-' prefix ignores a non-zero EXIT but
+# NOT a hang; without TimeoutStartSec a wedged start (npm/apt blocking on a
+# dead-but-accepting network) hits systemd's 90s default and Restart=always loops.
+# Insert once if absent (idempotent); existing boxes never re-run install.sh.
+if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^TimeoutStartSec=' "$SERVICE_FILE"; then
+  echo "  TimeoutStartSec=120 (T-0077) wird eingefuegt..."
+  sed -i "\|^ExecStart=|a TimeoutStartSec=120" "$SERVICE_FILE"
+  SERVICE_CHANGED=1
+fi
+
 if [[ "$SERVICE_CHANGED" -eq 1 ]]; then
   systemctl daemon-reload
 fi
