@@ -415,6 +415,27 @@ export function compareSemverTag(a, b) {
   return 0;
 }
 
+// T-0100: universal downgrade guard for the self-update path. Throws on a
+// downgrade OR an undeterminable target version (fail-safe — never check out
+// blindly), unless allowDowngrade is set. The pre-existing guard only covered an
+// explicit stable `targetVersion`; the dev-channel origin/main checkout and the
+// stable auto-latest-tag selection had none, so a stale release anchor (origin/main
+// far behind the deployed code, or only ancient tags) would silently downgrade a
+// site on update. Pure + exported so the decision is unit-testable without git.
+export function assertNoDowngrade(targetVersion, currentVersion, { allowDowngrade = false, label = 'target' } = {}) {
+  if (allowDowngrade) return;
+  if (!targetVersion || !SEMVER_TAG.test(String(targetVersion))) {
+    const e = new Error(`update_aborted: could not determine ${label} version`);
+    e.code = 'version_undeterminable';
+    throw e;
+  }
+  if (compareSemverTag(String(targetVersion), String(currentVersion || '0.0.0')) < 0) {
+    const e = new Error(`downgrade_blocked: ${label} ${targetVersion} < installed ${currentVersion}`);
+    e.code = 'downgrade_blocked';
+    throw e;
+  }
+}
+
 // Derive allowed POST /api/config root keys from the canonical default config
 // PLUS the well-known live-config sections that are seeded by migrations
 // (vpn, https*, tls*, notifications, mqtt, forecast, family, devices, etc.).
@@ -4917,15 +4938,31 @@ export function createApiRoutes(ctx) {
         const hasStash = !stashResult.stdout.includes('No local changes');
 
         try {
-          // --- git fetch + checkout (inside inner try for rollback coverage) ---
+          // --- git fetch + downgrade guard + checkout (inside inner try for rollback coverage) ---
+          // T-0100: resolve the TARGET version for whichever channel/ref we are about to
+          // check out and refuse a downgrade BEFORE touching the working tree (the explicit
+          // stable targetVersion was already guarded above; auto-selected refs were not).
+          const currentVersionNow = ctx.getAppVersion?.()?.version || ctx.getAppVersion?.()?.versionLabel || '0.0.0';
+          const allowDowngrade = body?.allowDowngrade === true;
           if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
             const selectedTag = targetVersion || (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
             if (!selectedTag) throw new Error('No release tags found');
+            // Explicit targetVersion was already downgrade-checked; guard an auto-selected tag.
+            if (!targetVersion) assertNoDowngrade(selectedTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
             const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
             gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
           } else {
             await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            // dev channel checks out origin/main — read ITS package.json version and refuse a
+            // downgrade (origin/main can be far behind the running code). package.json path is
+            // derived relative to the repo root so a flat or nested app layout both work.
+            const relAppDir = path.relative(repoRoot, appDir).split(path.sep).join('/');
+            const pkgGitPath = (relAppDir ? relAppDir + '/' : '') + 'package.json';
+            const mainPkg = await execFileAsync('git', ['show', `origin/main:${pkgGitPath}`], { cwd: repoRoot, timeout: 5000 }).catch(() => ({ stdout: '' }));
+            let mainVersion = null;
+            try { mainVersion = JSON.parse(mainPkg.stdout || '{}').version || null; } catch { mainVersion = null; }
+            assertNoDowngrade(mainVersion, currentVersionNow, { allowDowngrade, label: 'origin/main' });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
             const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
             gitOutput = pull.stdout.trim();
