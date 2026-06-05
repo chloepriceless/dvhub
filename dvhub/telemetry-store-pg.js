@@ -107,9 +107,10 @@ function assertSqlIdentifier(value, label) {
   return value;
 }
 
-function buildMaterializedEnergySlotWrites(rows) {
+export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true) {
   const writes = new Map();
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     const seriesKey = String(row.seriesKey || '').trim();
     if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
 
@@ -128,6 +129,14 @@ function buildMaterializedEnergySlotWrites(rows) {
     }
 
     if (!sourceKind || !writeMode) continue;
+
+    // T-0079 (P0-5) replay idempotency: the accumulate path ADDS to the existing
+    // slot value, so it must count each raw sample exactly once. Skip an
+    // accumulate-mode sample that was NOT newly inserted into timeseries_samples
+    // (a replay/gap re-run upserts the same raw row → no new energy, must not be
+    // re-added). The replace path (vrm_import) SETS the slot to the full batch
+    // total and is idempotent by construction, so it always includes every row.
+    if (writeMode === 'accumulate' && !isNewSample(row, i)) continue;
 
     const valueNum = energyKwhForSample(row.value, row.resolutionSeconds);
     if (!Number.isFinite(valueNum)) continue;
@@ -371,13 +380,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           ON CONFLICT (series_key) DO NOTHING
         `, [row.seriesKey]);
       }
-      for (const row of rows) {
-        await client.query(`
+      // T-0079 (P0-5): track which raw samples were genuinely INSERTed vs UPDATEd
+      // on conflict (a replay/gap re-run). `RETURNING (xmax = 0)` is the standard
+      // Postgres upsert discriminator — xmax = 0 ⇒ this txn inserted the row;
+      // xmax != 0 ⇒ it was an ON CONFLICT update. Only newly-inserted samples feed
+      // the accumulate-mode materialized-slot writes below, so re-processing the
+      // same samples never double-counts the slot energy.
+      const insertedFlags = new Array(rows.length).fill(true);
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const res = await client.query(`
           INSERT INTO timeseries_samples
             (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, value_text, unit, meta_json)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           ON CONFLICT (series_key, scope, source, quality, ts_utc, resolution_seconds)
           DO UPDATE SET value_num = EXCLUDED.value_num, value_text = EXCLUDED.value_text, unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json
+          RETURNING (xmax = 0) AS inserted
         `, [
           row.seriesKey,
           row.scope || 'live',
@@ -390,9 +408,10 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           row.unit ?? null,
           row.meta == null ? null : JSON.stringify(row.meta)
         ]);
+        insertedFlags[i] = res.rows?.[0]?.inserted === true;
       }
 
-      for (const slotRow of buildMaterializedEnergySlotWrites(rows)) {
+      for (const slotRow of buildMaterializedEnergySlotWrites(rows, (row, i) => insertedFlags[i] === true)) {
         if (slotRow.writeMode === 'replace') {
           await client.query(`
             INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
