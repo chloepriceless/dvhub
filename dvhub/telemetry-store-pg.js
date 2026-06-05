@@ -42,10 +42,17 @@ function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
 }
 
-function energyKwhForSample(value, resolutionSeconds) {
+export function energyKwhForSample(value, resolutionSeconds, maxSeconds = MATERIALIZED_SLOT_BUCKET_SECONDS) {
   const numeric = Number(value);
-  const seconds = Number(resolutionSeconds || 0);
+  let seconds = Number(resolutionSeconds || 0);
   if (!Number.isFinite(numeric) || !Number.isFinite(seconds) || seconds <= 0) return null;
+  // T-0079 (P0-5): cap a single sample's contribution at one slot's worth. A
+  // sample whose resolution_seconds exceeds the 15-min materialized slot (e.g. a
+  // gap-fill artifact, or a sample stamped with an oversized resolution) must not
+  // over-fill the slot it buckets into — buildMaterializedEnergySlotWrites assigns
+  // the whole sample to ONE 900s slot via bucketIso, so an uncapped 1h-resolution
+  // sample would inflate that slot 4×. Capping bounds the per-sample contribution.
+  if (Number.isFinite(maxSeconds) && maxSeconds > 0 && seconds > maxSeconds) seconds = maxSeconds;
   return (numeric * seconds) / 3600000;
 }
 
