@@ -1709,11 +1709,15 @@ async function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled promise rejection:', reason);
-  pushLog('unhandled_rejection', { error: String(reason?.message || reason) }, 'error');
-  try { poller.stop(); } catch {}
-  liveTelemetryBuffer?.flush({ force: true });
-  process.exit(1);
+  // P1 (T-0080): a single unhandled promise rejection must NOT kill a 24/7
+  // battery-control appliance — that would stop polling + control over a
+  // transient async error (e.g. a flaky HTTP fetch). Log LOUDLY (critical) and
+  // keep running; control/polling/telemetry continue. Only a genuinely corrupt
+  // process state (uncaughtException, below) warrants an exit + systemd restart.
+  console.error('[unhandledRejection] (non-fatal, logged):', reason);
+  try {
+    pushLog('unhandled_rejection', { error: String(reason?.message || reason), fatal: false }, 'critical');
+  } catch { /* never let the handler itself throw */ }
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
