@@ -2303,7 +2303,10 @@ export function createDefaultConfig() {
     },
     victron: {
       transport: 'modbus',
-      host: '192.168.1.19',
+      // T-0080: generic product default — operator configures their own Victron
+      // host. Was a fleet-specific LAN IP; prod runs from /etc/dvhub/config.json
+      // so it is unaffected. Empty host → transport retry until configured.
+      host: '',
       port: 502,
       unitId: 100,
       timeoutMs: 1000,
@@ -2428,7 +2431,7 @@ export function createDefaultConfig() {
       }
     },
     scan: {
-      host: '192.168.1.19',
+      host: '',  // T-0080: generic default; operator sets the scan target (on-demand debug tool).
       port: 502,
       unitId: 0,
       fc: 4,
@@ -2504,7 +2507,7 @@ export function createDefaultConfig() {
     // Set holdValueW to a positive number (e.g. 8000) if you want a cap instead of full hold.
     evcc: {
       enabled: false,
-      url: 'http://192.168.1.21:7070',
+      url: '',  // T-0080: generic default (evcc off by default; operator sets their evcc URL).
       pollIntervalMs: 15000,
       requestTimeoutMs: 5000,
       holdValueW: 0,
