@@ -16,6 +16,12 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // eslint-disable-next-line no-unused-vars
 import { safeInterval } from './services/safe-async.js';
 
+// T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
+// FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
+// Self-consumption setpoints (e.g. -100) and the neg-price limit (-40) are well
+// above it and are never gated.
+const FORCED_EXPORT_THRESHOLD_W = -1000;
+
 // D-18 live runtime Akku-Hard-Limit clamp — hysteresis dead-band (W).
 // Within [akkuHardLimitW - HYST, akkuHardLimitW + HYST] the clamp does not
 // change the setpoint, so a measured battery discharge hovering near the
@@ -636,6 +642,35 @@ export function createScheduleEvaluator(ctx) {
           continue;
         }
       }
+
+      // === T-0118 sell-price floor =========================================
+      // Arbitrage export rules (forecast_optimizer / small-market / Stage-2
+      // LEEREN) rank discharge slots RELATIVE to a daily average. On solar-glut
+      // days with negative midday prices the average collapses, so absolutely-
+      // cheap night slots (e.g. 6 ct at 04:00) clear the relative bar and the
+      // 43 kWh battery gets sold off cheap. When the current spot price is below
+      // the configured floor, suppress a FORCED grid export — hold at the default
+      // self-consumption setpoint so the energy stays for own load instead of a
+      // cheap sale. Same shape as negativePriceProtection above. Runs BEFORE the
+      // Stage-2 clamp so a cheap LEEREN slot is held, not clamped. OFF when
+      // minSellPriceCtKwh is unset (prior behavior).
+      if (target === 'gridSetpointW') {
+        const sellFloor = Number(cfg.optimizer?.minSellPriceCtKwh);
+        const curCt = priceNow ? Number(priceNow.ct_kwh) : null;
+        const forcedExport = Number(eff.value) <= FORCED_EXPORT_THRESHOLD_W;
+        if (Number.isFinite(sellFloor) && forcedExport && curCt !== null && Number.isFinite(curCt) && curCt < sellFloor) {
+          const hold = Number(cfg.schedule?.defaultGridSetpointW ?? -100);
+          await applyControlTarget('gridSetpointW', hold, 'sell_price_floor');
+          const key = String(eff.rule?.id ?? eff.source ?? '');
+          if (state.ctrl._sellFloorKey !== key) {
+            pushLog('sell_price_floor_hold', { price: curCt, floor: sellFloor, suppressed: Number(eff.value), held: hold, source: eff.source });
+            state.ctrl._sellFloorKey = key;
+          }
+          continue;
+        }
+        if (state.ctrl._sellFloorKey != null) state.ctrl._sellFloorKey = null;
+      }
+      // === end T-0118 sell-price floor =====================================
 
       // Skip gridSetpointW if export mode is actively controlling it
       if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0)) > 50) {

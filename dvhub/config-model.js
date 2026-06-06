@@ -2504,7 +2504,14 @@ export function createDefaultConfig() {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
       // T-0075: absolute SoC floor (%) below which the chokepoint discharge floor
       // (applyControlTarget) suppresses ANY forced discharge, regardless of source.
-      hardFloorSocPct: 5
+      hardFloorSocPct: 5,
+      // T-0118: minimum spot price (ct/kWh) for a FORCED grid export. Below this,
+      // the schedule-eval chokepoint suppresses arbitrage export rules (hold at
+      // default self-consumption) so the battery is never dumped to grid at a low
+      // price. Covers ALL sources (heuristic/MILP/small-market/Stage-2 LEEREN).
+      // null = OFF (no floor, prior behavior). Self-consumption setpoints are
+      // never gated — only forced exports beyond the threshold.
+      minSellPriceCtKwh: null
     },
     // evcc integration. Polls evcc /api/state and writes maxDischargeW=holdValueW (default 0 = HOLD)
     // when an EV is charging, releases (-1 = unlimited) when charging stops. Edge-triggered, so it

@@ -273,3 +273,62 @@ test('T-0075 2b: stop-SoC rule stays active when SoC is fresh + above threshold 
     'fresh SoC above threshold keeps the stop-SoC rule active');
   assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
 });
+
+// --- T-0118 sell-price floor ---
+
+test('T-0118: forced grid export is suppressed (held) when the spot price is below minSellPriceCtKwh', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ cfg, ctx }) => {
+      cfg.optimizer.minSellPriceCtKwh = 13;
+      ctx.epexNowNext = () => ({ current: { ct_kwh: 6, eur_mwh: 60 }, next: null });
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const written = state.schedule.active.gridSetpointW;
+  assert.ok(written, 'a gridSetpointW write must be recorded');
+  assert.equal(Number(written.value), -100,
+    'below the floor the -16000 export must be held at the default self-consumption setpoint (-100)');
+  assert.equal(written.source, 'sell_price_floor', 'the hold must be tagged sell_price_floor');
+  assert.equal(findLog(logs, 'sell_price_floor_hold').length, 1,
+    'sell_price_floor_hold must be logged once when the floor binds');
+});
+
+test('T-0118: forced grid export proceeds when the spot price is at/above minSellPriceCtKwh', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ cfg, ctx }) => {
+      cfg.optimizer.minSellPriceCtKwh = 13;
+      ctx.epexNowNext = () => ({ current: { ct_kwh: 14, eur_mwh: 140 }, next: null });
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const written = state.schedule.active.gridSetpointW;
+  assert.ok(written, 'a gridSetpointW write must be recorded');
+  assert.equal(Number(written.value), -16000,
+    'above the floor the arbitrage export proceeds unchanged');
+  assert.equal(findLog(logs, 'sell_price_floor_hold').length, 0,
+    'no sell_price_floor_hold must be logged above the floor');
+});
+
+test('T-0118: with no floor configured, a cheap-price export is NOT suppressed (backward compatible)', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ ctx }) => {
+      // minSellPriceCtKwh left unset (null/undefined) -> floor OFF
+      ctx.epexNowNext = () => ({ current: { ct_kwh: 6, eur_mwh: 60 }, next: null });
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const written = state.schedule.active.gridSetpointW;
+  assert.equal(Number(written.value), -16000,
+    'with the floor unset, the prior export behavior is preserved');
+  assert.equal(findLog(logs, 'sell_price_floor_hold').length, 0,
+    'no floor log when the floor is unset');
+});
