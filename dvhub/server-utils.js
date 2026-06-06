@@ -160,3 +160,17 @@ export function clampMinSoc(value, floorPct) {
   const clampedVal = Math.min(MAX_MINSOC_PCT, Math.max(lo, v));
   return { value: clampedVal, clamped: clampedVal !== v };
 }
+
+// T-0080 (P1 sweep): decide whether to raise a (throttled) telemetry-DOWN alarm.
+// Lesson from the T-0106 incident: telemetry persistence died SILENTLY — the store
+// was null (init failed) so every write was a no-op with NO alarm, and the data
+// gap went unnoticed until a human reported it. Alarm only when telemetry is
+// CONFIGURED-but-unhealthy, throttled to once per throttleMs. Intentionally
+// disabled telemetry (not configured) never alarms.
+//   configured = cfg says telemetry should be on
+//   healthy    = store present AND last write succeeded
+export function shouldAlarmTelemetryDown({ configured, healthy, lastAlarmAt = 0, nowMs = Date.now(), throttleMs = 300000 }) {
+  if (!configured) return false;   // telemetry intentionally off → stay silent
+  if (healthy) return false;       // up → no alarm
+  return (nowMs - Number(lastAlarmAt || 0)) >= Number(throttleMs);
+}

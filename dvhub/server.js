@@ -57,7 +57,8 @@ import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
   nowIso,
-  gridDirection
+  gridDirection,
+  shouldAlarmTelemetryDown
 } from './server-utils.js';
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
@@ -716,18 +717,42 @@ function startDedicatedRuntimeWorker() {
   return worker;
 }
 
+// T-0080 (P1 sweep): throttled alarm for a CONFIGURED-but-down telemetry store.
+// The T-0106 incident was silent — telemetryStore was null (init failed) so every
+// write was a no-op with no alarm, and the data gap went unnoticed until reported.
+let lastTelemetryDownAlarmAt = 0;
+function alarmTelemetryDownIfNeeded(context) {
+  const configured = cfg?.telemetry?.enabled === true;
+  const healthy = !!telemetryStore && state.telemetry.ok === true;
+  if (shouldAlarmTelemetryDown({ configured, healthy, lastAlarmAt: lastTelemetryDownAlarmAt })) {
+    lastTelemetryDownAlarmAt = Date.now();
+    pushLog('telemetry_store_down', {
+      context,
+      storePresent: !!telemetryStore,
+      lastError: state.telemetry.lastError || null
+    }, 'critical');
+  }
+}
+
 async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup = false } = {}) {
-  if (!telemetryStore) return null;
+  if (!telemetryStore) {
+    // Configured-but-no-store (e.g. init failed, T-0106) → loud throttled alarm
+    // instead of a silent drop. Intentionally-disabled telemetry stays silent.
+    alarmTelemetryDownIfNeeded('store_absent');
+    return null;
+  }
   try {
     const result = await action();
     await refreshTelemetryStatus();
     if (updateRollup) state.telemetry.lastRollupAt = Date.now();
     if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
+    lastTelemetryDownAlarmAt = 0; // recovered → re-arm the alarm for the next outage
     return result;
   } catch (error) {
     state.telemetry.ok = false;
     state.telemetry.lastError = error.message;
     pushLog('telemetry_store_error', { error: error.message }, 'error');
+    alarmTelemetryDownIfNeeded('write_failed');
     return null;
   }
 }
