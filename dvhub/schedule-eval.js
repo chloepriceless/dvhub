@@ -3,7 +3,7 @@
 // Controls hardware via injected transport: applyDvVictronControl, applyControlTarget.
 // Evaluates schedule rules every ~15 seconds, writes control signals to Victron inverter.
 
-import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale } from './server-utils.js';
+import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale, controlWriteBoundsError, clampMinSoc } from './server-utils.js';
 import {
   autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
@@ -250,6 +250,30 @@ export function createScheduleEvaluator(ctx) {
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
+
+    // === T-0080 write-layer bounds (defense-in-depth at the chokepoint) =======
+    // The /api/control/write route bounds values, but EOS/EMHASS (routes-api.js
+    // eos/emhass apply) and evcc-integration call applyControlTarget DIRECTLY
+    // with only an isFinite check — they bypassed the route's sanity ceilings.
+    // Enforce the SAME bounds here (single source: server-utils) so a faulty
+    // optimizer output, or a stolen-token EOS-apply, cannot push an absurd value
+    // into the ESS write pipeline. These are GROSS sanity bounds, not inverter
+    // spec. minSocPct is CLAMPED (not rejected) to the hard floor so an optimizer
+    // minSoc=0 cannot remove the Victron SoC floor (reg 2901).
+    const boundsErr = controlWriteBoundsError(target, value);
+    if (boundsErr) {
+      pushLog('control_write_rejected', { target, value, source, reason: boundsErr.error });
+      return { ok: false, error: boundsErr.error };
+    }
+    if (target === 'minSocPct') {
+      const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
+      const clamped = clampMinSoc(value, floorPct);
+      if (clamped.clamped) {
+        pushLog('control_minsoc_clamped', { requested: Number(value), clampedTo: clamped.value, floorPct, source });
+        value = clamped.value;
+      }
+    }
+    // === end T-0080 write-layer bounds =======================================
 
     // === EEG/§14a legal gate — applies to ALL callers (schedule rules, manual control,
     // dc-export, eos/emhass optimizer, negative-price triggers). Source of truth:

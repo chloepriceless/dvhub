@@ -374,3 +374,57 @@ test('T-0076: after a successful write an identical feedIn short-circuits (no re
   assert.equal(attempts, 1, 'no redundant re-write after a successful identical state');
   assert.equal(state.ctrl._lastDvFeedIn, false);
 });
+
+// --- T-0080: write-layer bounds at the applyControlTarget chokepoint -----------
+// EOS/EMHASS/evcc call applyControlTarget DIRECTLY (bypassing the
+// /api/control/write route bounds). The chokepoint now enforces the SAME sanity
+// bounds for every caller + clamps minSocPct to the hard floor.
+
+test('T-0080: chokepoint rejects an out-of-range gridSetpointW (EOS/EMHASS bypass closed)', async () => {
+  const { evaluator, writes, logs } = makeCtx();
+  const r = await evaluator.applyControlTarget('gridSetpointW', -200000, 'eos_optimization');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'value_out_of_range');
+  assert.equal(gridWrites(writes).length, 0, 'no hardware write for an absurd value');
+  assert.equal(countLogs(logs, 'control_write_rejected'), 1);
+});
+
+test('T-0080: chokepoint rejects a non-finite value', async () => {
+  const { evaluator, writes } = makeCtx();
+  const r = await evaluator.applyControlTarget('gridSetpointW', Number('nope'), 'test');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'value_not_finite');
+  assert.equal(gridWrites(writes).length, 0);
+});
+
+test('T-0080: chokepoint rejects an out-of-range maxDischargeW but allows the -1 unlimited sentinel', async () => {
+  const { evaluator, cfg, writes } = makeCtx();
+  cfg.controlWrite.maxDischargeW = { enabled: true, address: 103 };
+  const bad = await evaluator.applyControlTarget('maxDischargeW', 50000, 'eos_optimization');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error, 'max_discharge_out_of_range');
+  assert.equal(writes.filter((w) => w.target === 'maxDischargeW').length, 0);
+  // -1 sentinel passes bounds (SoC 50 is fresh > floor, so no discharge-floor hold either).
+  const ok = await evaluator.applyControlTarget('maxDischargeW', -1, 'test');
+  assert.equal(ok.ok, true, '-1 unlimited sentinel is allowed');
+});
+
+test('T-0080: chokepoint CLAMPS minSocPct below the hard floor (optimizer cannot drop the SoC floor)', async () => {
+  const { evaluator, cfg, writes, logs } = makeCtx();
+  cfg.controlWrite.minSocPct = { enabled: true, address: 102 };
+  cfg.optimizer.hardFloorSocPct = 5;
+  const r = await evaluator.applyControlTarget('minSocPct', 2, 'eos_optimization');
+  assert.equal(r.ok, true);
+  const w = writes.filter((x) => x.target === 'minSocPct');
+  assert.equal(w.length, 1);
+  assert.equal(w[0].value, 5, 'minSoc 2 raised to the hard floor 5 before the hardware write');
+  assert.equal(countLogs(logs, 'control_minsoc_clamped'), 1);
+});
+
+test('T-0080: a valid value still writes (no regression)', async () => {
+  const { evaluator, writes } = makeCtx();
+  const r = await evaluator.applyControlTarget('gridSetpointW', -5000, 'test');
+  assert.equal(r.ok, true);
+  assert.notEqual(r.skipped, true);
+  assert.equal(gridWrites(writes).length, 1);
+});

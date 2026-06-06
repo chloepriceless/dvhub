@@ -7,7 +7,7 @@ import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, roundCtKwh, addDays, gridDirection } from './server-utils.js';
+import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, roundCtKwh, addDays, gridDirection, controlWriteBoundsError, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
@@ -225,15 +225,12 @@ export const SECURITY_HEADERS = {
   ].join('; ')
 };
 
-// ── Plan 08-04: Input-validation + DoS bounds constants ─────────────────
-// Numeric upper bounds for /api/control/write — |value| above this is an
-// obvious attacker payload on residential HEMS hardware (highest plausible
-// industrial setpoint is ~50 kW; 100 kW is headroom).
-export const MAX_GRID_SETPOINT_W = 100_000;
-export const MAX_MINSOC_PCT = 100;
-// MaxDischargePower cap: 0 = no discharge (hold), positive = AC discharge limit in W,
-// -1 = unlimited (Victron sentinel). Bound matches realistic residential inverter sizes.
-export const MAX_BATTERY_DISCHARGE_W = 30_000;
+// ── Plan 08-04 / T-0080: control-write sanity bounds ────────────────────
+// Moved to server-utils.js (single source of truth) so the applyControlTarget
+// chokepoint shares them — EOS/EMHASS/evcc call the chokepoint directly and
+// previously bypassed the route's bounds. Imported above for the route's own
+// minSoc check; re-exported here for backward-compat with any importer/test.
+export { MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W };
 // /api/telemetry/series cap — (endMs-startMs)/stepMs * seriesCount must stay below this
 // to protect the Pi from range-explosion DoS queries. Raised from 50k to 1.5M so
 // granular Explorer queries up to 5s × ~17d × 5 keys (or 10s × 30d × 5 keys)
@@ -5378,29 +5375,19 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { ok: true, cleared: true, target });
       }
       const value = Number(body.value);
-      // Plan 08-04 Task 1 Step 2: numeric bounds before applyControlTarget so an
-      // attacker with a stolen token cannot push 1e308 into the ESS write pipeline.
-      if (!Number.isFinite(value)) {
-        return json(res, 400, { ok: false, error: 'value_not_finite' });
-      }
-      if (target === 'gridSetpointW' && Math.abs(value) > MAX_GRID_SETPOINT_W) {
-        return json(res, 400, { ok: false, error: 'value_out_of_range', max: MAX_GRID_SETPOINT_W });
+      // Plan 08-04 / T-0080: numeric sanity bounds before applyControlTarget so a
+      // stolen token (or faulty client) cannot push 1e308 into the ESS write
+      // pipeline. Shared helper (server-utils) = single source of truth, IDENTICAL
+      // to the bounds the applyControlTarget chokepoint now also enforces for
+      // EOS/EMHASS/evcc. Covers finite + gridSetpointW/chargeCurrentA/maxDischargeW/
+      // feedExcessDcPv. minSocPct keeps its own strict [0,100] reject for manual
+      // input here (the chokepoint instead CLAMPS minSoc to the hard floor).
+      const boundsErr = controlWriteBoundsError(target, value);
+      if (boundsErr) {
+        return json(res, 400, { ok: false, ...boundsErr });
       }
       if (target === 'minSocPct' && (value < 0 || value > MAX_MINSOC_PCT)) {
         return json(res, 400, { ok: false, error: 'minsoc_out_of_range', max: MAX_MINSOC_PCT });
-      }
-      // chargeCurrentA: ±1000 A is an order of magnitude above residential inverter spec.
-      if (target === 'chargeCurrentA' && Math.abs(value) > 1000) {
-        return json(res, 400, { ok: false, error: 'charge_current_out_of_range', max: 1000 });
-      }
-      // feedExcessDcPv is a boolean flag at the Modbus layer (0/1); anything else is a bug.
-      if (target === 'feedExcessDcPv' && value !== 0 && value !== 1) {
-        return json(res, 400, { ok: false, error: 'feed_excess_flag_must_be_0_or_1' });
-      }
-      // maxDischargeW: 0 = hold, positive = AC discharge cap in W (bounded by inverter spec),
-      // -1 = unlimited (Victron sentinel for "remove the cap"). Reject anything else.
-      if (target === 'maxDischargeW' && value !== -1 && (value < 0 || value > MAX_BATTERY_DISCHARGE_W)) {
-        return json(res, 400, { ok: false, error: 'max_discharge_out_of_range', max: MAX_BATTERY_DISCHARGE_W });
       }
       ctx.assertValidRuntimeCommand('control_write', { target, value });
       // T-0002: persist:true makes the override survive manualOverrideTtlMs (and

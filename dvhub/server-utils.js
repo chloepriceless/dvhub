@@ -110,3 +110,53 @@ export function gridDirection(value, gridPositiveMeans = 'feed_in') {
   const exporting = positiveFeedIn ? v > 0 : v < 0;
   return exporting ? { mode: 'feed_in', label: 'Einspeisung' } : { mode: 'grid_import', label: 'Netzbezug' };
 }
+
+// ── Control-write numeric sanity bounds (T-0080) ────────────────────────
+// Anti-attack / anti-bug ceilings for ESS hardware writes. SINGLE source of
+// truth shared by the /api/control/write route AND the applyControlTarget
+// chokepoint (schedule-eval.js): EOS/EMHASS/evcc call the chokepoint directly
+// with only an isFinite check and previously bypassed the route's bounds.
+// These are GROSS sanity ceilings (against 1e308-type payloads / a faulty
+// optimizer), NOT install-specific inverter-spec limits.
+export const MAX_GRID_SETPOINT_W = 100_000;
+export const MAX_MINSOC_PCT = 100;
+// maxDischargeW: 0 = hold, positive = AC discharge cap (W), -1 = unlimited sentinel.
+export const MAX_BATTERY_DISCHARGE_W = 30_000;
+export const MAX_CHARGE_CURRENT_A = 1000;
+
+// Pure bounds check for the always-REJECT control targets. Returns null when in
+// range, else { error, max? } — the shape mirrors the historical
+// /api/control/write 400 responses verbatim. minSocPct is intentionally NOT
+// handled here: the route rejects out-of-[0,100] manual input, while the
+// chokepoint CLAMPS it to the hard floor (clampMinSoc) — two deliberate,
+// different behaviours (a manual API typo is a 400; an optimizer's low minSoc
+// is silently raised to the safe floor rather than dropped).
+export function controlWriteBoundsError(target, value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return { error: 'value_not_finite' };
+  if (target === 'gridSetpointW' && Math.abs(v) > MAX_GRID_SETPOINT_W) {
+    return { error: 'value_out_of_range', max: MAX_GRID_SETPOINT_W };
+  }
+  if (target === 'chargeCurrentA' && Math.abs(v) > MAX_CHARGE_CURRENT_A) {
+    return { error: 'charge_current_out_of_range', max: MAX_CHARGE_CURRENT_A };
+  }
+  if (target === 'maxDischargeW' && v !== -1 && (v < 0 || v > MAX_BATTERY_DISCHARGE_W)) {
+    return { error: 'max_discharge_out_of_range', max: MAX_BATTERY_DISCHARGE_W };
+  }
+  if (target === 'feedExcessDcPv' && v !== 0 && v !== 1) {
+    return { error: 'feed_excess_flag_must_be_0_or_1' };
+  }
+  return null;
+}
+
+// Clamp a minSocPct write into [floorPct, 100] for the applyControlTarget
+// chokepoint, so any caller (incl. an optimizer sending minSoc=0) cannot drop
+// the Victron SoC floor (reg 2901) below the configured hard floor. Returns
+// { value, clamped }. A non-finite input clamps to the floor (fail-safe).
+export function clampMinSoc(value, floorPct) {
+  const lo = Math.max(0, Number.isFinite(Number(floorPct)) ? Number(floorPct) : 0);
+  const v = Number(value);
+  if (!Number.isFinite(v)) return { value: lo, clamped: true };
+  const clampedVal = Math.min(MAX_MINSOC_PCT, Math.max(lo, v));
+  return { value: clampedVal, clamped: clampedVal !== v };
+}
