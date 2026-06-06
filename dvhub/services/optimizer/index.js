@@ -9,7 +9,7 @@ import { applyConfidenceGating } from './confidence-gate.js';
 import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
-import { buildScheduleRules, insertOptimizerRules } from './schedule-builder.js';
+import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from './schedule-builder.js';
 import { createEosAdapter } from './eos-adapter.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
@@ -387,15 +387,23 @@ export function createOptimizerService(ctx) {
         source = 'internal';
       }
 
-      // 10. Apply DV forecast logic (sell-vs-self-consume)
+      // 10. T-0118: convert the optimizer's BATTERY dispatch into GRID setpoints
+      // via the power balance (grid = load − PV + powerW) and DROP self-consumption
+      // slots. This stops "discharge to cover load" from being written as a forced
+      // grid export (the −1250/−5000 night values), and frees self-consumption
+      // slots so the small-market automation no longer sees the peak as "occupied"
+      // by junk and cascades its arbitrage into worse night slots.
+      const gridSlots = optimizerSlotsToGridSetpoints(winningSchedule, pvSlots, loadSlots);
+
+      // Apply DV forecast logic (sell-vs-self-consume). dvRules ALREADY carry grid
+      // setpoints in powerW (e.g. 0 = self-consume) — append AFTER the balance
+      // transform so they are not re-balanced.
       const dvRules = applyDvForecastLogic(normalized, state, getCfg);
-      if (dvRules.length > 0) {
-        winningSchedule = [...winningSchedule, ...dvRules];
-      }
+      const finalSlots = dvRules.length > 0 ? [...gridSlots, ...dvRules] : gridSlots;
 
       // 11. Convert to schedule rules
       const newRules = buildScheduleRules({
-        slots: winningSchedule,
+        slots: finalSlots,
         source: 'forecast_optimizer',
         optimizer: source,
         getCfg

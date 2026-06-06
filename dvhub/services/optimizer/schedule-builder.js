@@ -67,3 +67,52 @@ export function insertOptimizerRules(stateScheduleRules, newRules, source) {
   const kept = stateScheduleRules.filter(r => r.source !== source);
   return [...newRules, ...kept];
 }
+
+/**
+ * T-0118: convert OPTIMIZER battery-dispatch slots into GRID-setpoint slots, and
+ * DROP self-consumption slots.
+ *
+ * The MILP/heuristic emit a BATTERY dispatch power per slot (powerW: + charge,
+ * − discharge). Writing that straight into gridSetpointW conflated two different
+ * things: "discharge X W to cover the load" (self-consumption — the inverter does
+ * this natively) vs. "export X W to the grid" (a deliberate market action). A
+ * −1250 self-consumption dispatch became gridSetpointW=−1250 = a forced 1.25 kW
+ * grid export at night.
+ *
+ * The real grid setpoint is the power-balance net grid — identical to the MILP's
+ * own internal net grid: grid = load − PV + powerW (import +, export −). For a
+ * pure self-consumption slot the battery just covers the load−PV deficit and the
+ * net grid is ≈ 0, so NO rule is emitted — the slot is left to the plant's native
+ * self-consumption at the default setpoint. This also stops the small-market
+ * automation from treating self-consumption slots as "occupied" and cascading its
+ * real arbitrage into worse (night) slots.
+ *
+ * Only genuine grid actions (|grid| beyond the band) become slots; their powerW
+ * is replaced by the grid setpoint so the existing buildScheduleRules converter
+ * (value = slot.powerW) writes the correct value. NOTE: only feed OPTIMIZER slots
+ * here — dvRules already carry grid setpoints in powerW and must NOT be re-balanced.
+ *
+ * @param {Array<{ts:number,endTs:number,powerW:number,confidence?:number}>} slots - optimizer battery-dispatch slots
+ * @param {Array<{ts:number,endTs:number,powerW:number}>} [pvSlots] - PV forecast slots (W)
+ * @param {Array<{ts:number,endTs:number,powerW:number}>} [loadSlots] - load forecast slots (W)
+ * @param {number} [selfConsumptionBandW=300] - |net grid| ≤ this ⇒ self-consumption ⇒ no rule
+ * @returns {Array<object>} grid-setpoint slots (self-consumption slots removed)
+ */
+export function optimizerSlotsToGridSetpoints(slots, pvSlots = [], loadSlots = [], selfConsumptionBandW = 300) {
+  if (!Array.isArray(slots)) return [];
+  const findAt = (arr, ts) => (Array.isArray(arr) ? arr.find((s) => s.ts <= ts && s.endTs > ts) : null);
+  const out = [];
+  for (const slot of slots) {
+    if (!slot) continue;
+    const batteryPowerW = Number(slot.powerW) || 0;
+    const pvW = Number(findAt(pvSlots, slot.ts)?.powerW) || 0;
+    const loadW = Number(findAt(loadSlots, slot.ts)?.powerW) || 0;
+    const gridW = Math.round(loadW - pvW + batteryPowerW);
+    // Self-consumption / no meaningful grid flow → leave the slot UNSET so the
+    // plant self-regulates (default setpoint). Only deliberate export/charge
+    // become rules.
+    if (Math.abs(gridW) <= selfConsumptionBandW) continue;
+    out.push({ ...slot, powerW: gridW });
+  }
+  return out;
+}

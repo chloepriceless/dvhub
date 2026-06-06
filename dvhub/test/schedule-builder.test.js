@@ -1,7 +1,7 @@
 // test/schedule-builder.test.js -- Unit tests for schedule-builder.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildScheduleRules, insertOptimizerRules } from '../services/optimizer/schedule-builder.js';
+import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from '../services/optimizer/schedule-builder.js';
 
 // Helper: create a mock getCfg returning configurable timezone
 function mockGetCfg(tz = 'Europe/Berlin') {
@@ -94,4 +94,56 @@ test('buildScheduleRules with custom optimizer name', () => {
   const slots = makeSlots(1);
   const rules = buildScheduleRules({ slots, optimizer: 'eos', getCfg: mockGetCfg() });
   assert.equal(rules[0].optimizer, 'eos');
+});
+
+// --- T-0118 optimizerSlotsToGridSetpoints (battery dispatch → grid setpoint) ---
+
+function slotAt(i, powerW) {
+  return { ts: BASE_TS + i * QUARTER_MS, endTs: BASE_TS + (i + 1) * QUARTER_MS, powerW, confidence: 0.9 };
+}
+
+test('T-0118: pure self-consumption discharge (battery covers load deficit) → NO rule', () => {
+  // discharge 3000 W, load 3000 W, PV 0 → net grid = 3000 - 0 - 3000 = 0 → self-consumption
+  const slots = [slotAt(0, -3000)];
+  const pv = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 0 }];
+  const load = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 3000 }];
+  const out = optimizerSlotsToGridSetpoints(slots, pv, load);
+  assert.equal(out.length, 0, 'self-consumption slot must be dropped (no forced setpoint)');
+});
+
+test('T-0118: self-consumption with PV (discharge = load − PV) → NO rule', () => {
+  // discharge 2000 W, load 3000 W, PV 1000 → net grid = 3000 - 1000 - 2000 = 0
+  const slots = [slotAt(0, -2000)];
+  const pv = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 1000 }];
+  const load = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 3000 }];
+  assert.equal(optimizerSlotsToGridSetpoints(slots, pv, load).length, 0);
+});
+
+test('T-0118: genuine arbitrage export (discharge beyond load) → grid setpoint = net export', () => {
+  // discharge 16000 W, load 2000 W, PV 0 → net grid = 2000 - 0 - 16000 = -14000 (export 14 kW)
+  const slots = [slotAt(0, -16000)];
+  const pv = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 0 }];
+  const load = [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 2000 }];
+  const out = optimizerSlotsToGridSetpoints(slots, pv, load);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].powerW, -14000, 'export setpoint is the net grid, not the raw battery power');
+});
+
+test('T-0118: small discharge within the band → NO rule (noise/self-consumption)', () => {
+  // net grid = 0 - 0 + (-200) = -200, |200| <= 300 band → dropped
+  assert.equal(optimizerSlotsToGridSetpoints([slotAt(0, -200)], [], []).length, 0);
+});
+
+test('T-0118: no PV/load context → grid setpoint falls back to raw powerW (band still applies)', () => {
+  // -1000 with no context → grid = -1000 (emit); -200 → dropped
+  const out = optimizerSlotsToGridSetpoints([slotAt(0, -1000), slotAt(1, -200)], [], []);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].powerW, -1000);
+});
+
+test('T-0118: original slot fields (ts/endTs/confidence) are preserved on emitted slots', () => {
+  const out = optimizerSlotsToGridSetpoints([slotAt(0, -16000)], [], [{ ts: BASE_TS, endTs: BASE_TS + QUARTER_MS, powerW: 0 }]);
+  assert.equal(out[0].ts, BASE_TS);
+  assert.equal(out[0].endTs, BASE_TS + QUARTER_MS);
+  assert.equal(out[0].confidence, 0.9);
 });
