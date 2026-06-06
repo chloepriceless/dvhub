@@ -654,7 +654,16 @@ export function createScheduleEvaluator(ctx) {
       // cheap sale. Same shape as negativePriceProtection above. Runs BEFORE the
       // Stage-2 clamp so a cheap LEEREN slot is held, not clamped. OFF when
       // minSellPriceCtKwh is unset (prior behavior).
-      if (target === 'gridSetpointW') {
+      //
+      // T-0118 (2026-06-06): the floor is NOT applied to EOS-sourced rules. EOS
+      // owns the full economic decision and deliberately empties at low/cheap
+      // prices before a curtailment window to free room for otherwise-curtailed
+      // PV — a flat 12 ct floor would block that valid prep. The negative-price
+      // guard above still applies to EVERY source (never pay to export). The
+      // floor stays in force for the internal optimizer, the small-market
+      // automation and Stage-2 LEEREN (eff.rule.optimizer is 'internal'/absent).
+      const isEosRule = eff.rule?.optimizer === 'eos';
+      if (target === 'gridSetpointW' && !isEosRule) {
         const sellFloor = Number(cfg.optimizer?.minSellPriceCtKwh);
         const curCt = priceNow ? Number(priceNow.ct_kwh) : null;
         const forcedExport = Number(eff.value) <= FORCED_EXPORT_THRESHOLD_W;

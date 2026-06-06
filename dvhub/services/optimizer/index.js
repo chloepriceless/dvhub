@@ -332,6 +332,7 @@ export function createOptimizerService(ctx) {
 
       // 7b. EOS adapter (when enabled on Tier 2+)
       let eosSchedule = null;
+      let eosGridSetpoints = null;
       if (cfg.optimizer.eosProxy?.enabled && tier >= 2) {
         try {
           // Send enriched forecast with fully-loaded prices to EOS
@@ -341,7 +342,11 @@ export function createOptimizerService(ctx) {
             price: { ...forecastResp.price, slots: enrichedPriceSlots }
           };
           await eosAdapter.pushForecast(enrichedForecast);
+          // eosSchedule = FRBC dispatch (battery power) for display/comparison.
+          // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
+          // — the actuatable export plan the old plan→power path threw away.
           eosSchedule = await eosAdapter.pullSchedule();
+          eosGridSetpoints = await eosAdapter.pullGridSetpoints();
         } catch (err) {
           pushLog('optimizer_eos_error', { error: err.message });
         }
@@ -387,18 +392,27 @@ export function createOptimizerService(ctx) {
         source = 'internal';
       }
 
-      // 10. T-0118: convert the optimizer's BATTERY dispatch into GRID setpoints
-      // via the power balance (grid = load − PV + powerW) and DROP self-consumption
-      // slots. This stops "discharge to cover load" from being written as a forced
-      // grid export (the −1250/−5000 night values), and frees self-consumption
-      // slots so the small-market automation no longer sees the peak as "occupied"
-      // by junk and cascades its arbitrage into worse night slots.
-      const gridSlots = optimizerSlotsToGridSetpoints(winningSchedule, pvSlots, loadSlots);
-
-      // Apply DV forecast logic (sell-vs-self-consume). dvRules ALREADY carry grid
-      // setpoints in powerW (e.g. 0 = self-consume) — append AFTER the balance
-      // transform so they are not re-balanced.
-      const dvRules = applyDvForecastLogic(normalized, state, getCfg);
+      // 10. Resolve the GRID-setpoint control slots from the winning source.
+      //  • EOS: its solution is ALREADY net-grid setpoints (AC-side, loss-correct
+      //    — eosGridSetpoints). Do NOT re-balance via optimizerSlotsToGridSetpoints
+      //    (that reconstructs grid from DVhub's own PV/load forecast, which would
+      //    diverge from EOS' internal forecast). EOS owns the full plan incl. self-
+      //    consumption + curtailment-prep emptying, so we also skip the DV forecast
+      //    self-consume rules. Only EOS' deliberate exports are emitted (the
+      //    adapter already drops imports/holds and negative-price slots).
+      //  • internal: convert the MILP/heuristic BATTERY dispatch into GRID setpoints
+      //    via the power balance (grid = load − PV + powerW) and DROP self-
+      //    consumption slots (the −1250/−5000 night-export bug fix).
+      let gridSlots;
+      let dvRules = [];
+      if (source === 'eos') {
+        gridSlots = Array.isArray(eosGridSetpoints) ? eosGridSetpoints : [];
+      } else {
+        gridSlots = optimizerSlotsToGridSetpoints(winningSchedule, pvSlots, loadSlots);
+        // dvRules ALREADY carry grid setpoints in powerW (e.g. 0 = self-consume) —
+        // append AFTER the balance transform so they are not re-balanced.
+        dvRules = applyDvForecastLogic(normalized, state, getCfg);
+      }
       const finalSlots = dvRules.length > 0 ? [...gridSlots, ...dvRules] : gridSlots;
 
       // 11. Convert to schedule rules

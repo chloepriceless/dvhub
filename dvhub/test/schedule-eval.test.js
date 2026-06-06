@@ -332,3 +332,61 @@ test('T-0118: with no floor configured, a cheap-price export is NOT suppressed (
   assert.equal(findLog(logs, 'sell_price_floor_hold').length, 0,
     'no floor log when the floor is unset');
 });
+
+// --- T-0118: sell-price floor is source-aware (EOS owns the decision) ---
+// EOS deliberately empties at cheap prices before a curtailment window to free
+// room for otherwise-curtailed PV. A flat floor would block that valid prep, so
+// the floor must NOT apply to EOS-sourced rules — but the negative-price guard
+// (never PAY to export) still must.
+function eosExportRule() {
+  return {
+    id: 'opt-eos-1', enabled: true, target: 'gridSetpointW',
+    start: '00:00', end: '23:59', value: -16000,
+    source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true,
+  };
+}
+
+test('T-0118: an EOS-sourced cheap export is NOT held by the sell-price floor', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.optimizer.enabled = true; // EOS-primary world: optimizer rules are live
+      cfg.optimizer.minSellPriceCtKwh = 13;
+      ctx.epexNowNext = () => ({ current: { ct_kwh: 6, eur_mwh: 60 }, next: null });
+      state.schedule.rules = [eosExportRule()];
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const written = state.schedule.active.gridSetpointW;
+  assert.ok(written, 'a gridSetpointW write must be recorded');
+  assert.equal(Number(written.value), -16000,
+    'EOS export bypasses the floor — curtailment-prep emptying must not be blocked');
+  assert.notEqual(written.source, 'sell_price_floor', 'EOS export is not a floor hold');
+  assert.equal(findLog(logs, 'sell_price_floor_hold').length, 0,
+    'no sell_price_floor_hold for an EOS rule');
+});
+
+test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (never pay to export)', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.optimizer.enabled = true; // EOS-primary world: optimizer rules are live
+      cfg.optimizer.minSellPriceCtKwh = 13;
+      // negativePriceProtection is read from cfg.dvControl.* by the evaluator.
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: -40 } };
+      ctx.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+      state.schedule.rules = [eosExportRule()];
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const written = state.schedule.active.gridSetpointW;
+  assert.ok(written, 'a gridSetpointW write must be recorded');
+  assert.equal(Number(written.value), -40,
+    'negative-price protection clamps even EOS exports to the npp limit (-40)');
+  assert.equal(findLog(logs, 'negative_price_protection_on').length, 1,
+    'negative_price_protection_on must fire regardless of source');
+});

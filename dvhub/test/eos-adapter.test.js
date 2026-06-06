@@ -358,6 +358,96 @@ test('getOptimizationSolution returns null when EOS has no solution (404)', asyn
   }
 });
 
+// --- T-0118: pullGridSetpoints maps EOS SOLUTION net-grid → export setpoints ---
+// EOS' plan op-modes carry no power, so the export plan must come from the
+// solution's per-slot net grid (grid_consumption − grid_feedin). Only deliberate
+// EXPORTs are emitted; imports/holds are left to the plant default; exports at a
+// negative feed-in price are dropped (never pay to export).
+test('pullGridSetpoints emits only genuine exports, skips import/hold/negative-price', async () => {
+  const solution = {
+    generated_at: '2026-06-06T20:00:00Z',
+    valid_from: '2026-06-06T20:00:00Z',
+    valid_until: '2026-06-06T21:15:00Z',
+    solution: {
+      data: {
+        // peak export @14ct → -14000 W setpoint  (EMIT)
+        '2026-06-06T20:00:00Z': { battery1_soc_factor: 0.95, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3500 },
+        // tiny net import (self-consumption) → +80 W → SKIP
+        '2026-06-06T20:15:00Z': { battery1_soc_factor: 0.90, grid_consumption_energy_wh: 20, grid_feedin_energy_wh: 0 },
+        // grid covers load (battery at floor) → +3200 W import → SKIP (never force charge)
+        '2026-06-06T20:30:00Z': { battery1_soc_factor: 0.90, grid_consumption_energy_wh: 800, grid_feedin_energy_wh: 0 },
+        // export but at NEGATIVE price → -8000 W → SKIP (never pay to export)
+        '2026-06-06T20:45:00Z': { battery1_soc_factor: 0.85, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 2000 },
+        // export within the noise band → -200 W → SKIP
+        '2026-06-06T21:00:00Z': { battery1_soc_factor: 0.85, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 50 },
+      },
+    },
+    prediction: {
+      data: {
+        '2026-06-06T20:00:00Z': { feed_in_tariff_amt_kwh: 0.14 },
+        '2026-06-06T20:15:00Z': { feed_in_tariff_amt_kwh: 0.13 },
+        '2026-06-06T20:30:00Z': { feed_in_tariff_amt_kwh: 0.10 },
+        '2026-06-06T20:45:00Z': { feed_in_tariff_amt_kwh: -0.02 },
+        '2026-06-06T21:00:00Z': { feed_in_tariff_amt_kwh: 0.13 },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+    assert.equal(slots.length, 1, 'only the genuine peak export is emitted');
+    const base = new Date('2026-06-06T20:00:00Z').getTime();
+    assert.equal(slots[0].ts, base);
+    assert.equal(slots[0].endTs, base + 15 * 60_000);
+    assert.equal(slots[0].powerW, -14000, 'net-grid export setpoint = -(3500Wh / 0.25h)');
+    assert.equal(slots[0].planAction, 'eos_grid_export');
+    assert.equal(slots[0].confidence, 0.7);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('pullGridSetpoints returns null when EOS has no solution (404)', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ detail: 'Can not get the optimization solution.' }));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    assert.equal(await adapter.pullGridSetpoints(), null);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('pullGridSetpoints returns [] when EOS plans no export (all self-consumption)', async () => {
+  const solution = {
+    generated_at: '2026-06-06T20:00:00Z',
+    solution: {
+      data: {
+        '2026-06-06T20:00:00Z': { battery1_soc_factor: 0.5, grid_consumption_energy_wh: 100, grid_feedin_energy_wh: 0 },
+        '2026-06-06T20:15:00Z': { battery1_soc_factor: 0.5, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 0 },
+      },
+    },
+    prediction: { data: {} },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+    assert.deepEqual(slots, [], 'no export slots → empty list (plant self-regulates)');
+  } finally {
+    await mock.close();
+  }
+});
+
 // --- Test 11: convertEosPlanToSlots fills variable gaps (15-min change-points) ---
 // After the geneticsolution.py 15-min fix, EOS emits an instruction only when
 // the mode CHANGES, on the 15-min grid. Each instruction must hold until the

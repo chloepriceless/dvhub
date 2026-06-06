@@ -477,6 +477,62 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 
   /**
+   * T-0118 (2026-06-06): build GRID-SETPOINT control slots directly from EOS'
+   * optimization SOLUTION (its own predicted per-slot grid flows), NOT from the
+   * FRBC plan instructions. The plan's op-mode strings (PEAK_SHAVING /
+   * grid_support_export / NON_EXPORT) carry no power magnitude, so the
+   * plan→power converter (convertEosPlanToSlots) maps EOS' real battery→grid
+   * export to 0 — DVhub silently dropped the entire arbitrage plan. The solution
+   * row's (grid_consumption − grid_feedin) energy IS the net grid EOS decided
+   * for that slot, already AC-side and loss-correct (= row.dvhubSetpointW, the
+   * same value the EOS inspector shows): positive = import, negative = export.
+   *
+   * Operator policy (2026-06-06): EOS owns the full economic decision (peak
+   * export, self-consumption holds, AND deliberate cheap emptying before a
+   * curtailment window to free room for otherwise-curtailed PV). We therefore
+   * ACTUATE only its deliberate EXPORTs and leave everything else to the plant's
+   * safe self-consumption default:
+   *   • Emit a rule ONLY for genuine export slots (net grid ≤ −bandW). Import /
+   *     self-consumption / PV-charge slots are skipped → the plant self-regulates
+   *     at the default setpoint, and we NEVER write a positive (grid-charge)
+   *     value (§14a-safe regardless of what EOS plans).
+   *   • Hard guard — never export at a negative feed-in price (curtail instead +
+   *     keep the §51 Förder hours). EOS already curtails internally; this is
+   *     defense in depth at the actuation edge.
+   *
+   * @param {number} [bandW=300] |net grid| ≤ this ⇒ self-consumption ⇒ no rule
+   * @returns {Promise<Array<{ts:number,endTs:number,powerW:number,planAction:string,confidence:number}>|null>}
+   */
+  async function pullGridSetpoints(bandW = 300) {
+    // Cover the full EOS horizon (≤8 days of 15-min slots) — no tail truncation.
+    const sol = await getOptimizationSolution(8 * 24 * 4);
+    if (!sol || !Array.isArray(sol.rows) || sol.rows.length === 0) return null;
+    const slotMin = Number(sol.slotMinutes) > 0 ? Number(sol.slotMinutes) : 15;
+    const slotMs = slotMin * 60 * 1000;
+    const out = [];
+    for (const r of sol.rows) {
+      const ts = new Date(r.ts_utc).getTime();
+      if (!Number.isFinite(ts)) continue;
+      const gridW = (typeof r.dvhubSetpointW === 'number') ? r.dvhubSetpointW : null;
+      if (gridW === null) continue;
+      // Only deliberate EXPORT becomes a forced setpoint. Skip import / hold /
+      // self-consumption (gridW ≥ −band) — plant default, and never force charge.
+      if (gridW >= -bandW) continue;
+      // Hard guard: never export at a negative feed-in price.
+      const feedInCt = (typeof r.feedInCtKwh === 'number') ? r.feedInCtKwh : null;
+      if (feedInCt !== null && feedInCt < 0) continue;
+      out.push({
+        ts,
+        endTs: ts + slotMs,
+        powerW: gridW,
+        planAction: 'eos_grid_export',
+        confidence: EOS_DEFAULT_CONFIDENCE,
+      });
+    }
+    return out;
+  }
+
+  /**
    * Check if EOS is reachable and responding.
    *
    * @returns {Promise<boolean>}
@@ -488,5 +544,5 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return result.ok;
   }
 
-  return { pushForecast, pullSchedule, getOptimizationSolution, isAvailable };
+  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, isAvailable };
 }
