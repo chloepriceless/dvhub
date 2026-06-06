@@ -9,12 +9,32 @@
 // throw (e.g. broker mid-disconnect) never disables the loop.
 import { safeInterval } from './services/safe-async.js';
 
+// T-0080 (P1 sweep): MQTT cache freshness. Venus OS pushes N/ values on change +
+// after each keepalive; if the broker connection wedges or a subscription is
+// silently dropped, the cache keeps the LAST value forever. Serving that stale
+// value as if fresh defeats the T-0075 telemetry-freshness floor downstream
+// (polling stamps fieldUpdatedAt on any returned value, so a frozen reading
+// would look fresh). A cache entry is fresh only if it has a non-null value and
+// its timestamp is within maxAgeMs. Pure + exported for testing.
+export function mqttCacheEntryFresh(entry, maxAgeMs, nowMs = Date.now()) {
+  if (!entry || entry.value == null) return false;
+  const max = Number(maxAgeMs);
+  if (!Number.isFinite(max) || max <= 0) return true; // staleness disabled
+  return (nowMs - Number(entry.ts || 0)) <= max;
+}
+
 export function createMqttTransport(victronConfig) {
   const mqttCfg = victronConfig.mqtt || {};
   const broker = mqttCfg.broker || `mqtt://${victronConfig.host}:1883`;
   const portalId = mqttCfg.portalId || '';
   const keepaliveMs = Number(mqttCfg.keepaliveIntervalMs) || 30000;
   const qos = Number(mqttCfg.qos) || 0;
+  // Reads older than this are treated as stale (unknown) → re-requested, and the
+  // floor downstream holds. Default = 3 keepalive intervals (min 90s). 0 disables.
+  const staleMaxAgeMs = mqttCfg.staleMaxAgeMs != null
+    ? Number(mqttCfg.staleMaxAgeMs)
+    : Math.max(3 * keepaliveMs, 90000);
+  let lastStaleReconnectAt = 0;
 
   let client = null;
   let keepaliveTimer = null;
@@ -138,7 +158,9 @@ export function createMqttTransport(victronConfig) {
      */
     getCached(name) {
       const topic = READ_TOPICS[name];
-      return topic ? (cache[topic]?.value ?? null) : null;
+      if (!topic) return null;
+      // T-0080: a stale cache entry reads as unknown (null), not the frozen value.
+      return mqttCacheEntryFresh(cache[topic], staleMaxAgeMs) ? cache[topic].value : null;
     },
 
     /**
@@ -149,18 +171,32 @@ export function createMqttTransport(victronConfig) {
       const topic = READ_TOPICS[name];
       if (!topic) throw new Error(`Kein MQTT-Topic-Mapping für: ${name}`);
 
-      const cached = cache[topic];
-      if (cached && cached.value != null) return { mqttValue: cached.value, ts: cached.ts };
+      // T-0080: only a FRESH cache entry is served directly. A stale one falls
+      // through to the re-request path (so a wedged subscription is recovered and
+      // the downstream T-0075 floor holds instead of trusting a frozen reading).
+      if (mqttCacheEntryFresh(cache[topic], staleMaxAgeMs)) {
+        return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      }
 
-      // Falls noch kein Wert: R/-Request senden und kurz warten
+      // Missing OR stale: re-request via R/ and, if a (now-stale) value existed,
+      // the subscription may be wedged → nudge a throttled reconnect to re-subscribe.
+      const wasStale = !!cache[topic];
       if (client?.connected) {
         const readTopic = topic.replace(/^N\//, 'R/');
         client.publish(readTopic, '');
+        if (wasStale && typeof client.reconnect === 'function') {
+          const now = Date.now();
+          if (now - lastStaleReconnectAt > staleMaxAgeMs) {
+            lastStaleReconnectAt = now;
+            try { client.reconnect(); } catch { /* best-effort recovery */ }
+          }
+        }
       }
       await new Promise((r) => setTimeout(r, 2000));
-      const retry = cache[topic];
-      if (retry && retry.value != null) return { mqttValue: retry.value, ts: retry.ts };
-      throw new Error(`MQTT-Wert nicht verfügbar für: ${name}`);
+      if (mqttCacheEntryFresh(cache[topic], staleMaxAgeMs)) {
+        return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      }
+      throw new Error(`MQTT-Wert nicht verfügbar oder veraltet für: ${name}`);
     },
 
     /**
