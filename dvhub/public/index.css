@@ -248,6 +248,7 @@
   cursor:pointer;
 }
 .min-soc-pending { animation:pulse 1.2s infinite; color:var(--yellow); }
+.max-discharge-presets { display:flex; gap:6px; flex-wrap:wrap; grid-column:1 / -1; margin:6px 0; }
 
 .vpn-card-actions { display:flex; gap:6px; margin-top:8px; }
 

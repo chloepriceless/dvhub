@@ -350,6 +350,7 @@ export function createPoller(ctx) {
       pollPoint('acPvL3W', cfg.points.acPvL3W),
       pollPoint('gridSetpointW', cfg.points.gridSetpointW),
       pollPoint('minSocPct', cfg.points.minSocPct),
+      pollPoint('maxDischargeW', cfg.points.maxDischargeW),
       pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);

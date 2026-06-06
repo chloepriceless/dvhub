@@ -105,6 +105,20 @@
           <input id="minSocSlider" class="min-soc-editor-slider" type="range" min="0" max="100" step="5" value="20">
           <button id="minSocSubmitBtn" class="btn primary sm" type="button">Absenden</button>
         </div>
+        <div class="rail-row rail-row-action" id="maxDischargeRow" role="button" tabindex="0" aria-expanded="false" aria-controls="maxDischargeEditor" title="Max. AC-Entladeleistung Akku&rarr;Haus (Cerbo Settings/CGwacs/MaxDischargePower, reg 2704 &mdash; Ist-Wert aus der GX). -1 = unbegrenzt, 0 = Hold (Akku liefert nichts), positiver Wert = Cap in Watt. Begrenzt direkt, wie viel der Akku zur Hausdeckung beitragen darf.">
+          <span class="l">Max Entladung <small class="rail-row-hint">Anpassen</small></span>
+          <strong class="v" id="maxDischargeReadback">&mdash;</strong>
+        </div>
+        <div class="min-soc-editor" id="maxDischargeEditor" hidden>
+          <label class="min-soc-editor-label" for="maxDischargeInput">Max Entladung Akku&rarr;Haus (W)</label>
+          <input id="maxDischargeInput" class="input mono" type="number" min="-1" max="30000" step="100" value="-1">
+          <div class="max-discharge-presets">
+            <button type="button" class="btn sm" data-md="-1">Unbegrenzt</button>
+            <button type="button" class="btn sm" data-md="16000">16 kW</button>
+            <button type="button" class="btn sm" data-md="0">Hold</button>
+          </div>
+          <button id="maxDischargeSubmitBtn" class="btn primary sm" type="button">Absenden</button>
+        </div>
       </div>
 
       <div class="card rail-card" data-accent="dv">

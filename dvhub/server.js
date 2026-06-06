@@ -255,6 +255,7 @@ const state = {
     pvTotalW: null,
     gridSetpointW: null,
     minSocPct: null,
+    maxDischargeW: null,
     feedExcessDcPv: null,
     dontFeedExcessAcPv: null,
     gridImportW: null,

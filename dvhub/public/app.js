@@ -409,7 +409,10 @@ const chartSelectionState = {
 const dashboardState = {
   lastMinSocReadback: null,
   minSocEditorOpen: false,
-  pendingMinSocWrite: null
+  pendingMinSocWrite: null,
+  // T-0118: live readback + inline editor for the Cerbo AC discharge cap (reg 2704).
+  lastMaxDischargeReadback: null,
+  maxDischargeEditorOpen: false
 };
 
 function normalizeChartSelectionIndices(data, indices) {
@@ -1564,6 +1567,90 @@ async function handleMinSocSubmit() {
   await requestDashboardRefresh();
 }
 
+// === T-0118: Max-Discharge (reg 2704) live readback + inline editor ===========
+// Mirrors the Min-SOC row pattern. The value is the AC discharge cap (Akku->Haus):
+// -1 = unbegrenzt, 0 = Hold (no discharge), positive = cap in W. Caps how much the
+// battery may contribute to house load — too low forces grid import during PV dips.
+function formatMaxDischarge(value) {
+  if (value == null) return '-';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+  if (n < 0) return 'unbegrenzt';
+  if (n === 0) return 'Hold (0 W)';
+  if (n >= 1000) return `${(n / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} kW`;
+  return `${n} W`;
+}
+
+function setMaxDischargeEditorOpen(isOpen) {
+  dashboardState.maxDischargeEditorOpen = Boolean(isOpen);
+  const row = document.getElementById('maxDischargeRow');
+  const editor = document.getElementById('maxDischargeEditor');
+  if (row) row.setAttribute('aria-expanded', dashboardState.maxDischargeEditorOpen ? 'true' : 'false');
+  if (editor) editor.hidden = !dashboardState.maxDischargeEditorOpen;
+}
+
+function openMaxDischargeEditor() {
+  const input = document.getElementById('maxDischargeInput');
+  const rb = dashboardState.lastMaxDischargeReadback;
+  if (input && rb != null && Number.isFinite(Number(rb))) input.value = String(Number(rb));
+  setMaxDischargeEditorOpen(true);
+}
+
+function closeMaxDischargeEditor() {
+  setMaxDischargeEditorOpen(false);
+}
+
+function toggleMaxDischargeEditor() {
+  if (dashboardState.maxDischargeEditorOpen) {
+    closeMaxDischargeEditor();
+    return;
+  }
+  openMaxDischargeEditor();
+}
+
+function handleMaxDischargeRowKeydown(event) {
+  if (!event) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  toggleMaxDischargeEditor();
+}
+
+async function submitMaxDischargeUpdate({ rawValue, apiFetchImpl = apiFetch }) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: 'Max Entladung: Ungültiger Wert' };
+  }
+  // Operator sanity check — mirrors manualWriteMaxDischarge: typos above the
+  // inverter's typical rating get a confirm. -1 / 0 / normal caps pass silently.
+  if (value > 15000 && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+    const proceed = window.confirm(`Max Entladung auf ${value} W setzen? Wert liegt über typischer Wechselrichter-Größe — Tippfehler?`);
+    if (!proceed) return { ok: false, error: null, cancelled: true };
+  }
+  const request = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: 'maxDischargeW', value })
+  };
+  const response = await apiFetchImpl('/api/control/write', request);
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    return { ok: false, error: `Max-Entladung Write Fehler: ${payload.error || response.status}` };
+  }
+  return { ok: true, value };
+}
+
+async function handleMaxDischargeSubmit() {
+  const input = document.getElementById('maxDischargeInput');
+  const outcome = await submitMaxDischargeUpdate({ rawValue: input?.value });
+  if (!outcome.ok) {
+    if (outcome.error) setControlMsg(outcome.error, true);
+    return;
+  }
+  closeMaxDischargeEditor();
+  setControlMsg(`Max Entladung geschrieben: ${formatMaxDischarge(outcome.value)}`);
+  await requestDashboardRefresh();
+}
+
 function renderDashboardStatus(status) {
   // Plan 09-04: each top-level dashboard card update is wrapped in
   // DVhubCommon.safeRender(...) so a throw in ONE card does NOT abort the
@@ -1749,6 +1836,9 @@ function renderDashboardStatus(status) {
     setText('minSoc', vic.minSocPct == null ? '-' : `${vic.minSocPct} %`);
     applyMinSocPendingVisualState(minSocRenderState.shouldBlink);
     if (!dashboardState.minSocEditorOpen) syncMinSocEditorFromReadback(vic.minSocPct);
+    // T-0118: live readback of the Cerbo AC discharge cap (reg 2704).
+    dashboardState.lastMaxDischargeReadback = vic.maxDischargeW == null ? null : Number(vic.maxDischargeW);
+    setText('maxDischargeReadback', formatMaxDischarge(vic.maxDischargeW), Number(vic.maxDischargeW) === 0 ? 'off' : null);
   });
 
   safeRender('dashboard.costs', () => {
@@ -2734,6 +2824,16 @@ function initDashboard() {
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
   document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);
+  // T-0118: Max-Discharge readback row -> inline editor (mirrors Min-SOC row).
+  document.getElementById('maxDischargeRow')?.addEventListener('click', toggleMaxDischargeEditor);
+  document.getElementById('maxDischargeRow')?.addEventListener('keydown', handleMaxDischargeRowKeydown);
+  document.getElementById('maxDischargeSubmitBtn')?.addEventListener('click', handleMaxDischargeSubmit);
+  document.querySelectorAll('#maxDischargeEditor [data-md]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById('maxDischargeInput');
+      if (input) input.value = btn.getAttribute('data-md');
+    });
+  });
   document.getElementById('minSocRow')?.addEventListener('click', toggleMinSocEditor);
   document.getElementById('minSocRow')?.addEventListener('keydown', handleMinSocRowKeydown);
   document.getElementById('minSocSlider')?.addEventListener('input', (event) => {

@@ -2335,6 +2335,11 @@ export function createDefaultConfig() {
       acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
       gridSetpointW: { enabled: true, fc: 4, address: 2700, quantity: 1, signed: true, scale: 1, offset: 0 },
       minSocPct: { enabled: true, fc: 4, address: 2901, quantity: 1, signed: false, scale: 0.1, offset: 0 },
+      // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
+      // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
+      // sentinel decodes correctly (0xFFFF -> -1, not 65535). 0 = hold, positive
+      // = AC discharge cap in W. Same register controlWrite.maxDischargeW writes.
+      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 1, offset: 0 },
       selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
     },
     controlWrite: {
