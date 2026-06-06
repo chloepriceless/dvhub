@@ -1738,10 +1738,22 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/health' && req.method === 'GET') {
+      // Liveness stays 200 while the process is up. T-0080: ALSO surface telemetry
+      // readiness as fields so an external monitor (Uptime Kuma) can alert on a
+      // silent telemetry/DB outage (the T-0106 lesson). Status stays 200 — liveness
+      // != readiness; consumers check `.ready` / `.telemetry.ok` for readiness.
+      const telemetryConfigured = getCfg().telemetry?.enabled === true;
+      const telemetryOk = !!state.telemetry?.ok;
       return json(res, 200, {
         ok: true,
         uptimeSec: Math.round(process.uptime()),
-        version: ctx.getAppVersion().versionLabel || null
+        version: ctx.getAppVersion().versionLabel || null,
+        ready: !telemetryConfigured || telemetryOk,
+        telemetry: {
+          configured: telemetryConfigured,
+          ok: telemetryOk,
+          lastError: state.telemetry?.lastError || null
+        }
       });
     }
 
