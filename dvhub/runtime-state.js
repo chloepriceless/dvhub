@@ -26,6 +26,7 @@ const VICTRON_FIELDS = [
   'pvTotalW',
   'gridSetpointW',
   'minSocPct',
+  'maxDischargeW',
   'feedExcessDcPv',
   'dontFeedExcessAcPv',
   'gridImportW',
