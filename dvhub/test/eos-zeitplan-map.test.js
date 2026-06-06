@@ -60,6 +60,19 @@ test('charge: dc_charge factor set, no feed-in → Halten (no active charge leve
   assert.equal(r.batteryExportW, 0);
 });
 
+// T-0118 (2026-06-06): the dc_charge gene is left ON in almost every slot so the
+// pack fills AS SOON AS PV appears. At NIGHT (pvW≈0) it charges nothing, so the
+// slot must NOT be labelled "Akku lädt (PV)" — it falls through to grid-draw/hold.
+test('charge label requires real PV: dc_charge gene at night (pvW=0) is NOT "charge"', () => {
+  const idle = classifyEosSlotAction({ pvW: 0, feedinW: 0, importW: 0, dcChargeFactor: 1, socPct: 30 });
+  assert.notEqual(idle.action, 'charge', 'no PV at night → never "Akku lädt (PV)"');
+  assert.equal(idle.action, 'hold');
+
+  const drawing = classifyEosSlotAction({ pvW: 0, feedinW: 0, importW: 800, dcChargeFactor: 1, socPct: 8 });
+  assert.notEqual(drawing.action, 'charge');
+  assert.equal(drawing.action, 'grid_draw', 'night load coverage with dc-gene on reads as Netzbezug, not charge');
+});
+
 test('grid draw: importing to cover load, no export/charge → Halten', () => {
   const r = classifyEosSlotAction({ pvW: 0, feedinW: 0, importW: 800, socPct: 10 });
   assert.equal(r.action, 'grid_draw');

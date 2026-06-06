@@ -108,7 +108,13 @@ export function classifyEosSlotAction({
 
   // Akku lädt aus PV — kein aktives Laden (Netzladen aus, bis BNetzA-Freigabe):
   // einfach halten, damit PV-Überschuss in den Akku statt ins Netz geht.
-  if (charging) {
+  // WICHTIG (T-0118, 2026-06-06): nur labeln wenn auch PV fließt. Die GA lässt
+  // das DC-Lade-Gen (dcChargeFactor) in fast jedem Slot AN, damit der Akku lädt
+  // SOBALD PV kommt — nachts ist PV=0, es lädt also nichts. Ohne diese
+  // pvPresent-Bedingung zeigte der Inspector fälschlich „Akku lädt (PV)" für
+  // jeden Nacht-Slot (SoC fällt, pv=0) — die wiederkehrende Verwirrung. Ohne PV
+  // fällt der Slot korrekt auf Netzbezug/Halten durch.
+  if (charging && pvPresent) {
     return {
       action: 'charge',
       label: 'Akku lädt (PV)',
