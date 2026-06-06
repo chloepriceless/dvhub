@@ -19,6 +19,18 @@ test('ensureSchema SQL contains all 4 table names', () => {
   assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS forecast_accuracy'), 'forecast_accuracy table missing');
 });
 
+// T-0105: isReady() must report false until ensureSchema() wires the pool, and
+// false again after close(). This is the signal forecast-snapshots uses to avoid
+// the boot-race null-pool dereference (8x snapshots_insert_error at startup).
+test('isReady() reflects pool init/close lifecycle (T-0105)', async () => {
+  const store = createForecastStore({ getCfg: () => ({}), pushLog: () => {} });
+  assert.equal(store.isReady(), false, 'not ready before ensureSchema');
+  await store.ensureSchema({ query: async () => ({ rows: [], rowCount: 0 }) });
+  assert.equal(store.isReady(), true, 'ready after ensureSchema');
+  store.close();
+  assert.equal(store.isReady(), false, 'not ready after close');
+});
+
 test('schema SQL creates indexes for all forecast tables', () => {
   const store = createForecastStore({
     getCfg: () => ({}),

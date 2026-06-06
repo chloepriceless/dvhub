@@ -90,6 +90,19 @@ export function createForecastSnapshots(ctx, { store, forecastService } = {}) {
       return { ok: true, skipped: true, forecastDate };
     }
 
+    // T-0105: defer until the forecast-store DB pool is initialised. At boot the
+    // first event-driven writeSnapshot (fired by pv-forecast after the startup
+    // forecast) can race ahead of forecast-store.ensureSchema(), leaving pool=null
+    // → every insertSnapshot throws "Cannot read properties of null (reading
+    // 'query')" (the 8× snapshots_insert_error burst observed at boot; benign +
+    // self-healing). Skip cleanly instead of dereferencing a null pool; the next
+    // forecast cycle / 00:05 recovery writes today's snapshot once the pool is up.
+    // lastSnapshotForecastDate stays unset so that retry proceeds.
+    if (typeof store?.isReady === 'function' && !store.isReady()) {
+      log('snapshots_skip_db_not_ready', { forecastDate });
+      return { ok: false, reason: 'db_not_ready' };
+    }
+
     // DB-level idempotency: merged layer already present for this forecast_date?
     try {
       const existing = await store.query(

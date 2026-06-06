@@ -350,6 +350,13 @@ export function createForecastStore(ctx) {
     pool = null;
   }
 
+  // T-0105: readiness signal. pool is null until ensureSchema(dbPool) runs and
+  // again after close(). Callers (e.g. forecast-snapshots.writeSnapshot) use this
+  // to defer DB work instead of dereferencing a null pool at boot.
+  function isReady() {
+    return pool !== null;
+  }
+
   // --- Phase 07 Wave-0 store helpers (REVIEWS H2: first-class deliverables) ---
 
   /**
@@ -488,6 +495,7 @@ export function createForecastStore(ctx) {
     getAccuracyHistory,
     runSmartRetention,
     close,
+    isReady,   // T-0105: boot-race guard for snapshot writer
     // Phase 07 Wave-0 helpers (REVIEWS H1/H2)
     query,
     getForecastAccuracyRow,
