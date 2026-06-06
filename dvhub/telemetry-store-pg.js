@@ -310,14 +310,45 @@ export async function ensurePgSchema(pool) {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  // Ensure connected user owns all tables (fixes tables created by a different user, e.g. postgres)
+  // Best-effort: make the connected user own public tables created by a different
+  // user (e.g. postgres) so later migration DDL on OUR tables works.
+  //
+  // T-0106 (incident 2026-06-06): this MUST be non-fatal PER TABLE. `ALTER TABLE
+  // ... OWNER TO` requires being the table's current owner (or superuser). On a
+  // multi-owner DB the app user is neither for foreign tables (e.g. a
+  // postgres-owned `victron_internals`), so the ALTER raises "must be owner of
+  // table X". Without the try/catch that single error aborted ALL of
+  // ensurePgSchema → createTelemetryStoreIfEnabled() threw → dbPool stayed null →
+  // the ENTIRE telemetry + forecast-store DB layer went dark after a restart
+  // (live telemetry persistence stopped; Forecast Inspector returned query_failed;
+  // forecast-store.pool null was also the real root of the T-0105 snapshot
+  // boot-race). The ownership normalisation is genuinely best-effort: foreign
+  // tables we cannot re-own are not OUR tables and no DVhub migration touches them,
+  // so skipping them is safe. Re-own what we can; never let it kill init.
   const { rows } = await pool.query(`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tableowner <> current_user
   `);
+  // NOTE: no explicit BEGIN here — each pool.query is its own implicit
+  // single-statement transaction, so a failed ALTER rolls back only itself and
+  // the next iteration runs cleanly (no aborted-transaction cascade).
+  let reowned = 0;
+  const skipped = [];
   for (const row of rows) {
     const safeName = assertSqlIdentifier(row.tablename, 'tablename');
-    await pool.query(`ALTER TABLE public.${safeName} OWNER TO current_user`);
+    try {
+      await pool.query(`ALTER TABLE public.${safeName} OWNER TO current_user`);
+      reowned++;
+    } catch (err) {
+      // Not owner/superuser for this (foreign) table — skip it. Collect for one
+      // summary line rather than spamming one warning per table at boot.
+      skipped.push(row.tablename);
+    }
+  }
+  if (skipped.length) {
+    // Low-level module: pushLog is not wired here; console.warn lands in the journal.
+    const sample = skipped.slice(0, 5).join(', ');
+    console.warn(`[schema] ownership normalisation: re-owned ${reowned}, left ${skipped.length} foreign-owned public table(s) under another owner (not owner/superuser) — continuing; DVhub tables unaffected. e.g.: ${sample}`);
   }
 }
 
