@@ -109,6 +109,19 @@ export function createPoller(ctx) {
     if (!regs || !regs.length) return null;
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
+    // T-0107: 32-bit value across two registers (Victron volatile setpoint
+    // 2716/2717). wordOrder 'be' (default) = high word first (regs[0]); 'le' =
+    // low word first. `* 0x10000` (not <<16) avoids JS 32-bit signed overflow.
+    const readType = String(conf.readType || '').toLowerCase();
+    if (regs.length >= 2 && (readType === 'int32' || readType === 'uint32')) {
+      const le = String(conf.wordOrder || 'be').toLowerCase().startsWith('l');
+      const hi = le ? regs[1] : regs[0];
+      const lo = le ? regs[0] : regs[1];
+      let raw = ((hi & 0xffff) * 0x10000) + (lo & 0xffff);
+      if (readType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
+      const v = raw * scale + offset;
+      return Number(v.toFixed(3));
+    }
     if (conf.quantity > 1 && conf.sumRegisters) {
       let sum = 0;
       for (const r of regs) sum += conf.signed ? s16(r) : r;

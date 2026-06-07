@@ -78,7 +78,9 @@ test('normalizeConfigInput restores legacy placeholder write registers while ign
   });
 
   assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.enabled, true);
-  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.address, 2700);
+  // T-0107: the restored default is now the volatile 32-bit setpoint (reg 2716/2717),
+  // flash-safe vs the legacy persistent reg 2700.
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.address, 2716);
   assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.scale, 1);
   assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.host, 'venus-gx.local');
   assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.port, 502);

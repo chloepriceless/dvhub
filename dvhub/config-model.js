@@ -933,11 +933,11 @@ function buildFieldDefinitions() {
       path: 'schedule.controlKeepaliveMs',
       label: 'Grid-Setpoint Keepalive (ms)',
       type: 'number',
-      default: 0,
+      default: 30000,
       min: 0,
       max: 600000,
       step: 1000,
-      help: 'Reg 2700 (ESS AcPowerSetpoint) periodisch neu schreiben, auch wenn unverändert (gegen Venus-Watchdog/Reboot-Verlust). 0 = aus.'
+      help: 'ESS-Grid-Setpoint periodisch neu schreiben (auch unverändert). PFLICHT für das flüchtige Reg 2716/2717 (verfällt nach 60 s → Passthru): Wert in (0, 60000]. 0 = aus (nur fürs persistente Reg 2700).'
     },
     {
       section: 'schedule',
@@ -2333,7 +2333,10 @@ export function createDefaultConfig() {
       acPvL1W: { enabled: true, fc: 4, address: 808, quantity: 1, signed: false, scale: 1, offset: 0 },
       acPvL2W: { enabled: true, fc: 4, address: 809, quantity: 1, signed: false, scale: 1, offset: 0 },
       acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
-      gridSetpointW: { enabled: true, fc: 4, address: 2700, quantity: 1, signed: true, scale: 1, offset: 0 },
+      // T-0107: read the VOLATILE setpoint (2716/2717, int32) — the value actually
+      // active once the write path drives 2716. Reading legacy 2700 goes stale then.
+      // fc3 = holding register (verify fc3 vs fc4 at the GX). Requires Venus >= 3.50.
+      gridSetpointW: { enabled: true, fc: 3, address: 2716, quantity: 2, signed: true, scale: 1, offset: 0, readType: 'int32', wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 4, address: 2901, quantity: 1, signed: false, scale: 0.1, offset: 0 },
       // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
       // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
@@ -2343,7 +2346,11 @@ export function createDefaultConfig() {
       selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
     },
     controlWrite: {
-      gridSetpointW: { enabled: true, fc: 6, address: 2700, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      // T-0107: VOLATILE 32-bit ESS setpoint (com.victronenergy.hub4 /Overrides/Setpoint,
+      // 2716/2717, big-endian high-word-first). Flash-safe vs the persistent 2700.
+      // REQUIRES Venus >= 3.50 AND schedule.controlKeepaliveMs in (0,60000] — else the
+      // Multi reverts to Passthru; enforced by the guard in schedule-eval applyControlTarget.
+      gridSetpointW: { enabled: true, fc: 16, address: 2716, writeType: 'int32', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' },
       // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
@@ -2360,11 +2367,11 @@ export function createDefaultConfig() {
     schedule: {
       timezone: 'Europe/Berlin',
       evaluateMs: 15000,
-      // T-0002 Reg-2700 keepalive: 0 = OFF (default). >0 = re-assert the ESS
-      // grid setpoint (reg 2700) every N ms even if unchanged, so a Venus-side
-      // watchdog/reboot cannot silently drop it. Per-target override available
-      // via controlWrite.<target>.keepaliveMs.
-      controlKeepaliveMs: 0,
+      // T-0002/T-0107 keepalive: re-assert the ESS grid setpoint every N ms even
+      // if unchanged. MANDATORY for the volatile reg 2716/2717 setpoint (which
+      // reverts to Passthru after 60 s if not re-written) — must be in (0,60000];
+      // 30 s gives margin. Per-target override via controlWrite.<target>.keepaliveMs.
+      controlKeepaliveMs: 30000,
       // T-0002 safety: SoC floor (%) for a PERSISTENT discharge override
       // (gridSetpointW < 0). At/below this SoC the override is suppressed (hold)
       // so it can never run the battery down to the bare hardware min-SoC.
