@@ -390,3 +390,71 @@ test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (n
   assert.equal(findLog(logs, 'negative_price_protection_on').length, 1,
     'negative_price_protection_on must fire regardless of source');
 });
+
+// --- T-0107: volatile reg-2716 Passthru guard ---
+// Reg 2716 (volatile RAM ESS setpoint) reverts the Multi to Passthru if not
+// re-asserted within 60 s. Writing it without a valid keepalive must be refused,
+// never silently arming Passthru. Prod pins controlKeepaliveMs=0, so a naive
+// default flip would hit exactly this case — the guard makes it impossible.
+
+function makeModbusCapture() {
+  const writes = [];
+  return {
+    writes,
+    transport: {
+      type: 'modbus',
+      mbWriteSingle: async (a) => { writes.push({ fc: 6, ...a }); },
+      mbWriteMultiple: async (a) => { writes.push({ fc: 16, ...a }); }
+    }
+  };
+}
+
+test('T-0107: gridSetpointW write to volatile reg 2716 is refused when keepalive is disabled (no silent Passthru)', async () => {
+  const cap = makeModbusCapture();
+  const { ctx, logs } = makeCtx({
+    mutate: ({ cfg, ctx }) => {
+      ctx.transport = cap.transport;
+      cfg.controlWrite.gridSetpointW = {
+        enabled: true, fc: 16, address: 2716, writeType: 'int32',
+        signed: true, scale: 1, offset: 0, wordOrder: 'be'
+      };
+      cfg.schedule.controlKeepaliveMs = 0; // prod's pinned value → must block
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: true };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  assert.equal(cap.writes.length, 0,
+    'no Modbus write may reach reg 2716 without a valid keepalive');
+  const blocked = findLog(logs, 'control_write_blocked');
+  assert.ok(blocked.length >= 1, 'a control_write_blocked event must be logged');
+  assert.equal(blocked[0].payload.reason, 'volatile_setpoint_requires_keepalive');
+});
+
+test('T-0107: gridSetpointW write to reg 2716 proceeds via fc16 int32 big-endian when keepalive is valid', async () => {
+  const cap = makeModbusCapture();
+  const { ctx } = makeCtx({
+    mutate: ({ cfg, ctx }) => {
+      ctx.transport = cap.transport;
+      cfg.controlWrite.gridSetpointW = {
+        enabled: true, fc: 16, address: 2716, writeType: 'int32',
+        signed: true, scale: 1, offset: 0, wordOrder: 'be'
+      };
+      cfg.schedule.controlKeepaliveMs = 30000; // valid (<= 60 s)
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: true };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  assert.equal(cap.writes.length, 1, 'exactly one Modbus write to reg 2716');
+  const w = cap.writes[0];
+  assert.equal(w.fc, 16, 'must use fc16 (write multiple) for the 32-bit value');
+  assert.equal(w.address, 2716, 'must write the volatile override register');
+  // -16000 W as signed int32, big-endian word order: 0xFFFFC180 → [0xFFFF, 0xC180]
+  assert.deepEqual(w.values, [0xFFFF, 0xC180],
+    'int32 big-endian: high word 0xFFFF (2716), low word 0xC180 (2717) = -16000 W');
+});

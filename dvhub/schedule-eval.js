@@ -349,6 +349,33 @@ export function createScheduleEvaluator(ctx) {
       ?? (target === 'gridSetpointW' ? cfg.schedule?.controlKeepaliveMs : 0)
       ?? 0
     );
+
+    // === T-0107 safety: volatile-setpoint Passthru guard ====================
+    // Reg 2716 (com.victronenergy.hub4 /Overrides/Setpoint) is the VOLATILE,
+    // flash-friendly 32-bit ESS setpoint (Venus >= 3.50). Victron reverts the
+    // Multi to Passthru if it is not re-asserted within 60 s. Writing it without
+    // a valid keepalive (0 < keepaliveMs <= 60000) therefore guarantees an
+    // uncontrolled battery shortly after. Refuse such a write LOUDLY rather than
+    // silently arming Passthru. The persistent reg 2700 has no such requirement,
+    // so this guard is scoped to the volatile override address only. This makes
+    // a half-migration (2716 write but keepalive still 0, e.g. prod's pinned 0)
+    // structurally impossible to actuate.
+    const VOLATILE_SETPOINT_ADDR = 2716;
+    if (transport.type !== 'mqtt'
+        && target === 'gridSetpointW'
+        && Number(conf.address) === VOLATILE_SETPOINT_ADDR
+        && !(keepaliveMs > 0 && keepaliveMs <= 60000)) {
+      pushLog('control_write_blocked', {
+        target, value, source, address: conf.address,
+        reason: 'volatile_setpoint_requires_keepalive', keepaliveMs
+      });
+      return {
+        ok: false,
+        error: `reg ${VOLATILE_SETPOINT_ADDR} (volatile ESS setpoint) requires schedule.controlKeepaliveMs in (0,60000]; refusing write to avoid Multi Passthru (keepaliveMs=${keepaliveMs})`
+      };
+    }
+    // === end T-0107 volatile-setpoint guard =================================
+
     const prev = state.schedule.lastWrite[target];
     let isKeepalive = false;
     if (prev != null && Number(prev.value) === Number(value)) {
