@@ -263,7 +263,11 @@ assert_supported_layout
 
 echo "[1/7] Pakete installieren"
 apt-get update
-apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan
+# python3-venv + python3-pip: a fresh Debian/Ubuntu ships the `venv` stdlib stub
+# but NOT ensurepip — so `python3 -m venv <dir>` fails until python3-venv is
+# present (T-0118: prod only worked because the package happened to be installed).
+# Distro-generic name pulls python3.11-venv@Debian12 / python3.12-venv@Ubuntu24.
+apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan python3-venv python3-pip
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
@@ -337,11 +341,14 @@ if command -v python3 &>/dev/null; then
   PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
   echo "Found Python $PYTHON_VERSION"
 
-  # Ensure python3-venv is available
-  if ! python3 -m venv --help &>/dev/null 2>&1; then
+  # Ensure python3-venv ACTUALLY works (T-0118): `venv --help` succeeds even
+  # without ensurepip, so it must NOT be the probe. Test a real throwaway venv
+  # creation; only that exposes a missing python3-venv/ensurepip.
+  if ! python3 -m venv /tmp/_dvhub_venvtest &>/dev/null; then
     echo "Installing python3-venv..."
-    sudo apt-get install -y python3-venv 2>/dev/null || true
+    sudo apt-get install -y python3-venv python3-pip 2>/dev/null || true
   fi
+  rm -rf /tmp/_dvhub_venvtest
 
   if [ -f "$REQUIREMENTS" ]; then
     echo "Creating forecast venv at $VENV_DIR..."
@@ -434,19 +441,23 @@ install_ml_deps() {
       echo "  LLM: Ollama bereits installiert."
     fi
 
+    # T-0118: start the Ollama daemon BEFORE pulling (the pull needs a running
+    # server, else "could not connect to ollama app") and call ollama by an
+    # explicit path — /usr/local/bin is frequently off a non-login-shell PATH on
+    # a fresh host. The pull is best-effort: the LLM tile is optional.
+    sudo systemctl enable --now ollama 2>/dev/null || true
+    OLLAMA_BIN="$(command -v ollama || echo /usr/local/bin/ollama)"
+    echo "  LLM: Ollama Service aktiviert."
+
     # Pull TinyLlama model (if not already present)
-    if ollama list 2>/dev/null | grep -q "tinyllama"; then
+    if "$OLLAMA_BIN" list 2>/dev/null | grep -q "tinyllama"; then
       echo "  LLM: TinyLlama Modell bereits vorhanden."
     else
       echo "  LLM: Lade TinyLlama Modell herunter (~637MB)..."
-      ollama pull tinyllama
-      echo "  LLM: TinyLlama Modell geladen."
+      "$OLLAMA_BIN" pull tinyllama \
+        && echo "  LLM: TinyLlama Modell geladen." \
+        || echo "  LLM: TinyLlama-Pull fehlgeschlagen — uebersprungen (optional)."
     fi
-
-    # Ensure Ollama service is enabled
-    sudo systemctl enable ollama 2>/dev/null || true
-    sudo systemctl start ollama 2>/dev/null || true
-    echo "  LLM: Ollama Service aktiviert."
 
     # Ensure Ollama only listens on localhost (security)
     if [ -f /etc/systemd/system/ollama.service ]; then
@@ -462,8 +473,11 @@ install_ml_deps() {
   fi
 }
 
-# Install ML dependencies after Python venv is ready
-install_ml_deps
+# Install ML dependencies after Python venv is ready.
+# T-0118: run in a subshell + `|| true` so an OPTIONAL Tier-2/3 step (ML pip,
+# Ollama download/pull) can never abort the script (subshell contains any inner
+# `exit`/set -e failure) — the essential tail (config/DB/systemd) must always run.
+( install_ml_deps ) || echo "  ML/LLM: optionaler Tier-2/3-Schritt fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 
 # --- EOS (Akkudoktor) Installation (Tier 3 only, --with-eos flag) ---
 install_eos() {
@@ -496,7 +510,12 @@ install_eos() {
     sudo python3 -m venv "$EOS_VENV"
   fi
   sudo "$EOS_VENV/bin/pip" install --upgrade pip
-  sudo "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
+  # T-0118: akkudoktor-EOS v0.3.0 ships pyproject.toml, NOT requirements.txt —
+  # only honour a requirements.txt if it actually exists; the editable install
+  # below resolves the project's dependencies from pyproject.toml regardless.
+  if [ -f "$EOS_DIR/requirements.txt" ]; then
+    sudo "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
+  fi
   sudo "$EOS_VENV/bin/pip" install -e "$EOS_DIR"
 
   # Phase 18-03: starlette 1.x dropped the `on_startup` kwarg in favour of
@@ -542,7 +561,9 @@ UNIT
 }
 
 if [ "${EOS_INSTALL:-0}" = "1" ]; then
-  install_eos
+  # T-0118: subshell + `|| true` — an EOS install failure must not abort the
+  # essential tail (config/DB/systemd) that follows.
+  ( install_eos ) || echo "  EOS: Installation fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 else
   echo "  EOS: Uebersprungen (--with-eos Flag nicht gesetzt)"
 fi
@@ -572,13 +593,21 @@ fi
 if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
   node -e "
     const fs = require('fs');
+    const crypto = require('crypto');
     const p = '$CONFIG_PATH';
     try {
       const c = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (!c.updateChannel) {
-        c.updateChannel = '$UPDATE_CHANNEL';
-        fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+      let changed = false;
+      if (!c.updateChannel) { c.updateChannel = '$UPDATE_CHANNEL'; changed = true; }
+      // T-0118: the systemd unit sets DV_ENABLE_SERVICE_ACTIONS=1 and the app
+      // refuses to start without an apiToken >= 16 chars (crash-loop on a fresh
+      // install whose config.example.json has none). Generate a strong random
+      // token so the service comes up clean on first boot.
+      if (!c.apiToken || String(c.apiToken).length < 16) {
+        c.apiToken = crypto.randomBytes(24).toString('hex');
+        changed = true;
       }
+      if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
     } catch {}
   "
 fi
