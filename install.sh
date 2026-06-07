@@ -488,21 +488,31 @@ install_eos() {
     return 0
   fi
 
-  local EOS_DIR="/opt/dvhub/eos-src"
+  local EOS_DIR="/opt/dvhub/eos"
   local EOS_VENV="/opt/dvhub/eos-venv"
-  local EOS_VERSION="v0.3.0"
+  # T-0121: install the DVhub DV-EOS *fork* (15-min slots, slot-aware
+  # battery/inverter math, battery->grid arbitrage export, EnergyCharts spot
+  # feed-in, pydantic /v1/prediction/import fix) directly from the public fork
+  # branch. The branch already carries every patch on top of upstream v0.3.0, so
+  # the legacy eos-patches/apply.sh step is no longer needed. Cloning vanilla
+  # upstream here (the pre-T-0121 behaviour) shipped an EOS that clamps to hourly
+  # slots and never exports the battery -> i.e. no arbitrage. EOS_DIR is now
+  # /opt/dvhub/eos to match the path prod + eos-adapter.js expect (was the
+  # divergent /opt/dvhub/eos-src). Override repo/branch via env for testing.
+  local EOS_REPO_URL="${EOS_REPO_URL:-https://github.com/chloepriceless/DV-EOS.git}"
+  local EOS_BRANCH="${EOS_BRANCH:-dvhub-fork}"
 
-  echo "  EOS: Installiere Akkudoktor-EOS ${EOS_VERSION} (bare-metal venv)..."
+  echo "  EOS: Installiere DV-EOS Fork (${EOS_BRANCH}) bare-metal venv..."
 
-  # Idempotent clone / fetch
+  # Idempotent clone / fetch of the fork branch
   if [ ! -d "$EOS_DIR/.git" ]; then
     sudo rm -rf "$EOS_DIR"
-    sudo git clone --branch "$EOS_VERSION" --depth 1 \
-      https://github.com/Akkudoktor-EOS/EOS.git "$EOS_DIR" \
-      || { echo "  EOS: git clone fehlgeschlagen"; return 1; }
+    sudo git clone --branch "$EOS_BRANCH" --depth 1 \
+      "$EOS_REPO_URL" "$EOS_DIR" \
+      || { echo "  EOS: git clone ${EOS_REPO_URL}@${EOS_BRANCH} fehlgeschlagen"; return 1; }
   else
-    sudo git -C "$EOS_DIR" fetch --tags --depth 1 origin "$EOS_VERSION"
-    sudo git -C "$EOS_DIR" checkout "$EOS_VERSION"
+    sudo git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_BRANCH"
+    sudo git -C "$EOS_DIR" checkout -B "$EOS_BRANCH" "origin/$EOS_BRANCH"
   fi
 
   # Python venv (Python 3.11+ required by EOS v0.3.0)
