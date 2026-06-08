@@ -568,6 +568,35 @@ function buildFieldDefinitions() {
       help: 'Wie viele Stunden vor der Lade-Deadline der DC-Export abgeschaltet wird, falls der Ziel-SOC noch nicht erreicht wurde. Standard: 2 Stunden.'
     },
 
+    // T-0113 Tier 3 — Fern-Support. Nur diese zwei Felder sind nutzer-editierbar;
+    // die Relay-Ports (peer-zugeteilt) liegen bewusst NICHT in config.json,
+    // sondern in /var/lib/dvhub/support/relay.json (config-replace-sicher).
+    {
+      section: 'system',
+      group: 'support',
+      groupLabel: 'Fern-Support (Remote-Zugang)',
+      groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang. Der Zugang ist STANDARDMÄSSIG VERSCHLOSSEN — ein Tunnel zum Support öffnet sich NUR, wenn du ihn aktiv per Knopf startest, ist zeitlich begrenzt und jederzeit abbrechbar. Ohne offenen Tunnel ist die Box von außen nicht erreichbar.',
+      path: 'support.localUser.enabled',
+      label: 'Support-Login-User bereithalten',
+      type: 'boolean',
+      help: 'Legt den Login-User „dvhub-support“ (Gruppe dvhub, KEIN sudo) an und hinterlegt den öffentlichen Support-Schlüssel — als Bereitschaft für Fern-Diagnose. Das allein gibt KEINEN Zugriff: der Support kommt nur rein, solange DU den Tunnel geöffnet hast. Deaktivieren entfernt User + Schlüssel beim nächsten Neustart (kein Fern-Support mehr möglich).'
+    },
+    {
+      section: 'system',
+      group: 'support',
+      groupLabel: 'Fern-Support (Remote-Zugang)',
+      groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang.',
+      path: 'support.tunnel.autoCloseMin',
+      label: 'Tunnel-Auto-Schließung (Minuten)',
+      type: 'select',
+      options: [
+        { value: 30, label: '30 Minuten' },
+        { value: 60, label: '60 Minuten (Standard)' },
+        { value: 120, label: '120 Minuten' }
+      ],
+      help: 'Spätestens nach dieser Zeit schließt sich ein geöffneter Support-Tunnel automatisch wieder. Du kannst ihn jederzeit vorher manuell beenden.'
+    },
+
     {
       section: 'telemetry',
 

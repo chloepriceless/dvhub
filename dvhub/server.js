@@ -90,6 +90,8 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 // fires its first interval tick. No console.error fallback — the helper throws
 // loudly if misordered. Hard dep on 09-06 (services/log.js).
 import { configureSafeAsync } from './services/safe-async.js';
+// T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
+import { createSupportTunnel } from './services/support-tunnel.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies. Imported here
@@ -958,6 +960,13 @@ ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
 ctx.notificationService = notificationService;
 
+// T-0113 Tier 3: reverse-SSH support tunnel (customer-initiated, time-bounded,
+// killable). Constructed unconditionally so routes-api.js can serve the three
+// /api/support/tunnel/* endpoints + the transparency UI status. The tunnel
+// process itself only spawns when the customer hits "open" — OFF by default.
+const supportTunnel = createSupportTunnel(ctx);
+ctx.supportTunnel = supportTunnel;
+
 // Phase 17 Plan 03 — license-service. Constructed unconditionally so
 // routes-api.js can destructure ctx.licenseService for the four /api/license/*
 // endpoints (Plan 17-03 Task 3) and for the Family-route gate (Plan 17-04).
@@ -1040,6 +1049,7 @@ ctx.getConfigDefinition = () => CONFIG_DEFINITION;
 ctx.getAppVersion = () => APP_VERSION;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
+ctx.getDataDir = () => DATA_DIR || __dirname;
 ctx.getRepoRoot = () => path.resolve(__dirname, '..');
 ctx.scanTransport = scanTransport;
 ctx.fetchEpexDay = () => epex.fetchEpexDay();

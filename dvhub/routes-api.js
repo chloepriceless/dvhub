@@ -3636,6 +3636,35 @@ export function createApiRoutes(ctx) {
       }
     }
 
+    // T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
+    //   GET  /api/support/tunnel/status  — transparency: open?, ttl, relay,
+    //        appliance key fingerprint, provisioned?, local-support-user on/off.
+    //   POST /api/support/tunnel/open    — { ttlMin? } opens an auto-closing tunnel.
+    //   POST /api/support/tunnel/close   — Kill switch.
+    // NOT in BEARER_REQUIRED_ENDPOINTS by design: open/close are LAN-trusted
+    // actions — the customer clicks the button from their own WLAN, the same trust
+    // boundary the rest of DVhub uses. Without an OPEN tunnel the box sits behind
+    // NAT and is unreachable; the deposited support key alone grants nothing.
+    if (url.pathname === '/api/support/tunnel/status' && req.method === 'GET') {
+      if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
+      return json(res, 200, { ok: true, ...ctx.supportTunnel.status() });
+    }
+    if (url.pathname === '/api/support/tunnel/open' && req.method === 'POST') {
+      if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
+      const actor = actorContext(req);
+      const body = await readJsonBody(req, res);
+      if (body === null) return; // readJsonBody already sent 400/413
+      const ttlRaw = Number(body?.ttlMin);
+      const r = ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
+      // not_provisioned / misconfigured / spawn_failed -> 409 (caller can't open yet)
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    if (url.pathname === '/api/support/tunnel/close' && req.method === 'POST') {
+      if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
+      const actor = actorContext(req);
+      return json(res, 200, ctx.supportTunnel.close(actor));
+    }
+
     // Plan 08-07 Task 3: frontend error reporting endpoint. The browser POSTs
     // window.onerror / unhandledrejection / per-widget catch payloads here so
     // operator-visible logs show frontend crashes too. Auth-required (handled by
