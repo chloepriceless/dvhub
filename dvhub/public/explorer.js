@@ -316,20 +316,33 @@ async function fetchExplorerData() {
   // (5s/10s/15s/30s/1min/5min); legacy slot path for 15min / 1h / day.
   if (GRANULAR_AGG_TO_SECONDS[agg]) {
     try {
-      // T-0129: the market price has no per-second source. Fetch the EPEX price
-      // slots alongside the raw telemetry and forward-fill them as a stepped line
-      // across the granular axis, so the Börsenpreis stays visible at 5s/10s/….
-      const [rows, statusData, fcData] = await Promise.all([
+      // T-0129: the market price has no per-second telemetry source. The PAST
+      // price lives in the historised 15min slots (marketPriceCtKwh); the FUTURE
+      // in EPEX day-ahead (/api/status, which is now→+24h ONLY). Fetch both +
+      // forward-fill across the granular axis so the Börsenpreis is visible for
+      // the whole (mostly past) window, not just the last minutes near now.
+      const [rows, statusData, fcData, ...dayResults] = await Promise.all([
         fetchGranularData(startISO, endISO, agg),
         apiFetch('/api/status').then(r => r.json()).catch(() => null),
         apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
+        ...daysCovered(startISO, endISO).map(dateStr =>
+          apiFetch(`/api/history/summary?view=day&date=${dateStr}`).then(r => r.json()).then(d => d.slots || []).catch(() => [])),
       ]);
-      const epexData = statusData?.epex?.data || [];
+      const priceByTs = new Map();
+      for (const sl of dayResults.flat()) {                 // PAST: historised slot price
+        const t = new Date(sl.ts).getTime(); const v = Number(sl.marketPriceCtKwh);
+        if (Number.isFinite(t) && Number.isFinite(v)) priceByTs.set(t, v);
+      }
+      for (const p of (statusData?.epex?.data || [])) {      // FUTURE: EPEX day-ahead (overrides overlap)
+        const t = new Date(p.ts).getTime(); const v = Number(p.ct_kwh);
+        if (Number.isFinite(t) && Number.isFinite(v)) priceByTs.set(t, v);
+      }
+      const priceData = [...priceByTs.entries()].map(([ts, ct_kwh]) => ({ ts, ct_kwh }));
       explorerData.rawSlots = [];
       explorerData.rawFc = fcData;
-      explorerData.rawEpex = epexData;
+      explorerData.rawEpex = priceData;
       explorerData.rawSoc = [];
-      buildGranularChartData(rows, agg, epexData, fcData);
+      buildGranularChartData(rows, agg, priceData, fcData);
       renderChart();
       setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg} · ${rangeLabel}).`);
     } catch (e) {
