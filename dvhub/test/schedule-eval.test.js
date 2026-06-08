@@ -534,3 +534,61 @@ test('T-0121: EOS closed-loop does NOT overwrite maxDischargeW while evcc owns i
   assert.equal(state.schedule.lastWrite.maxDischargeW.source, 'evcc',
     'evcc remains the maxDischargeW owner — EOS cap deferred (EV charging takes priority)');
 });
+
+// B == 0: charge / self-consumption slot. EOS feeds in only the planned amount and
+// charges the REST of the PV surplus into the battery. The closed-loop must NOT dump
+// the full live PV to the grid (the 2026-06-08 "voller PV ins Netz statt Akku laden"
+// bug), and must NOT cap discharge (house+EV draw the full battery).
+function eosChargeSlotRule(plannedExportW = 5000) {
+  return {
+    id: 'eos-cl-b0', enabled: true, target: 'gridSetpointW',
+    start: '00:00', end: '23:59', value: -plannedExportW,
+    optimizer: 'eos', closedLoopExport: true, batteryShareW: 0,
+    source: 'forecast_optimizer', autoManaged: true
+  };
+}
+
+test('T-0122: B=0 charge slot exports only the planned amount, NOT the full live PV', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 20000;       // big midday surplus
+      state.victron.selfConsumptionW = 1000; // live PV surplus 19000 W
+      state.schedule.rules = [eosChargeSlotRule(5000)];
+      // a restrictive cap left by a prior export slot must be released to -1
+      state.schedule.lastWrite = { maxDischargeW: { value: 5000, source: 'rule:eos-prev', at: 1 } };
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  // export = min(plannedExport 5000, livePV 19000) = 5000 — the rest of the PV charges the battery
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -5000,
+    'B=0: export capped at the EOS plan, surplus PV charges the battery instead of dumping to grid');
+  // discharge cap released to unlimited so house load + EV can draw the full battery
+  assert.equal(Number(state.schedule.active.maxDischargeW.value), -1,
+    'B=0: a restrictive discharge cap is released to -1 (unlimited) — no expensive grid backfill');
+});
+
+test('T-0122: B=0 charge slot — a PV dip lowers the export, battery is not drained', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 2000;        // PV underdelivers vs the -5000 plan
+      state.victron.selfConsumptionW = 0;
+      state.schedule.rules = [eosChargeSlotRule(5000)];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  // export follows the live PV (2000), it does NOT hold the -5000 plan by draining the battery
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -2000,
+    'B=0 + PV dip: export = live PV surplus; battery is not asked to backfill the planned export');
+});

@@ -617,27 +617,52 @@ export function createScheduleEvaluator(ctx) {
       if (eff.value == null) continue;
 
       // === T-0121 EOS closed-loop export: live-PV recompute + battery cap ======
-      // For an EOS export rule, re-derive the setpoint from MEASURED PV every
-      // cycle: gridSetpointW = -(B + live PV surplus). B (the deliberate Akku→Netz
-      // share) is held from the plan; live PV rides on top, so a PV dip lowers the
-      // export instead of draining the battery (Christin's original bug). The
-      // reg-2704 cap = B + a FIXED headroom bounds the battery as a backstop for the
-      // <=5 s gap between recomputes. 2704 is PERSISTENT, so it is written only on
-      // change (per slot) — no flash wear; evcc owns 2704 while an EV charges, so
-      // defer to it. Runs BEFORE the guards so neg-price / SoC-floor / D-18 all act
-      // on the live value. Internal-optimizer rules (no closedLoopExport) untouched.
+      // For an EOS rule, re-derive the setpoint from MEASURED PV every cycle. Two
+      // regimes, split on B (the deliberate Akku→Netz share held from the plan):
+      //
+      //   B > 0  — deliberate battery-export slot (evening arbitrage): dump B and
+      //            ride the live PV surplus on top → gridSetpointW = -(B + livePV).
+      //            reg-2704 cap = B + headroom bounds the battery as a <=5 s
+      //            backstop. (Christin's evening "PV oben drauf".)
+      //
+      //   B == 0 — charge / self-consumption slot: EOS wants to feed in ONLY the
+      //            planned amount and charge the REST of the PV surplus into the
+      //            battery. So export AT MOST the planned amount, PV-limited
+      //            (min(plannedExport, livePV)): a PV dip lowers the export (no
+      //            drain) and surplus PV EOS earmarked for the battery is NOT
+      //            dumped to the grid. T-0122 fix for "voller PV ins Netz statt
+      //            Akku laden". And do NOT cap discharge here — house load + EV
+      //            must draw the full battery, else the shortfall comes expensively
+      //            from the grid (Christin's maxDischarge point); release any
+      //            restrictive cap a prior export slot left back to -1 (unlimited).
+      //
+      // 2704 is PERSISTENT → written only on change (per slot) — no flash wear.
+      // evcc owns 2704 while an EV charges, so defer to it. Runs BEFORE the guards
+      // so neg-price / SoC-floor / D-18 all act on the live value. Internal-
+      // optimizer rules (no closedLoopExport) untouched.
       if (target === 'gridSetpointW'
           && eff.rule?.optimizer === 'eos'
           && eff.rule?.closedLoopExport
           && Number(eff.value) < 0) {
+        const plannedExportW = Math.abs(Number(eff.value)); // EOS' planned net export for this slot
         const B = Math.max(0, Number(eff.rule.batteryShareW) || 0);
         const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
         const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
-        eff.value = -Math.round(B + Math.max(0, pvW - loadW));
-        const headroomW = Number(cfg.optimizer?.capLoadHeadroomW ?? 5000);
-        const capW = Math.min(20000, Math.round(B + headroomW)); // 20000 = reg-2704 HW max (prod)
-        if (state.schedule.lastWrite?.maxDischargeW?.source !== 'evcc') {
-          await applyControlTarget('maxDischargeW', capW, eff.source);
+        const livePvSurplusW = Math.max(0, pvW - loadW);
+        const evccOwnsCap = state.schedule.lastWrite?.maxDischargeW?.source === 'evcc';
+        if (B > 0) {
+          eff.value = -Math.round(B + livePvSurplusW);
+          const headroomW = Number(cfg.optimizer?.capLoadHeadroomW ?? 5000);
+          const capW = Math.min(20000, Math.round(B + headroomW)); // 20000 = reg-2704 HW max (prod)
+          if (!evccOwnsCap) {
+            await applyControlTarget('maxDischargeW', capW, eff.source);
+          }
+        } else {
+          eff.value = -Math.round(Math.min(plannedExportW, livePvSurplusW));
+          const capNow = Number(state.schedule.lastWrite?.maxDischargeW?.value);
+          if (!evccOwnsCap && Number.isFinite(capNow) && capNow >= 0) {
+            await applyControlTarget('maxDischargeW', -1, eff.source); // -1 = unlimited discharge
+          }
         }
       }
       // === end T-0121 EOS closed-loop =========================================
