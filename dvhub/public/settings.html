@@ -329,6 +329,41 @@
               <p class="svc-meta" id="supportBundleResult"></p>
             </div>
 
+            <!-- Fern-Support: Reverse-SSH-Tunnel (T-0113 Tier 3) -->
+            <div class="config-group" data-accent="purple">
+              <div class="config-group-kicker">Fern-Support (Remote-Zugang)</div>
+              <p class="svc-meta">Kundeninitiierter, zeitbegrenzter Support-Zugang. <strong>Standardm&auml;&szlig;ig verschlossen.</strong> Ein Tunnel zum Support &ouml;ffnet sich <strong>nur</strong>, wenn DU ihn hier startest &mdash; ohne offenen Tunnel ist die Box hinter NAT von au&szlig;en nicht erreichbar. Der hinterlegte Schl&uuml;ssel allein gibt keinen Zugriff. Du kannst den Tunnel jederzeit sofort beenden; er schlie&szlig;t sich zus&auml;tzlich automatisch.</p>
+              <div class="config-row">
+                <span class="config-row-label">Tunnel-Status</span>
+                <span class="config-row-value" id="supportTunnelState">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Support-Schl&uuml;ssel hinterlegt</span>
+                <span class="config-row-value" id="supportTunnelKey">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Appliance-ID</span>
+                <span class="config-row-value api-row-value" id="supportTunnelApplianceId">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Relay</span>
+                <span class="config-row-value api-row-value" id="supportTunnelRelay">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Tunnel-Dauer</span>
+                <select id="supportTunnelTtl" class="config-select">
+                  <option value="30">30 Minuten</option>
+                  <option value="60" selected>60 Minuten</option>
+                  <option value="120">120 Minuten</option>
+                </select>
+              </div>
+              <div class="svc-actions-row">
+                <button id="supportTunnelOpenBtn" class="btn btn-primary btn-small" type="button">Support-Tunnel &ouml;ffnen</button>
+                <button id="supportTunnelCloseBtn" class="btn btn-danger btn-small" type="button">Tunnel sofort schlie&szlig;en</button>
+              </div>
+              <p class="svc-meta" id="supportTunnelResult"></p>
+            </div>
+
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker">DV-Signale</div>
@@ -724,7 +759,7 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260601-eos-hebel2"></script>
-  <script src="/tools.js?v=20260608-t0113"></script>
+  <script src="/tools.js?v=20260608-t0113-tunnel"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

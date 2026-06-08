@@ -863,6 +863,87 @@ async function downloadSupportBundle() {
   }
 }
 
+// --- T-0113 Tier 3: customer-initiated reverse-SSH support tunnel -------------
+// Transparency first: the customer sees which key can reach them, the relay
+// endpoint, and the live tunnel state. Opening is an explicit, time-bounded,
+// killable action — the box is OFF by default and unreachable behind NAT.
+let supportTunnelTimer = null;
+
+function fmtTunnelState(st) {
+  if (!st) return '—';
+  if (st.open) {
+    const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
+    return mins != null
+      ? `🟢 OFFEN — schließt in ~${mins} min automatisch`
+      : '🟢 OFFEN';
+  }
+  if (!st.provisioned) return '⚪ Nicht freigeschaltet (Support muss die Box erst registrieren)';
+  return '🔒 Geschlossen (Support hat keinen Zugang)';
+}
+
+async function refreshSupportTunnelStatus() {
+  try {
+    const res = await apiFetch('/api/support/tunnel/status');
+    if (!res.ok) return;
+    const st = await res.json();
+    setText('supportTunnelState', fmtTunnelState(st));
+    setText('supportTunnelKey', st.localUserEnabled === false
+      ? 'Deaktiviert — kein Support-Login (kein Fern-Support möglich)'
+      : (st.applianceKeyFingerprint ? `✓ ${st.applianceKeyFingerprint}` : '✓ hinterlegt'));
+    setText('supportTunnelApplianceId', st.applianceId || '— (noch nicht generiert)');
+    const r = st.relay || {};
+    setText('supportTunnelRelay', r.host
+      ? `${r.user || 'dvhub-support'}@${r.host}:${r.port || ''}${(r.shellPort ? ` (Ports ${r.shellPort}/${r.webPort})` : ' (Ports nicht zugeteilt)')}`
+      : '—');
+    const openBtn = document.getElementById('supportTunnelOpenBtn');
+    const closeBtn = document.getElementById('supportTunnelCloseBtn');
+    if (openBtn) openBtn.disabled = !!st.open || !st.provisioned;
+    if (closeBtn) closeBtn.disabled = !st.open;
+  } catch { /* status is best-effort */ }
+}
+
+async function openSupportTunnel() {
+  const btn = document.getElementById('supportTunnelOpenBtn');
+  const result = document.getElementById('supportTunnelResult');
+  const ttlMin = Number(document.getElementById('supportTunnelTtl')?.value) || 60;
+  if (btn) btn.disabled = true;
+  if (result) result.textContent = 'Öffne Support-Tunnel…';
+  try {
+    const res = await apiFetch('/api/support/tunnel/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ttlMin }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) {
+      const detail = j.detail || j.error || `HTTP ${res.status}`;
+      if (result) result.textContent = 'Konnte nicht öffnen: ' + detail;
+    } else if (result) {
+      result.textContent = `✓ Tunnel offen — Support erreicht die Box für ~${ttlMin} min. Du kannst jederzeit schließen.`;
+    }
+  } catch (e) {
+    if (result) result.textContent = 'Fehler: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    await refreshSupportTunnelStatus();
+  }
+}
+
+async function closeSupportTunnel() {
+  const result = document.getElementById('supportTunnelResult');
+  if (result) result.textContent = 'Schließe Tunnel…';
+  try {
+    const res = await apiFetch('/api/support/tunnel/close', { method: 'POST' });
+    const j = await res.json().catch(() => ({}));
+    if (result) result.textContent = (res.ok && j.ok)
+      ? '🔒 Tunnel geschlossen — Support hat keinen Zugang mehr.'
+      : 'Fehler beim Schließen: ' + (j.error || `HTTP ${res.status}`);
+  } catch (e) {
+    if (result) result.textContent = 'Fehler: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    await refreshSupportTunnelStatus();
+  }
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -896,6 +977,15 @@ function initToolsPage() {
 
   // T-0113 Tier 1: support bundle download
   document.getElementById('supportBundleBtn')?.addEventListener('click', () => downloadSupportBundle());
+
+  // T-0113 Tier 3 support tunnel — only wire + poll when the panel is present.
+  if (document.getElementById('supportTunnelOpenBtn')) {
+    document.getElementById('supportTunnelOpenBtn')?.addEventListener('click', () => openSupportTunnel());
+    document.getElementById('supportTunnelCloseBtn')?.addEventListener('click', () => closeSupportTunnel());
+    refreshSupportTunnelStatus();
+    if (supportTunnelTimer) clearInterval(supportTunnelTimer);
+    supportTunnelTimer = setInterval(refreshSupportTunnelStatus, 15000);
+  }
 
   // VPN tools
   document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));
