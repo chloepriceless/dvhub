@@ -13,6 +13,7 @@ import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
+import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump } from './services/db-backup.js';
 // L-11 (Plan 16-03): MESSAGE_TYPES is the single source of truth for the
@@ -1085,7 +1086,11 @@ export function createApiRoutes(ctx) {
   // matching /api/telemetry/series, /api/forecast, /api/history/summary.
   // Set kept empty as the explicit override mechanism for any future endpoint
   // that genuinely needs Bearer-only-from-anywhere.
-  const BEARER_REQUIRED_ENDPOINTS = new Set([]);
+  // T-0113: the support bundle carries redacted-but-still-sensitive diagnostics
+  // (config shape, logs, host info). Require Bearer even on LAN, like the raw
+  // history exports — the CLI (`dvhub support dump`) is the unauthenticated
+  // local-shell path for an operator already on the box.
+  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle']);
 
   function checkAuth(req, res) {
     const cfg = getCfg();
@@ -3550,6 +3555,85 @@ export function createApiRoutes(ctx) {
         level: entry.level || 'info',
       }));
       return json(res, 200, { rows });
+    }
+
+    // T-0113 Tier 1: redacted diagnostic support bundle (Bearer-required, see
+    // BEARER_REQUIRED_ENDPOINTS). Collects ALLOWLISTED live sources only (never a
+    // raw FS dump) and hands them to buildSupportBundle() which applies
+    // redactConfig() + scrubDeep(). Operator pulls one shareable JSON; the
+    // matching `dvhub support dump` CLI is the local-shell path.
+    //   ?sinceHours=<n>  optional time window   ?maxEntries=<n>  optional cap
+    if (url.pathname === '/api/support/bundle' && req.method === 'GET') {
+      const actor = actorContext(req);
+      try {
+        const opts = {};
+        const sinceHours = Number(url.searchParams.get('sinceHours'));
+        if (Number.isFinite(sinceHours) && sinceHours > 0) opts.sinceMs = sinceHours * 3600 * 1000;
+        const maxEntries = Number(url.searchParams.get('maxEntries'));
+        if (Number.isFinite(maxEntries) && maxEntries > 0) {
+          opts.maxLogEntries = maxEntries;
+          opts.maxAuditEntries = maxEntries;
+        }
+
+        // audit/control events (durable) — optional, only if telemetry store present
+        let auditEntries = [];
+        try {
+          if (ctx.telemetryStore?.listControlEvents) {
+            const r = await ctx.telemetryStore.listControlEvents({ limit: opts.maxAuditEntries || 1000 });
+            auditEntries = Array.isArray(r) ? r : (r?.rows || []);
+          }
+        } catch { /* audit is best-effort; the in-memory ring is the primary source */ }
+
+        // systemd active-state (best-effort)
+        let serviceActive = null;
+        try {
+          if (ctx.getServiceActionsEnabled?.()) {
+            const r = await ctx.runServiceCommand(['is-active', ctx.getServiceName()]);
+            serviceActive = (r?.stdout || r?.output || '').toString().trim() || null;
+          }
+        } catch { /* ignore */ }
+
+        const rawCfg = ctx.getRawCfg?.() || {};
+        const loaded = ctx.getLoadedConfig?.() || {};
+        const bundle = buildSupportBundle({
+          version: ctx.getAppVersion?.() ?? null,
+          system: {
+            node: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            uptimeSec: Math.round(process.uptime()),
+            serviceActive,
+            transport: ctx.getTransportType?.() ?? null,
+          },
+          migrations: { configSchemaVersion: rawCfg?.configSchemaVersion ?? null },
+          logRing: state.log,
+          auditEntries,
+          config: rawCfg,
+          health: {
+            configValid: !!(loaded.exists && loaded.valid),
+            needsSetup: !!loaded.needsSetup,
+            telemetryEnabled: !!getCfg().telemetry?.enabled,
+            telemetryOk: !!state.telemetry?.ok,
+          },
+        }, opts);
+
+        pushLog('support_bundle_generated', {
+          logs: bundle.meta.counts.logs,
+          audit: bundle.meta.counts.audit,
+          window: bundle.meta.window.sinceMs,
+        }, actor);
+
+        const fn = supportBundleFilename(bundle.meta.generatedAt, bundle.meta.dvhubVersion);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${fn}"`,
+          'Cache-Control': 'no-store',
+        });
+        return res.end(JSON.stringify(bundle, null, 2));
+      } catch (e) {
+        pushLog('support_bundle_error', { error: e.message }, actor);
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // Plan 08-07 Task 3: frontend error reporting endpoint. The browser POSTs

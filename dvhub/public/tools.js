@@ -824,6 +824,45 @@ function renderVpnLog() {
   }).join('');
 }
 
+// T-0113 Tier 1: pull the redacted support bundle and save it. Uses apiFetch
+// (Bearer header — NOT a token-in-URL download, which would leak into history)
+// and the server's Content-Disposition filename. CSP-safe: anchor + click, no
+// inline handlers.
+async function downloadSupportBundle() {
+  const btn = document.getElementById('supportBundleBtn');
+  const result = document.getElementById('supportBundleResult');
+  const win = document.getElementById('supportBundleWindow')?.value || '';
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Erzeuge Bundle…'; }
+  if (result) result.textContent = 'Sammle Logs, System & Health (redigiert)…';
+  try {
+    const path = '/api/support/bundle' + (win ? `?sinceHours=${encodeURIComponent(win)}` : '');
+    const res = await apiFetch(path);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* non-json */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const filename = m ? m[1] : 'dvhub-support.json';
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
+    if (result) result.textContent = `✓ ${filename} (${Math.round(blob.size / 1024)} KB) heruntergeladen — Passwörter/Tokens entfernt, öffentliche IPs maskiert.`;
+  } catch (e) {
+    if (result) result.textContent = 'Fehler: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || 'Support-Bundle erzeugen & herunterladen'; }
+  }
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -854,6 +893,9 @@ function initToolsPage() {
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('dvLogFilter')?.addEventListener('change', () => renderDvSignalLog());
   document.getElementById('dvLogSource')?.addEventListener('change', () => loadDvSignalLog());
+
+  // T-0113 Tier 1: support bundle download
+  document.getElementById('supportBundleBtn')?.addEventListener('click', () => downloadSupportBundle());
 
   // VPN tools
   document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));

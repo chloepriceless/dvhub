@@ -311,6 +311,24 @@
               </div>
             </div>
 
+            <!-- Support-Bundle (T-0113) -->
+            <div class="config-group" data-accent="orange">
+              <div class="config-group-kicker">Support-Bundle</div>
+              <p class="svc-meta">Erzeugt ein <strong>redigiertes</strong> Diagnose-Paket (Logs, System, Health, Konfiguration) zum Teilen mit dem Support. Passw&ouml;rter/Tokens werden entfernt, &ouml;ffentliche IPs maskiert &mdash; LAN-/GX-Adressen bleiben f&uuml;r die Diagnose erhalten. Enth&auml;lt KEINE Geheimnisse.</p>
+              <div class="config-row">
+                <span class="config-row-label">Zeitfenster</span>
+                <select id="supportBundleWindow" class="config-select">
+                  <option value="">Alles im Log-Puffer</option>
+                  <option value="6">Letzte 6 Stunden</option>
+                  <option value="24">Letzte 24 Stunden</option>
+                </select>
+              </div>
+              <div class="svc-actions-row">
+                <button id="supportBundleBtn" class="btn btn-primary btn-small" type="button">Support-Bundle erzeugen &amp; herunterladen</button>
+              </div>
+              <p class="svc-meta" id="supportBundleResult"></p>
+            </div>
+
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker">DV-Signale</div>
@@ -706,7 +724,7 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260601-eos-hebel2"></script>
-  <script src="/tools.js"></script>
+  <script src="/tools.js?v=20260608-t0113"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>
