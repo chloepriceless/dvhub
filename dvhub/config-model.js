@@ -1035,6 +1035,22 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'optimizer',
       groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Genauigkeit/Geschwindigkeit der EOS-Optimierung. 15 Minuten matches EPEX-Day-Ahead seit 2024 \u2014 empfohlen f\u00fcr Direktvermarktung.',
+      path: 'optimizer.eosEmsIntervalSec',
+      label: 'EOS Re-Planungs-Intervall',
+      type: 'select',
+      options: [
+        { value: 0, label: 'Automatisch (an Slot-Aufl\u00f6sung gekoppelt)' },
+        { value: 900, label: '15 Minuten' },
+        { value: 1800, label: '30 Minuten' },
+        { value: 3600, label: '1 Stunde' }
+      ],
+      help: 'Wie oft EOS einen frischen Optimierungslauf startet (ems.interval), ENTKOPPELT von der Slot-Aufl\u00f6sung. \u201eAutomatisch\u201c drosselt 15-min-Slots auf st\u00fcndlich. Ein Lauf dauert ~6 min; 30 Minuten gibt auch langsamer Hardware (z.B. Raspberry-Pi-EOS-Host) Puffer. Muss > Laufdauer sein, sonst stomp.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
       groupDescription: 'Einspeiseverg\u00fctung: Bestimmt wie der Optimizer den Verkaufserl\u00f6s bewertet.',
       path: 'optimizer.tariff.feedInMode',
       label: 'Einspeise-Modus',

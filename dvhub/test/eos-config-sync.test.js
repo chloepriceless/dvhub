@@ -182,6 +182,22 @@ test('pickEmsIntervalSec: stretches at finer slot resolutions', () => {
   assert.equal(pickEmsIntervalSec(7200), 300);
 });
 
+test('pickEmsIntervalSec: operator override decouples ems tick from slot resolution', () => {
+  // 15-min slots BUT operator wants a 30-min re-plan tick → override wins, slots untouched
+  assert.equal(pickEmsIntervalSec(900, 1800), 1800);
+  // override applies regardless of slot resolution
+  assert.equal(pickEmsIntervalSec(3600, 1800), 1800);
+  assert.equal(pickEmsIntervalSec(900, 900), 900);
+  // clamped to [300, 7200]
+  assert.equal(pickEmsIntervalSec(900, 60), 300);
+  assert.equal(pickEmsIntervalSec(900, 99999), 7200);
+  // 0 / non-finite / negative → fall back to the auto value
+  assert.equal(pickEmsIntervalSec(900, 0), 3600);
+  assert.equal(pickEmsIntervalSec(900, undefined), 3600);
+  assert.equal(pickEmsIntervalSec(900, NaN), 3600);
+  assert.equal(pickEmsIntervalSec(900, -5), 3600);
+});
+
 test('buildEosElectricVehicles returns one ev11 with config overrides', () => {
   const def = buildEosElectricVehicles({});
   assert.equal(def.length, 1);

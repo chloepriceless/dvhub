@@ -207,14 +207,23 @@ export function pickGeneticSizing(intervalSec) {
 
 /**
  * EMS tick interval — how often the energy-management loop fires a fresh
- * genetic optimization. At 15-min slot resolution a single run takes ~30-60
- * min, so we slow the ticker to 3600s (= 1 run/hour) so the loop never
- * stomps on itself. Hourly slot resolution keeps the EOS default 300s.
+ * genetic optimization. By default it is derived from (and slowed to suit) the
+ * slot resolution: at 15-min slots a run is heavy, so the auto value is 3600s
+ * (1 run/hour) to keep the loop from stomping on itself.
+ *
+ * Operator override (optimizer.eosEmsIntervalSec, 2026-06-08): DECOUPLE the EMS
+ * tick from the slot resolution so 15-min slots can be re-planned more often
+ * than hourly. A run measures ~6 min on prod, so 30-min ticks (1800s) are safe
+ * and give slower hardware (e.g. a Raspberry-Pi EOS host) comfortable headroom.
+ * Clamped to [300, 7200]; 0 / non-finite → fall back to the auto value.
  *
  * @param {number} intervalSec  the slot resolution from buildEosOptimization
+ * @param {number} [overrideSec] explicit operator ems.interval (optimizer.eosEmsIntervalSec)
  * @returns {number}             ems.interval in seconds
  */
-export function pickEmsIntervalSec(intervalSec) {
+export function pickEmsIntervalSec(intervalSec, overrideSec) {
+  const o = Number(overrideSec);
+  if (Number.isFinite(o) && o > 0) return Math.min(7200, Math.max(300, Math.round(o)));
   if (intervalSec === 900) return 3600;
   if (intervalSec === 1800) return 1800;
   return 300; // hourly — upstream default
@@ -360,7 +369,7 @@ export function createEosConfigSync(ctx) {
     // elecprice.charges_kwh (Bezugs-Aufschlag for grid-import pricing).
     // These hit field-level PUT endpoints (PUT /v1/config/{path}) one value
     // at a time — the section-level shape only works for {device,inverter}.
-    const emsIntervalSec = pickEmsIntervalSec(optimization.interval);
+    const emsIntervalSec = pickEmsIntervalSec(optimization.interval, cfg?.optimizer?.eosEmsIntervalSec);
     // EV optimization is opt-in via cfg.optimizer.eosOptimizeEv (default OFF,
     // operator request 2026-05-29). When OFF, EOS gets max_electric_vehicles=0
     // (geneticparams → electric_vehicle_params=None) so it does NOT schedule EV
