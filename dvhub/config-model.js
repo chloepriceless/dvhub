@@ -2522,7 +2522,17 @@ export function createDefaultConfig() {
       // price. Covers ALL sources (heuristic/MILP/small-market/Stage-2 LEEREN).
       // null = OFF (no floor, prior behavior). Self-consumption setpoints are
       // never gated — only forced exports beyond the threshold.
-      minSellPriceCtKwh: null
+      minSellPriceCtKwh: null,
+      // T-0121: how far ahead to ACTUATE schedule rules from the optimizer/EOS
+      // plan. The plan still covers days (kept for display/forecast), but emitting
+      // rules for >12 h out is pointless — the next (hourly) run recomputes them as
+      // conditions change, so it just churns hundreds of rules. Cap the rule set to
+      // the next N hours; rules beyond are not actuated until they enter the window.
+      ruleHorizonHours: 12,
+      // T-0121 closed-loop: fixed load headroom (W) added to the reg-2704 battery
+      // cap (cap = B + headroom). FIXED (not live load) so the cap only changes on
+      // B change (per slot) → no flash wear on the persistent register.
+      capLoadHeadroomW: 5000
     },
     // evcc integration. Polls evcc /api/state and writes maxDischargeW=holdValueW (default 0 = HOLD)
     // when an EV is charging, releases (-1 = unlimited) when charging stops. Edge-triggered, so it

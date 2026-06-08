@@ -510,10 +510,17 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const slotMin = Number(sol.slotMinutes) > 0 ? Number(sol.slotMinutes) : 15;
     const slotMs = slotMin * 60 * 1000;
     const slotH = slotMin / 60;
+    // T-0121: only ACTUATE rules within a horizon. The plan covers days, but rules
+    // for slots >horizon out get recomputed at the next (hourly) run as conditions
+    // change — emitting them now just churns hundreds of rules. Default 12 h.
+    const acfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
+    const horizonH = Number(acfg.optimizer?.ruleHorizonHours) > 0 ? Number(acfg.optimizer.ruleHorizonHours) : 12;
+    const horizonCutoff = Date.now() + horizonH * 3600 * 1000;
     const out = [];
     for (const r of sol.rows) {
       const ts = new Date(r.ts_utc).getTime();
       if (!Number.isFinite(ts)) continue;
+      if (ts > horizonCutoff) continue; // beyond the actuation horizon — recomputed next run
       const gridW = (typeof r.dvhubSetpointW === 'number') ? r.dvhubSetpointW : null;
       if (gridW === null) continue;
       // Only deliberate EXPORT becomes a forced setpoint. Skip import / hold /

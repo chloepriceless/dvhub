@@ -411,6 +411,39 @@ test('pullGridSetpoints emits only genuine exports, skips import/hold/negative-p
   }
 });
 
+// --- T-0121: pullGridSetpoints caps actuated rules to the horizon ---
+test('pullGridSetpoints caps rules to ruleHorizonHours (no churning far-future rules)', async () => {
+  const now = Date.now();
+  const k0 = new Date(now + 1 * 3600_000).toISOString();          // +1 h  (in horizon)
+  const k1 = new Date(now + 1 * 3600_000 + 900_000).toISOString(); // +1h15 (in horizon, sets slotMinutes=15)
+  const k2 = new Date(now + 20 * 3600_000).toISOString();         // +20 h (BEYOND 12 h horizon → skip)
+  const solution = {
+    solution: { data: {
+      [k0]: { battery1_soc_factor: 0.95, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3500 },
+      [k1]: { battery1_soc_factor: 0.94, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3500 },
+      [k2]: { battery1_soc_factor: 0.93, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3500 },
+    } },
+    prediction: { data: {
+      [k0]: { feed_in_tariff_amt_kwh: 0.14 },
+      [k1]: { feed_in_tariff_amt_kwh: 0.14 },
+      [k2]: { feed_in_tariff_amt_kwh: 0.14 },
+    } },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+    assert.equal(slots.length, 2, 'only the two in-horizon exports are actuated; the +20 h one is dropped');
+    const cutoff = now + 12 * 3600_000;
+    for (const s of slots) assert.ok(s.ts <= cutoff, 'no rule beyond the 12 h horizon');
+  } finally {
+    await mock.close();
+  }
+});
+
 test('pullGridSetpoints returns null when EOS has no solution (404)', async () => {
   const mock = await createMockEos((req, res) => {
     res.writeHead(404, { 'Content-Type': 'application/json' });
