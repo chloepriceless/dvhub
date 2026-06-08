@@ -210,7 +210,7 @@ async function fetchGranularData(startISO, endISO, agg) {
   return body.data || [];
 }
 
-function buildGranularChartData(rows, agg) {
+function buildGranularChartData(rows, agg, epexData = []) {
   // Group telemetry rows by timestamp → { ts, pv_power_w, load_power_w, ... }
   const byTs = new Map();
   for (const r of rows) {
@@ -237,6 +237,24 @@ function buildGranularChartData(rows, agg) {
     const map = GRANULAR_SERIES_MAP[def.id];
     if (!map) { seriesData[def.id] = sorted.map(() => null); continue; }
     seriesData[def.id] = sorted.map(s => map.compute(s));
+  }
+
+  // T-0129: EPEX market price has no per-second source — forward-fill the
+  // 15min/hourly EPEX slots across the granular timestamps as a stepped line.
+  // For each ascending sample, carry the latest slot whose start <= sample ts.
+  if (Array.isArray(epexData) && epexData.length) {
+    const epexSorted = epexData
+      .map(p => ({ ts: Number(p.ts), price: Number(p.ct_kwh) }))
+      .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.price))
+      .sort((a, b) => a.ts - b.ts);
+    if (epexSorted.length) {
+      let ei = 0;
+      seriesData.epex = sorted.map(s => {
+        const t = new Date(s.ts).getTime();
+        while (ei + 1 < epexSorted.length && epexSorted[ei + 1].ts <= t) ei++;
+        return epexSorted[ei].ts <= t ? epexSorted[ei].price : null; // null before the first slot
+      });
+    }
   }
 
   explorerData.labels = labels;
@@ -272,12 +290,19 @@ async function fetchExplorerData() {
   // (5s/10s/15s/30s/1min/5min); legacy slot path for 15min / 1h / day.
   if (GRANULAR_AGG_TO_SECONDS[agg]) {
     try {
-      const rows = await fetchGranularData(startISO, endISO, agg);
+      // T-0129: the market price has no per-second source. Fetch the EPEX price
+      // slots alongside the raw telemetry and forward-fill them as a stepped line
+      // across the granular axis, so the Börsenpreis stays visible at 5s/10s/….
+      const [rows, statusData] = await Promise.all([
+        fetchGranularData(startISO, endISO, agg),
+        apiFetch('/api/status').then(r => r.json()).catch(() => null),
+      ]);
+      const epexData = statusData?.epex?.data || [];
       explorerData.rawSlots = [];
       explorerData.rawFc = null;
-      explorerData.rawEpex = [];
+      explorerData.rawEpex = epexData;
       explorerData.rawSoc = [];
-      buildGranularChartData(rows, agg);
+      buildGranularChartData(rows, agg, epexData);
       renderChart();
       setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg} · ${rangeLabel}).`);
     } catch (e) {
