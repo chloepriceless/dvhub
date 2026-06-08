@@ -492,10 +492,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * curtailment window to free room for otherwise-curtailed PV). We therefore
    * ACTUATE only its deliberate EXPORTs and leave everything else to the plant's
    * safe self-consumption default:
-   *   • Emit a rule ONLY for genuine export slots (net grid ≤ −bandW). Import /
-   *     self-consumption / PV-charge slots are skipped → the plant self-regulates
-   *     at the default setpoint, and we NEVER write a positive (grid-charge)
-   *     value (§14a-safe regardless of what EOS plans).
+   *   • Emit a rule ONLY for slots with a deliberate BATTERY export share (B>0).
+   *     Import / self-consumption / PV-charge AND pure PV-surplus feed-in slots are
+   *     skipped → the plant self-regulates at the self-consumption default (PV →
+   *     house → battery → grid only on real surplus), so a live PV drop never
+   *     drains the battery to the grid (T-0124). We NEVER write a positive
+   *     (grid-charge) value either (§14a-safe regardless of what EOS plans).
    *   • Hard guard — never export at a negative feed-in price (curtail instead +
    *     keep the §51 Förder hours). EOS already curtails internally; this is
    *     defense in depth at the actuation edge.
@@ -538,6 +540,15 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       const loadW = slotH > 0 ? (Number(r.loadWh) || 0) / slotH : 0;
       const pvSurplusW = Math.max(0, pvW - loadW);
       const batteryShareW = Math.max(0, -gridW - pvSurplusW); // -gridW = net export (W)
+      // T-0124 (operator 2026-06-08): a PURE PV-surplus feed-in slot — forecast PV
+      // already covers the planned export, so NO deliberate battery share — gets NO
+      // setpoint at all. Forcing a negative setpoint here would drain the BATTERY
+      // into the grid the moment live PV drops below the forecast (bad weather).
+      // Without a rule the slot falls back to the self-consumption default and the
+      // Victron ESS self-regulates: PV → house → battery → grid only on real
+      // surplus. Only a slot that deliberately exports FROM the battery (B>0) needs
+      // a forced setpoint.
+      if (batteryShareW <= 0) continue;
       out.push({
         ts,
         endTs: ts + slotMs,

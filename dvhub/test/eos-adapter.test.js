@@ -411,6 +411,46 @@ test('pullGridSetpoints emits only genuine exports, skips import/hold/negative-p
   }
 });
 
+// --- T-0124: pure PV-surplus feed-in gets NO setpoint (Victron self-regulates) ---
+test('pullGridSetpoints skips pure PV-surplus (B=0), emits only battery-export (B>0)', async () => {
+  const solution = {
+    generated_at: '2026-06-06T20:00:00Z',
+    valid_from: '2026-06-06T20:00:00Z',
+    valid_until: '2026-06-06T20:30:00Z',
+    solution: {
+      data: {
+        // export 1000Wh/0.25h = -4000W, but forecast PV surplus fully covers it → B=0 → SKIP
+        '2026-06-06T20:00:00Z': { battery1_soc_factor: 0.60, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 1000 },
+        // export 4000Wh/0.25h = -16000W, PV surplus only 1000W → B=15000 → EMIT
+        '2026-06-06T20:15:00Z': { battery1_soc_factor: 0.90, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 4000 },
+      },
+    },
+    prediction: {
+      data: {
+        // PV surplus (1500-250)/0.25 = 5000W ≥ 4000W export → battery share 0
+        '2026-06-06T20:00:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 1500, loadforecast_energy_wh: 250 },
+        // PV surplus (250-0)/0.25 = 1000W ≪ 16000W export → battery share 15000
+        '2026-06-06T20:15:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 250, loadforecast_energy_wh: 0 },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+    assert.equal(slots.length, 1, 'pure PV-surplus slot skipped — only the deliberate battery export is emitted');
+    assert.equal(slots[0].ts, new Date('2026-06-06T20:15:00Z').getTime());
+    assert.equal(slots[0].powerW, -16000);
+    assert.ok(slots[0].batteryShareW > 0, 'emitted slot carries a deliberate battery share');
+    assert.equal(slots[0].batteryShareW, 15000, 'B = |gridW| - forecast PV surplus = 16000 - 1000');
+  } finally {
+    await mock.close();
+  }
+});
+
 // --- T-0121: pullGridSetpoints caps actuated rules to the horizon ---
 test('pullGridSetpoints caps rules to ruleHorizonHours (no churning far-future rules)', async () => {
   const now = Date.now();
