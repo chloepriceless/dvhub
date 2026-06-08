@@ -754,35 +754,40 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     });
   }
 
-  // --- Per-bar colors & alpha ---
-  chartSelectionState.baseBarColors = null; // will be set after barColors built
-  const barColors = data.map((d, i) => {
-    const val = Number(d.ct_kwh);
-    const ts = Number(d.ts);
-    const isPast = ts < nowTs;
-    const isOptimizer = optimizerSlots.has(ts);
-    const isAutomation = automationSlots.has(ts);
-    const isUserSlot = userSlots.has(ts);
-    const isHighPos = highHighlights.has(i);
-    const isHighNeg = lowHighlights.has(i);
-    let color = isOptimizer ? chartOptimizer
-      : isAutomation ? chartAutomation
-      : isUserSlot ? chartUserSlot
-      : isHighNeg ? chartNegativeHighlight
-      : isHighPos ? chartPositiveHighlight
-      : (val < 0 ? chartNegative : chartPositive);
-    // Apply alpha for past bars
-    if (isPast) {
-      // Convert hex to rgba with 0.30 alpha for past bars
-      const r = parseInt(color.slice(1,3), 16);
-      const g = parseInt(color.slice(3,5), 16);
-      const b = parseInt(color.slice(5,7), 16);
-      color = `rgba(${r},${g},${b},0.30)`;
-    }
-    return color;
-  });
+  // T-0128: parse a #rgb / #rrggbb hex (or pass through an existing rgb/rgba
+  // string) into an rgba() with the given alpha. Used for the energy-bar
+  // overlay bands and slot highlights.
+  const hexToRgba = (hex, alpha) => {
+    if (typeof hex !== 'string') return `rgba(148,163,184,${alpha})`;
+    if (hex.startsWith('rgb')) return hex; // already a colour string — leave as-is
+    let h = hex.replace('#', '').trim();
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+    if (h.length < 6) return `rgba(148,163,184,${alpha})`;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  };
 
-  chartSelectionState.baseBarColors = [...barColors];
+  // --- Price LINE styling (T-0128: Börsenpreis als Linie statt Balken) ---
+  // Per-point highlight dots mark the day's most valuable (high) slots and its
+  // negative-price (low) slots; the line itself is one colour and negative
+  // windows are tinted full-height by the negativeZone plugin. The past portion
+  // of the line is dimmed so the "JETZT"-marker reads as the pivot between the
+  // realised energy bars (left) and the forecast lines (right).
+  chartSelectionState.baseBarColors = null;
+  const pricePointRadius = data.map((d, i) => (highHighlights.has(i) || lowHighlights.has(i)) ? 3.5 : 0);
+  const pricePointColors = data.map((d, i) => {
+    if (lowHighlights.has(i)) return chartNegativeHighlight;   // negative-price slot
+    if (highHighlights.has(i)) return chartPositiveHighlight;  // most valuable slot
+    return chartPositive;
+  });
+  const pricePastColor = hexToRgba(chartPositive, 0.4);
+  const priceSegmentColor = (segCtx) => {
+    const idx = segCtx?.p0DataIndex;
+    const ts = Number(data[idx]?.ts);
+    return (Number.isFinite(ts) && ts < nowTs) ? pricePastColor : chartPositive;
+  };
 
   const hasSolarFc = solarFc.some(v => v != null && v > 0);
   const hasImport = importPrices.some(v => v != null);
@@ -791,16 +796,19 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const datasets = [
     {
       label: 'Börsenpreis',
-      type: 'bar',
+      type: 'line',
       data: prices,
-      backgroundColor: barColors,
-      borderColor: barColors,
-      borderWidth: 0,
-      // Aurora mockup spacing: 0.4 px gap per 6.25 px slot ≈ 6 % gap, with
-      // tiny corner rounding to match rx="0.6" in the SVG mockup.
-      barPercentage: 0.94,
-      categoryPercentage: 1.0,
-      borderRadius: 1,
+      borderColor: chartPositive,
+      backgroundColor: chartPositive,
+      borderWidth: 2,
+      pointRadius: pricePointRadius,
+      pointHoverRadius: 4,
+      pointBackgroundColor: pricePointColors,
+      pointBorderColor: pricePointColors,
+      tension: 0,
+      fill: false,
+      spanGaps: true,
+      segment: { borderColor: priceSegmentColor },
       yAxisID: 'y',
       order: 2
     }
@@ -920,71 +928,44 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     }
   }
 
-  // --- Actual PV production + Grid power from history slots ---
+  // --- Realised energy as stacked bars (T-0128) ---
+  // Christin: the past portion of the chart should show the Historie-style
+  // energy view — PV / Import / Akku / Export / Last as stacked bars up to
+  // the JETZT-marker; the future stays line-only (forecast overlays above).
+  // Supply stacks above zero (PV, Import, Akku-Entladung), demand below zero
+  // (Last, Export, Akku-Ladung). Energy per 15-min slot (kWh) → average kW.
   if (Array.isArray(historySlots) && historySlots.length > 0) {
     const slotMap = new Map(historySlots.map(s => [new Date(s.ts).getTime(), s]));
-    const pvActual = data.map(d => {
-      const slot = slotMap.get(Number(d.ts));
-      return slot ? (slot.pvKwh * 4) : null; // kWh per 15min → kW average
-    });
-    const gridActual = data.map(d => {
-      const slot = slotMap.get(Number(d.ts));
+    const pastKw = (fn) => data.map(d => {
+      const ts = Number(d.ts);
+      if (!(ts < nowTs)) return null;          // future stays line-only
+      const slot = slotMap.get(ts);
       if (!slot) return null;
-      const imp = Number(slot.importKwh || 0);
-      const exp = Number(slot.exportKwh || 0);
-      return (imp - exp) * 4; // kW (positive = import, negative = export)
+      const v = fn(slot);
+      return Number.isFinite(v) ? v : null;
     });
-    const loadActual = data.map(d => {
-      const slot = slotMap.get(Number(d.ts));
-      return slot ? (slot.loadKwh * 4) : null;
-    });
-
-    // Render Ist-lines whenever any slot has data (not just > 0) — at night PV
-    // is legitimately 0 W and the line still belongs on the chart so it's
-    // visible in the legend and connects smoothly when the sun rises.
-    if (pvActual.some(v => v != null)) {
+    const kw = (x) => Number(x || 0) * 4;       // kWh per 15min → kW average
+    const energyBars = [
+      { label: 'PV',     data: pastKw(s => kw(s.pvKwh)),                                color: cssVar('--yellow', '#f5c451') },
+      { label: 'Import', data: pastKw(s => kw(s.importKwh)),                            color: cssVar('--pink', '#ff7ac6') },
+      { label: 'Akku',   data: pastKw(s => kw(s.batteryDischargeKwh) - kw(s.batteryChargeKwh)), color: cssVar('--cyan', '#34dbff') },
+      { label: 'Export', data: pastKw(s => -kw(s.exportKwh)),                           color: '#34d399' },
+      { label: 'Last',   data: pastKw(s => -kw(s.loadKwh)),                             color: cssVar('--chart-axis', '#9ca3af') }
+    ];
+    for (const b of energyBars) {
+      if (!b.data.some(v => v != null)) continue;
       datasets.push({
-        label: '☀ PV Ist',
-        type: 'line',
-        data: pvActual,
-        borderColor: chartPvIstYellow,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        fill: false,
-        spanGaps: true,
-        yAxisID: 'kw',
-        order: 0
-      });
-    }
-    if (loadActual.some(v => v != null)) {
-      datasets.push({
-        label: '🏠 Verbrauch',
-        type: 'line',
-        data: loadActual,
-        borderColor: chartLoadActual,
-        borderWidth: 1.5,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        fill: false,
-        spanGaps: true,
-        yAxisID: 'kw',
-        order: 0
-      });
-    }
-    if (gridActual.some(v => v != null)) {
-      datasets.push({
-        label: '🔌 Netz',
-        type: 'line',
-        data: gridActual,
-        borderColor: chartGridLine,
-        borderWidth: 1.5,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        fill: false,
-        spanGaps: true,
-        yAxisID: 'kw',
-        order: 0
+        label: b.label,
+        type: 'bar',
+        data: b.data,
+        backgroundColor: hexToRgba(b.color, 0.8),
+        borderColor: b.color,
+        borderWidth: 0,
+        barPercentage: 0.9,
+        categoryPercentage: 1.0,
+        stack: 'energie',
+        yAxisID: 'energy',
+        order: 10
       });
     }
   }
@@ -1087,6 +1068,67 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (segStart != null) flush(segStart, data.length - 1);
   }
 
+  // --- Schedule slot overlays as background bands (T-0128) ---
+  // Replaces the old per-bar colouring: contiguous runs of Optimizer / Automatik
+  // / Plan slots are drawn as tinted boxes behind the data, exactly like the
+  // negative-price windows above.
+  const slotOverlayAnnotations = {};
+  {
+    const overlayDefs = [
+      { set: optimizerSlots, color: chartOptimizer, key: 'optSlot' },
+      { set: automationSlots, color: chartAutomation, key: 'autoSlot' },
+      { set: userSlots, color: chartUserSlot, key: 'userSlot' }
+    ];
+    for (const def of overlayDefs) {
+      if (!def.set || def.set.size === 0) continue;
+      let segStart = null;
+      const flush = (start, end) => {
+        slotOverlayAnnotations[`${def.key}_${start}`] = {
+          type: 'box',
+          xMin: start - 0.5,
+          xMax: end + 0.5,
+          backgroundColor: hexToRgba(def.color, 0.14),
+          borderColor: hexToRgba(def.color, 0.5),
+          borderWidth: 1,
+          drawTime: 'beforeDatasetsDraw'
+        };
+      };
+      for (let i = 0; i < data.length; i++) {
+        if (def.set.has(Number(data[i].ts))) {
+          if (segStart == null) segStart = i;
+        } else if (segStart != null) { flush(segStart, i - 1); segStart = null; }
+      }
+      if (segStart != null) flush(segStart, data.length - 1);
+    }
+  }
+
+  // --- kW-axis bounds: the energy bars are stacked, so the axis must span the
+  // per-slot positive sum (PV+Import+Akku⁺) and negative sum (Last+Export+Akku⁻),
+  // plus any forecast-line peak. ---
+  const kwAxisBounds = (() => {
+    const energieDs = datasets.filter(d => d.stack === 'energie');
+    const kwLineDs = datasets.filter(d => d.yAxisID === 'kw' && d.stack !== 'energie');
+    let posMax = 1;
+    let negMin = 0;
+    for (let i = 0; i < data.length; i++) {
+      let pos = 0;
+      let neg = 0;
+      for (const d of energieDs) {
+        const v = Number(d.data[i]);
+        if (Number.isFinite(v)) { if (v >= 0) pos += v; else neg += v; }
+      }
+      if (pos > posMax) posMax = pos;
+      if (neg < negMin) negMin = neg;
+    }
+    for (const d of kwLineDs) {
+      for (const raw of d.data) {
+        const v = Number(raw);
+        if (Number.isFinite(v) && v > posMax) posMax = v;
+      }
+    }
+    return { max: posMax * 1.15, min: negMin * 1.15 };
+  })();
+
   // --- Chart.js config ---
   const config = {
     type: 'bar',
@@ -1134,6 +1176,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               if (dp.dataset?.label?.includes('Forecast') && dp.raw != null) {
                 parts.push(`PV Fc: ${Number(dp.raw).toFixed(1)} kW`);
               }
+              // Realised-energy stacked bars (T-0128): show magnitude in kW.
+              if (dp.dataset?.stack === 'energie' && dp.raw != null && Number(dp.raw) !== 0) {
+                parts.push(`${dp.dataset.label}: ${Math.abs(Number(dp.raw)).toFixed(1)} kW`);
+              }
             }
             tt.innerHTML = parts.map(p => escapeHtml(p)).join(' <span class="tooltip-separator">|</span> ');
             tt.style.display = 'block';
@@ -1146,6 +1192,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         annotation: {
           annotations: {
+            ...slotOverlayAnnotations,
             ...dayBoundaryAnnotations,
             ...negWindowAnnotations,
             nowLine: {
@@ -1231,6 +1278,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       scales: {
         x: {
           type: 'category',
+          stacked: true,
           ticks: {
             color: chartAxis,
             font: { size: 10 },
@@ -1261,9 +1309,18 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
           title: { display: true, text: 'kW', color: fcColor, font: { size: 11 } },
           ticks: { color: fcColor + '90', font: { size: 10 } },
           grid: { display: false },
-          beginAtZero: true,
-          min: 0,
-          suggestedMax: Math.max(...datasets.filter(d => d.yAxisID === 'kw').flatMap(d => d.data).filter(v => v != null && Number.isFinite(v)), 1) * 1.15
+          min: kwAxisBounds.min,
+          max: kwAxisBounds.max
+        },
+        // Hidden axis for the stacked realised-energy bars (T-0128). Shares the
+        // exact min/max of the visible 'kw' axis so a value sits at the same
+        // pixel on both — the energy bars and the forecast lines stay aligned.
+        energy: {
+          position: 'right',
+          stacked: true,
+          display: false,
+          min: kwAxisBounds.min,
+          max: kwAxisBounds.max
         }
       }
     }
@@ -1272,29 +1329,38 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // Set canvas container height
   container.style.height = '380px';
 
+  // x-scale helper: half the category width in pixels (for full-height bands
+  // now that the price is a line, not bars).
+  const halfCategoryPx = (chart) => {
+    const xScale = chart.scales.x;
+    if (!xScale) return 0;
+    if (data.length > 1) return Math.abs(xScale.getPixelForValue(1) - xScale.getPixelForValue(0)) / 2;
+    return (chart.chartArea.right - chart.chartArea.left) / 2;
+  };
+
   // Negative zone plugin - highlights negative-price time slots with a full-height
   // red tint and draws a dashed zero line when negative values are visible.
   const negativeZonePlugin = {
     id: 'negativeZone',
     beforeDatasetsDraw(chart) {
       const yScale = chart.scales.y;
+      const xScale = chart.scales.x;
       const ctx = chart.ctx;
       const { top, bottom, left, right } = chart.chartArea;
+      if (!xScale) return;
 
-      // Full-height red tint behind each negative bar
-      const ds = chart.data.datasets.findIndex(d => d.label === 'Börsenpreis');
-      if (ds >= 0) {
-        const meta = chart.getDatasetMeta(ds);
-        ctx.save();
-        ctx.fillStyle = chartNegativeTint;
-        meta.data.forEach((bar, i) => {
-          const val = Number(data[i]?.ct_kwh);
-          if (val < 0) {
-            ctx.fillRect(bar.x - bar.width / 2, top, bar.width, bottom - top);
-          }
-        });
-        ctx.restore();
+      // Full-height red tint behind each negative-price slot (x-scale based,
+      // since the price is now a line rather than per-slot bars).
+      const halfW = halfCategoryPx(chart);
+      ctx.save();
+      ctx.fillStyle = chartNegativeTint;
+      for (let i = 0; i < data.length; i++) {
+        if (Number(data[i]?.ct_kwh) < 0) {
+          const cx = xScale.getPixelForValue(i);
+          ctx.fillRect(cx - halfW, top, halfW * 2, bottom - top);
+        }
       }
+      ctx.restore();
 
       // Dashed zero line when negative values exist
       if (yScale && yScale.min < 0) {
@@ -1314,35 +1380,39 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     }
   };
 
-  // Selection overlay plugin - draws highlight over selected bars
+  // Selection overlay plugin - draws full-height highlight bands over the
+  // selected slots (x-scale based, works for future slots that have no bars).
   const selectionHighlightPlugin = {
     id: 'selectionHighlight',
     afterDatasetsDraw(chart) {
       const selected = new Set(getSelectedChartIndices());
       if (!selected.size) return;
-      const ds = chart.data.datasets.findIndex(d => d.label === "Börsenpreis");
-      if (ds < 0) return;
-      const meta = chart.getDatasetMeta(ds);
+      const xScale = chart.scales.x;
+      if (!xScale) return;
       const ctx = chart.ctx;
-      // Dim all non-selected bars
-      meta.data.forEach((bar, i) => {
+      const { top, bottom } = chart.chartArea;
+      const halfW = halfCategoryPx(chart);
+      // Dim all non-selected slots
+      ctx.save();
+      ctx.fillStyle = chartSelectionDim;
+      for (let i = 0; i < data.length; i++) {
         if (!selected.has(i)) {
-          ctx.save();
-          ctx.fillStyle = chartSelectionDim;
-          ctx.fillRect(bar.x - bar.width / 2, chart.chartArea.top, bar.width, chart.chartArea.bottom - chart.chartArea.top);
-          ctx.restore();
+          const cx = xScale.getPixelForValue(i);
+          ctx.fillRect(cx - halfW, top, halfW * 2, bottom - top);
         }
-      });
-      // Highlight selected bars with bright border
-      meta.data.forEach((bar, i) => {
+      }
+      ctx.restore();
+      // Outline the selected slots
+      ctx.save();
+      ctx.strokeStyle = chartSelectionStroke;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < data.length; i++) {
         if (selected.has(i)) {
-          ctx.save();
-          ctx.strokeStyle = chartSelectionStroke;
-          ctx.lineWidth = 2;
-          ctx.strokeRect(bar.x - bar.width / 2, bar.y, bar.width, bar.base - bar.y);
-          ctx.restore();
+          const cx = xScale.getPixelForValue(i);
+          ctx.strokeRect(cx - halfW, top, halfW * 2, bottom - top);
         }
-      });
+      }
+      ctx.restore();
     }
   };
   config.plugins = [negativeZonePlugin, selectionHighlightPlugin, ...(config.plugins || [])];
@@ -1901,8 +1971,13 @@ function renderDashboardStatus(status) {
   });
 
   safeRender('dashboard.price-chart', () => {
-    // Fetch forecast + history slots for chart overlay
-    const today = new Date(status.now).toISOString().slice(0, 10);
+    // Fetch forecast + history slots for chart overlay. T-0128: the past-12h
+    // energy bars can reach into yesterday (window = now−12h … now+24h), so we
+    // fetch both yesterday and today and merge the slots.
+    const nowMs = Number(status.now);
+    const dayStr = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const today = dayStr(nowMs);
+    const yesterday = dayStr(nowMs - 24 * 3600 * 1000);
     const activeRules = (status.schedule?.rules || []).filter(r => r.enabled !== false);
     // Optimizer/EOS rules carry an exact 15-min slotTs → highlight the precise
     // slot (no time-of-day cross-day false matches). Manual user rules have no
@@ -1927,9 +2002,11 @@ function renderDashboardStatus(status) {
       : null;
     Promise.all([
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
+      apiFetch(`/api/history/summary?view=day&date=${yesterday}`).then(r => r.json()).catch(() => null),
       apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
-    ]).then(([fc, hist]) => {
-      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
+    ]).then(([fc, histYesterday, histToday]) => {
+      const mergedSlots = [...(histYesterday?.slots || []), ...(histToday?.slots || [])];
+      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, mergedSlots, userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     }).catch(() => {
       drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     });
