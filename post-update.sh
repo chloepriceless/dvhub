@@ -9,6 +9,8 @@ APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
+CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
+DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Dieses Skript muss als root ausgeführt werden." >&2
@@ -19,7 +21,7 @@ echo "DVhub post-update (idempotent)"
 
 # ── 1. Pakete ──
 NEEDED_PKGS=""
-for pkg in openvpn wireguard-tools strongswan; do
+for pkg in openvpn wireguard-tools strongswan autossh openssh-client; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi
@@ -207,6 +209,22 @@ if [[ "$SERVICE_CHANGED" -eq 1 ]]; then
   systemctl daemon-reload
 fi
 echo "  systemd Service: OK"
+
+# ── 9. Support-Provisioning (T-0113 Tier 3, idempotent) ──
+# Ensure the reverse-SSH support-tunnel prerequisites (appliance-id, relay
+# keypair, hostkey pin, relay sidecar) and reconcile the dvhub-support login user
+# to the config flag support.localUser.enabled. Shared with install.sh via the
+# same support-provision.sh so the two never drift. Runs as root (this hook is
+# ExecStartPre with '+'). NON-FATAL — a provisioning hiccup must never block boot.
+if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
+  echo "  Support-Provisioning (T-0113)..."
+  if ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \
+         bash "$INSTALL_DIR/support-provision.sh" ); then
+    echo "  Support-Provisioning: OK"
+  else
+    echo "  WARN: Support-Provisioning fehlgeschlagen (non-fatal). Fern-Support ggf. bis zum nächsten Lauf eingeschränkt." >&2
+  fi
+fi
 
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"

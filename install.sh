@@ -13,6 +13,12 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
 DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
+# T-0113 Tier 3: remote-support readiness. Default ON (opt-out) — creates the
+# dvhub-support login user + deposits the support pubkey, so the customer CAN
+# request remote help. Grants NOTHING on its own: a supporter only reaches the
+# box while the customer holds a tunnel open (UI button). Disable with
+# --no-support-user (no user, no key, no remote support possible).
+SUPPORT_LOCAL_USER="${SUPPORT_LOCAL_USER:-1}"
 
 function parse_branch_from_installer_url() {
   local url="${1:-}"
@@ -224,6 +230,11 @@ while [[ $# -gt 0 ]]; do
       EOS_INSTALL=1
       shift
       ;;
+    --no-support-user)
+      # T-0113: opt out of the dvhub-support remote-support login user.
+      SUPPORT_LOCAL_USER=0
+      shift
+      ;;
     *)
       echo "Unbekannter Parameter: $1" >&2
       exit 1
@@ -248,7 +259,7 @@ fi
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "$0" "$@"
+    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR,SUPPORT_LOCAL_USER bash "$0" "$@"
   fi
   echo "Dieses Skript muss als root ausgeführt werden." >&2
   exit 1
@@ -267,7 +278,9 @@ apt-get update
 # but NOT ensurepip — so `python3 -m venv <dir>` fails until python3-venv is
 # present (T-0118: prod only worked because the package happened to be installed).
 # Distro-generic name pulls python3.11-venv@Debian12 / python3.12-venv@Ubuntu24.
-apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan python3-venv python3-pip
+# autossh + openssh-client: T-0113 reverse-SSH support tunnel (autossh self-heals
+# the outbound tunnel; ssh-keygen from openssh-client mints the relay keypair).
+apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan python3-venv python3-pip autossh openssh-client
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
@@ -617,6 +630,12 @@ if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
         c.apiToken = crypto.randomBytes(24).toString('hex');
         changed = true;
       }
+      // T-0113: persist the support-user opt-out choice so the UI + post-update
+      // reconcile consistently. '1' => remote-support ready (default), '0' => off.
+      const wantSupportUser = '$SUPPORT_LOCAL_USER' !== '0';
+      c.support = c.support || {};
+      c.support.localUser = c.support.localUser || {};
+      if (c.support.localUser.enabled === undefined) { c.support.localUser.enabled = wantSupportUser; changed = true; }
       if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
     } catch {}
   "
@@ -649,6 +668,17 @@ if command -v psql >/dev/null 2>&1; then
     fi
     systemctl reload postgresql 2>/dev/null || true
   fi
+fi
+
+# T-0113 Tier 3: provision the support-tunnel prerequisites (appliance-id, relay
+# keypair, hostkey pin, relay sidecar, optional dvhub-support login user). Shared
+# with post-update.sh so they never drift. Non-fatal — a provisioning hiccup must
+# never abort the core install.
+if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
+  echo "[6b/7] Support-Provisioning (T-0113)"
+  ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" SUPPORT_LOCAL_USER="$SUPPORT_LOCAL_USER" \
+      bash "$INSTALL_DIR/support-provision.sh" ) \
+    || echo "  Support: Provisioning fehlgeschlagen (non-fatal) — Fern-Support ggf. erst nach dem nächsten Neustart bereit." >&2
 fi
 
 echo "[7/7] systemd Service einrichten"
@@ -770,3 +800,11 @@ echo "DVhub nutzt eine externe Betriebs-Config und ein separates Herstellerprofi
 echo "Technische Register und Victron-spezifische Kommunikationswerte liegen in ${CONFIG_DIR}/hersteller/victron.json."
 echo "Restart-Button und Health-Check sind über die Einstellungen aktiv."
 echo "Die Telemetrie-Daten werden in PostgreSQL gespeichert und ab dem ersten Start automatisch erfasst."
+echo
+if [[ "$SUPPORT_LOCAL_USER" != "0" ]]; then
+  echo "Fern-Support: Bereitschaft AKTIV (Login-User 'dvhub-support', kein sudo) — abschaltbar mit --no-support-user."
+  echo "  Der Support kommt NUR rein, wenn DU in den Einstellungen einen Tunnel öffnest (zeitbegrenzt, abbrechbar)."
+  echo "  Box-Kennung (appliance-id): $(cat "${DATA_DIR}/appliance-id" 2>/dev/null || echo '<wird beim ersten Start erzeugt>')"
+else
+  echo "Fern-Support: DEAKTIVIERT (--no-support-user) — kein dvhub-support-User, kein Fern-Zugang. Nachträglich in den Einstellungen aktivierbar."
+fi

@@ -98,6 +98,15 @@ Der Installer:
 - **Stable-Channel** (Standard): checkt den neuesten Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
 - Update-Channel ist nachträglich über die Einstellungen umschaltbar
+- legt **standardmäßig** einen Fern-Support-Login-User `dvhub-support` an (Gruppe `dvhub`, **kein sudo**) und hinterlegt den öffentlichen Support-Schlüssel — als Bereitschaft für Fern-Diagnose. **Wichtig:** Das gibt dem Support **keinen** Zugriff. Erreichbar ist die Box nur, solange **du** in den Einstellungen aktiv einen zeitbegrenzten Support-Tunnel öffnest (jederzeit abbrechbar). Abschaltbar mit `--no-support-user` (kein User, kein Schlüssel, kein Fern-Support) — auch nachträglich in den Einstellungen umschaltbar.
+
+**Ohne Fern-Support-User (Opt-out):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash -s -- --no-support-user
+```
+
+> Flags sind kombinierbar, z. B. `--channel dev --no-support-user`.
 
 Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten Aufruf automatisch den Setup-Assistenten.
 
