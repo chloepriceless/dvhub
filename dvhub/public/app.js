@@ -46,6 +46,14 @@ function isSmallMarketAutomationRule(rule) {
   return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
     || (typeof rule.id === 'string' && rule.id.startsWith(SMA_ID_PREFIX));
 }
+// Optimizer/EOS rules — same detection the rule-table badge uses (source
+// 'forecast_optimizer' or id prefix 'opt-'). These carry an exact slotTs so
+// the Börsenchart can highlight the precise 15-min slot in the Optimizer tone.
+function isOptimizerRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === FORECAST_OPTIMIZER_SOURCE
+    || (typeof rule.id === 'string' && rule.id.startsWith(OPT_ID_PREFIX));
+}
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
@@ -618,7 +626,7 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 
 let priceChartInstance = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null) {
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = []) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -665,6 +673,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const chartNegative = cssVar('--chart-negative', '#ef4444');
   const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
   const chartUserSlot = cssVar('--schedule-user-cyan', '#56d4e0');
+  // Optimizer/EOS rule highlight — same Aurora --violet token the
+  // "Optimizer" rule-table badge uses, so chart and badge stay in lockstep
+  // across light/dark themes.
+  const chartOptimizer = cssVar('--violet', '#a78bff');
   const chartPositiveHighlight = cssVar('--chart-positive-highlight', '#a8f000');
   const chartNegativeHighlight = cssVar('--chart-negative-highlight', '#ff7a59');
   const chartImport = cssVar('--chart-import', '#22c55e');
@@ -701,6 +713,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const comparisonByTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const userSlots = new Set((userSlotTimestamps || []).map(Number));
+  const optimizerSlots = new Set((optimizerSlotTimestamps || []).map(Number));
   const vals = data.map((d) => Number(d.ct_kwh) / 100);
   const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
 
@@ -747,11 +760,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     const val = Number(d.ct_kwh);
     const ts = Number(d.ts);
     const isPast = ts < nowTs;
+    const isOptimizer = optimizerSlots.has(ts);
     const isAutomation = automationSlots.has(ts);
     const isUserSlot = userSlots.has(ts);
     const isHighPos = highHighlights.has(i);
     const isHighNeg = lowHighlights.has(i);
-    let color = isAutomation ? chartAutomation
+    let color = isOptimizer ? chartOptimizer
+      : isAutomation ? chartAutomation
       : isUserSlot ? chartUserSlot
       : isHighNeg ? chartNegativeHighlight
       : isHighPos ? chartPositiveHighlight
@@ -1888,8 +1903,16 @@ function renderDashboardStatus(status) {
   safeRender('dashboard.price-chart', () => {
     // Fetch forecast + history slots for chart overlay
     const today = new Date(status.now).toISOString().slice(0, 10);
-    const userSlotTimestamps = (status.schedule?.rules || [])
-      .filter(r => r.enabled !== false && !isSmallMarketAutomationRule(r))
+    const activeRules = (status.schedule?.rules || []).filter(r => r.enabled !== false);
+    // Optimizer/EOS rules carry an exact 15-min slotTs → highlight the precise
+    // slot (no time-of-day cross-day false matches). Manual user rules have no
+    // slotTs, so they keep the HH:MM-vs-epex matching below.
+    const optimizerSlotTimestamps = activeRules
+      .filter(isOptimizerRule)
+      .map(r => Number(r.slotTs))
+      .filter(Number.isFinite);
+    const userSlotTimestamps = activeRules
+      .filter(r => !isSmallMarketAutomationRule(r) && !isOptimizerRule(r))
       .flatMap(r => {
         const epexData = status.epex?.data || [];
         return epexData.filter(s => {
@@ -1906,9 +1929,9 @@ function renderDashboardStatus(status) {
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
       apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
     ]).then(([fc, hist]) => {
-      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes);
+      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, hist?.slots || [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     }).catch(() => {
-      drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes);
+      drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     });
     {
       const epd = status.epex?.data || [];
