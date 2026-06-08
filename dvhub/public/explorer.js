@@ -210,7 +210,7 @@ async function fetchGranularData(startISO, endISO, agg) {
   return body.data || [];
 }
 
-function buildGranularChartData(rows, agg, epexData = []) {
+function buildGranularChartData(rows, agg, epexData = [], fcData = null) {
   // Group telemetry rows by timestamp → { ts, pv_power_w, load_power_w, ... }
   const byTs = new Map();
   for (const r of rows) {
@@ -239,23 +239,44 @@ function buildGranularChartData(rows, agg, epexData = []) {
     seriesData[def.id] = sorted.map(s => map.compute(s));
   }
 
-  // T-0129: EPEX market price has no per-second source — forward-fill the
-  // 15min/hourly EPEX slots across the granular timestamps as a stepped line.
-  // For each ascending sample, carry the latest slot whose start <= sample ts.
-  if (Array.isArray(epexData) && epexData.length) {
-    const epexSorted = epexData
-      .map(p => ({ ts: Number(p.ts), price: Number(p.ct_kwh) }))
-      .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.price))
-      .sort((a, b) => a.ts - b.ts);
-    if (epexSorted.length) {
-      let ei = 0;
-      seriesData.epex = sorted.map(s => {
-        const t = new Date(s.ts).getTime();
-        while (ei + 1 < epexSorted.length && epexSorted[ei + 1].ts <= t) ei++;
-        return epexSorted[ei].ts <= t ? epexSorted[ei].price : null; // null before the first slot
-      });
-    }
+  // T-0129: overlay series have no per-second source. Fill them onto the granular
+  // axis from their coarse sources — same series IDs + shapes as buildChartData:
+  //   marketCt (Börsenpreis) ← EPEX slots, forward-filled (stepped, 15min/hourly)
+  //   pvFc (PV Forecast) / consFc (Lastvorhersage) ← forecast, linear-interpolated
+  const tsList = sorted.map(s => new Date(s.ts).getTime());
+
+  const epexSorted = (Array.isArray(epexData) ? epexData : [])
+    .map(p => ({ ts: Number(p.ts), price: Number(p.ct_kwh) }))
+    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.price))
+    .sort((a, b) => a.ts - b.ts);
+  if (epexSorted.length) {
+    let ei = 0;
+    seriesData.marketCt = tsList.map(t => {
+      while (ei + 1 < epexSorted.length && epexSorted[ei + 1].ts <= t) ei++;
+      return epexSorted[ei].ts <= t ? epexSorted[ei].price : null; // null before the first slot
+    });
   }
+
+  function interpol(arr, ts) {
+    if (!arr.length) return null;
+    if (ts <= arr[0].ts) return arr[0].v;
+    if (ts >= arr[arr.length - 1].ts) return arr[arr.length - 1].v;
+    for (let j = 0; j < arr.length - 1; j++) {
+      if (ts >= arr[j].ts && ts <= arr[j + 1].ts) {
+        const r = (ts - arr[j].ts) / (arr[j + 1].ts - arr[j].ts);
+        return arr[j].v + r * (arr[j + 1].v - arr[j].v);
+      }
+    }
+    return null;
+  }
+  const fcSolarArr = (fcData?.solar || [])
+    .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
+    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
+  const fcConsArr = (fcData?.consumption || [])
+    .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
+    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
+  if (fcSolarArr.length) seriesData.pvFc = tsList.map(t => interpol(fcSolarArr, t));
+  if (fcConsArr.length) seriesData.consFc = tsList.map(t => interpol(fcConsArr, t));
 
   explorerData.labels = labels;
   explorerData.seriesData = seriesData;
@@ -293,16 +314,17 @@ async function fetchExplorerData() {
       // T-0129: the market price has no per-second source. Fetch the EPEX price
       // slots alongside the raw telemetry and forward-fill them as a stepped line
       // across the granular axis, so the Börsenpreis stays visible at 5s/10s/….
-      const [rows, statusData] = await Promise.all([
+      const [rows, statusData, fcData] = await Promise.all([
         fetchGranularData(startISO, endISO, agg),
         apiFetch('/api/status').then(r => r.json()).catch(() => null),
+        apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
       ]);
       const epexData = statusData?.epex?.data || [];
       explorerData.rawSlots = [];
-      explorerData.rawFc = null;
+      explorerData.rawFc = fcData;
       explorerData.rawEpex = epexData;
       explorerData.rawSoc = [];
-      buildGranularChartData(rows, agg, epexData);
+      buildGranularChartData(rows, agg, epexData, fcData);
       renderChart();
       setStatus(`${rows.length.toLocaleString('de-DE')} Telemetry-Punkte geladen (${agg} · ${rangeLabel}).`);
     } catch (e) {
