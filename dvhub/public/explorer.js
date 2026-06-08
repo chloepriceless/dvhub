@@ -270,20 +270,13 @@ function buildGranularChartData(rows, agg, epexData = [], fcData = null) {
     }
     return arr[arr.length - 1].v;
   }
-  // PV forecast: merge the HISTORICAL curve (pastForecast: {start, powerW}) with
-  // the FUTURE (solar: {ts, w}) so a past granular window shows what was forecast.
-  // Dedup by ts (pastForecast carries per-model rows; keep one per timestamp;
-  // future overrides). Granular view is mostly past, so pastForecast is the key.
-  const pvByTs = new Map();
-  for (const p of (fcData?.pastForecast || [])) {
-    const t = new Date(p.start).getTime(); const v = Number(p.powerW) / 1000;
-    if (Number.isFinite(t) && Number.isFinite(v)) pvByTs.set(t, v);
-  }
-  for (const p of (fcData?.solar || [])) {
-    const t = new Date(p.ts).getTime(); const v = Number(p.w) / 1000;
-    if (Number.isFinite(t) && Number.isFinite(v)) pvByTs.set(t, v);
-  }
-  const fcSolarArr = [...pvByTs.entries()].map(([ts, v]) => ({ ts, v })).sort((a, b) => a.ts - b.ts);
+  // PV forecast: use the clean ensemble curve only (`solar`). NOTE: `pastForecast`
+  // is NOT a usable curve — it round-robins per-provider rows (vrm ~13kW at :00,
+  // solcast 0 at :30, …) → a 30-min zigzag. A clean HISTORICAL forecast overlay
+  // needs the persisted ensemble (pv_forecasts) via a dedicated endpoint (TODO).
+  const fcSolarArr = (fcData?.solar || [])
+    .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
+    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
   const fcConsArr = (fcData?.consumption || [])
     .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
     .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
