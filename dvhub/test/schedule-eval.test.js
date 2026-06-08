@@ -489,10 +489,9 @@ test('T-0121: EOS closed-loop recomputes gridSetpointW = -(B + live PV surplus)'
   assert.ok(gp, 'a gridSetpointW write must be recorded');
   // B 16000 + live PV surplus (4000-1000=3000) → -19000 W export
   assert.equal(Number(gp.value), -19000, 'live PV rides on top of the battery share B');
-  // dynamic cap = min(20000, B + headroom 5000) = 20000
-  const cap = state.schedule.active.maxDischargeW;
-  assert.ok(cap, 'a maxDischargeW cap must be written');
-  assert.equal(Number(cap.value), 20000, 'cap = min(20000 HW, B + headroom)');
+  // T-0122: the closed-loop must NOT touch the operator-owned maxDischargeW cap
+  assert.ok(!state.schedule.active.maxDischargeW,
+    'closed-loop leaves maxDischargeW to the operator (no automatic cap)');
 });
 
 test('T-0121: a PV dip lowers the export, it does NOT drain more battery (no over-drain)', async () => {
@@ -515,14 +514,15 @@ test('T-0121: a PV dip lowers the export, it does NOT drain more battery (no ove
     'no live PV → export = B only; battery is not asked to backfill missing PV');
 });
 
-test('T-0121: EOS closed-loop does NOT overwrite maxDischargeW while evcc owns it', async () => {
+test('T-0122: closed-loop never writes maxDischargeW (operator/evcc owns it)', async () => {
   const { ctx, state } = makeCtx({
     mutate: ({ state, cfg }) => {
       state.victron.soc = 50;
       state.victron.pvTotalW = 2000;
       state.victron.selfConsumptionW = 0;
       state.schedule.rules = [eosClosedLoopRule(16000)];
-      state.schedule.lastWrite = { maxDischargeW: { value: 0, source: 'evcc', at: 1 } };
+      // operator's manual cap (prod: 20000 = full battery for house+EV) must survive
+      state.schedule.lastWrite = { maxDischargeW: { value: 20000, source: 'manual', at: 1 } };
       cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
       cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
     }
@@ -531,8 +531,10 @@ test('T-0121: EOS closed-loop does NOT overwrite maxDischargeW while evcc owns i
 
   await evaluator.evaluateSchedule();
 
-  assert.equal(state.schedule.lastWrite.maxDischargeW.source, 'evcc',
-    'evcc remains the maxDischargeW owner — EOS cap deferred (EV charging takes priority)');
+  assert.equal(Number(state.schedule.lastWrite.maxDischargeW.value), 20000,
+    'the operator-set maxDischargeW cap is untouched by the closed-loop');
+  assert.equal(state.schedule.lastWrite.maxDischargeW.source, 'manual',
+    'the closed-loop does not take ownership of maxDischargeW');
 });
 
 // B == 0: charge / self-consumption slot. EOS feeds in only the planned amount and
@@ -555,8 +557,8 @@ test('T-0122: B=0 charge slot exports only the planned amount, NOT the full live
       state.victron.pvTotalW = 20000;       // big midday surplus
       state.victron.selfConsumptionW = 1000; // live PV surplus 19000 W
       state.schedule.rules = [eosChargeSlotRule(5000)];
-      // a restrictive cap left by a prior export slot must be released to -1
-      state.schedule.lastWrite = { maxDischargeW: { value: 5000, source: 'rule:eos-prev', at: 1 } };
+      // operator's manual cap must survive — the closed-loop does not touch it
+      state.schedule.lastWrite = { maxDischargeW: { value: 20000, source: 'manual', at: 1 } };
       cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
       cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
     }
@@ -568,9 +570,9 @@ test('T-0122: B=0 charge slot exports only the planned amount, NOT the full live
   // export = min(plannedExport 5000, livePV 19000) = 5000 — the rest of the PV charges the battery
   assert.equal(Number(state.schedule.active.gridSetpointW.value), -5000,
     'B=0: export capped at the EOS plan, surplus PV charges the battery instead of dumping to grid');
-  // discharge cap released to unlimited so house load + EV can draw the full battery
-  assert.equal(Number(state.schedule.active.maxDischargeW.value), -1,
-    'B=0: a restrictive discharge cap is released to -1 (unlimited) — no expensive grid backfill');
+  // the operator's manual discharge cap is left intact (full battery for house+EV)
+  assert.equal(Number(state.schedule.lastWrite.maxDischargeW.value), 20000,
+    'B=0: operator maxDischargeW untouched — house+EV keep the full battery');
 });
 
 test('T-0122: B=0 charge slot — a PV dip lowers the export, battery is not drained', async () => {

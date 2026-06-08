@@ -616,14 +616,13 @@ export function createScheduleEvaluator(ctx) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
 
-      // === T-0121 EOS closed-loop export: live-PV recompute + battery cap ======
+      // === T-0121/T-0122 EOS closed-loop export: live-PV recompute ============
       // For an EOS rule, re-derive the setpoint from MEASURED PV every cycle. Two
       // regimes, split on B (the deliberate Akku→Netz share held from the plan):
       //
       //   B > 0  — deliberate battery-export slot (evening arbitrage): dump B and
       //            ride the live PV surplus on top → gridSetpointW = -(B + livePV).
-      //            reg-2704 cap = B + headroom bounds the battery as a <=5 s
-      //            backstop. (Christin's evening "PV oben drauf".)
+      //            (Christin's evening "PV oben drauf".)
       //
       //   B == 0 — charge / self-consumption slot: EOS wants to feed in ONLY the
       //            planned amount and charge the REST of the PV surplus into the
@@ -631,15 +630,15 @@ export function createScheduleEvaluator(ctx) {
       //            (min(plannedExport, livePV)): a PV dip lowers the export (no
       //            drain) and surplus PV EOS earmarked for the battery is NOT
       //            dumped to the grid. T-0122 fix for "voller PV ins Netz statt
-      //            Akku laden". And do NOT cap discharge here — house load + EV
-      //            must draw the full battery, else the shortfall comes expensively
-      //            from the grid (Christin's maxDischarge point); release any
-      //            restrictive cap a prior export slot left back to -1 (unlimited).
+      //            Akku laden".
       //
-      // 2704 is PERSISTENT → written only on change (per slot) — no flash wear.
-      // evcc owns 2704 while an EV charges, so defer to it. Runs BEFORE the guards
-      // so neg-price / SoC-floor / D-18 all act on the live value. Internal-
-      // optimizer rules (no closedLoopExport) untouched.
+      // maxDischargeW (reg 2704) is DELIBERATELY left untouched: the operator owns
+      // it manually (prod: 20000 = full battery for house+EV). The closed-loop must
+      // not cap it — a low cap starves EV charging (the shortfall comes expensively
+      // from the grid). Over-discharge protection comes from THIS 5 s recompute and,
+      // on a stall, from reg 2716's ~10 s Passthru revert → safe self-consumption.
+      // Runs BEFORE the guards so neg-price / SoC-floor / D-18 act on the live
+      // value. Internal-optimizer rules (no closedLoopExport) untouched.
       if (target === 'gridSetpointW'
           && eff.rule?.optimizer === 'eos'
           && eff.rule?.closedLoopExport
@@ -649,23 +648,11 @@ export function createScheduleEvaluator(ctx) {
         const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
         const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
         const livePvSurplusW = Math.max(0, pvW - loadW);
-        const evccOwnsCap = state.schedule.lastWrite?.maxDischargeW?.source === 'evcc';
-        if (B > 0) {
-          eff.value = -Math.round(B + livePvSurplusW);
-          const headroomW = Number(cfg.optimizer?.capLoadHeadroomW ?? 5000);
-          const capW = Math.min(20000, Math.round(B + headroomW)); // 20000 = reg-2704 HW max (prod)
-          if (!evccOwnsCap) {
-            await applyControlTarget('maxDischargeW', capW, eff.source);
-          }
-        } else {
-          eff.value = -Math.round(Math.min(plannedExportW, livePvSurplusW));
-          const capNow = Number(state.schedule.lastWrite?.maxDischargeW?.value);
-          if (!evccOwnsCap && Number.isFinite(capNow) && capNow >= 0) {
-            await applyControlTarget('maxDischargeW', -1, eff.source); // -1 = unlimited discharge
-          }
-        }
+        eff.value = B > 0
+          ? -Math.round(B + livePvSurplusW)                        // export slot: B + live PV on top
+          : -Math.round(Math.min(plannedExportW, livePvSurplusW)); // charge slot: plan-capped, PV-limited
       }
-      // === end T-0121 EOS closed-loop =========================================
+      // === end T-0121/T-0122 EOS closed-loop ==================================
 
       // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
       // A persistent override has no TTL and is invisible to both the per-rule
