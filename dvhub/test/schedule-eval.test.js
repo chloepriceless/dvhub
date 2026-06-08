@@ -458,3 +458,79 @@ test('T-0107: gridSetpointW write to reg 2716 proceeds via fc16 int32 big-endian
   assert.deepEqual(w.values, [0xFFFF, 0xC180],
     'int32 big-endian: high word 0xFFFF (2716), low word 0xC180 (2717) = -16000 W');
 });
+
+// --- T-0121: EOS closed-loop export (live-PV recompute + battery cap) ---
+
+function eosClosedLoopRule(batteryShareW = 16000) {
+  return {
+    id: 'eos-cl', enabled: true, target: 'gridSetpointW',
+    start: '00:00', end: '23:59', value: -batteryShareW,
+    optimizer: 'eos', closedLoopExport: true, batteryShareW,
+    source: 'forecast_optimizer', autoManaged: true
+  };
+}
+
+test('T-0121: EOS closed-loop recomputes gridSetpointW = -(B + live PV surplus)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 4000;
+      state.victron.selfConsumptionW = 1000; // → live PV surplus 3000 W
+      state.schedule.rules = [eosClosedLoopRule(16000)];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  const gp = state.schedule.active.gridSetpointW;
+  assert.ok(gp, 'a gridSetpointW write must be recorded');
+  // B 16000 + live PV surplus (4000-1000=3000) → -19000 W export
+  assert.equal(Number(gp.value), -19000, 'live PV rides on top of the battery share B');
+  // dynamic cap = min(20000, B + headroom 5000) = 20000
+  const cap = state.schedule.active.maxDischargeW;
+  assert.ok(cap, 'a maxDischargeW cap must be written');
+  assert.equal(Number(cap.value), 20000, 'cap = min(20000 HW, B + headroom)');
+});
+
+test('T-0121: a PV dip lowers the export, it does NOT drain more battery (no over-drain)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 0;        // sun gone
+      state.victron.selfConsumptionW = 0;
+      state.schedule.rules = [eosClosedLoopRule(16000)];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  // PV=0 → setpoint collapses to just the battery share B, not the PV-inflated plan value.
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -16000,
+    'no live PV → export = B only; battery is not asked to backfill missing PV');
+});
+
+test('T-0121: EOS closed-loop does NOT overwrite maxDischargeW while evcc owns it', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 2000;
+      state.victron.selfConsumptionW = 0;
+      state.schedule.rules = [eosClosedLoopRule(16000)];
+      state.schedule.lastWrite = { maxDischargeW: { value: 0, source: 'evcc', at: 1 } };
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  await evaluator.evaluateSchedule();
+
+  assert.equal(state.schedule.lastWrite.maxDischargeW.source, 'evcc',
+    'evcc remains the maxDischargeW owner — EOS cap deferred (EV charging takes priority)');
+});

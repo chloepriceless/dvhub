@@ -509,6 +509,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     if (!sol || !Array.isArray(sol.rows) || sol.rows.length === 0) return null;
     const slotMin = Number(sol.slotMinutes) > 0 ? Number(sol.slotMinutes) : 15;
     const slotMs = slotMin * 60 * 1000;
+    const slotH = slotMin / 60;
     const out = [];
     for (const r of sol.rows) {
       const ts = new Date(r.ts_utc).getTime();
@@ -521,10 +522,21 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       // Hard guard: never export at a negative feed-in price.
       const feedInCt = (typeof r.feedInCtKwh === 'number') ? r.feedInCtKwh : null;
       if (feedInCt !== null && feedInCt < 0) continue;
+      // T-0121 closed-loop: split the planned net export into a PV-surplus part
+      // (re-derived from LIVE PV every control cycle in schedule-eval) and the
+      // battery part B — the deliberate Akku→Netz dump, held from the plan. At
+      // the evening peak PV≈0 so B ≈ net export; for a pure-surplus slot B≈0.
+      // The precise plan-split is noisy, but the reg-2704 cap (= B) bounds it.
+      const pvW = slotH > 0 ? (Number(r.pvWh) || 0) / slotH : 0;
+      const loadW = slotH > 0 ? (Number(r.loadWh) || 0) / slotH : 0;
+      const pvSurplusW = Math.max(0, pvW - loadW);
+      const batteryShareW = Math.max(0, -gridW - pvSurplusW); // -gridW = net export (W)
       out.push({
         ts,
         endTs: ts + slotMs,
         powerW: gridW,
+        batteryShareW,
+        closedLoopExport: true,
         planAction: 'eos_grid_export',
         confidence: EOS_DEFAULT_CONFIDENCE,
       });

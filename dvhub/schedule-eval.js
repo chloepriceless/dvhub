@@ -616,6 +616,32 @@ export function createScheduleEvaluator(ctx) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
 
+      // === T-0121 EOS closed-loop export: live-PV recompute + battery cap ======
+      // For an EOS export rule, re-derive the setpoint from MEASURED PV every
+      // cycle: gridSetpointW = -(B + live PV surplus). B (the deliberate Akku→Netz
+      // share) is held from the plan; live PV rides on top, so a PV dip lowers the
+      // export instead of draining the battery (Christin's original bug). The
+      // reg-2704 cap = B + a FIXED headroom bounds the battery as a backstop for the
+      // <=5 s gap between recomputes. 2704 is PERSISTENT, so it is written only on
+      // change (per slot) — no flash wear; evcc owns 2704 while an EV charges, so
+      // defer to it. Runs BEFORE the guards so neg-price / SoC-floor / D-18 all act
+      // on the live value. Internal-optimizer rules (no closedLoopExport) untouched.
+      if (target === 'gridSetpointW'
+          && eff.rule?.optimizer === 'eos'
+          && eff.rule?.closedLoopExport
+          && Number(eff.value) < 0) {
+        const B = Math.max(0, Number(eff.rule.batteryShareW) || 0);
+        const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
+        const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
+        eff.value = -Math.round(B + Math.max(0, pvW - loadW));
+        const headroomW = Number(cfg.optimizer?.capLoadHeadroomW ?? 5000);
+        const capW = Math.min(20000, Math.round(B + headroomW)); // 20000 = reg-2704 HW max (prod)
+        if (state.schedule.lastWrite?.maxDischargeW?.source !== 'evcc') {
+          await applyControlTarget('maxDischargeW', capW, eff.source);
+        }
+      }
+      // === end T-0121 EOS closed-loop =========================================
+
       // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
       // A persistent override has no TTL and is invisible to both the per-rule
       // stopSocPct floor (autoDisableStopSocScheduleRules — rules only) and the
