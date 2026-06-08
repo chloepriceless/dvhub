@@ -116,7 +116,7 @@ test('normalizeConfigInput resets out-of-range runtime intervals to defaults', (
 
   assert.equal(normalized.persistedConfig.meterPollMs, 2000);
   assert.equal(normalized.persistedConfig.keepalivePulseSec, 60);
-  assert.equal(normalized.persistedConfig.schedule.evaluateMs, 15000);
+  assert.equal(normalized.persistedConfig.schedule.evaluateMs, 5000); // T-0107: 5s = volatile reg-2716 re-assert cadence
   assert.match(normalized.warnings.join('\n'), /out of range/i);
 });
 

@@ -933,11 +933,11 @@ function buildFieldDefinitions() {
       path: 'schedule.controlKeepaliveMs',
       label: 'Grid-Setpoint Keepalive (ms)',
       type: 'number',
-      default: 30000,
+      default: 5000,
       min: 0,
       max: 600000,
       step: 1000,
-      help: 'ESS-Grid-Setpoint periodisch neu schreiben (auch unverändert). PFLICHT für das flüchtige Reg 2716/2717 (verfällt nach 60 s → Passthru): Wert in (0, 60000]. 0 = aus (nur fürs persistente Reg 2700).'
+      help: 'ESS-Grid-Setpoint periodisch neu schreiben (auch unverändert). PFLICHT fürs flüchtige Reg 2716/2717: fällt real schon nach ~10 s (Venus 3.7x) in Passthru, nicht erst nach 60 s → 5 s empfohlen (RAM, Schreiben gratis). Wert in (0, 60000]. 0 = aus (nur fürs persistente Reg 2700).'
     },
     {
       section: 'schedule',
@@ -2366,12 +2366,16 @@ export function createDefaultConfig() {
     },
     schedule: {
       timezone: 'Europe/Berlin',
-      evaluateMs: 15000,
+      // T-0107: 5 s eval IS the volatile reg-2716 re-assert cadence. The firmware
+      // reverts to Passthru well before the documented 60 s (~10 s observed on
+      // Venus 3.7x; we run 3.73). One 5 s writer — no parallel loop racing on 2716.
+      evaluateMs: 5000,
       // T-0002/T-0107 keepalive: re-assert the ESS grid setpoint every N ms even
-      // if unchanged. MANDATORY for the volatile reg 2716/2717 setpoint (which
-      // reverts to Passthru after 60 s if not re-written) — must be in (0,60000];
-      // 30 s gives margin. Per-target override via controlWrite.<target>.keepaliveMs.
-      controlKeepaliveMs: 30000,
+      // if unchanged. MANDATORY for the volatile reg 2716/2717 setpoint. The
+      // documented 60 s Passthru timeout is OPTIMISTIC — ~10 s observed on Venus
+      // 3.7x. 5 s gives >2x margin; 2716 is RAM so frequent writes are free.
+      // Must be in (0,60000]. Per-target override via controlWrite.<target>.keepaliveMs.
+      controlKeepaliveMs: 5000,
       // T-0002 safety: SoC floor (%) for a PERSISTENT discharge override
       // (gridSetpointW < 0). At/below this SoC the override is suppressed (hold)
       // so it can never run the battery down to the bare hardware min-SoC.
