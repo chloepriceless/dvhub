@@ -53,6 +53,75 @@ export function redactUrlCreds(raw) {
   }
 }
 
+// T-0113 support bundle: scrub FREE TEXT (log-ring lines, audit_log payloads)
+// for secrets + obvious PII before they enter a shareable diagnostic bundle.
+// This is the SECOND line of defence — the bundle is allowlist-built (only
+// known-safe sources) and config goes through redactConfig() first; scrubText
+// catches secrets/PII that leak into event payloads. Conservative + over-redacts
+// rather than under-redacts (a diagnostic bundle is meant to be sharable).
+const SCRUB_PATTERNS = Object.freeze([
+  // "Bearer <token>"
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/\-]{12,}=*/g, '$1***'],
+  // key/token/secret/password = value  (json or kv form)
+  [/\b(api[_-]?key|apitoken|access[_-]?token|token|secret|password|passwd|pwd|auth|signingkey|botToken)(["']?\s*[:=]\s*["']?)[^\s"',}]{6,}/gi, '$1$2***'],
+  // JWT
+  [/\beyJ[A-Za-z0-9._\-]{20,}/g, '***'],
+  // long hex blobs (>=32) — likely keys/hashes/tokens
+  [/\b[A-Fa-f0-9]{32,}\b/g, '***'],
+  // email addresses (PII)
+  [/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g, '***@***'],
+  // userinfo embedded in URLs
+  [/:\/\/[^/\s:@]+:[^/\s@]+@/g, '://***:***@'],
+  // PUBLIC IPv4 → masked (PII / customer location). RFC1918 + loopback are KEPT
+  // because LAN/GX addresses (192.168.x, the Victron GX, the broker) are exactly
+  // what makes a diagnostic bundle useful. Replacer decides per-match.
+  [/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g, (m, a, b) => {
+    const o1 = Number(a), o2 = Number(b);
+    if (o1 > 255 || o2 > 255) return m; // not a real octet (version string etc.)
+    const isPrivate = o1 === 10
+      || (o1 === 172 && o2 >= 16 && o2 <= 31)
+      || (o1 === 192 && o2 === 168)
+      || o1 === 127
+      || (o1 === 169 && o2 === 254); // link-local
+    return isPrivate ? m : '***.***.***.***';
+  }],
+]);
+
+export function scrubText(input) {
+  if (typeof input !== 'string' || input.length === 0) return input;
+  let s = input;
+  for (const [re, repl] of SCRUB_PATTERNS) s = s.replace(re, repl);
+  return s;
+}
+
+// Keys whose VALUE is a secret regardless of its shape (audit/log payloads
+// often carry e.g. {token:"<opaque>"} where the value matches no pattern). A
+// normalised key (lowercased, _/- stripped) containing one of these → mask the
+// whole string value. Substring match so botToken/appToken/clientSecret hit.
+const SECRET_KEY_RE = /(password|passwd|secret|token|apikey|signingkey|privatekey|accesskey)/;
+
+// Recursively scrub a structured value (audit payloads, log event detail
+// objects): string values are pattern-scrubbed; a string value whose KEY looks
+// like a secret is fully masked; keys themselves are left intact. Cycle-safe.
+export function scrubDeep(value, _seen) {
+  if (typeof value === 'string') return scrubText(value);
+  if (value === null || typeof value !== 'object') return value;
+  const seen = _seen || new WeakSet();
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, seen));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    const keyNorm = String(k).toLowerCase().replace(/[_-]/g, '');
+    if (typeof v === 'string' && v.length > 0 && SECRET_KEY_RE.test(keyNorm)) {
+      out[k] = REDACTED;
+    } else {
+      out[k] = scrubDeep(v, seen);
+    }
+  }
+  return out;
+}
+
 export function redactConfig(config) {
   const copy = JSON.parse(JSON.stringify(config));
   for (const dotPath of REDACTED_PATHS) {
