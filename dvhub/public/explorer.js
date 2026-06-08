@@ -257,26 +257,38 @@ function buildGranularChartData(rows, agg, epexData = [], fcData = null) {
     });
   }
 
-  function interpol(arr, ts) {
-    if (!arr.length) return null;
-    if (ts <= arr[0].ts) return arr[0].v;
-    if (ts >= arr[arr.length - 1].ts) return arr[arr.length - 1].v;
+  // NO extrapolation: clamping the forecast onto a non-overlapping window drew a
+  // misleading flat line (the 0.36 kW bug). Return null outside the real ts range.
+  function interpolNoClamp(arr, ts) {
+    if (!arr.length || ts < arr[0].ts || ts > arr[arr.length - 1].ts) return null;
     for (let j = 0; j < arr.length - 1; j++) {
       if (ts >= arr[j].ts && ts <= arr[j + 1].ts) {
-        const r = (ts - arr[j].ts) / (arr[j + 1].ts - arr[j].ts);
+        const span = arr[j + 1].ts - arr[j].ts;
+        const r = span > 0 ? (ts - arr[j].ts) / span : 0;
         return arr[j].v + r * (arr[j + 1].v - arr[j].v);
       }
     }
-    return null;
+    return arr[arr.length - 1].v;
   }
-  const fcSolarArr = (fcData?.solar || [])
-    .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
-    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
+  // PV forecast: merge the HISTORICAL curve (pastForecast: {start, powerW}) with
+  // the FUTURE (solar: {ts, w}) so a past granular window shows what was forecast.
+  // Dedup by ts (pastForecast carries per-model rows; keep one per timestamp;
+  // future overrides). Granular view is mostly past, so pastForecast is the key.
+  const pvByTs = new Map();
+  for (const p of (fcData?.pastForecast || [])) {
+    const t = new Date(p.start).getTime(); const v = Number(p.powerW) / 1000;
+    if (Number.isFinite(t) && Number.isFinite(v)) pvByTs.set(t, v);
+  }
+  for (const p of (fcData?.solar || [])) {
+    const t = new Date(p.ts).getTime(); const v = Number(p.w) / 1000;
+    if (Number.isFinite(t) && Number.isFinite(v)) pvByTs.set(t, v);
+  }
+  const fcSolarArr = [...pvByTs.entries()].map(([ts, v]) => ({ ts, v })).sort((a, b) => a.ts - b.ts);
   const fcConsArr = (fcData?.consumption || [])
     .map(p => ({ ts: new Date(p.ts).getTime(), v: Number(p.w) / 1000 }))
     .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.v)).sort((a, b) => a.ts - b.ts);
-  if (fcSolarArr.length) seriesData.pvFc = tsList.map(t => interpol(fcSolarArr, t));
-  if (fcConsArr.length) seriesData.consFc = tsList.map(t => interpol(fcConsArr, t));
+  if (fcSolarArr.length) seriesData.pvFc = tsList.map(t => interpolNoClamp(fcSolarArr, t));
+  if (fcConsArr.length) seriesData.consFc = tsList.map(t => interpolNoClamp(fcConsArr, t));
 
   explorerData.labels = labels;
   explorerData.seriesData = seriesData;
