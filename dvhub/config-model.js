@@ -524,6 +524,16 @@ function buildFieldDefinitions() {
       group: 'dcExportMode',
       groupLabel: 'PV-Export-Modus (Ladeverhinderung)',
       groupDescription: 'Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte PV-Leistung (DC + AC) ins Netz einspeist.',
+      path: 'dcExportMode.subtractHouseLoad',
+      label: 'Hausverbrauch abziehen',
+      type: 'boolean',
+      help: 'EIN (Standard): speist nur den echten Überschuss ein (PV − live Hausverbrauch − Puffer), der Akku-Nettostrom bleibt ~0 A. AUS: speist die gesamte PV ein (PV − Puffer), der Hausverbrauch kommt dann aus Akku/Netz. Live-Hausverbrauch = Victron Ac/Consumption.'
+    },
+    {
+      section: 'system',
+      group: 'dcExportMode',
+      groupLabel: 'PV-Export-Modus (Ladeverhinderung)',
+      groupDescription: 'Verhindert Akkuladung durch dynamischen Grid Setpoint der die gesamte PV-Leistung (DC + AC) ins Netz einspeist.',
       path: 'dcExportMode.priceThresholdCtKwh',
       label: 'Preisschwelle (ct/kWh)',
       type: 'number',
@@ -2341,6 +2351,7 @@ export function createDefaultConfig() {
     dcExportMode: {
       enabled: false,
       bufferW: 100,
+      subtractHouseLoad: true,
       priceThresholdCtKwh: null,
       targetSocPct: 90,
       chargeDeadlineHour: 17,

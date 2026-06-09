@@ -584,9 +584,20 @@ export function createScheduleEvaluator(ctx) {
         state.ctrl._dcExportPriceBlockLogged = false;
         const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
         const bufferW = Number(cfg.dcExportMode?.bufferW ?? 100);
+        // T-0124c (operator 2026-06-09): subtract the LIVE house consumption so we
+        // export only the REAL surplus (PV − Haus − Puffer). selfConsumptionW = live
+        // total AC house load (Victron Ac/Consumption L1..L3). This keeps the
+        // battery net ~0 A — exactly what the "100 % Einspeisung" tooltip promises
+        // AND what EOS plans for a pure PV-surplus slot (so a live PV dip lowers the
+        // export instead of draining the battery). Toggle: dcExportMode.subtractHouseLoad
+        // (default ON). With it OFF the legacy "export all PV minus buffer" applies.
+        const subtractLoad = cfg.dcExportMode?.subtractHouseLoad !== false;
+        const liveLoadW = subtractLoad ? Math.max(0, Number(state.victron.selfConsumptionW || 0)) : 0;
+        const reserveW = liveLoadW + bufferW;
         if (pvW > 50) {
-          // Negativer Setpoint = Einspeisung. Export = Gesamt-PV minus Puffer.
-          const exportW = Math.round(-(pvW - bufferW));
+          // Negativer Setpoint = Einspeisung. Export = PV − Hausverbrauch − Puffer,
+          // nie negativ (kein erzwungener Import / Akku-Entladen wenn PV < Last).
+          const exportW = Math.round(-Math.max(0, pvW - reserveW));
           const prev = state.schedule.active.gridSetpointW;
           const prevVal = prev?.value;
           // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
@@ -595,7 +606,7 @@ export function createScheduleEvaluator(ctx) {
             await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
             state.ctrl._dcExportLastWriteAt = now;
             if (!state.ctrl._dcExportLogged) {
-              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, currentPrice });
+              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, subtractLoad, currentPrice });
               state.ctrl._dcExportLogged = true;
             }
           }

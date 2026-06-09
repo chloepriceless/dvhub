@@ -297,7 +297,7 @@
           <thead>
             <tr>
               <th>Aktiv</th><th>Beginn</th><th>Ende</th><th class="num">Grid (W)</th><th class="num" title="DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.">Charger-Leistung (A)</th>
-              <th class="num">STOP-SOC (%)</th><th title="Setzt Grid-Setpoint = -(PV-Total − Puffer), sodass die gesamte aktuelle PV-Leistung (AC+DC) ins Netz fließt und der Akku-Nettostrom ~0 A bleibt. OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).">100% Einspeisung</th><th>Aktion</th>
+              <th class="num">STOP-SOC (%)</th><th title="Setzt Grid-Setpoint = -(PV − live Hausverbrauch − Puffer), speist also den echten PV-Überschuss ins Netz; der Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen (dann -(PV − Puffer) = volle PV). OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).">100% Einspeisung</th><th>Aktion</th>
             </tr>
           </thead>
           <tbody id="scheduleRowsDash"></tbody>
@@ -450,7 +450,7 @@
 <script src="/dv-modal.js"></script>
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js"></script>
-<script src="/app.js?v=20260608-t0128hybrid"></script>
+<script src="/app.js?v=20260609-t0128b"></script>
 <script src="/leitstand-charts.js?v=10"></script>
 </body>
 </html>

@@ -928,12 +928,14 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     }
   }
 
-  // --- Realised energy as stacked bars (T-0128) ---
-  // Christin: the past portion of the chart should show the Historie-style
-  // energy view — PV / Import / Akku / Export / Last as stacked bars up to
-  // the JETZT-marker; the future stays line-only (forecast overlays above).
-  // Supply stacks above zero (PV, Import, Akku-Entladung), demand below zero
-  // (Last, Export, Akku-Ladung). Energy per 15-min slot (kWh) → average kW.
+  // --- Realised energy as stacked bars (T-0128b) ---
+  // Christin: the past portion of the chart shows the SAME 7-flow stacking as the
+  // Historie day-flow view (renderDayFlowStackedBars) — supply above zero (Solar
+  // zum Verbrauch / zur Batterie / ins Netz, Batterie ins Netz), consumption +
+  // charge below zero (Batterie zum Verbrauch, Netz zum Verbrauch, Netz zur
+  // Batterie). Identical labels + colours so both pages read the same. Future
+  // stays line-only (forecast overlays above). Energy per 15-min slot (kWh) →
+  // average kW so the bars line up with the kW forecast lines.
   if (Array.isArray(historySlots) && historySlots.length > 0) {
     const slotMap = new Map(historySlots.map(s => [new Date(s.ts).getTime(), s]));
     const pastKw = (fn) => data.map(d => {
@@ -945,12 +947,17 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       return Number.isFinite(v) ? v : null;
     });
     const kw = (x) => Number(x || 0) * 4;       // kWh per 15min → kW average
+    const posFlow = (key) => pastKw(s => Math.max(0, kw(s[key])));
+    const negFlow = (key) => pastKw(s => -Math.max(0, kw(s[key])));
+    // Same order + colours as history.js renderDayFlowStackedBars.
     const energyBars = [
-      { label: 'PV',     data: pastKw(s => kw(s.pvKwh)),                                color: cssVar('--yellow', '#f5c451') },
-      { label: 'Import', data: pastKw(s => kw(s.importKwh)),                            color: cssVar('--pink', '#ff7ac6') },
-      { label: 'Akku',   data: pastKw(s => kw(s.batteryDischargeKwh) - kw(s.batteryChargeKwh)), color: cssVar('--cyan', '#34dbff') },
-      { label: 'Export', data: pastKw(s => -kw(s.exportKwh)),                           color: '#34d399' },
-      { label: 'Last',   data: pastKw(s => -kw(s.loadKwh)),                             color: cssVar('--chart-axis', '#9ca3af') }
+      { label: 'Solar zum Verbrauch',    data: posFlow('solarDirectUseKwh'),   color: '#f5c451' },
+      { label: 'Solar zur Batterie',     data: posFlow('solarToBatteryKwh'),   color: '#34d399' },
+      { label: 'Solar ins Netz',         data: posFlow('solarToGridKwh'),      color: '#f59e0b' },
+      { label: 'Batterie ins Netz',      data: posFlow('batteryToGridKwh'),    color: '#22d3ee' },
+      { label: 'Batterie zum Verbrauch', data: negFlow('batteryDirectUseKwh'), color: '#67a5ff' },
+      { label: 'Netz zum Verbrauch',     data: negFlow('gridDirectUseKwh'),    color: '#f472b6' },
+      { label: 'Netz zur Batterie',      data: negFlow('gridToBatteryKwh'),    color: '#c084fc' }
     ];
     for (const b of energyBars) {
       if (!b.data.some(v => v != null)) continue;
@@ -958,9 +965,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         label: b.label,
         type: 'bar',
         data: b.data,
-        backgroundColor: hexToRgba(b.color, 0.8),
+        backgroundColor: b.color,
         borderColor: b.color,
         borderWidth: 0,
+        borderSkipped: false,
         barPercentage: 0.9,
         categoryPercentage: 1.0,
         stack: 'energie',
@@ -2420,7 +2428,7 @@ function addScheduleRow(opts = {}) {
     <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
     <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="5" ${disabled} /></label></td>
-    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="100% Einspeisung — Grid-Setpoint folgt der aktuellen PV-Leistung (AC+DC, minus Puffer), Akku-Nettostrom bleibt ~0 A. OvervoltageFeedIn wird NICHT angefasst (das macht nur die DV-Vermarktung)." /></td>
+    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="100% Einspeisung — Grid-Setpoint folgt dem echten PV-Überschuss (PV − live Hausverbrauch − Puffer), Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen. OvervoltageFeedIn wird NICHT angefasst (das macht nur die DV-Vermarktung)." /></td>
     <td>${isAutomation ? (isOptimizer
       ? '<span class="sched-auto-badge sched-badge-optimizer" title="Vom Optimizer verwaltet">Optimizer' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>'
       : '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>')
