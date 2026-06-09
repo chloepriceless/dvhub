@@ -492,12 +492,14 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * curtailment window to free room for otherwise-curtailed PV). We therefore
    * ACTUATE only its deliberate EXPORTs and leave everything else to the plant's
    * safe self-consumption default:
-   *   • Emit a rule ONLY for slots with a deliberate BATTERY export share (B>0).
-   *     Import / self-consumption / PV-charge AND pure PV-surplus feed-in slots are
-   *     skipped → the plant self-regulates at the self-consumption default (PV →
-   *     house → battery → grid only on real surplus), so a live PV drop never
-   *     drains the battery to the grid (T-0124). We NEVER write a positive
-   *     (grid-charge) value either (§14a-safe regardless of what EOS plans).
+   *   • Emit a rule for every genuine EXPORT slot, split by lever (T-0124b):
+   *       – pure PV-surplus feed-in (B=0) → lever 'dcExportMode' (live PV drives
+   *         gridSetpointW = -(PV−buffer) every cycle, like the manual "100 %
+   *         Einspeisung" checkbox — the real PV sets the setpoint, no static value).
+   *       – deliberate battery export (B>0, e.g. the evening dump) → lever
+   *         'gridSetpointW' with the closed-loop (B + live PV on top, reg-2704 cap).
+   *     Import / self-consumption / PV-charge slots are still skipped → plant
+   *     default. We NEVER write a positive (grid-charge) value (§14a-safe).
    *   • Hard guard — never export at a negative feed-in price (curtail instead +
    *     keep the §51 Förder hours). EOS already curtails internally; this is
    *     defense in depth at the actuation edge.
@@ -540,18 +542,29 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       const loadW = slotH > 0 ? (Number(r.loadWh) || 0) / slotH : 0;
       const pvSurplusW = Math.max(0, pvW - loadW);
       const batteryShareW = Math.max(0, -gridW - pvSurplusW); // -gridW = net export (W)
-      // T-0124 (operator 2026-06-08): a PURE PV-surplus feed-in slot — forecast PV
-      // already covers the planned export, so NO deliberate battery share — gets NO
-      // setpoint at all. Forcing a negative setpoint here would drain the BATTERY
-      // into the grid the moment live PV drops below the forecast (bad weather).
-      // Without a rule the slot falls back to the self-consumption default and the
-      // Victron ESS self-regulates: PV → house → battery → grid only on real
-      // surplus. Only a slot that deliberately exports FROM the battery (B>0) needs
-      // a forced setpoint.
-      if (batteryShareW <= 0) continue;
+      if (batteryShareW <= 0) {
+        // T-0124b (operator 2026-06-09, supersedes T-0124): a PURE PV-surplus
+        // feed-in slot — EOS' forecast PV covers the planned export, no deliberate
+        // battery share. Actuate it via the dcExportMode lever instead of a static
+        // setpoint: schedule-eval drives gridSetpointW = -(live PV − buffer) every
+        // cycle, so the REAL measured PV sets the setpoint (Christin 2026-06-09:
+        // "der echte PV setzt den grid setpoint") — the exact same "100 %
+        // Einspeisung" lever the manual Zeitplan checkbox uses. Neg-price pause and
+        // the dcExportMode SoC-guard still apply (handled in schedule-eval). No
+        // static gridSetpointW → no forecast-vs-live mismatch forcing a drain.
+        out.push({
+          ts,
+          endTs: ts + slotMs,
+          lever: 'dcExportMode',
+          planAction: 'eos_pv_export',
+          confidence: EOS_DEFAULT_CONFIDENCE,
+        });
+        continue;
+      }
       out.push({
         ts,
         endTs: ts + slotMs,
+        lever: 'gridSetpointW',
         powerW: gridW,
         batteryShareW,
         closedLoopExport: true,

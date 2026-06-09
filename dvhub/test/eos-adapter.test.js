@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 
 import { createEosAdapter } from '../services/optimizer/eos-adapter.js';
+import { buildScheduleRules } from '../services/optimizer/schedule-builder.js';
 
 /**
  * Helper: Create a mock EOS HTTP server on a random port.
@@ -411,17 +412,18 @@ test('pullGridSetpoints emits only genuine exports, skips import/hold/negative-p
   }
 });
 
-// --- T-0124: pure PV-surplus feed-in gets NO setpoint (Victron self-regulates) ---
-test('pullGridSetpoints skips pure PV-surplus (B=0), emits only battery-export (B>0)', async () => {
+// --- T-0124b: pure PV-surplus feed-in → dcExportMode lever (live PV drives it);
+//     deliberate battery export → gridSetpointW closed-loop. ---
+test('pullGridSetpoints: pure PV-surplus (B=0) → dcExportMode lever, battery-export (B>0) → gridSetpointW', async () => {
   const solution = {
     generated_at: '2026-06-06T20:00:00Z',
     valid_from: '2026-06-06T20:00:00Z',
     valid_until: '2026-06-06T20:30:00Z',
     solution: {
       data: {
-        // export 1000Wh/0.25h = -4000W, but forecast PV surplus fully covers it → B=0 → SKIP
+        // export 1000Wh/0.25h = -4000W, forecast PV surplus fully covers it → B=0 → dcExportMode
         '2026-06-06T20:00:00Z': { battery1_soc_factor: 0.60, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 1000 },
-        // export 4000Wh/0.25h = -16000W, PV surplus only 1000W → B=15000 → EMIT
+        // export 4000Wh/0.25h = -16000W, PV surplus only 1000W → B=15000 → gridSetpointW
         '2026-06-06T20:15:00Z': { battery1_soc_factor: 0.90, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 4000 },
       },
     },
@@ -441,14 +443,42 @@ test('pullGridSetpoints skips pure PV-surplus (B=0), emits only battery-export (
   try {
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
     const slots = await adapter.pullGridSetpoints();
-    assert.equal(slots.length, 1, 'pure PV-surplus slot skipped — only the deliberate battery export is emitted');
-    assert.equal(slots[0].ts, new Date('2026-06-06T20:15:00Z').getTime());
-    assert.equal(slots[0].powerW, -16000);
-    assert.ok(slots[0].batteryShareW > 0, 'emitted slot carries a deliberate battery share');
-    assert.equal(slots[0].batteryShareW, 15000, 'B = |gridW| - forecast PV surplus = 16000 - 1000');
+    assert.equal(slots.length, 2, 'both genuine exports are emitted, each with its lever');
+
+    const pv = slots.find((s) => s.ts === new Date('2026-06-06T20:00:00Z').getTime());
+    assert.ok(pv, 'pure PV-surplus slot is emitted');
+    assert.equal(pv.lever, 'dcExportMode', 'PV-surplus feed-in uses the dcExportMode lever');
+    assert.equal(pv.planAction, 'eos_pv_export');
+    assert.equal(pv.powerW, undefined, 'no static setpoint — live PV drives it');
+    assert.ok(!pv.closedLoopExport, 'dcExportMode slot is not a closed-loop gridSetpointW export');
+
+    const batt = slots.find((s) => s.ts === new Date('2026-06-06T20:15:00Z').getTime());
+    assert.ok(batt, 'battery-export slot is emitted');
+    assert.equal(batt.lever, 'gridSetpointW', 'battery export uses the gridSetpointW lever');
+    assert.equal(batt.powerW, -16000);
+    assert.equal(batt.closedLoopExport, true);
+    assert.equal(batt.batteryShareW, 15000, 'B = |gridW| - forecast PV surplus = 16000 - 1000');
+    assert.equal(batt.planAction, 'eos_grid_export');
   } finally {
     await mock.close();
   }
+});
+
+// --- T-0124b: buildScheduleRules maps a dcExportMode lever slot to a dcExportMode rule ---
+test('buildScheduleRules: dcExportMode lever slot → target=dcExportMode, value=1', () => {
+  const slots = [
+    { ts: 1717704000000, endTs: 1717704900000, lever: 'dcExportMode', planAction: 'eos_pv_export', confidence: 0.7 },
+    { ts: 1717704900000, endTs: 1717705800000, lever: 'gridSetpointW', powerW: -16000, batteryShareW: 15000, closedLoopExport: true, confidence: 0.7 },
+  ];
+  const rules = buildScheduleRules({ slots, source: 'forecast_optimizer', optimizer: 'eos', getCfg: () => ({ schedule: { timezone: 'Europe/Berlin' } }) });
+  assert.equal(rules.length, 2);
+  assert.equal(rules[0].target, 'dcExportMode');
+  assert.equal(rules[0].value, 1);
+  assert.ok(!('closedLoopExport' in rules[0]), 'dcExportMode rule carries no closed-loop fields');
+  assert.equal(rules[1].target, 'gridSetpointW');
+  assert.equal(rules[1].value, -16000);
+  assert.equal(rules[1].closedLoopExport, true);
+  assert.equal(rules[1].batteryShareW, 15000);
 });
 
 // --- T-0121: pullGridSetpoints caps actuated rules to the horizon ---

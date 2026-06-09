@@ -36,25 +36,37 @@ function formatHHMM(tsMs, timezone) {
 export function buildScheduleRules({ slots, source = 'forecast_optimizer', optimizer = 'internal', getCfg }) {
   const tz = getCfg().schedule.timezone || 'Europe/Berlin';
 
-  return slots.map((slot, index) => ({
-    id: `opt-${slot.ts}-${index}`,
-    enabled: true,
-    target: 'gridSetpointW',
-    start: formatHHMM(slot.ts, tz),
-    end: formatHHMM(slot.endTs, tz),
-    value: slot.powerW,
-    slotTs: slot.ts,
-    slotEndTs: slot.endTs,
-    source,
-    autoManaged: true,
-    displayTone: 'blue',
-    confidence: slot.confidence,
-    optimizer,
-    // T-0121 closed-loop: carry the deliberate battery→grid share B + flag so
-    // schedule-eval re-derives gridSetpointW = -(B + live PV surplus) each cycle
-    // and writes the reg-2704 cap. Present only on EOS export slots.
-    ...(slot.closedLoopExport ? { closedLoopExport: true, batteryShareW: slot.batteryShareW } : {})
-  }));
+  return slots.map((slot, index) => {
+    const base = {
+      id: `opt-${slot.ts}-${index}`,
+      enabled: true,
+      start: formatHHMM(slot.ts, tz),
+      end: formatHHMM(slot.endTs, tz),
+      slotTs: slot.ts,
+      slotEndTs: slot.endTs,
+      source,
+      autoManaged: true,
+      displayTone: 'blue',
+      confidence: slot.confidence,
+      optimizer,
+    };
+    // T-0124b: a pure PV-surplus feed-in slot is actuated via the dcExportMode
+    // lever (the "100 % Einspeisung" Zeitplan checkbox): schedule-eval drives
+    // gridSetpointW = -(live PV − buffer) each cycle, so the real PV sets the
+    // setpoint — no static value. value=1 = lever ON.
+    if (slot.lever === 'dcExportMode') {
+      return { ...base, target: 'dcExportMode', value: 1 };
+    }
+    return {
+      ...base,
+      target: 'gridSetpointW',
+      value: slot.powerW,
+      // T-0121 closed-loop: carry the deliberate battery→grid share B + flag so
+      // schedule-eval re-derives gridSetpointW = -(B + live PV surplus) each cycle
+      // and writes the reg-2704 cap. Present only on EOS battery-export slots.
+      ...(slot.closedLoopExport ? { closedLoopExport: true, batteryShareW: slot.batteryShareW } : {})
+    };
+  });
 }
 
 /**
