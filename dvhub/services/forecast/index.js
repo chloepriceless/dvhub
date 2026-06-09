@@ -16,6 +16,7 @@ import { forecastAgeSeconds } from '../../routes-api.js';
 import { detectRamTier } from './ram-tier.js';
 import { createForecastStore } from './forecast-store.js';
 import { createWeatherFetch } from './weather-fetch.js';
+import { createMqttWeather } from './mqtt-weather.js';
 import { createSolcastClient } from './solcast-client.js';
 import { createForecastSolar } from './forecast-solar.js';
 import { createVrmForecast } from './vrm-forecast.js';
@@ -93,6 +94,9 @@ export function createForecastService(ctx) {
 
   // Create subsystems
   const weatherFetch = createWeatherFetch(ctx, { store });
+  // T-0131: configurable MQTT weather provider (weather4lox preset + custom
+  // mapping). No-op unless forecast.weather.provider === 'mqtt'.
+  const mqttWeather = createMqttWeather(ctx, { store });
   const solcastClient = createSolcastClient(ctx, { store });
   const forecastSolar = createForecastSolar(ctx, { store });
   const vrmForecast = createVrmForecast(ctx, { store }); // Phase 18-01j: deps-object threads store for pv_forecasts mirror
@@ -120,6 +124,7 @@ export function createForecastService(ctx) {
     // Records which subsystems came up; the rest fail-in-place and surface via pushLog.
     const subs = [
       ['weather', weatherFetch],
+      ['mqtt_weather', mqttWeather], // T-0131: no-op unless provider === 'mqtt'
       ['pv', pvForecast],
       ['load', loadForecast],
       ['accuracy', accuracyTracker]
@@ -141,6 +146,7 @@ export function createForecastService(ctx) {
    */
   async function close() {
     weatherFetch.close();
+    mqttWeather.close();
     pvForecast.close();
     loadForecast.close();
     accuracyTracker.close();

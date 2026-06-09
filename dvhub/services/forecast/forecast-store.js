@@ -265,14 +265,35 @@ export function createForecastStore(ctx) {
 
   // --- Query methods ---
 
-  async function getLatestWeather({ start, end } = {}) {
+  async function getLatestWeather({ start, end, provider } = {}) {
     const sql = `
       SELECT * FROM weather_forecasts
       WHERE ts_utc >= $1 AND ts_utc <= $2
-      ORDER BY ts_utc ASC
+      ORDER BY ts_utc ASC, fetched_at DESC
     `;
     const result = await pool.query(sql, [start, end]);
-    return result.rows;
+    const rows = result.rows;
+    if (rows.length === 0) return rows;
+
+    // T-0131 provider de-duplication: a single ts_utc can carry rows from
+    // several providers — e.g. a local MQTT/weather4lox source covering the ~8h
+    // forecast horizon PLUS Open-Meteo covering the longer tail. Keep ONE row
+    // per ts_utc, preferring the configured (or explicitly requested) primary
+    // provider, then Open-Meteo as the universal fallback that fills the rest.
+    // With only one provider in the rows (the historical default) this returns
+    // them unchanged.
+    const distinctProviders = new Set(rows.map(r => r.provider));
+    if (distinctProviders.size <= 1) return rows;
+
+    const primary = provider || getCfg()?.forecast?.weather?.provider || 'open_meteo';
+    const rank = (p) => (p === primary ? 0 : p === 'open_meteo' ? 1 : 2);
+    const byTs = new Map();
+    for (const r of rows) {
+      const key = new Date(r.ts_utc).toISOString();
+      const prev = byTs.get(key);
+      if (!prev || rank(r.provider) < rank(prev.provider)) byTs.set(key, r);
+    }
+    return Array.from(byTs.values()).sort((a, b) => new Date(a.ts_utc) - new Date(b.ts_utc));
   }
 
   async function getLatestPvForecast({ start, end } = {}) {

@@ -260,3 +260,50 @@ test('createForecastService start without db is a no-op', async () => {
   await service.start();
   await service.close();
 });
+
+// --- T-0131: getLatestWeather provider de-duplication / merge ---
+
+function makeWeatherStore(rows, cfg = {}) {
+  const store = createForecastStore({ getCfg: () => cfg, pushLog: () => {} });
+  return store.ensureSchema({ query: async () => ({ rows, rowCount: rows.length }) }).then(() => store);
+}
+
+test('getLatestWeather returns rows unchanged when only one provider is present', async () => {
+  const rows = [
+    { provider: 'open_meteo', ts_utc: '2026-06-09T15:00:00.000Z', ghi_wm2: 100 },
+    { provider: 'open_meteo', ts_utc: '2026-06-09T16:00:00.000Z', ghi_wm2: 200 }
+  ];
+  const store = await makeWeatherStore(rows);
+  const out = await store.getLatestWeather({ start: 'a', end: 'b' });
+  assert.equal(out.length, 2);
+  assert.equal(out[0].ghi_wm2, 100);
+});
+
+test('getLatestWeather prefers the configured primary provider in the overlap, fills the tail with the fallback', async () => {
+  // Overlap at 15:00 (both mqtt + open_meteo); 16:00 mqtt-only; 17:00 open_meteo-only (longer horizon).
+  const rows = [
+    { provider: 'open_meteo', ts_utc: '2026-06-09T15:00:00.000Z', ghi_wm2: 100 },
+    { provider: 'mqtt',       ts_utc: '2026-06-09T15:00:00.000Z', ghi_wm2: 111 },
+    { provider: 'mqtt',       ts_utc: '2026-06-09T16:00:00.000Z', ghi_wm2: 222 },
+    { provider: 'open_meteo', ts_utc: '2026-06-09T17:00:00.000Z', ghi_wm2: 300 }
+  ];
+  const store = await makeWeatherStore(rows, { forecast: { weather: { provider: 'mqtt' } } });
+  const out = await store.getLatestWeather({ start: 'a', end: 'b' });
+  assert.equal(out.length, 3, 'one row per timestamp');
+  assert.equal(out[0].ts_utc, '2026-06-09T15:00:00.000Z');
+  assert.equal(out[0].provider, 'mqtt');     // local wins the overlap
+  assert.equal(out[0].ghi_wm2, 111);
+  assert.equal(out[1].ghi_wm2, 222);         // mqtt-only slot kept
+  assert.equal(out[2].provider, 'open_meteo'); // tail filled by Open-Meteo
+});
+
+test('getLatestWeather: explicit provider arg overrides config for the merge priority', async () => {
+  const rows = [
+    { provider: 'open_meteo', ts_utc: '2026-06-09T15:00:00.000Z', ghi_wm2: 100 },
+    { provider: 'mqtt',       ts_utc: '2026-06-09T15:00:00.000Z', ghi_wm2: 111 }
+  ];
+  const store = await makeWeatherStore(rows, { forecast: { weather: { provider: 'mqtt' } } });
+  const out = await store.getLatestWeather({ start: 'a', end: 'b', provider: 'open_meteo' });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].provider, 'open_meteo'); // explicit arg beats config
+});

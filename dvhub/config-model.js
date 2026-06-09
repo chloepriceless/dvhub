@@ -2029,9 +2029,95 @@ function buildFieldDefinitions() {
       label: 'Wetter-Provider',
       type: 'select',
       options: [
-        { value: 'open_meteo', label: 'Open-Meteo (kostenlos, global)' }
+        { value: 'open_meteo', label: 'Open-Meteo (kostenlos, global)' },
+        { value: 'mqtt', label: 'MQTT (lokal, z.B. LoxBerry Weather4Lox)' }
       ],
-      help: 'Quelle f\u00fcr Wetterdaten (Temperatur, Bew\u00f6lkung, Sichtweite).'
+      help: 'Quelle f\u00fcr Wetterdaten (Globalstrahlung, Temperatur, Bew\u00f6lkung). "MQTT" liest eine lokale Wetterstation \u00fcber den Broker (z.B. Weather4Lox auf der LoxBerry).'
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.preset',
+      label: 'MQTT-Wetter: Schema',
+      type: 'select',
+      options: [
+        { value: 'weather4lox', label: 'LoxBerry Weather4Lox (nur Pfad n\u00f6tig)' },
+        { value: 'custom', label: 'Eigenes Mapping (andere Quelle)' }
+      ],
+      help: 'Weather4Lox hat ein festes Topic-Schema \u2014 es reicht der Broker + Pr\u00e4fix. F\u00fcr andere Quellen (Home Assistant, ioBroker, Node-RED, eigene Station) "Eigenes Mapping" w\u00e4hlen und die Topics je Feld angeben.',
+      visibleWhenPath: { path: 'forecast.weather.provider', equals: 'mqtt' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.brokerUrl',
+      label: 'MQTT-Wetter: Broker-URL',
+      type: 'text',
+      help: 'Broker der Wetterquelle, z.B. mqtt://192.168.0.10:1883. Leer lassen = denselben Broker wie unter "MQTT" verwenden.',
+      visibleWhenPath: { path: 'forecast.weather.provider', equals: 'mqtt' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.prefix',
+      label: 'Weather4Lox: Topic-Pr\u00e4fix',
+      type: 'text',
+      help: 'Pr\u00e4fix der Weather4Lox-Topics (Standard: weather4lox). Es werden die st\u00fcndliche Vorhersage <pr\u00e4fix>/hfcNN_* und die Live-Werte <pr\u00e4fix>/cur_* gelesen.',
+      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'weather4lox' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.ghiTopic',
+      label: 'Eigenes Mapping: Globalstrahlung-Topic',
+      type: 'text',
+      help: 'MQTT-Topic mit der Globalstrahlung (GHI). Pflichtfeld f\u00fcr eigenes Mapping \u2014 ohne Strahlung keine PV-Sch\u00e4tzung.',
+      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.ghiUnit',
+      label: 'Eigenes Mapping: Einheit Globalstrahlung',
+      type: 'select',
+      options: [
+        { value: 'wm2', label: 'W/m\u00b2' },
+        { value: 'whm2', label: 'Wh/m\u00b2 (pro Stunde)' }
+      ],
+      help: 'Einheit des Globalstrahlung-Werts.',
+      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.tempTopic',
+      label: 'Eigenes Mapping: Temperatur-Topic',
+      type: 'text',
+      help: 'MQTT-Topic mit der Au\u00dfentemperatur (\u00b0C). Optional.',
+      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
+    },
+    {
+      section: 'forecast',
+      group: 'weather',
+      groupLabel: 'Wetter',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      path: 'forecast.weather.mqtt.cloudTopic',
+      label: 'Eigenes Mapping: Bew\u00f6lkung-Topic',
+      type: 'text',
+      help: 'MQTT-Topic mit der Bew\u00f6lkung (%). Optional.',
+      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
     },
     {
       section: 'forecast',
