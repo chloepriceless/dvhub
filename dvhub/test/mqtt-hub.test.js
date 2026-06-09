@@ -44,7 +44,7 @@ describe('config-model optional-section contract', () => {
     assert.ok(cfg && typeof cfg === 'object', 'createDefaultConfig returns an object');
     // Optional feature sections are NOT seeded into the minimal default config —
     // they are layered in by the settings UI / migrations when actually used.
-    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family']) {
+    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family', 'support']) {
       assert.equal(cfg[optional], undefined,
         `${optional} is an optional section — absent from the minimal default config`);
     }
@@ -55,7 +55,7 @@ describe('config-model optional-section contract', () => {
     // strict root-key allowlist when a user saves them — otherwise the settings
     // UI could never configure MQTT / integrations / notifications.
     const { ALLOWED_CONFIG_ROOTS } = await import('../routes-api.js');
-    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family']) {
+    for (const optional of ['mqtt', 'integrations', 'devices', 'notifications', 'family', 'support']) {
       assert.ok(ALLOWED_CONFIG_ROOTS.has(optional),
         `${optional} must be an accepted POST /api/config root key`);
     }

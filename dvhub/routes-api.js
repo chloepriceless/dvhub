@@ -474,7 +474,12 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   // and are echoed back unchanged when the settings UI saves; without these,
   // the strict-root check rejects a normal save with `unknown_config_paths`.
   'configSchemaVersion',
-  'influx'
+  'influx',
+  // T-0113: Support-Tunnel provisioning persists a `support` block
+  // ({ localUser, tunnel }) into config.json. The settings UI GETs the whole
+  // config and POSTs it back verbatim, so without `support` here EVERY settings
+  // save on a provisioned appliance is rejected with unknown_config_paths.
+  'support'
 ]));
 
 // Plan 08-09 Task 2: actor context extracted from a request — feeds the
