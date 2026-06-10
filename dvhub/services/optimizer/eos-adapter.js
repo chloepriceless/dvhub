@@ -413,7 +413,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         const d = new Date(tsKeys[1]).getTime() - new Date(tsKeys[0]).getTime();
         if (Number.isFinite(d) && d > 0) return Math.round(d / 60000);
       }
-      return 15;
+      // Review 2026-06-10 (B8): a single-row solution has no derivable slot
+      // length — guessing 15 min turned a 1h slot's Wh into a 4×-too-large
+      // setpoint. Return null → slotHours 0 → dvhubSetpointW stays null and
+      // the slot is not actuated (safe skip instead of a wrong write).
+      return null;
     })();
     const slotHoursForSetpoint = slotMinutesForSetpoint / 60;
     // WS-EOS (2026-06-01): translate each EOS slot into the DVhub Zeitplan lever

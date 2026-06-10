@@ -4667,6 +4667,24 @@ export function createApiRoutes(ctx) {
           return json(res, 400, { ok: false, error: 'invalid_epex_price_api_url' });
         }
       }
+      // Review 2026-06-10 (B2): same SSRF surface as epex.priceApiUrl — the EOS
+      // probe (/api/forecast/providers/eos-akkudoktor/probe) and sync
+      // (/api/eos/sync-from-dvhub) handlers fetch optimizer.eosProxy.url
+      // server-side and relay the response. EOS deploys next to the appliance,
+      // so: http only to RFC1918/loopback hosts; https to any host (TLS deploys
+      // behind a public reverse proxy stay possible). Everything else rejected.
+      const candidateEosUrl = body.config?.optimizer?.eosProxy?.url;
+      if (candidateEosUrl) {
+        let eu;
+        try { eu = new URL(candidateEosUrl); } catch { /* eu stays undefined → reject below */ }
+        const eosUrlOk = eu && (
+          eu.protocol === 'https:'
+          || (eu.protocol === 'http:' && (isRfc1918OrLoopback(eu.hostname) || eu.hostname === 'localhost'))
+        );
+        if (!eosUrlOk) {
+          return json(res, 400, { ok: false, error: 'invalid_eos_proxy_url' });
+        }
+      }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. Flipping either
       // requires an explicit `x-confirm-legal-gate: true` header AND emits a distinct

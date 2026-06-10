@@ -332,7 +332,11 @@ export function createEosConfigSync(ctx) {
 
     // No-op when the operator has explicitly disabled the EOS bridge — avoids
     // log spam when EOS isn't running and the operator doesn't intend it to.
-    if (cfg?.optimizer?.eosProxy?.enabled === false) {
+    // Review 2026-06-10 (B6): treat ABSENT eosProxy config as disabled too.
+    // The old `=== false` check let installs without any eosProxy block
+    // (undefined) run 10+ doomed HTTP calls against 127.0.0.1:8503 on every
+    // config save — log flood at fleet scale. Explicit enabled:true required.
+    if (!cfg?.optimizer?.eosProxy?.enabled) {
       return { ok: true, applied: [], errors: {}, skipped: 'eosProxy.enabled=false' };
     }
 

@@ -80,3 +80,17 @@ test('smbExec reports failure on nonzero exit', async () => {
   assert.equal(res.ok, false);
   assert.match(res.stdout, /ACCESS_DENIED/);
 });
+
+// --- Review 2026-06-10 (B3): smbclient metachar sanitizing ---
+import { buildSmbcCommand as _cmdB3, buildSmbcArgs as _argsB3 } from '../services/smb-target.js';
+
+test('B3: subPath smbclient metachars are stripped (no command injection via cd)', () => {
+  const cmd = _cmdB3('backups"; del dvhub-*; cd "x', ['ls dvhub-*.dump']);
+  assert.ok(!cmd.includes('"; del'), `injection survived: ${cmd}`);
+  assert.equal(cmd, 'cd "backups del dvhub-* cd x"; ls dvhub-*.dump');
+});
+
+test('B3: host/share are reduced to hostname/share charsets', () => {
+  const args = _argsB3({ host: 'nas;rm -rf', share: 'back"up$', authFile: '/tmp/a', command: 'ls' });
+  assert.equal(args[0], '//nasrm-rf/backup$');
+});

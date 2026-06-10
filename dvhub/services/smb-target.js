@@ -24,14 +24,23 @@ export function parseSmbLs(stdout) {
 }
 
 /** Pure: smbclient argv. Auth always via -A file (never password in argv). */
+// Review 2026-06-10 (B3): host/share come from operator config (LAN-writable) —
+// strip everything outside hostname/share charsets so a crafted value cannot
+// smuggle smbclient syntax into the service argument. spawn() already prevents
+// SHELL injection; this prevents smbclient-level surprises.
 export function buildSmbcArgs({ host, share, authFile, command }) {
-  return [`//${host}/${share}`, '-A', authFile, '-c', command];
+  const h = String(host || '').replace(/[^A-Za-z0-9.\-_]/g, '');
+  const s = String(share || '').replace(/[^A-Za-z0-9.\-_$ ]/g, '');
+  return [`//${h}/${s}`, '-A', authFile, '-c', command];
 }
 
 /** Pure: a `-c` command string — optional `cd subPath`, then the actions. */
 export function buildSmbcCommand(subPath, actions) {
   const parts = [];
-  const p = String(subPath || '').trim().replace(/^\/+/, '');
+  // Review 2026-06-10 (B3): subPath is embedded in the `-c` mini-language inside
+  // double quotes — a `"` or `;` in the config value could terminate the cd and
+  // inject arbitrary smbclient commands (e.g. `del *`). Strip the metachars.
+  const p = String(subPath || '').trim().replace(/^\/+/, '').replace(/[";\\]/g, '');
   if (p) parts.push(`cd "${p}"`);
   for (const a of actions) parts.push(a);
   return parts.join('; ');

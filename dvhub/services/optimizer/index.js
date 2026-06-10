@@ -141,7 +141,20 @@ export function applyDvForecastLogic(normalized, state, getCfg) {
 export function getOptInterval(cfg, hourOverride) {
   const normalInterval = cfg.optimizer?.intervalMs ?? 900_000;       // 15 min default
   const morningInterval = cfg.optimizer?.morningReoptIntervalMs ?? 300_000; // 5 min default
-  const hour = hourOverride !== undefined ? hourOverride : new Date().getHours();
+  // Review 2026-06-10 (B1): hour in the CONFIGURED timezone, not process-local —
+  // on a UTC host getHours() shifted the morning-reopt window by 2h.
+  let hour;
+  if (hourOverride !== undefined) {
+    hour = hourOverride;
+  } else {
+    try {
+      hour = Number(new Intl.DateTimeFormat('en-GB', {
+        timeZone: cfg.schedule?.timezone || 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23'
+      }).format(new Date()));
+    } catch {
+      hour = new Date().getHours(); // invalid TZ string — fall back to process-local
+    }
+  }
 
   // Morning reopt window: 05:00-09:59 local time
   if (hour >= 5 && hour < 10) {
