@@ -210,3 +210,54 @@ test('unexpected process exit clears open state + audits', () => {
   const closed = logs.find((l) => l.ev === 'support_tunnel_closed');
   assert.ok(closed && closed.data.unexpected === true);
 });
+
+// --- Review 2026-06-10 (B7): uiToken CSRF-nonce -------------------------------
+
+test('B7: status() issues a uiToken; consumeUiToken accepts it exactly once', () => {
+  const { ctx } = makeCtx();
+  const tun = createSupportTunnel(ctx, {
+    fs: { existsSync: () => false, readFileSync: () => { throw new Error('ENOENT'); } },
+  });
+  const tok = tun.status().uiToken;
+  assert.ok(typeof tok === 'string' && tok.length === 32, 'hex token expected');
+  assert.equal(tun.consumeUiToken(tok), true, 'first consume succeeds');
+  assert.equal(tun.consumeUiToken(tok), false, 'one-time: second consume fails');
+});
+
+test('B7: consumeUiToken rejects wrong/garbage candidates without consuming', () => {
+  const { ctx } = makeCtx();
+  const tun = createSupportTunnel(ctx, {
+    fs: { existsSync: () => false, readFileSync: () => { throw new Error('ENOENT'); } },
+  });
+  const tok = tun.status().uiToken;
+  assert.equal(tun.consumeUiToken('deadbeef'.repeat(4)), false, 'wrong token rejected');
+  assert.equal(tun.consumeUiToken(''), false);
+  assert.equal(tun.consumeUiToken(null), false);
+  assert.equal(tun.consumeUiToken(tok), true, 'real token still valid after failed attempts');
+});
+
+test('B7: uiToken expires after 10 min and status() re-issues a fresh one', () => {
+  const { ctx } = makeCtx();
+  let nowMs = 1_000_000;
+  const tun = createSupportTunnel(ctx, {
+    fs: { existsSync: () => false, readFileSync: () => { throw new Error('ENOENT'); } },
+    now: () => nowMs,
+  });
+  const tok1 = tun.status().uiToken;
+  nowMs += 11 * 60 * 1000; // beyond TTL
+  assert.equal(tun.consumeUiToken(tok1), false, 'expired token rejected');
+  const tok2 = tun.status().uiToken;
+  assert.notEqual(tok2, tok1, 'fresh token re-issued after expiry');
+  assert.equal(tun.consumeUiToken(tok2), true);
+});
+
+test('B7: liteStatus exposes only in-memory fields and NO uiToken', () => {
+  const { ctx } = makeCtx();
+  const tun = createSupportTunnel(ctx, {
+    fs: { existsSync: () => false, readFileSync: () => { throw new Error('ENOENT'); } },
+  });
+  const ls = tun.liteStatus();
+  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'open', 'ttlRemainingSec']);
+  assert.equal(ls.open, false);
+  assert.ok(!('uiToken' in ls), 'liteStatus must never leak the nonce');
+});

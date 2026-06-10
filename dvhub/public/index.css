@@ -933,3 +933,14 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   position:absolute; top:6px; right:8px;
   color:var(--red); font-size:14px;
 }
+
+/* Review 2026-06-10 (B7): persistent banner while the support tunnel is open
+   (rendered by app.js renderSupportTunnelBanner from /api/status.supportTunnel) */
+.support-tunnel-banner {
+  position:sticky; top:0; z-index:9999;
+  padding:8px 16px; text-align:center;
+  background:linear-gradient(90deg, #7c2d12, #b45309);
+  color:#fff7ed; font-weight:600; font-size:14px;
+  border-bottom:1px solid #f59e0b;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);
+}

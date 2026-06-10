@@ -307,6 +307,37 @@ export function createNotificationService(ctx) {
   }
 
   /**
+   * Review 2026-06-10 (B7): direct dispatch for deliberate, user-facing events
+   * (e.g. support tunnel opened/closed). Bypasses triggers, throttle and quiet
+   * hours BY DESIGN — these messages are the direct result of an action on the
+   * box and must always reach the operator. Fire-and-forget safe: errors are
+   * logged per channel, never propagated.
+   *
+   * @param {{ event?: string, level?: string, title: string, body?: string }} msg
+   * @returns {Promise<{ sent: number }>}
+   */
+  async function sendDirect(msg) {
+    let sent = 0;
+    try {
+      const cfg = getCfg();
+      if (!cfg.notifications?.enabled) return { sent };
+      const payload = { level: msg.level || 'info', title: msg.title || 'DVhub', body: msg.body || '' };
+      for (const [name, provider] of providers) {
+        try {
+          const result = await provider.notify(payload);
+          if (result?.ok) sent++;
+          pushLog('notification_sent', { event: msg.event || 'direct', channel: name, ok: result?.ok, error: result?.error });
+        } catch (err) {
+          pushLog('notification_error', { event: msg.event || 'direct', channel: name, error: err.message });
+        }
+      }
+    } catch (err) {
+      try { pushLog('notification_send_direct_error', { error: err.message }); } catch { /* noop */ }
+    }
+    return { sent };
+  }
+
+  /**
    * Test helper: inject mock providers.
    * @param {object} providerMap - { telegram: providerInstance, ... }
    */
@@ -314,5 +345,5 @@ export function createNotificationService(ctx) {
     providers = new Map(Object.entries(providerMap));
   }
 
-  return { start, close, evaluate, _setProviders };
+  return { start, close, evaluate, sendDirect, _setProviders };
 }

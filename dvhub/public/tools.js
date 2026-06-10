@@ -881,11 +881,16 @@ function fmtTunnelState(st) {
   return '🔒 Geschlossen (Support hat keinen Zugang)';
 }
 
+// Review 2026-06-10 (B7): one-time CSRF token from the status response — sent
+// back automatically on open. The customer never sees or types anything.
+let supportTunnelUiToken = null;
+
 async function refreshSupportTunnelStatus() {
   try {
     const res = await apiFetch('/api/support/tunnel/status');
     if (!res.ok) return;
     const st = await res.json();
+    supportTunnelUiToken = st.uiToken || null;
     setText('supportTunnelState', fmtTunnelState(st));
     setText('supportTunnelKey', st.localUserEnabled === false
       ? 'Deaktiviert — kein Support-Login (kein Fern-Support möglich)'
@@ -909,12 +914,20 @@ async function openSupportTunnel() {
   if (btn) btn.disabled = true;
   if (result) result.textContent = 'Öffne Support-Tunnel…';
   try {
-    const res = await apiFetch('/api/support/tunnel/open', {
+    const postOpen = () => apiFetch('/api/support/tunnel/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ttlMin }),
+      body: JSON.stringify({ ttlMin, uiToken: supportTunnelUiToken }),
     });
-    const j = await res.json().catch(() => ({}));
+    let res = await postOpen();
+    let j = await res.json().catch(() => ({}));
+    // B7: nonce stale (page sat open > token TTL)? Fetch a fresh status —
+    // which re-issues the token — and retry once, invisibly.
+    if (res.status === 403 && j.error === 'ui_token_required') {
+      await refreshSupportTunnelStatus();
+      res = await postOpen();
+      j = await res.json().catch(() => ({}));
+    }
     if (!res.ok || !j.ok) {
       const detail = j.detail || j.error || `HTTP ${res.status}`;
       if (result) result.textContent = 'Konnte nicht öffnen: ' + detail;

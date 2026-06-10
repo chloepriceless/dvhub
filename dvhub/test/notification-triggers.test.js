@@ -143,3 +143,40 @@ describe('createNotificationService', () => {
     assert.ok(dispatched[0].title || dispatched[0].body, 'notification should have content');
   });
 });
+
+// --- Review 2026-06-10 (B7): sendDirect ---------------------------------------
+
+describe('B7 sendDirect', () => {
+  it('dispatches to all providers, bypassing triggers/quiet-hours', async () => {
+    const sent = [];
+    const svc = createNotificationService({
+      getCfg: () => ({ notifications: { enabled: true } }),
+      pushLog: () => {}
+    });
+    svc._setProviders({
+      telegram: { type: 'telegram', notify: async (m) => { sent.push(['tg', m]); return { ok: true }; } },
+      pushover: { type: 'pushover', notify: async (m) => { sent.push(['po', m]); return { ok: true }; } }
+    });
+    const r = await svc.sendDirect({ event: 'support_tunnel', level: 'warning', title: 'Support-Tunnel ge\u00f6ffnet', body: 'x' });
+    assert.equal(r.sent, 2);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0][1].title, 'Support-Tunnel ge\u00f6ffnet');
+  });
+
+  it('is a no-op when notifications are disabled', async () => {
+    const svc = createNotificationService({ getCfg: () => ({ notifications: { enabled: false } }), pushLog: () => {} });
+    svc._setProviders({ telegram: { type: 'telegram', notify: async () => { throw new Error('must not be called'); } } });
+    const r = await svc.sendDirect({ title: 'x' });
+    assert.equal(r.sent, 0);
+  });
+
+  it('survives a throwing provider and still counts the others', async () => {
+    const svc = createNotificationService({ getCfg: () => ({ notifications: { enabled: true } }), pushLog: () => {} });
+    svc._setProviders({
+      broken: { type: 'broken', notify: async () => { throw new Error('boom'); } },
+      ok: { type: 'ok', notify: async () => ({ ok: true }) }
+    });
+    const r = await svc.sendDirect({ title: 'x' });
+    assert.equal(r.sent, 1);
+  });
+});

@@ -142,6 +142,53 @@ export function createSupportTunnel(ctx, deps = {}) {
   let lastError = null;
   let lastOpenedBy = null;
 
+  // Review 2026-06-10 (B7, Christin-Entscheid Lösung 1): CSRF-Nonce für den
+  // Open-Endpunkt. Der Status-GET liefert ein kurzlebiges Einmal-Token mit; die
+  // eigene UI schickt es beim Öffnen automatisch zurück. Eine fremde Website im
+  // Browser des Kunden kann die Status-Antwort wegen der Same-Origin-Policy
+  // nicht LESEN → sie kommt nie an das Token → blindes CSRF/DNS-Rebinding auf
+  // POST /open läuft ins Leere. Für den Kunden bleibt es 1 Klick (kein Token-
+  // Eingeben). Close bleibt bewusst UNGESCHÜTZT — der Kill-Switch ist
+  // privilegienREDUZIEREND und muss immer funktionieren (fail-safe).
+  const UI_TOKEN_TTL_MS = 10 * 60 * 1000;
+  let uiToken = null;
+  let uiTokenAt = 0;
+
+  function issueUiToken() {
+    const t = now();
+    if (!uiToken || (t - uiTokenAt) > UI_TOKEN_TTL_MS) {
+      uiToken = crypto.randomBytes(16).toString('hex');
+      uiTokenAt = t;
+    }
+    return uiToken;
+  }
+
+  // One-time consume: a valid candidate invalidates the stored token (the UI
+  // re-fetches status afterwards anyway). Length-guarded timingSafeEqual.
+  function consumeUiToken(candidate) {
+    if (!uiToken || typeof candidate !== 'string') return false;
+    if ((now() - uiTokenAt) > UI_TOKEN_TTL_MS) { uiToken = null; return false; }
+    const cand = Buffer.from(candidate);
+    const expect = Buffer.from(uiToken);
+    if (cand.length !== expect.length) return false;
+    const ok = crypto.timingSafeEqual(cand, expect);
+    if (ok) { uiToken = null; uiTokenAt = 0; }
+    return ok;
+  }
+
+  // Fire-and-forget Direktmeldung (Review 2026-06-10 B7 Lösung 2): Telegram/
+  // Pushover/ntfy über den Notification-Service, falls konfiguriert. Lazy über
+  // ctx, damit die Boot-Reihenfolge (tunnel vor notificationService) egal ist.
+  function notifyTunnel(title, body, level) {
+    try {
+      const svc = ctx?.notificationService;
+      if (svc && typeof svc.sendDirect === 'function') {
+        Promise.resolve(svc.sendDirect({ event: 'support_tunnel', level: level || 'warning', title, body }))
+          .catch(() => { /* fire-and-forget */ });
+      }
+    } catch { /* notification must never break tunnel mechanics */ }
+  }
+
   function getDataDir() {
     if (typeof ctx?.getDataDir === 'function') return ctx.getDataDir() || '.';
     return process.env.DV_DATA_DIR || '.';
@@ -159,16 +206,38 @@ export function createSupportTunnel(ctx, deps = {}) {
     };
   }
 
+  // Provisioning values (peer-assigned shellPort/webPort) live in a SIDECAR file
+  // next to the key material — NOT in config.json, which `POST /api/config`
+  // overwrites verbatim (a UI config-save would otherwise wipe the relay ports).
+  // Precedence: built-in defaults < sidecar relay.json < config.support.relay
+  // (config wins, so an operator/test can override the sidecar deliberately).
+  function readRelaySidecar(supDir) {
+    try {
+      const raw = fsImpl.readFileSync(path.join(supDir, 'relay.json'), 'utf8');
+      const o = JSON.parse(raw);
+      return (o && typeof o === 'object') ? o : {};
+    } catch {
+      return {};
+    }
+  }
+
   function relayConfig() {
     const cfg = (typeof ctx?.getCfg === 'function' ? ctx.getCfg() : null) || {};
     const support = cfg.support || {};
-    const relay = support.relay || {};
+    const cfgRelay = support.relay || {};
+    const p = supportPaths();
+    const side = readRelaySidecar(p.supDir);
+    const pick = (key, dflt) => {
+      if (cfgRelay[key] !== undefined && cfgRelay[key] !== null && cfgRelay[key] !== '') return cfgRelay[key];
+      if (side[key] !== undefined && side[key] !== null && side[key] !== '') return side[key];
+      return dflt;
+    };
     return {
-      host: relay.host || 'support.dvhub.de',
-      port: Number(relay.port) || 47821,
-      user: relay.user || 'dvhub-support',
-      shellPort: Number(relay.shellPort) || 0,
-      webPort: Number(relay.webPort) || 0,
+      host: String(pick('host', 'support.dvhub.de')),
+      port: Number(pick('port', 47821)) || 47821,
+      user: String(pick('user', 'dvhub-support')),
+      shellPort: Number(pick('shellPort', 0)) || 0,
+      webPort: Number(pick('webPort', 0)) || 0,
       autoCloseMin: clampTtlMin(support.tunnel?.autoCloseMin, TTL_MIN_DEFAULT),
       localUserEnabled: support.localUser?.enabled !== false, // opt-out: default ON
     };
@@ -212,6 +281,20 @@ export function createSupportTunnel(ctx, deps = {}) {
       localUserEnabled: rc.localUserEnabled,
       autoCloseMin: rc.autoCloseMin,
       lastError,
+      // B7: CSRF-Nonce für POST /open — die UI schickt ihn automatisch mit.
+      uiToken: issueUiToken(),
+    };
+  }
+
+  // Leichtgewichtiger Status für den /api/status-Poll des Leitstands (3s-Takt):
+  // nur In-Memory-Felder, KEINE fs-Zugriffe (status() liest appliance-id +
+  // Key-Fingerprint von Platte) und KEIN uiToken.
+  function liteStatus() {
+    const t = now();
+    return {
+      open: !!child,
+      expiresAt,
+      ttlRemainingSec: (child && expiresAt) ? Math.max(0, Math.round((expiresAt - t) / 1000)) : null,
     };
   }
 
@@ -227,6 +310,11 @@ export function createSupportTunnel(ctx, deps = {}) {
     }
     if (wasOpen) {
       pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
+      notifyTunnel('Support-Tunnel geschlossen',
+        reason === 'auto_close'
+          ? 'Der Support-Tunnel wurde nach Ablauf der Zeit automatisch geschlossen.'
+          : 'Der Support-Tunnel wurde geschlossen.',
+        'info');
     }
     lastOpenedBy = null;
   }
@@ -326,6 +414,10 @@ export function createSupportTunnel(ctx, deps = {}) {
       webPort: rc.webPort,
       applianceId,
     }, actor);
+    notifyTunnel('Support-Tunnel geöffnet',
+      `Fernzugriff für den Support ist jetzt möglich — schließt automatisch in ${ttl} min. `
+      + 'Falls du das nicht warst: Tools → Support-Tunnel → Schließen.',
+      'warning');
 
     return { ok: true, status: status() };
   }
@@ -336,5 +428,5 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { ok: true, status: status() };
   }
 
-  return { open, close, status };
+  return { open, close, status, liteStatus, consumeUiToken };
 }

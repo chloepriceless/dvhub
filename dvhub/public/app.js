@@ -1744,6 +1744,24 @@ async function handleMaxDischargeSubmit() {
   await requestDashboardRefresh();
 }
 
+// Review 2026-06-10 (B7 Lösung 2): persistenter, unübersehbarer Banner solange
+// der Support-Tunnel offen ist. Quelle: /api/status.supportTunnel (3s-Poll) —
+// erscheint im Leitstand, egal von wo der Tunnel geöffnet wurde.
+function renderSupportTunnelBanner(st) {
+  let el = document.getElementById('supportTunnelBanner');
+  if (!st || !st.open) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'supportTunnelBanner';
+    el.className = 'support-tunnel-banner';
+    document.body.prepend(el);
+  }
+  const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
+  el.textContent = '🔓 Support-Tunnel aktiv — Fernzugriff für den Support möglich'
+    + (mins != null ? `, schließt automatisch in ~${mins} min` : '')
+    + '. Schließen: Einstellungen → Support-Tunnel.';
+}
+
 function renderDashboardStatus(status) {
   // Plan 09-04: each top-level dashboard card update is wrapped in
   // DVhubCommon.safeRender(...) so a throw in ONE card does NOT abort the
@@ -1753,6 +1771,10 @@ function renderDashboardStatus(status) {
   // misses (e.g., throws in the refresh control flow itself).
   // safeRender returns a Promise but a synchronous throw inside fn() is
   // caught synchronously, so the fire-and-forget pattern below is safe.
+
+  safeRender('dashboard.support-tunnel-banner', () => {
+    renderSupportTunnelBanner(status.supportTunnel);
+  });
 
   safeRender('dashboard.dv-status', () => {
     const dvOn = Number(status.dvControlValue) === 1;

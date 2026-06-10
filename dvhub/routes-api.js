@@ -1599,12 +1599,16 @@ export function createApiRoutes(ctx) {
 
   // ── Status / History builders ────────────────────────────────────────
   function buildApiStatusResponse(now = Date.now()) {
-    return buildWorkerBackedStatusResponse({
+    const payload = buildWorkerBackedStatusResponse({
       cachedStatus: ctx.getCachedRuntimeStatusPayload(),
       fallbackStatus: ctx.buildFallbackStatusPayload(now),
       setup: configMetaPayload(),
       runtime: ctx.buildRuntimeRouteMeta(now)
     });
+    // Review 2026-06-10 (B7 Lösung 2): Leitstand-Banner-Quelle. liteStatus()
+    // liest nur In-Memory-Felder (kein fs, kein uiToken) — sicher im 3s-Poll.
+    payload.supportTunnel = ctx.supportTunnel?.liteStatus?.() ?? null;
+    return payload;
   }
 
   function buildApiHistoryImportStatusResponse() {
@@ -3650,6 +3654,14 @@ export function createApiRoutes(ctx) {
     // actions — the customer clicks the button from their own WLAN, the same trust
     // boundary the rest of DVhub uses. Without an OPEN tunnel the box sits behind
     // NAT and is unreachable; the deposited support key alone grants nothing.
+    //
+    // Review 2026-06-10 (B7, Christin-Entscheid): POST /open additionally requires
+    // the one-time uiToken from GET /status (CSRF-nonce — a cross-origin page in
+    // the customer's browser cannot READ the status response, so blind CSRF/
+    // DNS-rebinding POSTs cannot supply it; the own UI passes it invisibly).
+    // A valid Bearer token bypasses the nonce so scripted/support flows keep
+    // working. /close stays nonce-free BY DESIGN: the kill switch is privilege-
+    // REDUCING and must never be blockable by a stale nonce.
     if (url.pathname === '/api/support/tunnel/status' && req.method === 'GET') {
       if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
       return json(res, 200, { ok: true, ...ctx.supportTunnel.status() });
@@ -3659,6 +3671,22 @@ export function createApiRoutes(ctx) {
       const actor = actorContext(req);
       const body = await readJsonBody(req, res);
       if (body === null) return; // readJsonBody already sent 400/413
+      const hasValidBearer = (() => {
+        const expectedTok = getCfg().apiToken;
+        if (typeof expectedTok !== 'string' || expectedTok.length === 0) return false;
+        const m = /^Bearer\s+(.+)$/i.exec(String(req.headers?.authorization || ''));
+        if (!m) return false;
+        const got = Buffer.from(m[1]);
+        const want = Buffer.from(expectedTok);
+        return got.length === want.length && crypto.timingSafeEqual(got, want);
+      })();
+      if (!hasValidBearer && !ctx.supportTunnel.consumeUiToken?.(body?.uiToken)) {
+        return json(res, 403, {
+          ok: false,
+          error: 'ui_token_required',
+          detail: 'Sicherheits-Token fehlt oder abgelaufen — Status neu laden und erneut öffnen.'
+        });
+      }
       const ttlRaw = Number(body?.ttlMin);
       const r = ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
       // not_provisioned / misconfigured / spawn_failed -> 409 (caller can't open yet)
