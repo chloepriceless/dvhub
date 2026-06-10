@@ -1265,9 +1265,18 @@ const web = http.createServer(async (req, res) => {
     // EOSdash reverse-proxy (Phase 21 — 2026-05-23): expose the EOS
     // configuration UI (bound to 127.0.0.1:8504) through DVhub so the
     // operator can configure EOS auto-optimization without an SSH tunnel.
-    // Gated by LAN-trust + Bearer-token like the rest of DVhub (checkAuth
-    // semantics are inherited via the same web listener context).
+    //
+    // A-1 (Go-Live-Review 2026-06-10): this proxy is dispatched BEFORE
+    // routes.handleRequest, so it previously bypassed checkAuth/checkRateLimit
+    // entirely — `/eosdash/*` (which fronts the EOS optimizer = battery-control
+    // config) was reachable with NO auth from anywhere that could reach the port.
+    // The earlier "checkAuth semantics are inherited" comment was simply false:
+    // /eosdash does not match the /api/ prefix that handleRequest gates on. Run
+    // the canonical gate explicitly here — it honours the SAME security.lanTrust
+    // model as every /api/ route (LAN-bypass under 'open', Bearer under
+    // 'restricted'/'strict' because eosdash is in the 'control' endpoint group).
     if (isEosdashRequest(url.pathname)) {
+      if (!routes.enforceRequestGate(req, res)) return;
       eosdashProxy(req, res);
       return;
     }

@@ -6070,5 +6070,20 @@ export function createApiRoutes(ctx) {
   ctx.costSummary = costSummary;
   ctx.userEnergyPricingSummary = userEnergyPricingSummary;
 
-  return { handleRequest, serveStatic };
+  // A-1 (Go-Live-Review 2026-06-10): expose the canonical request gate so the
+  // orchestrator can protect routes that are dispatched OUTSIDE handleRequest —
+  // specifically the /eosdash/* reverse-proxy (server.js dispatches it before
+  // handleRequest). Without this, /eosdash/* (which fronts the EOS optimizer =
+  // battery-control config) was reachable with NO auth and NO rate-limit from
+  // anywhere that could hit the port. Returns true when the request passed both
+  // rate-limit and auth (caller proceeds); false means a response was already
+  // written (caller MUST return). Honours the SAME security.lanTrust model as
+  // every /api/ route, so eosdash inherits restricted/strict automatically.
+  function enforceRequestGate(req, res) {
+    if (!checkRateLimit(req, res)) return false;
+    if (!checkAuth(req, res)) return false;
+    return true;
+  }
+
+  return { handleRequest, serveStatic, enforceRequestGate };
 }
