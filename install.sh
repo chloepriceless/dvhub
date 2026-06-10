@@ -445,6 +445,42 @@ install_ml_deps() {
           sudo install -m 0755 "$OLLAMA_TMP" /usr/local/bin/ollama
           rm -f "$OLLAMA_TMP"
           echo "  LLM: Ollama installiert (sha256 verifiziert)."
+
+          # A-2 (Go-Live-Review 2026-06-10): the official `curl|sh` installer
+          # creates the systemd unit + the `ollama` service user; our pinned
+          # binary download does NOT. Without a unit, the `systemctl enable
+          # --now ollama` below fails on every fresh host and the TinyLlama pull
+          # runs against a dead daemon. Create a minimal unit ourselves, bound to
+          # 127.0.0.1 (the security posture the post-install sed at the bottom of
+          # this block also enforces — kept idempotent). Best-effort: a unit-write
+          # hiccup must not abort the optional LLM tier.
+          if ! id ollama >/dev/null 2>&1; then
+            sudo useradd --system --create-home --home-dir /usr/share/ollama --shell /usr/sbin/nologin ollama 2>/dev/null || true
+          fi
+          if [ ! -f /etc/systemd/system/ollama.service ]; then
+            cat <<OLLAMA_UNIT | sudo tee /etc/systemd/system/ollama.service >/dev/null
+[Unit]
+Description=Ollama Service (DVhub LLM tile)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=on-failure
+RestartSec=3
+Environment=OLLAMA_HOST=127.0.0.1
+# Persist pulled models across restarts under the service user's home.
+Environment=HOME=/usr/share/ollama
+
+[Install]
+WantedBy=multi-user.target
+OLLAMA_UNIT
+            sudo systemctl daemon-reload
+            echo "  LLM: ollama.service angelegt (127.0.0.1, User ollama)."
+          fi
         else
           echo "  LLM: Download von ${OLLAMA_URL} fehlgeschlagen — Ollama wird uebersprungen."
           rm -f "$OLLAMA_TMP"
@@ -787,6 +823,16 @@ if [[ -z "${PRIMARY_IP}" ]]; then
   PRIMARY_IP="127.0.0.1"
 fi
 
+# A-3 (Go-Live-Review 2026-06-10): print the REAL listen port. The server binds
+# cfg.httpPort (default 80, see config.example.json) — the old hard-coded :8080
+# echo printed a dead URL for every fresh install (deploy-test.sh already flagged
+# this: "app httpPort from config.json (NOT 8080)"). Read it back from the config
+# we just wrote; fall back to 80.
+SETUP_HTTP_PORT="80"
+if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
+  SETUP_HTTP_PORT="$(node -e "try{const c=require('$CONFIG_PATH');process.stdout.write(String(c.httpPort||80))}catch{process.stdout.write('80')}" 2>/dev/null || echo 80)"
+fi
+
 echo
 echo "DVhub wurde installiert."
 echo "Service: systemctl status ${SERVICE_NAME}.service"
@@ -794,7 +840,7 @@ echo "Config-Datei: ${CONFIG_PATH}"
 echo "Herstellerprofil: ${CONFIG_DIR}/hersteller/victron.json"
 echo "Datenverzeichnis: ${DATA_DIR}"
 echo "Datenbank: PostgreSQL (dvhub)"
-echo "Setup-Oberfläche: http://${PRIMARY_IP}:8080/"
+echo "Setup-Oberfläche: http://${PRIMARY_IP}:${SETUP_HTTP_PORT}/"
 echo
 echo "DVhub nutzt eine externe Betriebs-Config und ein separates Herstellerprofil."
 echo "Technische Register und Victron-spezifische Kommunikationswerte liegen in ${CONFIG_DIR}/hersteller/victron.json."

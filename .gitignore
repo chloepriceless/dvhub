@@ -1,6 +1,14 @@
 # Runtime / Secrets
 dv-control-webapp/config.json
 dv-control-webapp/energy_state.json
+# A-3 (Go-Live-Review 2026-06-10): the app persists day-energy counters to
+# ${DV_DATA_DIR}/energy_state.json, but with no DV_DATA_DIR it falls back to the
+# app dir and overwrites the in-repo file — a tracked runtime file makes the tree
+# dirty and breaks the `git checkout`-based self-update. Keep it out of git.
+dvhub/energy_state.json
+# Local diagnostic scratch files (background-flow probes, ad-hoc screenshots).
+dvhub/diag-*.mjs
+dvhub/diag-*.png
 
 # Node
 node_modules/
