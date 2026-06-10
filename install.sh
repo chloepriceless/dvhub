@@ -498,14 +498,23 @@ OLLAMA_UNIT
     OLLAMA_BIN="$(command -v ollama || echo /usr/local/bin/ollama)"
     echo "  LLM: Ollama Service aktiviert."
 
-    # Pull TinyLlama model (if not already present)
-    if "$OLLAMA_BIN" list 2>/dev/null | grep -q "tinyllama"; then
-      echo "  LLM: TinyLlama Modell bereits vorhanden."
+    # Pull the CONFIGURED LLM model (Go-Live-Review 2026-06-10). Was hard-coded to
+    # TinyLlama, which produces poor German; the default is now qwen3:4b (clearly
+    # better German for the status messages). The operator can pick another model
+    # in Settings (llm.llmModel) — we read it back from the config so install/
+    # update pulls whatever is actually selected. The 8 GB+ Tier-3 gate above has
+    # ample room for a 4B (~2.5 GB) model. Best-effort: the LLM tile is optional.
+    LLM_MODEL="qwen3:4b"
+    if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
+      LLM_MODEL="$(node -e "try{const c=require('$CONFIG_PATH');process.stdout.write(String(c.llm&&c.llm.llmModel||'qwen3:4b'))}catch{process.stdout.write('qwen3:4b')}" 2>/dev/null || echo qwen3:4b)"
+    fi
+    if "$OLLAMA_BIN" list 2>/dev/null | grep -qF "$LLM_MODEL"; then
+      echo "  LLM: Modell $LLM_MODEL bereits vorhanden."
     else
-      echo "  LLM: Lade TinyLlama Modell herunter (~637MB)..."
-      "$OLLAMA_BIN" pull tinyllama \
-        && echo "  LLM: TinyLlama Modell geladen." \
-        || echo "  LLM: TinyLlama-Pull fehlgeschlagen — uebersprungen (optional)."
+      echo "  LLM: Lade Modell $LLM_MODEL herunter..."
+      "$OLLAMA_BIN" pull "$LLM_MODEL" \
+        && echo "  LLM: Modell $LLM_MODEL geladen." \
+        || echo "  LLM: Pull von $LLM_MODEL fehlgeschlagen — uebersprungen (optional)."
     fi
 
     # Ensure Ollama only listens on localhost (security)

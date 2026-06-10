@@ -2283,18 +2283,6 @@ function buildFieldDefinitions() {
       group: 'mlCorrection',
       groupLabel: 'ML & Forecast-Korrektur',
       groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlLgbmDataDays',
-      label: 'Min. Datentage (LightGBM)',
-      type: 'number',
-      min: 30,
-      max: 365,
-      help: 'Mindestanzahl Tage fuer LightGBM-Training.'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
       path: 'ml.mlSlidingWindowMonths',
       label: 'Datenfenster (Monate)',
       type: 'number',
@@ -2351,8 +2339,15 @@ function buildFieldDefinitions() {
       groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
       path: 'llm.llmModel',
       label: 'LLM Modell',
-      type: 'text',
-      help: 'Ollama Modellname.'
+      type: 'select',
+      default: 'qwen3:4b',
+      options: [
+        { value: 'qwen3:1.7b', label: 'Qwen3 1.7B — sparsam (~1,4 GB), gutes Deutsch' },
+        { value: 'qwen3:4b',   label: 'Qwen3 4B — Standard/empfohlen (~2,5 GB), flüssiges Deutsch' },
+        { value: 'qwen3:8b',   label: 'Qwen3 8B — beste Qualität (~5,2 GB), braucht ≥8 GB RAM' },
+        { value: 'tinyllama',  label: 'TinyLlama — Minimal/Legacy (~0,6 GB), schwaches Deutsch' }
+      ],
+      help: 'Sprachmodell für die generierten Status-Nachrichten (lokal via Ollama). Qwen3 erzeugt deutlich besseres Deutsch als das alte TinyLlama. Größere Modelle = bessere Sprache, mehr RAM/langsamer. Das gewählte Modell wird beim Setup/Update via "ollama pull" geladen; ein Wechsel kann beim ersten Lauf eine Verzögerung verursachen, bis das Modell gezogen ist.'
     },
     {
       section: 'llm',
@@ -2644,7 +2639,6 @@ export function createDefaultConfig() {
       mlTrainingMinute: 30,
       mlRollbackThreshold: 10,
       mlMinDataDays: 30,
-      mlLgbmDataDays: 90,
       mlSlidingWindowMonths: 12,
       sfEnabled: true,
       sfUseMstl: true
@@ -2652,7 +2646,7 @@ export function createDefaultConfig() {
     llm: {
       llmEnabled: true,
       llmOllamaUrl: 'http://127.0.0.1:11434',
-      llmModel: 'tinyllama',
+      llmModel: 'qwen3:4b',
       llmMaxMessagesPerDay: 20,
       llmStatusIntervalMin: 60,
       llmTemperature: 0.7,

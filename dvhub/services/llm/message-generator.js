@@ -127,7 +127,7 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
         const cfg = getCfg();
         const temperature = cfg?.llm?.llmTemperature ?? 0.7;
         const maxTokens = cfg?.llm?.llmMaxTokens ?? DEFAULT_MAX_TOKENS;
-        const model = cfg?.llm?.llmModel ?? 'llama3.2';
+        const model = cfg?.llm?.llmModel ?? 'qwen3:4b';
 
         const { messages, version } = buildPromptMessages(type, data);
 
@@ -159,6 +159,16 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
           const raw = result?.response ?? '';
           text = typeof raw === 'string' ? raw.trim() : '';
         }
+
+        // B-1/LLM-Auswahl (2026-06-10): reasoning models (Qwen3 et al.) prepend a
+        // <think>…</think> block before the actual answer. For our short German
+        // status lines that reasoning must never leak into the UI. Strip matched
+        // blocks, then any dangling text up to a stray closing tag, then trim.
+        text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+        if (text.includes('</think>')) {
+          text = text.slice(text.lastIndexOf('</think>') + '</think>'.length);
+        }
+        text = text.trim();
 
         if (text.length > 0) {
           dailyLlmCount++;
