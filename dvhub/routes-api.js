@@ -397,6 +397,57 @@ export function _resetTrustProxyWarnForTesting() {
   trustProxyMisconfigWarned = false;
 }
 
+// ── Go-Live-Review 2026-06-10: LAN-trust CIDR matching ──────────────────
+// Pure + exported so the security.lanCidrs decision is unit-testable without a
+// live socket. IPv4 is matched bit-exact against a.b.c.d/n. IPv6 is matched by
+// normalised-prefix (best-effort: full-address match, or /n on a 16-bit hextet
+// boundary). Anything unparseable → false (fail-closed: a bad CIDR never widens
+// trust). An empty/absent CIDR list is handled by the CALLER (means "use the
+// built-in RFC1918 default"), not here.
+function ipv4ToInt(ip) {
+  const parts = String(ip).split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    const o = Number(p);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = (n * 256) + o;
+  }
+  return n >>> 0;
+}
+export function ipMatchesCidr(ip, cidr) {
+  const raw = String(ip || '').replace(/^::ffff:/, '');
+  const str = String(cidr || '').trim();
+  if (!raw || !str) return false;
+  const slash = str.indexOf('/');
+  const net = slash >= 0 ? str.slice(0, slash) : str;
+  const bitsRaw = slash >= 0 ? Number(str.slice(slash + 1)) : null;
+
+  // IPv4 path
+  if (raw.indexOf(':') === -1 && net.indexOf(':') === -1) {
+    const ipInt = ipv4ToInt(raw);
+    const netInt = ipv4ToInt(net);
+    if (ipInt === null || netInt === null) return false;
+    const bits = bitsRaw === null ? 32 : bitsRaw;
+    if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+    if (bits === 0) return true;
+    const mask = bits === 32 ? 0xffffffff : (~((1 << (32 - bits)) - 1)) >>> 0;
+    return (ipInt & mask) === (netInt & mask);
+  }
+
+  // IPv6 best-effort: exact match, or hextet-boundary prefix match.
+  const norm = (s) => String(s).toLowerCase().replace(/^::ffff:/, '');
+  const a = norm(raw);
+  const b = norm(net);
+  if (bitsRaw === null) return a === b;
+  if (!Number.isInteger(bitsRaw) || bitsRaw < 0 || bitsRaw > 128) return false;
+  if (bitsRaw % 16 !== 0) return a === b; // sub-hextet IPv6 masks unsupported → exact-only
+  const hextets = bitsRaw / 16;
+  const aPref = a.split(':').slice(0, hextets).join(':');
+  const bPref = b.split(':').slice(0, hextets).join(':');
+  return aPref !== '' && aPref === bPref;
+}
+
 // Compare two semver-ish tags numerically on major.minor.patch. Strips a leading
 // `v`, ignores pre-release/build metadata (after `-` / `+`). Returns -1 / 0 / +1.
 // Used by /api/admin/update/apply downgrade guard.
@@ -759,20 +810,51 @@ export function createApiRoutes(ctx) {
   // an operator opts in via cfg.trustProxy=true + cfg.trustedProxyIps, XFF from
   // a known reverse proxy is honoured. Without opt-in, behaviour is unchanged
   // (req.socket.remoteAddress is the sole source of truth — QUAL-02 backward compat).
-  function isLocalNetworkRequest(req) {
+  // Loopback = the box itself. Always trusted regardless of lanTrust posture
+  // (internal calls, on-box kiosk). Under 'strict' this is the ONLY bypass.
+  function isLoopbackRequest(req) {
     const addr = deriveClientIp(req, getCfg());
-    // Localhost
+    return addr === '127.0.0.1' || addr === '::1';
+  }
+
+  // Built-in "is this a private/LAN address" test — RFC1918 + loopback + IPv6
+  // link-local. Used when the operator has NOT narrowed the definition via
+  // security.lanCidrs.
+  function isDefaultPrivateAddr(addr) {
     if (addr === '127.0.0.1' || addr === '::1') return true;
-    // Private/LAN ranges (RFC 1918)
     const parts = addr.split('.').map(Number);
-    if (parts.length === 4) {
+    if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
       if (parts[0] === 10) return true;                                    // 10.0.0.0/8
       if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
       if (parts[0] === 192 && parts[1] === 168) return true;               // 192.168.0.0/16
     }
-    // IPv6 link-local
-    if (addr.startsWith('fe80:')) return true;
+    if (addr.startsWith('fe80:')) return true;                             // IPv6 link-local
     return false;
+  }
+
+  // Go-Live-Review 2026-06-10: "is this client on the trusted LAN" now honours
+  // the operator's security config:
+  //   - security.lanCidrs: if non-empty, ONLY these CIDRs count as LAN (loopback
+  //     always still counts — the box itself). Empty = built-in RFC1918 default.
+  //   - security.trustedClientIps: if non-empty, the client must ALSO be one of
+  //     these exact IPs (an explicit per-device allowlist on top of the range).
+  // Backward-compatible: with an empty security block this is byte-for-byte the
+  // old RFC1918/loopback behaviour.
+  function isLocalNetworkRequest(req) {
+    const addr = deriveClientIp(req, getCfg());
+    if (addr === '127.0.0.1' || addr === '::1') return true; // box itself, always
+    const sec = getCfg().security || {};
+    const cidrs = Array.isArray(sec.lanCidrs) ? sec.lanCidrs.filter(Boolean) : [];
+    const inRange = cidrs.length > 0
+      ? cidrs.some((c) => ipMatchesCidr(addr, c))
+      : isDefaultPrivateAddr(addr);
+    if (!inRange) return false;
+    const trusted = Array.isArray(sec.trustedClientIps) ? sec.trustedClientIps.filter(Boolean) : [];
+    if (trusted.length > 0) {
+      const norm = String(addr).replace(/^::ffff:/, '');
+      if (!trusted.map((t) => String(t).replace(/^::ffff:/, '')).includes(norm)) return false;
+    }
+    return true;
   }
 
   // LAN-safe endpoints: read-only, no secrets, no admin surface, no internal paths/errors.
@@ -844,19 +926,69 @@ export function createApiRoutes(ctx) {
     '/api/forecast/inspector/optimizer-cold',
   ]);
 
-  function isLanSafeRequest(req) {
+  // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
+  // so security.lanTrust='restricted' can bypass auth for whole categories
+  // (e.g. just the read-only dashboard) while still requiring a Bearer token for
+  // everything else. Endpoints absent from this map fall back to the 'status'
+  // group (the most conservative read-only category). Returns the group name.
+  const ENDPOINT_GROUP = new Map([
+    // status — keepalive, live status, costs, metrics, config READ, discovery
+    ['/api/keepalive/modbus', 'status'], ['/api/keepalive/pulse', 'status'],
+    ['/api/status', 'status'], ['/api/costs', 'status'], ['/api/metrics', 'status'],
+    ['/dv/control-value', 'status'], ['/api/config', 'status'],
+    ['/api/config/export', 'status'], ['/api/discovery/systems', 'status'],
+    ['/api/optimizer/status', 'status'],
+    // dashboard — family kiosk (token-less tablet)
+    ['/api/family/status', 'dashboard'], ['/api/family/presence', 'dashboard'],
+    ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
+    // history — telemetry/history reads + exports + DB backup
+    ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
+    ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
+    ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
+    ['/api/db/backup', 'history'], ['/api/db/backup/status', 'history'],
+    // forecast — forecast reads + inspector
+    ['/api/forecast', 'forecast'],
+    ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
+    ['/api/forecast/inspector/ml-correction', 'forecast'], ['/api/forecast/inspector/eos', 'forecast'],
+    ['/api/forecast/inspector/stage2', 'forecast'], ['/api/forecast/inspector/optimizer-cold', 'forecast'],
+    // integrations — integration status, schedule read, meter scan, vpn status,
+    // devices, messages, signals, epex, mqtt inspector, health
+    ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
+    ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
+    ['/api/integration/evcc', 'integrations'], ['/api/integrations/health', 'integrations'],
+    ['/api/integrations/mqtt/topics', 'integrations'], ['/api/schedule', 'integrations'],
+    ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
+    ['/api/vpn/status', 'integrations'], ['/api/vpn/history', 'integrations'],
+    ['/api/devices', 'integrations'], ['/api/messages', 'integrations'],
+    ['/api/messages/history', 'integrations'], ['/api/log/dv-signals', 'integrations'],
+    ['/api/epex/zones', 'integrations'], ['/api/epex/gaps', 'integrations'],
+  ]);
+  function endpointGroupFor(pathname) {
+    if (ENDPOINT_GROUP.has(pathname)) return ENDPOINT_GROUP.get(pathname);
+    if (pathname.startsWith('/api/devices/')) return 'integrations';
+    if (pathname.startsWith('/api/history/viz/')) return 'history';
+    return 'status'; // most conservative read-only fallback
+  }
+
+  // GET-only LAN-safe check. Under lanTrust='restricted' this is consulted to
+  // decide whether a given endpoint's GROUP is operator-enabled. Now it is
+  // ACTUALLY CALLED (pre-review it was dead code — checkAuth bypassed every
+  // endpoint blanket on LAN; see checkAuth below).
+  //   - opts.requireGroupEnabled=false (default): legacy behaviour — any
+  //     allowlisted GET is LAN-safe (used by lanTrust='open' callers indirectly).
+  //   - opts.requireGroupEnabled=true: the endpoint must ALSO be in an enabled
+  //     security.lanSafeGroups group (lanTrust='restricted').
+  function isLanSafeRequest(req, { requireGroupEnabled = false } = {}) {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    // Only GET requests to allowlisted endpoints bypass auth from LAN
     if (req.method !== 'GET') return false;
-    if (LAN_SAFE_ENDPOINTS.has(url.pathname)) return true;
-    // Dynamic segments for device endpoints (INTG-05)
-    if (url.pathname.startsWith('/api/devices/')) return true;
-    // Phase 09.3-01: per-card history viz endpoints (read-only aggregations).
-    // GET-only (the outer guard already enforces method === 'GET'). Same posture
-    // as /api/devices/ — appliance LAN-trust model. Non-LAN callers still hit
-    // checkAuth (Bearer required, 503 if token unset). T-09.3-05 in threat model.
-    if (url.pathname.startsWith('/api/history/viz/')) return true;
-    return false;
+    const isAllowlisted = LAN_SAFE_ENDPOINTS.has(url.pathname)
+      || url.pathname.startsWith('/api/devices/')
+      || url.pathname.startsWith('/api/history/viz/');
+    if (!isAllowlisted) return false;
+    if (!requireGroupEnabled) return true;
+    const sec = getCfg().security || {};
+    const groups = Array.isArray(sec.lanSafeGroups) ? sec.lanSafeGroups : [];
+    return groups.includes(endpointGroupFor(url.pathname));
   }
 
   // --- /api/integrations/health 5-second cache (Phase 09.2 D-18) ---
@@ -1107,12 +1239,33 @@ export function createApiRoutes(ctx) {
       catch { return req.url || ''; }
     })();
     const bearerOnly = BEARER_REQUIRED_ENDPOINTS.has(reqPathForBearerGate);
-    // LAN-trust: any client reachable on the local subnet bypasses the token check.
-    // This is the operator's explicit security stance — phones/tablets/laptops on the
-    // same WLAN are trusted without having to register a token. Reverted from the
-    // Phase-08-01 GET-allowlist gate. A proper user/device-registration phase is the
-    // right place to tighten this further (see backlog).
-    if (!bearerOnly && isLocalNetworkRequest(req)) return true;
+    // ── Go-Live-Review 2026-06-10: operator-selectable LAN-trust posture ──────
+    // Previously this was a single blanket rule: any private/loopback client
+    // bypassed the token for EVERY non-bearer-only endpoint (the curated
+    // LAN_SAFE_ENDPOINTS allowlist was never consulted — dead code). It is now
+    // driven by cfg.security.lanTrust:
+    //   'open'       — blanket LAN bypass (UNCHANGED default; phones/tablets on
+    //                  the WLAN trusted without a token, as before).
+    //   'restricted' — LAN bypass ONLY for GET endpoints whose group is in
+    //                  security.lanSafeGroups; admin/config/control writes and
+    //                  the eosdash proxy require a Bearer token even on LAN.
+    //   'strict'     — no LAN bypass at all; only 127.0.0.1/::1 (the box itself).
+    // Loopback always bypasses (internal calls, on-box kiosk). Misconfigured /
+    // unknown value fails safe to 'open' only when the field is absent (so an
+    // un-migrated config keeps working); an explicit unknown string is treated
+    // as 'strict' (fail-closed).
+    if (!bearerOnly) {
+      const lanTrustRaw = getCfg().security?.lanTrust;
+      const lanTrust = lanTrustRaw == null ? 'open' : String(lanTrustRaw);
+      if (isLoopbackRequest(req)) return true;                     // the box itself
+      if (lanTrust === 'open') {
+        if (isLocalNetworkRequest(req)) return true;
+      } else if (lanTrust === 'restricted') {
+        if (isLocalNetworkRequest(req) && isLanSafeRequest(req, { requireGroupEnabled: true })) return true;
+        // else: fall through to the Bearer check below.
+      }
+      // 'strict' (and any unknown explicit value) → no LAN bypass; Bearer required.
+    }
     // Plan 08-06 Task 2 Step 3: server-side rejection of ?token= query params.
     // syncTokenFromUrl (Plan 08-03) strips ?token= on first page load — this gate
     // refuses any direct API call with a token in the URL so it cannot leak via

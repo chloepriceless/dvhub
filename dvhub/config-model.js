@@ -369,6 +369,22 @@ function buildFieldDefinitions() {
     },
     {
       section: 'system',
+      group: 'security',
+      groupLabel: 'Sicherheit / LAN-Vertrauen',
+      groupDescription: 'Legt fest, wie viel ein Geraet im lokalen Netz ohne API-Token darf. Feinere Listen (erlaubte Netze/IPs, Endpunkt-Gruppen) liegen in security.lanCidrs / security.trustedClientIps / security.lanSafeGroups.',
+      path: 'security.lanTrust',
+      label: 'LAN-Vertrauensstufe',
+      type: 'select',
+      default: 'open',
+      options: [
+        { value: 'open', label: 'Offen — jedes LAN-Geraet ohne Token (Standard)' },
+        { value: 'restricted', label: 'Eingeschraenkt — LAN nur fuer freigegebene Bereiche, Rest braucht Token' },
+        { value: 'strict', label: 'Strikt — nur 127.0.0.1, alles andere braucht Token' }
+      ],
+      help: 'Offen = bisheriges Verhalten (jedes Geraet im Heimnetz darf ohne Token). Eingeschraenkt = nur lesende Dashboard-/Historie-/Prognose-Bereiche sind im LAN tokenfrei, Konfig-/Steuer-/Admin-Schreibzugriffe und die EOSdash-Konfig verlangen ein Bearer-Token. Strikt = ausser dem Geraet selbst (127.0.0.1) braucht jeder Aufruf ein Token. Bei Eingeschraenkt/Strikt: API-Token unter Verbindung setzen, sonst sperrst du dich aus.'
+    },
+    {
+      section: 'system',
       group: 'general',
       groupLabel: 'Grundsystem',
       groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
@@ -2691,7 +2707,33 @@ export function createDefaultConfig() {
     // trustProxy=true is treated as misconfigured (server logs a one-time
     // warning at startup and falls back to req.socket.remoteAddress — defends
     // against XFF spoofing, which is the CRITICAL class Phase 8 hardened).
-    trustedProxyIps: []
+    trustedProxyIps: [],
+    // Go-Live-Review 2026-06-10 (Christin): operator-selectable LAN-trust posture.
+    // Until now the LAN bypass was hard-coded: every endpoint reachable from a
+    // private/loopback address skipped checkAuth (the curated LAN_SAFE_ENDPOINTS
+    // allowlist was never actually consulted — dead code). This block makes the
+    // posture a choice without breaking any existing install (default 'open' ==
+    // the prior blanket-bypass behaviour). See routes-api.js checkAuth.
+    //   lanTrust:
+    //     'open'       — any LAN client bypasses the token (today's behaviour, default)
+    //     'restricted' — LAN clients bypass ONLY for endpoints whose group is in
+    //                    lanSafeGroups; everything else (admin, config writes,
+    //                    control writes, eosdash) needs a Bearer token even on LAN
+    //     'strict'     — no LAN bypass at all; only 127.0.0.1/::1 (the box itself)
+    //                    is trusted, every other client needs a Bearer token
+    //   lanCidrs:        [] = built-in RFC1918 + loopback + fe80 definition of "LAN".
+    //                    Non-empty = ONLY these CIDRs count as LAN (e.g. just the
+    //                    smart-home VLAN). IPv4 a.b.c.d/n and IPv6 prefix/n.
+    //   lanSafeGroups:   endpoint groups that bypass under 'restricted'. Groups:
+    //                    status, dashboard, history, forecast, integrations.
+    //   trustedClientIps:[] = any LAN ip is trusted. Non-empty = ONLY these exact
+    //                    IPs get the LAN bypass (an explicit per-device allowlist).
+    security: {
+      lanTrust: 'open',
+      lanCidrs: [],
+      lanSafeGroups: ['status', 'dashboard', 'history', 'forecast', 'integrations'],
+      trustedClientIps: []
+    }
   };
 }
 
