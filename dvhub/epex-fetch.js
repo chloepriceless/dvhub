@@ -81,6 +81,13 @@ export function createEpexFetcher(ctx) {
       if (!data || data.length === 0) {
         data = await fetchEpexFromEnergyCharts(day, day2, bzn);
       }
+      // Review 2026-06-10 (P2-6): if BOTH sources came back empty this is a
+      // FAILED refresh — do not stamp state.epex.ok=true with data:[] (that
+      // fooled the health tracker and every ok-trusting consumer). Throw into
+      // the existing catch path so ok:false + error get recorded instead.
+      if (!data || data.length === 0) {
+        throw new Error('both price sources returned no slots');
+      }
 
       data.sort((a, b) => a.ts - b.ts);
       state.epex = { ok: true, date: day, nextDate: day2, updatedAt: Date.now(), data, error: null };

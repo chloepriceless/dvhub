@@ -2,6 +2,12 @@
 'use strict';
 const common = window.DVhubCommon || {};
 const { apiFetch, buildApiUrl } = common;
+// Review 2026-06-10 (P2-4): escapeHtml was used 8× below but never imported —
+// every call threw ReferenceError inside try/catch, silently breaking the
+// Systeminfo and OS-update panels. Destructure from common with a fallback.
+const escapeHtml = common.escapeHtml || ((s) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;'));
 
 const HISTORY_FULL_BACKFILL_DEFAULT_LOOKBACK_DAYS = 14;
 const HISTORY_FULL_BACKFILL_EXTENDED_LOOKBACK_DEFAULT_DAYS = 365;
@@ -764,19 +770,22 @@ async function loadVpnStatus() {
     const vpn = await r.json();
     if (!vpn || !vpn.enabled) { banner.textContent = 'VPN ist deaktiviert.'; return; }
     const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
-    let html = `<strong>${labels[vpn.status] || vpn.status}</strong>`;
-    if (vpn.tunIp) html += ` | IP: ${vpn.tunIp}`;
-    if (vpn.profileName) html += ` | Profil: ${vpn.profileName}`;
+    // Review 2026-06-10 (P2-5): status/tunIp/profileName/lastError come from the
+    // VPN subsystem (daemon error strings!) — escape before the innerHTML sink.
+    // The settings.js twin of this function already escapes; keep them aligned.
+    let html = `<strong>${labels[vpn.status] || escapeHtml(vpn.status)}</strong>`;
+    if (vpn.tunIp) html += ` | IP: ${escapeHtml(vpn.tunIp)}`;
+    if (vpn.profileName) html += ` | Profil: ${escapeHtml(vpn.profileName)}`;
     if (vpn.uptimeSeconds > 0) {
       const h = Math.floor(vpn.uptimeSeconds / 3600);
       const m = Math.floor((vpn.uptimeSeconds % 3600) / 60);
       html += ` | Uptime: ${h > 0 ? h + 'h ' : ''}${m}m`;
     }
-    if (vpn.reconnectAttempts) html += ` | Reconnects: ${vpn.reconnectAttempts}`;
+    if (vpn.reconnectAttempts) html += ` | Reconnects: ${escapeHtml(vpn.reconnectAttempts)}`;
     if (vpn.certDaysRemaining != null && vpn.certDaysRemaining <= 30) {
-      html += ` | <span class="text-status-warn">Cert: ${vpn.certDaysRemaining}d</span>`;
+      html += ` | <span class="text-status-warn">Cert: ${escapeHtml(vpn.certDaysRemaining)}d</span>`;
     }
-    if (vpn.lastError) html += ` | Fehler: ${vpn.lastError}`;
+    if (vpn.lastError) html += ` | Fehler: ${escapeHtml(vpn.lastError)}`;
     banner.innerHTML = html;
   } catch {
     banner.textContent = 'VPN-Status konnte nicht geladen werden.';
@@ -814,13 +823,16 @@ function renderVpnLog() {
     rows = rows.filter(e => e.event && e.event.includes(filter));
   }
 
+  // Review 2026-06-10 (P2-5): event names and detail key/values are free text
+  // from the VPN event log — escape everything before the innerHTML sink
+  // (JSON.stringify does NOT neutralise </> for HTML).
   tbody.innerHTML = rows.slice().reverse().map(e => {
     const ts = e.ts ? new Date(e.ts).toLocaleString('de-DE') : '-';
     const details = Object.entries(e)
       .filter(([k]) => k !== 'ts' && k !== 'event')
       .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
       .join(', ');
-    return `<tr><td>${ts}</td><td>${e.event || '-'}</td><td>${details || '-'}</td></tr>`;
+    return `<tr><td>${escapeHtml(ts)}</td><td>${escapeHtml(e.event || '-')}</td><td>${escapeHtml(details || '-')}</td></tr>`;
   }).join('');
 }
 

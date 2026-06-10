@@ -1302,7 +1302,10 @@ export function createMarketAutomationBuilder(ctx) {
       pushLog('sma_plan_applied', {
         slots: planSummary.futureSlots,
         energyKwh: availableEnergyKwh,
-        estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt) / 100
+        // Review 2026-06-10 (P2-8): despite its name, estimatedRevenueCt holds
+        // EUR (kW × h × ct/kWh ÷ 100 — see the reduce above). The old ÷100 here
+        // logged the value 100× too small. Round to cents, keep EUR.
+        estimatedRevenueEur: Math.round(planSummary.estimatedRevenueCt * 100) / 100
       });
     }
   }

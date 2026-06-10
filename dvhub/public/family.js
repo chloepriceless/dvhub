@@ -517,7 +517,10 @@
         el.id = 'dev-card-' + d.id;
         el.setAttribute('data-panel', cardId);
         el.style.animationDelay = (i * 0.06) + 's';
-        el.innerHTML = '<div class="dev-emoji">' + d.emoji + '</div><div class="dev-name">' + d.name + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>';
+        // Review 2026-06-10 (P2-3): device name/emoji are operator/MQTT-sourced
+        // strings — escape before the innerHTML sink (same rule as the MQTT
+        // tiles below, which already run everything through escapeMsg()).
+        el.innerHTML = '<div class="dev-emoji">' + escapeMsg(d.emoji) + '</div><div class="dev-name">' + escapeMsg(d.name) + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>';
         el.querySelector('.dev-watts').style.color = col;
         el.querySelector('.dev-bar').style.width = barPct + '%';
         el.querySelector('.dev-bar').style.background = col;
@@ -529,12 +532,15 @@
         el.querySelector('.dev-bar').style.width = barPct + '%';
         el.querySelector('.dev-bar').style.background = col;
       }
+      // Review 2026-06-10 (P2-3): panelData feeds openPanel()'s innerHTML sinks
+      // (p-title / p-summary / detail rows) — escape the device-sourced strings
+      // at the source. Static panels above keep raw HTML icons by design.
       panelData[cardId] = {
-        icon: d.emoji, iconBg: 'rgba(120,144,156,.1)', title: d.name, sub: 'Einzelverbraucher', color: d.color || '#78909c',
-        summary: d.name + ' verbraucht gerade ' + formatW(d.watts) + '.',
+        icon: escapeMsg(d.emoji), iconBg: 'rgba(120,144,156,.1)', title: escapeMsg(d.name), sub: 'Einzelverbraucher', color: d.color || '#78909c',
+        summary: escapeMsg(d.name) + ' verbraucht gerade ' + formatW(d.watts) + '.',
         stats: [{ label: 'Gerade', val: formatW(d.watts), delta: d.watts > 500 ? 'Hoher Verbrauch' : 'Normal', up: d.watts < 500 }],
         chart: null,
-        details: [['Aktueller Verbrauch', formatW(d.watts)], ['Quelle', 'Shelly / Smart Plug'], ['Gerät', d.name]]
+        details: [['Aktueller Verbrauch', formatW(d.watts)], ['Quelle', 'Shelly / Smart Plug'], ['Gerät', escapeMsg(d.name)]]
       };
     });
 
@@ -1293,7 +1299,16 @@
       if (greeting.hello) setText('g-hello', greeting.hello);
       if (greeting.message) {
         var msgEl = document.getElementById('g-msg');
-        if (msgEl) msgEl.innerHTML = String(greeting.message).replace(/\n/g, '<br>');
+        // Review 2026-06-10 (P2-3): the greeting is raw LLM output — never feed
+        // it to innerHTML (a model can emit markup). textContent + <br> nodes.
+        if (msgEl) {
+          msgEl.textContent = '';
+          var glines = String(greeting.message).split('\n');
+          for (var gi = 0; gi < glines.length; gi++) {
+            if (gi > 0) msgEl.appendChild(document.createElement('br'));
+            msgEl.appendChild(document.createTextNode(glines[gi]));
+          }
+        }
       }
       if (greeting.moodLabel) setText('g-mood', greeting.moodLabel);
       var moodEl = document.getElementById('g-mood');

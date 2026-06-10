@@ -40,7 +40,11 @@ export function createPythonBridge(ctx, { tier }) {
    * @param {object} inputData - JSON-serializable input data (passed via stdin)
    * @returns {Promise<object|null>} Parsed JSON output or null on error
    */
-  async function call(scriptPath, inputData) {
+  // Review 2026-06-10 (P2-10): callers (load-forecast 120s, ml-correction 30s)
+  // always passed a third timeout argument that this signature silently
+  // dropped — StatsForecast ran against the 60s default and timed out on
+  // larger datasets. Honour the caller's timeout when provided.
+  async function call(scriptPath, inputData, callerTimeoutMs) {
     // Tier gate: refuse on Tier 1
     if (tier < 2) {
       throw new Error('Python bridge not available on Tier 1');
@@ -62,7 +66,9 @@ export function createPythonBridge(ctx, { tier }) {
     const stdinStr = JSON.stringify(inputData);
     // ML training with 90+ days of data can take several minutes — use longer timeout for train scripts
     const isTraining = path.basename(scriptPath) === 'ml_train.py';
-    const timeoutMs = isTraining ? 600_000 : 60_000;
+    const timeoutMs = (Number.isFinite(Number(callerTimeoutMs)) && Number(callerTimeoutMs) > 0)
+      ? Number(callerTimeoutMs)
+      : (isTraining ? 600_000 : 60_000);
 
     // Use spawn with explicit pipes — execFile with `input` option was returning
     // non-zero exit codes silently on Debian 13 / Node 22 with no captured stderr.

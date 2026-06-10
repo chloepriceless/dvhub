@@ -3403,12 +3403,20 @@ async function loadLlmModelDropdown() {
     var res = await apiFetch('/api/llm/models');
     var payload = await res.json();
     if (!res.ok || !payload.ok || !Array.isArray(payload.models)) {
-      select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (Ollama nicht erreichbar)</option>';
+      select.innerHTML = '';
+      var _fbOpt = document.createElement('option');
+      _fbOpt.value = currentModel;
+      _fbOpt.textContent = currentModel + ' (Ollama nicht erreichbar)';
+      select.appendChild(_fbOpt);
       return;
     }
     select.innerHTML = '';
     if (payload.models.length === 0) {
-      select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (keine Modelle gefunden)</option>';
+      select.innerHTML = '';
+      var _fbOpt = document.createElement('option');
+      _fbOpt.value = currentModel;
+      _fbOpt.textContent = currentModel + ' (keine Modelle gefunden)';
+      select.appendChild(_fbOpt);
       return;
     }
     var found = false;
@@ -3429,7 +3437,11 @@ async function loadLlmModelDropdown() {
       select.insertBefore(fallback, select.firstChild);
     }
   } catch (e) {
-    select.innerHTML = '<option value="' + currentModel + '">' + currentModel + ' (Fehler)</option>';
+    select.innerHTML = '';
+      var _fbOpt = document.createElement('option');
+      _fbOpt.value = currentModel;
+      _fbOpt.textContent = currentModel + ' (Fehler)';
+      select.appendChild(_fbOpt);
   }
 }
 

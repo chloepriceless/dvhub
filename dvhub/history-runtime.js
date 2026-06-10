@@ -1370,7 +1370,11 @@ export function createHistoryRuntime({
       const slotsByHour = new Map();
       for (const slot of rawFiltered) {
         const ts = new Date(slot.ts);
-        const hourKey = `${ts.getUTCFullYear()}-${ts.getUTCMonth()}-${ts.getUTCDate()}-${ts.getUTCHours()}`;
+        // Review 2026-06-10 (P2-1): keys MUST sort chronologically — the
+        // unpadded form ("2026-9-30-2") sorted lexicographically as
+        // 0,1,10,…,19,2,20,…, breaking the consecutive-negative-hour count
+        // (§51 EEG hourly rules, plants ≥ 400 kWp). Zero-pad all parts.
+        const hourKey = `${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}-${String(ts.getUTCDate()).padStart(2, '0')}-${String(ts.getUTCHours()).padStart(2, '0')}`;
         if (!slotsByHour.has(hourKey)) slotsByHour.set(hourKey, []);
         slotsByHour.get(hourKey).push(slot);
       }

@@ -38,14 +38,18 @@ export function buildPvlibInput(cfg) {
   const pv = fc.pv;
   const loc = fc.location;
 
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
+  // Review 2026-06-10 (P2-2): setHours(0,0,0,0) + toISOString().replace('Z','')
+  // produced a zone-less UTC wall-time string that pandas then localised as
+  // Europe/Berlin — a ~2h grid offset in EVERY host TZ. Only the clear-sky
+  // fallback consumes `start` (with weather rows pvlib uses the UTC-indexed
+  // weather frame), but fix it properly: pass the bare Berlin calendar date —
+  // pd.date_range('YYYY-MM-DD', tz='Europe/Berlin') anchors to Berlin midnight.
+  const berlinToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' }).format(new Date());
 
   const base = {
     lat: loc.latitude,
     lon: loc.longitude,
-    start: start.toISOString().replace('Z', ''),
+    start: berlinToday,
     periods: 288, // 72h at 15-min intervals
     weather: []
   };
@@ -396,6 +400,18 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       stateUpdated = true;
       ctx.bumpForecastVersion?.();
     } else if (!stateUpdated && pvnodeResult.length > 0) {
+      // Review 2026-06-10 (P2-11a): this branch was the only single-provider
+      // path WITHOUT a DB persist — pvnode-only forecasts vanished on restart
+      // and never reached the accuracy/snapshot pipeline. Mirror the
+      // pvlib/solcast branches.
+      await store.insertPvForecastBatch(
+        pvnodeResult.map((row) => ({
+          model: 'pvnode',
+          ts_utc: row.ts_utc,
+          power_w: row.power_w,
+          confidence: 0.5
+        }))
+      );
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
         model: 'pvnode',
@@ -490,11 +506,20 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       pushLog('pv_forecast_first_run_error', { error: err?.message ?? String(err) });
     }
 
-    // Schedule periodic runs (always, even if first run threw)
+    // Schedule periodic runs (always, even if first run threw).
+    // Review 2026-06-10 (P2-11b): overlap guard — a slow cycle (python spawn
+    // retries + sluggish DB) must not race a second concurrent runForecast()
+    // (double batch-inserts + last-writer-wins on state.forecast.pv). Same
+    // pattern as load-forecast.js / weather-fetch.js.
+    let running = false;
     intervalId = setInterval(() => {
-      runForecast().catch(err => {
-        pushLog('pv_forecast_interval_error', { error: err.message });
-      });
+      if (running) return;
+      running = true;
+      runForecast()
+        .catch(err => {
+          pushLog('pv_forecast_interval_error', { error: err.message });
+        })
+        .finally(() => { running = false; });
     }, FORECAST_INTERVAL_MS);
   }
 

@@ -565,22 +565,26 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   }
 
   async function writeOptimizerRun(run) {
-    const result = await pool.query(`
-      INSERT INTO optimizer_runs (optimizer, run_started_at, run_finished_at, status, input_json, result_json, source, external_run_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING id
-    `, [
-      run.optimizer, isoTimestamp(run.runStartedAt || new Date()),
-      isoTimestamp(run.runFinishedAt || new Date()), run.status || 'applied',
-      run.inputJson == null ? null : JSON.stringify(run.inputJson),
-      run.resultJson == null ? null : JSON.stringify(run.resultJson),
-      run.source || 'runtime', run.externalRunId ?? null
-    ]);
-    const rowId = Number(result.rows[0].id);
-
+    // Review 2026-06-10 (P2-12): the parent INSERT used to run on pool.query
+    // (autocommit) BEFORE the series transaction — a failing series insert
+    // rolled back the series but left an orphaned optimizer_runs row that
+    // getLatestOptimizerRun() could then return without any series. Parent +
+    // series now share one transaction.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      const result = await client.query(`
+        INSERT INTO optimizer_runs (optimizer, run_started_at, run_finished_at, status, input_json, result_json, source, external_run_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+      `, [
+        run.optimizer, isoTimestamp(run.runStartedAt || new Date()),
+        isoTimestamp(run.runFinishedAt || new Date()), run.status || 'applied',
+        run.inputJson == null ? null : JSON.stringify(run.inputJson),
+        run.resultJson == null ? null : JSON.stringify(run.resultJson),
+        run.source || 'runtime', run.externalRunId ?? null
+      ]);
+      const rowId = Number(result.rows[0].id);
       for (const row of (run.series || [])) {
         await client.query(`
           INSERT INTO optimizer_run_series (optimizer_run_id, series_key, scope, ts_utc, resolution_seconds, value_num, unit)
@@ -588,13 +592,13 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         `, [rowId, row.seriesKey, row.scope || 'output', isoTimestamp(row.ts), Number(row.resolutionSeconds || 3600), row.value == null ? null : Number(row.value), row.unit ?? null]);
       }
       await client.query('COMMIT');
+      return rowId;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
-    return rowId;
   }
 
   async function writeImportJob(job) {

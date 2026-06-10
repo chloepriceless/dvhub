@@ -901,6 +901,13 @@ ctx.vpnManager = vpnManager;
 const epex = createEpexFetcher(ctx);
 ctx.epexNowNext = epex.epexNowNext;
 ctx.energyPath = ENERGY_PATH;
+// Review 2026-06-10 (P2-13): boot-race stub. The real onPollComplete is
+// assigned inside the un-awaited telemetryReady IIFE (~line 1341), but
+// poller.start() fires earlier — the FIRST poll tick used to hit an undefined
+// handler (optional chaining hid it) and silently skipped telemetry capture +
+// notification evaluation for that cycle. A no-op stub keeps the contract
+// explicit until the real handler lands.
+ctx.onPollComplete = () => {};
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
