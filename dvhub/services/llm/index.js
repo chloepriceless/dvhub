@@ -185,7 +185,7 @@ export function createLlmService(ctx) {
       }
       messages.push({ role: 'user', content: template.user });
       const chatArgs = {
-        model: cfg?.llm?.llmModel ?? 'qwen3:4b',
+        model: cfg?.llm?.llmModel ?? 'qwen3.5:2b',
         messages,
         temperature: cfg?.llm?.llmTemperature ?? 0.7,
         num_predict: 240  // 5 short sentences + JSON syntax fits comfortably

@@ -127,7 +127,7 @@ export function createMessageGenerator({ ollamaClient, getCfg, tier, pushLog }) 
         const cfg = getCfg();
         const temperature = cfg?.llm?.llmTemperature ?? 0.7;
         const maxTokens = cfg?.llm?.llmMaxTokens ?? DEFAULT_MAX_TOKENS;
-        const model = cfg?.llm?.llmModel ?? 'qwen3:4b';
+        const model = cfg?.llm?.llmModel ?? 'qwen3.5:2b';
 
         const { messages, version } = buildPromptMessages(type, data);
 

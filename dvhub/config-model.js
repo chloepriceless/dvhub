@@ -2340,14 +2340,15 @@ function buildFieldDefinitions() {
       path: 'llm.llmModel',
       label: 'LLM Modell',
       type: 'select',
-      default: 'qwen3:4b',
+      default: 'qwen3.5:2b',
       options: [
-        { value: 'qwen3:1.7b', label: 'Qwen3 1.7B — sparsam (~1,4 GB), gutes Deutsch' },
-        { value: 'qwen3:4b',   label: 'Qwen3 4B — Standard/empfohlen (~2,5 GB), flüssiges Deutsch' },
-        { value: 'qwen3:8b',   label: 'Qwen3 8B — beste Qualität (~5,2 GB), braucht ≥8 GB RAM' },
-        { value: 'tinyllama',  label: 'TinyLlama — Minimal/Legacy (~0,6 GB), schwaches Deutsch' }
+        { value: 'qwen3.5:0.8b', label: 'Qwen3.5 0.8B — sparsam (~1,0 GB)' },
+        { value: 'qwen3.5:2b',   label: 'Qwen3.5 2B — Standard/empfohlen (~2,7 GB), gutes Deutsch' },
+        { value: 'qwen3.5:4b',   label: 'Qwen3.5 4B — besser (~3,4 GB)' },
+        { value: 'qwen3.5:9b',   label: 'Qwen3.5 9B — beste Qualität (~6,6 GB), braucht ≥8–12 GB RAM' },
+        { value: 'tinyllama',    label: 'TinyLlama — Legacy, NICHT empfohlen (schwaches Deutsch)' }
       ],
-      help: 'Sprachmodell für die generierten Status-Nachrichten (lokal via Ollama). Qwen3 erzeugt deutlich besseres Deutsch als das alte TinyLlama. Größere Modelle = bessere Sprache, mehr RAM/langsamer. Das gewählte Modell wird beim Setup/Update via "ollama pull" geladen; ein Wechsel kann beim ersten Lauf eine Verzögerung verursachen, bis das Modell gezogen ist.'
+      help: 'Sprachmodell für die generierten Status-Nachrichten (lokal via Ollama). Qwen3.5 erzeugt deutlich besseres Deutsch als das alte TinyLlama. Größere Modelle = bessere Sprache, mehr RAM/langsamer. Das gewählte Modell wird beim Setup/Update via "ollama pull" geladen; ein Wechsel kann beim ersten Lauf eine Verzögerung verursachen, bis das Modell gezogen ist.'
     },
     {
       section: 'llm',
@@ -2646,7 +2647,7 @@ export function createDefaultConfig() {
     llm: {
       llmEnabled: true,
       llmOllamaUrl: 'http://127.0.0.1:11434',
-      llmModel: 'qwen3:4b',
+      llmModel: 'qwen3.5:2b',
       llmMaxMessagesPerDay: 20,
       llmStatusIntervalMin: 60,
       llmTemperature: 0.7,

@@ -208,6 +208,18 @@
               </div>
             </div>
 
+            <!-- API-Token -->
+            <div class="config-group" data-accent="cyan">
+              <div class="config-group-kicker">API-Token</div>
+              <p class="svc-meta">Der API-Token authentifiziert Zugriffe von au&szlig;erhalb des Heimnetzes (Skripte, Integrationen, Fernzugriff). Bei Verdacht auf Missbrauch hier neu erzeugen oder zur&uuml;ckziehen.</p>
+              <div id="tokenBanner" class="config-banner info" hidden></div>
+              <div class="svc-actions-row">
+                <button id="rotateTokenBtn" class="btn btn-ghost btn-small" type="button">Token neu erzeugen</button>
+                <button id="revokeTokenBtn" class="btn btn-danger btn-small" type="button">Token zur&uuml;ckziehen</button>
+              </div>
+              <p class="svc-meta" id="tokenMeta">-</p>
+            </div>
+
             <!-- Config Import / Export -->
             <div class="config-group" data-accent="cyan">
               <div class="config-group-kicker">Config</div>
@@ -759,7 +771,7 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260610-p2fix"></script>
-  <script src="/tools.js?v=20260610-p2fix"></script>
+  <script src="/tools.js?v=20260610-tokenui"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

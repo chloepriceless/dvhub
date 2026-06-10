@@ -345,6 +345,42 @@ async function restartService() {
   window.setTimeout(() => window.location.reload(), 8000);
 }
 
+// B-2 (Go-Live-Review 2026-06-10): API-Token rotieren/zurückziehen aus der UI.
+// Vorher gab es nur die Backend-Endpunkte (POST /api/admin/token/{rotate,revoke})
+// ohne Bedienoberfläche — ein Endkunde konnte sein Token nicht selbst erneuern.
+function showTokenBanner(text, kind) {
+  const el = document.getElementById('tokenBanner');
+  if (el) el.hidden = false;
+  setBanner('tokenBanner', text, kind);
+}
+async function rotateApiToken() {
+  if (!window.confirm('Neuen API-Token erzeugen?\n\nDer bisherige Token wird sofort ungültig — alle externen Integrationen/Skripte müssen danach auf den NEUEN Token umgestellt werden. Der neue Token wird nur EINMAL angezeigt.')) return;
+  const res = await apiFetch('/api/admin/token/rotate', { method: 'POST' });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out.ok) {
+    showTokenBanner(`Token-Rotation fehlgeschlagen: ${out.error || res.status}`, 'error');
+    return;
+  }
+  // setBanner nutzt textContent → der Token wird nicht als HTML interpretiert.
+  showTokenBanner(`Neuer API-Token (JETZT kopieren – wird nur einmal angezeigt):\n${out.token}`, 'warn');
+  const meta = document.getElementById('tokenMeta');
+  if (meta) meta.textContent = `Neuer Token-Fingerprint: ${out.fingerprint || '-'}`;
+}
+async function revokeApiToken() {
+  if (!window.confirm('API-Token zurückziehen?\n\nZugriffe von außerhalb des Heimnetzes sind danach gesperrt, bis ein neuer Token gesetzt wird. Der Dienst startet dabei neu.')) return;
+  const res = await apiFetch('/api/admin/token/revoke', { method: 'POST' });
+  const out = await res.json().catch(() => ({}));
+  if (res.ok && out.ok) {
+    showTokenBanner('Token zurückgezogen. Der Dienst startet neu; externe Zugriffe sind bis zum Setzen eines neuen Tokens gesperrt.', 'warn');
+  } else if (res.status === 503) {
+    showTokenBanner('Token wurde geleert, aber der automatische Neustart ist deaktiviert (Service-Aktionen aus). Bitte den Dienst manuell neu starten, damit bestehende Sitzungen ungültig werden.', 'warn');
+  } else {
+    showTokenBanner(`Zurückziehen fehlgeschlagen: ${out.error || res.status}`, 'error');
+  }
+  const meta = document.getElementById('tokenMeta');
+  if (meta && out.revokedFingerprint) meta.textContent = `Zurückgezogener Fingerprint: ${out.revokedFingerprint}`;
+}
+
 function exportConfig() {
   window.location.href = buildApiUrl('/api/config/export');
   setBanner('importBanner', 'Config-Export wurde gestartet.', 'success');
@@ -985,6 +1021,12 @@ function initToolsPage() {
   });
   document.getElementById('restartServiceBtn')?.addEventListener('click', () => {
     restartService().catch((error) => setBanner('healthBanner', `Restart fehlgeschlagen: ${error.message}`, 'error'));
+  });
+  document.getElementById('rotateTokenBtn')?.addEventListener('click', () => {
+    rotateApiToken().catch((error) => setBanner('tokenBanner', `Fehler: ${error.message}`, 'error'));
+  });
+  document.getElementById('revokeTokenBtn')?.addEventListener('click', () => {
+    revokeApiToken().catch((error) => setBanner('tokenBanner', `Fehler: ${error.message}`, 'error'));
   });
   document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
   document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
