@@ -24,9 +24,18 @@ export function createLlmService(ctx) {
   // Tier comes from forecast service (wired first in server.js); fall back to ctx.tier for standalone tests
   const tier = ctx.forecastService?.tier ?? ctx.tier ?? 1;
 
-  // Create Ollama client (T-05-07: hardcoded to localhost)
+  // Create Ollama client. B-1 (Go-Live-Review 2026-06-10): the config field
+  // llm.llmOllamaUrl existed (config-model.js) but was never passed through —
+  // createOllamaClient defaulted to 127.0.0.1:11434 regardless, so the GUI knob
+  // was a no-op. Wire it: an operator running Ollama on a beefier box can now
+  // point DVhub at it. Empty/unset → undefined → the client's loopback default
+  // applies (unchanged behaviour). install.sh still binds the LOCAL Ollama to
+  // 127.0.0.1; this only changes which URL DVhub *calls*.
   // Pass pushLog so OLLAMA_DEBUG=1 captures per-call diagnostics into audit_log.
-  const ollamaClient = createOllamaClient({ pushLog });
+  const ollamaClient = createOllamaClient({
+    pushLog,
+    baseUrl: getCfg()?.llm?.llmOllamaUrl || undefined
+  });
 
   // Create message generator with tier gating
   const generator = createMessageGenerator({ ollamaClient, getCfg, tier, pushLog });
