@@ -558,8 +558,16 @@ export function createScheduleEvaluator(ctx) {
     const dcDeadlineHour = Number(cfg.dcExportMode?.chargeDeadlineHour ?? 17);
     const dcChargeGuardHours = Number(cfg.dcExportMode?.chargeGuardHours ?? 2);
     const currentSoc = Number(state.victron.soc ?? 0);
-    const currentHour = new Date(now).getHours();
-    if (dcExportActive && currentSoc < dcTargetSoc && currentHour >= (dcDeadlineHour - dcChargeGuardHours)) {
+    // Review 2026-06-10 (B1): use the configured timezone, not process-local
+    // time — on a UTC host getHours() shifted the charge-guard window by 2h.
+    const currentHour = Math.floor(localMinutesOfDay(new Date(now), cfg.schedule.timezone) / 60);
+    // Review 2026-06-10 (A1): the SoC guard exists so a MANUALLY scheduled
+    // "100 % Einspeisung" still lets the battery charge before the evening
+    // peak. EOS-planned dcExportMode slots (T-0124b, autoManaged) already
+    // account for SoC/battery in the plan — guarding them only blocked
+    // planned PV feed-in revenue on afternoons with SoC < targetSocPct.
+    const dcGuardApplies = dcScheduleRule?.autoManaged !== true;
+    if (dcExportActive && dcGuardApplies && currentSoc < dcTargetSoc && currentHour >= (dcDeadlineHour - dcChargeGuardHours)) {
       // Weniger als chargeGuardHours Stunden bis Deadline und SOC noch nicht erreicht -> laden lassen
       dcExportActive = false;
       if (!state.ctrl._dcSocGuardLogged) {
@@ -659,9 +667,14 @@ export function createScheduleEvaluator(ctx) {
         const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
         const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
         const livePvSurplusW = Math.max(0, pvW - loadW);
+        // Review 2026-06-10 (A4): clamp B + live PV to the inverter's AC limit.
+        // A setpoint above what the Multis can deliver forces them to max power
+        // (not the setpoint) and leaves a grid-import residual that confuses
+        // the closed-loop cascade. Gross bound (100 kW) is far too loose here.
+        const inverterCapW = Math.max(1000, Number(cfg.optimizer?.inverterMaxPowerW) || 29000);
         eff.value = B > 0
-          ? -Math.round(B + livePvSurplusW)                        // export slot: B + live PV on top
-          : -Math.round(Math.min(plannedExportW, livePvSurplusW)); // charge slot: plan-capped, PV-limited
+          ? -Math.round(Math.min(B + livePvSurplusW, inverterCapW)) // export slot: B + live PV, AC-capped
+          : -Math.round(Math.min(plannedExportW, livePvSurplusW));  // charge slot: plan-capped, PV-limited
       }
       // === end T-0121/T-0122 EOS closed-loop ==================================
 
@@ -711,7 +724,10 @@ export function createScheduleEvaluator(ctx) {
         state.ctrl.negativePriceActive = true;
         // Victron DC/AC Abregelung immer bei negativen Preisen
         if (cfg.dvControl?.enabled && !state.ctrl.forcedOff) {
-          applyDvVictronControl(false);
+          // Review 2026-06-10 (A2): await was missing — a failed "block feed-in"
+          // write went undetected in this path (T-0076 retry semantics rely on
+          // the awaited result; line ~870 already awaits the same call).
+          await applyDvVictronControl(false);
         }
         if (eff.value < limit) {
           await applyControlTarget(target, limit, 'negative_price_protection');

@@ -594,3 +594,57 @@ test('T-0122: B=0 charge slot — a PV dip lowers the export, battery is not dra
   assert.equal(Number(state.schedule.active.gridSetpointW.value), -2000,
     'B=0 + PV dip: export = live PV surplus; battery is not asked to backfill the planned export');
 });
+
+// --- Review 2026-06-10 (A1): dcExportMode SoC guard scope ---
+// The guard must keep protecting MANUALLY scheduled "100 % Einspeisung" rules
+// (battery still needs to charge before the evening peak) but must NOT fire on
+// EOS-planned dcExportMode slots (autoManaged) — EOS already planned around the
+// battery, guarding those just blocked planned PV feed-in revenue.
+// Guard window is forced always-on via chargeDeadlineHour/GuardHours so the
+// tests are independent of the wall-clock hour they run at.
+
+function makeDcExportCtx({ autoManaged }) {
+  return makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.schedule.rules = [{
+        id: autoManaged ? 'opt-dc-1' : 'manual-dc-1',
+        enabled: true,
+        target: 'dcExportMode',
+        value: 1,
+        start: '00:00',
+        end: '23:59',
+        source: autoManaged ? 'forecast_optimizer' : 'schedule',
+        ...(autoManaged ? { autoManaged: true, optimizer: 'eos' } : {})
+      }];
+      state.victron.soc = 50;          // below targetSocPct → guard condition met
+      state.victron.pvTotalW = 5000;   // real PV surplus → a write would happen
+      state.victron.selfConsumptionW = 0;
+      // Window [deadline-guard, …) = [0, …) → guard hour-condition ALWAYS true.
+      cfg.dcExportMode = { targetSocPct: 90, chargeDeadlineHour: 23, chargeGuardHours: 23, bufferW: 100 };
+      // The autoManaged rule carries source 'forecast_optimizer' — evaluateSchedule
+      // purges those when the optimizer is off, so enable it (matches prod).
+      if (autoManaged) cfg.optimizer.enabled = true;
+    }
+  });
+}
+
+test('A1: manual dcExportMode rule is still suppressed by the SoC guard', async () => {
+  const { ctx, logs, writes } = makeDcExportCtx({ autoManaged: false });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.ok(findLog(logs, 'dc_export_soc_guard').length >= 1, 'guard log expected for manual rule');
+  assert.equal(findLog(logs, 'dc_export_mode_active').length, 0, 'no active export under guard');
+  assert.ok(!writes.some((w) => w.target === 'gridSetpointW' && w.value < 0),
+    'no negative setpoint written while guarded');
+});
+
+test('A1: EOS autoManaged dcExportMode rule bypasses the SoC guard and exports', async () => {
+  const { ctx, logs, writes } = makeDcExportCtx({ autoManaged: true });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.equal(findLog(logs, 'dc_export_soc_guard').length, 0, 'guard must not fire for EOS slot');
+  assert.ok(findLog(logs, 'dc_export_mode_active').length >= 1, 'EOS slot exports');
+  // exportW = -(pv 5000 − load 0 − buffer 100) = -4900
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -4900),
+    `expected -4900 write, got ${JSON.stringify(writes)}`);
+});
