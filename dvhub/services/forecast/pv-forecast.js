@@ -404,13 +404,18 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       // path WITHOUT a DB persist — pvnode-only forecasts vanished on restart
       // and never reached the accuracy/snapshot pipeline. Mirror the
       // pvlib/solcast branches.
+      // Second-pass hardening: tolerate both row shapes — pvnode-client's
+      // extractRows emits {ts_utc,…} while the sibling branches map {ts,…}.
+      // Drop rows without a usable timestamp instead of inserting null ts_utc.
       await store.insertPvForecastBatch(
-        pvnodeResult.map((row) => ({
-          model: 'pvnode',
-          ts_utc: row.ts_utc,
-          power_w: row.power_w,
-          confidence: 0.5
-        }))
+        pvnodeResult
+          .map((row) => ({
+            model: 'pvnode',
+            ts_utc: row.ts_utc ?? row.ts ?? null,
+            power_w: row.power_w,
+            confidence: 0.5
+          }))
+          .filter((r) => r.ts_utc != null)
       );
       state.forecast.pv = {
         lastFetchAt: new Date().toISOString(),
