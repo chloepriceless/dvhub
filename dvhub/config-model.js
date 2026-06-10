@@ -2079,22 +2079,11 @@ function buildFieldDefinitions() {
       path: 'forecast.weather.mqtt.ghiTopic',
       label: 'Eigenes Mapping: Globalstrahlung-Topic',
       type: 'text',
-      help: 'MQTT-Topic mit der Globalstrahlung (GHI). Pflichtfeld f\u00fcr eigenes Mapping \u2014 ohne Strahlung keine PV-Sch\u00e4tzung.',
-      visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
-    },
-    {
-      section: 'forecast',
-      group: 'weather',
-      groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
-      path: 'forecast.weather.mqtt.ghiUnit',
-      label: 'Eigenes Mapping: Einheit Globalstrahlung',
-      type: 'select',
-      options: [
-        { value: 'wm2', label: 'W/m\u00b2' },
-        { value: 'whm2', label: 'Wh/m\u00b2 (pro Stunde)' }
-      ],
-      help: 'Einheit des Globalstrahlung-Werts.',
+      // Review 2026-06-10 (B5): das fr\u00fchere ghiUnit-Auswahlfeld (W/m\u00b2 vs. Wh/m\u00b2)
+      // ist entfernt \u2014 es gab keine Konversion dahinter (Wh/m\u00b2 pro Stunde ist
+      // numerisch identisch mit W/m\u00b2; sub-st\u00fcndlich w\u00e4re ohne Mess-Intervall
+      // nicht definierbar). Der Wert MUSS in W/m\u00b2 geliefert werden.
+      help: 'MQTT-Topic mit der Globalstrahlung (GHI). Der Wert muss in W/m\u00b2 geliefert werden. Pflichtfeld f\u00fcr eigenes Mapping \u2014 ohne Strahlung keine PV-Sch\u00e4tzung.',
       visibleWhenPath: { path: 'forecast.weather.mqtt.preset', equals: 'custom' }
     },
     {

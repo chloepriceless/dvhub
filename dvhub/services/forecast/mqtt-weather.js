@@ -174,8 +174,9 @@ export function resolveMqttWeatherConfig(cfg) {
     preset: m.preset || 'weather4lox',
     prefix: m.prefix || WEATHER4LOX_DEFAULT_PREFIX,
     custom: {
+      // Review 2026-06-10 (B5): ghiUnit removed — there was no conversion behind
+      // it. The GHI topic value is expected in W/m² (documented in config-model).
       ghiTopic: m.ghiTopic || '',
-      ghiUnit: m.ghiUnit || 'wm2',
       tempTopic: m.tempTopic || '',
       cloudTopic: m.cloudTopic || ''
     },

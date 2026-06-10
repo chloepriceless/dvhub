@@ -10,6 +10,10 @@ export const REDACTED_PATHS = Object.freeze([
   'forecast.pvnode.apiKey',
   'mqtt.username',
   'mqtt.password',
+  // T-0131 MQTT weather provider (Review 2026-06-10 B4): the dedicated weather
+  // broker can carry its own credentials — redact like the top-level mqtt block.
+  'forecast.weather.mqtt.username',
+  'forecast.weather.mqtt.password',
   'monitoring.signingKey',
   'notifications.providers.telegram.botToken',
   'notifications.providers.telegram.chatId',
@@ -145,6 +149,12 @@ export function redactConfig(config) {
   if (copy?.monitoring && typeof copy.monitoring.pushUrl === 'string') {
     copy.monitoring.pushUrl = redactUrlCreds(copy.monitoring.pushUrl);
   }
+  // T-0131 weather broker URL (Review 2026-06-10 B4): same embedded-credential
+  // shape as mqtt.brokerUrl (`mqtt://user:pass@host`).
+  const weatherMqtt = copy?.forecast?.weather?.mqtt;
+  if (weatherMqtt && typeof weatherMqtt.brokerUrl === 'string') {
+    weatherMqtt.brokerUrl = redactUrlCreds(weatherMqtt.brokerUrl);
+  }
   return copy;
 }
 
@@ -180,6 +190,14 @@ export function restoreRedacted(incoming, current) {
   if (copy?.monitoring && typeof copy.monitoring.pushUrl === 'string' && looksUrlRedacted(copy.monitoring.pushUrl)
       && current?.monitoring && typeof current.monitoring.pushUrl === 'string') {
     copy.monitoring.pushUrl = current.monitoring.pushUrl;
+  }
+  // T-0131 weather broker URL restore (Review 2026-06-10 B4) — mirror of the
+  // redactConfig() URL-level redaction above.
+  const wmIn = copy?.forecast?.weather?.mqtt;
+  const wmCur = current?.forecast?.weather?.mqtt;
+  if (wmIn && typeof wmIn.brokerUrl === 'string' && looksUrlRedacted(wmIn.brokerUrl)
+      && wmCur && typeof wmCur.brokerUrl === 'string') {
+    wmIn.brokerUrl = wmCur.brokerUrl;
   }
   return copy;
 }

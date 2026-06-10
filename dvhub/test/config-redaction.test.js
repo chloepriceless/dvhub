@@ -81,3 +81,22 @@ test('config-redaction: restoreRedacted handles missing nested paths gracefully'
   assert.equal(out.apiToken, 'real-token');
   // No mqtt/forecast keys in either — should not throw
 });
+
+// --- Review 2026-06-10 (B4): T-0131 weather-broker credentials ---
+import { redactConfig as _redactB4, restoreRedacted as _restoreB4, REDACTED_PATHS as _PATHS_B4 } from '../config-redaction.js';
+
+test('B4: forecast.weather.mqtt password/username are in REDACTED_PATHS', () => {
+  assert.ok(_PATHS_B4.includes('forecast.weather.mqtt.password'));
+  assert.ok(_PATHS_B4.includes('forecast.weather.mqtt.username'));
+});
+
+test('B4: weather brokerUrl credentials are URL-redacted and restored', () => {
+  const cfg = { forecast: { weather: { mqtt: { brokerUrl: 'mqtt://lox:geheim@192.168.0.10:1883', password: 'pw' } } } };
+  const red = _redactB4(cfg);
+  assert.ok(!JSON.stringify(red).includes('geheim'), 'embedded password must not survive redaction');
+  assert.equal(red.forecast.weather.mqtt.password, '***');
+  // UI echoes the redacted copy back → restore must bring the original URL back.
+  const restored = _restoreB4(red, cfg);
+  assert.equal(restored.forecast.weather.mqtt.brokerUrl, 'mqtt://lox:geheim@192.168.0.10:1883');
+  assert.equal(restored.forecast.weather.mqtt.password, 'pw');
+});
