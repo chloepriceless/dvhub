@@ -122,6 +122,11 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
       model,
       prompt,
       stream: false,
+      // Disable reasoning. Qwen3/Qwen3.5 (and other thinking models) otherwise spend
+      // the entire num_predict budget inside a <think>…</think> block and return an
+      // EMPTY final answer for our short status prompts (→ llm_null_response → template
+      // fallback). Non-thinking models ignore this field. (Go-Live-Review 2026-06-11.)
+      think: false,
       options: {}
     };
     if (system) body.system = system;
@@ -150,6 +155,10 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', timeout
       model,
       messages,
       stream: false,
+      // Disable reasoning — see generate() above. Qwen3.5's <think> block would
+      // otherwise eat the whole token budget and yield an empty answer for the
+      // short status messages. Non-thinking models ignore this. (2026-06-11.)
+      think: false,
       options: {
         num_predict: num_predict ?? 120,   // Pitfall LLM-3 token budget (T-07-07-03)
         ...(temperature != null ? { temperature } : {}),
