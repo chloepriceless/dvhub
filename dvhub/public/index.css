@@ -473,10 +473,21 @@
 .sched-editor-actions { display:flex; gap:8px; }
 .sched-editor input[type=time],
 .sched-editor input[type=number] {
+  /* iOS Safari gives input[type=time] a native intrinsic width that ignores
+     width:100% and overflows the grid cell (operator screenshot 2026-06-12)
+     — appearance:none makes it behave like a text field so the cell width
+     wins. max-width belt-and-suspenders for engines with min-content quirks. */
+  -webkit-appearance:none; appearance:none;
   background:var(--glass); border:1px solid var(--glass-brd);
   border-radius:7px; padding:7px 10px;
   color:var(--text); font-family:var(--f-mono); font-size:12.5px;
-  width:100%; min-width:0; font-variant-numeric:tabular-nums;
+  width:100%; min-width:0; max-width:100%;
+  font-variant-numeric:tabular-nums;
+}
+/* iOS centers the time value in a fixed-size inner wrapper; align it like
+   the other fields and keep the wrapper from forcing extra width. */
+.sched-editor input[type=time]::-webkit-date-and-time-value {
+  text-align:left; min-width:0;
 }
 .sched-editor input:focus { outline:none; border-color:var(--accent); }
 .sched-editor input[type=checkbox] {
