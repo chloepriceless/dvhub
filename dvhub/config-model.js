@@ -2732,6 +2732,18 @@ export function createDefaultConfig() {
       lanCidrs: [],
       lanSafeGroups: ['status', 'dashboard', 'history', 'forecast', 'integrations'],
       trustedClientIps: []
+    },
+    // Licensing (Phase 17 license service). keygenAccount is the Keygen CE
+    // account ID on license.dvhub.de — product-wide, identical for every
+    // DVhub installation (it identifies the VENDOR account, not the customer;
+    // the customer-specific part is the license key itself, which is never
+    // stored in config.json — it lives in license_state.json, mode 0600).
+    // Previously this had no default, so activateLicense() always failed with
+    // keygen_account_not_configured unless KEYGEN_ACCOUNT was set in the env.
+    // Being part of createDefaultConfig also auto-adds the 'licensing' root to
+    // ALLOWED_CONFIG_ROOTS (strict-root save check).
+    licensing: {
+      keygenAccount: '7458ae2d-50d2-469a-9174-8a7fcd9934a1'
     }
   };
 }
