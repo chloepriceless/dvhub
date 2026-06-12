@@ -149,11 +149,23 @@ export function createScheduleEvaluator(ctx) {
     });
     if (hit) {
       hit._wasActive = true;
-      // A transient scheduled rule wins over a manual override, but must NOT
-      // erase a PERSISTENT override (T-0002) — that one resumes when the rule's
-      // window ends. Non-persistent overrides are still consumed as before.
+      // A scheduled rule ENDS any manual override on this target — including a
+      // persistent one. Operator semantics (Christin 2026-06-12): a persistent
+      // override holds "longer than the 5-min TTL, until a time slot writes the
+      // target again" — it must NOT resume after the rule's window (the old
+      // T-0002 resume-after-rule behaviour is retired).
       const mo0 = state.schedule.manualOverride[target];
-      if (mo0 && mo0.persistent !== true) delete state.schedule.manualOverride[target];
+      if (mo0) {
+        delete state.schedule.manualOverride[target];
+        if (mo0.persistent === true) {
+          pushLog('manual_override_ended_by_rule', {
+            target,
+            overrideValue: mo0.value,
+            ruleId: hit.id || 'unnamed',
+            ruleSource: hit.source || 'manual'
+          });
+        }
+      }
       return { value: Number(hit.value), source: `rule:${hit.id || 'unnamed'}`, rule: hit };
     }
 

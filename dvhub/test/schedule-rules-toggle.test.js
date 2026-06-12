@@ -193,3 +193,15 @@ describe('POST /api/schedule/rules keeps optimizer rules server-side', () => {
     assert.equal(optRules[0].slotTs, 111);
   });
 });
+
+describe('GET /healthz (T-0080 liveness probe)', () => {
+  it('returns ok + uptime + store flag without auth, and no sensitive details', async () => {
+    const ctx = mockCtx([]);
+    const out = await call(ctx, 'GET', '/healthz');
+    assert.equal(out.status, 200);
+    assert.equal(out.body.ok, true);
+    assert.equal(typeof out.body.uptimeSec, 'number');
+    assert.ok('store' in out.body);
+    assert.deepEqual(Object.keys(out.body).sort(), ['ok', 'store', 'uptimeSec'], 'no extra fields — keep the surface data-free');
+  });
+});

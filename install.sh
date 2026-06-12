@@ -785,7 +785,11 @@ chmod 440 "${SUDOERS_FILE}"
 cat >/etc/systemd/system/${SERVICE_NAME}.service <<SERVICE
 [Unit]
 Description=DVhub DV Control
-After=network-online.target
+# T-0080 P1: order after PostgreSQL so the telemetry store does not boot into
+# a half-up DB after a host reboot (Proxmox stop-mode backups reboot the LXC).
+# After= is ordering-only — a Postgres-less install (SQLite store) is NOT
+# blocked because there is no Requires=/Wants= on postgresql.
+After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]

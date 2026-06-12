@@ -1833,6 +1833,17 @@ export function createApiRoutes(ctx) {
 
   // ── Main request handler ─────────────────────────────────────────────
   async function handleRequest(req, res, url) {
+    // T-0080 P1: unauthenticated liveness probe for uptime monitoring
+    // (Uptime-Kuma/LXC health checks). Deliberately auth-free AND data-free:
+    // process liveness + the coarse telemetry-store flag only — no config,
+    // host or version details that would make this an enumeration surface.
+    if (url.pathname === '/healthz' && req.method === 'GET') {
+      return json(res, 200, {
+        ok: true,
+        uptimeSec: Math.floor(process.uptime()),
+        store: state.telemetry?.ok ?? null
+      });
+    }
     // Plan 09-06 (D-06): per-request metrics. Record start time + canonical
     // route label so res.on('finish') can emit httpRequestsTotal +
     // httpRequestDurationSeconds with bounded cardinality (no raw dynamic ids).

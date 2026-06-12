@@ -178,23 +178,29 @@ test('non-persistent override expires after TTL (regression)', async () => {
   assert.equal(state.schedule.manualOverride.gridSetpointW, undefined, 'expired override deleted');
 });
 
-test('persistent override is NOT erased by a transient rule and resumes after it', async () => {
-  const { evaluator, state, writes } = makeCtx();
+test('a scheduled rule ENDS a persistent override — no resume after the rule window', async () => {
+  // Operator semantics (Christin 2026-06-12): a persistent override holds
+  // "until a time slot writes the target again". The original T-0002
+  // resume-after-rule behaviour is retired — the slot consumes the override.
+  const { evaluator, state, writes, logs } = makeCtx();
   state.schedule.manualOverride.gridSetpointW = { value: -8000, at: Date.now() - 400000, persistent: true };
   state.schedule.rules = [
     { id: 'r1', target: 'gridSetpointW', enabled: true, start: '00:00', end: '23:59', value: -16000, source: 'manual' }
   ];
 
-  await evaluator.evaluateSchedule(); // rule active → writes -16000
+  await evaluator.evaluateSchedule(); // rule active → writes -16000, ends the override
   let gw = gridWrites(writes);
   assert.equal(gw[gw.length - 1].value, -16000, 'active rule wins over override');
-  assert.ok(state.schedule.manualOverride.gridSetpointW, 'persistent override not deleted by rule');
-  assert.equal(state.schedule.manualOverride.gridSetpointW.persistent, true);
+  assert.equal(state.schedule.manualOverride.gridSetpointW, undefined, 'persistent override ended by the rule');
+  assert.ok(
+    logs.some((l) => l.event === 'manual_override_ended_by_rule'),
+    'override end is surfaced in the log ring'
+  );
 
   state.schedule.rules = []; // rule window ends
-  await evaluator.evaluateSchedule(); // override resumes
+  await evaluator.evaluateSchedule();
   gw = gridWrites(writes);
-  assert.equal(gw[gw.length - 1].value, -8000, 'persistent override resumes after rule');
+  assert.equal(gw[gw.length - 1].value, -40, 'after the rule the DEFAULT applies — the override does NOT resume');
 });
 
 // --- 4. Persistent-override SoC floor (safety, closes adversarial finding C) ----

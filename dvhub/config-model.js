@@ -2457,7 +2457,11 @@ export function createDefaultConfig() {
       // treated as stale and forced discharge is suppressed (chokepoint floor).
       telemetryMaxAgeMs: 90000,
       mqtt: {
-        broker: 'mqtt://192.168.1.19:1883',
+        // T-0080 P1: was a fleet-specific LAN IP baked into the shipped default
+        // (same class as victron.host above — prod reads /etc/dvhub/config.json
+        // and is unaffected). Empty broker → MQTT transport waits until the
+        // operator configures it instead of probing a stranger's network.
+        broker: '',
         portalId: '',
         keepaliveIntervalMs: 30000,
         qos: 0
