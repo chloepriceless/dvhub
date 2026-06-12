@@ -2090,6 +2090,11 @@ function renderDashboardStatus(status) {
   });
 
   safeRender('dashboard.price-chart', () => {
+    // Don't redraw mid-interaction: a 3 s tick replacing the bar elements
+    // while the operator is dragging a selection aborts the drag (operator
+    // report 2026-06-13). The selection itself is timestamp-based and
+    // survives redraws — this only protects the live pointer interaction.
+    if (chartSelectionState.pointerDown) return;
     // Fetch forecast + history slots for chart overlay. T-0128: the past-12h
     // energy bars can reach into yesterday (window = now−12h … now+24h), so we
     // fetch both yesterday and today and merge the slots.
@@ -2200,6 +2205,14 @@ function rerenderDashboardLog() {
   if (!logBox) return;
   const filter = dashboardLogState.filter || 'all';
   const all = dashboardLogState.rows;
+  // Skip the innerHTML rebuild when nothing changed (same filter, same rows).
+  // The 3 s poll used to replace the whole log block every tick, which reset
+  // the operator's scroll-back position in the <pre> and broke iOS momentum
+  // scrolling (operator report 2026-06-13). first/last ts + length identifies
+  // the 20-row window reliably (ms-precision timestamps).
+  const sig = `${filter}|${all.length}|${all[0]?.ts || ''}|${all[all.length - 1]?.ts || ''}`;
+  if (sig === dashboardLogState.renderedSig) return;
+  dashboardLogState.renderedSig = sig;
   // Plan 09-06 (D-09): default missing level to 'info' so rows that predate
   // this plan stay visible under the INFO filter (backward compat).
   const visibleRows = (filter === 'all')
@@ -2625,8 +2638,11 @@ function updateScheduleEconomicsCells(nowTs = lastStatusNow || Date.now()) {
       eurTd.classList.toggle('ok', econ.eur >= 0);
       eurTd.classList.toggle('off', econ.eur < 0);
       eurTd.title = `≈ ${econ.kwh.toLocaleString('de-DE', { maximumFractionDigits: 2 })} kWh × ${econ.avgCt.toLocaleString('de-DE', { maximumFractionDigits: 2 })} ct/kWh (Börsenpreis)`;
-      const expired = tr.classList.contains('sched-row-expired');
-      if (slot.enabled !== false && !expired) {
+      // Total = every ENABLED row that shows a € estimate — including windows
+      // that already ran today. Excluding expired rows made the footer smaller
+      // than a single visible row value (operator report 2026-06-13: row +0,13 €
+      // vs total +0,03 €) — the row and the total must tell the same story.
+      if (slot.enabled !== false) {
         total += econ.eur;
         hasTotal = true;
       }
@@ -3271,6 +3287,13 @@ async function replanAutomation() {
   }
 }
 
+// Render-signature of the last-built automation plan table. The 3 s status
+// poll used to rebuild the tbody via innerHTML on EVERY tick even when the
+// plan was unchanged — on iOS a DOM mutation burst kills momentum scrolling
+// and "resets the view" while the operator is reading/scrolling the SMA panel
+// (operator report 2026-06-13). Rebuild only when the plan actually changed.
+let automationPlanRenderSig = null;
+
 function renderAutomationStatus(scheduleData) {
   const sma = scheduleData?.smallMarketAutomation;
   if (!sma) return;
@@ -3351,13 +3374,17 @@ function renderAutomationStatus(scheduleData) {
 
   const tbody = document.getElementById('planSlotRows');
   if (tbody) {
-    tbody.innerHTML = '';
-    for (const slot of plan.selectedSlots) {
-      const tr = document.createElement('tr');
-      tr.className = 'sched-row-automation';
-      const powerLabel = slot.powerW != null ? `${Number(slot.powerW).toLocaleString('de-DE')} W` : '\u2014';
-      tr.innerHTML = `<td>${escapeAttr(slot.time || '\u2014')}</td><td>${escapeAttr(powerLabel)}</td><td>${escapeAttr(slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014')} ct/kWh</td>`;
-      tbody.appendChild(tr);
+    const sig = `${plan.computedAt}|${plan.selectedSlots.length}|${plan.estimatedRevenueCt ?? ''}`;
+    if (sig !== automationPlanRenderSig) {
+      automationPlanRenderSig = sig;
+      tbody.innerHTML = '';
+      for (const slot of plan.selectedSlots) {
+        const tr = document.createElement('tr');
+        tr.className = 'sched-row-automation';
+        const powerLabel = slot.powerW != null ? `${Number(slot.powerW).toLocaleString('de-DE')} W` : '\u2014';
+        tr.innerHTML = `<td>${escapeAttr(slot.time || '\u2014')}</td><td>${escapeAttr(powerLabel)}</td><td>${escapeAttr(slot.priceCtKwh != null ? (Number(slot.priceCtKwh)).toFixed(2) : '\u2014')} ct/kWh</td>`;
+        tbody.appendChild(tr);
+      }
     }
   }
 }
