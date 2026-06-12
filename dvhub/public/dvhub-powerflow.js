@@ -1,6 +1,15 @@
 /* DVhubPowerflow — vanilla JS, no deps. Exposes window.DVhubPowerflow. */
 (function(){
   const PV_COL=[255,212,33], BAT_COL=[70,211,68], GRID_COL=[255,122,198];
+  // Light-theme particle variants (operator request 2026-06-13) — the neon
+  // hues above wash out on a light background. Keyed by reference to the
+  // dark array so the stream definitions below stay untouched.
+  const LIGHT_COLS = new Map([
+    [PV_COL,   [168, 126, 0]],
+    [BAT_COL,  [21, 128, 61]],
+    [GRID_COL, [190, 24, 93]],
+  ]);
+  const isLightTheme = () => document.documentElement.getAttribute('data-theme') === 'light';
   const fmt = (v, dec=2) => v.toFixed(dec).replace('.', ',');
   const fmtS = v => (v >= 0 ? '+' : '') + fmt(v);
 
@@ -161,9 +170,15 @@
 
     function draw(){
       if (!alive) return;
-      ctx.fillStyle = 'rgba(3,6,16,.32)';
+      // Theme-aware trail layer: the per-frame translucent fill is what the
+      // particles fade into, and it converges to an OPAQUE canvas background
+      // — so this (not the CSS gradient) is the visible backdrop. Light theme
+      // fades to the CSS --pf-bg (#f1f5fb) and uses normal compositing
+      // (additive 'lighter' particles bleach to white on a light backdrop).
+      const light = isLightTheme();
+      ctx.fillStyle = light ? 'rgba(241,245,251,.32)' : 'rgba(3,6,16,.32)';
       ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
       dust.forEach(d => {
         const s = d.s;
         const rank = (d.phase * 1000) % 1;
@@ -174,10 +189,11 @@
         const jit = Math.sin(d.p*Math.PI*8 + d.life*10) * d.jit * len;
         const x = fx + dx*d.p + nx*jit, y = fy + dy*d.p + ny*jit;
         const env = Math.sin(d.p*Math.PI), a = env*.85, sz = d.sz*devicePixelRatio*(.6+env*.6);
-        const c = s.color;
+        const c = light ? (LIGHT_COLS.get(s.color) || s.color) : s.color;
         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
         ctx.beginPath(); ctx.arc(x, y, sz, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = `rgba(255,255,255,${a*.55})`;
+        // Particle core: white glow on dark, darker core on light.
+        ctx.fillStyle = light ? `rgba(19,35,63,${a*.3})` : `rgba(255,255,255,${a*.55})`;
         ctx.beginPath(); ctx.arc(x, y, sz*.35, 0, Math.PI*2); ctx.fill();
         d.p += s.speed * 0.018;
         if (d.p > 1) { d.p = 0; d.life = Math.random(); }

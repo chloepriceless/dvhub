@@ -127,3 +127,44 @@
   .dvhub-powerflow .pf-pill{ font-size:8px; padding:2px 5px }
   .dvhub-powerflow .pf-hubglow{ width:140px; height:140px }
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Light theme (operator request 2026-06-13). The node/pill/legend
+   accents all read the --pf-* variables, so overriding them here
+   restyles every element at once. Node colors are darkened variants
+   of the dark-theme hues — the originals (#ffd421 yellow, #34dbff
+   cyan) are unreadable on a light background. The particle canvas
+   is handled in dvhub-powerflow.js (theme-aware fade fill +
+   composite mode); the matching light fade color there is
+   rgba(241,245,251,…) = --pf-bg below.
+   ────────────────────────────────────────────────────────────── */
+html[data-theme="light"] .dvhub-powerflow{
+  --pf-bg:#f1f5fb; --pf-text:#13233f; --pf-dim:#51648a; --pf-mute:#8094b5;
+  --pf-brd:rgba(30,60,120,.16);
+  --pf-pv:#a87e00; --pf-bat:#15803d; --pf-house:#0e7490; --pf-grid:#be185d;
+  background:
+    radial-gradient(ellipse at 30% 20%,#ffffff,#eef3fa 60%),
+    radial-gradient(ellipse at 80% 90%,#e3ecf8,transparent 55%),
+    var(--pf-bg);
+}
+html[data-theme="light"] .dvhub-powerflow .pf-stars{ display:none }
+html[data-theme="light"] .dvhub-powerflow .pf-chip{ background:rgba(255,255,255,.72) }
+html[data-theme="light"] .dvhub-powerflow .pf-node .pf-v{
+  background:rgba(255,255,255,.78); border-color:rgba(30,60,120,.14);
+}
+html[data-theme="light"] .dvhub-powerflow .pf-node .pf-sub{ color:#51648a }
+html[data-theme="light"] .dvhub-powerflow .pf-pill{
+  background:rgba(255,255,255,.82); border-color:rgba(30,60,120,.14); color:#3b4f74;
+}
+html[data-theme="light"] .dvhub-powerflow .pf-center .v{
+  color:#13233f; background:rgba(255,255,255,.78); border-color:rgba(30,60,120,.14);
+}
+html[data-theme="light"] .dvhub-powerflow .pf-hubglow{
+  background:radial-gradient(circle, rgba(21,128,61,.12), transparent 60%);
+}
+/* Soften the dark-theme neon glow — on white it reads as smearing. */
+html[data-theme="light"] .dvhub-powerflow .pf-node .pf-star{
+  box-shadow:0 0 8px currentColor;
+}
+html[data-theme="light"] .dvhub-powerflow .pf-chip .d,
+html[data-theme="light"] .dvhub-powerflow .pf-pill .d{ box-shadow:none }
