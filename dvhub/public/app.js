@@ -1779,7 +1779,10 @@ function renderDashboardStatus(status) {
   safeRender('dashboard.dv-status', () => {
     const dvOn = Number(status.dvControlValue) === 1;
     setText('dvStatus', dvOn ? 'EIN (Freigabe)' : 'AUS (Sperre)', dvOn ? 'ok' : 'off');
-    setText('nowTime', fmtTs(status.now));
+    // Topbar clock: time-only (placeholder is "--:--"). The full date+seconds
+    // string made .topbar-right wider than a phone viewport — the page could
+    // be pinch-zoomed out past the cards (operator screenshot 2026-06-12).
+    setText('nowTime', status.now ? new Date(status.now).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--');
     setText('dvValue', String(status.dvControlValue));
     setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
     setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');

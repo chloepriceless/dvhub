@@ -171,6 +171,16 @@ body::before {
   background:var(--accent); box-shadow:0 0 6px var(--accent);
 }
 .topbar-right { display:flex; align-items:center; gap:var(--gap-2); flex-shrink:0; }
+/* Phone: the topbar must never exceed the viewport — a wider topbar makes the
+   whole page horizontally scrollable/zoomable past the cards (operator
+   screenshot 2026-06-12). Hide the integration badges (their status lives on
+   the cards/pages anyway), let the right group shrink, tighten gaps. */
+@media (max-width:760px) {
+  .topbar { gap:var(--gap-2); }
+  .topbar .intg-badge { display:none; }
+  .topbar-right { flex-shrink:1; min-width:0; overflow:hidden; }
+  .topbar-right .chip { white-space:nowrap; }
+}
 
 /* status pill in topbar */
 .status-pill {
