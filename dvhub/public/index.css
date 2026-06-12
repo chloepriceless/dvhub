@@ -712,14 +712,7 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 }
 @media (max-width:1100px) { .forecast-row { grid-template-columns:1fr; } }
 #gantt-chart { width:100% !important; height:200px !important; }
-.savings-card { gap:6px; }
-.savings-value { font-size:22px; font-variant-numeric:tabular-nums; }
-.savings-value.positive { color:var(--green); }
-.savings-value.negative { color:var(--red); }
-.savings-breakdown {
-  display:flex; flex-direction:column; gap:4px;
-  font-family:var(--f-mono); font-size:10.5px;
-}
+/* Savings card removed 2026-06-12 (duplicate of "Kosten heute" rail card). */
 
 /* Overlay toggle */
 .overlay-toggle-label {
@@ -759,22 +752,7 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
    these names must paint in Aurora aesthetic here.
    ═══════════════════════════════════════════════════════════════ */
 
-/* metric-row (savings card breakdown — leitstand-charts.js#L459) */
-.metric-row {
-  display:flex; justify-content:space-between; align-items:center;
-  gap:8px; padding:4px 0;
-  border-bottom:1px solid var(--hairline);
-  font-size:11.5px;
-}
-.metric-row:last-child { border-bottom:0; }
-.metric-row span {
-  font-family:var(--f-mono); font-size:10.5px; letter-spacing:.06em;
-  color:var(--text-dim);
-}
-.metric-row strong {
-  font-family:var(--f-mono); font-variant-numeric:tabular-nums;
-  color:var(--text); font-weight:500;
-}
+/* metric-row removed 2026-06-12 — only consumer was the savings card breakdown. */
 
 /* settings-field (used in JS-rendered stage cards) */
 .settings-field {

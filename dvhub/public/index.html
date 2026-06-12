@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css">
-  <link rel="stylesheet" href="/index.css?v=20260610-b7banner">
+  <link rel="stylesheet" href="/index.css?v=20260612-schedredesign">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -411,14 +411,8 @@
         <div class="chart-legend" id="optimizerPlanLegend"></div>
       </div>
 
-      <!-- Savings card (mockup parity — Optimizer-Schedule gantt removed; the
-           Zeitplan/Optimizer Schedule table already shows the same data more
-           clearly than a gantt visualisation could). -->
-      <div class="forecast-chart-shell savings-card" id="savings-card">
-        <span class="kicker-mini">Ersparnis heute</span>
-        <div class="savings-value card-value" id="savings-total">&mdash;</div>
-        <div class="savings-breakdown" id="savings-breakdown"></div>
-      </div>
+      <!-- Savings card removed (operator request 2026-06-12): duplicated the
+           "Kosten heute" rail card (same /api/costs data). -->
     </div>
   </section>
 
@@ -451,6 +445,6 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js"></script>
 <script src="/app.js?v=20260610-b7banner"></script>
-<script src="/leitstand-charts.js?v=10"></script>
+<script src="/leitstand-charts.js?v=20260612-nosavings"></script>
 </body>
 </html>

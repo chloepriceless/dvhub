@@ -174,16 +174,6 @@
     }
   }
 
-  async function fetchCostData() {
-    try {
-      const res = await apiFetch('/api/costs');
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (e) {
-      return null;
-    }
-  }
-
   async function fetchStatusData() {
     try {
       const res = await apiFetch('/api/status');
@@ -270,36 +260,9 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Savings Card (D-06 type 4) — HTML card, not canvas
+  // 4. Savings Card — REMOVED (operator request 2026-06-12): the card duplicated
+  //    the "Kosten heute" rail card which renders the same /api/costs data.
   // ---------------------------------------------------------------------------
-  function renderSavingsCard(costData) {
-    var totalEl = document.getElementById('savings-total');
-    var breakdownEl = document.getElementById('savings-breakdown');
-    if (!totalEl || !breakdownEl) return;
-
-    if (!costData) {
-      totalEl.textContent = '--';
-      totalEl.className = 'savings-value card-value';
-      breakdownEl.innerHTML = '';
-      return;
-    }
-
-    // VERIFIED: actual field names from /api/costs
-    var netEur = costData.netEur || 0;
-    var costEur = costData.costEur || 0;
-    var revenueEur = costData.revenueEur || 0;
-
-    var isPositive = netEur >= 0;
-    var sign = isPositive ? '+' : '';
-    totalEl.textContent = sign + netEur.toFixed(2) + ' EUR';
-    totalEl.className = 'savings-value card-value ' + (isPositive ? 'positive' : 'negative');
-
-    // Breakdown rows using metric-row pattern
-    breakdownEl.innerHTML =
-      '<div class="metric-row"><span>Bezugskosten</span><strong>' + costEur.toFixed(2) + ' EUR</strong></div>' +
-      '<div class="metric-row"><span>Einspeiseertrag</span><strong>' + revenueEur.toFixed(2) + ' EUR</strong></div>' +
-      '<div class="metric-row"><span>Gesamt</span><strong>' + sign + netEur.toFixed(2) + ' EUR</strong></div>';
-  }
 
   // ---------------------------------------------------------------------------
   // 5. Badge updates (moved from Plan 07 to avoid modifying this file twice)
@@ -1124,7 +1087,6 @@
     var results = await Promise.allSettled([
       fetchForecastData(),
       fetchOptimizerData(),
-      fetchCostData(),
       fetchMlStatus(),
       fetchOptimizerPlan(),
       fetchStatusData()
@@ -1132,10 +1094,9 @@
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
     var optimizerData = results[1].status === 'fulfilled' ? results[1].value : null;
-    var costData = results[2].status === 'fulfilled' ? results[2].value : null;
-    var mlStatus = results[3].status === 'fulfilled' ? results[3].value : null;
-    var optimizerPlan = results[4].status === 'fulfilled' ? results[4].value : null;
-    var statusData = results[5].status === 'fulfilled' ? results[5].value : null;
+    var mlStatus = results[2].status === 'fulfilled' ? results[2].value : null;
+    var optimizerPlan = results[3].status === 'fulfilled' ? results[3].value : null;
+    var statusData = results[4].status === 'fulfilled' ? results[4].value : null;
 
     // Plan 09-04: each chart render is wrapped in DVhubCommon.safeRender so a
     // throw in ONE chart does NOT abort the sibling charts in the same refresh
@@ -1149,7 +1110,7 @@
     // duplicate datasets in a removed canvas anyway.
     // Gantt timeline removed in Aurora 09.1-04 follow-up — the Optimizer Schedule
     // table already shows the schedule by time, more legibly than a 3-row gantt.
-    sr('leitstand.savings', function () { renderSavingsCard(costData); });
+    // Savings card removed 2026-06-12 (duplicate of the "Kosten heute" rail card).
     sr('leitstand.badges', function () { updateBadges(); });
 
     // ML additions
