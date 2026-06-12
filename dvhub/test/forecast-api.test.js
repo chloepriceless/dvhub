@@ -225,3 +225,53 @@ describe('buildForecastResponse', () => {
     }
   });
 });
+
+// pastForecast model selection (operator zigzag report 2026-06-13): vrm
+// persists hourly values, solcast persists all-zero rows on the :30 slots.
+// Per-timestamp picking alternated vrm≈6kW with solcast=0 every 30 minutes.
+// Contract: ONE model (best non-zero coverage) supplies the whole line.
+describe('buildForecastResponse pastForecast model consistency', () => {
+  it('picks the single best-coverage model instead of mixing models per slot', async () => {
+    const ctx = createMockCtx();
+    ctx.telemetryStore = { listPvActualSlots: async () => [] };
+    const service = createForecastService(ctx);
+
+    const base = Date.parse('2026-06-13T10:00:00.000Z');
+    const rows = [];
+    // vrm: hourly, non-zero daytime values
+    for (let h = 0; h < 6; h++) {
+      rows.push({ ts_utc: new Date(base + h * 3_600_000).toISOString(), power_w: 6000 + h * 100, model: 'vrm' });
+    }
+    // solcast: half-hourly all-zero rows (the zigzag source)
+    for (let s = 0; s < 12; s++) {
+      rows.push({ ts_utc: new Date(base + s * 1_800_000 + 1_800_000).toISOString(), power_w: 0, model: 'solcast' });
+    }
+    service.store.getLatestPvForecast = async () => rows;
+
+    const { pastForecast } = await service.buildForecastResponse();
+    assert.ok(pastForecast.length > 0, 'pastForecast must not be empty');
+    const models = new Set(pastForecast.map((r) => r.model));
+    assert.deepEqual([...models], ['vrm'], 'only the best-coverage model may appear');
+    assert.ok(pastForecast.every((r) => r.powerW > 0), 'no zero rows from the losing model');
+  });
+
+  it('falls back to row count + trust rank when everything is zero (night window)', async () => {
+    const ctx = createMockCtx();
+    ctx.telemetryStore = { listPvActualSlots: async () => [] };
+    const service = createForecastService(ctx);
+
+    const base = Date.parse('2026-06-13T00:00:00.000Z');
+    const rows = [];
+    for (let s = 0; s < 12; s++) {
+      rows.push({ ts_utc: new Date(base + s * 1_800_000).toISOString(), power_w: 0, model: 'solcast' });
+    }
+    for (let h = 0; h < 3; h++) {
+      rows.push({ ts_utc: new Date(base + h * 3_600_000).toISOString(), power_w: 0, model: 'vrm' });
+    }
+    service.store.getLatestPvForecast = async () => rows;
+
+    const { pastForecast } = await service.buildForecastResponse();
+    assert.equal(pastForecast.length, 12, 'denser all-zero model wins on row count');
+    assert.ok(pastForecast.every((r) => r.model === 'solcast'));
+  });
+});

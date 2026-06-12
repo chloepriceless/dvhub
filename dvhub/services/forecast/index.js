@@ -349,26 +349,50 @@ export function createForecastService(ctx) {
             end: end.toISOString()
           });
           if (Array.isArray(historicRows)) {
-            // Pick latest forecast per timestamp. Operator complaint 2026-05-22:
-            // solcast started persisting all-zero rows mid-morning, but the
-            // previous ranking ('combined' > 'solcast' > 'pvlib' > 'pvnode' >
-            // anything else) hard-preferred solcast=0 over vrm=15kW / open_meteo=
-            // 20kW that landed at rank 999 (ignored fallbacks). Result: the
-            // pastForecast line in the Forecast-Vergleich chart was a flat zero
-            // over the last 12h. Fix: non-zero rows ALWAYS win, then break ties
-            // by the (expanded) model rank so the live ML-source we trust most
-            // still wins among equally-valid forecasts.
+            // ONE consistent model for the whole line — no per-timestamp mixing.
+            // History: the 2026-05-22 fix ("non-zero rows always win, tie-break
+            // by model rank") still mixed models per slot, and the models have
+            // different GRIDS: vrm persists hourly values, solcast persists
+            // all-zero rows on the :30 slots. Per-slot picking therefore
+            // alternated vrm≈6kW (on :00) with solcast=0 (on :30, where vrm
+            // simply has no row to outrank the zero) — the operator-reported
+            // zigzag in the Forecast-Vergleich chart (2026-06-13, verified on
+            // prod: 12:00 6366W vrm / 12:30 0W solcast / 13:00 6417W vrm …).
+            // Picking the single model with the best non-zero coverage gives a
+            // self-consistent line; gaps inside one model's own grid are filled
+            // by the chart's linear resampling.
             const modelRank = (m) => {
               const idx = ['combined', 'solcast', 'vrm', 'open_meteo', 'forecast_solar', 'pvlib', 'pvnode'].indexOf(m);
               return idx === -1 ? 999 : idx;
             };
-            const rowScore = (row) =>
-              (Number(row.power_w) > 0 ? 0 : 1000) + modelRank(row.model);
-            const byTs = new Map();
+            const byModel = new Map();
             for (const row of historicRows) {
+              if (!byModel.has(row.model)) byModel.set(row.model, []);
+              byModel.get(row.model).push(row);
+            }
+            let bestModel = null;
+            let bestScore = null;
+            for (const [model, rows] of byModel) {
+              const nonZero = rows.filter((r) => Number(r.power_w) > 0).length;
+              // More non-zero slots win; ties (e.g. night: everything 0) fall
+              // back to row count, then to the trust ranking.
+              const score = [nonZero, rows.length, -modelRank(model)];
+              if (!bestScore
+                  || score[0] > bestScore[0]
+                  || (score[0] === bestScore[0] && score[1] > bestScore[1])
+                  || (score[0] === bestScore[0] && score[1] === bestScore[1] && score[2] > bestScore[2])) {
+                bestScore = score;
+                bestModel = model;
+              }
+            }
+            const chosenRows = bestModel != null ? byModel.get(bestModel) : [];
+            // A model can still persist several snapshots per timestamp —
+            // keep the latest row per ts (created_at if present, else last wins).
+            const byTs = new Map();
+            for (const row of chosenRows) {
               const key = new Date(row.ts_utc).toISOString();
               const prev = byTs.get(key);
-              if (!prev || rowScore(row) < rowScore(prev)) {
+              if (!prev || String(row.created_at || '') >= String(prev.created_at || '')) {
                 byTs.set(key, row);
               }
             }
