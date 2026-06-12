@@ -164,10 +164,10 @@ async function callExtension(ctx) {
 test('GET /api/eeg/extension: 15-min plant → counts, VLVS and month conversion', async () => {
   // 3 negative slots → ceil(1.5) = 2 VLVS → 2/87 months accrued, 1 legal month.
   const priceRows = [
-    { key: 'spot_price_ct_kwh', ts: '2026-06-01T11:00:00Z', value: 4 },
-    { key: 'spot_price_ct_kwh', ts: '2026-06-01T12:00:00Z', value: -1 },
-    { key: 'spot_price_ct_kwh', ts: '2026-06-01T12:15:00Z', value: -2 },
-    { key: 'spot_price_ct_kwh', ts: '2026-06-01T12:30:00Z', value: -0.5 },
+    { key: 'price_ct_kwh', ts: '2026-06-01T11:00:00Z', value: 4 },
+    { key: 'price_ct_kwh', ts: '2026-06-01T12:00:00Z', value: -1 },
+    { key: 'price_ct_kwh', ts: '2026-06-01T12:15:00Z', value: -2 },
+    { key: 'price_ct_kwh', ts: '2026-06-01T12:30:00Z', value: -0.5 },
   ];
   const ctx = makeCtx({ pvPlants: [{ kwp: 30, commissionedAt: '2025-06-01' }], priceRows });
   const out = await callExtension(ctx);

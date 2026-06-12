@@ -4025,12 +4025,18 @@ export function createApiRoutes(ctx) {
         }
 
         const startIso = new Date(`${earliest.slice(0, 10)}T00:00:00Z`).toISOString();
-        const rows = await ctx.telemetryStore.querySeries({
-          seriesKeys: ['spot_price_ct_kwh'],
+        // The live EPEX ingest writes the series as 'price_ct_kwh';
+        // 'spot_price_ct_kwh' is the migration-019 catalogue name kept as a
+        // fallback. Query both, prefer the populated live key (verified on
+        // prod 2026-06-13: price_ct_kwh has the data, spot_* is empty).
+        const allRows = await ctx.telemetryStore.querySeries({
+          seriesKeys: ['price_ct_kwh', 'spot_price_ct_kwh'],
           start: startIso,
           end: new Date().toISOString(),
           maxResolution: 900
         });
+        const liveRows = allRows.filter((r) => r.key === 'price_ct_kwh');
+        const rows = liveRows.length ? liveRows : allRows.filter((r) => r.key === 'spot_price_ct_kwh');
         const { count, firstTs, lastTs } = countNegativeQuarterSlots(rows);
         const vlvs = vollastViertelstunden(count);
         const ext = extensionFromVollast(vlvs);
