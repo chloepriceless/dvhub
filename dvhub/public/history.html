@@ -196,7 +196,11 @@
             <div class="calc-row-line"><span id="historyKpiCurtailedRevenueLabel">Pot. Erl&ouml;s (Marktwert)</span><strong id="historyKpiCurtailedRevenue">-</strong></div>
             <!-- §51 EEG (Solarspitzengesetz): negative-Preis-Viertelstunden verlängern
                  den Förderzeitraum. Nur sichtbar wenn die Anlage §51-betroffen ist. -->
-            <div class="calc-row-line" id="historyKpiEegExtensionRow" style="display:none" title="§51 Abs. 2 EEG: Viertelstunden mit negativem Spotpreis (EEG-Vergütung = 0) werden ans Ende des 20-Jahre-Förderzeitraums angehängt. Der Erlös ist aufgeschoben, nicht verloren."><span>§51 Förder-Verl&auml;ngerung</span><strong id="historyKpiEegExtension">-</strong></div>
+            <div class="calc-row-line" id="historyKpiEegExtensionRow" style="display:none" title="§51 Abs. 2 EEG: Viertelstunden mit negativem Spotpreis (EEG-Vergütung = 0) werden ans Ende des 20-Jahre-Förderzeitraums angehängt. Der Erlös ist aufgeschoben, nicht verloren."><span>§51 im Zeitraum</span><strong id="historyKpiEegExtension">-</strong></div>
+            <!-- T-0004: §51a-Lebenszeit-Zähler seit Inbetriebnahme — offizielle
+                 Mechanik (Negativ-15min × 0,5 aufgerundet = Vollastviertelstunden,
+                 Umrechnung via Monatstabelle des §51a Abs. 2). -->
+            <div class="calc-row-line" id="historyKpiEegLifetimeRow" hidden title="§51a Abs. 2 EEG: Negativpreis-Viertelstunden seit Inbetriebnahme × 0,5 (aufgerundet) = Vollastviertelstunden. Umrechnung in Monate über die gesetzliche Monatstabelle (Jan 87 … Dez 73), Abbau ab Januar nach Förderende. Die Verlängerung läuft bis zum Ende des Monats der letzten Vollastviertelstunde."><span>&sect;51a seit Inbetriebnahme</span><strong id="historyKpiEegLifetime">-</strong></div>
           </div>
         </article>
 
@@ -594,7 +598,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=18"></script>
+  <script src="/history.js?v=20260613-eeg51a"></script>
   <script src="/history-viz.js?v=20260613-autarkyfix"></script>
 </body>
 </html>

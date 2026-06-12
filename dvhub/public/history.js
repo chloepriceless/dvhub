@@ -2377,11 +2377,45 @@ function bindHistoryControls() {
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }
 
+// T-0004: §51a lifetime Förder-Verlängerung seit Inbetriebnahme. View-
+// independent — fetched once per page load; the row lives on the
+// Abregelungs-KPI card next to the per-view §51 counter.
+async function loadEegLifetimeExtension() {
+  const row = byId('historyKpiEegLifetimeRow');
+  const valueEl = byId('historyKpiEegLifetime');
+  if (!row || !valueEl) return;
+  try {
+    const r = await apiFetch('/api/eeg/extension');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data?.ok || data.applicable !== true) {
+      // Not applicable (no commissioning date / legacy hour-rule plant) —
+      // keep the row hidden; the per-view counter still covers hour rules.
+      return;
+    }
+    const months = Number(data.extension?.accruedMonths) || 0;
+    const vlvs = Number(data.vollastViertelstunden) || 0;
+    const slots = Number(data.negQuarterSlots) || 0;
+    valueEl.textContent = `${months.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Mon. (${vlvs.toLocaleString('de-DE')} VLVS)`;
+    const coverageFrom = data.coverage?.firstPriceTs ? new Date(data.coverage.firstPriceTs) : null;
+    const commissioned = data.commissionedAt ? new Date(`${String(data.commissionedAt).slice(0, 10)}T00:00:00`) : null;
+    const coverageGap = coverageFrom && commissioned && (coverageFrom.getTime() - commissioned.getTime()) > 7 * 86400000;
+    row.title = `§51a Abs. 2 EEG — seit Inbetriebnahme ${data.commissionedAt ? String(data.commissionedAt).slice(0, 10) : '—'}: `
+      + `${slots.toLocaleString('de-DE')} Negativpreis-Viertelstunden × 0,5 (aufgerundet) = ${vlvs.toLocaleString('de-DE')} Vollastviertelstunden. `
+      + `Gesetzliche Verlängerung: ${Number(data.extension?.legalMonths) || 0} Monat(e) (bis Monatsende), angesammelt ${months.toLocaleString('de-DE', { maximumFractionDigits: 2 })} Monate via §51a-Monatstabelle.`
+      + (coverageGap ? ` Hinweis: lokale Preis-Historie erst ab ${coverageFrom.toLocaleDateString('de-DE')} — ggf. "Preise nachladen".` : '');
+    row.hidden = false;
+  } catch (_) {
+    // endpoint unavailable → row stays hidden
+  }
+}
+
 function initHistoryPage() {
   const date = byId('historyDate');
   if (date && !date.value) date.value = currentDateValue();
   renderBackfillButtonState();
   bindHistoryControls();
+  loadEegLifetimeExtension();
   // Marktwert toggle on Vermiedene Kosten card
   const marketToggle = byId('historyMarketToggle');
   if (marketToggle) {

@@ -11,6 +11,8 @@ import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, ro
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
+import { getEegNegativePriceRule } from './eeg-rules.js';
+import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
@@ -550,6 +552,12 @@ export function actorContext(req) {
 export function createApiRoutes(ctx) {
   const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
 
+  // §51a lifetime extension (T-0004): the since-commissioning price scan is
+  // a full-history query — cache it; negative-price slots only accrue every
+  // 15 min anyway.
+  const EEG_EXTENSION_CACHE_MS = 15 * 60 * 1000;
+  const eegExtensionCache = { payload: null, at: 0 };
+
   // ── Admin health payload builder ────────────────────────────────────
   // Plan 09-06 Task 3: every checks[] entry carries additive
   // latencyMs / lastSuccessAt / lastErrorAt fields alongside the existing
@@ -888,6 +896,9 @@ export function createApiRoutes(ctx) {
     '/api/schedule',
     '/api/history/import/status',
     '/api/history/summary',
+    // §51a lifetime Förder-Verlängerung (T-0004) — read-only aggregate for the
+    // history page; same appliance-trust pattern as /api/history/summary.
+    '/api/eeg/extension',
     '/api/schedule/automation/config',
     '/api/meter/scan',
     '/api/metrics',                // Plan 09-06 (D-07): LAN scrape allowed — appliance model. External callers still need Bearer.
@@ -944,6 +955,7 @@ export function createApiRoutes(ctx) {
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
     // history — telemetry/history reads + exports + DB backup
     ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
+    ['/api/eeg/extension', 'history'],
     ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
     ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
     ['/api/db/backup', 'history'], ['/api/db/backup/status', 'history'],
@@ -3958,6 +3970,86 @@ export function createApiRoutes(ctx) {
       try {
         const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- /api/eeg/extension — §51a lifetime Förder-Verlängerung (T-0004) ---
+    // Counts negative-price quarter-hours from the LOCAL spot-price history
+    // since plant commissioning and converts them per the statutory §51a
+    // Abs. 2 mechanics (×0.5 → Volllastviertelstunden → month table). The
+    // count is market-wide (price < 0), NOT export-conditioned — §51a Abs. 3
+    // has the exchanges report the count centrally for all affected plants.
+    if (url.pathname === '/api/eeg/extension' && req.method === 'GET') {
+      if (!ctx.telemetryStore?.querySeries) return json(res, 503, { ok: false, error: 'telemetry store not available' });
+      const cached = eegExtensionCache.payload;
+      if (cached && (Date.now() - eegExtensionCache.at) < EEG_EXTENSION_CACHE_MS) {
+        return json(res, 200, { ...cached, cached: true });
+      }
+      try {
+        const cfg = getCfg();
+        const plants = Array.isArray(cfg.userEnergyPricing?.pvPlants) ? cfg.userEnergyPricing.pvPlants : [];
+        const commissioned = plants
+          .map((p) => (typeof p?.commissionedAt === 'string' ? p.commissionedAt : ''))
+          .filter((d) => /^\d{4}-\d{2}-\d{2}/.test(d))
+          .sort();
+        const earliest = commissioned[0] || null;
+        const totalKwp = plants.reduce((a, p) => a + (Number(p?.kwp) > 0 ? Number(p.kwp) : 0), 0);
+        const rule = getEegNegativePriceRule({ commissionedAt: earliest, kwp: totalKwp });
+
+        if (!earliest || rule.rule === 'none') {
+          const payload = {
+            ok: true, applicable: false, rule: rule.rule,
+            reason: earliest ? (rule.description || 'Anlage nicht §51-betroffen') : 'Kein Inbetriebnahmedatum konfiguriert (Einstellungen → Strompreise → PV-Anlagen)',
+            commissionedAt: earliest
+          };
+          eegExtensionCache.payload = payload;
+          eegExtensionCache.at = Date.now();
+          return json(res, 200, payload);
+        }
+
+        if (rule.rule !== '15min') {
+          // Bestandsanlage unter Stunden-Regeln: §51a Abs. 1 path (days, no
+          // 0.5 factor / month table). The per-view counter on the history
+          // page already applies the correct hour-block rule; a lifetime
+          // counter for hour rules follows in a later iteration.
+          const payload = {
+            ok: true, applicable: false, rule: rule.rule,
+            reason: `Bestandsanlage (${rule.description || rule.rule}) — der Lebenszeit-Zähler unterstützt aktuell die 15-min-Regel (Inbetriebnahme ab 25.02.2025).`,
+            commissionedAt: earliest
+          };
+          eegExtensionCache.payload = payload;
+          eegExtensionCache.at = Date.now();
+          return json(res, 200, payload);
+        }
+
+        const startIso = new Date(`${earliest.slice(0, 10)}T00:00:00Z`).toISOString();
+        const rows = await ctx.telemetryStore.querySeries({
+          seriesKeys: ['spot_price_ct_kwh'],
+          start: startIso,
+          end: new Date().toISOString(),
+          maxResolution: 900
+        });
+        const { count, firstTs, lastTs } = countNegativeQuarterSlots(rows);
+        const vlvs = vollastViertelstunden(count);
+        const ext = extensionFromVollast(vlvs);
+        const payload = {
+          ok: true,
+          applicable: true,
+          rule: rule.rule,
+          commissionedAt: earliest,
+          negQuarterSlots: count,
+          vollastViertelstunden: vlvs,
+          extension: ext,
+          // Honest data-coverage note: the local price history may start
+          // after commissioning (DVhub install date / backfill depth).
+          coverage: { firstPriceTs: firstTs, lastPriceTs: lastTs, priceRows: rows.length },
+          generatedAt: new Date().toISOString()
+        };
+        eegExtensionCache.payload = payload;
+        eegExtensionCache.at = Date.now();
+        return json(res, 200, payload);
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
       }
