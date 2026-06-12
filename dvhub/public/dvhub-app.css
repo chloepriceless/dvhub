@@ -178,8 +178,19 @@ body::before {
 @media (max-width:760px) {
   .topbar { gap:var(--gap-2); }
   .topbar .intg-badge { display:none; }
-  .topbar-right { flex-shrink:1; min-width:0; overflow:hidden; }
-  .topbar-right .chip { white-space:nowrap; }
+  /* Operator follow-up 2026-06-13: overflow:hidden clipped the theme toggle
+     to a sliver. The right group is horizontally swipeable instead — items
+     keep their width (flex-shrink:0), the GROUP scrolls, the page never
+     grows past the viewport. Scrollbar hidden (touch swiping needs none). */
+  .topbar-right {
+    flex-shrink:1; min-width:0;
+    overflow-x:auto; overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+  }
+  .topbar-right::-webkit-scrollbar { display:none; }
+  .topbar-right .chip,
+  .topbar-right .theme-toggle { flex-shrink:0; white-space:nowrap; }
 }
 
 /* status pill in topbar */
