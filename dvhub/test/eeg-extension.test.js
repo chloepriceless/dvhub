@@ -82,7 +82,7 @@ test('countNegativeQuarterSlots: counts price<0 rows, tracks coverage window', (
   assert.equal(out.count, 2);
   assert.equal(out.firstTs, '2026-06-01T10:00:00Z');
   assert.equal(out.lastTs, '2026-06-01T12:30:00Z');
-  assert.deepEqual(countNegativeQuarterSlots([]), { count: 0, approxQuarterSlots: 0, firstTs: null, lastTs: null });
+  assert.deepEqual(countNegativeQuarterSlots([]), { count: 0, firstTs: null, lastTs: null });
 });
 
 // ── Endpoint /api/eeg/extension (minimal-ctx harness) ───────────────────────
@@ -196,13 +196,15 @@ test('GET /api/eeg/extension: pre-2025-02-25 plant (hour rule) → applicable:fa
   assert.notEqual(out.body.rule, '15min');
 });
 
-test('countNegativeQuarterSlots: hourly rows weigh ×4 and are flagged as approximated', () => {
+test('countNegativeQuarterSlots: one row = one quarter-hour regardless of resolution stamp', () => {
+  // Prod data verified 2026-06-13: rows stamped resolution=3600 ARE 15-min
+  // slots (96/day, :00/:15/:30/:45 — ingest mis-stamp since 2026-03-26).
+  // Weighing by the stamp would overcount 4×; the counter must ignore it.
   const rows = [
-    { ts: '2026-04-10T12:00:00Z', value: -1, resolution: 3600 }, // 1 neg hour = 4 quarters
-    { ts: '2026-04-10T13:00:00Z', value: 2, resolution: 3600 },
-    { ts: '2026-04-09T12:00:00Z', value: -1, resolution: 900 },  // fine row = 1 quarter
+    { ts: '2026-04-10T12:00:00Z', value: -1, resolution: 3600 },
+    { ts: '2026-04-10T12:15:00Z', value: 2, resolution: 3600 },
+    { ts: '2026-04-09T12:00:00Z', value: -1, resolution: 900 },
   ];
   const out = countNegativeQuarterSlots(rows);
-  assert.equal(out.count, 5);
-  assert.equal(out.approxQuarterSlots, 4);
+  assert.equal(out.count, 2);
 });

@@ -4040,7 +4040,7 @@ export function createApiRoutes(ctx) {
         });
         const liveRows = allRows.filter((r) => r.key === 'price_ct_kwh');
         const rows = liveRows.length ? liveRows : allRows.filter((r) => r.key === 'spot_price_ct_kwh');
-        const { count, approxQuarterSlots, firstTs, lastTs } = countNegativeQuarterSlots(rows);
+        const { count, firstTs, lastTs } = countNegativeQuarterSlots(rows);
         const vlvs = vollastViertelstunden(count);
         const ext = extensionFromVollast(vlvs);
         const payload = {
@@ -4053,9 +4053,7 @@ export function createApiRoutes(ctx) {
           extension: ext,
           // Honest data-coverage note: the local price history may start
           // after commissioning (DVhub install date / backfill depth).
-          // approxQuarterSlots: portion derived from HOURLY price rows
-          // (1 negative hour counted as 4 quarter-hours).
-          coverage: { firstPriceTs: firstTs, lastPriceTs: lastTs, priceRows: rows.length, approxQuarterSlots },
+          coverage: { firstPriceTs: firstTs, lastPriceTs: lastTs, priceRows: rows.length },
           generatedAt: new Date().toISOString()
         };
         eegExtensionCache.payload = payload;

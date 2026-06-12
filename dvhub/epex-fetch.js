@@ -91,10 +91,17 @@ export function createEpexFetcher(ctx) {
 
       data.sort((a, b) => a.ts - b.ts);
       state.epex = { ok: true, date: day, nextDate: day2, updatedAt: Date.now(), data, error: null };
+      // Resolution stamp derived from the actual slot spacing: the hardcoded
+      // 3600 mis-stamped the 15-min day-ahead slots (96/day) as hourly from
+      // 2026-03-26 until this fix — consumers that filter or weigh by
+      // resolution_seconds were misled (found via the T-0004 §51a counter).
+      const slotSpacingSec = data.length >= 2
+        ? Math.max(60, Math.round((Number(data[1].ts) - Number(data[0].ts)) / 1000))
+        : 900;
       ctx.telemetrySafeWrite(() => ctx.telemetryStore.writeSamples(buildPriceTelemetrySamples(data, {
         source: 'price_api',
         scope: 'forecast',
-        resolutionSeconds: 3600
+        resolutionSeconds: slotSpacingSec
       })));
       pushLog('epex_refresh_ok', { count: data.length });
       // Bridge-timing fix (2026-05-31): the moment tomorrow's day-ahead first

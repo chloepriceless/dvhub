@@ -106,16 +106,17 @@ export function extensionFromVollast(vlvs) {
  * per-plant export condition (the exchanges report the count centrally,
  * §51a Abs. 3).
  *
- * Resolution-aware: prod stores some price windows HOURLY (resolution 3600,
- * observed since 2026-03-26) — a negative hourly row covers 4 quarter-hours.
- * Those are counted ×(resolution/900) and surfaced separately in
- * `approxQuarterSlots` so the payload can flag the approximation.
+ * One row = one quarter-hour, regardless of the row's resolution stamp:
+ * prod data verified 2026-06-13 shows rows stamped resolution=3600 that ARE
+ * 15-min slots (96/day, :00/:15/:30/:45 — an ingest mis-stamp since
+ * 2026-03-26). Weighing by the stamp would overcount 4×. If genuinely
+ * hourly data ever appears the counter UNDER-counts — the legally safe
+ * direction for a subsidy-extension claim.
  *
- * @returns {{ count: number, approxQuarterSlots: number, firstTs: string|null, lastTs: string|null }}
+ * @returns {{ count: number, firstTs: string|null, lastTs: string|null }}
  */
 export function countNegativeQuarterSlots(priceRows) {
   let count = 0;
-  let approxQuarterSlots = 0;
   let firstTs = null;
   let lastTs = null;
   for (const row of (Array.isArray(priceRows) ? priceRows : [])) {
@@ -123,14 +124,9 @@ export function countNegativeQuarterSlots(priceRows) {
     if (!Number.isFinite(v)) continue;
     if (firstTs == null) firstTs = row.ts;
     lastTs = row.ts;
-    if (v < 0) {
-      const res = Number(row?.resolution);
-      const quarters = Number.isFinite(res) && res > 900 ? Math.round(res / 900) : 1;
-      count += quarters;
-      if (quarters > 1) approxQuarterSlots += quarters;
-    }
+    if (v < 0) count += 1;
   }
-  return { count, approxQuarterSlots, firstTs, lastTs };
+  return { count, firstTs, lastTs };
 }
 
 function round2(v) {
