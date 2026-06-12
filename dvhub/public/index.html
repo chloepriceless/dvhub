@@ -135,6 +135,19 @@
         <div class="rail-row"><span class="l">Replan-Trigger</span><strong class="v" id="dvReplanTrigger">&mdash;</strong></div>
       </div>
 
+      <!-- Kosten heute — moved from the right rail (operator request 2026-06-13):
+           sits next to the powerflow on the left, money next to energy. -->
+      <div class="card rail-card rail-rows-2col" data-accent="cost">
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-cost"></span>Kosten heute</span>
+        </div>
+        <div class="rail-row"><span class="l">Import</span><strong class="v" id="costImport">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Export</span><strong class="v" id="costExport">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Kosten</span><strong class="v" id="costCost">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Erl&ouml;s</span><strong class="v" id="costRevenue">&mdash;</strong></div>
+        <div class="rail-row rail-row-span-2"><span class="l">Netto</span><strong class="v" id="costNet">&mdash;</strong></div>
+      </div>
+
       <div class="card rail-card u-hidden" data-accent="vpn" id="vpnCard">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-vpn"></span>VPN-Tunnel</span>
@@ -181,17 +194,6 @@
         <span hidden id="todayMinMax">&mdash;</span>
         <span hidden id="negLater">&mdash;</span>
         <span hidden id="negTomorrow">&mdash;</span>
-      </div>
-
-      <div class="card rail-card rail-rows-2col" data-accent="cost">
-        <div class="rail-card-head">
-          <span class="ttl"><span class="dot dot-cost"></span>Kosten heute</span>
-        </div>
-        <div class="rail-row"><span class="l">Import</span><strong class="v" id="costImport">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Export</span><strong class="v" id="costExport">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Kosten</span><strong class="v" id="costCost">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Erl&ouml;s</span><strong class="v" id="costRevenue">&mdash;</strong></div>
-        <div class="rail-row rail-row-span-2"><span class="l">Netto</span><strong class="v" id="costNet">&mdash;</strong></div>
       </div>
 
       <div class="card rail-card rail-rows-2col" data-accent="ctrl">
