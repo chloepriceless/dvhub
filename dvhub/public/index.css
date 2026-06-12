@@ -437,45 +437,67 @@
 }
 .sched-total-row #scheduleEconTotal { font-size:12px; font-weight:600; }
 
-/* Slot editor (dv-modal body) — 16px inputs so iOS Safari does not
-   auto-zoom on focus; generous touch targets for phone use. */
-.sched-editor {
+/* Inline slot editor — renders in #schedEditorHost directly under the
+   schedule table (operator feedback 2026-06-12: no modal/overlay). Desktop:
+   compact auto-fit field grid; phone: stacked, 16px inputs so iOS Safari
+   does not auto-zoom on focus. */
+.sched-editor-panel {
+  margin-top:10px; padding:12px 14px;
+  border:1px solid var(--glass-brd-strong); border-radius:var(--r-md);
+  background:rgba(20,28,46,.45);
   display:flex; flex-direction:column; gap:12px;
-  min-width:min(320px, 78vw); margin-top:8px;
 }
-.sched-editor-row {
-  display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:end;
-}
-.sched-editor-field {
-  display:flex; flex-direction:column; gap:5px;
-  font-family:var(--f-mono); font-size:10px; letter-spacing:.1em;
+.sched-editor-title {
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--text-dim);
 }
+.sched-editor-fields {
+  display:grid; gap:12px;
+  grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
+  align-items:end;
+}
+.sched-editor-field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.sched-editor-field-head {
+  display:flex; align-items:center; gap:7px;
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-dim); cursor:pointer;
+  min-height:18px;
+}
+.sched-editor-field-off input[type=time],
+.sched-editor-field-off input[type=number] { opacity:.35; }
 .sched-editor-check {
   display:flex; flex-direction:row; align-items:center; gap:10px;
-  font-size:12.5px; color:var(--text); text-transform:none;
-  letter-spacing:0; font-family:var(--f-sans, inherit);
+  font-size:12px; color:var(--text);
   min-height:40px; cursor:pointer;
 }
+.sched-editor-actions { display:flex; gap:8px; }
 .sched-editor input[type=time],
 .sched-editor input[type=number] {
   background:var(--glass); border:1px solid var(--glass-brd);
-  border-radius:7px; padding:10px 12px;
-  color:var(--text); font-family:var(--f-mono); font-size:16px;
+  border-radius:7px; padding:7px 10px;
+  color:var(--text); font-family:var(--f-mono); font-size:12.5px;
   width:100%; min-width:0; font-variant-numeric:tabular-nums;
 }
 .sched-editor input:focus { outline:none; border-color:var(--accent); }
 .sched-editor input[type=checkbox] {
   appearance:none; -webkit-appearance:none;
-  width:22px; height:22px; flex-shrink:0;
-  border:1px solid var(--glass-brd-strong); border-radius:5px;
+  width:16px; height:16px; flex-shrink:0;
+  border:1px solid var(--glass-brd-strong); border-radius:4px;
   background:var(--glass); cursor:pointer; position:relative;
 }
 .sched-editor input[type=checkbox]:checked { background:var(--accent); border-color:var(--accent); }
 .sched-editor input[type=checkbox]:checked::after {
   content:'\2713'; position:absolute; inset:0;
   display:flex; align-items:center; justify-content:center;
-  color:#031024; font-size:14px; font-weight:700; line-height:1;
+  color:#031024; font-size:11px; font-weight:700; line-height:1;
+}
+@media (max-width:760px) {
+  .sched-editor-fields { grid-template-columns:1fr 1fr; }
+  .sched-editor input[type=time],
+  .sched-editor input[type=number] { font-size:16px; padding:10px 12px; }
+  .sched-editor input[type=checkbox] { width:22px; height:22px; }
+  .sched-editor input[type=checkbox]:checked::after { font-size:14px; }
+  .sched-editor-actions .btn { min-height:42px; flex:1; }
 }
 
 /* Phone layout: bigger touch targets, hide the price column on very

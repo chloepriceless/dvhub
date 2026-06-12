@@ -2690,6 +2690,7 @@ function renderScheduleTable() {
       removeBtn.textContent = '−';
       removeBtn.addEventListener('click', () => {
         scheduleRowsState.splice(idx, 1);
+        closeSlotEditor(); // an open editor may point at the removed/old index
         renderScheduleTable();
         setControlMsg('Zeile entfernt — mit „Speichern“ übernehmen.');
       });
@@ -2715,15 +2716,33 @@ function renderScheduleTable() {
   updateScheduleEconomicsCells();
 }
 
-// Editor dialog (dv-modal) — large touch targets; 16px inputs so iOS does
-// not auto-zoom. Field classes mirror the old per-cell input classes
-// (sched-grid-val, sched-stop-soc-en, …) so styling/tests stay anchored.
+// Inline slot editor — renders directly under the schedule table (operator
+// feedback 2026-06-12: the dv-modal dialog landed unstyled at the page end on
+// the Leitstand; the old "editable row under the table" placement was right).
+// Desktop: compact field grid in place. Phone: stacked fields with 16px
+// inputs (no iOS auto-zoom). Field classes mirror the old per-cell input
+// classes (sched-grid-val, sched-stop-soc-en, …) so styling/tests stay
+// anchored.
+function closeSlotEditor() {
+  const host = document.getElementById('schedEditorHost');
+  if (host) host.textContent = '';
+}
+
 function openSlotEditor(idx = null) {
-  if (typeof window === 'undefined' || typeof window.dvConfirm !== 'function') return Promise.resolve(false);
+  const host = document.getElementById('schedEditorHost');
+  if (!host) return;
+  host.textContent = ''; // only one editor at a time — reopen replaces
   const slot = idx != null ? scheduleRowsState[idx] : null;
 
-  const form = document.createElement('div');
-  form.className = 'sched-editor';
+  const panel = document.createElement('div');
+  panel.className = 'sched-editor sched-editor-panel';
+
+  const title = document.createElement('div');
+  title.className = 'sched-editor-title';
+  title.textContent = idx != null
+    ? `Zeitplan bearbeiten (${slot?.start || '—'}–${slot?.end || '—'})`
+    : 'Neuer Zeitplan';
+  panel.appendChild(title);
 
   const mkInput = (type, className, value, attrs = {}) => {
     const input = document.createElement('input');
@@ -2734,26 +2753,25 @@ function openSlotEditor(idx = null) {
     for (const [k, v] of Object.entries(attrs)) input.setAttribute(k, String(v));
     return input;
   };
-  const mkField = (labelText, input, titleText) => {
-    const label = document.createElement('label');
-    label.className = input.type === 'checkbox' ? 'sched-editor-check' : 'sched-editor-field';
-    if (titleText) label.title = titleText;
+  // One field card per value: header line [checkbox? + label], input below.
+  const mkField = (labelText, input, { titleText = '', enableCb = null } = {}) => {
+    const field = document.createElement('div');
+    field.className = 'sched-editor-field';
+    if (titleText) field.title = titleText;
+    const head = document.createElement('label');
+    head.className = 'sched-editor-field-head';
+    if (enableCb) head.appendChild(enableCb);
     const span = document.createElement('span');
     span.textContent = labelText;
-    if (input.type === 'checkbox') {
-      label.appendChild(input);
-      label.appendChild(span);
-    } else {
-      label.appendChild(span);
-      label.appendChild(input);
+    head.appendChild(span);
+    field.appendChild(head);
+    field.appendChild(input);
+    if (enableCb) {
+      const syncDim = () => { field.classList.toggle('sched-editor-field-off', !enableCb.checked); };
+      enableCb.addEventListener('change', syncDim);
+      syncDim();
     }
-    return label;
-  };
-  const mkRow = (...children) => {
-    const row = document.createElement('div');
-    row.className = 'sched-editor-row';
-    children.forEach((c) => row.appendChild(c));
-    return row;
+    return field;
   };
 
   const startIn = mkInput('time', 'sched-start', slot?.start ?? '06:45');
@@ -2766,30 +2784,48 @@ function openSlotEditor(idx = null) {
   const stopSocVal = mkInput('number', 'sched-stop-soc-val', slot?.stopSocPct ?? '', { min: 0, max: 100, step: 5 });
   const dcExportEn = mkInput('checkbox', 'sched-dc-export', slot?.dcExport === true);
 
-  form.appendChild(mkRow(mkField('Beginn', startIn), mkField('Ende', endIn)));
-  form.appendChild(mkRow(
-    mkField('Grid aktiv', gridEn),
-    mkField('Grid-Setpoint (W)', gridVal, 'Negativ = Einspeisen, positiv = Netzbezug, 0 = Halten.')
-  ));
-  form.appendChild(mkRow(
-    mkField('Charger aktiv', chargeEn),
-    mkField('Charger-Leistung (A)', chargeVal, 'DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.')
-  ));
-  form.appendChild(mkRow(
-    mkField('STOP-SOC aktiv', stopSocEn),
-    mkField('STOP-SOC (%)', stopSocVal, 'Entladung stoppt, wenn der Akku-SoC unter diese Grenze fällt.')
-  ));
-  form.appendChild(mkField(
-    '100% Einspeisung',
-    dcExportEn,
-    'Setzt Grid-Setpoint = -(PV − live Hausverbrauch − Puffer), speist also den echten PV-Überschuss ins Netz; der Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen. OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).'
-  ));
+  const fields = document.createElement('div');
+  fields.className = 'sched-editor-fields';
+  fields.appendChild(mkField('Beginn', startIn));
+  fields.appendChild(mkField('Ende', endIn));
+  fields.appendChild(mkField('Grid-Setpoint (W)', gridVal, {
+    enableCb: gridEn,
+    titleText: 'Negativ = Einspeisen, positiv = Netzbezug, 0 = Halten.'
+  }));
+  fields.appendChild(mkField('Charger-Leistung (A)', chargeVal, {
+    enableCb: chargeEn,
+    titleText: 'DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.'
+  }));
+  fields.appendChild(mkField('STOP-SOC (%)', stopSocVal, {
+    enableCb: stopSocEn,
+    titleText: 'Entladung stoppt, wenn der Akku-SoC unter diese Grenze fällt.'
+  }));
+  const dcField = document.createElement('label');
+  dcField.className = 'sched-editor-check';
+  dcField.title = 'Setzt Grid-Setpoint = -(PV − live Hausverbrauch − Puffer), speist also den echten PV-Überschuss ins Netz; der Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen. OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).';
+  dcField.appendChild(dcExportEn);
+  const dcSpan = document.createElement('span');
+  dcSpan.textContent = '100% Einspeisung';
+  dcField.appendChild(dcSpan);
+  fields.appendChild(dcField);
+  panel.appendChild(fields);
 
-  return window.dvConfirm(form, {
-    title: idx != null ? 'Zeitplan bearbeiten' : 'Neuer Zeitplan',
-    okLabel: 'Übernehmen'
-  }).then((ok) => {
-    if (!ok) return false;
+  const actions = document.createElement('div');
+  actions.className = 'sched-editor-actions';
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'btn primary sm';
+  applyBtn.textContent = 'Übernehmen';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn ghost sm';
+  cancelBtn.textContent = 'Abbrechen';
+  actions.appendChild(applyBtn);
+  actions.appendChild(cancelBtn);
+  panel.appendChild(actions);
+
+  cancelBtn.addEventListener('click', closeSlotEditor);
+  applyBtn.addEventListener('click', () => {
     const num = (input) => {
       const v = Number(input.value);
       return input.value !== '' && Number.isFinite(v) ? v : null;
@@ -2813,10 +2849,14 @@ function openSlotEditor(idx = null) {
     };
     if (idx != null) scheduleRowsState[idx] = next;
     else scheduleRowsState.push(next);
+    closeSlotEditor();
     renderScheduleTable();
     setControlMsg('Zeile übernommen — mit „Speichern“ aktivieren.');
-    return true;
   });
+
+  host.appendChild(panel);
+  try { panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { /* older engines */ }
+  try { startIn.focus(); } catch { /* non-interactive contexts */ }
 }
 
 function addScheduleRow(opts = {}) {
@@ -2909,6 +2949,7 @@ async function loadScheduleDash() {
 
   // State-driven table (2026-06-12): the grouped slots ARE the row state.
   scheduleRowsState = groupScheduleRulesForDashboard(rules);
+  closeSlotEditor(); // fresh server state — an open editor would edit stale indices
   renderScheduleTable();
 
   const defGrid = data?.config?.defaultGridSetpointW;
