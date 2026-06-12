@@ -82,7 +82,7 @@ test('countNegativeQuarterSlots: counts price<0 rows, tracks coverage window', (
   assert.equal(out.count, 2);
   assert.equal(out.firstTs, '2026-06-01T10:00:00Z');
   assert.equal(out.lastTs, '2026-06-01T12:30:00Z');
-  assert.deepEqual(countNegativeQuarterSlots([]), { count: 0, firstTs: null, lastTs: null });
+  assert.deepEqual(countNegativeQuarterSlots([]), { count: 0, approxQuarterSlots: 0, firstTs: null, lastTs: null });
 });
 
 // ── Endpoint /api/eeg/extension (minimal-ctx harness) ───────────────────────
@@ -194,4 +194,15 @@ test('GET /api/eeg/extension: pre-2025-02-25 plant (hour rule) → applicable:fa
   assert.equal(out.status, 200);
   assert.equal(out.body.applicable, false);
   assert.notEqual(out.body.rule, '15min');
+});
+
+test('countNegativeQuarterSlots: hourly rows weigh ×4 and are flagged as approximated', () => {
+  const rows = [
+    { ts: '2026-04-10T12:00:00Z', value: -1, resolution: 3600 }, // 1 neg hour = 4 quarters
+    { ts: '2026-04-10T13:00:00Z', value: 2, resolution: 3600 },
+    { ts: '2026-04-09T12:00:00Z', value: -1, resolution: 900 },  // fine row = 1 quarter
+  ];
+  const out = countNegativeQuarterSlots(rows);
+  assert.equal(out.count, 5);
+  assert.equal(out.approxQuarterSlots, 4);
 });

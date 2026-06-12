@@ -4029,15 +4029,18 @@ export function createApiRoutes(ctx) {
         // 'spot_price_ct_kwh' is the migration-019 catalogue name kept as a
         // fallback. Query both, prefer the populated live key (verified on
         // prod 2026-06-13: price_ct_kwh has the data, spot_* is empty).
+        // maxResolution 3600: prod stores some windows hourly (observed since
+        // 2026-03-26) — countNegativeQuarterSlots weighs those ×4. In overlap
+        // windows querySeries' 15-min bucket dedup prefers the finer row.
         const allRows = await ctx.telemetryStore.querySeries({
           seriesKeys: ['price_ct_kwh', 'spot_price_ct_kwh'],
           start: startIso,
           end: new Date().toISOString(),
-          maxResolution: 900
+          maxResolution: 3600
         });
         const liveRows = allRows.filter((r) => r.key === 'price_ct_kwh');
         const rows = liveRows.length ? liveRows : allRows.filter((r) => r.key === 'spot_price_ct_kwh');
-        const { count, firstTs, lastTs } = countNegativeQuarterSlots(rows);
+        const { count, approxQuarterSlots, firstTs, lastTs } = countNegativeQuarterSlots(rows);
         const vlvs = vollastViertelstunden(count);
         const ext = extensionFromVollast(vlvs);
         const payload = {
@@ -4050,7 +4053,9 @@ export function createApiRoutes(ctx) {
           extension: ext,
           // Honest data-coverage note: the local price history may start
           // after commissioning (DVhub install date / backfill depth).
-          coverage: { firstPriceTs: firstTs, lastPriceTs: lastTs, priceRows: rows.length },
+          // approxQuarterSlots: portion derived from HOURLY price rows
+          // (1 negative hour counted as 4 quarter-hours).
+          coverage: { firstPriceTs: firstTs, lastPriceTs: lastTs, priceRows: rows.length, approxQuarterSlots },
           generatedAt: new Date().toISOString()
         };
         eegExtensionCache.payload = payload;

@@ -100,16 +100,22 @@ export function extensionFromVollast(vlvs) {
 
 /**
  * Count negative-price quarter-hour slots from a spot-price series
- * ({ts, value} rows, ct/kWh, 15-min resolution). §51 Abs. 1 (i.d.F.
+ * ({ts, value, resolution?} rows, ct/kWh). §51 Abs. 1 (i.d.F.
  * Solarspitzengesetz, plants commissioned >= 2025-02-25): EVERY quarter-hour
  * with a negative day-ahead price reduces the AW to zero — market-wide, no
  * per-plant export condition (the exchanges report the count centrally,
  * §51a Abs. 3).
  *
- * @returns {{ count: number, firstTs: string|null, lastTs: string|null }}
+ * Resolution-aware: prod stores some price windows HOURLY (resolution 3600,
+ * observed since 2026-03-26) — a negative hourly row covers 4 quarter-hours.
+ * Those are counted ×(resolution/900) and surfaced separately in
+ * `approxQuarterSlots` so the payload can flag the approximation.
+ *
+ * @returns {{ count: number, approxQuarterSlots: number, firstTs: string|null, lastTs: string|null }}
  */
 export function countNegativeQuarterSlots(priceRows) {
   let count = 0;
+  let approxQuarterSlots = 0;
   let firstTs = null;
   let lastTs = null;
   for (const row of (Array.isArray(priceRows) ? priceRows : [])) {
@@ -117,9 +123,14 @@ export function countNegativeQuarterSlots(priceRows) {
     if (!Number.isFinite(v)) continue;
     if (firstTs == null) firstTs = row.ts;
     lastTs = row.ts;
-    if (v < 0) count += 1;
+    if (v < 0) {
+      const res = Number(row?.resolution);
+      const quarters = Number.isFinite(res) && res > 900 ? Math.round(res / 900) : 1;
+      count += quarters;
+      if (quarters > 1) approxQuarterSlots += quarters;
+    }
   }
-  return { count, firstTs, lastTs };
+  return { count, approxQuarterSlots, firstTs, lastTs };
 }
 
 function round2(v) {
