@@ -395,10 +395,101 @@
   display:inline-flex; align-items:center; gap:6px; width:100%;
 }
 
-/* SMA-managed rows highlighted yellow */
+/* SMA-managed rows highlighted yellow (full tint — still used by the
+   SMA automation-plan-table). The compact schedule table below overrides
+   this with a subtle left stripe per operator request 2026-06-12. */
 .sched-tbl tr.sched-row-automation td {
   background:rgba(255,212,33,.12);
   box-shadow:inset 3px 0 0 var(--yellow);
+}
+
+/* ─── Compact schedule table (operator redesign 2026-06-12) ───
+   Read-only text rows (SMA-plan-table look) — editing happens in the
+   dv-modal editor. Automation rows get a subtle stripe instead of the
+   loud full-row tint: yellow = SMA, violet = Optimizer. */
+.sched-tbl-compact td { padding:9px 9px; }
+.sched-tbl-compact tr.sched-row-automation td {
+  background:transparent;
+  box-shadow:none;
+}
+.sched-tbl-compact tr.sched-row-automation td:first-child {
+  box-shadow:inset 3px 0 0 var(--yellow);
+}
+.sched-tbl-compact tr.sched-row-optimizer td:first-child {
+  box-shadow:inset 3px 0 0 var(--violet);
+}
+.sched-window {
+  font-family:var(--f-mono); font-size:12.5px; font-weight:600;
+  letter-spacing:.02em; white-space:nowrap;
+}
+.sched-control { font-size:12px; }
+.sched-control .sched-auto-badge { margin-left:8px; }
+.sched-price, .sched-eur { white-space:nowrap; }
+.sched-eur { font-weight:600; }
+.sched-eur.ok, #scheduleEconTotal.ok { color:var(--green); }
+.sched-eur.off, #scheduleEconTotal.off { color:var(--red); }
+.sched-empty { color:var(--text-dim); font-size:11.5px; padding:14px 9px; }
+.sched-actions { white-space:nowrap; text-align:right; }
+.sched-actions .icon-btn { margin-left:4px; }
+.sched-total-row td {
+  font-family:var(--f-mono); font-size:10.5px; color:var(--text-dim);
+  border-top:1px solid var(--glass-brd-strong); border-bottom:0;
+}
+.sched-total-row #scheduleEconTotal { font-size:12px; font-weight:600; }
+
+/* Slot editor (dv-modal body) — 16px inputs so iOS Safari does not
+   auto-zoom on focus; generous touch targets for phone use. */
+.sched-editor {
+  display:flex; flex-direction:column; gap:12px;
+  min-width:min(320px, 78vw); margin-top:8px;
+}
+.sched-editor-row {
+  display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:end;
+}
+.sched-editor-field {
+  display:flex; flex-direction:column; gap:5px;
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-dim);
+}
+.sched-editor-check {
+  display:flex; flex-direction:row; align-items:center; gap:10px;
+  font-size:12.5px; color:var(--text); text-transform:none;
+  letter-spacing:0; font-family:var(--f-sans, inherit);
+  min-height:40px; cursor:pointer;
+}
+.sched-editor input[type=time],
+.sched-editor input[type=number] {
+  background:var(--glass); border:1px solid var(--glass-brd);
+  border-radius:7px; padding:10px 12px;
+  color:var(--text); font-family:var(--f-mono); font-size:16px;
+  width:100%; min-width:0; font-variant-numeric:tabular-nums;
+}
+.sched-editor input:focus { outline:none; border-color:var(--accent); }
+.sched-editor input[type=checkbox] {
+  appearance:none; -webkit-appearance:none;
+  width:22px; height:22px; flex-shrink:0;
+  border:1px solid var(--glass-brd-strong); border-radius:5px;
+  background:var(--glass); cursor:pointer; position:relative;
+}
+.sched-editor input[type=checkbox]:checked { background:var(--accent); border-color:var(--accent); }
+.sched-editor input[type=checkbox]:checked::after {
+  content:'\2713'; position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  color:#031024; font-size:14px; font-weight:700; line-height:1;
+}
+
+/* Phone layout: bigger touch targets, hide the price column on very
+   narrow screens (the € tooltip still carries the price basis). */
+@media (max-width:760px) {
+  .sched-tbl-compact { font-size:12.5px; }
+  .sched-tbl-compact td { padding:12px 8px; }
+  .sched-tbl-compact input.sched-row-enabled { width:20px; height:20px; }
+  .sched-actions .icon-btn { min-width:38px; min-height:38px; font-size:15px; }
+  .sched-window { font-size:13px; }
+  .sched-control { font-size:12.5px; }
+}
+@media (max-width:560px) {
+  .sched-col-price { display:none; }
 }
 /* Operator complaint 2026-05-22: the global `.sched-tbl input[disabled]
    { opacity:.32 }` rule made the start/end time and value inputs on

@@ -272,10 +272,9 @@
         <span class="card-title"><span class="dot dot-violet"></span>Optimizer &middot; Schedule</span>
         <span class="chip info sm" id="schedRuleCountChip" hidden><span class="dot"></span><span id="schedRuleCount">&mdash;</span> Regeln</span>
       </div>
-      <div class="schedule-flags">
-        <label class="schedule-flag"><input type="checkbox" id="schedColGrid" checked> Grid-Spalte</label>
-        <label class="schedule-flag"><input type="checkbox" id="schedColCharge"> Charger-Leistung-Spalte</label>
-      </div>
+      <!-- schedule-flags column toggles removed 2026-06-12: dead UI — the
+           checkboxes were never wired in app.js; the compact table shows all
+           control values in one Steuerung column. -->
       <div id="automationPlanSummary" class="automation-plan-summary u-hidden">
         <div class="automation-plan-header">
           <p class="card-title">Aktueller Automationsplan</p>
@@ -291,16 +290,28 @@
           <tbody id="planSlotRows"></tbody>
         </table>
       </div>
-      <div class="meta">Gelb markierte Zeilen geh&ouml;ren zur kleinen B&ouml;rsenautomatik.</div>
+      <div class="meta">Gelber Streifen = kleine B&ouml;rsenautomatik &middot; violetter Streifen = Optimizer. Optimizer-Slots lassen sich &uuml;ber &bdquo;Aktiv&ldquo; einzeln deaktivieren (bleibt auch nach Neuplanung erhalten).</div>
       <div class="sched-scroll-x">
-        <table class="sched-tbl">
+        <table class="sched-tbl sched-tbl-compact">
           <thead>
             <tr>
-              <th>Aktiv</th><th>Beginn</th><th>Ende</th><th class="num">Grid (W)</th><th class="num" title="DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.">Charger-Leistung (A)</th>
-              <th class="num">STOP-SOC (%)</th><th title="Setzt Grid-Setpoint = -(PV − live Hausverbrauch − Puffer), speist also den echten PV-Überschuss ins Netz; der Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen (dann -(PV − Puffer) = volle PV). OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).">100% Einspeisung</th><th>Aktion</th>
+              <th title="Zeile aktiv/inaktiv. Optimizer-Slots werden sofort umgeschaltet; manuelle Zeilen mit &bdquo;Speichern&ldquo; &uuml;bernehmen.">Aktiv</th>
+              <th>Zeitfenster</th>
+              <th title="Zusammenfassung der Steuerung: Grid-Setpoint (W), Charger-Leistung (A, DC-seitige Ladestrom-Begrenzung), STOP-SOC (%), 100% Einspeisung (Grid-Setpoint folgt dem echten PV-&Uuml;berschuss).">Steuerung</th>
+              <th class="num sched-col-price" title="B&ouml;rsenpreis (Day-Ahead) im Zeitfenster, zeitgewichtet.">ct/kWh</th>
+              <th class="num sched-col-eur" title="&Uuml;berschlag: Energie im Fenster &times; B&ouml;rsenpreis. Einspeisen = Erl&ouml;s (+), Netzbezug = Kosten (&minus;). Ohne feste Leistung (100% Einspeisung, reine Ladestrom-/SOC-Regel) keine Sch&auml;tzung.">&asymp; Ertrag</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="scheduleRowsDash"></tbody>
+          <tfoot>
+            <tr id="scheduleEconTotalRow" class="sched-total-row" hidden>
+              <td colspan="3">Summe aktiver Slots</td>
+              <td class="num sched-col-price"></td>
+              <td class="num sched-col-eur" id="scheduleEconTotal">&mdash;</td>
+              <td></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
       <div class="schedule-controls">
@@ -444,7 +455,7 @@
 <script src="/dv-modal.js"></script>
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js"></script>
-<script src="/app.js?v=20260610-b7banner"></script>
+<script src="/app.js?v=20260612-schedredesign"></script>
 <script src="/leitstand-charts.js?v=20260612-nosavings"></script>
 </body>
 </html>

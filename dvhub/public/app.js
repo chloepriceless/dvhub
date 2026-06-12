@@ -1997,6 +1997,11 @@ function renderDashboardStatus(status) {
     if (lwMD?.at) lwParts.push(`MaxDis: ${lwMD.value} @ ${fmtTs(lwMD.at)}`);
     setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
     applyScheduleRowStates(status.now);
+    // Per-slot economics: cache the EPEX slots from /api/status and refresh
+    // the price/€ cells (cheap textContent updates — no table re-render).
+    lastEpexData = status.epex?.data || [];
+    lastStatusNow = Number(status.now) || Date.now();
+    updateScheduleEconomicsCells(lastStatusNow);
     updateChartComparisonSummary(status.userEnergyPricing);
   });
 
@@ -2366,6 +2371,17 @@ function groupScheduleRulesForDashboard(rules) {
     if (rule.target === 'dcExportMode') slot.dcExport = true;
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
+    // All rule ids of the window — the optimizer slot-disable toggle must flip
+    // EVERY rule sharing the window (grid + dcExport can coexist).
+    if (rule.id) {
+      if (!Array.isArray(slot.ruleIds)) slot.ruleIds = [];
+      slot.ruleIds.push(rule.id);
+    }
+    // Absolute window for per-slot economics (optimizer/SMA rules carry it).
+    if (slot.slotTs == null && Number.isFinite(Number(rule.slotTs))) {
+      slot.slotTs = Number(rule.slotTs);
+      if (Number.isFinite(Number(rule.slotEndTs))) slot.slotEndTs = Number(rule.slotEndTs);
+    }
     if (!slot.source && rule.source) slot.source = rule.source;
     if (!slot.displayTone && rule.displayTone) slot.displayTone = rule.displayTone;
     if (slot.autoManaged !== true && rule.autoManaged === true) slot.autoManaged = true;
@@ -2382,8 +2398,8 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
   if (!tr) return false;
   const enabled = tr.querySelector('.sched-row-enabled')?.checked ?? true;
   const expired = isScheduleWindowExpired({
-    start: tr.dataset.start || tr.querySelector('.sched-start')?.value,
-    end: tr.dataset.end || tr.querySelector('.sched-end')?.value
+    start: tr.dataset.start,
+    end: tr.dataset.end
   }, nowTs);
   const isAutomationRule =
     tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
@@ -2403,11 +2419,404 @@ function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
 function applyScheduleRowStates(nowTs = Date.now()) {
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
-  for (const tr of tbody.querySelectorAll('tr')) {
-    tr.dataset.start = tr.querySelector('.sched-start')?.value || '';
-    tr.dataset.end = tr.querySelector('.sched-end')?.value || '';
+  for (const tr of tbody.querySelectorAll('tr[data-slot-idx]')) {
     updateScheduleRowVisualState(tr, nowTs);
   }
+}
+
+/* --- Compact schedule table (operator redesign 2026-06-12) ---------------
+   The table is rendered read-only from `scheduleRowsState` (slot objects in
+   the groupScheduleRulesForDashboard shape). Editing happens in a dv-modal
+   editor with touch-sized inputs — the old per-cell mini inputs were
+   unusable on a phone. Optimizer rows stay server-managed but their Aktiv
+   checkbox now toggles the slot live (POST /api/schedule/rules/toggle). */
+
+let scheduleRowsState = [];
+let lastEpexData = [];
+let lastStatusNow = null;
+
+function isSmaSlot(slot) {
+  return slot?.source === SMALL_MARKET_AUTOMATION_SOURCE
+    || (typeof slot?.ruleId === 'string' && slot.ruleId.startsWith(SMA_ID_PREFIX));
+}
+
+function isOptimizerSlot(slot) {
+  return slot?.source === FORECAST_OPTIMIZER_SOURCE
+    || (typeof slot?.ruleId === 'string' && slot.ruleId.startsWith(OPT_ID_PREFIX));
+}
+
+function describeSlotControl(slot) {
+  const parts = [];
+  if (slot?.grid != null && Number.isFinite(Number(slot.grid))) {
+    const g = Number(slot.grid);
+    if (g < 0) parts.push(`Einspeisen ${Math.abs(g).toLocaleString('de-DE')} W`);
+    else if (g > 0) parts.push(`Netzbezug ${g.toLocaleString('de-DE')} W`);
+    else parts.push('Halten (0 W)');
+  }
+  if (slot?.charge != null && Number.isFinite(Number(slot.charge))) {
+    parts.push(`Laden ${Number(slot.charge).toLocaleString('de-DE')} A`);
+  }
+  if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
+    parts.push(`Stop-SoC ${Number(slot.stopSocPct)}%`);
+  }
+  if (slot?.dcExport === true) parts.push('100% Einspeisung');
+  return parts.join(' · ') || '—';
+}
+
+// Resolve a slot to an absolute [startMs, endMs) window. Automation slots
+// carry slotTs/slotEndTs; manual HH:MM rules recur daily and are resolved
+// against "today" of nowTs (windows crossing midnight extend into tomorrow).
+function scheduleSlotWindowMs(slot, nowTs = Date.now()) {
+  const ts = Number(slot?.slotTs);
+  const endTs = Number(slot?.slotEndTs);
+  if (Number.isFinite(ts) && Number.isFinite(endTs) && endTs > ts) {
+    return { startMs: ts, endMs: endTs };
+  }
+  const parse = (s) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || ''));
+    return m ? (Number(m[1]) * 60 + Number(m[2])) : null;
+  };
+  const sMin = parse(slot?.start);
+  const eMin = parse(slot?.end);
+  if (sMin == null || eMin == null) return null;
+  const base = new Date(nowTs);
+  base.setHours(0, 0, 0, 0);
+  const startMs = base.getTime() + sMin * 60000;
+  let endMs = base.getTime() + eMin * 60000;
+  if (endMs <= startMs) endMs += 86400000;
+  return { startMs, endMs };
+}
+
+// Per-slot economics estimate: window energy × time-weighted day-ahead price.
+// Export (grid<0) = revenue (+), import (grid>0) = cost (−). Slots without a
+// fixed wattage (100% Einspeisung, charger-amps- or SOC-only rules) get a
+// price but NO € estimate — anything else would be fake precision.
+function estimateSlotEconomics(slot, epexData, nowTs = Date.now()) {
+  const win = scheduleSlotWindowMs(slot, nowTs);
+  if (!win) return null;
+  const EPEX_SLOT_MS = 15 * 60000;
+  let weightedCt = 0;
+  let coveredMs = 0;
+  for (const row of (Array.isArray(epexData) ? epexData : [])) {
+    const ts = Number(row?.ts);
+    const ct = Number(row?.ct_kwh);
+    if (!Number.isFinite(ts) || !Number.isFinite(ct)) continue;
+    const oStart = Math.max(ts, win.startMs);
+    const oEnd = Math.min(ts + EPEX_SLOT_MS, win.endMs);
+    if (oEnd <= oStart) continue;
+    weightedCt += ct * (oEnd - oStart);
+    coveredMs += oEnd - oStart;
+  }
+  if (!coveredMs) return null;
+  const avgCt = weightedCt / coveredMs;
+  const gridW = Number(slot?.grid);
+  if (!Number.isFinite(gridW) || gridW === 0) return { avgCt, kwh: null, eur: null };
+  const hours = (win.endMs - win.startMs) / 3600000;
+  const kwh = Math.abs(gridW) * hours / 1000;
+  const eur = (gridW < 0 ? 1 : -1) * kwh * avgCt / 100;
+  return { avgCt, kwh, eur };
+}
+
+function fmtEur(value) {
+  return `${value >= 0 ? '+' : '−'}${Math.abs(value).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+}
+
+function updateScheduleEconomicsCells(nowTs = lastStatusNow || Date.now()) {
+  const tbody = document.getElementById('scheduleRowsDash');
+  if (!tbody) return;
+  let total = 0;
+  let hasTotal = false;
+  for (const tr of tbody.querySelectorAll('tr[data-slot-idx]')) {
+    const slot = scheduleRowsState[Number(tr.dataset.slotIdx)];
+    if (!slot) continue;
+    const econ = estimateSlotEconomics(slot, lastEpexData, nowTs);
+    const priceTd = tr.querySelector('.sched-price');
+    const eurTd = tr.querySelector('.sched-eur');
+    if (priceTd) {
+      priceTd.textContent = econ ? econ.avgCt.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+    }
+    if (!eurTd) continue;
+    if (econ?.eur != null) {
+      eurTd.textContent = fmtEur(econ.eur);
+      eurTd.classList.toggle('ok', econ.eur >= 0);
+      eurTd.classList.toggle('off', econ.eur < 0);
+      eurTd.title = `≈ ${econ.kwh.toLocaleString('de-DE', { maximumFractionDigits: 2 })} kWh × ${econ.avgCt.toLocaleString('de-DE', { maximumFractionDigits: 2 })} ct/kWh (Börsenpreis)`;
+      const expired = tr.classList.contains('sched-row-expired');
+      if (slot.enabled !== false && !expired) {
+        total += econ.eur;
+        hasTotal = true;
+      }
+    } else {
+      eurTd.textContent = '—';
+      eurTd.title = '';
+      eurTd.classList.remove('ok', 'off');
+    }
+  }
+  const totalRow = document.getElementById('scheduleEconTotalRow');
+  const totalEl = document.getElementById('scheduleEconTotal');
+  if (totalRow && totalEl) {
+    totalRow.hidden = !hasTotal;
+    if (hasTotal) {
+      totalEl.textContent = fmtEur(total);
+      totalEl.classList.toggle('ok', total >= 0);
+      totalEl.classList.toggle('off', total < 0);
+    }
+  }
+}
+
+async function handleRowEnabledToggle(slot, cb, tr) {
+  if (!isOptimizerSlot(slot)) {
+    slot.enabled = cb.checked;
+    updateScheduleRowVisualState(tr);
+    updateScheduleEconomicsCells();
+    setControlMsg('Aktiv-Status geändert — mit „Speichern“ übernehmen.');
+    return;
+  }
+  // Optimizer slots are server-managed: toggle live, the replan inherits the
+  // disable per slotTs|target (insertOptimizerRules), so it survives replans.
+  const ids = Array.isArray(slot.ruleIds) && slot.ruleIds.length
+    ? slot.ruleIds
+    : (slot.ruleId ? [slot.ruleId] : []);
+  if (!ids.length) {
+    cb.checked = !cb.checked;
+    setControlMsg('Optimizer-Slot ohne Regel-ID — nicht umschaltbar.', true);
+    return;
+  }
+  const desired = cb.checked;
+  cb.disabled = true;
+  try {
+    const r = await apiFetch('/api/schedule/rules/toggle', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids, enabled: desired })
+    });
+    const out = await r.json();
+    if (!r.ok || !out.ok) throw new Error(out.error || String(r.status));
+    slot.enabled = desired;
+    updateScheduleRowVisualState(tr);
+    updateScheduleEconomicsCells();
+    setControlMsg(`Optimizer-Slot ${slot.start}–${slot.end} ${desired ? 'aktiviert' : 'deaktiviert'} (überlebt Neuplanung)`);
+  } catch (e) {
+    cb.checked = !desired;
+    setControlMsg(`Fehler beim Umschalten: ${e.message}`, true);
+  } finally {
+    cb.disabled = false;
+  }
+}
+
+function renderScheduleTable() {
+  const tbody = document.getElementById('scheduleRowsDash');
+  if (!tbody) return;
+  tbody.textContent = '';
+
+  scheduleRowsState.forEach((slot, idx) => {
+    const isSma = isSmaSlot(slot);
+    const isOptimizer = isOptimizerSlot(slot);
+    const tr = document.createElement('tr');
+    tr.dataset.slotIdx = String(idx);
+    tr.dataset.ruleId = slot.ruleId || '';
+    tr.dataset.ruleSource = slot.source || '';
+    tr.dataset.displayTone = slot.displayTone || '';
+    tr.dataset.autoManaged = slot.autoManaged ? 'true' : 'false';
+    tr.dataset.activeDate = slot.activeDate || '';
+    tr.dataset.start = slot.start || '';
+    tr.dataset.end = slot.end || '';
+    if (isOptimizer) tr.classList.add('sched-row-optimizer');
+    if (isSma) {
+      tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${slot.activeDate ? ` (${slot.activeDate})` : ''} — automatisch verwaltet`;
+    } else if (isOptimizer) {
+      tr.title = `${FORECAST_OPTIMIZER_LABEL} — automatisch verwaltet; über „Aktiv“ einzeln deaktivierbar`;
+    }
+
+    const tdActive = document.createElement('td');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'sched-row-enabled';
+    cb.checked = slot.enabled !== false;
+    if (isSma) {
+      cb.disabled = true;
+      cb.title = 'Von der kleinen Börsenautomatik verwaltet';
+    } else if (isOptimizer) {
+      cb.title = 'Optimizer-Slot deaktivieren/aktivieren — bleibt auch nach Neuplanung erhalten';
+    } else {
+      cb.title = 'Aktiv';
+    }
+    cb.addEventListener('change', () => handleRowEnabledToggle(slot, cb, tr));
+    tdActive.appendChild(cb);
+    tr.appendChild(tdActive);
+
+    const tdWindow = document.createElement('td');
+    tdWindow.className = 'sched-window';
+    tdWindow.textContent = `${slot.activeDate ? `${slot.activeDate} · ` : ''}${slot.start || '—'}–${slot.end || '—'}`;
+    tr.appendChild(tdWindow);
+
+    const tdControl = document.createElement('td');
+    tdControl.className = 'sched-control';
+    const controlText = document.createElement('span');
+    controlText.textContent = describeSlotControl(slot);
+    tdControl.appendChild(controlText);
+    if (isSma || isOptimizer) {
+      const badge = document.createElement('span');
+      badge.className = `sched-auto-badge${isOptimizer ? ' sched-badge-optimizer' : ''}`;
+      badge.textContent = isOptimizer ? FORECAST_OPTIMIZER_LABEL : 'Auto';
+      badge.title = isOptimizer ? 'Vom Optimizer verwaltet' : 'Von der kleinen Börsenautomatik verwaltet';
+      tdControl.appendChild(badge);
+    }
+    tr.appendChild(tdControl);
+
+    const tdPrice = document.createElement('td');
+    tdPrice.className = 'num sched-col-price sched-price';
+    tdPrice.textContent = '—';
+    tr.appendChild(tdPrice);
+
+    const tdEur = document.createElement('td');
+    tdEur.className = 'num sched-col-eur sched-eur';
+    tdEur.textContent = '—';
+    tr.appendChild(tdEur);
+
+    const tdActions = document.createElement('td');
+    tdActions.className = 'sched-actions';
+    if (!isSma && !isOptimizer) {
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'icon-btn sched-edit';
+      editBtn.title = 'Zeile bearbeiten';
+      editBtn.textContent = '✎';
+      editBtn.addEventListener('click', () => { openSlotEditor(idx); });
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'icon-btn sched-remove';
+      removeBtn.title = 'Zeile entfernen';
+      removeBtn.textContent = '−';
+      removeBtn.addEventListener('click', () => {
+        scheduleRowsState.splice(idx, 1);
+        renderScheduleTable();
+        setControlMsg('Zeile entfernt — mit „Speichern“ übernehmen.');
+      });
+      tdActions.appendChild(editBtn);
+      tdActions.appendChild(removeBtn);
+    }
+    tr.appendChild(tdActions);
+
+    tbody.appendChild(tr);
+    updateScheduleRowVisualState(tr);
+  });
+
+  if (!scheduleRowsState.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'sched-empty';
+    td.textContent = 'Keine Zeitpläne — „+ Zeile“ legt einen an.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  updateScheduleEconomicsCells();
+}
+
+// Editor dialog (dv-modal) — large touch targets; 16px inputs so iOS does
+// not auto-zoom. Field classes mirror the old per-cell input classes
+// (sched-grid-val, sched-stop-soc-en, …) so styling/tests stay anchored.
+function openSlotEditor(idx = null) {
+  if (typeof window === 'undefined' || typeof window.dvConfirm !== 'function') return Promise.resolve(false);
+  const slot = idx != null ? scheduleRowsState[idx] : null;
+
+  const form = document.createElement('div');
+  form.className = 'sched-editor';
+
+  const mkInput = (type, className, value, attrs = {}) => {
+    const input = document.createElement('input');
+    input.type = type;
+    input.className = className;
+    if (type === 'checkbox') input.checked = Boolean(value);
+    else input.value = value == null ? '' : String(value);
+    for (const [k, v] of Object.entries(attrs)) input.setAttribute(k, String(v));
+    return input;
+  };
+  const mkField = (labelText, input, titleText) => {
+    const label = document.createElement('label');
+    label.className = input.type === 'checkbox' ? 'sched-editor-check' : 'sched-editor-field';
+    if (titleText) label.title = titleText;
+    const span = document.createElement('span');
+    span.textContent = labelText;
+    if (input.type === 'checkbox') {
+      label.appendChild(input);
+      label.appendChild(span);
+    } else {
+      label.appendChild(span);
+      label.appendChild(input);
+    }
+    return label;
+  };
+  const mkRow = (...children) => {
+    const row = document.createElement('div');
+    row.className = 'sched-editor-row';
+    children.forEach((c) => row.appendChild(c));
+    return row;
+  };
+
+  const startIn = mkInput('time', 'sched-start', slot?.start ?? '06:45');
+  const endIn = mkInput('time', 'sched-end', slot?.end ?? '07:15');
+  const gridEn = mkInput('checkbox', 'sched-grid-en', slot ? slot.grid != null : true);
+  const gridVal = mkInput('number', 'sched-grid-val', slot?.grid ?? -40, { step: 10 });
+  const chargeEn = mkInput('checkbox', 'sched-charge-en', slot?.charge != null);
+  const chargeVal = mkInput('number', 'sched-charge-val', slot?.charge ?? '', { step: 1 });
+  const stopSocEn = mkInput('checkbox', 'sched-stop-soc-en', slot?.stopSocPct != null);
+  const stopSocVal = mkInput('number', 'sched-stop-soc-val', slot?.stopSocPct ?? '', { min: 0, max: 100, step: 5 });
+  const dcExportEn = mkInput('checkbox', 'sched-dc-export', slot?.dcExport === true);
+
+  form.appendChild(mkRow(mkField('Beginn', startIn), mkField('Ende', endIn)));
+  form.appendChild(mkRow(
+    mkField('Grid aktiv', gridEn),
+    mkField('Grid-Setpoint (W)', gridVal, 'Negativ = Einspeisen, positiv = Netzbezug, 0 = Halten.')
+  ));
+  form.appendChild(mkRow(
+    mkField('Charger aktiv', chargeEn),
+    mkField('Charger-Leistung (A)', chargeVal, 'DC-seitige Batterie-Ladestrom-Begrenzung (Cerbo GX SystemSetup/MaxChargeCurrent). Bei ~55,2 V Batteriespannung sind 100 A ≈ 5,5 kW, 300 A ≈ 16,5 kW. HW-Max typisch 350 A.')
+  ));
+  form.appendChild(mkRow(
+    mkField('STOP-SOC aktiv', stopSocEn),
+    mkField('STOP-SOC (%)', stopSocVal, 'Entladung stoppt, wenn der Akku-SoC unter diese Grenze fällt.')
+  ));
+  form.appendChild(mkField(
+    '100% Einspeisung',
+    dcExportEn,
+    'Setzt Grid-Setpoint = -(PV − live Hausverbrauch − Puffer), speist also den echten PV-Überschuss ins Netz; der Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen. OvervoltageFeedIn wird hier NICHT angefasst (das macht ausschließlich die DV-Vermarktungs-Schnittstelle).'
+  ));
+
+  return window.dvConfirm(form, {
+    title: idx != null ? 'Zeitplan bearbeiten' : 'Neuer Zeitplan',
+    okLabel: 'Übernehmen'
+  }).then((ok) => {
+    if (!ok) return false;
+    const num = (input) => {
+      const v = Number(input.value);
+      return input.value !== '' && Number.isFinite(v) ? v : null;
+    };
+    const next = {
+      start: startIn.value || '06:45',
+      end: endIn.value || '07:15',
+      grid: gridEn.checked ? num(gridVal) : null,
+      charge: chargeEn.checked ? num(chargeVal) : null,
+      stopSocPct: stopSocEn.checked ? num(stopSocVal) : null,
+      dcExport: dcExportEn.checked,
+      enabled: slot ? slot.enabled !== false : true,
+      ruleId: slot?.ruleId || '',
+      ruleIds: slot?.ruleIds,
+      slotTs: slot?.slotTs,
+      slotEndTs: slot?.slotEndTs,
+      source: slot?.source || '',
+      displayTone: slot?.displayTone || '',
+      autoManaged: slot?.autoManaged === true,
+      activeDate: slot?.activeDate || ''
+    };
+    if (idx != null) scheduleRowsState[idx] = next;
+    else scheduleRowsState.push(next);
+    renderScheduleTable();
+    setControlMsg('Zeile übernommen — mit „Speichern“ aktivieren.');
+    return true;
+  });
 }
 
 function addScheduleRow(opts = {}) {
@@ -2423,91 +2832,60 @@ function addScheduleRow(opts = {}) {
     autoManaged = false,
     activeDate = ''
   } = opts;
-  const tbody = document.getElementById('scheduleRowsDash');
-  if (!tbody) return;
-  const tr = document.createElement('tr');
-  tr.dataset.ruleId = ruleId || '';
-  tr.dataset.ruleSource = source || '';
-  tr.dataset.displayTone = displayTone || '';
-  tr.dataset.autoManaged = autoManaged ? 'true' : 'false';
-  tr.dataset.activeDate = activeDate || '';
-  const isSma = source === SMALL_MARKET_AUTOMATION_SOURCE
-    || (typeof ruleId === 'string' && ruleId.startsWith(SMA_ID_PREFIX));
-  const isOptimizer = source === FORECAST_OPTIMIZER_SOURCE
-    || (typeof ruleId === 'string' && ruleId.startsWith(OPT_ID_PREFIX));
-  const isAutomation = isSma || isOptimizer;
-  if (isSma) {
-    tr.title = `${SMALL_MARKET_AUTOMATION_LABEL}${activeDate ? ` (${activeDate})` : ''} — automatisch verwaltet`;
-  } else if (isOptimizer) {
-    tr.title = `${FORECAST_OPTIMIZER_LABEL} — automatisch verwaltet`;
-  }
-
-  const disabled = isAutomation ? 'disabled' : '';
-  tr.innerHTML = `
-    <td><input type="checkbox" class="sched-row-enabled" ${rowEnabled ? 'checked' : ''} ${disabled} title="${escapeAttr(isAutomation ? 'Automatisch verwaltet' : 'Aktiv')}" /></td>
-    <td><input type="time" class="sched-start" value="${escapeAttr(start)}" ${disabled} /></td>
-    <td><input type="time" class="sched-end" value="${escapeAttr(end)}" ${disabled} /></td>
-    <td><label><input type="checkbox" class="sched-grid-en" ${gridEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-grid-val" value="${escapeAttr(gridVal)}" ${disabled} /></label></td>
-    <td><label><input type="checkbox" class="sched-charge-en" ${chargeEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-charge-val" value="${escapeAttr(chargeVal)}" ${disabled} /></label></td>
-    <td><label><input type="checkbox" class="sched-stop-soc-en" ${stopSocEnabled ? 'checked' : ''} ${disabled} /> <input type="number" class="sched-stop-soc-val" value="${escapeAttr(stopSocVal)}" min="0" max="100" step="5" ${disabled} /></label></td>
-    <td><input type="checkbox" class="sched-dc-export" ${dcExportEnabled ? 'checked' : ''} ${disabled} title="100% Einspeisung — Grid-Setpoint folgt dem echten PV-Überschuss (PV − live Hausverbrauch − Puffer), Akku-Nettostrom bleibt ~0 A. Hausverbrauch-Abzug abschaltbar in den Einstellungen. OvervoltageFeedIn wird NICHT angefasst (das macht nur die DV-Vermarktung)." /></td>
-    <td>${isAutomation ? (isOptimizer
-      ? '<span class="sched-auto-badge sched-badge-optimizer" title="Vom Optimizer verwaltet">Optimizer' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>'
-      : '<span class="sched-auto-badge" title="Von der kleinen Börsenautomatik verwaltet">Auto' + (activeDate ? ' · ' + escapeHtml(activeDate) : '') + '</span>')
-      : '<button class="icon-btn sched-remove" title="Zeile entfernen">-</button>'}</td>
-  `;
-  if (!isAutomation) {
-    tr.querySelector('.sched-remove')?.addEventListener('click', () => tr.remove());
-  }
-
-  const enableCb = tr.querySelector('.sched-row-enabled');
-  const syncRowState = () => {
-    tr.dataset.start = tr.querySelector('.sched-start')?.value || '';
-    tr.dataset.end = tr.querySelector('.sched-end')?.value || '';
-    updateScheduleRowVisualState(tr);
+  const num = (v) => {
+    const n = Number(v);
+    return v !== '' && v != null && Number.isFinite(n) ? n : null;
   };
-  enableCb.addEventListener('change', syncRowState);
-  tr.querySelector('.sched-start')?.addEventListener('change', syncRowState);
-  tr.querySelector('.sched-end')?.addEventListener('change', syncRowState);
-  syncRowState();
-
-  tbody.appendChild(tr);
+  scheduleRowsState.push({
+    start,
+    end,
+    grid: gridEnabled ? num(gridVal) : null,
+    charge: chargeEnabled ? num(chargeVal) : null,
+    stopSocPct: stopSocEnabled ? num(stopSocVal) : null,
+    dcExport: dcExportEnabled === true,
+    enabled: rowEnabled !== false,
+    ruleId: ruleId || '',
+    ruleIds: opts.ruleIds,
+    slotTs: opts.slotTs,
+    slotEndTs: opts.slotEndTs,
+    source: source || '',
+    displayTone: displayTone || '',
+    autoManaged: autoManaged === true,
+    activeDate: activeDate || ''
+  });
+  renderScheduleTable();
 }
 
 function clearScheduleRows() {
+  scheduleRowsState = [];
   const tbody = document.getElementById('scheduleRowsDash');
-  if (tbody) tbody.innerHTML = '';
+  if (tbody) tbody.textContent = '';
 }
 
 function collectScheduleRows() {
-  const tbody = document.getElementById('scheduleRowsDash');
-  if (!tbody) return [];
-  const rowState = [];
-  for (const tr of tbody.querySelectorAll('tr')) {
-    // Skip automation-managed rows — they are handled server-side
-    if (tr.dataset.ruleSource === SMALL_MARKET_AUTOMATION_SOURCE
-      || (tr.dataset.ruleId || '').startsWith(SMA_ID_PREFIX)) continue;
-    const start = tr.querySelector('.sched-start')?.value;
-    const end = tr.querySelector('.sched-end')?.value;
-    if (!start || !end) continue;
-
-    rowState.push({
-      start,
-      end,
-      rowEnabled: tr.querySelector('.sched-row-enabled')?.checked ?? true,
-      gridEnabled: tr.querySelector('.sched-grid-en')?.checked,
-      gridVal: tr.querySelector('.sched-grid-val')?.value,
-      chargeEnabled: tr.querySelector('.sched-charge-en')?.checked,
-      chargeVal: tr.querySelector('.sched-charge-val')?.value,
-      stopSocEnabled: tr.querySelector('.sched-stop-soc-en')?.checked,
-      stopSocVal: tr.querySelector('.sched-stop-soc-val')?.value,
-      dcExportEnabled: tr.querySelector('.sched-dc-export')?.checked ?? false,
-      source: tr.dataset.ruleSource || '',
-      displayTone: tr.dataset.displayTone || '',
-      autoManaged: tr.dataset.autoManaged === 'true',
-      activeDate: tr.dataset.activeDate || ''
-    });
-  }
+  const rowState = scheduleRowsState
+    // Automation rows (SMA + Optimizer) are server-managed — never round-trip
+    // them through the manual save. Before 2026-06-12 optimizer rows WERE
+    // collected here and re-imported without slotTs/closedLoopExport, which
+    // silently degraded them to daily rules until the next replan.
+    .filter((slot) => !isSmaSlot(slot) && !isOptimizerSlot(slot))
+    .filter((slot) => slot.start && slot.end)
+    .map((slot) => ({
+      start: slot.start,
+      end: slot.end,
+      rowEnabled: slot.enabled !== false,
+      gridEnabled: slot.grid != null,
+      gridVal: slot.grid,
+      chargeEnabled: slot.charge != null,
+      chargeVal: slot.charge,
+      stopSocEnabled: slot.stopSocPct != null,
+      stopSocVal: slot.stopSocPct,
+      dcExportEnabled: slot.dcExport === true,
+      source: slot.source || '',
+      displayTone: slot.displayTone || '',
+      autoManaged: slot.autoManaged === true,
+      activeDate: slot.activeDate || ''
+    }));
   return collectScheduleRulesFromRowState(rowState);
 }
 
@@ -2529,31 +2907,9 @@ async function loadScheduleDash() {
     }
   }
 
-  const timeSlots = groupScheduleRulesForDashboard(rules);
-
-  if (!timeSlots.length) {
-    addScheduleRow();
-  } else {
-    for (const slot of timeSlots) {
-      addScheduleRow({
-        start: slot.start || '06:45',
-        end: slot.end || '07:15',
-        gridVal: slot.grid ?? -40,
-        chargeVal: slot.charge ?? '',
-        stopSocVal: slot.stopSocPct ?? '',
-        gridEnabled: slot.grid != null,
-        chargeEnabled: slot.charge != null,
-        stopSocEnabled: slot.stopSocPct != null,
-        dcExportEnabled: slot.dcExport === true,
-        rowEnabled: slot.enabled,
-        ruleId: slot.ruleId,
-        source: slot.source,
-        displayTone: slot.displayTone,
-        autoManaged: slot.autoManaged,
-        activeDate: slot.activeDate
-      });
-    }
-  }
+  // State-driven table (2026-06-12): the grouped slots ARE the row state.
+  scheduleRowsState = groupScheduleRulesForDashboard(rules);
+  renderScheduleTable();
 
   const defGrid = data?.config?.defaultGridSetpointW;
   if (defGrid != null) {
@@ -2950,7 +3306,7 @@ function initDashboard() {
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);
-  document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => addScheduleRow());
+  document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => { openSlotEditor(null); });
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
   document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);
@@ -3025,6 +3381,9 @@ const dashboardApi = {
   collectScheduleRulesFromRowState,
   computeMinSocRenderState,
   computeDynamicGrossImportCtKwh,
+  describeSlotControl,
+  estimateSlotEconomics,
+  scheduleSlotWindowMs,
   createPriceChartScale,
   createMinSocPendingState,
   createDashboardRefreshTask,

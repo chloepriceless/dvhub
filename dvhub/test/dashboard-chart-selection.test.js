@@ -249,9 +249,15 @@ test('dashboard markup and styles expose user price comparison summary and expir
   assert.match(app, /isScheduleWindowExpired/);
 });
 
-test('dashboard schedule table exposes a stop-soc column', () => {
+test('dashboard schedule table exposes stop-soc via the Steuerung column and the slot editor', () => {
+  // Operator redesign 2026-06-12: the per-value columns collapsed into one
+  // read-only "Steuerung" summary column; STOP-SOC editing moved into the
+  // dv-modal slot editor (app.js openSlotEditor).
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  assert.match(html, /STOP-SOC \(%\)/);
+  const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+  assert.match(html, /STOP-SOC \(%\)/); // column tooltip documents the summary fields
+  assert.match(app, /STOP-SOC \(%\)/); // editor field label
+  assert.match(app, /Stop-SoC \$\{Number\(slot\.stopSocPct\)\}%/); // summary text renders the value
 });
 
 test('dashboard helpers attach stopSocPct only to grid rules and hydrate it back from grouped rules', () => {
@@ -320,18 +326,70 @@ test('dashboard schedule row template includes stop-soc controls', () => {
 });
 
 test('dashboard escapes dynamic schedule and plan row template values', () => {
+  // Operator redesign 2026-06-12: schedule rows are now built exclusively via
+  // createElement + textContent (renderScheduleTable / openSlotEditor) — no
+  // innerHTML templates remain, so injection is impossible by construction.
+  // The SMA plan rows still use an innerHTML template and must stay escaped.
   const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
 
   assert.match(app, /function escapeAttr\(value\)/);
-  assert.match(app, /value="\$\{escapeAttr\(start\)\}"/);
-  assert.match(app, /value="\$\{escapeAttr\(end\)\}"/);
-  assert.match(app, /value="\$\{escapeAttr\(gridVal\)\}"/);
-  assert.match(app, /value="\$\{escapeAttr\(chargeVal\)\}"/);
-  assert.match(app, /value="\$\{escapeAttr\(stopSocVal\)\}"/);
-  assert.match(app, /title="\$\{escapeAttr\(isAutomation \? 'Automatisch verwaltet' : 'Aktiv'\)\}"/);
+  // renderScheduleTable builds rows DOM-node-wise, not via innerHTML
+  assert.match(app, /function renderScheduleTable\(\)/);
+  assert.match(app, /controlText\.textContent = describeSlotControl\(slot\)/);
+  assert.match(app, /tdWindow\.textContent =/);
+  assert.doesNotMatch(app, /tr\.innerHTML = `\s*\n?\s*<td><input type="checkbox" class="sched-row-enabled"/);
+  // SMA plan rows (innerHTML template) keep their escaping
   assert.match(app, /<td>\$\{escapeAttr\(slot\.time \|\| '\\u2014'\)\}<\/td>/);
   assert.match(app, /<td>\$\{escapeAttr\(powerLabel\)\}<\/td>/);
   assert.match(app, /<td>\$\{escapeAttr\(slot\.priceCtKwh != null \? \(Number\(slot\.priceCtKwh\)\)\.toFixed\(2\) : '\\u2014'\)\} ct\/kWh<\/td>/);
+});
+
+test('schedule slot economics: export revenue, import cost, no estimate without fixed wattage', () => {
+  const helpers = loadDashboardHelpers();
+  assert.equal(typeof helpers.estimateSlotEconomics, 'function');
+
+  // 4 EPEX 15-min slots covering 18:00–19:00 UTC at 40/40/20/20 ct
+  const base = Date.parse('2026-06-12T18:00:00Z');
+  const Q = 15 * 60000;
+  const epex = [
+    { ts: base, ct_kwh: 40 },
+    { ts: base + Q, ct_kwh: 40 },
+    { ts: base + 2 * Q, ct_kwh: 20 },
+    { ts: base + 3 * Q, ct_kwh: 20 }
+  ];
+
+  // Export slot: −2000 W over the full hour → 2 kWh × 30 ct avg = +0.60 €
+  const exportSlot = { grid: -2000, slotTs: base, slotEndTs: base + 4 * Q };
+  const exportEcon = helpers.estimateSlotEconomics(exportSlot, epex, base);
+  assert.equal(exportEcon.avgCt, 30);
+  assert.equal(exportEcon.kwh, 2);
+  assert.ok(Math.abs(exportEcon.eur - 0.6) < 1e-9, 'export = revenue (+)');
+
+  // Import slot: +2000 W → cost (−0.60 €)
+  const importEcon = helpers.estimateSlotEconomics({ grid: 2000, slotTs: base, slotEndTs: base + 4 * Q }, epex, base);
+  assert.ok(Math.abs(importEcon.eur + 0.6) < 1e-9, 'import = cost (−)');
+
+  // dcExport-only slot (no fixed wattage): price yes, € estimate no
+  const dcEcon = helpers.estimateSlotEconomics({ dcExport: true, slotTs: base, slotEndTs: base + 4 * Q }, epex, base);
+  assert.equal(dcEcon.avgCt, 30);
+  assert.equal(dcEcon.eur, null);
+
+  // No overlapping price data → null
+  assert.equal(helpers.estimateSlotEconomics({ grid: -2000, slotTs: base + 86400000, slotEndTs: base + 86400000 + Q }, epex, base), null);
+});
+
+test('schedule slot window resolves daily HH:MM rules and midnight crossings', () => {
+  const helpers = loadDashboardHelpers();
+  assert.equal(typeof helpers.scheduleSlotWindowMs, 'function');
+
+  const now = new Date('2026-06-12T10:00:00');
+  const win = helpers.scheduleSlotWindowMs({ start: '22:00', end: '02:00' }, now.getTime());
+  assert.ok(win.endMs > win.startMs, 'midnight crossing extends into tomorrow');
+  assert.equal(win.endMs - win.startMs, 4 * 3600000, '22:00–02:00 = 4h window');
+
+  // Absolute slotTs/slotEndTs wins over HH:MM
+  const abs = JSON.parse(JSON.stringify(helpers.scheduleSlotWindowMs({ start: '22:00', end: '02:00', slotTs: 1000, slotEndTs: 2000 }, now.getTime())));
+  assert.deepEqual(abs, { startMs: 1000, endMs: 2000 });
 });
 
 test('dashboard places the schedule panel directly after the price chart panel', () => {
