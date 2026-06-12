@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css">
-  <link rel="stylesheet" href="/index.css?v=20260612-btnfix">
+  <link rel="stylesheet" href="/index.css?v=20260613-nothalt">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -197,6 +197,14 @@
       <div class="card rail-card rail-rows-2col" data-accent="ctrl">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-ctrl"></span>Steuerung</span>
+        </div>
+        <!-- T-0099 NOT-HALT: stoppt alle diskretionaeren Setpoint-Writes (Spot-Markt/
+             Akku). Pflicht-Pfade (&sect;51 Negativpreis-Abregelung, SOC-Boden-Schutz,
+             &sect;9 Einspeisegrenze) laufen weiter; Live-Werte (Reads) sowieso. -->
+        <div class="nothalt-block">
+          <button id="emergencyStopBtn" class="btn nothalt-btn" type="button" title="Not-Halt: schreibt einmalig Grid-Setpoint 0 (Eigenverbrauchsregelung) und stoppt danach alle Markt-/Optimizer-/Hand-Steuerbefehle, bis du fortsetzt. Pflicht-Abregelung (&sect;51/&sect;9) und Live-Anzeige laufen weiter. &Uuml;berlebt einen Neustart.">&#128721; NOT-HALT &mdash; Steuerung stoppen</button>
+          <button id="emergencyResumeBtn" class="btn nothalt-resume-btn" type="button" hidden title="Hebt den Not-Halt auf. Der Zeitplan &uuml;bernimmt beim n&auml;chsten Takt (~15 s) wieder.">&#9654; Steuerung fortsetzen</button>
+          <div class="meta nothalt-meta" id="emergencyStopMeta" hidden>&mdash;</div>
         </div>
         <div class="rail-row"><span class="l">Aktiver Grid Setpoint</span><strong class="v" id="activeGridSetpoint">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Aktiver Charge Current</span><strong class="v" id="activeChargeCurrent">&mdash;</strong></div>
@@ -456,7 +464,7 @@
 <script src="/dv-modal.js"></script>
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js"></script>
-<script src="/app.js?v=20260613-topbarfix"></script>
+<script src="/app.js?v=20260613-nothalt"></script>
 <script src="/leitstand-charts.js?v=20260612-nosavings"></script>
 </body>
 </html>

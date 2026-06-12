@@ -47,6 +47,32 @@ function dischargeFloorHold(target, value) {
   return null;
 }
 
+// T-0099 NOT-HALT — source classification for the selective emergency-stop
+// gate. MANDATORY sources keep writing while state.ctrl.discretionaryWritesPaused
+// is set; everything else is blocked. This is a WHITELIST on purpose (fail-safe):
+// a source string added tomorrow that nobody classified is blocked during an
+// emergency stop, not silently allowed.
+//   negative_price_protection  — §51 EEG curtailment duty (legal, must keep running)
+//   manual_override_soc_floor  — T-0002 safety neutralization (writes 0 at SoC floor)
+//   emergency_stop             — the stop action's own one-time gridSetpointW=0
+//                                neutralization (must pass its own gate)
+// Deliberately DISCRETIONARY (= blocked): dc_export_mode (DV revenue
+// maximization, not a curtailment duty — Christin 2026-06-12), sell_price_floor,
+// stage2_akku_clamp, forecast_optimizer rule:* sources, eos_optimization,
+// emhass_optimization, api_manual_write, manual_override*, default.
+// NOTE: applyDvVictronControl (§9 feed-in limit / PV curtailment, reg 2707/2709)
+// is a separate path that never goes through applyControlTarget — it is NOT
+// gated, by design. Reads (polling.js) are likewise untouched.
+const MANDATORY_CONTROL_SOURCES = new Set([
+  'negative_price_protection',
+  'manual_override_soc_floor',
+  'emergency_stop'
+]);
+
+export function isMandatoryControlSource(source) {
+  return MANDATORY_CONTROL_SOURCES.has(String(source));
+}
+
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
 
@@ -268,6 +294,25 @@ export function createScheduleEvaluator(ctx) {
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
+
+    // === T-0099 NOT-HALT selective gate =======================================
+    // While the operator's emergency stop is active, ONLY whitelisted mandatory
+    // sources (§51 curtailment, SoC-floor safety, the stop's own neutralization)
+    // may write hardware. Runs FIRST — before bounds, EEG gate, keepalive and
+    // the prev-value short-circuit — so a blocked write leaves lastWrite/active
+    // state completely untouched. Log once per (target,source) while paused
+    // (eval ticks every ~15 s — unthrottled this would flood the ring buffer);
+    // the throttle map is cleared on resume.
+    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source)) {
+      const blockKey = `${target}|${source}`;
+      if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
+      if (!state.ctrl._stopBlockLogged[blockKey]) {
+        state.ctrl._stopBlockLogged[blockKey] = true;
+        pushLog('control_write_blocked_nothalt', { target, value, source }, 'warn');
+      }
+      return { ok: false, blocked: true, error: 'emergency_stop_active' };
+    }
+    // === end T-0099 NOT-HALT gate =============================================
 
     // === T-0080 write-layer bounds (defense-in-depth at the chokepoint) =======
     // The /api/control/write route bounds values, but EOS/EMHASS (routes-api.js

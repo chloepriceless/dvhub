@@ -404,7 +404,7 @@ function renderKpis(summary) {
         const negRule = kpis?.negPriceRule;
         const extHours = hasFiniteNumber(kpis?.eegExtensionHours) ? Number(kpis.eegExtensionHours) : null;
         const subject = negRule && negRule !== 'none' && extHours != null;
-        eegRow.style.display = subject ? '' : 'none';
+        eegRow.hidden = !subject;
         if (subject) {
           const months = hasFiniteNumber(kpis?.eegExtensionMonths) ? Number(kpis.eegExtensionMonths) : 0;
           const monthSuffix = months >= 0.01

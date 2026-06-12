@@ -1774,6 +1774,12 @@ export function createApiRoutes(ctx) {
     // Review 2026-06-10 (B7 Lösung 2): Leitstand-Banner-Quelle. liteStatus()
     // liest nur In-Memory-Felder (kein fs, kein uiToken) — sicher im 3s-Poll.
     payload.supportTunnel = ctx.supportTunnel?.liteStatus?.() ?? null;
+    // T-0099 NOT-HALT: in-memory only, safe in the 3 s poll. Drives the
+    // Leitstand emergency-stop button + sticky banner.
+    payload.emergencyStop = {
+      active: !!state.ctrl.discretionaryWritesPaused,
+      pausedAt: state.ctrl.pausedAt || null
+    };
     return payload;
   }
 
@@ -5893,6 +5899,58 @@ export function createApiRoutes(ctx) {
         }).catch((err) => pushLog('manual_override_persist_error', { error: err?.message ?? String(err) }, actor));
       }
       return json(res, result.ok ? 200 : 500, result);
+    }
+
+    // --- T-0099 NOT-HALT (emergency stop) -------------------------------
+    // POST /api/control/stop: pause all DISCRETIONARY hardware writes (spot-
+    // market / battery setpoints). Mandatory paths (§51 negative-price
+    // curtailment, SoC-floor safety, §9 applyDvVictronControl) keep running —
+    // see isMandatoryControlSource in schedule-eval.js. Order matters:
+    //   1. set the flag FIRST (no discretionary write can race in between),
+    //   2. then ONE active gridSetpointW=0 neutralization (source
+    //      'emergency_stop' is whitelisted through the gate) so the plant is
+    //      immediately on internal self-consumption — we do NOT rely on a
+    //      Venus-side reg-2700 revert timeout (T-0099 scope §1).
+    // No auto-resume: the flag never expires; only POST /api/control/resume
+    // (or deleting control_state.json) lifts it.
+    if (url.pathname === '/api/control/stop' && req.method === 'POST') {
+      const actor = actorContext(req);
+      if (state.ctrl.discretionaryWritesPaused) {
+        return json(res, 200, { ok: true, alreadyStopped: true, pausedAt: state.ctrl.pausedAt });
+      }
+      state.ctrl.discretionaryWritesPaused = true;
+      state.ctrl.pausedAt = Date.now();
+      state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
+      state.ctrl._stopBlockLogged = {};
+      ctx.persistControlState?.();
+      pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...actor, severity: 'warn' });
+      let neutralize = null;
+      try {
+        neutralize = await ctx.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
+      } catch (e) {
+        neutralize = { ok: false, error: e.message };
+      }
+      if (!neutralize?.ok && !neutralize?.skipped) {
+        // Writes are paused either way; the operator must know the plant may
+        // still hold the last setpoint until Venus reverts it.
+        pushLog('emergency_stop_neutralize_failed', { error: neutralize?.error || 'unknown' }, { ...actor, severity: 'error' });
+      }
+      return json(res, 200, { ok: true, paused: true, pausedAt: state.ctrl.pausedAt, neutralize });
+    }
+
+    if (url.pathname === '/api/control/resume' && req.method === 'POST') {
+      const actor = actorContext(req);
+      if (!state.ctrl.discretionaryWritesPaused) {
+        return json(res, 200, { ok: true, alreadyRunning: true });
+      }
+      state.ctrl.discretionaryWritesPaused = false;
+      state.ctrl.pausedAt = 0;
+      state.ctrl.pausedBy = null;
+      state.ctrl._stopBlockLogged = {};
+      ctx.persistControlState?.();
+      pushLog('emergency_stop_resumed', {}, { ...actor, severity: 'warn' });
+      // The next evaluateSchedule tick (~15 s) re-applies rules/defaults.
+      return json(res, 200, { ok: true, resumed: true });
     }
 
     // --- VPN Endpoints ---

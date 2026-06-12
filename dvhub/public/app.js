@@ -1762,6 +1762,83 @@ function renderSupportTunnelBanner(st) {
     + '. Schließen: Einstellungen → Support-Tunnel.';
 }
 
+// T-0099 NOT-HALT: sticky Banner solange der Not-Halt aktiv ist (Quelle:
+// /api/status.emergencyStop, 3s-Poll) + Button-Zustand in der Steuerung-Karte.
+// Der Banner bekommt seinen Resume-Button einmalig beim Erstellen — der Poll
+// aktualisiert nur den Text-Span (kein Listener-Verlust durch re-render).
+function renderEmergencyStop(es) {
+  const active = !!(es && es.active);
+  const stopBtn = document.getElementById('emergencyStopBtn');
+  const resumeBtn = document.getElementById('emergencyResumeBtn');
+  const meta = document.getElementById('emergencyStopMeta');
+  if (stopBtn) stopBtn.hidden = active;
+  if (resumeBtn) resumeBtn.hidden = !active;
+  if (meta) {
+    meta.hidden = !active;
+    if (active) meta.textContent = 'Not-Halt aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + ' — Markt-/Optimizer-Steuerung pausiert.';
+  }
+  let banner = document.getElementById('emergencyStopBanner');
+  if (!active) { if (banner) banner.remove(); return; }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'emergencyStopBanner';
+    banner.className = 'nothalt-banner';
+    const text = document.createElement('span');
+    text.id = 'emergencyStopBannerText';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn sm nothalt-banner-resume';
+    btn.textContent = 'Fortsetzen';
+    btn.addEventListener('click', handleEmergencyResume);
+    banner.append(text, btn);
+    document.body.prepend(banner);
+  }
+  const textEl = document.getElementById('emergencyStopBannerText');
+  if (textEl) {
+    textEl.textContent = '\u{1F6D1} NOT-HALT aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '')
+      + ' — diskretionäre Steuerbefehle pausiert (Pflicht-Abregelung läuft weiter).';
+  }
+}
+
+async function handleEmergencyStop() {
+  const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
+    ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nPflicht-Abregelung (§51/§9) und Live-Anzeige laufen weiter.')
+    : true;
+  if (!go) return;
+  try {
+    const res = await apiFetch('/api/control/stop', { method: 'POST' });
+    const payload = await res.json();
+    if (!res.ok || !payload.ok) {
+      setControlMsg(`Not-Halt fehlgeschlagen: ${payload.error || res.status}`, true);
+      return;
+    }
+    const n = payload.neutralize;
+    setControlMsg(n && (n.ok || n.skipped)
+      ? 'NOT-HALT aktiv — Setpoint neutralisiert (0 W), Steuerung pausiert.'
+      : `NOT-HALT aktiv — ABER Neutralisierung fehlgeschlagen (${n?.error || 'unbekannt'}): letzter Setpoint kann noch anliegen!`, !(n && (n.ok || n.skipped)));
+  } catch (e) {
+    setControlMsg(`Not-Halt fehlgeschlagen: ${e.message}`, true);
+    return;
+  }
+  await requestDashboardRefresh();
+}
+
+async function handleEmergencyResume() {
+  try {
+    const res = await apiFetch('/api/control/resume', { method: 'POST' });
+    const payload = await res.json();
+    if (!res.ok || !payload.ok) {
+      setControlMsg(`Fortsetzen fehlgeschlagen: ${payload.error || res.status}`, true);
+      return;
+    }
+    setControlMsg('Steuerung fortgesetzt — Zeitplan übernimmt beim nächsten Takt (~15 s).');
+  } catch (e) {
+    setControlMsg(`Fortsetzen fehlgeschlagen: ${e.message}`, true);
+    return;
+  }
+  await requestDashboardRefresh();
+}
+
 function renderDashboardStatus(status) {
   // Plan 09-04: each top-level dashboard card update is wrapped in
   // DVhubCommon.safeRender(...) so a throw in ONE card does NOT abort the
@@ -1774,6 +1851,10 @@ function renderDashboardStatus(status) {
 
   safeRender('dashboard.support-tunnel-banner', () => {
     renderSupportTunnelBanner(status.supportTunnel);
+  });
+
+  safeRender('dashboard.emergency-stop', () => {
+    renderEmergencyStop(status.emergencyStop);
   });
 
   safeRender('dashboard.dv-status', () => {
@@ -3351,6 +3432,8 @@ function initDashboard() {
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);
   document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => { openSlotEditor(null); });
+  document.getElementById('emergencyStopBtn')?.addEventListener('click', handleEmergencyStop);
+  document.getElementById('emergencyResumeBtn')?.addEventListener('click', handleEmergencyResume);
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
   document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);

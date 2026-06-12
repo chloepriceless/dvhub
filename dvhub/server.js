@@ -239,7 +239,16 @@ const IS_RUNTIME_PROCESS = PROCESS_ROLE === 'runtime-worker' || PROCESS_ROLE ===
 const state = {
   systemWarnings,
   dvRegs: { 0: 0, 1: 0, 3: 0, 4: 0 },
-  ctrl: { forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(), _dcExportLastWriteAt: 0, _dcExportLogged: false, _dcExportPriceBlockLogged: false },
+  ctrl: {
+    forcedOff: false, offUntil: 0, lastSignal: 'init', updatedAt: Date.now(),
+    _dcExportLastWriteAt: 0, _dcExportLogged: false, _dcExportPriceBlockLogged: false,
+    // T-0099 NOT-HALT: pauses all DISCRETIONARY hardware writes (whitelist gate
+    // in applyControlTarget). Distinct from forcedOff (DV-export lease with
+    // auto-expire) — this flag NEVER expires, only an explicit operator resume
+    // clears it. Persisted to control_state.json so a service restart cannot
+    // silently lift an emergency stop.
+    discretionaryWritesPaused: false, pausedAt: 0, pausedBy: null, _stopBlockLogged: {}
+  },
   keepalive: {
     modbusLastQuery: null,
     appPulse: { periodSec: cfg.keepalivePulseSec }
@@ -762,6 +771,42 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
 
 const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 
+// T-0099 NOT-HALT restart persistence. A restart (manual, watchdog, self-update
+// post-update hook) must NOT silently lift an active emergency stop — the
+// operator pressed it for a reason. Tiny dedicated file (not config.json: the
+// stop is runtime STATE, not configuration, and must never ride along a
+// config save/restore).
+const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json');
+
+function persistControlState() {
+  try {
+    fs.writeFileSync(CONTROL_STATE_PATH, JSON.stringify({
+      discretionaryWritesPaused: !!state.ctrl.discretionaryWritesPaused,
+      pausedAt: state.ctrl.pausedAt || 0,
+      pausedBy: state.ctrl.pausedBy || null
+    }) + '\n');
+  } catch (e) {
+    pushLog('control_state_persist_error', { error: e.message }, 'error');
+  }
+}
+
+function loadControlState() {
+  try {
+    if (!fs.existsSync(CONTROL_STATE_PATH)) return;
+    const saved = JSON.parse(fs.readFileSync(CONTROL_STATE_PATH, 'utf8'));
+    if (saved?.discretionaryWritesPaused === true) {
+      state.ctrl.discretionaryWritesPaused = true;
+      state.ctrl.pausedAt = Number(saved.pausedAt) || Date.now();
+      state.ctrl.pausedBy = saved.pausedBy || null;
+      pushLog('emergency_stop_restored', { pausedAt: state.ctrl.pausedAt, pausedBy: state.ctrl.pausedBy }, 'warn');
+    }
+  } catch (e) {
+    // Unreadable state file → fail toward normal operation (the operator can
+    // re-press the button); log loudly so the broken file is visible.
+    pushLog('control_state_load_error', { error: e.message }, 'error');
+  }
+}
+
 // Plan 09-06 (D-08, D-09): pushLog gains a `level` field on every ring-buffer
 // entry. The new level threads through to audit_log.severity (column already
 // exists from migration 015; BLOCKER 3 fix — no new migration).
@@ -892,6 +937,7 @@ const ctx = {
   setForcedOff,
   clearForcedOff,
   expireLeaseIfNeeded,
+  persistControlState,
   get db() { return dbPool; }, // lazy getter — dbPool set during createTelemetryStoreIfEnabled()
 };
 
@@ -1458,6 +1504,9 @@ if (IS_WEB_PROCESS) {
 
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
+  // T-0099: restore an active emergency stop BEFORE the schedule evaluator's
+  // first tick so no discretionary write slips through the boot window.
+  loadControlState();
   // Phase 17 Plan 03 — sync boot-load of license_state.json. Runs BEFORE any
   // service.start() / HTTP listener so the very first request sees the
   // persisted license status (no race window where requirePro returns 403 on
