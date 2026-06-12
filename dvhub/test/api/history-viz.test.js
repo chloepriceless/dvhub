@@ -1025,12 +1025,26 @@ describe('Plan 09.3-03 Wave 3 — AutarkyCalendar/Ring/Duration builders', () =>
     assert.equal(b.card, 'autarky-calendar');
     assert.equal(b.mode, 'calendar', 'month view should be mode:calendar');
     assert.ok(Array.isArray(b.xLabels), 'xLabels should be an array');
-    // 30-day rolling window → 28..31 dates with data
-    assert.ok(b.xLabels.length >= 28 && b.xLabels.length <= 31, `xLabels length 28-31 expected, got ${b.xLabels.length}`);
+    // Calendar-matrix fix 2026-06-12: x columns are WEEKS (Monday dates), not
+    // individual days — a 28-31 day window spans 5-6 ISO weeks.
+    assert.ok(b.xLabels.length >= 5 && b.xLabels.length <= 6, `xLabels should be 5-6 week columns, got ${b.xLabels.length}`);
+    for (const wk of b.xLabels) {
+      assert.equal(new Date(`${wk}T12:00:00Z`).getUTCDay(), 1, `week column key must be a Monday, got ${wk}`);
+    }
     assert.ok(Array.isArray(b.yLabels) && b.yLabels.length === 7, `yLabels should be 7 day-of-week labels, got ${b.yLabels?.length}`);
     assert.ok(Array.isArray(b.matrix), 'matrix should be an array');
-    // One cell per actual date (each day maps to exactly one dow row).
-    assert.equal(b.matrix.length, b.xLabels.length, `matrix.length (${b.matrix.length}) should equal xLabels.length (${b.xLabels.length})`);
+    // One cell per actual DAY (28-31), each anchored to its week column + dow
+    // row and carrying the real date in `d` for the tooltip.
+    assert.ok(b.matrix.length >= 28 && b.matrix.length <= 31, `matrix should have one cell per day (28-31), got ${b.matrix.length}`);
+    for (const cell of b.matrix) {
+      assert.ok(b.xLabels.includes(cell.x), `cell.x (${cell.x}) must be a week column`);
+      assert.ok(b.yLabels.includes(cell.y), `cell.y (${cell.y}) must be a dow label`);
+      assert.match(cell.d, /^\d{4}-\d{2}-\d{2}$/, 'cell.d must carry the real date');
+    }
+    // No two cells may share the same (week, dow) coordinate — that was the
+    // diagonal-staircase bug's inverse failure mode.
+    const coords = new Set(b.matrix.map((c) => `${c.x}|${c.y}`));
+    assert.equal(coords.size, b.matrix.length, 'every day must land on a unique (week, dow) cell');
     assert.ok(b.domain && b.domain.min === 0 && b.domain.max === 100, 'domain should be {min:0,max:100}');
     // periodTotal — overall-autarky summary alongside the calendar.
     assert.ok(b.periodTotal, 'month view should add a periodTotal summary');

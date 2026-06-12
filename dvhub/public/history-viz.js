@@ -626,9 +626,11 @@
               title() { return ''; },
               label(c) {
                 // RC-2 — d.y is the German DOW label STRING; use it directly.
+                // d.d carries the real cell date since the calendar-matrix fix
+                // (d.x is now the week's Monday = the column key).
                 const d = c.dataset.data[c.dataIndex];
                 if (!d) return '';
-                return `${d.x} (${d.y}): ${d.v}%`;
+                return `${d.d || d.x} (${d.y}): ${d.v}%`;
               },
             } },
           },

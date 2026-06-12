@@ -1182,13 +1182,21 @@ export function createHistoryVizAggregator(ctx) {
       }
       const dates = [...rowsByDay.keys()].sort();
       const matrix = [];
+      const weekKeys = [];
       for (const d of dates) {
         const donut = autarkyDonutFromFlows(decomposeEnergyFlows(rowsByDay.get(d), gridChargeAllowed));
         // dow mapping: JS getUTCDay() is 0=Sunday..6=Saturday; the y-axis
         // labels are Mo=0..So=6, so shift by +6 mod 7.
-        const jsDow = new Date(`${d}T12:00:00Z`).getUTCDay();
+        const dayDate = new Date(`${d}T12:00:00Z`);
+        const jsDow = dayDate.getUTCDay();
         const dowIdx = (jsDow + 6) % 7;
-        matrix.push({ x: d, y: DOW_DE_SHORT[dowIdx], v: round1(donut.autarkyPct) });
+        // Calendar-matrix fix (operator screenshot 2026-06-12): the x cell must
+        // be the WEEK column (its Monday date), not the day itself — one column
+        // per day put every cell in its own column and the "calendar" rendered
+        // as a diagonal staircase. `d` keeps the real date for the tooltip.
+        const monday = new Date(dayDate.getTime() - dowIdx * 86400000).toISOString().slice(0, 10);
+        if (!weekKeys.includes(monday)) weekKeys.push(monday);
+        matrix.push({ x: monday, y: DOW_DE_SHORT[dowIdx], v: round1(donut.autarkyPct), d });
       }
       // periodTotal — decompose the WHOLE range's buckets in one pass.
       const periodDonut = autarkyDonutFromFlows(decomposeEnergyFlows(rows, gridChargeAllowed));
@@ -1200,7 +1208,7 @@ export function createHistoryVizAggregator(ctx) {
         generatedAt: new Date().toISOString(),
         cached: false,
         mode: 'calendar',
-        xLabels: dates,
+        xLabels: weekKeys,
         yLabels: DOW_DE_SHORT.slice(),
         matrix,
         domain: { min: 0, max: 100, unit: '%' },
