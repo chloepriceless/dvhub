@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, roundCtKwh, addDays, gridDirection, controlWriteBoundsError, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
+import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
@@ -5598,9 +5599,15 @@ export function createApiRoutes(ctx) {
         return true;
       });
       if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
-      const incomingManualRules = validRules.filter((r) => !isSmallMarketAutomationRule(r));
-      const existingAutomationRules = state.schedule.rules.filter((r) => isSmallMarketAutomationRule(r));
-      const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isSmallMarketAutomationRule(r));
+      // 2026-06-12: optimizer rules are server-managed like SMA rules. Before
+      // this, a manual save round-tripped them through the frontend table and
+      // re-imported them WITHOUT slotTs/slotEndTs/closedLoopExport — they then
+      // matched daily (no date binding) and lost the closed-loop semantics
+      // until the next replan. Keep both automation families server-side.
+      const isAutomationRule = (r) => isSmallMarketAutomationRule(r) || isForecastOptimizerRule(r);
+      const incomingManualRules = validRules.filter((r) => !isAutomationRule(r));
+      const existingAutomationRules = state.schedule.rules.filter((r) => isAutomationRule(r));
+      const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isAutomationRule(r));
       const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
       const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
       const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
@@ -5610,6 +5617,31 @@ export function createApiRoutes(ctx) {
       // can distinguish operator-initiated rule edits from automation writes.
       ctx.persistConfig('operator_manual');
       return json(res, 200, { ok: true, count: state.schedule.rules.length });
+    }
+
+    // --- Schedule Rule enable/disable Toggle (2026-06-12) ---
+    // Flips `enabled` on existing rules in-place by id. Built for operator
+    // disables of optimizer-managed slots (the frontend cannot round-trip
+    // those through the rules POST — they are server-managed). A replan
+    // inherits the disable per slotTs|target (insertOptimizerRules).
+    if (url.pathname === '/api/schedule/rules/toggle' && req.method === 'POST') {
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const ids = Array.isArray(body.ids) ? body.ids.filter((v) => typeof v === 'string' && v) : null;
+      if (!ids || !ids.length) return json(res, 400, { ok: false, error: 'ids array required' });
+      if (typeof body.enabled !== 'boolean') return json(res, 400, { ok: false, error: 'enabled boolean required' });
+      const idSet = new Set(ids);
+      let toggled = 0;
+      for (const rule of state.schedule.rules) {
+        if (rule && idSet.has(rule.id)) {
+          rule.enabled = body.enabled;
+          toggled++;
+        }
+      }
+      if (!toggled) return json(res, 404, { ok: false, error: 'no matching rules' });
+      pushLog('schedule_rule_toggled', { ids, enabled: body.enabled, toggled });
+      ctx.persistConfig('operator_manual');
+      return json(res, 200, { ok: true, toggled });
     }
 
     // --- Schedule Config POST ---

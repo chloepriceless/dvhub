@@ -70,9 +70,29 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
 }
 
 /**
+ * Detect optimizer-managed rules — mirror of the frontend isOptimizerRule
+ * (app.js) and the SMA counterpart isSmallMarketAutomationRule
+ * (market-automation-builder.js): source match OR the 'opt-' id prefix.
+ *
+ * @param {object} rule
+ * @returns {boolean}
+ */
+export function isForecastOptimizerRule(rule) {
+  if (!rule || typeof rule !== 'object') return false;
+  return rule.source === 'forecast_optimizer'
+    || (typeof rule.id === 'string' && rule.id.startsWith('opt-'));
+}
+
+/**
  * Replace old optimizer rules with new ones.
  * Filters out rules with matching source, then prepends new rules (highest priority).
  * Atomic replacement -- never mutates the input array in-place.
+ *
+ * Operator slot-disable (2026-06-12): an operator can disable individual
+ * optimizer slots via POST /api/schedule/rules/toggle. A replan rebuilds all
+ * optimizer rules from scratch, so the disable is inherited onto the new rule
+ * for the SAME slot (key slotTs|target). Slots the optimizer no longer plans
+ * simply drop out — the disable expires with the slot.
  *
  * @param {Array<object>} stateScheduleRules - Current schedule rules from state
  * @param {Array<object>} newRules - New optimizer rules to insert
@@ -80,8 +100,16 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
  * @returns {Array<object>} Updated rules array with new rules first
  */
 export function insertOptimizerRules(stateScheduleRules, newRules, source) {
+  const disabledSlotKeys = new Set(
+    stateScheduleRules
+      .filter(r => r.source === source && r.enabled === false && Number.isFinite(Number(r.slotTs)))
+      .map(r => `${r.slotTs}|${r.target}`)
+  );
+  const inherited = disabledSlotKeys.size
+    ? newRules.map(r => (disabledSlotKeys.has(`${r.slotTs}|${r.target}`) ? { ...r, enabled: false } : r))
+    : newRules;
   const kept = stateScheduleRules.filter(r => r.source !== source);
-  return [...newRules, ...kept];
+  return [...inherited, ...kept];
 }
 
 /**

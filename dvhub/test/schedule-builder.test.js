@@ -147,3 +147,44 @@ test('T-0118: original slot fields (ts/endTs/confidence) are preserved on emitte
   assert.equal(out[0].endTs, BASE_TS + QUARTER_MS);
   assert.equal(out[0].confidence, 0.9);
 });
+
+// ── Operator slot-disable (2026-06-12) ──────────────────────────────────────
+
+test('insertOptimizerRules inherits enabled:false onto the replanned rule for the same slot', () => {
+  const oldRules = [
+    { id: 'opt-111-0', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 111, enabled: false, value: -3000 },
+    { id: 'opt-222-1', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 222, enabled: true, value: -2000 }
+  ];
+  const newRules = [
+    { id: 'opt-111-7', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 111, enabled: true, value: -3500 },
+    { id: 'opt-222-8', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 222, enabled: true, value: -2500 },
+    { id: 'opt-333-9', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 333, enabled: true, value: -1000 }
+  ];
+  const result = insertOptimizerRules(oldRules, newRules, 'forecast_optimizer');
+
+  assert.equal(result.find(r => r.slotTs === 111).enabled, false, 'operator disable survives the replan');
+  assert.equal(result.find(r => r.slotTs === 222).enabled, true, 'enabled slot stays enabled');
+  assert.equal(result.find(r => r.slotTs === 333).enabled, true, 'new slot unaffected');
+  // Input rules are never mutated (atomic replacement contract)
+  assert.equal(newRules[0].enabled, true);
+});
+
+test('insertOptimizerRules disable-inheritance keys on slotTs AND target — no cross-target bleed', () => {
+  const oldRules = [
+    { id: 'opt-111-0', source: 'forecast_optimizer', target: 'dcExportMode', slotTs: 111, enabled: false, value: 1 }
+  ];
+  const newRules = [
+    { id: 'opt-111-5', source: 'forecast_optimizer', target: 'gridSetpointW', slotTs: 111, enabled: true, value: -3000 }
+  ];
+  const result = insertOptimizerRules(oldRules, newRules, 'forecast_optimizer');
+  assert.equal(result[0].enabled, true, 'different target on the same slot must NOT inherit the disable');
+});
+
+test('isForecastOptimizerRule matches source and opt- id prefix, rejects SMA/manual', async () => {
+  const { isForecastOptimizerRule } = await import('../services/optimizer/schedule-builder.js');
+  assert.equal(isForecastOptimizerRule({ source: 'forecast_optimizer' }), true);
+  assert.equal(isForecastOptimizerRule({ id: 'opt-123-0' }), true);
+  assert.equal(isForecastOptimizerRule({ id: 'sma-123-0', source: 'small_market_automation' }), false);
+  assert.equal(isForecastOptimizerRule({ id: 'grid_1' }), false);
+  assert.equal(isForecastOptimizerRule(null), false);
+});
