@@ -88,7 +88,8 @@
     grid: { icon: '&#9889;', iconBg: 'rgba(253,150,68,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#fd9644', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
     forecast: { icon: '&#9925;', iconBg: 'rgba(247,183,49,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#F7B731', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
     price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'Stündliche EPEX Day-Ahead Börsenpreise.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
-    optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'Lade-/Entlade-Strategie', color: '#4b7bec', summary: 'Der interne Optimizer plant Lade- und Entladephasen basierend auf EPEX Preisen und PV-Vorhersage.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/optimizer/status']] }
+    optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'Lade-/Entlade-Strategie', color: '#4b7bec', summary: 'Der interne Optimizer plant Lade- und Entladephasen basierend auf EPEX Preisen und PV-Vorhersage.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/optimizer/status']] },
+    weather: { icon: '&#9925;', iconBg: 'rgba(52,219,255,.08)', title: 'Wetter', sub: 'Open-Meteo · Standort der Anlage', color: '#34dbff', summary: 'Stundenprognose aus der Wetter-Integration, die auch die PV-Vorhersage speist.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Regen', val: '—', delta: '', up: true }], chart: null, details: [] },
   };
 
   /* ===================== TILE ICON / COLOUR HEURISTIC (D-01..D-04) ==========
@@ -1371,6 +1372,7 @@
     });
     if (data.price) sr('family.price-widget', function () { renderPriceWidget(data.price); });
     if (data.optimizer) sr('family.optimizer-widget', function () { renderOptimizerWidget(data.optimizer); });
+    sr('family.weather-widget', function () { renderWeatherWidget(data.weather); });
 
     sr('family.flow-state', function () {
       // Flow animations: hide idle links, reverse direction on discharge/import
@@ -1605,6 +1607,52 @@
     if (elMin) elMin.textContent = typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—';
     var elMax = document.getElementById('price-max');
     if (elMax) elMax.textContent = typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—';
+  }
+
+  /* Weather widget (2026-06-13) — WMO weather_code → emoji symbol. */
+  function famWeatherSymbol(code, cloudPct) {
+    if (code == null) {
+      if (cloudPct == null) return '🌡️';
+      return cloudPct < 25 ? '☀️' : cloudPct < 70 ? '🌤️' : '☁️';
+    }
+    if (code === 0) return '☀️';
+    if (code <= 2) return '🌤️';
+    if (code === 3) return '☁️';
+    if (code === 45 || code === 48) return '🌫️';
+    if (code >= 51 && code <= 57) return '🌦️';
+    if (code >= 61 && code <= 67) return '🌧️';
+    if (code >= 71 && code <= 77) return '🌨️';
+    if (code >= 80 && code <= 82) return '🌦️';
+    if (code >= 85 && code <= 86) return '🌨️';
+    if (code >= 95) return '⛈️';
+    return '🌡️';
+  }
+
+  function renderWeatherWidget(weather) {
+    var box = document.getElementById('widgetWeather');
+    if (!box) return;
+    if (!weather || weather.tempC == null) { box.hidden = true; return; }
+    box.hidden = false;
+    setText('weather-now', famWeatherSymbol(weather.code, weather.cloudPct) + ' ' + Math.round(weather.tempC) + '°');
+    var subParts = [];
+    if (weather.maxC != null && weather.minC != null) {
+      subParts.push('↑' + Math.round(weather.maxC) + '° ↓' + Math.round(weather.minC) + '°');
+    }
+    if (weather.precipPct != null) subParts.push('Regen ' + Math.round(weather.precipPct) + '%');
+    setText('weather-sub', subParts.join(' · ') || '—');
+    // Detail panel: stats + the next hours as rows.
+    panelData.weather.stats = [
+      { label: 'Jetzt', val: Math.round(weather.tempC) + ' °C', delta: weather.windMs != null ? 'Wind ' + Math.round(weather.windMs * 3.6) + ' km/h' : '', up: true },
+      { label: 'Heute', val: (weather.maxC != null ? '↑' + Math.round(weather.maxC) + '°' : '—') + (weather.minC != null ? ' ↓' + Math.round(weather.minC) + '°' : ''), delta: '', up: true },
+      { label: 'Regen', val: weather.precipPct != null ? Math.round(weather.precipPct) + ' %' : '—', delta: weather.humidityPct != null ? 'Luftfeuchte ' + Math.round(weather.humidityPct) + '%' : '', up: true }
+    ];
+    panelData.weather.details = (weather.hours || []).map(function (h) {
+      var t = new Date(h.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      var parts = [];
+      if (h.tempC != null) parts.push(Math.round(h.tempC) + ' °C');
+      if (h.precipPct != null && h.precipPct > 0) parts.push(h.precipPct + '% Regen');
+      return [t, famWeatherSymbol(h.code, h.cloudPct) + ' ' + parts.join(' · ')];
+    });
   }
 
   /* DV-EOS plan slot → human label (operator request 2026-06-13: the widget

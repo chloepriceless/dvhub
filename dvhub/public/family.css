@@ -480,3 +480,6 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .tag-solar .tag-friendly,.tag-bat .tag-friendly,
 .tag-solar .tag-val,.tag-bat .tag-val{text-shadow:0 1px 8px rgba(0,0,0,.8)}
 .tag-bat .tag-status{background:rgba(8,10,16,.55)}
+
+/* Weather widget (2026-06-13) */
+.widget-weather .widget-main{font-size:24px;font-weight:800;letter-spacing:-.5px}

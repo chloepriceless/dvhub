@@ -495,6 +495,58 @@ export function createFamilyService(ctx) {
   }
 
   /**
+   * Weather section (operator request 2026-06-13) — recycles the hourly
+   * Open-Meteo cache the PV forecast already fetches (state.forecast.weather,
+   * services/forecast/weather-fetch.js). No extra upstream call. Returns
+   * null when the weather fetcher has no data (widget hides itself).
+   */
+  function deriveWeatherSection() {
+    const rows = ctx.state?.forecast?.weather?.data;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const now = Date.now();
+    const HOUR = 3600 * 1000;
+    const toTs = (r) => new Date(r.ts_utc).getTime();
+    // Current = the hour bucket we are in (rows are hourly, Europe/Berlin).
+    let current = null;
+    for (const r of rows) {
+      const ts = toTs(r);
+      if (ts <= now && now < ts + HOUR) { current = r; break; }
+    }
+    if (!current) current = rows.find((r) => toTs(r) >= now) || rows[rows.length - 1];
+    // Today min/max (local calendar day).
+    const dayKey = new Date(now).toLocaleDateString('en-CA');
+    let minC = null; let maxC = null;
+    for (const r of rows) {
+      if (new Date(toTs(r)).toLocaleDateString('en-CA') !== dayKey) continue;
+      const t = Number(r.temperature_c);
+      if (!Number.isFinite(t)) continue;
+      if (minC == null || t < minC) minC = t;
+      if (maxC == null || t > maxC) maxC = t;
+    }
+    // Next 8 hours for the detail panel.
+    const hours = rows
+      .filter((r) => toTs(r) >= now - HOUR)
+      .slice(0, 8)
+      .map((r) => ({
+        ts: toTs(r),
+        tempC: Number.isFinite(Number(r.temperature_c)) ? Number(r.temperature_c) : null,
+        code: Number.isFinite(Number(r.weather_code)) ? Number(r.weather_code) : null,
+        precipPct: Number.isFinite(Number(r.precip_prob_pct)) ? Number(r.precip_prob_pct) : null,
+        cloudPct: Number.isFinite(Number(r.cloud_cover_pct)) ? Number(r.cloud_cover_pct) : null
+      }));
+    return {
+      provider: 'open_meteo',
+      tempC: Number.isFinite(Number(current.temperature_c)) ? Number(current.temperature_c) : null,
+      code: Number.isFinite(Number(current.weather_code)) ? Number(current.weather_code) : null,
+      cloudPct: Number.isFinite(Number(current.cloud_cover_pct)) ? Number(current.cloud_cover_pct) : null,
+      precipPct: Number.isFinite(Number(current.precip_prob_pct)) ? Number(current.precip_prob_pct) : null,
+      windMs: Number.isFinite(Number(current.wind_speed_ms)) ? Number(current.wind_speed_ms) : null,
+      humidityPct: Number.isFinite(Number(current.humidity_pct)) ? Number(current.humidity_pct) : null,
+      minC, maxC, hours
+    };
+  }
+
+  /**
    * Savings section. Pre-formatted strings for direct display in the UI.
    */
   function deriveSavingsSection(costs) {
@@ -622,6 +674,7 @@ export function createFamilyService(ctx) {
     const forecast = deriveForecastSection(forecastResponse);
     const price = derivePriceSection(epexNN, epexState, costs);
     const optimizer = deriveOptimizerSection(optimizerStatus);
+    const weather = deriveWeatherSection();
     const savings = deriveSavingsSection(costs);
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
     const today = deriveTodaySection(todayKpis, todayCharts);
@@ -657,6 +710,7 @@ export function createFamilyService(ctx) {
       today,
       price,
       optimizer,
+      weather,
       savings,
       greeting,
       tileFriendlies,

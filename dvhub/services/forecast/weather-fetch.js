@@ -12,7 +12,12 @@ const HOURLY_VARS = [
   'windspeed_10m',
   'cloudcover',
   'visibility',
-  'relative_humidity_2m'
+  'relative_humidity_2m',
+  // Family weather widget (2026-06-13): rain probability + WMO code for the
+  // forecast symbol. RAM-only extras — insertWeather maps its columns
+  // explicitly, so the DB schema is untouched.
+  'precipitation_probability',
+  'weather_code'
 ].join(',');
 
 /**
@@ -48,7 +53,9 @@ export function parseOpenMeteoResponse(data) {
       wind_speed_ms: hourly.windspeed_10m?.[i] ?? null,
       cloud_cover_pct: hourly.cloudcover?.[i] ?? null,
       visibility_m: hourly.visibility?.[i] ?? null,
-      humidity_pct: hourly.relative_humidity_2m?.[i] ?? null
+      humidity_pct: hourly.relative_humidity_2m?.[i] ?? null,
+      precip_prob_pct: hourly.precipitation_probability?.[i] ?? null,
+      weather_code: hourly.weather_code?.[i] ?? null
     });
   }
 

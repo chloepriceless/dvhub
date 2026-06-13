@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=10">
+<link rel="stylesheet" href="/family.css?v=11">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -74,6 +74,11 @@
 
   <!-- D-10 Forecast/Preis/Optimizer widgets (right side) -->
   <div class="widgets" id="widgets">
+    <div class="widget widget-weather" id="widgetWeather" data-panel="weather" hidden>
+      <div class="widget-title">Wetter</div>
+      <div class="widget-main"><span id="weather-now">&mdash;</span></div>
+      <div class="widget-sub" id="weather-sub">&mdash;</div>
+    </div>
     <div class="widget widget-forecast" data-panel="forecast">
       <div class="widget-title">PV Morgen</div>
       <div class="widget-chart-wrap"><canvas id="forecast-chart"></canvas></div>
@@ -138,6 +143,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-pf2c"></script>
+<script src="/family.js?v=20260613-weather"></script>
 </body>
 </html>
