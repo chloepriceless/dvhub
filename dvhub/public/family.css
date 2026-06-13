@@ -504,3 +504,47 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-eos-chg{color:#fed330}
 .fam-eos-imp{color:#fc5c65}
 .fam-eos-now td{background:rgba(75,123,236,.22)}
+
+/* Task #21 (2026-06-13) — weather widget detail + size levels.
+   cfg.family.weather.{detail,size} → wx-detail-* / wx-size-* classes on
+   #widgetWeather (set by famWeatherApplyLevel). Size scales the headline +
+   padding; detail reveals the extras (wind/humidity line, hourly strip, days). */
+.widget-weather.wx-size-sm .widget-main{font-size:20px}
+.widget-weather.wx-size-md .widget-main{font-size:24px}
+.widget-weather.wx-size-lg{padding:16px 20px}
+.widget-weather.wx-size-lg .widget-main{font-size:34px}
+.widget-weather.wx-size-lg .widget-sub{font-size:12px}
+
+/* Extras hidden by default; only the "detailed" level reveals them. */
+.weather-extra,.weather-hourly,.weather-days{display:none}
+.widget-weather.wx-detail-detailed .weather-extra,
+.widget-weather.wx-detail-detailed .weather-hourly,
+.widget-weather.wx-detail-detailed .weather-days{display:flex}
+/* Compact level drops the sub line (temperature headline only). */
+.widget-weather.wx-detail-compact .widget-sub{display:none}
+
+.weather-extra{margin-top:6px;font-size:11px;color:rgba(255,255,255,.6);
+  gap:2px;flex-wrap:wrap}
+.weather-hourly{margin-top:10px;gap:8px;justify-content:space-between}
+.wx-h{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;flex:1}
+.wx-h-t{font-size:9px;color:rgba(255,255,255,.4);font-variant-numeric:tabular-nums}
+.wx-h-i{font-size:16px;line-height:1}
+.wx-h-c{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.wx-h-r{font-size:9px;color:#4b9bff;min-height:11px;font-variant-numeric:tabular-nums}
+.weather-days{margin-top:10px;flex-direction:column;gap:5px}
+.wx-d{display:flex;align-items:center;gap:8px;font-size:12px}
+.wx-d-l{flex:0 0 38px;color:rgba(255,255,255,.55);font-weight:600}
+.wx-d-i{flex:0 0 20px;font-size:15px;text-align:center}
+.wx-d-t{flex:1;font-weight:700;font-variant-numeric:tabular-nums}
+.wx-d-min{color:rgba(255,255,255,.4);font-weight:400;margin-left:4px}
+.wx-d-r{flex:0 0 auto;color:#4b9bff;font-size:10px;font-variant-numeric:tabular-nums}
+.widget-weather.wx-size-lg .wx-h-i{font-size:20px}
+.widget-weather.wx-size-lg .wx-h-c,.widget-weather.wx-size-lg .wx-d{font-size:14px}
+
+/* Settings popup — section divider + select control (weather levels). */
+.fam-set-sep{margin:16px 0 8px;font-size:11px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.08em;color:rgba(255,255,255,.35);border-top:1px solid rgba(255,255,255,.08);padding-top:12px}
+.fam-set-select{min-width:160px;max-width:60%;padding:8px 10px;border-radius:10px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.9);font-size:13px}
+.fam-set-select option{background:#181b27;color:#fff}

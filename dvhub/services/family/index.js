@@ -532,26 +532,57 @@ export function createFamilyService(ctx) {
       if (minC == null || t < minC) minC = t;
       if (maxC == null || t > maxC) maxC = t;
     }
-    // Next 8 hours for the detail panel.
+    // Next 12 hours for the detail panel / hourly strip. The family widget's
+    // "ausführlich" detail level (operator request 2026-06-13) surfaces wind +
+    // humidity per hour, so they ride along here too.
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
     const hours = rows
       .filter((r) => toTs(r) >= now - HOUR)
-      .slice(0, 8)
+      .slice(0, 12)
       .map((r) => ({
         ts: toTs(r),
-        tempC: Number.isFinite(Number(r.temperature_c)) ? Number(r.temperature_c) : null,
-        code: Number.isFinite(Number(r.weather_code)) ? Number(r.weather_code) : null,
-        precipPct: Number.isFinite(Number(r.precip_prob_pct)) ? Number(r.precip_prob_pct) : null,
-        cloudPct: Number.isFinite(Number(r.cloud_cover_pct)) ? Number(r.cloud_cover_pct) : null
+        tempC: num(r.temperature_c),
+        code: num(r.weather_code),
+        precipPct: num(r.precip_prob_pct),
+        cloudPct: num(r.cloud_cover_pct),
+        windMs: num(r.wind_speed_ms),
+        humidityPct: num(r.humidity_pct)
       }));
+    // Multi-day outlook (today + the following days, up to 4 from forecast_days).
+    // One entry per local calendar day: min/max temp, a representative midday
+    // symbol (the row closest to 12:00 local), and the worst precip probability.
+    const dayBuckets = new Map();
+    for (const r of rows) {
+      const ts = toTs(r);
+      const d = new Date(ts);
+      const key = d.toLocaleDateString('en-CA');
+      let b = dayBuckets.get(key);
+      if (!b) { b = { key, ts, minC: null, maxC: null, precipMaxPct: null, middayCode: null, middayDelta: Infinity }; dayBuckets.set(key, b); }
+      const t = num(r.temperature_c);
+      if (t != null) {
+        if (b.minC == null || t < b.minC) b.minC = t;
+        if (b.maxC == null || t > b.maxC) b.maxC = t;
+      }
+      const pp = num(r.precip_prob_pct);
+      if (pp != null && (b.precipMaxPct == null || pp > b.precipMaxPct)) b.precipMaxPct = pp;
+      const code = num(r.weather_code);
+      const delta = Math.abs(d.getHours() - 12);
+      if (code != null && delta < b.middayDelta) { b.middayCode = code; b.middayDelta = delta; }
+    }
+    const days = Array.from(dayBuckets.values())
+      .sort((a, b) => a.ts - b.ts)
+      .slice(0, 4)
+      .map((b) => ({ dateKey: b.key, ts: b.ts, minC: b.minC, maxC: b.maxC, code: b.middayCode, precipMaxPct: b.precipMaxPct }));
     return {
       provider: 'open_meteo',
-      tempC: Number.isFinite(Number(current.temperature_c)) ? Number(current.temperature_c) : null,
-      code: Number.isFinite(Number(current.weather_code)) ? Number(current.weather_code) : null,
-      cloudPct: Number.isFinite(Number(current.cloud_cover_pct)) ? Number(current.cloud_cover_pct) : null,
-      precipPct: Number.isFinite(Number(current.precip_prob_pct)) ? Number(current.precip_prob_pct) : null,
-      windMs: Number.isFinite(Number(current.wind_speed_ms)) ? Number(current.wind_speed_ms) : null,
-      humidityPct: Number.isFinite(Number(current.humidity_pct)) ? Number(current.humidity_pct) : null,
-      minC, maxC, hours
+      tempC: num(current.temperature_c),
+      code: num(current.weather_code),
+      cloudPct: num(current.cloud_cover_pct),
+      precipPct: num(current.precip_prob_pct),
+      windMs: num(current.wind_speed_ms),
+      humidityPct: num(current.humidity_pct),
+      visibilityM: num(current.visibility_m),
+      minC, maxC, hours, days
     };
   }
 
@@ -761,7 +792,8 @@ export function createFamilyService(ctx) {
       presence: { ...presence },
       config: {
         screensaver: cfg?.family?.screensaver || null,
-        presence: cfg?.family?.presence || null
+        presence: cfg?.family?.presence || null,
+        weather: cfg?.family?.weather || null
       }
     };
 

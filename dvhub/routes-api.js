@@ -2103,23 +2103,36 @@ export function createApiRoutes(ctx) {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
       const saver = body && body.screensaver;
-      if (!saver || typeof saver !== 'object') {
-        return json(res, 400, { ok: false, error: 'screensaver object required' });
-      }
-      const timeoutSec = Number(saver.defaultTimeoutSec);
-      if (!Number.isFinite(timeoutSec) || timeoutSec < 30 || timeoutSec > 7200) {
-        return json(res, 400, { ok: false, error: 'defaultTimeoutSec must be 30..7200' });
+      const wx = body && body.weather;
+      const hasSaver = saver && typeof saver === 'object';
+      const hasWx = wx && typeof wx === 'object';
+      if (!hasSaver && !hasWx) {
+        return json(res, 400, { ok: false, error: 'screensaver or weather object required' });
       }
       // Same merge mechanics as /api/family/mqtt-tiles: deep-copy the raw
-      // config, change ONLY family.screensaver, save the complete config.
+      // config, change ONLY the family sub-blocks we were given, save the
+      // complete config.
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       next.family = (next.family && typeof next.family === 'object') ? next.family : {};
-      // Merge: keep any extra screensaver fields (e.g. time windows) intact.
-      next.family.screensaver = {
-        ...(next.family.screensaver || {}),
-        enabled: saver.enabled !== false,
-        defaultTimeoutSec: Math.round(timeoutSec)
-      };
+      if (hasSaver) {
+        const timeoutSec = Number(saver.defaultTimeoutSec);
+        if (!Number.isFinite(timeoutSec) || timeoutSec < 30 || timeoutSec > 7200) {
+          return json(res, 400, { ok: false, error: 'defaultTimeoutSec must be 30..7200' });
+        }
+        // Merge: keep any extra screensaver fields (e.g. time windows) intact.
+        next.family.screensaver = {
+          ...(next.family.screensaver || {}),
+          enabled: saver.enabled !== false,
+          defaultTimeoutSec: Math.round(timeoutSec)
+        };
+      }
+      if (hasWx) {
+        const DETAILS = ['compact', 'normal', 'detailed'];
+        const SIZES = ['sm', 'md', 'lg'];
+        const detail = DETAILS.includes(wx.detail) ? wx.detail : 'normal';
+        const size = SIZES.includes(wx.size) ? wx.size : 'md';
+        next.family.weather = { ...(next.family.weather || {}), detail, size };
+      }
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {
@@ -2127,10 +2140,10 @@ export function createApiRoutes(ctx) {
         return json(res, 500, { ok: false, error: 'save failed' });
       }
       pushLog('family_settings_saved', {
-        enabled: next.family.screensaver.enabled,
-        defaultTimeoutSec: next.family.screensaver.defaultTimeoutSec
+        ...(hasSaver ? { enabled: next.family.screensaver.enabled, defaultTimeoutSec: next.family.screensaver.defaultTimeoutSec } : {}),
+        ...(hasWx ? { weatherDetail: next.family.weather.detail, weatherSize: next.family.weather.size } : {})
       }, actorContext(req));
-      return json(res, 200, { ok: true, screensaver: next.family.screensaver });
+      return json(res, 200, { ok: true, screensaver: next.family.screensaver || null, weather: next.family.weather || null });
     }
 
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {

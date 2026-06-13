@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=14">
+<link rel="stylesheet" href="/family.css?v=15">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -67,6 +67,9 @@
       <div class="widget-title">Wetter</div>
       <div class="widget-main"><span id="weather-now">&mdash;</span></div>
       <div class="widget-sub" id="weather-sub">&mdash;</div>
+      <div class="weather-extra" id="weather-extra"></div>
+      <div class="weather-hourly" id="weather-hourly"></div>
+      <div class="weather-days" id="weather-days"></div>
     </div>
     <div class="widget widget-forecast" data-panel="forecast">
       <div class="widget-title">PV Morgen</div>
@@ -95,6 +98,21 @@
     <div class="picker-title">Familien-Dashboard &middot; Einstellungen</div>
     <label class="fam-set-row"><span>Automatisch abdunkeln (Bildschirmschoner)</span><input type="checkbox" id="famSetSaverEnabled"></label>
     <label class="fam-set-row"><span>Abdunkeln nach (Minuten)</span><input type="number" id="famSetSaverMinutes" min="1" max="120" step="1" inputmode="numeric"></label>
+    <div class="fam-set-sep">Wetter</div>
+    <label class="fam-set-row"><span>Detailgrad</span>
+      <select class="fam-set-select" id="famSetWeatherDetail">
+        <option value="compact">Kompakt &middot; nur Temperatur</option>
+        <option value="normal">Normal &middot; mit Tagesh&ouml;chst/-tiefst</option>
+        <option value="detailed">Ausf&uuml;hrlich &middot; Stunden + Tage</option>
+      </select>
+    </label>
+    <label class="fam-set-row"><span>Gr&ouml;&szlig;e</span>
+      <select class="fam-set-select" id="famSetWeatherSize">
+        <option value="sm">Klein</option>
+        <option value="md">Mittel</option>
+        <option value="lg">Gro&szlig;</option>
+      </select>
+    </label>
     <div class="fam-set-actions">
       <button class="fam-set-btn ghost" id="famSetLayoutReset" type="button">Kachel-Layout zur&uuml;cksetzen</button>
       <button class="fam-set-btn primary" id="famSetSave" type="button">Speichern</button>
@@ -116,6 +134,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-panelstats-fix2"></script>
+<script src="/family.js?v=20260613-weather-levels"></script>
 </body>
 </html>

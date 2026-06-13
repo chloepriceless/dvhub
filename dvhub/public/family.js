@@ -1813,11 +1813,30 @@
     return '🌡️';
   }
 
+  /* Operator request #21 (2026-06-13): the weather widget has configurable
+     detail + size levels (cfg.family.weather, set in the Einstellungs-Popup).
+     The size class scales fonts/padding; the detail class lets CSS reveal the
+     extras (wind/humidity line, hourly strip, multi-day outlook). */
+  var WX_SIZES = ['sm', 'md', 'lg'];
+  var WX_DETAILS = ['compact', 'normal', 'detailed'];
+  function famWeatherApplyLevel(box, detail, size) {
+    WX_SIZES.forEach(function (s) { box.classList.remove('wx-size-' + s); });
+    WX_DETAILS.forEach(function (d) { box.classList.remove('wx-detail-' + d); });
+    box.classList.add('wx-size-' + (WX_SIZES.indexOf(size) >= 0 ? size : 'md'));
+    box.classList.add('wx-detail-' + (WX_DETAILS.indexOf(detail) >= 0 ? detail : 'normal'));
+  }
+  function famWeekdayLabel(ts) {
+    try { return new Date(ts).toLocaleDateString('de-DE', { weekday: 'short' }); } catch (e) { return ''; }
+  }
+
   function renderWeatherWidget(weather) {
     var box = document.getElementById('widgetWeather');
     if (!box) return;
     if (!weather || weather.tempC == null) { box.hidden = true; return; }
     box.hidden = false;
+    var wxCfg = (lastStatus && lastStatus.config && lastStatus.config.weather) || {};
+    famWeatherApplyLevel(box, wxCfg.detail || 'normal', wxCfg.size || 'md');
+
     setText('weather-now', famWeatherSymbol(weather.code, weather.cloudPct) + ' ' + Math.round(weather.tempC) + '°');
     var subParts = [];
     if (weather.maxC != null && weather.minC != null) {
@@ -1825,19 +1844,69 @@
     }
     if (weather.precipPct != null) subParts.push('Regen ' + Math.round(weather.precipPct) + '%');
     setText('weather-sub', subParts.join(' · ') || '—');
-    // Detail panel: stats + the next hours as rows.
+
+    // Detailed extras — CSS keeps them hidden unless wx-detail-detailed.
+    // Content is emoji + integers only (no user strings → no injection vector).
+    var extra = document.getElementById('weather-extra');
+    if (extra) {
+      var ex = [];
+      if (weather.windMs != null) ex.push('💨 ' + Math.round(weather.windMs * 3.6) + ' km/h');
+      if (weather.humidityPct != null) ex.push('💧 ' + Math.round(weather.humidityPct) + '%');
+      if (weather.cloudPct != null) ex.push('☁ ' + Math.round(weather.cloudPct) + '%');
+      extra.textContent = ex.join('   ·   ');
+    }
+    var hourly = document.getElementById('weather-hourly');
+    if (hourly) {
+      var hh = '';
+      (weather.hours || []).slice(0, 6).forEach(function (h) {
+        hh += '<div class="wx-h">'
+          + '<div class="wx-h-t">' + new Date(h.ts).getHours() + '</div>'
+          + '<div class="wx-h-i">' + famWeatherSymbol(h.code, h.cloudPct) + '</div>'
+          + '<div class="wx-h-c">' + (h.tempC != null ? Math.round(h.tempC) + '°' : '—') + '</div>'
+          + '<div class="wx-h-r">' + (h.precipPct != null && h.precipPct > 0 ? Math.round(h.precipPct) + '%' : '') + '</div>'
+          + '</div>';
+      });
+      hourly.innerHTML = hh;
+    }
+    var daysEl = document.getElementById('weather-days');
+    if (daysEl) {
+      var dd = '';
+      (weather.days || []).forEach(function (d, i) {
+        var lbl = i === 0 ? 'Heute' : famWeekdayLabel(d.ts);
+        dd += '<div class="wx-d">'
+          + '<div class="wx-d-l">' + lbl + '</div>'
+          + '<div class="wx-d-i">' + famWeatherSymbol(d.code, null) + '</div>'
+          + '<div class="wx-d-t">' + (d.maxC != null ? Math.round(d.maxC) + '°' : '—')
+            + '<span class="wx-d-min">' + (d.minC != null ? Math.round(d.minC) + '°' : '') + '</span></div>'
+          + '<div class="wx-d-r">' + (d.precipMaxPct != null && d.precipMaxPct > 0 ? '💧' + Math.round(d.precipMaxPct) + '%' : '') + '</div>'
+          + '</div>';
+      });
+      daysEl.innerHTML = dd;
+    }
+
+    // Detail panel (tap-to-open): always full detail regardless of widget size.
     panelData.weather.stats = [
       { label: 'Jetzt', val: Math.round(weather.tempC) + ' °C', delta: weather.windMs != null ? 'Wind ' + Math.round(weather.windMs * 3.6) + ' km/h' : '', up: true },
-      { label: 'Heute', val: (weather.maxC != null ? '↑' + Math.round(weather.maxC) + '°' : '—') + (weather.minC != null ? ' ↓' + Math.round(weather.minC) + '°' : ''), delta: '', up: true },
+      { label: 'Heute', val: (weather.maxC != null ? '↑' + Math.round(weather.maxC) + '°' : '—') + (weather.minC != null ? ' ↓' + Math.round(weather.minC) + '°' : ''), delta: weather.cloudPct != null ? 'Bewölkung ' + Math.round(weather.cloudPct) + '%' : '', up: true },
       { label: 'Regen', val: weather.precipPct != null ? Math.round(weather.precipPct) + ' %' : '—', delta: weather.humidityPct != null ? 'Luftfeuchte ' + Math.round(weather.humidityPct) + '%' : '', up: true }
     ];
-    panelData.weather.details = (weather.hours || []).map(function (h) {
+    var dayRows = (weather.days || []).map(function (d, i) {
+      var lbl = i === 0 ? 'Heute' : famWeekdayLabel(d.ts);
+      var v = famWeatherSymbol(d.code, null)
+        + (d.maxC != null ? ' ↑' + Math.round(d.maxC) + '°' : '')
+        + (d.minC != null ? ' ↓' + Math.round(d.minC) + '°' : '')
+        + (d.precipMaxPct != null && d.precipMaxPct > 0 ? ' · 💧' + Math.round(d.precipMaxPct) + '%' : '');
+      return [lbl, v];
+    });
+    var hourRows = (weather.hours || []).map(function (h) {
       var t = new Date(h.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       var parts = [];
       if (h.tempC != null) parts.push(Math.round(h.tempC) + ' °C');
       if (h.precipPct != null && h.precipPct > 0) parts.push(h.precipPct + '% Regen');
+      if (h.windMs != null) parts.push(Math.round(h.windMs * 3.6) + ' km/h');
       return [t, famWeatherSymbol(h.code, h.cloudPct) + ' ' + parts.join(' · ')];
     });
+    panelData.weather.details = dayRows.concat(hourRows);
   }
 
   /* DV-EOS plan slot → human label (operator request 2026-06-13: the widget
@@ -2623,6 +2692,11 @@
     var min = document.getElementById('famSetSaverMinutes');
     if (en) en.checked = cfg.enabled !== false;
     if (min) min.value = String(Math.max(1, Math.round((Number(cfg.defaultTimeoutSec) || 120) / 60)));
+    var wxCfg = (lastStatus && lastStatus.config && lastStatus.config.weather) || {};
+    var wd = document.getElementById('famSetWeatherDetail');
+    var ws = document.getElementById('famSetWeatherSize');
+    if (wd) wd.value = (['compact', 'normal', 'detailed'].indexOf(wxCfg.detail) >= 0) ? wxCfg.detail : 'normal';
+    if (ws) ws.value = (['sm', 'md', 'lg'].indexOf(wxCfg.size) >= 0) ? wxCfg.size : 'md';
     setText('famSetMsg', '');
     ov.classList.add('open');
   }
@@ -2636,11 +2710,16 @@
     var en = document.getElementById('famSetSaverEnabled');
     var min = document.getElementById('famSetSaverMinutes');
     var minutes = Math.max(1, Math.min(120, Math.round(Number(min && min.value) || 2)));
+    var wd = document.getElementById('famSetWeatherDetail');
+    var ws = document.getElementById('famSetWeatherSize');
+    var detail = (wd && ['compact', 'normal', 'detailed'].indexOf(wd.value) >= 0) ? wd.value : 'normal';
+    var size = (ws && ['sm', 'md', 'lg'].indexOf(ws.value) >= 0) ? ws.value : 'md';
     var body = {
       screensaver: {
         enabled: !(en && en.checked === false),
         defaultTimeoutSec: minutes * 60
-      }
+      },
+      weather: { detail: detail, size: size }
     };
     apiFetchCompat('/api/family/settings', {
       method: 'POST',
@@ -2653,7 +2732,11 @@
       if (lastStatus) {
         lastStatus.config = lastStatus.config || {};
         lastStatus.config.screensaver = Object.assign({}, lastStatus.config.screensaver, body.screensaver);
+        lastStatus.config.weather = Object.assign({}, lastStatus.config.weather, body.weather);
       }
+      // Re-render the widget immediately so the new level shows without waiting
+      // for the next poll.
+      if (lastStatus && lastStatus.weather) { try { renderWeatherWidget(lastStatus.weather); } catch (e) { /* non-fatal */ } }
       setText('famSetMsg', 'Gespeichert ✓');
       setTimeout(closeFamSettings, 700);
     }).catch(function (e) {
