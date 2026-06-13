@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=28" />
+  <link rel="stylesheet" href="/integrations.css?v=29" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -407,6 +407,70 @@
         <div class="dv-drawer-toast" id="dv-drawer-evcc-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- MID grid-meter config drawer (2026-06-13). Modbus connection for a
+           direct grid meter (host/port/unitId/register) + sign convention. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-mid-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-mid" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-mid-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-mid-title">MID-Z&auml;hler (Modbus)</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-mid-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-mid-body">
+          <p class="dv-drawer-intro">
+            Direkter <strong>MID-Netzz&auml;hler</strong> per Modbus TCP. L&auml;sst du den Host leer,
+            kommen die Netzwerte aus der Haupt-Anbindung (z.&nbsp;B. Victron).
+          </p>
+          <label class="dv-field">
+            <span class="field-label">Bezeichnung (optional)</span>
+            <input type="text" class="input" id="mid-name" placeholder="z.B. Netzz&auml;hler Hauptverteilung" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Host / IP</span>
+            <input type="text" class="input mono" id="mid-host" placeholder="192.168.x.x (leer = aus)" autocomplete="off" spellcheck="false" inputmode="url">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Port</span>
+            <input type="number" class="input mono" id="mid-port" min="1" max="65535" step="1" inputmode="numeric" placeholder="502">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Unit-ID (Slave)</span>
+            <input type="number" class="input mono" id="mid-unitid" min="0" max="255" step="1" inputmode="numeric" placeholder="1">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Register-Adresse (L1, fortlaufend L2/L3)</span>
+            <input type="number" class="input mono" id="mid-address" min="0" max="65535" step="1" inputmode="numeric" placeholder="0">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Anzahl Register</span>
+            <input type="number" class="input mono" id="mid-quantity" min="1" max="125" step="1" inputmode="numeric" placeholder="3">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Funktionscode</span>
+            <select class="input" id="mid-fc">
+              <option value="3">3 &mdash; Holding Register</option>
+              <option value="4">4 &mdash; Input Register</option>
+            </select>
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Vorzeichen-Logik</span>
+            <select class="input" id="mid-sign">
+              <option value="feed_in">Positiv = Einspeisung</option>
+              <option value="grid_import">Positiv = Netzbezug</option>
+            </select>
+          </label>
+          <div class="dv-field-validation" id="mid-status" hidden>&mdash;</div>
+          <div class="dv-field-validation" id="mid-banner" hidden></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm primary" id="mid-save">Speichern</button>
+          </div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-mid-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- Forecast-Provider config drawer (Phase 20-06). Static markup; 2 tabs. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-forecast-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-forecast" role="dialog" aria-modal="true"
@@ -681,6 +745,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=28"></script>
+  <script src="/integrations.js?v=29"></script>
 </body>
 </html>

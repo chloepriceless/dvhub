@@ -413,6 +413,11 @@
         // No URL = not configured. URL set but unreachable = stale (warn).
         if (!data || !data.url) return 'disabled';
         return data.reachable ? 'online' : 'stale';
+      case 'mid':
+        // MID grid meter — online when a Modbus meter host is configured
+        // (cfg.meter.host), else not configured.
+        if (!data || !data.host) return 'disabled';
+        return 'online';
       default: return 'disabled';
     }
   }
@@ -495,10 +500,10 @@
         ];
       case 'mid':
         return [
-          { label: 'Seriennr.', value: data.serial || '—' },
           { label: 'Host', value: data.host || '—' },
-          { label: 'Firmware', value: data.firmware || '—' },
-          { label: 'Status', value: fmtBool(!!(data.serial || data.host), 'Konfiguriert', 'Nicht konfiguriert') }
+          { label: 'Unit-ID', value: data.unitId != null ? String(data.unitId) : '—' },
+          { label: 'Register', value: data.address != null ? String(data.address) : '—' },
+          { label: 'Status', value: fmtBool(!!data.host, 'Konfiguriert', 'Nicht konfiguriert') }
         ];
       case 'luox':
         return [
@@ -678,7 +683,7 @@
     }
     var actions = '';
     if (sys.key === 'mqtt' || sys.key === 'tesla' || sys.key === 'homeAssistant' || sys.key === 'loxone' || sys.key === 'devices' || sys.key === 'notifications'
-        || sys.key === 'victron' || sys.key === 'mid' || sys.key === 'luox') {
+        || sys.key === 'victron' || sys.key === 'luox') {
       actions = '<div class="conn-actions">'
         + '<a class="btn sm ghost" href="/settings.html#system">Logs</a>'
         + '<a class="btn sm" href="/settings.html">Konfig.</a>'
@@ -1446,6 +1451,14 @@
       setTimeout(loadEvccDrawer, 0);
       return;
     }
+    var midCard = e.target.closest('.conn-card[data-system="mid"]');
+    if (midCard) {
+      e.preventDefault();
+      var instMid = getOrCreateDrawer('mid');
+      if (instMid) instMid.open();
+      setTimeout(loadMidDrawer, 0);
+      return;
+    }
     // Phase 21 (2026-05-23): TeslaMate card → drawer (Einstellungen + Live +
     // Ladevorgänge). loadTeslaSettings/Snapshot are queued via setTimeout(0)
     // so the drawer animation paints before the GET kicks off.
@@ -2071,6 +2084,86 @@
     if (evccSave) { saveEvccDrawer(evccSave); return; }
     var evccRefresh = e.target.closest('#evcc-refresh');
     if (evccRefresh) { loadEvccDrawer(); return; }
+  });
+
+  // === MID Grid-Meter Drawer Wiring (2026-06-13) ===
+  // Loads/saves cfg.meter.{host,port,unitId,address,quantity,fc} +
+  // cfg.gridPositiveMeans via the dedicated /api/integrations/mid endpoint.
+  async function loadMidDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/mid');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      if (el('mid-name')) el('mid-name').value = data.name || '';
+      if (el('mid-host')) el('mid-host').value = data.host || '';
+      if (el('mid-port')) el('mid-port').value = data.port != null ? data.port : 502;
+      if (el('mid-unitid')) el('mid-unitid').value = data.unitId != null ? data.unitId : 1;
+      if (el('mid-address')) el('mid-address').value = data.address != null ? data.address : 0;
+      if (el('mid-quantity')) el('mid-quantity').value = data.quantity != null ? data.quantity : 3;
+      if (el('mid-fc')) el('mid-fc').value = String(data.fc === 4 ? 4 : 3);
+      if (el('mid-sign')) el('mid-sign').value = data.gridPositiveMeans === 'grid_import' ? 'grid_import' : 'feed_in';
+      var st = el('mid-status');
+      if (st) {
+        st.hidden = false;
+        st.textContent = data.host
+          ? (data.meterOk ? '✓ Zähler liefert Werte.' : '⚠ Konfiguriert, aber noch keine Werte gelesen.')
+          : 'Kein Modbus-Zähler konfiguriert (Netzdaten kommen aus der Haupt-Anbindung).';
+      }
+    } catch (e) {
+      showDrawerToast('mid', 'err', '✗ Zähler laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  async function saveMidDrawer(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var el = function (id) { return document.getElementById(id); };
+    var banner = el('mid-banner');
+    var host = ((el('mid-host') && el('mid-host').value) || '').trim();
+    // Host is optional (empty clears the meter); when set it must look like a host.
+    if (host && /\s/.test(host)) {
+      if (banner) { banner.textContent = 'Host darf keine Leerzeichen enthalten.'; banner.hidden = false; }
+      return;
+    }
+    if (banner) banner.hidden = true;
+    var intVal = function (id, d) { var v = parseInt((el(id) && el(id).value) || '', 10); return Number.isFinite(v) ? v : d; };
+    var body = {
+      name: ((el('mid-name') && el('mid-name').value) || '').trim(),
+      host: host,
+      port: intVal('mid-port', 502),
+      unitId: intVal('mid-unitid', 1),
+      address: intVal('mid-address', 0),
+      quantity: intVal('mid-quantity', 3),
+      fc: intVal('mid-fc', 3),
+      gridPositiveMeans: (el('mid-sign') && el('mid-sign').value === 'grid_import') ? 'grid_import' : 'feed_in'
+    };
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/mid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('mid', 'ok', '✓ Gespeichert.');
+        setTimeout(loadMidDrawer, 1000);
+      } else {
+        showDrawerToast('mid', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('mid', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var midSave = e.target.closest('#mid-save');
+    if (midSave) { saveMidDrawer(midSave); return; }
   });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===

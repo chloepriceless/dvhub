@@ -2783,11 +2783,21 @@ export function createApiRoutes(ctx) {
           modelId: getCfg().victron?.modelId || null,
           firmware: ctx.healthTracker?.snapshot?.()?.victron?.firmware || null
         },
-        mid: {
-          serial: getCfg().mid?.serial || getCfg().mid?.serialNumber || null,
-          host: getCfg().mid?.host || null,
-          firmware: ctx.healthTracker?.snapshot?.()?.mid?.firmware || null
-        },
+        // MID grid meter (#23 follow-up 2026-06-13). The configurable Modbus
+        // connection lives at cfg.meter (host/port/unitId/address); cfg.mid keeps
+        // optional identity (serial). configured = a Modbus meter host is set.
+        mid: (() => {
+          const m = getCfg().meter || {};
+          return {
+            serial: getCfg().mid?.serial || getCfg().mid?.serialNumber || null,
+            host: m.host || null,
+            port: m.port ?? null,
+            unitId: m.unitId ?? null,
+            address: m.address ?? null,
+            configured: !!m.host,
+            firmware: ctx.healthTracker?.snapshot?.()?.mid?.firmware || null
+          };
+        })(),
         luox: {
           identifier: getCfg().luox?.identifier || getCfg().luox?.host || null,
           firmware: ctx.healthTracker?.snapshot?.()?.luox?.firmware || null
@@ -3340,6 +3350,68 @@ export function createApiRoutes(ctx) {
         portalIdSet: !!body.vrmPortalId,
         tokenSet: !!token
       }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
+    // === MID grid-meter config (operator request 2026-06-13) ===
+    // Configured on the Integrations page (sibling of /api/integrations/vrm).
+    // Writes the Modbus meter connection to cfg.meter (host/port/unitId/address/
+    // quantity/fc) + the sign convention cfg.gridPositiveMeans. NOTE: when the
+    // transport is Venus-MQTT the meter is read from MQTT and cfg.meter is not
+    // polled — this config takes effect for a direct Modbus meter.
+    if (url.pathname === '/api/integrations/mid' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const m = raw.meter || {};
+      return json(res, 200, {
+        ok: true,
+        name: m.label || raw.mid?.name || '',
+        host: m.host || '',
+        port: m.port ?? 502,
+        unitId: m.unitId ?? 1,
+        address: m.address ?? 0,
+        quantity: m.quantity ?? 3,
+        fc: m.fc ?? 3,
+        gridPositiveMeans: raw.gridPositiveMeans || 'feed_in',
+        meterOk: !!ctx.state?.meter?.ok
+      });
+    }
+
+    if (url.pathname === '/api/integrations/mid' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+      const host = String(body.host == null ? '' : body.host).trim().slice(0, 128);
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.meter = (next.meter && typeof next.meter === 'object') ? next.meter : {};
+      if (host) {
+        next.meter.host = host;
+        next.meter.port = Math.min(65535, Math.max(1, num(body.port, 502)));
+        next.meter.unitId = Math.min(255, Math.max(0, num(body.unitId, 1)));
+        next.meter.address = Math.max(0, num(body.address, 0));
+        next.meter.quantity = Math.min(125, Math.max(1, num(body.quantity, 3)));
+        next.meter.fc = (num(body.fc, 3) === 4) ? 4 : 3;
+        if (typeof body.name === 'string') next.meter.label = body.name.trim().slice(0, 64);
+      } else {
+        // Empty host clears the Modbus meter config (grid falls back to the
+        // transport's native source, e.g. Victron MQTT).
+        delete next.meter.host;
+      }
+      if (body.gridPositiveMeans === 'grid_import' || body.gridPositiveMeans === 'feed_in') {
+        next.gridPositiveMeans = body.gridPositiveMeans;
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('mid_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('mid_config_saved', { hostSet: !!host, gridPositiveMeans: next.gridPositiveMeans }, actorContext(req));
       return json(res, 200, { ok: true });
     }
 
