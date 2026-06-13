@@ -80,7 +80,8 @@
    Mockup used 200px on a 720px stage; our Leitstand card is 420px,
    so the sky is scaled to keep the PV node clear of the centre.
    ────────────────────────────────────────────────────────────── */
-.dvhub-powerflow .pf-sky{
+.dvhub-powerflow .pf-sky,
+.fam-taganim.pf-sky{
   position:relative;
   width:120px; height:120px;
   margin:0 auto 2px;
@@ -90,7 +91,8 @@
     drop-shadow(0 0 calc(22px + var(--pv-i)*44px) rgba(255,170,70, calc(.03 + var(--pv-i)*.22)));
   transition:filter .45s ease;
 }
-.dvhub-powerflow .pf-sky .pf-frame{
+.dvhub-powerflow .pf-sky .pf-frame,
+.fam-taganim.pf-sky .pf-frame{
   position:absolute; inset:0;
   width:100%; height:100%;
   object-fit:cover;
@@ -117,7 +119,8 @@
    The component is rotated -90° through an inner rotor so the fill
    grows upward. Pill without a plus-pole nub.
    ────────────────────────────────────────────────────────────── */
-.dvhub-powerflow .pf-bat-anim{
+.dvhub-powerflow .pf-bat-anim,
+.fam-taganim.pf-bat-anim{
   position:relative;
   width:54px;
   height:136px;
@@ -125,7 +128,8 @@
   --p:50; --fill:50%; --glow:.3; --charge:0; --danger:0;
   isolation:isolate;
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
+.dvhub-powerflow .pf-bat-anim .pf-bat-rotor,
+.fam-taganim.pf-bat-anim .pf-bat-rotor{
   position:absolute;
   top:50%; left:50%;
   width:136px;
@@ -136,7 +140,8 @@
     drop-shadow(0 0 calc(4px + var(--glow)*14px) rgba(100,255,160, calc(.08 + var(--glow)*.32)))
     drop-shadow(0 4px 10px rgba(0,0,0,.55));
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-body{
+.dvhub-powerflow .pf-bat-anim .pf-bat-body,
+.fam-taganim.pf-bat-anim .pf-bat-body{
   position:absolute; inset:0;
   border-radius:10px;
   border:1.5px solid rgba(170,205,255,.34);
@@ -148,7 +153,8 @@
     inset 0 0 0 1px rgba(170,205,255,.08);
   overflow:hidden;
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-body::before{
+.dvhub-powerflow .pf-bat-anim .pf-bat-body::before,
+.fam-taganim.pf-bat-anim .pf-bat-body::before{
   content:""; position:absolute; inset:3px;
   border-radius:7px;
   background:
@@ -156,7 +162,8 @@
     repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 12px);
   pointer-events:none; z-index:4;
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-fill{
+.dvhub-powerflow .pf-bat-anim .pf-bat-fill,
+.fam-taganim.pf-bat-anim .pf-bat-fill{
   position:absolute; left:0; top:0; bottom:0;
   width:var(--fill);
   border-radius:8px 3px 3px 8px;
@@ -172,14 +179,16 @@
   transition:width 220ms linear, background 220ms linear;
   z-index:1;
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-fill::after{
+.dvhub-powerflow .pf-bat-anim .pf-bat-fill::after,
+.fam-taganim.pf-bat-anim .pf-bat-fill::after{
   content:""; position:absolute; inset:0;
   background:linear-gradient(120deg, transparent 0 32%, rgba(255,255,255,.22) 42%, transparent 52% 100%);
   transform:translateX(-130%);
   animation:pfBatSweep 2.2s ease-in-out infinite;
   opacity:calc(.08 + var(--charge) * .55);
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-warning{
+.dvhub-powerflow .pf-bat-anim .pf-bat-warning,
+.fam-taganim.pf-bat-anim .pf-bat-warning{
   position:absolute; inset:0;
   display:flex; align-items:center; justify-content:center;
   z-index:8;
@@ -192,12 +201,14 @@
   pointer-events:none;
   color:#ff5050;
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-bolts{
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolts,
+.fam-taganim.pf-bat-anim .pf-bat-bolts{
   position:absolute; inset:0; z-index:7;
   pointer-events:none;
   opacity:calc(var(--charge) * .9);
 }
-.dvhub-powerflow .pf-bat-anim .pf-bat-bolt{
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolt,
+.fam-taganim.pf-bat-anim .pf-bat-bolt{
   position:absolute;
   width:5px; height:18px;
   background:#fff7b0;
@@ -208,7 +219,8 @@
 .dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b1{ left:18%; top:14%; animation-delay:-.3s; }
 .dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b2{ left:62%; top:18%; animation-delay:-1.1s; transform:scale(.72); }
 .dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b3{ left:42%; top:62%; animation-delay:-1.8s; transform:scale(.58); }
-.dvhub-powerflow .pf-bat-anim .pf-bat-sparks{
+.dvhub-powerflow .pf-bat-anim .pf-bat-sparks,
+.fam-taganim.pf-bat-anim .pf-bat-sparks{
   position:absolute; inset:0; z-index:9;
   opacity:calc(var(--glow) * .65);
   pointer-events:none;

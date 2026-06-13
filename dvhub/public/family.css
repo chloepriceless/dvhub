@@ -438,3 +438,29 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 }
 .pf-center-readout .pf-dir.dir-export{color:#ff7ac6}
 .pf-center-readout .pf-dir.dir-import{color:#ff9a3c}
+
+/* Powerflow-2.0 animations inside the constellation tags (2026-06-13):
+   compact sizes — the animation rules themselves live dual-scoped in
+   dvhub-powerflow.css (.fam-taganim.pf-sky / .fam-taganim.pf-bat-anim). */
+.fam-taganim.pf-sky{width:88px;height:88px;margin:0 auto 4px}
+.fam-taganim.pf-bat-anim{width:38px;height:96px;margin:2px auto 6px}
+.fam-taganim.pf-bat-anim .pf-bat-rotor{width:96px;height:38px}
+.fam-taganim.pf-bat-anim .pf-bat-warning{font-size:14px}
+
+/* Family settings (2026-06-13): the top-right clock opens the dashboard's own
+   settings popup. .greeting * is pointer-events:none — re-enable the clock. */
+.greeting .greeting-time{pointer-events:auto;cursor:pointer}
+.fam-settings{min-width:320px;max-width:92vw}
+.fam-set-row{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:12px 4px;font-size:14px;font-weight:600;color:rgba(255,255,255,.85);
+  border-bottom:1px solid rgba(255,255,255,.08)}
+.fam-set-row input[type="checkbox"]{width:22px;height:22px;accent-color:#26de81}
+.fam-set-row input[type="number"]{width:84px;padding:8px 10px;border-radius:10px;
+  border:1px solid rgba(255,255,255,.18);background:rgba(8,10,16,.6);color:#fff;
+  font-size:16px;font-weight:700;text-align:center}
+.fam-set-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.fam-set-btn{flex:1;padding:12px 14px;border-radius:12px;font-size:14px;font-weight:700;
+  cursor:pointer;border:1px solid rgba(255,255,255,.18);min-width:130px}
+.fam-set-btn.ghost{background:rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
+.fam-set-btn.primary{background:#26de81;border-color:#26de81;color:#06281a}
+.fam-set-msg{margin-top:10px;font-size:12px;color:rgba(255,255,255,.55);min-height:16px}

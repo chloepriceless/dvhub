@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=8">
+<link rel="stylesheet" href="/family.css?v=9">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -35,17 +35,17 @@
   <div class="greeting"><div class="greeting-top"><div><div class="greeting-hello" id="g-hello">Guten Tag</div><div class="greeting-msg" id="g-msg">Dein Haus produziert mehr<br>Strom als es braucht</div><div class="greeting-mood" id="g-mood">Alles l&auml;uft perfekt</div></div><div class="greeting-right"><div class="greeting-time" id="g-time">14:32</div><div class="greeting-date" id="g-date"></div></div></div></div>
   <svg class="flow-svg" id="flowSvg" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gl"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g id="flowGroup"></g></svg>
 
-  <div class="tag tag-solar" id="tag-solar" data-panel="solar"><span class="tag-dot"></span><div class="tag-emoji">&#9728;&#65039;</div><div class="tag-friendly" id="tf-solar">Sonne gibt Vollgas</div><div class="tag-val" id="v-s">4.8 kW</div><div class="tag-status" id="ts-solar">Toller Tag!</div></div>
-  <div class="tag tag-bat" id="tag-bat" data-panel="bat"><span class="tag-dot"></span><div class="tag-emoji">&#128267;</div><div class="tag-friendly" id="tf-bat">Batterie l&auml;dt</div><div class="tag-val" id="v-b">78%</div><div class="tag-status" id="ts-bat">+1.2 kW</div></div>
-  <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji tag-emoji-svg"><svg class="tesla-glyph" viewBox="0 0 64 26" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tesla"><path fill="currentColor" d="M9.6 23.4c-2 0-3.6-1.6-3.6-3.6 0-.5.1-1 .3-1.5H3.4c-1.3 0-2.4-1-2.5-2.3l-.3-3c-.1-1 .5-2 1.4-2.4l5.6-2.6 4.3-4.4C12.7 2 14 1.4 15.4 1.4h22.9c1.6 0 3.1.7 4.2 1.9l3.6 4.1 9.7 1.7c2.4.4 4.3 2.3 4.7 4.7l.3 1.8c.3 1.8-1.1 3.5-3 3.5h-3.4c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6s-3.6-1.6-3.6-3.6c0-.5.1-1 .3-1.5H16.5c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6z"/><circle cx="13.2" cy="19.8" r="2.1" fill="#0a0c12"/><circle cx="51.4" cy="19.8" r="2.1" fill="#0a0c12"/></svg></div><div class="tag-friendly" id="tf-ev">Auto l&auml;dt mit Solar</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-soc" id="ev-soc-wrap" hidden><div class="tag-soc-row"><span class="tag-soc-pct" id="ev-soc-pct">59 %</span><span class="tag-soc-limit" id="ev-soc-limit">Limit 80 %</span></div><div class="tag-soc-bar"><div class="tag-soc-fill" id="ev-soc-fill"></div><div class="tag-soc-limit-mark" id="ev-soc-limit-mark"></div></div></div><div class="tag-status" id="ts-ev">Fertig ca. 22 Uhr</div></div>
-  <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Wir speisen ein</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">Verdienen gerade</div></div>
+  <div class="tag tag-solar" id="tag-solar" data-panel="solar"><span class="tag-dot"></span><div class="fam-taganim pf-sky" id="famSky" aria-hidden="true"></div><div class="tag-friendly" id="tf-solar">Solar</div><div class="tag-val" id="v-s">&mdash;</div><div class="tag-status" id="ts-solar" hidden>&mdash;</div></div>
+  <div class="tag tag-bat" id="tag-bat" data-panel="bat"><span class="tag-dot"></span><div class="fam-taganim pf-bat-anim" id="famBat" aria-hidden="true"><div class="pf-bat-rotor"><div class="pf-bat-body"><div class="pf-bat-fill"></div><div class="pf-bat-sparks"></div><div class="pf-bat-warning">&#9888;</div></div><div class="pf-bat-bolts"><div class="pf-bat-bolt b1"></div><div class="pf-bat-bolt b2"></div><div class="pf-bat-bolt b3"></div></div></div></div><div class="tag-friendly" id="tf-bat">Batterie</div><div class="tag-val" id="v-b">&mdash;</div><div class="tag-status" id="ts-bat">&mdash;</div></div>
+  <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji tag-emoji-svg"><svg class="tesla-glyph" viewBox="0 0 64 26" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tesla"><path fill="currentColor" d="M9.6 23.4c-2 0-3.6-1.6-3.6-3.6 0-.5.1-1 .3-1.5H3.4c-1.3 0-2.4-1-2.5-2.3l-.3-3c-.1-1 .5-2 1.4-2.4l5.6-2.6 4.3-4.4C12.7 2 14 1.4 15.4 1.4h22.9c1.6 0 3.1.7 4.2 1.9l3.6 4.1 9.7 1.7c2.4.4 4.3 2.3 4.7 4.7l.3 1.8c.3 1.8-1.1 3.5-3 3.5h-3.4c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6s-3.6-1.6-3.6-3.6c0-.5.1-1 .3-1.5H16.5c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6z"/><circle cx="13.2" cy="19.8" r="2.1" fill="#0a0c12"/><circle cx="51.4" cy="19.8" r="2.1" fill="#0a0c12"/></svg></div><div class="tag-friendly" id="tf-ev">E-Auto</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-soc" id="ev-soc-wrap" hidden><div class="tag-soc-row"><span class="tag-soc-pct" id="ev-soc-pct">59 %</span><span class="tag-soc-limit" id="ev-soc-limit">Limit 80 %</span></div><div class="tag-soc-bar"><div class="tag-soc-fill" id="ev-soc-fill"></div><div class="tag-soc-limit-mark" id="ev-soc-limit-mark"></div></div></div><div class="tag-status" id="ts-ev">&mdash;</div></div>
+  <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Netz</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">&mdash;</div></div>
 
   <!-- HOUSE tile (Powerflow-2.0 rework 2026-06-13): the House is a regular
        constellation endpoint again — energy visibly flows INTO it from the
        crossing, in source-mix colours. Draggable like every tile (T-0091);
        tapping opens the same home panel as before. pf-house-kw keeps its id
        (family.js live-updates it each poll). -->
-  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Haus verbraucht</div><div class="tag-val" id="pf-house-kw">0,0 kW</div><div class="tag-status" id="ts-home">&mdash;</div></div>
+  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Zuhause</div><div class="tag-val" id="pf-house-kw">0,0 kW</div><div class="tag-status" id="ts-home">&mdash;</div></div>
 
   <!-- Center CROSSING readout (Powerflow-2.0 rework 2026-06-13): the centre is
        the junction all flows route through — like the powerflow mockup it
@@ -53,11 +53,10 @@
        balance stays as the secondary line. data-panel="home" keeps the tap
        target (home panel). -->
   <div class="pf-center-readout" id="pfCenter" data-panel="home">
-    <div class="l">Netto</div>
-    <div class="pf-house"><span class="v" id="pf-center-kw">0,0 kW</span></div>
-    <div class="pf-dir" id="pf-center-dir">BALANCE</div>
+    <div class="l" id="pf-center-d">Gewinn heute</div>
+    <div class="pf-house"><span class="v" id="pf-center-v">+0,00 &euro;</span></div>
     <div class="pf-divider"></div>
-    <div class="pf-net"><span id="pf-center-v">+0,00 &euro;</span> <span class="pf-net-label" id="pf-center-d">NETTO</span></div>
+    <div class="pf-net"><span id="pf-center-kw">0,0 kW</span> <span class="pf-net-label" id="pf-center-dir">BALANCE</span></div>
   </div>
 
   <div class="devices-tray" id="devices-tray"></div>
@@ -96,6 +95,19 @@
     <div class="edit-toggle" id="editBtn" data-action="toggle-edit">&#9881;</div>
   </div></div>
 </div>
+<div class="picker-overlay" id="famSettingsOverlay">
+  <div class="overlay-bg" data-action="close-fam-settings"></div>
+  <div class="picker fam-settings" id="famSettings">
+    <div class="picker-title">Familien-Dashboard &middot; Einstellungen</div>
+    <label class="fam-set-row"><span>Automatisch abdunkeln (Bildschirmschoner)</span><input type="checkbox" id="famSetSaverEnabled"></label>
+    <label class="fam-set-row"><span>Abdunkeln nach (Minuten)</span><input type="number" id="famSetSaverMinutes" min="1" max="120" step="1" inputmode="numeric"></label>
+    <div class="fam-set-actions">
+      <button class="fam-set-btn ghost" id="famSetLayoutReset" type="button">Kachel-Layout zur&uuml;cksetzen</button>
+      <button class="fam-set-btn primary" id="famSetSave" type="button">Speichern</button>
+    </div>
+    <div class="fam-set-msg" id="famSetMsg"></div>
+  </div>
+</div>
 <div class="picker-overlay" id="pickerOverlay">
   <div class="overlay-bg" data-action="close-picker"></div>
   <div class="picker" id="picker">
@@ -126,6 +138,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-pf2"></script>
+<script src="/family.js?v=20260613-pf2b"></script>
 </body>
 </html>

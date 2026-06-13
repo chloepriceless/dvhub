@@ -36,6 +36,7 @@
       var action = actionEl.getAttribute('data-action');
       if (action === 'toggle-edit') { toggleEdit(); return; }
       if (action === 'close-picker') { closePicker(); return; }
+      if (action === 'close-fam-settings') { closeFamSettings(); return; }
       if (action === 'close-panel') { closePanel(); return; }
       if (action === 'pick-metric') {
         var key = actionEl.getAttribute('data-metric-key');
@@ -1164,9 +1165,6 @@
     var ev = data.ev || {};
     var price = data.price || {};
     var greeting = data.greeting || {};
-    // LLM-generated tile captions, refreshed every 15 min server-side.
-    // Falsy / missing per-tile field → fall through to the rule-based text below.
-    var tileFriendlies = data.tileFriendlies || {};
 
     // Patch energy.homeKw via conservation when the API reports 0 / wrong value.
     // Mutating the payload's energy object here means every downstream consumer
@@ -1191,20 +1189,15 @@
       setText('v-g', formatKw(Math.abs(energy.gridKw || 0)));
     });
 
-    sr('family.solar-home-status', function () {
-      // Friendly texts & statuses — LLM-generated captions when present, else rule-based.
-      setText('tf-solar', tileFriendlies.solar || (energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne')));
-      // tf-home returned with the Powerflow-2.0 rework (2026-06-13) — the
-      // House is a dedicated tile again (the centre is now the crossing).
-      setText('tf-home', tileFriendlies.home || 'Haus verbraucht');
-    });
+    // Generated friendly captions removed (operator request 2026-06-13) — the
+    // tag labels are static HTML now ("Solar", "Batterie", "E-Auto", "Netz",
+    // "Zuhause"); only DATA lines (kW, SoC, prices, times) stay dynamic.
 
     sr('family.battery', function () {
-      var batMode = battery.mode || 'idle';
-      setText('tf-bat', tileFriendlies.battery || (batMode === 'charging' ? 'Batterie lädt' : batMode === 'discharging' ? 'Batterie entlädt' : 'Batterie hält'));
       if (typeof battery.powerKw === 'number') {
         setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW');
       }
+      famUpdateTagAnims(energy, battery);
     });
 
     sr('family.ev', function () {
@@ -1220,15 +1213,7 @@
       var teslaLive = !!(tesla && tesla.enabled);
       var teslaCharging = teslaLive && teslaIsCharging(tesla);
       if (teslaLive) {
-        // Friendly text + status driven by the Tesla, not the placeholder ev.
         var tChgKw = Number(tesla.chargerPowerKw);
-        if (teslaCharging) {
-          setText('tf-ev', 'Auto lädt' + (tChgKw > 0 ? ' · ' + (Math.round(tChgKw * 10) / 10) + ' kW' : ''));
-        } else if (tesla.pluggedIn === true) {
-          setText('tf-ev', 'Auto eingesteckt');
-        } else {
-          setText('tf-ev', tesla.geofence ? 'Auto · ' + tesla.geofence : 'Auto parkt');
-        }
         // Primary value line: charge power while charging, else the range.
         // Graceful degradation for the ASLEEP state (checkpoint round 6) —
         // when the Tesla sleeps, chargerPowerKw / rangeKm / chargingState all
@@ -1264,7 +1249,6 @@
         }
         setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
       } else {
-        setText('tf-ev', tileFriendlies.ev || (evMode === 'solar_charging' ? 'Auto lädt mit Solar' : evMode === 'grid_charging' ? 'Auto lädt' : 'Auto parkt'));
         setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
         var socWrapOff = document.getElementById('ev-soc-wrap');
         if (socWrapOff) socWrapOff.hidden = true;
@@ -1292,13 +1276,13 @@
     });
 
     sr('family.grid', function () {
-      setText('tf-grid', tileFriendlies.grid || (energy.feedingToGrid ? 'Wir speisen ein' : 'Wir beziehen'));
-      // "Kosten" = actual user import price (includes grid fees/VAT/taxes), not the
-      // raw EPEX spot. Fall back to EPEX spot only if the tariff-adjusted price is
-      // unavailable so the row never shows a confusing number.
+      // Data-only status (generated copy removed): direction + the tariff-
+      // adjusted import price (falls back to EPEX spot) when importing.
       var importPrice = typeof price.importCtKwh === 'number' ? price.importCtKwh
         : (typeof price.nowCtKwh === 'number' ? price.nowCtKwh : null);
-      setText('ts-grid', energy.feedingToGrid ? 'Verdienen gerade' : (importPrice != null ? 'Kosten ' + importPrice.toFixed(1) + ' ct' : ''));
+      setText('ts-grid', energy.feedingToGrid
+        ? 'Einspeisung'
+        : (importPrice != null ? 'Bezug · ' + importPrice.toFixed(1) + ' ct/kWh' : 'Bezug'));
     });
 
     sr('family.greeting', function () {
@@ -2312,18 +2296,8 @@
     // House tile — the SAME homeKw the proportional MQTT streams use as
     // their denominator (already patched by inferHomeKw in the family.tags block).
     setText('pf-house-kw', formatKw(Math.max(0, Number(energy.homeKw || 0))));
-    // Crossing primary line — net grid energy. energy.gridKw: + = Bezug,
-    // − = Export (matches updateBgFlowFromStatus sign convention).
-    var gridKw = Number(energy.gridKw || 0);
-    var netKw = -gridKw; // + = exporting (earning), − = importing
-    var dirEl = document.getElementById('pf-center-dir');
-    setText('pf-center-kw', (netKw > 0.05 ? '+' : netKw < -0.05 ? '−' : '') + formatKw(Math.abs(netKw)));
-    if (dirEl) {
-      dirEl.textContent = netKw > 0.05 ? 'EXPORT' : netKw < -0.05 ? 'BEZUG' : 'BALANCE';
-      dirEl.classList.toggle('dir-export', netKw > 0.05);
-      dirEl.classList.toggle('dir-import', netKw < -0.05);
-    }
-    // Secondary net-Euro line — feed-in revenue + avoided cost = the day balance.
+    // PRIMARY line (operator request 2026-06-13): the day's earnings in €.
+    // Secondary line: live net grid energy + direction (EXPORT/BEZUG/BALANCE).
     var sav = (data && data.savings) || {};
     var feed = parseFloat(sav.feedInRevenueEur || '0');
     var avoid = parseFloat(sav.avoidedCostEur || '0');
@@ -2332,6 +2306,16 @@
     setText('pf-center-v', sign + Math.abs(net).toFixed(2).replace('.', ',') + ' €');
     setText('pf-center-d', net >= 0 ? 'Gewinn heute' : 'Kosten heute');
     c.classList.toggle('loss', net < 0);
+    // energy.gridKw: + = Bezug, − = Export (matches updateBgFlowFromStatus).
+    var gridKw = Number(energy.gridKw || 0);
+    var netKw = -gridKw; // + = exporting, − = importing
+    var dirEl = document.getElementById('pf-center-dir');
+    setText('pf-center-kw', (netKw > 0.05 ? '+' : netKw < -0.05 ? '−' : '') + formatKw(Math.abs(netKw)));
+    if (dirEl) {
+      dirEl.textContent = netKw > 0.05 ? 'EXPORT' : netKw < -0.05 ? 'BEZUG' : 'BALANCE';
+      dirEl.classList.toggle('dir-export', netKw > 0.05);
+      dirEl.classList.toggle('dir-import', netKw < -0.05);
+    }
   }
 
   /* =======================================================================
@@ -2415,6 +2399,135 @@
     if (document.visibilityState === 'visible') startFamilyColdPoll();
     else stopFamilyColdPoll();
   });
+
+  /* ===================== Powerflow-2.0 tag animations (2026-06-13) =========
+     The Leitstand's photo sky + battery SoC pill, reused on the Family tags.
+     Animation CSS lives dual-scoped in dvhub-powerflow.css (.fam-taganim.*);
+     family.css only overrides the compact sizes. Sky frames are the same
+     /assets/pf-sky/ WebPs (one browser cache entry for both pages). */
+  var FAM_SKY_PCTS = [0, 10, 20, 30, 40, 50, 60, 65, 70, 75, 80, 85, 90, 93, 95, 97, 99, 100];
+  var FAM_PV_RAMP_MAX_KW = 27; // 90% of the 30 kW plant nameplate (mockup contract)
+
+  function initFamTagAnims() {
+    var sky = document.getElementById('famSky');
+    if (sky && !sky.childElementCount) {
+      FAM_SKY_PCTS.forEach(function (p) {
+        var img = document.createElement('img');
+        img.className = 'pf-frame';
+        img.dataset.pct = String(p);
+        img.src = '/assets/pf-sky/sky-' + ('00' + p).slice(-3) + '.webp';
+        img.alt = '';
+        img.decoding = 'async';
+        if (p === 0) img.style.opacity = '1'; // moon until the first poll
+        sky.appendChild(img);
+      });
+    }
+  }
+
+  function famUpdateTagAnims(energy, battery) {
+    // Sky — weighted multi-frame blending over the PV share (see dvhub-powerflow.js).
+    var sky = document.getElementById('famSky');
+    if (sky) {
+      var pvKw = Math.max(0, Number(energy && energy.solarKw || 0));
+      var pct = Math.max(0, Math.min(pvKw / FAM_PV_RAMP_MAX_KW, 1)) * 100;
+      sky.style.setProperty('--pv-i', (pct / 100).toFixed(3));
+      var frames = sky.querySelectorAll('.pf-frame');
+      var SPAN = 18;
+      var maxW = 0;
+      var weights = [];
+      for (var i = 0; i < frames.length; i++) {
+        var dlt = Math.abs(pct - Number(frames[i].dataset.pct));
+        var w = Math.max(0, 1 - dlt / SPAN);
+        w = w * w * (3 - 2 * w);
+        weights.push(w);
+        if (w > maxW) maxW = w;
+      }
+      var norm = maxW > 0 ? 1 / maxW : 1;
+      for (var j = 0; j < frames.length; j++) {
+        frames[j].style.opacity = (weights[j] * norm).toFixed(3);
+      }
+    }
+    // Battery pill — SoC fill + colour, charge sweep/bolts, danger blink.
+    var bat = document.getElementById('famBat');
+    if (bat && battery && typeof battery.socPct === 'number') {
+      var soc = Math.max(0, Math.min(Number(battery.socPct), 100));
+      var charging = battery.mode === 'charging';
+      var passive = Math.max(0, Math.min((soc - 35) / 65, 1));
+      bat.style.setProperty('--p', soc.toFixed(2));
+      bat.style.setProperty('--fill', soc.toFixed(2) + '%');
+      bat.style.setProperty('--glow', Math.max(0, Math.min((soc - 18) / 82, 1)).toFixed(3));
+      bat.style.setProperty('--charge', (charging ? 1 : passive).toFixed(3));
+      bat.style.setProperty('--danger', Math.max(0, Math.min((18 - soc) / 18, 1)).toFixed(3));
+    }
+  }
+
+  /* ===================== Family settings popup (2026-06-13) ================
+     Tapping the top-right clock opens the dashboard's OWN settings: the
+     screensaver ("automatisch abdunkeln") toggle + timeout, and a reset for
+     the dragged tile layout (T-0091). Saved server-side via
+     POST /api/family/settings → cfg.family.screensaver, which the existing
+     screensaver state machine reads from /api/family/status config block. */
+  function openFamSettings() {
+    var ov = document.getElementById('famSettingsOverlay');
+    if (!ov) return;
+    var cfg = (lastStatus && lastStatus.config && lastStatus.config.screensaver) || {};
+    var en = document.getElementById('famSetSaverEnabled');
+    var min = document.getElementById('famSetSaverMinutes');
+    if (en) en.checked = cfg.enabled !== false;
+    if (min) min.value = String(Math.max(1, Math.round((Number(cfg.defaultTimeoutSec) || 120) / 60)));
+    setText('famSetMsg', '');
+    ov.classList.add('open');
+  }
+
+  function closeFamSettings() {
+    var ov = document.getElementById('famSettingsOverlay');
+    if (ov) ov.classList.remove('open');
+  }
+
+  function saveFamSettings() {
+    var en = document.getElementById('famSetSaverEnabled');
+    var min = document.getElementById('famSetSaverMinutes');
+    var minutes = Math.max(1, Math.min(120, Math.round(Number(min && min.value) || 2)));
+    var body = {
+      screensaver: {
+        enabled: !(en && en.checked === false),
+        defaultTimeoutSec: minutes * 60
+      }
+    };
+    apiFetchCompat('/api/family/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (out) {
+      if (!out || out.ok !== true) throw new Error((out && out.error) || 'save failed');
+      // Patch the local status copy so the state machine picks it up before
+      // the next poll.
+      if (lastStatus) {
+        lastStatus.config = lastStatus.config || {};
+        lastStatus.config.screensaver = Object.assign({}, lastStatus.config.screensaver, body.screensaver);
+      }
+      setText('famSetMsg', 'Gespeichert ✓');
+      setTimeout(closeFamSettings, 700);
+    }).catch(function (e) {
+      setText('famSetMsg', 'Fehler: ' + e.message);
+    });
+  }
+
+  function initFamSettings() {
+    var clock = document.getElementById('g-time');
+    if (clock) clock.addEventListener('click', openFamSettings);
+    var save = document.getElementById('famSetSave');
+    if (save) save.addEventListener('click', saveFamSettings);
+    var reset = document.getElementById('famSetLayoutReset');
+    if (reset) reset.addEventListener('click', function () {
+      try { localStorage.removeItem(TAG_LAYOUT_KEY); } catch (e) { /* private mode */ }
+      DRAGGABLE_TILE_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) tagLayoutClearOne(el);
+      });
+      setText('famSetMsg', 'Kachel-Layout zurückgesetzt ✓');
+    });
+  }
 
   /* ===================== T-0091: draggable constellation tiles =============
      Operator request (2026-06-05/13): the tags sit on fixed CSS positions, so
@@ -2515,6 +2628,8 @@
   // then drives stream kW/speed/count from real data.
   initBgFlow();
   initTagDrag();
+  initFamTagAnims();
+  initFamSettings();
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
   initMessageWidget();

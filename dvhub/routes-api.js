@@ -2139,6 +2139,50 @@ export function createApiRoutes(ctx) {
     // merges ONLY family.mqttTiles into the full config SERVER-SIDE — the
     // client never round-trips the whole config object (which would, with a
     // partial body, replace it: saveAndApplyConfig overwrites, never merges).
+    // Family-dashboard OWN settings (2026-06-13, operator request): the kiosk
+    // clock opens a settings popup; this endpoint server-side-MERGES the
+    // screensaver block into cfg.family (full-config POST /api/config would be
+    // wrong from a token-less kiosk — and replaces, never merges). Same
+    // LAN-trust + Pro-gate pattern as /api/family/mqtt-tiles below.
+    if (url.pathname === '/api/family/settings' && req.method === 'POST') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
+      let body;
+      try {
+        body = await parseBody(req);
+      } catch (e) {
+        return json(res, 400, { ok: false, error: 'invalid json' });
+      }
+      const saver = body && body.screensaver;
+      if (!saver || typeof saver !== 'object') {
+        return json(res, 400, { ok: false, error: 'screensaver object required' });
+      }
+      const timeoutSec = Number(saver.defaultTimeoutSec);
+      if (!Number.isFinite(timeoutSec) || timeoutSec < 30 || timeoutSec > 7200) {
+        return json(res, 400, { ok: false, error: 'defaultTimeoutSec must be 30..7200' });
+      }
+      // Same merge mechanics as /api/family/mqtt-tiles: deep-copy the raw
+      // config, change ONLY family.screensaver, save the complete config.
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.family = (next.family && typeof next.family === 'object') ? next.family : {};
+      // Merge: keep any extra screensaver fields (e.g. time windows) intact.
+      next.family.screensaver = {
+        ...(next.family.screensaver || {}),
+        enabled: saver.enabled !== false,
+        defaultTimeoutSec: Math.round(timeoutSec)
+      };
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('family_settings_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('family_settings_saved', {
+        enabled: next.family.screensaver.enabled,
+        defaultTimeoutSec: next.family.screensaver.defaultTimeoutSec
+      }, actorContext(req));
+      return json(res, 200, { ok: true, screensaver: next.family.screensaver });
+    }
+
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {
       if (!requirePro(req, res, 'family-dashboard')) return;
       const fam = ctx.getRawCfg?.()?.family;
