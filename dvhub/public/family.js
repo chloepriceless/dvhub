@@ -2691,9 +2691,13 @@
     // PRIMARY line (operator request 2026-06-13): the day's earnings in €.
     // Secondary line: live net grid energy + direction (EXPORT/BEZUG/BALANCE).
     var sav = (data && data.savings) || {};
-    var feed = parseFloat(sav.feedInRevenueEur || '0');
-    var avoid = parseFloat(sav.avoidedCostEur || '0');
-    var net = (isFinite(feed) ? feed : 0) + (isFinite(avoid) ? avoid : 0);
+    // Match the Leitstand: the day's NET grid balance (status.costs.netEur), NOT
+    // feedInRevenueEur + avoidedCostEur. The old sum double-counted self-consumption
+    // value and showed ~15 € while the Leitstand showed ~0 € (operator report
+    // 2026-06-13). The total-benefit breakdown still lives in the Einnahmen /
+    // Kosten-vermieden tiles.
+    var net = parseFloat(sav.netEur);
+    if (!isFinite(net)) net = 0;
     var sign = net >= 0 ? '+' : '−'; // unicode minus
     setText('pf-center-v', sign + Math.abs(net).toFixed(2).replace('.', ',') + ' €');
     setText('pf-center-d', net >= 0 ? 'Gewinn heute' : 'Kosten heute');

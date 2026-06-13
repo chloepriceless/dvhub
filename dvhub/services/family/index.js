@@ -666,6 +666,12 @@ export function createFamilyService(ctx) {
    */
   function deriveSavingsSection(costs) {
     const todayEur = Math.abs(Number(costs?.netEur || 0)).toFixed(2);
+    // SIGNED net grid balance for the powerflow centre — the SAME status.costs.netEur
+    // the Leitstand shows (positive = earned, negative = paid). The centre used to
+    // show feedInRevenueEur + avoidedCostEur, which double-counts self-consumption
+    // value and read ~15 € while the Leitstand showed ~0 € (operator report
+    // 2026-06-13). Now both screens tell the same story.
+    const netEur = Math.round(Number(costs?.netEur || 0) * 100) / 100;
     // Month: REAL month-to-date net from the history KPIs when available
     // (was: today's net × 30 extrapolation).
     const monthNet = Number(periodKpis.month?.netEur);
@@ -686,7 +692,7 @@ export function createFamilyService(ctx) {
       ? histAvoided
       : Math.abs(Number(costs?.costEur || 0))).toFixed(2);
 
-    return { todayEur, monthEur, feedInRevenueEur, avoidedCostEur };
+    return { todayEur, netEur, monthEur, feedInRevenueEur, avoidedCostEur };
   }
 
   /**
