@@ -2384,10 +2384,21 @@ export function createApiRoutes(ctx) {
           end,
           maxResolution: 900,
         });
-        const power = rows.filter(r => r.key === 'tesla_charger_power' && Number.isFinite(r.value));
+        // tesla_charger_power is stored in kW (TeslaMate `charger_power`, DB column
+        // charger_power_kw) — convert to W up front so the W-based threshold and the
+        // trapezoidal Wh integration below are correct. Bug 2026-06-13: the detector
+        // treated the kW value as W, so a real ~11 kW charge (stored as 11) fell below
+        // the 100 W threshold and NO sessions were ever built (operator report:
+        // "Ladevorgänge leer obwohl ich geladen habe").
+        const power = rows
+          .filter(r => r.key === 'tesla_charger_power' && Number.isFinite(r.value))
+          .map(r => ({ ...r, value: r.value * 1000 }));
         const soc = rows.filter(r => r.key === 'tesla_battery_level' && Number.isFinite(r.value));
-        // Session detection: contiguous power > 100 W with gaps < 10 min.
-        const SESSION_GAP_MS = 10 * 60 * 1000;
+        // Session detection: contiguous power ≥ 100 W. TeslaMate publishes
+        // charger_power ON CHANGE, so a steady charge produces sparse samples
+        // (minutes-to-tens-of-minutes apart) — use a 30 min gap so one charge is not
+        // fragmented into many 1-sample sessions (which integrate to 0 Wh).
+        const SESSION_GAP_MS = 30 * 60 * 1000;
         const SESSION_POWER_W = 100;
         const sessions = [];
         let cur = null;
