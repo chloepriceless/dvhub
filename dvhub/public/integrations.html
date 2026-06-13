@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=30" />
+  <link rel="stylesheet" href="/integrations.css?v=31" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -413,7 +413,7 @@
       <aside class="dv-drawer" id="dv-drawer-mid" role="dialog" aria-modal="true"
              aria-labelledby="dv-drawer-mid-title" hidden>
         <header class="dv-drawer-head">
-          <h2 id="dv-drawer-mid-title">MID-Z&auml;hler (Modbus)</h2>
+          <h2 id="dv-drawer-mid-title">Netzz&auml;hler &mdash; Quelle</h2>
           <div class="dv-drawer-head-actions">
             <button type="button" class="btn sm ghost dv-drawer-close"
                     id="dv-drawer-mid-close" aria-label="Schlie&szlig;en">&times;</button>
@@ -421,39 +421,104 @@
         </header>
         <div class="dv-drawer-body" id="dv-drawer-mid-body">
           <p class="dv-drawer-intro">
-            Direkter <strong>MID-Netzz&auml;hler</strong> per Modbus TCP. L&auml;sst du den Host leer,
-            kommen die Netzwerte aus der Haupt-Anbindung (z.&nbsp;B. Victron).
+            Der <strong>Netzz&auml;hler</strong> liefert die Werte f&uuml;r DV-Schnittstelle und Anzeige.
+            W&auml;hle die <strong>Quelle</strong>: das Hersteller-Profil oder einen eigenen
+            Modbus-/MQTT-/HTTP-Endpunkt &mdash; Hybrid-Akkus bringen oft einen eigenen
+            Z&auml;hlerpunkt mit.
           </p>
+          <label class="dv-field">
+            <span class="field-label">Quelle</span>
+            <select class="input" id="mid-source-mode">
+              <option value="profile">Hersteller-Profil</option>
+              <option value="modbus">Modbus (individuell)</option>
+              <option value="mqtt">MQTT</option>
+              <option value="http">HTTP</option>
+            </select>
+          </label>
+
+          <!-- Quelle: Hersteller-Profil -->
+          <div id="mid-grp-profile" hidden>
+            <label class="dv-field">
+              <span class="field-label">Hersteller</span>
+              <select class="input" id="mid-manufacturer"></select>
+            </label>
+            <p class="dv-drawer-intro" id="mid-profile-hint">
+              Z&auml;hler-Register kommen aus dem Hersteller-Profil und sind hier nicht editierbar.
+              Weitere Hersteller werden als Profildatei im <code>hersteller/</code>-Ordner angelegt.
+            </p>
+            <div class="dv-field-validation" id="mid-profile-detail" hidden>&mdash;</div>
+          </div>
+
+          <!-- Quelle: Modbus (individuell) -->
+          <div id="mid-grp-modbus" hidden>
+            <label class="dv-field">
+              <span class="field-label">Host / IP</span>
+              <input type="text" class="input mono" id="mid-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Port</span>
+              <input type="number" class="input mono" id="mid-port" min="1" max="65535" step="1" inputmode="numeric" placeholder="502">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Unit-ID (Slave)</span>
+              <input type="number" class="input mono" id="mid-unitid" min="0" max="255" step="1" inputmode="numeric" placeholder="1">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Register-Adresse (L1, fortlaufend L2/L3)</span>
+              <input type="number" class="input mono" id="mid-address" min="0" max="65535" step="1" inputmode="numeric" placeholder="0">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Anzahl Register</span>
+              <input type="number" class="input mono" id="mid-quantity" min="1" max="125" step="1" inputmode="numeric" placeholder="3">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Funktionscode</span>
+              <select class="input" id="mid-fc">
+                <option value="3">3 &mdash; Holding Register</option>
+                <option value="4">4 &mdash; Input Register</option>
+              </select>
+            </label>
+          </div>
+
+          <!-- Quelle: MQTT -->
+          <div id="mid-grp-mqtt" hidden>
+            <p class="dv-drawer-intro" id="mid-mqtt-note">
+              &#9888; Ben&ouml;tigt einen eingebundenen <strong>MQTT-Hub</strong> (Karte &bdquo;MQTT Hub&ldquo;) &mdash;
+              sonst kommen keine Daten an.
+            </p>
+            <label class="dv-field">
+              <span class="field-label">Topic L1</span>
+              <input type="text" class="input mono" id="mid-mqtt-l1" placeholder="z.B. meter/grid/l1/power" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic L2</span>
+              <input type="text" class="input mono" id="mid-mqtt-l2" placeholder="optional" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic L3</span>
+              <input type="text" class="input mono" id="mid-mqtt-l3" placeholder="optional" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Topic Gesamt (statt L1&ndash;L3)</span>
+              <input type="text" class="input mono" id="mid-mqtt-total" placeholder="optional &mdash; nutzt Summe statt L1/L2/L3" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+
+          <!-- Quelle: HTTP -->
+          <div id="mid-grp-http" hidden>
+            <label class="dv-field">
+              <span class="field-label">URL</span>
+              <input type="text" class="input mono" id="mid-http-url" placeholder="https://host/api/meter" autocomplete="off" spellcheck="false" inputmode="url">
+            </label>
+            <label class="dv-field">
+              <span class="field-label">JSON-Pfad (optional)</span>
+              <input type="text" class="input mono" id="mid-http-path" placeholder="z.B. data.power_w" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+
           <label class="dv-field">
             <span class="field-label">Bezeichnung (optional)</span>
             <input type="text" class="input" id="mid-name" placeholder="z.B. Netzz&auml;hler Hauptverteilung" autocomplete="off" spellcheck="false">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Host / IP</span>
-            <input type="text" class="input mono" id="mid-host" placeholder="192.168.x.x (leer = aus)" autocomplete="off" spellcheck="false" inputmode="url">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Port</span>
-            <input type="number" class="input mono" id="mid-port" min="1" max="65535" step="1" inputmode="numeric" placeholder="502">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Unit-ID (Slave)</span>
-            <input type="number" class="input mono" id="mid-unitid" min="0" max="255" step="1" inputmode="numeric" placeholder="1">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Register-Adresse (L1, fortlaufend L2/L3)</span>
-            <input type="number" class="input mono" id="mid-address" min="0" max="65535" step="1" inputmode="numeric" placeholder="0">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Anzahl Register</span>
-            <input type="number" class="input mono" id="mid-quantity" min="1" max="125" step="1" inputmode="numeric" placeholder="3">
-          </label>
-          <label class="dv-field">
-            <span class="field-label">Funktionscode</span>
-            <select class="input" id="mid-fc">
-              <option value="3">3 &mdash; Holding Register</option>
-              <option value="4">4 &mdash; Input Register</option>
-            </select>
           </label>
           <label class="dv-field">
             <span class="field-label">Vorzeichen-Logik</span>
@@ -745,6 +810,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=30"></script>
+  <script src="/integrations.js?v=31"></script>
 </body>
 </html>

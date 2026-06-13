@@ -518,6 +518,26 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   'llm'
 ]));
 
+// Meter/inverter manufacturer profiles (2026-06-13). The available manufacturers
+// are simply the *.json files in the hersteller/ folder next to config.json —
+// the filename (minus .json) is the manufacturer id (operator request: read the
+// folder, don't hardcode the list). Today only victron.json ships; new makers are
+// added by dropping a profile file. Returns [{ value, label }]; falls back to
+// Victron-only if the folder can't be read so the dropdown is never empty.
+export function listManufacturerProfiles(ctx) {
+  let list = [];
+  try {
+    const dir = path.join(path.dirname(ctx.getConfigPath?.() || ''), 'hersteller');
+    list = fs.readdirSync(dir)
+      .filter((f) => f.toLowerCase().endsWith('.json'))
+      .map((f) => f.replace(/\.json$/i, ''))
+      .filter(Boolean)
+      .map((id) => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }));
+  } catch { list = []; }
+  if (!list.some((x) => x.value === 'victron')) list.unshift({ value: 'victron', label: 'Victron' });
+  return list;
+}
+
 // Plan 08-09 Task 2: actor context extracted from a request — feeds the
 // audit_log mirror in pushLog (server.js) and the new exec.manual_overrides
 // rows. Strips the IPv4-in-IPv6 prefix that node http exposes by default
@@ -3361,25 +3381,43 @@ export function createApiRoutes(ctx) {
     // polled — this config takes effect for a direct Modbus meter.
     if (url.pathname === '/api/integrations/mid' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
-      // Show the EFFECTIVE meter (getCfg) — on Victron systems the Modbus meter
-      // block comes from the manufacturer profile, not config.json. profileManaged
-      // flags that case so the drawer can explain why the connection fields are
-      // read-only (the profile overwrites a raw cfg.meter; see applyManufacturerProfile).
+      // Meter-source selector (2026-06-13). The grid meter can come from the
+      // manufacturer profile (mode='profile', register map from
+      // hersteller/<manufacturer>.json — read-only here) OR from an
+      // operator-supplied endpoint (mode='modbus'|'mqtt'|'http', persisted in the
+      // non-managed cfg.meterSource root). profileMeter mirrors the effective
+      // profile meter for the read-only 'profile' view.
       const cfg = getCfg();
       const raw = ctx.getRawCfg?.() || {};
       const m = cfg.meter || {};
+      const ms = raw.meterSource || {};
+      const msModbus = ms.modbus || {};
+      const msMqtt = ms.mqtt || {};
+      const msHttp = ms.http || {};
       return json(res, 200, {
         ok: true,
-        name: m.label || raw.mid?.name || '',
-        host: m.host || '',
-        port: m.port ?? 502,
-        unitId: m.unitId ?? 1,
-        address: m.address ?? 0,
-        quantity: m.quantity ?? 3,
-        fc: m.fc ?? 3,
+        manufacturer: raw.manufacturer || 'victron',
+        manufacturers: listManufacturerProfiles(ctx),
+        mode: ['profile', 'modbus', 'mqtt', 'http'].includes(ms.mode) ? ms.mode : 'profile',
+        name: ms.label || '',
         gridPositiveMeans: cfg.gridPositiveMeans || 'feed_in',
-        profileManaged: !!(m.host && !(raw.meter && raw.meter.host)),
-        meterOk: !!ctx.state?.meter?.ok
+        // Read-only profile meter (mode='profile').
+        profileMeter: {
+          host: m.host || '', port: m.port ?? 502, unitId: m.unitId ?? 1,
+          address: m.address ?? 0, quantity: m.quantity ?? 3, fc: m.fc ?? 3
+        },
+        profileManaged: !!m.host,
+        meterOk: !!ctx.state?.meter?.ok,
+        // Operator-supplied meter endpoints.
+        modbus: {
+          host: msModbus.host || '', port: msModbus.port ?? 502, unitId: msModbus.unitId ?? 1,
+          address: msModbus.address ?? 0, quantity: msModbus.quantity ?? 3, fc: msModbus.fc ?? 3
+        },
+        mqtt: {
+          topicL1: msMqtt.topicL1 || '', topicL2: msMqtt.topicL2 || '',
+          topicL3: msMqtt.topicL3 || '', topicTotal: msMqtt.topicTotal || ''
+        },
+        http: { url: msHttp.url || '', jsonPath: msHttp.jsonPath || '' }
       });
     }
 
@@ -3392,22 +3430,41 @@ export function createApiRoutes(ctx) {
         return json(res, 400, { ok: false, error: 'object required' });
       }
       const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
-      const host = String(body.host == null ? '' : body.host).trim().slice(0, 128);
+      const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
-      next.meter = (next.meter && typeof next.meter === 'object') ? next.meter : {};
-      if (host) {
-        next.meter.host = host;
-        next.meter.port = Math.min(65535, Math.max(1, num(body.port, 502)));
-        next.meter.unitId = Math.min(255, Math.max(0, num(body.unitId, 1)));
-        next.meter.address = Math.max(0, num(body.address, 0));
-        next.meter.quantity = Math.min(125, Math.max(1, num(body.quantity, 3)));
-        next.meter.fc = (num(body.fc, 3) === 4) ? 4 : 3;
-        if (typeof body.name === 'string') next.meter.label = body.name.trim().slice(0, 64);
-      } else {
-        // Empty host clears the Modbus meter config (grid falls back to the
-        // transport's native source, e.g. Victron MQTT).
-        delete next.meter.host;
+
+      // Manufacturer profile selection. Validate against the actual hersteller/
+      // folder so an unknown value can never brick the profile load on reload.
+      if (typeof body.manufacturer === 'string' && body.manufacturer.trim()) {
+        const wanted = body.manufacturer.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        const known = listManufacturerProfiles(ctx).map((x) => x.value);
+        if (wanted && (known.includes(wanted) || wanted === 'victron')) next.manufacturer = wanted;
       }
+
+      // Meter-source selector — persisted under the non-managed meterSource root.
+      const mode = ['profile', 'modbus', 'mqtt', 'http'].includes(body.mode) ? body.mode : 'profile';
+      const ms = (next.meterSource && typeof next.meterSource === 'object') ? next.meterSource : {};
+      ms.mode = mode;
+      if (typeof body.name === 'string') ms.label = str(body.name, 64);
+      const inModbus = (body.modbus && typeof body.modbus === 'object') ? body.modbus : {};
+      ms.modbus = {
+        host: str(inModbus.host, 128),
+        port: Math.min(65535, Math.max(1, num(inModbus.port, 502))),
+        unitId: Math.min(255, Math.max(0, num(inModbus.unitId, 1))),
+        address: Math.max(0, num(inModbus.address, 0)),
+        quantity: Math.min(125, Math.max(1, num(inModbus.quantity, 3))),
+        fc: (num(inModbus.fc, 3) === 4) ? 4 : 3,
+        timeoutMs: Math.min(10000, Math.max(100, num(inModbus.timeoutMs, 1200)))
+      };
+      const inMqtt = (body.mqtt && typeof body.mqtt === 'object') ? body.mqtt : {};
+      ms.mqtt = {
+        topicL1: str(inMqtt.topicL1, 256), topicL2: str(inMqtt.topicL2, 256),
+        topicL3: str(inMqtt.topicL3, 256), topicTotal: str(inMqtt.topicTotal, 256)
+      };
+      const inHttp = (body.http && typeof body.http === 'object') ? body.http : {};
+      ms.http = { url: str(inHttp.url, 512), jsonPath: str(inHttp.jsonPath, 128) };
+      next.meterSource = ms;
+
       if (body.gridPositiveMeans === 'grid_import' || body.gridPositiveMeans === 'feed_in') {
         next.gridPositiveMeans = body.gridPositiveMeans;
       }
@@ -3417,7 +3474,7 @@ export function createApiRoutes(ctx) {
         pushLog('mid_config_save_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'save failed' });
       }
-      pushLog('mid_config_saved', { hostSet: !!host, gridPositiveMeans: next.gridPositiveMeans }, actorContext(req));
+      pushLog('mid_config_saved', { mode, manufacturer: next.manufacturer, gridPositiveMeans: next.gridPositiveMeans }, actorContext(req));
       return json(res, 200, { ok: true });
     }
 

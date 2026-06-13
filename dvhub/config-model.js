@@ -2333,6 +2333,24 @@ export function createDefaultConfig() {
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',
     pvCoupling: 'ac_dc',
+    // Operator meter-source selector (2026-06-13). Decouples the GRID-METER feed
+    // from the manufacturer profile so a non-Victron / hybrid system can point at
+    // its own meter (hybrid batteries usually ship their own meter point).
+    //   mode='profile' (DEFAULT) — unchanged: the meter register map comes from
+    //     the manufacturer profile (hersteller/<manufacturer>.json). Live systems
+    //     keep their current behaviour with zero change.
+    //   mode='modbus'|'mqtt'|'http' — the operator-supplied endpoint below feeds
+    //     the grid value (DV-Schnittstelle + Anzeige). The data-path routing that
+    //     consumes these is staged on top of this config (the field is read by the
+    //     meter poll once that lands). NOT in MANUFACTURER_MANAGED_PATHS, so it
+    //     survives config.json round-trips (unlike cfg.meter, which is stripped).
+    meterSource: {
+      mode: 'profile',
+      label: '',
+      modbus: { host: '', port: 502, unitId: 1, fc: 3, address: 0, quantity: 3, timeoutMs: 1200 },
+      mqtt: { topicL1: '', topicL2: '', topicL3: '', topicTotal: '' },
+      http: { url: '', jsonPath: '' }
+    },
     monitoring: {
       pushUrl: '',
       pushIntervalSec: 240,

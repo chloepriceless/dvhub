@@ -2086,9 +2086,20 @@
     if (evccRefresh) { loadEvccDrawer(); return; }
   });
 
-  // === MID Grid-Meter Drawer Wiring (2026-06-13) ===
-  // Loads/saves cfg.meter.{host,port,unitId,address,quantity,fc} +
-  // cfg.gridPositiveMeans via the dedicated /api/integrations/mid endpoint.
+  // === MID / Netzzähler Drawer Wiring (2026-06-13) ===
+  // The grid meter has a SOURCE selector: 'profile' (register map from the
+  // manufacturer profile, read-only), or an operator endpoint 'modbus'|'mqtt'|
+  // 'http' persisted in cfg.meterSource. The manufacturer dropdown is populated
+  // from the hersteller/ folder. Default 'profile' = unchanged live behaviour;
+  // the data-path that consumes a custom source is staged on top of this config.
+  var MID_MODES = ['profile', 'modbus', 'mqtt', 'http'];
+  function midApplyMode(mode) {
+    var el = function (id) { return document.getElementById(id); };
+    MID_MODES.forEach(function (mo) {
+      var g = el('mid-grp-' + mo);
+      if (g) g.hidden = (mo !== mode);
+    });
+  }
   async function loadMidDrawer() {
     var el = function (id) { return document.getElementById(id); };
     try {
@@ -2096,27 +2107,84 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       if (!data || !data.ok) return;
+
+      // Manufacturer dropdown — options come from the hersteller/ folder.
+      var manSel = el('mid-manufacturer');
+      if (manSel) {
+        var opts = Array.isArray(data.manufacturers) ? data.manufacturers : [];
+        manSel.textContent = '';
+        opts.forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label || o.value;
+          manSel.appendChild(opt);
+        });
+        manSel.value = data.manufacturer || 'victron';
+      }
+
+      // Source mode.
+      var mode = MID_MODES.indexOf(data.mode) >= 0 ? data.mode : 'profile';
+      if (el('mid-source-mode')) el('mid-source-mode').value = mode;
+      midApplyMode(mode);
+
+      // Modbus (individuell) fields.
+      var mb = data.modbus || {};
+      if (el('mid-host')) el('mid-host').value = mb.host || '';
+      if (el('mid-port')) el('mid-port').value = mb.port != null ? mb.port : 502;
+      if (el('mid-unitid')) el('mid-unitid').value = mb.unitId != null ? mb.unitId : 1;
+      if (el('mid-address')) el('mid-address').value = mb.address != null ? mb.address : 0;
+      if (el('mid-quantity')) el('mid-quantity').value = mb.quantity != null ? mb.quantity : 3;
+      if (el('mid-fc')) el('mid-fc').value = String(mb.fc === 4 ? 4 : 3);
+
+      // MQTT fields.
+      var mq = data.mqtt || {};
+      if (el('mid-mqtt-l1')) el('mid-mqtt-l1').value = mq.topicL1 || '';
+      if (el('mid-mqtt-l2')) el('mid-mqtt-l2').value = mq.topicL2 || '';
+      if (el('mid-mqtt-l3')) el('mid-mqtt-l3').value = mq.topicL3 || '';
+      if (el('mid-mqtt-total')) el('mid-mqtt-total').value = mq.topicTotal || '';
+
+      // HTTP fields.
+      var ht = data.http || {};
+      if (el('mid-http-url')) el('mid-http-url').value = ht.url || '';
+      if (el('mid-http-path')) el('mid-http-path').value = ht.jsonPath || '';
+
+      // General.
       if (el('mid-name')) el('mid-name').value = data.name || '';
-      if (el('mid-host')) el('mid-host').value = data.host || '';
-      if (el('mid-port')) el('mid-port').value = data.port != null ? data.port : 502;
-      if (el('mid-unitid')) el('mid-unitid').value = data.unitId != null ? data.unitId : 1;
-      if (el('mid-address')) el('mid-address').value = data.address != null ? data.address : 0;
-      if (el('mid-quantity')) el('mid-quantity').value = data.quantity != null ? data.quantity : 3;
-      if (el('mid-fc')) el('mid-fc').value = String(data.fc === 4 ? 4 : 3);
       if (el('mid-sign')) el('mid-sign').value = data.gridPositiveMeans === 'grid_import' ? 'grid_import' : 'feed_in';
-      // On Victron systems the connection comes from the manufacturer profile —
-      // the fields are read-only there (a raw cfg.meter would be overwritten).
-      // Only the sign convention (gridPositiveMeans) stays editable.
-      var connFields = ['mid-name', 'mid-host', 'mid-port', 'mid-unitid', 'mid-address', 'mid-quantity', 'mid-fc'];
-      connFields.forEach(function (id) { if (el(id)) el(id).disabled = !!data.profileManaged; });
+
+      // Profile read-only meter detail.
+      var pd = el('mid-profile-detail');
+      if (pd) {
+        var pm = data.profileMeter || {};
+        if (pm.host || data.profileManaged) {
+          pd.hidden = false;
+          pd.textContent = '🔒 Profil-Zähler ' + (pm.host || '—') + ':' + (pm.port != null ? pm.port : 502)
+            + ' · Unit ' + (pm.unitId != null ? pm.unitId : 1)
+            + ' · Reg ' + (pm.address != null ? pm.address : 0) + '×' + (pm.quantity != null ? pm.quantity : 3)
+            + ' · FC' + (pm.fc != null ? pm.fc : 3)
+            + ' · ' + (data.meterOk ? 'liefert Werte ✓' : 'noch keine Werte ⚠');
+        } else {
+          pd.hidden = true;
+        }
+      }
+
+      // Status line (per mode).
       var st = el('mid-status');
       if (st) {
         st.hidden = false;
-        st.textContent = data.profileManaged
-          ? ('🔒 Verbindung kommt aus dem Victron-Herstellerprofil (' + (data.meterOk ? 'liefert Werte' : 'noch keine Werte') + '). Nur die Vorzeichen-Logik ist hier änderbar.')
-          : (data.host
-            ? (data.meterOk ? '✓ Zähler liefert Werte.' : '⚠ Konfiguriert, aber noch keine Werte gelesen.')
-            : 'Kein Modbus-Zähler konfiguriert (Netzdaten kommen aus der Haupt-Anbindung).');
+        if (mode === 'profile') {
+          st.textContent = data.meterOk
+            ? '✓ Netzwerte kommen aus dem Hersteller-Profil und liefern Werte.'
+            : '⚠ Hersteller-Profil aktiv, aber noch keine Netzwerte gelesen.';
+        } else if (mode === 'modbus') {
+          st.textContent = mb.host
+            ? 'Eigener Modbus-Zähler hinterlegt. Aktivierung des Datenpfads folgt im nächsten Schritt.'
+            : 'Trage Host/Register des Modbus-Zählers ein.';
+        } else if (mode === 'mqtt') {
+          st.textContent = 'MQTT-Quelle: Topics hinterlegen + MQTT-Hub einbinden. Datenpfad folgt.';
+        } else {
+          st.textContent = 'HTTP-Quelle: URL hinterlegen. Datenpfad folgt.';
+        }
       }
     } catch (e) {
       showDrawerToast('mid', 'err', '✗ Zähler laden fehlgeschlagen: ' + e.message);
@@ -2126,23 +2194,39 @@
     if (!buttonEl || buttonEl.disabled) return;
     var el = function (id) { return document.getElementById(id); };
     var banner = el('mid-banner');
+    var mode = (el('mid-source-mode') && el('mid-source-mode').value) || 'profile';
     var host = ((el('mid-host') && el('mid-host').value) || '').trim();
-    // Host is optional (empty clears the meter); when set it must look like a host.
-    if (host && /\s/.test(host)) {
+    // Host required only in Modbus mode; when set it must look like a host.
+    if (mode === 'modbus' && host && /\s/.test(host)) {
       if (banner) { banner.textContent = 'Host darf keine Leerzeichen enthalten.'; banner.hidden = false; }
       return;
     }
     if (banner) banner.hidden = true;
     var intVal = function (id, d) { var v = parseInt((el(id) && el(id).value) || '', 10); return Number.isFinite(v) ? v : d; };
+    var trim = function (id) { return ((el(id) && el(id).value) || '').trim(); };
     var body = {
-      name: ((el('mid-name') && el('mid-name').value) || '').trim(),
-      host: host,
-      port: intVal('mid-port', 502),
-      unitId: intVal('mid-unitid', 1),
-      address: intVal('mid-address', 0),
-      quantity: intVal('mid-quantity', 3),
-      fc: intVal('mid-fc', 3),
-      gridPositiveMeans: (el('mid-sign') && el('mid-sign').value === 'grid_import') ? 'grid_import' : 'feed_in'
+      manufacturer: (el('mid-manufacturer') && el('mid-manufacturer').value) || undefined,
+      mode: mode,
+      name: trim('mid-name'),
+      gridPositiveMeans: (el('mid-sign') && el('mid-sign').value === 'grid_import') ? 'grid_import' : 'feed_in',
+      modbus: {
+        host: host,
+        port: intVal('mid-port', 502),
+        unitId: intVal('mid-unitid', 1),
+        address: intVal('mid-address', 0),
+        quantity: intVal('mid-quantity', 3),
+        fc: intVal('mid-fc', 3)
+      },
+      mqtt: {
+        topicL1: trim('mid-mqtt-l1'),
+        topicL2: trim('mid-mqtt-l2'),
+        topicL3: trim('mid-mqtt-l3'),
+        topicTotal: trim('mid-mqtt-total')
+      },
+      http: {
+        url: trim('mid-http-url'),
+        jsonPath: trim('mid-http-path')
+      }
     };
     buttonEl.disabled = true;
     var origText = buttonEl.textContent;
@@ -2171,6 +2255,10 @@
   document.addEventListener('click', function (e) {
     var midSave = e.target.closest('#mid-save');
     if (midSave) { saveMidDrawer(midSave); return; }
+  });
+  document.addEventListener('change', function (e) {
+    var t = e.target;
+    if (t && t.id === 'mid-source-mode') { midApplyMode(t.value); }
   });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===
