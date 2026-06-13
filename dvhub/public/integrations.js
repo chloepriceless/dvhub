@@ -686,7 +686,7 @@
         || sys.key === 'victron' || sys.key === 'luox') {
       actions = '<div class="conn-actions">'
         + '<a class="btn sm ghost" href="/settings.html#system">Logs</a>'
-        + '<a class="btn sm" href="/settings.html">Konfig.</a>'
+        + '<a class="btn sm" href="/settings.html" data-action="card-konfig" data-system="' + esc(sys.key) + '">Konfig.</a>'
         + '</div>';
     }
     var pulseHtml = buildPulseBars(data && data.sampleIntervalHistogramMs);
@@ -1382,6 +1382,39 @@
     return inst;
   }
 
+  // Single source of truth for "card → its settings drawer" so the card-click
+  // AND the "Konfig."-link open the exact same drawer (operator request
+  // 2026-06-13). Returns true if a drawer was opened, false if the system has no
+  // drawer yet (then the "Konfig."-link falls through to its settings.html href).
+  function openDrawerForSystem(key) {
+    var inst;
+    if (key === 'mqtt') { openMqttDrawer(); return true; }
+    if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
+    if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
+    if (key === 'forecast-providers') { inst = getOrCreateDrawer('forecast'); if (inst) inst.open(); return true; }
+    if (key === 'evcc') {
+      inst = getOrCreateDrawer('evcc');
+      if (inst) { inst.open(); setTimeout(loadEvccDrawer, 0); }
+      return true;
+    }
+    if (key === 'mid') {
+      inst = getOrCreateDrawer('mid');
+      if (inst) { inst.open(); setTimeout(loadMidDrawer, 0); }
+      return true;
+    }
+    if (key === 'tesla') {
+      inst = getOrCreateDrawer('tesla');
+      if (inst) {
+        inst.open();
+        setTimeout(loadTeslaSettings, 0);
+        setTimeout(loadTeslaSnapshot, 0);
+        setTimeout(function () { loadTeslaSessions(7); }, 0);
+      }
+      return true;
+    }
+    return false;
+  }
+
   document.addEventListener('click', function (e) {
     // Inline element-specific intercepts that other handlers (pause/refresh) own.
     if (e.target.closest('#mqtt-drawer-pause')) { toggleMqttPause(); return; }
@@ -1416,61 +1449,24 @@
       return;
     }
 
-    // Action-link inside card should navigate, not open drawer.
+    // "Konfig."-link inside a card → open the SAME drawer as clicking the card
+    // (operator request 2026-06-13: both must show the card's own settings). If
+    // the system has no drawer yet, fall through to the link's settings.html href.
+    var konfigLink = e.target.closest('a[data-action="card-konfig"]');
+    if (konfigLink) {
+      var kKey = konfigLink.getAttribute('data-system') || '';
+      if (openDrawerForSystem(kKey)) e.preventDefault();
+      return;
+    }
+
+    // Other action-links inside card should navigate, not open drawer.
     if (e.target.closest('a')) return;
 
-    // Card → drawer routing by data-system.
-    var mqttCard = e.target.closest('.conn-card[data-system="mqtt"]');
-    if (mqttCard) { e.preventDefault(); openMqttDrawer(); return; }
-    var notifCard = e.target.closest('.conn-card[data-system="notifications"]');
-    if (notifCard) {
-      e.preventDefault();
-      var inst = getOrCreateDrawer('notifications');
-      if (inst) inst.open();
-      return;
-    }
-    var vrmCard = e.target.closest('.conn-card[data-system="vrm"]');
-    if (vrmCard) {
-      e.preventDefault();
-      var inst2 = getOrCreateDrawer('vrm');
-      if (inst2) inst2.open();
-      return;
-    }
-    var fcCard = e.target.closest('.conn-card[data-system="forecast-providers"]');
-    if (fcCard) {
-      e.preventDefault();
-      var inst3 = getOrCreateDrawer('forecast');
-      if (inst3) inst3.open();
-      return;
-    }
-    var evccCard = e.target.closest('.conn-card[data-system="evcc"]');
-    if (evccCard) {
-      e.preventDefault();
-      var instEvcc = getOrCreateDrawer('evcc');
-      if (instEvcc) instEvcc.open();
-      setTimeout(loadEvccDrawer, 0);
-      return;
-    }
-    var midCard = e.target.closest('.conn-card[data-system="mid"]');
-    if (midCard) {
-      e.preventDefault();
-      var instMid = getOrCreateDrawer('mid');
-      if (instMid) instMid.open();
-      setTimeout(loadMidDrawer, 0);
-      return;
-    }
-    // Phase 21 (2026-05-23): TeslaMate card → drawer (Einstellungen + Live +
-    // Ladevorgänge). loadTeslaSettings/Snapshot are queued via setTimeout(0)
-    // so the drawer animation paints before the GET kicks off.
-    var teslaCard = e.target.closest('.conn-card[data-system="tesla"]');
-    if (teslaCard) {
-      e.preventDefault();
-      var inst4 = getOrCreateDrawer('tesla');
-      if (inst4) inst4.open();
-      setTimeout(loadTeslaSettings, 0);
-      setTimeout(loadTeslaSnapshot, 0);
-      setTimeout(function () { loadTeslaSessions(7); }, 0);
-      return;
+    // Card → drawer routing by data-system (single shared path with "Konfig.").
+    var card = e.target.closest('.conn-card[data-system]');
+    if (card) {
+      var cKey = card.getAttribute('data-system');
+      if (openDrawerForSystem(cKey)) { e.preventDefault(); return; }
     }
   });
 
