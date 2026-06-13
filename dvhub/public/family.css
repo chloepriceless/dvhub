@@ -418,3 +418,10 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
     font-size: 12px;
   }
 }
+
+/* T-0091: draggable constellation tiles. touch-action:none lets pointermove
+   track a finger without the browser hijacking the gesture for scrolling
+   (kiosk page does not scroll). While dragging: kill the float/fade animation
+   and spring transition so the tile pins exactly to the finger. */
+.tag,.pf-center-readout{touch-action:none}
+.tag.tag-dragging,.pf-center-readout.tag-dragging{transition:none;animation:none;z-index:60;cursor:grabbing}

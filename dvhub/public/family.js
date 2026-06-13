@@ -49,13 +49,19 @@
       }
     }
     var tag = e.target.closest('[data-panel]');
-    if (tag) openPanel(tag.getAttribute('data-panel'));
+    if (tag) {
+      if (tagDragSuppressTap) return; // T-0091: a drag just ended — not a tap
+      openPanel(tag.getAttribute('data-panel'));
+    }
   });
   document.addEventListener('touchend', function (e) {
     var tag = e.target.closest('[data-panel]');
     var actionEl = e.target.closest('[data-action]');
     if (actionEl) return; // click handler will fire
-    if (tag) { e.preventDefault(); openPanel(tag.getAttribute('data-panel')); }
+    if (tag) {
+      if (tagDragSuppressTap) { e.preventDefault(); return; } // T-0091
+      e.preventDefault(); openPanel(tag.getAttribute('data-panel'));
+    }
   }, { passive: false });
 
   var NS = 'http://www.w3.org/2000/svg';
@@ -2318,11 +2324,105 @@
     else stopFamilyColdPoll();
   });
 
+  /* ===================== T-0091: draggable constellation tiles =============
+     Operator request (2026-06-05/13): the tags sit on fixed CSS positions, so
+     flows can overlap (EV and Grid ran on nearly the same bearing). Every
+     constellation tile (+ the House centre) is now drag-movable; positions
+     persist per browser in localStorage as viewport-% so they survive reloads
+     and adapt to screen size. The bgFlow particle paths follow automatically —
+     bgFlowEndpoint() reads live getBoundingClientRect() each frame.
+     Interaction contract: <8 px movement = tap (opens the detail panel as
+     before); >=8 px = drag (panel-open suppressed). Double-tap a tile to reset
+     it to its CSS default position. ======================================== */
+  var TAG_LAYOUT_KEY = 'dvhub.family.tagLayout.v1';
+  var DRAGGABLE_TILE_IDS = ['tag-solar', 'tag-bat', 'tag-ev', 'tag-grid', 'pfCenter'];
+  var tagDragSuppressTap = false;
+
+  function tagLayoutLoad() {
+    try { return JSON.parse(localStorage.getItem(TAG_LAYOUT_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function tagLayoutSave(layout) {
+    try { localStorage.setItem(TAG_LAYOUT_KEY, JSON.stringify(layout)); } catch (e) { /* private mode */ }
+  }
+  function tagLayoutApplyOne(el, pos) {
+    var leftPct = Math.max(0, Math.min(95, Number(pos && pos.leftPct)));
+    var topPct = Math.max(0, Math.min(92, Number(pos && pos.topPct)));
+    if (!isFinite(leftPct) || !isFinite(topPct)) return;
+    el.style.left = leftPct + '%';
+    el.style.top = topPct + '%';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  }
+  function tagLayoutClearOne(el) {
+    el.style.left = ''; el.style.top = ''; el.style.right = ''; el.style.bottom = '';
+  }
+
+  function initTagDrag() {
+    var layout = tagLayoutLoad();
+    DRAGGABLE_TILE_IDS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (layout[id]) tagLayoutApplyOne(el, layout[id]);
+
+      el.addEventListener('dblclick', function () {
+        var l = tagLayoutLoad(); delete l[id]; tagLayoutSave(l);
+        tagLayoutClearOne(el);
+      });
+
+      el.addEventListener('pointerdown', function (ev) {
+        if (ev.isPrimary === false) return;
+        var startX = ev.clientX, startY = ev.clientY;
+        var rect = el.getBoundingClientRect();
+        var moved = false;
+        // #pfCenter is centred via translate(-50%,-50%) — its left/top address
+        // the CENTRE, not the top-left corner.
+        var centred = (id === 'pfCenter');
+
+        function onMove(mv) {
+          var dx = mv.clientX - startX, dy = mv.clientY - startY;
+          if (!moved && Math.hypot(dx, dy) < 8) return;
+          if (!moved) {
+            moved = true;
+            el.classList.add('tag-dragging');
+            try { el.setPointerCapture(ev.pointerId); } catch (e) { /* capture optional */ }
+          }
+          mv.preventDefault();
+          el.style.left = (rect.left + dx + (centred ? rect.width / 2 : 0)) + 'px';
+          el.style.top = (rect.top + dy + (centred ? rect.height / 2 : 0)) + 'px';
+          el.style.right = 'auto';
+          el.style.bottom = 'auto';
+        }
+        function onUp() {
+          el.removeEventListener('pointermove', onMove);
+          el.removeEventListener('pointerup', onUp);
+          el.removeEventListener('pointercancel', onUp);
+          if (!moved) return;
+          el.classList.remove('tag-dragging');
+          var r = el.getBoundingClientRect();
+          var pos = {
+            leftPct: (r.left + (centred ? r.width / 2 : 0)) / window.innerWidth * 100,
+            topPct: (r.top + (centred ? r.height / 2 : 0)) / window.innerHeight * 100
+          };
+          tagLayoutApplyOne(el, pos);   // re-anchor in % (responsive) + clamp
+          var l = tagLayoutLoad(); l[id] = pos; tagLayoutSave(l);
+          // The browser fires click/touchend after pointerup — swallow that
+          // one tap so ending a drag does not open the detail panel.
+          tagDragSuppressTap = true;
+          setTimeout(function () { tagDragSuppressTap = false; }, 350);
+        }
+        el.addEventListener('pointermove', onMove);
+        el.addEventListener('pointerup', onUp);
+        el.addEventListener('pointercancel', onUp);
+      });
+    });
+  }
+
   /* ===================== BOOTSTRAP ===================== */
   // Initialise the Aurora bgFlow dust constellation eagerly so the background
   // paints (idle) before the first /api/family/status poll completes; the poll
   // then drives stream kW/speed/count from real data.
   initBgFlow();
+  initTagDrag();
   pollFamilyStatus();
   setInterval(pollFamilyStatus, POLL_INTERVAL_MS);
   initMessageWidget();
