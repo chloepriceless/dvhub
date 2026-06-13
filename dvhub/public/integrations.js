@@ -23,6 +23,16 @@
       logo: 'MD',
       accent: 'yellow'
     },
+    {
+      // DV-EOS fork as the arbitrage optimizer (operator request 2026-06-13:
+      // her own DV-EOS fork, NOT the stock EOS). Status from cfg.optimizer +
+      // a live reachability ping in the drawer (/api/integrations/dveos).
+      key: 'dveos',
+      label: 'DV-EOS',
+      category: 'Arbitrage-Optimizer · Fork',
+      logo: 'EO',
+      accent: 'violet'
+    },
     // LUOX-Karte entfernt 2026-05-23 (Operator-Request): keine LUOX-Hardware
     // bei diesem Operator. Backend (`luox` in /api/integrations/status, plus
     // identity-handling für künftige Operatoren) bleibt für Aktivierung
@@ -418,6 +428,11 @@
         // (cfg.meter.host), else not configured.
         if (!data || !data.host) return 'disabled';
         return 'online';
+      case 'dveos':
+        // DV-EOS fork optimizer — online when the EOS proxy is enabled in
+        // cfg.optimizer; the active-source detail lives in the stats/drawer.
+        if (!data || !data.enabled) return 'disabled';
+        return 'online';
       default: return 'disabled';
     }
   }
@@ -511,6 +526,13 @@
           { label: 'Unit-ID', value: data.unitId != null ? String(data.unitId) : '—' },
           { label: 'Register', value: data.address != null ? String(data.address) : '—' },
           { label: 'Status', value: fmtBool(!!data.host, 'Konfiguriert', 'Nicht konfiguriert') }
+        ];
+      case 'dveos':
+        return [
+          { label: 'Optimizer', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
+          { label: 'Quelle', value: data.primarySource === 'eos' ? 'EOS' : (data.primarySource === 'best' ? 'Best' : 'Intern') },
+          { label: 'Steuerung', value: data.active ? 'EOS führt' : 'nicht führend' },
+          { label: 'Proxy', value: data.url ? String(data.url).replace(/^https?:\/\//, '') : '—' }
         ];
       case 'luox':
         return [
@@ -1409,6 +1431,11 @@
       if (inst) { inst.open(); setTimeout(loadMidDrawer, 0); }
       return true;
     }
+    if (key === 'dveos') {
+      inst = getOrCreateDrawer('dveos');
+      if (inst) { inst.open(); setTimeout(loadDveosDrawer, 0); }
+      return true;
+    }
     if (key === 'tesla') {
       inst = getOrCreateDrawer('tesla');
       if (inst) {
@@ -2263,6 +2290,41 @@
     var t = e.target;
     if (t && t.id === 'mid-source-mode') { midApplyMode(t.value); }
   });
+
+  // === DV-EOS Drawer Wiring (2026-06-13) ===
+  // Read-only status of the DV-EOS fork optimizer + a live reachability ping
+  // (/api/integrations/dveos). EOS engine config itself lives in EOSdash.
+  async function loadDveosDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/dveos');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var d = await res.json();
+      if (!d || !d.ok) return;
+      var srcLabel = d.primarySource === 'eos' ? 'EOS'
+        : (d.primarySource === 'best' ? 'Best (intern/EOS)' : 'Intern');
+      if (el('dveos-enabled')) el('dveos-enabled').textContent = d.enabled ? 'Ja' : 'Nein';
+      if (el('dveos-source')) el('dveos-source').textContent = srcLabel;
+      if (el('dveos-active')) el('dveos-active').textContent = d.active ? 'EOS führt die Steuerung' : 'EOS nicht führend';
+      if (el('dveos-url')) el('dveos-url').textContent = d.url || '—';
+      if (el('dveos-reachable')) el('dveos-reachable').textContent = d.reachable ? '✓ erreichbar' : '✗ nicht erreichbar';
+      var st = el('dveos-status');
+      if (st) {
+        st.hidden = false;
+        if (!d.enabled) {
+          st.textContent = 'DV-EOS-Optimizer ist deaktiviert (cfg.optimizer.eosProxy.enabled = false).';
+        } else if (!d.reachable) {
+          st.textContent = '⚠ EOS-Proxy nicht erreichbar unter ' + (d.url || '—') + '.';
+        } else if (d.active) {
+          st.textContent = '✓ DV-EOS läuft und steuert die Batterie (Quelle: ' + srcLabel + ').';
+        } else {
+          st.textContent = 'DV-EOS erreichbar, aber nicht die führende Optimizer-Quelle (primarySource = ' + d.primarySource + ').';
+        }
+      }
+    } catch (e) {
+      showDrawerToast('dveos', 'err', '✗ DV-EOS-Status laden fehlgeschlagen: ' + e.message);
+    }
+  }
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===
   // Loads/saves cfg.forecast.solcast.* and cfg.forecast.pvnode.* via dedicated

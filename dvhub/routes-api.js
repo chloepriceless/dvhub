@@ -2818,6 +2818,19 @@ export function createApiRoutes(ctx) {
             firmware: ctx.healthTracker?.snapshot?.()?.mid?.firmware || null
           };
         })(),
+        dveos: (() => {
+          // DV-EOS fork optimizer status (non-blocking — no live ping here; the
+          // dedicated /api/integrations/dveos GET does the reachability check).
+          const opt = getCfg().optimizer || {};
+          const primarySource = opt.primarySource || 'internal';
+          const enabled = !!(opt.eosProxy && opt.eosProxy.enabled);
+          return {
+            enabled,
+            primarySource,
+            active: enabled && (primarySource === 'eos' || primarySource === 'best'),
+            url: (opt.eosProxy && opt.eosProxy.url) || ''
+          };
+        })(),
         luox: {
           identifier: getCfg().luox?.identifier || getCfg().luox?.host || null,
           firmware: ctx.healthTracker?.snapshot?.()?.luox?.firmware || null
@@ -3418,6 +3431,31 @@ export function createApiRoutes(ctx) {
           topicL3: msMqtt.topicL3 || '', topicTotal: msMqtt.topicTotal || ''
         },
         http: { url: msHttp.url || '', jsonPath: msHttp.jsonPath || '' }
+      });
+    }
+
+    // DV-EOS fork optimizer status — live reachability ping via the inspector
+    // adapter (ctx.eosAdapter.isAvailable hits EOS /v1/health, 5s timeout). Read
+    // model only; the EOS engine config lives in EOSdash. (Operator request
+    // 2026-06-13: a dedicated card for her DV-EOS fork, not the stock EOS.)
+    if (url.pathname === '/api/integrations/dveos' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const opt = getCfg().optimizer || {};
+      const primarySource = opt.primarySource || 'internal';
+      const enabled = !!(opt.eosProxy && opt.eosProxy.enabled);
+      let reachable = false;
+      if (enabled) {
+        try { reachable = !!(await ctx.eosAdapter?.isAvailable?.()); }
+        catch { reachable = false; }
+      }
+      return json(res, 200, {
+        ok: true,
+        enabled,
+        primarySource,
+        active: enabled && (primarySource === 'eos' || primarySource === 'best'),
+        url: (opt.eosProxy && opt.eosProxy.url) || '',
+        reachable,
+        eosdashUrl: '/eosdash/'
       });
     }
 

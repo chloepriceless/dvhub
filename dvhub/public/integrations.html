@@ -536,6 +536,53 @@
         <div class="dv-drawer-toast" id="dv-drawer-mid-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- DV-EOS optimizer status drawer (2026-06-13). Read-only status of the
+           DV-EOS fork + live reachability; engine config lives in EOSdash. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-dveos-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-dveos" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-dveos-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-dveos-title">DV-EOS &mdash; Arbitrage-Optimizer</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-dveos-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-dveos-body">
+          <p class="dv-drawer-intro">
+            Dein <strong>DV-EOS-Fork</strong> (nicht das Standard-EOS) als
+            Arbitrage-Optimizer. Die EOS-Engine selbst wird &uuml;ber EOSdash konfiguriert.
+          </p>
+          <div class="dv-field-validation" id="dveos-status" hidden>&mdash;</div>
+          <div class="dv-info-box">
+            <div class="dv-info-row">
+              <span class="dv-info-label">Optimizer aktiv</span>
+              <span class="dv-info-value mono" id="dveos-enabled">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">Optimizer-Quelle</span>
+              <span class="dv-info-value mono" id="dveos-source">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">Steuerung</span>
+              <span class="dv-info-value mono" id="dveos-active">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">EOS-Proxy</span>
+              <span class="dv-info-value mono" id="dveos-url">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">Erreichbar</span>
+              <span class="dv-info-value mono" id="dveos-reachable">&mdash;</span>
+            </div>
+          </div>
+          <div class="dv-drawer-actions">
+            <a class="btn sm primary" href="/eosdash/" target="_blank" rel="noopener">EOSdash &ouml;ffnen</a>
+          </div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-dveos-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- Forecast-Provider config drawer (Phase 20-06). Static markup; 2 tabs. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-forecast-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-forecast" role="dialog" aria-modal="true"
@@ -810,6 +857,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=33"></script>
+  <script src="/integrations.js?v=34"></script>
 </body>
 </html>
