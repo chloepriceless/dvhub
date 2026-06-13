@@ -1446,6 +1446,11 @@
       if (inst) { inst.open(); setTimeout(loadDveosDrawer, 0); }
       return true;
     }
+    if (key === 'loxone') {
+      inst = getOrCreateDrawer('loxone');
+      if (inst) { inst.open(); setTimeout(loadLoxoneDrawer, 0); }
+      return true;
+    }
     if (key === 'tesla') {
       inst = getOrCreateDrawer('tesla');
       if (inst) {
@@ -2714,6 +2719,50 @@
       buttonEl.textContent = origText;
     }
   }
+  // Loxone Virtual HTTP Input import template (operator request 2026-06-13).
+  // Data source is the existing /api/integration/loxone endpoint, which emits a
+  // flat `key=value` text block (plus a few JSON blobs). Loxone's command
+  // recognition (`\v` = value placeholder) scans that text. We expose only the
+  // values that appear BEFORE the large userEnergyPricing JSON array, so a
+  // Miniserver response buffer never truncates them. The own DVhub address is
+  // pre-filled from window.location.origin so each user gets their own IP.
+  function buildLoxoneTemplate() {
+    var base = (window.location && window.location.origin) ? window.location.origin : 'http://DVHUB-IP';
+    var addr = base + '/api/integration/loxone';
+    var cmds = [
+      { t: 'Batterie SoC (%)', c: 'soc=\\v' },
+      { t: 'Batterieleistung (W)', c: 'batteryPowerW=\\v' },
+      { t: 'Netzleistung (W)', c: 'gridTotalW=\\v' },
+      { t: 'PV gesamt (W)', c: 'pvTotalW=\\v' },
+      { t: 'Netz-Sollwert (W)', c: 'gridSetpointW=\\v' },
+      { t: 'Min-SoC (%)', c: 'minSocPct=\\v' },
+      { t: 'DV-Steuerwert', c: 'dvControlValue=\\v' },
+      { t: 'Netzbezug heute (Wh)', c: '&quot;importWh&quot;:\\v' },
+      { t: 'Einspeisung heute (Wh)', c: '&quot;exportWh&quot;:\\v' },
+      { t: 'Stromkosten heute (EUR)', c: '&quot;costEur&quot;:\\v' },
+      { t: 'Erlös heute (EUR)', c: '&quot;revenueEur&quot;:\\v' },
+      { t: 'Netto heute (EUR)', c: '&quot;netEur&quot;:\\v' },
+      { t: 'Strompreis (ct/kWh)', c: '&quot;priceNowCtKwh&quot;:\\v' }
+    ];
+    var lines = [];
+    lines.push('<?xml version="1.0" encoding="utf-8"?>');
+    lines.push('<VirtualInHttp Title="DVhub" Comment="DVhub HEMS Messwerte" Address="' + addr + '" PollingTime="60">');
+    for (var i = 0; i < cmds.length; i++) {
+      lines.push('\t<VirtualInHttpCmd Title="' + cmds[i].t + '" Comment="" Check="' + cmds[i].c + '" Signed="true" Analog="true" SourceValLow="0" DestValLow="0" SourceValHigh="100" DestValHigh="100" DefVal="0" MinVal="-1000000" MaxVal="1000000"/>');
+    }
+    lines.push('</VirtualInHttp>');
+    return lines.join('\n');
+  }
+  function loadLoxoneDrawer() {
+    var base = (window.location && window.location.origin) ? window.location.origin : 'http://DVHUB-IP';
+    var urlEl = document.getElementById('lox-url');
+    if (urlEl) urlEl.textContent = base + '/api/integration/loxone';
+    var tpl = buildLoxoneTemplate();
+    var tplEl = document.getElementById('lox-template');
+    if (tplEl) tplEl.textContent = tpl;
+    var countEl = document.getElementById('lox-count');
+    if (countEl) countEl.textContent = (tpl.match(/VirtualInHttpCmd/g) || []).length + ' Messwerte';
+  }
   document.addEventListener('click', function (e) {
     var haSave = e.target.closest('#ha-save');
     if (haSave) { saveHaDrawer(haSave); return; }
@@ -2729,6 +2778,21 @@
         });
       } else {
         showDrawerToast('homeassistant', 'err', 'Zwischenablage nicht verfügbar — Block manuell markieren.');
+      }
+      return;
+    }
+    var loxCopy = e.target.closest('#lox-copy');
+    if (loxCopy) {
+      var loxPre = document.getElementById('lox-template');
+      var loxTxt = loxPre ? loxPre.textContent : '';
+      if (loxTxt && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(loxTxt).then(function () {
+          showDrawerToast('loxone', 'ok', '✓ Loxone-Vorlage kopiert.');
+        }).catch(function () {
+          showDrawerToast('loxone', 'err', 'Kopieren fehlgeschlagen — Block manuell markieren.');
+        });
+      } else {
+        showDrawerToast('loxone', 'err', 'Zwischenablage nicht verfügbar — Block manuell markieren.');
       }
       return;
     }
