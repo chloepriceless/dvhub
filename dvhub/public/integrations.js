@@ -714,7 +714,7 @@
     if (sys.key === 'mqtt' || sys.key === 'tesla' || sys.key === 'homeAssistant' || sys.key === 'loxone' || sys.key === 'devices' || sys.key === 'notifications'
         || sys.key === 'victron' || sys.key === 'luox') {
       actions = '<div class="conn-actions">'
-        + '<a class="btn sm ghost" href="/settings.html#system">Logs</a>'
+        + '<a class="btn sm ghost" href="/settings.html#system" data-action="card-logs" data-system="' + esc(sys.key) + '" data-label="' + esc(sys.label) + '">Logs</a>'
         + '<a class="btn sm" href="/settings.html" data-action="card-konfig" data-system="' + esc(sys.key) + '">Konfig.</a>'
         + '</div>';
     }
@@ -1480,6 +1480,23 @@
     if (e.target.closest('.dv-drawer')) {
       var tabBtn = e.target.closest('[role="tab"][data-panel]');
       if (tabBtn) { activateTab(tabBtn.id); return; }
+      return;
+    }
+
+    // "Logs"-link inside a card → integration-specific log drawer (operator
+    // request 2026-06-13: the Logs link went generically to settings.html#system;
+    // now it filters the live log-ring to this integration). href stays as a
+    // no-JS fallback.
+    var logsLink = e.target.closest('a[data-action="card-logs"]');
+    if (logsLink) {
+      e.preventDefault();
+      var lKey = logsLink.getAttribute('data-system') || '';
+      var lLabel = logsLink.getAttribute('data-label') || lKey;
+      var logsInst = getOrCreateDrawer('logs');
+      if (logsInst) {
+        logsInst.open();
+        setTimeout(function () { loadLogsDrawer(lKey, lLabel); }, 0);
+      }
       return;
     }
 
@@ -2323,6 +2340,90 @@
       }
     } catch (e) {
       showDrawerToast('dveos', 'err', '✗ DV-EOS-Status laden fehlgeschlagen: ' + e.message);
+    }
+  }
+
+  // === Integration-specific Logs Drawer (2026-06-13) ===
+  // The card "Logs" link filters the live /api/log ring to entries whose `event`
+  // key matches the integration's keyword set, instead of jumping to the generic
+  // settings log view. Heuristic by design — the ring has no per-integration tag.
+  var LOG_FILTERS = {
+    victron: ['victron', 'modbus', 'poll_meter', 'poll_point', 'control_write', 'ctrl_', 'control_', 'minsoc', 'discharge'],
+    mid: ['mid', 'meter'],
+    dveos: ['eos'],
+    mqtt: ['mqtt'],
+    evcc: ['evcc'],
+    tesla: ['tesla'],
+    vrm: ['vrm', 'historyimport', 'history_import', 'backfill'],
+    notifications: ['notif', 'ntfy', 'telegram', 'pushover', 'uptime', 'alert'],
+    'forecast-providers': ['forecast', 'solcast', 'pvnode', 'accuracy'],
+    homeAssistant: ['ha_', 'homeassistant', 'hadiscovery'],
+    loxone: ['loxone'],
+    devices: ['device', 'shelly']
+  };
+  function logMatchesSystem(row, key) {
+    var kws = LOG_FILTERS[key];
+    if (!kws || !row || !row.event) return false;
+    var ev = String(row.event).toLowerCase();
+    for (var i = 0; i < kws.length; i++) { if (ev.indexOf(kws[i]) >= 0) return true; }
+    return false;
+  }
+  function fmtLogTime(ts) {
+    try { return new Date(ts).toLocaleTimeString('de-DE'); } catch (_) { return String(ts || ''); }
+  }
+  function summarizeLogDetail(r) {
+    var skip = { ts: 1, event: 1, level: 1 };
+    var parts = [];
+    for (var k in r) {
+      if (skip[k] || !Object.prototype.hasOwnProperty.call(r, k)) continue;
+      var v = r[k];
+      if (v && typeof v === 'object') { try { v = JSON.stringify(v); } catch (_) { v = '[obj]'; } }
+      parts.push(k + '=' + v);
+    }
+    return parts.join('  ').slice(0, 200);
+  }
+  async function loadLogsDrawer(key, label) {
+    var el = function (id) { return document.getElementById(id); };
+    var titleEl = el('dv-drawer-logs-title');
+    if (titleEl) titleEl.textContent = 'Logs — ' + (label || key);
+    var listEl = el('logs-list');
+    var emptyEl = el('logs-empty');
+    if (listEl) listEl.textContent = '';
+    if (emptyEl) emptyEl.hidden = true;
+    try {
+      var res = await apiFetch('/api/log?limit=400');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      var rows = (data && Array.isArray(data.rows)) ? data.rows : [];
+      var filtered = rows.filter(function (r) { return logMatchesSystem(r, key); }).reverse();
+      if (!filtered.length) {
+        if (emptyEl) emptyEl.hidden = false;
+        return;
+      }
+      if (!listEl) return;
+      filtered.slice(0, 200).forEach(function (r) {
+        var item = document.createElement('div');
+        item.className = 'logs-row level-' + (r.level || 'info');
+        var t = document.createElement('span');
+        t.className = 'logs-ts mono';
+        t.textContent = fmtLogTime(r.ts);
+        var lvl = document.createElement('span');
+        lvl.className = 'logs-level';
+        lvl.textContent = (r.level || 'info').toUpperCase();
+        var ev = document.createElement('span');
+        ev.className = 'logs-event mono';
+        ev.textContent = r.event || '';
+        var det = document.createElement('span');
+        det.className = 'logs-detail mono';
+        det.textContent = summarizeLogDetail(r);
+        item.appendChild(t);
+        item.appendChild(lvl);
+        item.appendChild(ev);
+        item.appendChild(det);
+        listEl.appendChild(item);
+      });
+    } catch (e) {
+      showDrawerToast('logs', 'err', '✗ Logs laden fehlgeschlagen: ' + e.message);
     }
   }
 

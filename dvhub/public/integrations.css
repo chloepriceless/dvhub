@@ -1158,3 +1158,41 @@
   .shelly-row .shelly-status { grid-area: status; }
   .shelly-row .shelly-del { grid-area: del; }
 }
+
+/* Integration-specific logs drawer (2026-06-13). Compact, monospace, scrollable
+   list rendered by loadLogsDrawer(); rows built via createElement (CSP-safe). */
+.logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.logs-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  grid-template-areas: "ts level event" "ts level detail";
+  column-gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  font-size: 12px;
+  line-height: 1.35;
+}
+.logs-row .logs-ts { grid-area: ts; opacity: 0.7; white-space: nowrap; }
+.logs-row .logs-level {
+  grid-area: level;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.logs-row .logs-event { grid-area: event; font-weight: 600; }
+.logs-row .logs-detail { grid-area: detail; opacity: 0.7; word-break: break-word; }
+.logs-row.level-warn { background: rgba(214, 158, 46, 0.12); }
+.logs-row.level-warn .logs-level { color: #d69e2e; }
+.logs-row.level-error { background: rgba(229, 62, 62, 0.12); }
+.logs-row.level-error .logs-level { color: #e53e3e; }

@@ -74,6 +74,7 @@
     "/api/log",
     "/api/log/dv-signals?limit=500",
     "/api/log?limit=1000",
+    "/api/log?limit=400",
     "/api/meter/scan",
     "/api/ml/accuracy",
     "/api/ml/status",
