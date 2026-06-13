@@ -1066,6 +1066,10 @@ ctx.mlRetrainJobs = mlRetrainJobs;
 // for Inspector reads — its tight timeout caps the operator-poll blast radius
 // when EOS is hung (T-19-05 mitigation, Pitfall 7 in 19-RESEARCH).
 const eosAdapterInspector = createEosAdapterForInspector(ctx, { timeoutMs: 5000 });
+// Expose the tight-timeout inspector adapter on ctx so routes-api.js can run a
+// live EOS reachability check (e.g. /api/integrations/dveos). Without this,
+// ctx.eosAdapter was undefined and the DV-EOS card always showed "nicht erreichbar".
+ctx.eosAdapter = eosAdapterInspector;
 const inspector = createInspector(ctx, {
   store: forecast.store,
   mlService,
