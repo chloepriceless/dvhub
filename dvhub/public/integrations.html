@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=37" />
+  <link rel="stylesheet" href="/integrations.css?v=38" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -670,9 +670,16 @@
           <p class="dv-drawer-intro">
             <strong>MQTT Auto-Discovery</strong>: DVhub erscheint in Home Assistant automatisch als ein
             Ger&auml;t &bdquo;DVhub&ldquo; mit allen Sensoren (SoC, Leistungen, Strompreis, Energie, Kosten,
-            Optimizer &hellip;). Ben&ouml;tigt einen eingebundenen <strong>MQTT-Hub</strong> (Karte &bdquo;MQTT Hub&ldquo;) &mdash;
-            denselben Broker muss auch Home Assistant nutzen.
+            Optimizer &hellip;).
           </p>
+          <div class="dv-ha-note">
+            &#9888; <strong>Damit Auto-Discovery funktioniert, muss Home Assistant am
+            <u>selben MQTT-Broker</u> h&auml;ngen wie DVhub</strong> (siehe &bdquo;DVhub-Broker&ldquo; unten).
+            In HA &rarr; <em>Einstellungen &rarr; Ger&auml;te &amp; Dienste &rarr; MQTT &rarr; Konfigurieren</em>
+            den Broker auf diese Adresse zeigen lassen, Discovery-Prefix <code>homeassistant</code>.
+            Danach erscheint das Ger&auml;t &bdquo;DVhub&ldquo; automatisch (ggf. MQTT-Integration neu laden).
+            H&auml;ngt HA an einem <em>anderen</em> Broker, nutze den REST-Weg ganz unten.
+          </div>
           <label class="dv-toggle-row">
             <input type="checkbox" id="ha-enabled">
             <span>Auto-Discovery aktiv</span>
@@ -687,12 +694,16 @@
           </label>
           <div class="dv-info-box">
             <div class="dv-info-row">
-              <span class="dv-info-label">Sensoren</span>
-              <span class="dv-info-value mono" id="ha-entity-count">&mdash;</span>
+              <span class="dv-info-label">DVhub-Broker</span>
+              <span class="dv-info-value mono" id="ha-broker">&mdash;</span>
             </div>
             <div class="dv-info-row">
               <span class="dv-info-label">MQTT-Hub</span>
               <span class="dv-info-value mono" id="ha-mqtt-status">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">Sensoren</span>
+              <span class="dv-info-value mono" id="ha-entity-count">&mdash;</span>
             </div>
           </div>
           <div class="dv-field-validation" id="ha-status" hidden>&mdash;</div>
@@ -700,7 +711,14 @@
             <button type="button" class="btn sm primary" id="ha-save">Speichern &amp; Resync</button>
           </div>
           <details class="dv-ha-fallback">
-            <summary>Ohne MQTT? Copy-Paste REST-Sensor f&uuml;r <code>configuration.yaml</code></summary>
+            <summary>Kein gemeinsamer Broker? Werte per REST in HA holen (ohne MQTT)</summary>
+            <p class="dv-ha-fallback-intro">
+              H&auml;ngt HA an einem anderen Broker, ist der einfachste Weg ohne MQTT ein
+              <strong>REST-Sensor</strong>: Home Assistant fragt DVhubs <code>/api/status</code>
+              periodisch ab. Das Folgende in die HA-<code>configuration.yaml</code> kopieren,
+              <code>DVHUB-IP</code> + <code>DEIN_API_TOKEN</code> anpassen, dann HA neu starten.
+              Weitere Werte per zus&auml;tzlicher <code>value_template</code>-Zeile erg&auml;nzen.
+            </p>
             <pre class="dv-code">rest:
   - resource: "http://DVHUB-IP/api/status"
     headers:
@@ -1002,6 +1020,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=38"></script>
+  <script src="/integrations.js?v=39"></script>
 </body>
 </html>

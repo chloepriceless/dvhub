@@ -3615,6 +3615,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       const raw = ctx.getRawCfg?.() || {};
       const ha = raw.mqtt?.haDiscovery || {};
+      const haMqttCfg = getCfg().mqtt || {};
       return json(res, 200, {
         ok: true,
         enabled: !!ha.enabled,
@@ -3623,6 +3624,9 @@ export function createApiRoutes(ctx) {
         entityCount: haDiscoveryEntityCount(),
         deviceName: 'DVhub',
         mqttConnected: !!ctx.mqttHub?.connected,
+        // The broker DVhub publishes to — HA must use the SAME broker for
+        // auto-discovery. 'embedded' = DVhub's built-in broker (no external one).
+        broker: haMqttCfg.brokerUrl ? redactUrlCreds(haMqttCfg.brokerUrl) : 'embedded',
         canResync: typeof ctx.republishHaDiscovery === 'function'
       });
     }

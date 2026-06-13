@@ -1235,3 +1235,18 @@
   overflow-x: auto;
   color: rgba(255, 255, 255, 0.8);
 }
+
+/* Home Assistant drawer: same-broker hint box + REST-fallback intro (2026-06-13). */
+.dv-ha-note {
+  margin: 10px 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(75, 123, 236, 0.12);
+  border: 1px solid rgba(75, 123, 236, 0.32);
+  color: rgba(220, 230, 255, 0.92);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dv-ha-note code { background: rgba(0, 0, 0, 0.3); padding: 1px 5px; border-radius: 4px; }
+.dv-ha-fallback-intro { margin: 8px 0 4px; font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, 0.7); }
+.dv-ha-fallback-intro code { background: rgba(0, 0, 0, 0.3); padding: 1px 5px; border-radius: 4px; }

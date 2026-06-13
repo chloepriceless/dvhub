@@ -2552,6 +2552,7 @@
       if (el('ha-enabled')) el('ha-enabled').checked = !!d.enabled;
       if (el('ha-prefix')) el('ha-prefix').value = d.prefix || 'homeassistant';
       if (el('ha-topic-prefix')) el('ha-topic-prefix').value = d.topicPrefix || 'dvhub';
+      if (el('ha-broker')) el('ha-broker').textContent = d.broker || '—';
       if (el('ha-entity-count')) el('ha-entity-count').textContent = (d.entityCount != null ? d.entityCount : '—') + ' Sensoren';
       if (el('ha-mqtt-status')) el('ha-mqtt-status').textContent = d.mqttConnected ? '✓ verbunden' : '✗ nicht verbunden';
       var st = el('ha-status');
