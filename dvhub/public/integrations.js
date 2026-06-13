@@ -422,7 +422,14 @@
     }
   }
 
-  function statusLabel(status) {
+  function statusLabel(status, data) {
+    // A 'warn' caused by an error WAVE (statusReason='errors') maps to 'stale'
+    // for the colour bucket, but "Veraltet" is wrong when the feed is still
+    // fresh — label it "Instabil" instead (operator report 2026-06-13: MQTT card
+    // said "Veraltet" while live topics kept arriving). Staleness keeps "Veraltet".
+    if (status === 'stale' && data && data.status === 'warn' && data.statusReason === 'errors') {
+      return 'Instabil';
+    }
     return status === 'online' ? 'Online'
          : status === 'stale' ? 'Veraltet'
          : status === 'offline' ? 'Offline'
@@ -671,7 +678,7 @@
     var stats = buildStats(sys.key, data);
     var identity = buildIdentityLine(sys.key, data);
     var dotClass = statusDotClass(status);
-    var label = statusLabel(status);
+    var label = statusLabel(status, data);
     var cardClass = 'conn-card status-' + status + ' accent-' + sys.accent;
     var statsHtml = '';
     for (var i = 0; i < stats.length; i++) {

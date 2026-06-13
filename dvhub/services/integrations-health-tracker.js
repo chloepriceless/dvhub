@@ -39,14 +39,19 @@ export function createIntegrationsHealthTracker(ctx) {
   // Status threshold map (per Phase 09.2 D-19 revised for victron — 30s warn, 5min err).
   // Other systems share the same thresholds for now; planner can add per-system overrides
   // in a follow-up if needed (luox/epex have their own cadences).
+  // Returns { status, reason }. reason disambiguates the two distinct causes of
+  // a 'warn'/'err': an error WAVE (data may be fresh) vs STALENESS (no recent
+  // sample). The UI uses reason to label an error-wave as "Instabil" instead of
+  // "Veraltet" — a fresh-but-erroring feed is not stale (operator report
+  // 2026-06-13: MQTT card showed "Veraltet" while live topics kept flowing).
   function deriveStatus(s) {
-    if (!s.lastSampleAt) return 'err';
+    if (!s.lastSampleAt) return { status: 'err', reason: 'no_samples' };
     // Recent error wave → 'warn' even if latest sample is fresh
-    if (s.errors24h.length > 10) return 'warn';
+    if (s.errors24h.length > 10) return { status: 'warn', reason: 'errors' };
     const ageMs = Date.now() - s.lastSampleAt;
-    if (ageMs > 5 * 60 * 1000) return 'err';
-    if (ageMs > 30 * 1000) return 'warn';
-    return 'ok';
+    if (ageMs > 5 * 60 * 1000) return { status: 'err', reason: 'stale' };
+    if (ageMs > 30 * 1000) return { status: 'warn', reason: 'stale' };
+    return { status: 'ok', reason: 'ok' };
   }
 
   function ensureSystem(system) {
@@ -102,6 +107,7 @@ export function createIntegrationsHealthTracker(ctx) {
       const avg = s.latencyMs.length
         ? Math.round(s.latencyMs.reduce((a, b) => a + b, 0) / s.latencyMs.length)
         : null;
+      const derived = deriveStatus(s);
       out[system] = {
         latencyMs: avg,
         uptimeSec: Math.max(0, Math.floor((now - s.uptimeStartedAt) / 1000)),
@@ -109,7 +115,8 @@ export function createIntegrationsHealthTracker(ctx) {
         lastSampleAt: s.lastSampleAt ? new Date(s.lastSampleAt).toISOString() : null,
         sampleIntervalHistogramMs: [...s.sampleIntervalHistogramMs],
         firmware: s.firmware,
-        status: deriveStatus(s)
+        status: derived.status,
+        statusReason: derived.reason
       };
     }
     return out;
