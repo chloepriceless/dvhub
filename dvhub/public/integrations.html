@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=36" />
+  <link rel="stylesheet" href="/integrations.css?v=37" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -654,6 +654,80 @@
         <div class="dv-drawer-toast" id="dv-drawer-victron-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- Home Assistant MQTT-Discovery drawer (2026-06-13). Enable/prefix +
+           resync; DVhub appears as one "DVhub" device in HA. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-homeassistant-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-homeassistant" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-homeassistant-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-homeassistant-title">Home Assistant</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-homeassistant-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-homeassistant-body">
+          <p class="dv-drawer-intro">
+            <strong>MQTT Auto-Discovery</strong>: DVhub erscheint in Home Assistant automatisch als ein
+            Ger&auml;t &bdquo;DVhub&ldquo; mit allen Sensoren (SoC, Leistungen, Strompreis, Energie, Kosten,
+            Optimizer &hellip;). Ben&ouml;tigt einen eingebundenen <strong>MQTT-Hub</strong> (Karte &bdquo;MQTT Hub&ldquo;) &mdash;
+            denselben Broker muss auch Home Assistant nutzen.
+          </p>
+          <label class="dv-toggle-row">
+            <input type="checkbox" id="ha-enabled">
+            <span>Auto-Discovery aktiv</span>
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Discovery-Prefix</span>
+            <input type="text" class="input mono" id="ha-prefix" placeholder="homeassistant" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="dv-field">
+            <span class="field-label">DVhub Topic-Prefix</span>
+            <input type="text" class="input mono" id="ha-topic-prefix" placeholder="dvhub" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="dv-info-box">
+            <div class="dv-info-row">
+              <span class="dv-info-label">Sensoren</span>
+              <span class="dv-info-value mono" id="ha-entity-count">&mdash;</span>
+            </div>
+            <div class="dv-info-row">
+              <span class="dv-info-label">MQTT-Hub</span>
+              <span class="dv-info-value mono" id="ha-mqtt-status">&mdash;</span>
+            </div>
+          </div>
+          <div class="dv-field-validation" id="ha-status" hidden>&mdash;</div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm primary" id="ha-save">Speichern &amp; Resync</button>
+          </div>
+          <details class="dv-ha-fallback">
+            <summary>Ohne MQTT? Copy-Paste REST-Sensor f&uuml;r <code>configuration.yaml</code></summary>
+            <pre class="dv-code">rest:
+  - resource: "http://DVHUB-IP/api/status"
+    headers:
+      Authorization: "Bearer DEIN_API_TOKEN"
+    scan_interval: 30
+    sensor:
+      - name: "DVhub Batterie SoC"
+        value_template: "{{ value_json.victron.soc }}"
+        unit_of_measurement: "%"
+        device_class: battery
+      - name: "DVhub Netzleistung"
+        value_template: "{{ value_json.meter.grid_total_w }}"
+        unit_of_measurement: "W"
+        device_class: power
+      - name: "DVhub PV gesamt"
+        value_template: "{{ value_json.victron.pvTotalW }}"
+        unit_of_measurement: "W"
+        device_class: power
+      - name: "DVhub Netto heute"
+        value_template: "{{ value_json.costs.netEur }}"
+        unit_of_measurement: "EUR"
+        device_class: monetary</pre>
+          </details>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-homeassistant-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- Forecast-Provider config drawer (Phase 20-06). Static markup; 2 tabs. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-forecast-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-forecast" role="dialog" aria-modal="true"
@@ -928,6 +1002,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=37"></script>
+  <script src="/integrations.js?v=38"></script>
 </body>
 </html>

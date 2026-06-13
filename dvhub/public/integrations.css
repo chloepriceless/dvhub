@@ -1209,3 +1209,29 @@
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* Home Assistant drawer (2026-06-13): toggle row + copy-paste REST fallback. */
+.dv-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.dv-toggle-row input[type="checkbox"] { width: 16px; height: 16px; flex-shrink: 0; }
+.dv-ha-fallback { margin-top: 14px; font-size: 12px; }
+.dv-ha-fallback summary { cursor: pointer; color: rgba(255, 255, 255, 0.6); padding: 6px 0; }
+.dv-code {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  color: rgba(255, 255, 255, 0.8);
+}

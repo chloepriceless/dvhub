@@ -12,6 +12,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImpor
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
+import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
@@ -3603,6 +3604,73 @@ export function createApiRoutes(ctx) {
         pvCoupling: next.pvCoupling
       }, actorContext(req));
       return json(res, 200, { ok: true });
+    }
+
+    // === Home Assistant MQTT-Discovery config (operator request 2026-06-13) ===
+    // Brings the (previously dead) HA card alive: enable/disable discovery, set the
+    // discovery prefix, and resync WITHOUT a restart (ctx.republishHaDiscovery /
+    // ctx.clearHaDiscovery, wired in server.js). DVhub then appears as one "DVhub"
+    // device in HA with all its sensors (services/mqtt/ha-discovery.js).
+    if (url.pathname === '/api/integrations/homeassistant' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const ha = raw.mqtt?.haDiscovery || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!ha.enabled,
+        prefix: ha.prefix || 'homeassistant',
+        topicPrefix: raw.mqtt?.topicPrefix || 'dvhub',
+        entityCount: haDiscoveryEntityCount(),
+        deviceName: 'DVhub',
+        mqttConnected: !!ctx.mqttHub?.connected,
+        canResync: typeof ctx.republishHaDiscovery === 'function'
+      });
+    }
+
+    if (url.pathname === '/api/integrations/homeassistant' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.mqtt = (next.mqtt && typeof next.mqtt === 'object') ? next.mqtt : {};
+      next.mqtt.haDiscovery = (next.mqtt.haDiscovery && typeof next.mqtt.haDiscovery === 'object') ? next.mqtt.haDiscovery : {};
+      const prevPrefix = next.mqtt.haDiscovery.prefix || 'homeassistant';
+      const wasEnabled = !!next.mqtt.haDiscovery.enabled;
+      if (typeof body.enabled === 'boolean') next.mqtt.haDiscovery.enabled = body.enabled;
+      if (typeof body.prefix === 'string' && body.prefix.trim()) {
+        next.mqtt.haDiscovery.prefix = (body.prefix.trim().replace(/[^a-zA-Z0-9_\-/]/g, '').slice(0, 64)) || 'homeassistant';
+      }
+      if (typeof body.topicPrefix === 'string' && body.topicPrefix.trim()) {
+        next.mqtt.topicPrefix = (body.topicPrefix.trim().replace(/[^a-zA-Z0-9_\-/]/g, '').slice(0, 64)) || 'dvhub';
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('ha_discovery_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      // Apply to MQTT live: republish on enable (also acts as "Resync"), clear on
+      // disable. If the prefix changed while enabled, clear the OLD prefix first
+      // so HA drops the entities under the old prefix instead of keeping ghosts.
+      let published = 0;
+      try {
+        const nowEnabled = !!next.mqtt.haDiscovery.enabled;
+        const nowPrefix = next.mqtt.haDiscovery.prefix || 'homeassistant';
+        if (wasEnabled && (!nowEnabled || nowPrefix !== prevPrefix) && typeof ctx.clearHaDiscovery === 'function') {
+          ctx.clearHaDiscovery(prevPrefix);
+        }
+        if (nowEnabled && typeof ctx.republishHaDiscovery === 'function') {
+          published = ctx.republishHaDiscovery() || 0;
+        }
+      } catch (e) {
+        pushLog('ha_discovery_apply_error', { error: e.message });
+      }
+      pushLog('ha_discovery_saved', { enabled: !!next.mqtt.haDiscovery.enabled, prefix: next.mqtt.haDiscovery.prefix, published }, actorContext(req));
+      return json(res, 200, { ok: true, enabled: !!next.mqtt.haDiscovery.enabled, published });
     }
 
     // === EVCC integration config (operator request #23, 2026-06-13) ===

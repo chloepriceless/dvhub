@@ -29,11 +29,11 @@ describe('publishHaDiscoveryTopics', () => {
     assert.ok(hub._published.length >= 6, `published ${hub._published.length} topics, expected >= 6`);
   });
 
-  it('topics follow homeassistant/sensor/dvhub_*/config pattern', () => {
+  it('topics follow homeassistant/{sensor|binary_sensor}/dvhub_*/config pattern', () => {
     const hub = makeMockHub();
     publishHaDiscoveryTopics(hub, () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } }));
     for (const pub of hub._published) {
-      assert.match(pub.topic, /^homeassistant\/sensor\/dvhub_\w+\/config$/, `topic ${pub.topic} matches pattern`);
+      assert.match(pub.topic, /^homeassistant\/(sensor|binary_sensor)\/dvhub_\w+\/config$/, `topic ${pub.topic} matches pattern`);
     }
   });
 
@@ -84,13 +84,37 @@ describe('publishHaDiscoveryTopics', () => {
     assert.equal(pvSensor.payload.unit_of_measurement, 'W');
   });
 
-  it('includes epex_price_now sensor', () => {
+  it('includes epex price sensor (rate, no monetary device_class)', () => {
     const hub = makeMockHub();
     publishHaDiscoveryTopics(hub, () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } }));
-    const priceSensor = hub._published.find(p => p.topic.includes('dvhub_epex_price_now'));
-    assert.ok(priceSensor, 'epex_price_now sensor found');
+    const priceSensor = hub._published.find(p => p.topic.includes('dvhub_epex_price_ct_kwh'));
+    assert.ok(priceSensor, 'epex_price_ct_kwh sensor found');
     assert.equal(priceSensor.payload.state_topic, 'dvhub/price/epex_current_ct_kwh');
     assert.equal(priceSensor.payload.unit_of_measurement, 'ct/kWh');
+    // A ct/kWh rate is NOT a monetary total — device_class must be absent.
+    assert.equal(priceSensor.payload.device_class, undefined);
+  });
+
+  it('publishes the energy counters as Energy-Dashboard grid sources', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } }));
+    for (const id of ['import_wh', 'export_wh']) {
+      const s = hub._published.find(p => p.topic.includes('dvhub_' + id));
+      assert.ok(s, id + ' sensor found');
+      assert.equal(s.payload.device_class, 'energy');
+      assert.equal(s.payload.state_class, 'total_increasing');
+      assert.equal(s.payload.unit_of_measurement, 'Wh');
+    }
+  });
+
+  it('payloads include an origin block naming DVhub', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } }), '1.2.3');
+    for (const pub of hub._published) {
+      assert.ok(pub.payload.origin, `${pub.topic} has origin block`);
+      assert.equal(pub.payload.origin.name, 'DVhub');
+      assert.equal(pub.payload.unique_id, pub.topic.split('/')[2]);
+    }
   });
 
   it('includes battery_power_w sensor', () => {

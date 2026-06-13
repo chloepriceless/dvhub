@@ -62,6 +62,7 @@
     "/api/integrations/dveos",
     "/api/integrations/evcc",
     "/api/integrations/health",
+    "/api/integrations/homeassistant",
     "/api/integrations/mid",
     "/api/integrations/mqtt/topics",
     "/api/integrations/status",

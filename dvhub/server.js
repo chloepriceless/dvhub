@@ -118,7 +118,7 @@ import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
 import { createMqttPublisher } from './services/mqtt/publisher.js';
 import { createMqttTopicObserver } from './services/mqtt/topic-observer.js';
-import { publishHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
+import { publishHaDiscoveryTopics, clearHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
 import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
 import { createFamilyMqttTiles } from './services/mqtt/family-tiles.js';
 import { createDeviceService } from './services/devices/index.js';
@@ -1530,10 +1530,15 @@ if (IS_RUNTIME_PROCESS) {
     });
     familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
     try {
-      publishHaDiscoveryTopics(mqttHub, ctx.getCfg);
+      publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION);
     } catch (err) {
       console.error('HA Discovery error:', err.message);
     }
+    // Republish/clear hooks so the Integrations HA card can (re)sync discovery
+    // WITHOUT a restart (the boot call above only runs once). Defined here where
+    // mqttHub is in scope; consumed by /api/integrations/homeassistant.
+    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION);
+    ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride);
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));

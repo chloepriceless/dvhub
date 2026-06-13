@@ -1423,6 +1423,11 @@
       if (inst) { inst.open(); setTimeout(loadVictronDrawer, 0); }
       return true;
     }
+    if (key === 'homeAssistant') {
+      inst = getOrCreateDrawer('homeassistant');
+      if (inst) { inst.open(); setTimeout(loadHaDrawer, 0); }
+      return true;
+    }
     if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
     if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
     if (key === 'forecast-providers') { inst = getOrCreateDrawer('forecast'); if (inst) inst.open(); return true; }
@@ -2533,6 +2538,74 @@
   document.addEventListener('click', function (e) {
     var vSave = e.target.closest('#victron-save');
     if (vSave) { saveVictronDrawer(vSave); return; }
+  });
+
+  // === Home Assistant MQTT-Discovery Drawer Wiring (2026-06-13) ===
+  // Enable/disable + prefix + "Speichern & Resync" (republish without a restart).
+  async function loadHaDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/homeassistant');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var d = await res.json();
+      if (!d || !d.ok) return;
+      if (el('ha-enabled')) el('ha-enabled').checked = !!d.enabled;
+      if (el('ha-prefix')) el('ha-prefix').value = d.prefix || 'homeassistant';
+      if (el('ha-topic-prefix')) el('ha-topic-prefix').value = d.topicPrefix || 'dvhub';
+      if (el('ha-entity-count')) el('ha-entity-count').textContent = (d.entityCount != null ? d.entityCount : '—') + ' Sensoren';
+      if (el('ha-mqtt-status')) el('ha-mqtt-status').textContent = d.mqttConnected ? '✓ verbunden' : '✗ nicht verbunden';
+      var st = el('ha-status');
+      if (st) {
+        st.hidden = false;
+        if (!d.enabled) {
+          st.textContent = 'Inaktiv — aktivieren, um DVhub in Home Assistant einzubinden.';
+        } else if (!d.mqttConnected) {
+          st.textContent = '⚠ Aktiv, aber der MQTT-Hub ist nicht verbunden — in HA kommen keine Daten an.';
+        } else {
+          st.textContent = '✓ Aktiv — DVhub erscheint in HA als Gerät „DVhub" (' + (d.entityCount || '?') + ' Sensoren).';
+        }
+      }
+    } catch (e) {
+      showDrawerToast('homeassistant', 'err', '✗ Laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  async function saveHaDrawer(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var el = function (id) { return document.getElementById(id); };
+    var body = {
+      enabled: !!(el('ha-enabled') && el('ha-enabled').checked),
+      prefix: ((el('ha-prefix') && el('ha-prefix').value) || '').trim() || 'homeassistant',
+      topicPrefix: ((el('ha-topic-prefix') && el('ha-topic-prefix').value) || '').trim() || 'dvhub'
+    };
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/homeassistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('homeassistant', 'ok', data.enabled
+          ? ('✓ Aktiv — ' + (data.published || 0) + ' Sensoren an HA gesendet.')
+          : '✓ Deaktiviert (Entities in HA entfernt).');
+        setTimeout(loadHaDrawer, 800);
+      } else {
+        showDrawerToast('homeassistant', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('homeassistant', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var haSave = e.target.closest('#ha-save');
+    if (haSave) { saveHaDrawer(haSave); return; }
   });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===
