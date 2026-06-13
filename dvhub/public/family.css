@@ -52,8 +52,12 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-solar{top:6%;left:32%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
 .tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
 .tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
-/* Phase 11-06 round 3: the separate .tag-home Kachel was removed — the House is
-   now the centre of the bgFlow constellation (see .pf-center-readout below). */
+/* Powerflow-2.0 rework (2026-06-13): the House tile is BACK — the centre is a
+   crossing now (see .pf-center-readout below). Default below the battery on
+   the left; drag-movable like every tile (T-0091). House accent: cyan. */
+.tag-home{top:58%;left:12%;border:1px solid rgba(52,219,255,.2);animation-delay:.3s}
+.tag-home .tag-val{color:#34dbff}.tag-home .tag-status{background:rgba(52,219,255,.12);color:#34dbff}
+.tag-home .tag-dot{background:#34dbff;box-shadow:0 0 12px rgba(52,219,255,.6);right:-12px;top:50%;transform:translateY(-50%)}
 .tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
 .tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
@@ -243,7 +247,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   /* Phase 11-06 round 9: on <768px the .widgets cluster becomes a static
      horizontal row (no overlap), so the desktop occlusion does not occur here —
      the EV tag keeps its mirrored position opposite .tag-bat. */
-  .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}
+  .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}.tag-home{left:3%;top:56%}
   /* Phase 11-06 round 3: narrower centre House readout on small viewports. */
   .pf-center-readout{padding:11px 18px}
   .pf-center-readout .v{font-size:30px}
@@ -425,3 +429,12 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
    and spring transition so the tile pins exactly to the finger. */
 .tag,.pf-center-readout{touch-action:none}
 .tag.tag-dragging,.pf-center-readout.tag-dragging{transition:none;animation:none;z-index:60;cursor:grabbing}
+
+/* Powerflow-2.0 crossing (2026-06-13): direction line under the net-kW value —
+   EXPORT (pink, earning) / BEZUG (orange, importing) / BALANCE (dim). */
+.pf-center-readout .pf-dir{
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.32em;
+  color:rgba(255,255,255,.45);margin-top:4px;font-weight:600;
+}
+.pf-center-readout .pf-dir.dir-export{color:#ff7ac6}
+.pf-center-readout .pf-dir.dir-import{color:#ff9a3c}

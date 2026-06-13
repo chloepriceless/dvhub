@@ -135,6 +135,7 @@ function updateFlowDiagram(status) {
       bat:   -batPower / 1000,
       house: loadW / 1000,
       grid:  (gridImportW - gridExportW) / 1000,
+      soc:   soc,
       costEur: netEur
     });
   }

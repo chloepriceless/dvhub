@@ -1835,6 +1835,7 @@ export function createApiRoutes(ctx) {
       '.json': 'application/json; charset=utf-8',
       '.svg': 'image/svg+xml',
       '.png': 'image/png',
+      '.webp': 'image/webp',
       '.ico': 'image/x-icon'
     }[ext] || 'application/octet-stream';
     let cacheControl;

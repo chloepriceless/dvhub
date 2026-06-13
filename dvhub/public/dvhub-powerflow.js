@@ -18,8 +18,20 @@
   // instead of bare "—" dashes that flash for 3 s before the first refresh
   // populates them. The skeleton is removed by `clearSkeletons()` on the
   // first `update()` call.
+  // Powerflow 2.0 (operator design import 2026-06-13): the PV node carries an
+  // 18-frame photo sky (moon → clouds → full sun, weighted multi-frame
+  // blending driven by PV intensity) and the battery node an animated SoC
+  // pill (fill level + HSL colour ramp, charge sweep, floating bolts, danger
+  // blink under 18 %). Frames are real files under /assets/pf-sky/ (the
+  // mockup inlined them as 1.8 MB of data-URIs — not shippable in JS).
+  const SKY_FRAME_PCTS = [0, 10, 20, 30, 40, 50, 60, 65, 70, 75, 80, 85, 90, 93, 95, 97, 99, 100];
+  const SKY_FRAMES_HTML = SKY_FRAME_PCTS
+    .map(p => `<img class="pf-frame" data-pct="${p}" src="/assets/pf-sky/sky-${String(p).padStart(3, '0')}.webp" alt="" loading="eager" decoding="async">`)
+    .join('\n        ');
+
   const TPL = `
     <div class="pf-stars"></div>
+    <div class="pf-sunbleed"></div>
     <canvas class="pf-cv"></canvas>
     <div class="pf-hubglow"></div>
     <div class="pf-legend">
@@ -28,8 +40,29 @@
       <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-house"></span>Haus</span>
       <span class="pf-chip"><span class="d pf-chip-dot pf-chip-dot-grid"></span>Netz</span>
     </div>
-    <div class="pf-node pf-nPV">    <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">PV · DC + AC</div><div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div></div>
-    <div class="pf-node pf-nBat">   <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Akku</div>      <div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div></div>
+    <div class="pf-node pf-nPV">
+      <div class="pf-sky" aria-hidden="true">
+        ${SKY_FRAMES_HTML}
+      </div>
+      <div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">PV · DC + AC</div><div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div>
+    </div>
+    <div class="pf-node pf-nBat">
+      <div class="pf-bat-anim" aria-hidden="true">
+        <div class="pf-bat-rotor">
+          <div class="pf-bat-body">
+            <div class="pf-bat-fill"></div>
+            <div class="pf-bat-sparks"></div>
+            <div class="pf-bat-warning">&#9888;</div>
+          </div>
+          <div class="pf-bat-bolts">
+            <div class="pf-bat-bolt b1"></div>
+            <div class="pf-bat-bolt b2"></div>
+            <div class="pf-bat-bolt b3"></div>
+          </div>
+        </div>
+      </div>
+      <div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Akku</div>      <div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div>
+    </div>
     <div class="pf-node pf-nHouse"> <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Haus</div>      <div class="pf-mix"></div></div>
     <div class="pf-node pf-nGrid">  <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Netz</div>      <div class="pf-mix"></div></div>
     <div class="pf-center"><div class="l">Bilanz heute</div><div class="v chart-skeleton" aria-busy="true">&nbsp;</div><div class="d">€ Netto</div></div>
@@ -40,6 +73,11 @@
     if (!root) throw new Error('DVhubPowerflow.mount: target not found');
     if (!root.classList.contains('dvhub-powerflow')) root.classList.add('dvhub-powerflow');
     root.innerHTML = TPL;
+
+    // Plant nameplate power — drives the sky ramp. Default 30 kW; the photo
+    // sequence reaches "full sun" at 90 % of nameplate (mockup contract).
+    const plantMax = (typeof opts.plantMax === 'number' && opts.plantMax > 0) ? opts.plantMax : 30;
+    const pvRampMax = plantMax * 0.9;
 
     const cv  = root.querySelector('.pf-cv');
     const ctx = cv.getContext('2d');
@@ -75,7 +113,7 @@
     const pwr2speed = kW => 0.005 + 0.05*Math.sqrt(Math.max(kW,0));
     const pwr2count = kW => Math.min(Math.round(kW*22), 320);
 
-    const state = { pv:0, bat:0, house:0, grid:null, costEur:null };
+    const state = { pv:0, bat:0, house:0, grid:null, soc:null, costEur:null };
 
     function compute(){
       const pvAvail  = Math.max(state.pv, 0);
@@ -126,11 +164,54 @@
       $('.pf-nPV .pf-v').textContent  = fmt(f.pv) + ' kW';
       $('.pf-nPV .pf-sub').textContent= f.pv > 0 ? '100 % der Erzeugung' : 'keine Erzeugung';
 
+      // PV sky — weighted multi-frame blending (Powerflow 2.0): every frame is
+      // visible inside a ±SPAN % window (smoothstep tent), so 2–4 photos
+      // overlap softly instead of a hard 2-frame cross-fade. Frame index maps
+      // linearly to PV % of the ramp (0 = moon, 100 = full sun). --pv-i also
+      // drives the sun-glow drop-shadow and the scene-wide sunbleed layer.
+      const sky = $('.pf-nPV .pf-sky');
+      if (sky) {
+        const pct = Math.max(0, Math.min(f.pv / pvRampMax, 1)) * 100;
+        sky.style.setProperty('--pv-i', (pct / 100).toFixed(3));
+        root.style.setProperty('--pv-i', (pct / 100).toFixed(3));
+        const frames = sky.querySelectorAll('.pf-frame');
+        const SPAN = 18; // tent half-width in %, > max frame gap (10)
+        let maxW = 0;
+        const weights = [];
+        for (let i = 0; i < frames.length; i++) {
+          const dlt = Math.abs(pct - Number(frames[i].dataset.pct));
+          let w = Math.max(0, 1 - dlt / SPAN);
+          w = w * w * (3 - 2 * w);
+          weights.push(w);
+          if (w > maxW) maxW = w;
+        }
+        const norm = maxW > 0 ? 1 / maxW : 1;
+        for (let i = 0; i < frames.length; i++) {
+          frames[i].style.opacity = (weights[i] * norm).toFixed(3);
+        }
+      }
+
       $('.pf-nBat .pf-v').textContent = fmtS(f.bat) + ' kW';
       $('.pf-nBat .pf-sub').textContent =
         f.bat > 0 ? `entlädt mit ${fmt(f.bat)} kW`
         : f.bat < 0 ? `lädt mit ${fmt(-f.bat)} kW`
         : 'Standby';
+
+      // Battery pill (Powerflow 2.0): SoC drives fill width + HSL colour ramp
+      // (red → green) + glow; charging turns on the sweep + floating bolts;
+      // SoC < 18 % blinks the danger icon. Note the component's bat sign:
+      // positive = discharging, NEGATIVE = charging.
+      const bat = $('.pf-nBat .pf-bat-anim');
+      if (bat && state.soc != null && Number.isFinite(Number(state.soc))) {
+        const soc = Math.max(0, Math.min(Number(state.soc), 100));
+        const charging = f.bat < 0;
+        const passive = Math.max(0, Math.min((soc - 35) / 65, 1));
+        bat.style.setProperty('--p', soc.toFixed(2));
+        bat.style.setProperty('--fill', soc.toFixed(2) + '%');
+        bat.style.setProperty('--glow', Math.max(0, Math.min((soc - 18) / 82, 1)).toFixed(3));
+        bat.style.setProperty('--charge', (charging ? 1 : passive).toFixed(3));
+        bat.style.setProperty('--danger', Math.max(0, Math.min((18 - soc) / 18, 1)).toFixed(3));
+      }
 
       $('.pf-nHouse .pf-v').textContent = fmt(f.house) + ' kW';
       $('.pf-nHouse .pf-mix').innerHTML = pillsHTML([
@@ -222,6 +303,7 @@
           if (typeof s.pv    === 'number') state.pv    = s.pv;
           if (typeof s.bat   === 'number') state.bat   = s.bat;
           if (typeof s.house === 'number') state.house = s.house;
+          if (typeof s.soc   === 'number') state.soc   = s.soc;
           if ('grid' in s) state.grid = (typeof s.grid === 'number') ? s.grid : null;
           if ('costEur' in s) state.costEur = (typeof s.costEur === 'number') ? s.costEur : null;
         }

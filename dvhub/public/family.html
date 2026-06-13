@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=7">
+<link rel="stylesheet" href="/family.css?v=8">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -40,13 +40,22 @@
   <div class="tag tag-ev" id="tag-ev" data-panel="ev"><span class="tag-dot"></span><div class="tag-emoji tag-emoji-svg"><svg class="tesla-glyph" viewBox="0 0 64 26" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tesla"><path fill="currentColor" d="M9.6 23.4c-2 0-3.6-1.6-3.6-3.6 0-.5.1-1 .3-1.5H3.4c-1.3 0-2.4-1-2.5-2.3l-.3-3c-.1-1 .5-2 1.4-2.4l5.6-2.6 4.3-4.4C12.7 2 14 1.4 15.4 1.4h22.9c1.6 0 3.1.7 4.2 1.9l3.6 4.1 9.7 1.7c2.4.4 4.3 2.3 4.7 4.7l.3 1.8c.3 1.8-1.1 3.5-3 3.5h-3.4c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6s-3.6-1.6-3.6-3.6c0-.5.1-1 .3-1.5H16.5c.2.5.3 1 .3 1.5 0 2-1.6 3.6-3.6 3.6z"/><circle cx="13.2" cy="19.8" r="2.1" fill="#0a0c12"/><circle cx="51.4" cy="19.8" r="2.1" fill="#0a0c12"/></svg></div><div class="tag-friendly" id="tf-ev">Auto l&auml;dt mit Solar</div><div class="tag-val" id="v-e">1.4 kW</div><div class="tag-soc" id="ev-soc-wrap" hidden><div class="tag-soc-row"><span class="tag-soc-pct" id="ev-soc-pct">59 %</span><span class="tag-soc-limit" id="ev-soc-limit">Limit 80 %</span></div><div class="tag-soc-bar"><div class="tag-soc-fill" id="ev-soc-fill"></div><div class="tag-soc-limit-mark" id="ev-soc-limit-mark"></div></div></div><div class="tag-status" id="ts-ev">Fertig ca. 22 Uhr</div></div>
   <div class="tag tag-grid" id="tag-grid" data-panel="grid"><span class="tag-dot"></span><div class="tag-emoji">&#9889;</div><div class="tag-friendly" id="tf-grid">Wir speisen ein</div><div class="tag-val" id="v-g">0.4 kW</div><div class="tag-status" id="ts-grid">Verdienen gerade</div></div>
 
-  <!-- Center HOUSE readout (Phase 11-06, checkpoint round 3) — the House IS the
-       centre of the bgFlow constellation: sources feed in, device streams flow
-       out. Primary line = Hausverbrauch (kW); secondary line = day net-Euro
-       balance. data-panel="home" makes tapping the centre open the home panel. -->
+  <!-- HOUSE tile (Powerflow-2.0 rework 2026-06-13): the House is a regular
+       constellation endpoint again — energy visibly flows INTO it from the
+       crossing, in source-mix colours. Draggable like every tile (T-0091);
+       tapping opens the same home panel as before. pf-house-kw keeps its id
+       (family.js live-updates it each poll). -->
+  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Haus verbraucht</div><div class="tag-val" id="pf-house-kw">0,0 kW</div><div class="tag-status" id="ts-home">&mdash;</div></div>
+
+  <!-- Center CROSSING readout (Powerflow-2.0 rework 2026-06-13): the centre is
+       the junction all flows route through — like the powerflow mockup it
+       shows the net energy (kW + EXPORT/BEZUG/BALANCE). The daily net-Euro
+       balance stays as the secondary line. data-panel="home" keeps the tap
+       target (home panel). -->
   <div class="pf-center-readout" id="pfCenter" data-panel="home">
-    <div class="pf-house"><span class="pf-house-icon">&#127968;</span><span class="v" id="pf-house-kw">0,0 kW</span></div>
-    <div class="l">Hausverbrauch</div>
+    <div class="l">Netto</div>
+    <div class="pf-house"><span class="v" id="pf-center-kw">0,0 kW</span></div>
+    <div class="pf-dir" id="pf-center-dir">BALANCE</div>
     <div class="pf-divider"></div>
     <div class="pf-net"><span id="pf-center-v">+0,00 &euro;</span> <span class="pf-net-label" id="pf-center-d">NETTO</span></div>
   </div>
@@ -117,6 +126,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-t0091"></script>
+<script src="/family.js?v=20260613-pf2"></script>
 </body>
 </html>

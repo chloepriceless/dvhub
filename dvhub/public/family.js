@@ -1193,9 +1193,10 @@
 
     sr('family.solar-home-status', function () {
       // Friendly texts & statuses — LLM-generated captions when present, else rule-based.
-      // The former tf-home friendly text was removed with the .tag-home Kachel
-      // (Phase 11-06 round 3) — the centre House readout shows the kW figure only.
       setText('tf-solar', tileFriendlies.solar || (energy.surplus ? 'Sonne gibt Vollgas' : (energy.solarKw > 0.5 ? 'Solar läuft' : 'Kaum Sonne')));
+      // tf-home returned with the Powerflow-2.0 rework (2026-06-13) — the
+      // House is a dedicated tile again (the centre is now the crossing).
+      setText('tf-home', tileFriendlies.home || 'Haus verbraucht');
     });
 
     sr('family.battery', function () {
@@ -1891,15 +1892,47 @@
      meaningless. Source streams still feed the centre; the proportional MQTT
      device streams flow OUT of the centre to the device tiles. */
   var BG_FLOWS_BASE = [
-    // Source streams (feed INTO the hub at pfCenter)
+    // Source streams (feed INTO the crossing at pfCenter)
     { from: 'tag-solar', to: 'pfCenter', color: [255,212,33],  id: 's_pv',   maxKw: 27 },
     { from: 'tag-bat',   to: 'pfCenter', color: [70,211,68],   id: 's_bat',  maxKw: 24 },
     { from: 'tag-grid',  to: 'pfCenter', color: [255,122,198], id: 's_grid', maxKw: 30 },
-    // Sink streams (drawn FROM the hub at pfCenter)
+    // Sink streams (drawn FROM the crossing at pfCenter)
     { from: 'pfCenter',  to: 'tag-bat',  color: [70,211,68],   id: 'k_bat',  maxKw: 24 },
     { from: 'pfCenter',  to: 'tag-ev',   color: [165,94,234],  id: 'k_ev',   maxKw: 22 },
-    { from: 'pfCenter',  to: 'tag-grid', color: [255,122,198], id: 'k_grid', maxKw: 30 }
+    { from: 'pfCenter',  to: 'tag-grid', color: [255,122,198], id: 'k_grid', maxKw: 30 },
+    // Powerflow-2.0 rework (2026-06-13): the House is an endpoint again — the
+    // centre is a CROSSING, the house-consumption flow runs crossing → house.
+    // APPENDED so updateBgFlowFromStatus's fixed [0..5] indices stay valid.
+    { from: 'pfCenter',  to: 'tag-home', color: [52,219,255],  id: 'k_home', maxKw: 30 }
   ];
+
+  /* Source colours for the provenance mix (operator request 2026-06-13):
+     particles on SINK streams (house, EV, battery-charge, grid-export and the
+     s_mqtt_* device streams) are coloured by where the energy COMES FROM —
+     green battery particles arrive green at the consumers. The mix is the
+     live source share at the crossing (mockup compute(): fPV/fBat/fGrid). */
+  var SRC_PV_COL   = [255, 212, 33];
+  var SRC_BAT_COL  = [70, 211, 68];
+  var SRC_GRID_COL = [255, 122, 198];
+  // Cumulative-bucket mix shared with the s_mqtt_* device streams — rebuilt on
+  // every status poll by updateBgFlowFromStatus().
+  var bgFlowSourceMix = null;
+
+  function bgFlowBuildMix(parts) {
+    var tot = 0;
+    for (var i = 0; i < parts.length; i++) tot += Math.max(0, parts[i][1]);
+    if (tot <= 0) return null;
+    var cum = 0;
+    var mix = [];
+    for (var j = 0; j < parts.length; j++) {
+      var share = Math.max(0, parts[j][1]) / tot;
+      if (share <= 0.001) continue; // sub-0.1% slivers add noise, not insight
+      cum += share;
+      mix.push({ c: parts[j][0], cum: cum });
+    }
+    if (mix.length) mix[mix.length - 1].cum = 1; // close rounding gap
+    return mix.length ? mix : null;
+  }
   /* Per-stream dust-speed multiplier for BG_FLOWS_BASE — applied on top of the
      bgFlowPwr2Speed() result. Default (any id not listed) is 1. k_grid is the
      hub → grid export stream (PV/solar power flowing toward the grid /
@@ -1975,7 +2008,19 @@
       var env = Math.sin(d.p * Math.PI);
       var aa = env * 0.85;
       var sz = d.sz * BG_FLOW_DPR * (0.6 + env * 0.6);
+      // Provenance mix (2026-06-13): when the stream carries a source-share
+      // mix, each particle picks its colour from a cumulative bucket keyed by
+      // its OWN phase — deterministic per particle (no per-frame flicker), and
+      // the population splits in the live source proportions: 60 % PV / 40 %
+      // battery renders as 60 % yellow / 40 % green dust arriving at the sink.
       var c = s.color;
+      if (s.mix && s.mix.length) {
+        var pick = (d.phase * 0.954929658) % 1; // phase 0..2π → 0..~6 → frac
+        for (var mi = 0; mi < s.mix.length; mi++) {
+          c = s.mix[mi].c;
+          if (pick <= s.mix[mi].cum) break;
+        }
+      }
       bgFlowCtx.fillStyle = 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + aa + ')';
       bgFlowCtx.beginPath(); bgFlowCtx.arc(x, y, sz, 0, Math.PI * 2); bgFlowCtx.fill();
       bgFlowCtx.fillStyle = 'rgba(255,255,255,' + (aa * 0.55) + ')';
@@ -2039,14 +2084,45 @@
       ev = Math.max(ev, Number(t.chargerPowerKw));
     }
 
-    // Sources → hub
-    BG_FLOWS_BASE[0].kw = solar;                      // s_pv:   pv  → hub
-    BG_FLOWS_BASE[1].kw = bat  < 0 ? -bat  : 0;       // s_bat:  bat → hub (discharging)
-    BG_FLOWS_BASE[2].kw = grid > 0 ?  grid : 0;       // s_grid: grid→ hub (importing)
-    // Hub → sinks (k_home removed — the House IS the hub now, Phase 11-06 round 3)
-    BG_FLOWS_BASE[3].kw = bat  > 0 ?  bat  : 0;       // k_bat:  hub → bat (charging)
-    BG_FLOWS_BASE[4].kw = ev;                         // k_ev:   hub → ev (Tesla charge power when charging)
-    BG_FLOWS_BASE[5].kw = grid < 0 ? -grid : 0;       // k_grid: hub → grid (exporting)
+    // Sources → crossing
+    BG_FLOWS_BASE[0].kw = solar;                      // s_pv:   pv  → crossing
+    BG_FLOWS_BASE[1].kw = bat  < 0 ? -bat  : 0;       // s_bat:  bat → crossing (discharging)
+    BG_FLOWS_BASE[2].kw = grid > 0 ?  grid : 0;       // s_grid: grid→ crossing (importing)
+    // Crossing → sinks
+    BG_FLOWS_BASE[3].kw = bat  > 0 ?  bat  : 0;       // k_bat:  crossing → bat (charging)
+    BG_FLOWS_BASE[4].kw = ev;                         // k_ev:   crossing → ev (Tesla charge power when charging)
+    BG_FLOWS_BASE[5].kw = grid < 0 ? -grid : 0;       // k_grid: crossing → grid (exporting)
+    BG_FLOWS_BASE[6].kw = Math.max(0, Number(e.homeKw || 0)); // k_home: crossing → house
+
+    // Provenance colour mix (operator request 2026-06-13): sink-stream
+    // particles carry the colours of the energy's ORIGIN, in the live share.
+    // Consumers (house/EV/devices) draw from PV + discharging battery +
+    // grid import; battery CHARGE comes from PV/grid only (a battery does not
+    // charge itself); grid EXPORT comes from PV/battery only.
+    var batOutKw = bat < 0 ? -bat : 0;
+    var gridImpKw = grid > 0 ? grid : 0;
+    bgFlowSourceMix = bgFlowBuildMix([
+      [SRC_PV_COL, solar], [SRC_BAT_COL, batOutKw], [SRC_GRID_COL, gridImpKw]
+    ]);
+    BG_FLOWS_BASE[3].mix = bgFlowBuildMix([[SRC_PV_COL, solar], [SRC_GRID_COL, gridImpKw]]); // k_bat
+    BG_FLOWS_BASE[4].mix = bgFlowSourceMix;                                                  // k_ev
+    BG_FLOWS_BASE[5].mix = bgFlowBuildMix([[SRC_PV_COL, solar], [SRC_BAT_COL, batOutKw]]);   // k_grid
+    BG_FLOWS_BASE[6].mix = bgFlowSourceMix;                                                  // k_home
+
+    // House tile status line: show WHERE the energy comes from (shares >= 5 %).
+    var tsHome = document.getElementById('ts-home');
+    if (tsHome) {
+      var totSrc = solar + batOutKw + gridImpKw;
+      if (totSrc > 0.05) {
+        var srcParts = [];
+        if (solar / totSrc >= 0.05) srcParts.push('PV ' + Math.round(solar / totSrc * 100) + '%');
+        if (batOutKw / totSrc >= 0.05) srcParts.push('Akku ' + Math.round(batOutKw / totSrc * 100) + '%');
+        if (gridImpKw / totSrc >= 0.05) srcParts.push('Netz ' + Math.round(gridImpKw / totSrc * 100) + '%');
+        tsHome.textContent = srcParts.join(' · ') || '—';
+      } else {
+        tsHome.textContent = 'Standby';
+      }
+    }
 
     BG_FLOWS_BASE.forEach(function (s) {
       var eff   = bgFlowEffectiveKw(s.kw, s.maxKw);   // scale by stream's nameplate
@@ -2170,6 +2246,10 @@
         s.from = cardId; s.to = 'pfCenter';           // negative → out of the card
       }
       s.reverse = false;
+      // Provenance mix (2026-06-13): a consuming device receives particles in
+      // the live source-share colours (same mix as the house/EV sinks). A
+      // PRODUCING device (negative value) keeps its own accent colour.
+      s.mix = (s.from === 'pfCenter') ? bgFlowSourceMix : null;
 
       var absW = Math.abs(valW);
 
@@ -2220,17 +2300,29 @@
     });
   }
 
-  // #pfCenter centre readout (Phase 11-06 round 3) — the House IS the centre of
-  // the bgFlow constellation. Primary line: 🏠 + the live Hausverbrauch (kW);
-  // secondary line: the daily net-Euro balance. Both figures are live-updated
-  // on every /api/family/status poll from the family.bg-flow sr-block.
+  // #pfCenter centre readout — Powerflow-2.0 rework (2026-06-13): the centre is
+  // a CROSSING (junction) like the powerflow mockup, not the House. Primary
+  // line: net energy in kW + direction (EXPORT / BEZUG / BALANCE). Secondary
+  // line: the daily net-Euro balance (kept from the previous design). The live
+  // Hausverbrauch moved to the dedicated #tag-home tile (id pf-house-kw kept).
   function updatePfCenterReadout(data) {
     var c = document.getElementById('pfCenter');
     if (!c) return;
     var energy = (data && data.energy) || {};
-    // Primary House line — the SAME homeKw the proportional MQTT streams use as
+    // House tile — the SAME homeKw the proportional MQTT streams use as
     // their denominator (already patched by inferHomeKw in the family.tags block).
     setText('pf-house-kw', formatKw(Math.max(0, Number(energy.homeKw || 0))));
+    // Crossing primary line — net grid energy. energy.gridKw: + = Bezug,
+    // − = Export (matches updateBgFlowFromStatus sign convention).
+    var gridKw = Number(energy.gridKw || 0);
+    var netKw = -gridKw; // + = exporting (earning), − = importing
+    var dirEl = document.getElementById('pf-center-dir');
+    setText('pf-center-kw', (netKw > 0.05 ? '+' : netKw < -0.05 ? '−' : '') + formatKw(Math.abs(netKw)));
+    if (dirEl) {
+      dirEl.textContent = netKw > 0.05 ? 'EXPORT' : netKw < -0.05 ? 'BEZUG' : 'BALANCE';
+      dirEl.classList.toggle('dir-export', netKw > 0.05);
+      dirEl.classList.toggle('dir-import', netKw < -0.05);
+    }
     // Secondary net-Euro line — feed-in revenue + avoided cost = the day balance.
     var sav = (data && data.savings) || {};
     var feed = parseFloat(sav.feedInRevenueEur || '0');
@@ -2335,7 +2427,7 @@
      before); >=8 px = drag (panel-open suppressed). Double-tap a tile to reset
      it to its CSS default position. ======================================== */
   var TAG_LAYOUT_KEY = 'dvhub.family.tagLayout.v1';
-  var DRAGGABLE_TILE_IDS = ['tag-solar', 'tag-bat', 'tag-ev', 'tag-grid', 'pfCenter'];
+  var DRAGGABLE_TILE_IDS = ['tag-solar', 'tag-bat', 'tag-ev', 'tag-grid', 'tag-home', 'pfCenter'];
   var tagDragSuppressTap = false;
 
   function tagLayoutLoad() {

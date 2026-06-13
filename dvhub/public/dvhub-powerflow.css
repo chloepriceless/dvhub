@@ -31,6 +31,16 @@
   radial-gradient(1px 1px at 55% 12%, rgba(255,255,255,.4),  transparent 60%),
   radial-gradient(1px 1px at 14% 86%, rgba(255,255,255,.5),  transparent 60%);}
 
+/* Powerflow 2.0: sunlight bleed — the PV light tints the scene itself
+   (instead of the sun looking like a pasted-on photo). Intensity follows
+   --pv-i (0..1), set by applyFlows() on the component root. */
+.dvhub-powerflow .pf-sunbleed{position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 64% 50% at 50% -6%, rgba(255,176,64,.26), rgba(255,148,50,.10) 46%, transparent 72%),
+    radial-gradient(ellipse 120% 34% at 50% 0%, rgba(255,205,125,.10), transparent 62%);
+  opacity:var(--pv-i,0);
+  transition:opacity .8s ease;}
+
 .dvhub-powerflow canvas.pf-cv{position:absolute;inset:0;width:100%;height:100%}
 
 .dvhub-powerflow .pf-hubglow{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
@@ -61,6 +71,158 @@
 .dvhub-powerflow .pf-node{position:absolute;text-align:center;z-index:6;pointer-events:none}
 .dvhub-powerflow .pf-node .pf-star{width:8px;height:8px;border-radius:50%;margin:0 auto 10px;
   box-shadow:0 0 16px currentColor,0 0 32px currentColor;background:currentColor;display:block}
+
+/* ──────────────────────────────────────────────────────────────
+   Powerflow 2.0 · PV sky — 18-frame photo sequence (moon → clouds →
+   full sun), weighted multi-frame cross-fade driven from JS.
+   Frames are luma-keyed alpha WebPs (sky = real transparency, soft
+   vignette baked into the alpha channel) — no CSS mask, no tile edge.
+   Mockup used 200px on a 720px stage; our Leitstand card is 420px,
+   so the sky is scaled to keep the PV node clear of the centre.
+   ────────────────────────────────────────────────────────────── */
+.dvhub-powerflow .pf-sky{
+  position:relative;
+  width:120px; height:120px;
+  margin:0 auto 2px;
+  --pv-i:0;
+  filter:
+    drop-shadow(0 0 calc(8px  + var(--pv-i)*24px) rgba(255,200,90, calc(.05 + var(--pv-i)*.30)))
+    drop-shadow(0 0 calc(22px + var(--pv-i)*44px) rgba(255,170,70, calc(.03 + var(--pv-i)*.22)));
+  transition:filter .45s ease;
+}
+.dvhub-powerflow .pf-sky .pf-frame{
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  object-fit:cover;
+  object-position:center;
+  opacity:0;
+  transition:opacity .6s ease-out;
+  pointer-events:none;
+  user-select:none;
+  -webkit-user-drag:none;
+}
+/* Before the first live update the JS has not set any frame opacity —
+   show the moon frame so the node is never an empty hole. The first
+   applyFlows() overrides this via inline style. */
+.dvhub-powerflow .pf-sky .pf-frame[data-pct="0"]{opacity:1}
+
+/* ──────────────────────────────────────────────────────────────
+   Powerflow 2.0 · battery pill — vertical battery with fill level,
+   glow, bolts (charging), warning (critical). Driven via CSS vars:
+     --p       0..100   SoC
+     --fill    "X%"     fill-bar width
+     --glow    0..1     general glow + sparks
+     --charge  0..1     charge effects (sweep, bolts)
+     --danger  0..1     warning (red, blinking)
+   The component is rotated -90° through an inner rotor so the fill
+   grows upward. Pill without a plus-pole nub.
+   ────────────────────────────────────────────────────────────── */
+.dvhub-powerflow .pf-bat-anim{
+  position:relative;
+  width:54px;
+  height:136px;
+  margin:0 auto 10px;
+  --p:50; --fill:50%; --glow:.3; --charge:0; --danger:0;
+  isolation:isolate;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
+  position:absolute;
+  top:50%; left:50%;
+  width:136px;
+  height:54px;
+  transform:translate(-50%,-50%) rotate(-90deg);
+  transform-origin:center;
+  filter:
+    drop-shadow(0 0 calc(4px + var(--glow)*14px) rgba(100,255,160, calc(.08 + var(--glow)*.32)))
+    drop-shadow(0 4px 10px rgba(0,0,0,.55));
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-body{
+  position:absolute; inset:0;
+  border-radius:10px;
+  border:1.5px solid rgba(170,205,255,.34);
+  background:
+    linear-gradient(145deg, rgba(140,190,255,.10), rgba(140,190,255,.02)),
+    rgba(5,10,22,.55);
+  box-shadow:
+    inset 0 0 10px rgba(120,180,255,.07),
+    inset 0 0 0 1px rgba(170,205,255,.08);
+  overflow:hidden;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-body::before{
+  content:""; position:absolute; inset:3px;
+  border-radius:7px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.07), transparent 16% 84%, rgba(255,255,255,.05)),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 12px);
+  pointer-events:none; z-index:4;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-fill{
+  position:absolute; left:0; top:0; bottom:0;
+  width:var(--fill);
+  border-radius:8px 3px 3px 8px;
+  background:
+    radial-gradient(circle at 35% 35%, rgba(255,255,255,.55), transparent 13%),
+    linear-gradient(90deg,
+      hsl(calc(0 + var(--p)*1.25) 92% 48%),
+      hsl(calc(18 + var(--p)*1.05) 95% 54%),
+      hsl(calc(45 + var(--p)*.78) 95% 58%));
+  box-shadow:
+    inset 0 0 10px rgba(255,255,255,.18),
+    0 0 calc(6px + var(--glow)*18px) rgba(120,255,150, calc(.10 + var(--glow)*.45));
+  transition:width 220ms linear, background 220ms linear;
+  z-index:1;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-fill::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(120deg, transparent 0 32%, rgba(255,255,255,.22) 42%, transparent 52% 100%);
+  transform:translateX(-130%);
+  animation:pfBatSweep 2.2s ease-in-out infinite;
+  opacity:calc(.08 + var(--charge) * .55);
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-warning{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  z-index:8;
+  font-size:20px;
+  opacity:calc(var(--danger) * .8);
+  filter:drop-shadow(0 0 6px rgba(255,60,40,.75));
+  animation:pfBatBlink 1.15s ease-in-out infinite alternate;
+  /* counter-rotate (+90°) so the warning icon stays upright */
+  transform:rotate(90deg);
+  pointer-events:none;
+  color:#ff5050;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolts{
+  position:absolute; inset:0; z-index:7;
+  pointer-events:none;
+  opacity:calc(var(--charge) * .9);
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolt{
+  position:absolute;
+  width:5px; height:18px;
+  background:#fff7b0;
+  clip-path:polygon(46% 0,100% 0,62% 42%,100% 42%,30% 100%,48% 55%,0 55%);
+  filter:drop-shadow(0 0 4px rgba(255,240,120,.8));
+  animation:pfBatFloat 2.4s ease-in-out infinite alternate;
+}
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b1{ left:18%; top:14%; animation-delay:-.3s; }
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b2{ left:62%; top:18%; animation-delay:-1.1s; transform:scale(.72); }
+.dvhub-powerflow .pf-bat-anim .pf-bat-bolt.b3{ left:42%; top:62%; animation-delay:-1.8s; transform:scale(.58); }
+.dvhub-powerflow .pf-bat-anim .pf-bat-sparks{
+  position:absolute; inset:0; z-index:9;
+  opacity:calc(var(--glow) * .65);
+  pointer-events:none;
+  background:
+    radial-gradient(circle at 17% 54%, rgba(255,255,255,.85) 0 1px, transparent 2px),
+    radial-gradient(circle at 28% 38%, rgba(255,255,255,.75) 0 1px, transparent 2px),
+    radial-gradient(circle at 73% 34%, rgba(255,255,255,.85) 0 1px, transparent 2px),
+    radial-gradient(circle at 84% 61%, rgba(255,255,255,.70) 0 1px, transparent 2px);
+  animation:pfBatSpark 900ms linear infinite;
+}
+@keyframes pfBatSweep{ to{ transform:translateX(130%); } }
+@keyframes pfBatBlink{ to{ opacity:calc(var(--danger) * .25); } }
+@keyframes pfBatFloat{ to{ transform:translateY(-5px) rotate(8deg); } }
+@keyframes pfBatSpark{ to{ filter:hue-rotate(20deg); transform:translateY(-3px); } }
 .dvhub-powerflow .pf-node .pf-lbl{font-family:var(--pf-m);font-size:12px;letter-spacing:.22em;text-transform:uppercase;
   color:var(--pf-dim);margin-top:8px;font-weight:500}
 .dvhub-powerflow .pf-node .pf-v{font-weight:500;font-size:30px;font-variant-numeric:tabular-nums;letter-spacing:-.01em;
@@ -69,7 +231,7 @@
 .dvhub-powerflow .pf-node .pf-sub{font-family:var(--pf-m);font-size:12px;color:#a9bedb;margin-top:6px;
   letter-spacing:.05em;font-variant-numeric:tabular-nums}
 
-.dvhub-powerflow .pf-nPV   {top:5%; left:50%;  transform:translateX(-50%); color:var(--pf-pv)}
+.dvhub-powerflow .pf-nPV   {top:2%; left:50%;  transform:translateX(-50%); color:var(--pf-pv)}
 .dvhub-powerflow .pf-nBat  {top:50%;left:5%;   transform:translateY(-50%); color:var(--pf-bat)}
 .dvhub-powerflow .pf-nHouse{top:50%;right:5%;  transform:translateY(-50%); color:var(--pf-house)}
 .dvhub-powerflow .pf-nGrid {bottom:5%;left:50%;transform:translateX(-50%); color:var(--pf-grid)}
@@ -105,6 +267,10 @@
    ────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .dvhub-powerflow{ min-height:340px }
+  .dvhub-powerflow .pf-sky{ width:84px; height:84px }
+  .dvhub-powerflow .pf-bat-anim{ width:40px; height:100px; margin-bottom:6px }
+  .dvhub-powerflow .pf-bat-anim .pf-bat-rotor{ width:100px; height:40px }
+  .dvhub-powerflow .pf-bat-anim .pf-bat-warning{ font-size:15px }
   .dvhub-powerflow .pf-node .pf-v{ font-size:18px; padding:3px 8px; border-radius:8px }
   .dvhub-powerflow .pf-node .pf-lbl{ font-size:9px; letter-spacing:.16em; margin-top:4px }
   .dvhub-powerflow .pf-node .pf-sub{ font-size:10px; margin-top:3px }
@@ -168,3 +334,17 @@ html[data-theme="light"] .dvhub-powerflow .pf-node .pf-star{
 }
 html[data-theme="light"] .dvhub-powerflow .pf-chip .d,
 html[data-theme="light"] .dvhub-powerflow .pf-pill .d{ box-shadow:none }
+/* Powerflow 2.0 elements on light: glassy-white battery body with a darker
+   outline; the photo sky + sunbleed work on light as-is. */
+html[data-theme="light"] .dvhub-powerflow .pf-bat-anim .pf-bat-body{
+  border-color:rgba(30,60,120,.38);
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.65), rgba(235,242,250,.4)),
+    rgba(255,255,255,.5);
+  box-shadow:inset 0 0 10px rgba(30,60,120,.08), inset 0 0 0 1px rgba(30,60,120,.10);
+}
+html[data-theme="light"] .dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
+  filter:
+    drop-shadow(0 0 calc(4px + var(--glow)*12px) rgba(21,128,61, calc(.06 + var(--glow)*.25)))
+    drop-shadow(0 3px 8px rgba(30,60,120,.25));
+}
