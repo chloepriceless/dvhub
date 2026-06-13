@@ -249,6 +249,33 @@ export function createFamilyService(ctx) {
   /**
    * EV section. `vehicles: []` is the D-14 placeholder for multi-EV setups.
    */
+  /**
+   * EVCC section (operator request #23, 2026-06-13). Surfaces the evcc
+   * loadpoint(s) + selected loadpoint so the Family EV panel can show the
+   * vehicle/charge state (when no Tesla) and switch the charge mode. Reads the
+   * cached state from the evcc integration (which polls whenever a URL is set).
+   * Returns { available:false, loadpoints:[] } when evcc is unreachable/unset.
+   */
+  function deriveEvccSection() {
+    const svc = ctx.evccIntegration;
+    if (!svc || typeof svc.getLoadpoints !== 'function') return { available: false, loadpoints: [] };
+    let lps = [];
+    try { lps = svc.getLoadpoints() || []; } catch (err) {
+      pushLog?.('family_evcc_error', { error: err.message });
+      return { available: false, loadpoints: [] };
+    }
+    const famEvcc = (getCfg?.() || {}).family?.evcc || {};
+    const selRaw = Number(famEvcc.loadpoint);
+    const selected = (Number.isInteger(selRaw) && lps.some((l) => l.id === selRaw))
+      ? selRaw
+      : (lps[0]?.id ?? null);
+    return {
+      available: lps.length > 0,
+      selectedLoadpoint: selected,
+      loadpoints: lps
+    };
+  }
+
   function deriveEvSection(victron /*, cfg */) {
     const evPowerW = Number(victron?.evPowerW || 0);
     const powerKw = kw(evPowerW);
@@ -760,6 +787,7 @@ export function createFamilyService(ctx) {
     const devices = deriveDevicesSection();
     const mqttTiles = deriveMqttTilesSection();
     const tesla = deriveTeslaSection();
+    const evcc = deriveEvccSection();
     const forecast = deriveForecastSection(forecastResponse);
     const price = derivePriceSection(epexNN, epexState, costs);
     const optimizer = deriveOptimizerSection(optimizerStatus);
@@ -781,6 +809,7 @@ export function createFamilyService(ctx) {
       devices,
       mqttTiles,
       tesla,
+      evcc,
       forecast,
       today,
       price,
@@ -793,7 +822,11 @@ export function createFamilyService(ctx) {
       config: {
         screensaver: cfg?.family?.screensaver || null,
         presence: cfg?.family?.presence || null,
-        weather: cfg?.family?.weather || null
+        weather: cfg?.family?.weather || null,
+        evcc: {
+          url: cfg?.evcc?.url || '',
+          loadpoint: cfg?.family?.evcc?.loadpoint ?? null
+        }
       }
     };
 

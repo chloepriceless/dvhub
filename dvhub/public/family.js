@@ -53,6 +53,12 @@
         if (!isNaN(idx)) slotClick(idx);
         return;
       }
+      if (action === 'evcc-mode') {
+        var evMode = actionEl.getAttribute('data-mode');
+        var evLp = parseInt(actionEl.getAttribute('data-lp'), 10);
+        if (evMode && !isNaN(evLp)) setEvccMode(evLp, evMode, actionEl);
+        return;
+      }
     }
     var tag = e.target.closest('[data-panel]');
     if (tag) {
@@ -583,6 +589,8 @@
     if (key === 'optimizer') {
       loadEosForecastPanel(key);
     }
+    // Task #23 — EV panel evcc charge-mode switch (hidden for other panels).
+    renderEvccModes(key);
     document.getElementById('overlay').classList.add('open');
     document.getElementById('panel').scrollTop = 0;
   }
@@ -722,6 +730,82 @@
     if (typeof t.charging === 'boolean') return t.charging;
     return t.chargingState === 'Charging'
       || (typeof t.chargerPowerKw === 'number' && t.chargerPowerKw > 0);
+  }
+
+  /* ===================== EVCC charge-mode control (#23, 2026-06-13) =========
+     The Family EV panel exposes the evcc loadpoint's charge mode (Aus/PV/
+     Min+PV/Schnell → off/pv/minpv/now). State comes from data.evcc; the switch
+     POSTs to /api/family/evcc/mode which proxies to evcc's REST API. The EV tag
+     falls back to the evcc vehicle/loadpoint when no Tesla is present. */
+  var EVCC_MODE_BTNS = [
+    { m: 'off', label: 'Aus' },
+    { m: 'pv', label: 'PV' },
+    { m: 'minpv', label: 'Min+PV' },
+    { m: 'now', label: 'Schnell' }
+  ];
+  function famEvccModeLabel(mode) {
+    switch (mode) {
+      case 'off': return 'Aus';
+      case 'pv': return 'PV';
+      case 'minpv': return 'Min+PV';
+      case 'now': return 'Schnell';
+      default: return '—';
+    }
+  }
+  // Resolve the currently-selected evcc loadpoint from a status payload.
+  function famSelectedEvccLp(data) {
+    var evcc = data && data.evcc;
+    if (!evcc || !evcc.available || !Array.isArray(evcc.loadpoints) || !evcc.loadpoints.length) return null;
+    var id = evcc.selectedLoadpoint;
+    var hit = evcc.loadpoints.filter(function (l) { return l.id === id; })[0];
+    return hit || evcc.loadpoints[0];
+  }
+  // Render the mode-switch buttons into #p-evcc (EV panel only). Hidden when no
+  // evcc loadpoint is available.
+  function renderEvccModes(key) {
+    var box = document.getElementById('p-evcc');
+    if (!box) return;
+    var lp = (key === 'ev') ? famSelectedEvccLp(lastStatus) : null;
+    if (!lp) { box.innerHTML = ''; box.hidden = true; return; }
+    var btns = EVCC_MODE_BTNS.map(function (x) {
+      return '<button class="evcc-mode-btn' + (lp.mode === x.m ? ' active' : '')
+        + '" data-action="evcc-mode" data-mode="' + x.m + '" data-lp="' + lp.id + '" type="button">'
+        + x.label + '</button>';
+    }).join('');
+    var sub = [];
+    if (lp.vehicleTitle) sub.push(escapeMsg(lp.vehicleTitle));
+    if (lp.charging && typeof lp.chargePowerW === 'number' && lp.chargePowerW > 0) sub.push((Math.round(lp.chargePowerW / 100) / 10).toString().replace('.', ',') + ' kW');
+    else if (lp.connected) sub.push('verbunden');
+    else sub.push('getrennt');
+    box.innerHTML = '<div class="evcc-mode-label">Lademodus &middot; ' + escapeMsg(lp.title) + '</div>'
+      + '<div class="evcc-mode-row">' + btns + '</div>'
+      + '<div class="evcc-mode-sub">' + sub.join(' &middot; ') + '</div>'
+      + '<div class="evcc-mode-msg" id="evcc-mode-msg"></div>';
+    box.hidden = false;
+  }
+  // POST a new charge mode for the loadpoint. Optimistic active-state toggle +
+  // local patch so the UI reacts instantly; the next poll re-syncs.
+  function setEvccMode(loadpoint, mode, btnEl) {
+    var msg = document.getElementById('evcc-mode-msg');
+    var row = btnEl && btnEl.parentNode;
+    if (row) { var bs = row.querySelectorAll('.evcc-mode-btn'); for (var i = 0; i < bs.length; i++) bs[i].classList.remove('active'); }
+    if (btnEl) btnEl.classList.add('active');
+    if (msg) msg.textContent = 'Sende…';
+    apiFetchCompat('/api/family/evcc/mode', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ loadpoint: loadpoint, mode: mode })
+    }).then(function (r) { return r.json(); }).then(function (out) {
+      if (!out || out.ok !== true) throw new Error((out && out.error) || 'fehlgeschlagen');
+      if (msg) msg.textContent = 'Gesetzt ✓';
+      if (lastStatus && lastStatus.evcc && Array.isArray(lastStatus.evcc.loadpoints)) {
+        var l = lastStatus.evcc.loadpoints.filter(function (x) { return x.id === loadpoint; })[0];
+        if (l) l.mode = mode;
+      }
+      setTimeout(function () { var m = document.getElementById('evcc-mode-msg'); if (m) m.textContent = ''; }, 1500);
+    }).catch(function (e) {
+      var m = document.getElementById('evcc-mode-msg'); if (m) m.textContent = 'Fehler: ' + e.message;
+    });
   }
 
   // Phase 11-06 round 9: the `hasSub` param was dropped with the Tesla tray
@@ -1474,6 +1558,34 @@
           if (bar) bar.classList.toggle('is-charging', teslaCharging);
         }
         setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
+      } else if (famSelectedEvccLp(data)) {
+        // No Tesla → drive the EV tag from the selected evcc loadpoint (#23).
+        var elp = famSelectedEvccLp(data);
+        var elpCharging = !!elp.charging;
+        if (elpCharging && typeof elp.chargePowerW === 'number' && elp.chargePowerW > 0) {
+          setText('v-e', (Math.round(elp.chargePowerW / 100) / 10).toString().replace('.', ',') + ' kW');
+        } else if (typeof elp.vehicleRangeKm === 'number' && elp.vehicleRangeKm > 0) {
+          setText('v-e', Math.round(elp.vehicleRangeKm) + ' km');
+        } else if (typeof elp.vehicleSocPct === 'number' && elp.vehicleSocPct > 0) {
+          setText('v-e', Math.round(elp.vehicleSocPct) + ' %');
+        } else {
+          setText('v-e', famEvccModeLabel(elp.mode));
+        }
+        var elvl = typeof elp.vehicleSocPct === 'number' ? Math.max(0, Math.min(100, elp.vehicleSocPct)) : null;
+        var elim = typeof elp.limitSocPct === 'number' ? Math.max(0, Math.min(100, elp.limitSocPct)) : null;
+        var eSocWrap = document.getElementById('ev-soc-wrap');
+        if (eSocWrap) eSocWrap.hidden = !(elvl != null && elvl > 0);
+        if (elvl != null && elvl > 0) {
+          setText('ev-soc-pct', Math.round(elvl) + ' %');
+          setText('ev-soc-limit', elim != null && elim > 0 ? 'Limit ' + Math.round(elim) + ' %' : '');
+          var eFill = document.getElementById('ev-soc-fill');
+          if (eFill) eFill.style.width = Math.round(elvl) + '%';
+          var eMark = document.getElementById('ev-soc-limit-mark');
+          if (eMark) { eMark.hidden = !(elim != null && elim > 0); if (elim != null && elim > 0) eMark.style.left = Math.round(elim) + '%'; }
+          var eBar = eSocWrap ? eSocWrap.querySelector('.tag-soc-bar') : null;
+          if (eBar) eBar.classList.toggle('is-charging', elpCharging);
+        }
+        setText('ts-ev', elpCharging ? 'Lädt gerade' : (elp.connected ? 'Bereit' : famEvccModeLabel(elp.mode)));
       } else {
         setText('ts-ev', ev.finishEstIso ? 'Fertig ca. ' + formatHour(ev.finishEstIso) : '');
         var socWrapOff = document.getElementById('ev-soc-wrap');
@@ -1485,7 +1597,9 @@
       // Phase 04 will populate ev.vehicles[] when an integration is wired.
       // A live Tesla also counts as "connected" so the tag stays visible while
       // the car is plugged in / charging even though energy.ev is idle.
+      // A reachable evcc loadpoint keeps the tag visible too (#23).
       var evConnected = teslaLive
+        || !!famSelectedEvccLp(data)
         || (typeof ev.powerKw === 'number' && Math.abs(ev.powerKw) > 0.01)
         || (typeof ev.socPct === 'number' && ev.socPct !== null)
         || (Array.isArray(ev.vehicles) && ev.vehicles.length > 0);
@@ -1661,6 +1775,22 @@
         ['Standort', escapeMsg(teslaPanel.geofence || '—')]
       ];
       panelData.ev.sub = 'Tesla · Ladezustand';
+    } else if (famSelectedEvccLp(data)) {
+      // No Tesla → EV panel reflects the evcc loadpoint (#23). The charge-mode
+      // switch lives in #p-evcc (renderEvccModes); these are the read-out stats.
+      var plp = famSelectedEvccLp(data);
+      var plpKw = (typeof plp.chargePowerW === 'number' && plp.chargePowerW > 0) ? (Math.round(plp.chargePowerW / 100) / 10) : 0;
+      panelData.ev.stats = [
+        { label: 'Ladezustand', val: typeof plp.vehicleSocPct === 'number' && plp.vehicleSocPct > 0 ? Math.round(plp.vehicleSocPct) + ' %' : '—', delta: typeof plp.limitSocPct === 'number' && plp.limitSocPct > 0 ? 'Limit ' + Math.round(plp.limitSocPct) + ' %' : '', up: true },
+        { label: 'Ladeleistung', val: plpKw > 0 ? plpKw + ' kW' : '0 kW', delta: plp.charging ? 'lädt' : '', up: true },
+        { label: 'Modus', val: famEvccModeLabel(plp.mode), delta: plp.connected ? 'verbunden' : 'getrennt', up: true }
+      ];
+      panelData.ev.details = [
+        ['Ladepunkt', escapeMsg(plp.title)],
+        ['Fahrzeug', escapeMsg(plp.vehicleTitle || '—')],
+        ['Reichweite', typeof plp.vehicleRangeKm === 'number' && plp.vehicleRangeKm > 0 ? Math.round(plp.vehicleRangeKm) + ' km' : '—']
+      ];
+      panelData.ev.sub = 'EVCC · ' + escapeMsg(plp.title);
     } else {
       panelData.ev.stats = [
         { label: 'Leistung', val: formatKw(ev.powerKw), delta: ev.mode || '', up: true },
@@ -2742,6 +2872,23 @@
     var ws = document.getElementById('famSetWeatherSize');
     if (wd) wd.value = (['compact', 'normal', 'detailed'].indexOf(wxCfg.detail) >= 0) ? wxCfg.detail : 'normal';
     if (ws) ws.value = (['sm', 'md', 'lg'].indexOf(wxCfg.size) >= 0) ? wxCfg.size : 'md';
+    // EVCC (#23) — URL + loadpoint picker (loadpoints come from the live state).
+    var ecfg = (lastStatus && lastStatus.config && lastStatus.config.evcc) || {};
+    var eurl = document.getElementById('famSetEvccUrl');
+    if (eurl) eurl.value = ecfg.url || '';
+    var elpSel = document.getElementById('famSetEvccLoadpoint');
+    if (elpSel) {
+      var elps = (lastStatus && lastStatus.evcc && lastStatus.evcc.loadpoints) || [];
+      if (elps.length) {
+        elpSel.innerHTML = elps.map(function (l) { return '<option value="' + l.id + '">' + escapeMsg(l.title) + '</option>'; }).join('');
+        elpSel.disabled = false;
+        var esel = ecfg.loadpoint != null ? Number(ecfg.loadpoint) : (lastStatus.evcc && lastStatus.evcc.selectedLoadpoint);
+        if (esel != null) elpSel.value = String(esel);
+      } else {
+        elpSel.innerHTML = '<option value="">— kein Ladepunkt gefunden —</option>';
+        elpSel.disabled = true;
+      }
+    }
     setText('famSetMsg', '');
     ov.classList.add('open');
   }
@@ -2759,12 +2906,18 @@
     var ws = document.getElementById('famSetWeatherSize');
     var detail = (wd && ['compact', 'normal', 'detailed'].indexOf(wd.value) >= 0) ? wd.value : 'normal';
     var size = (ws && ['sm', 'md', 'lg'].indexOf(ws.value) >= 0) ? ws.value : 'md';
+    var eurl = document.getElementById('famSetEvccUrl');
+    var elpSel = document.getElementById('famSetEvccLoadpoint');
+    var evccBody = {};
+    if (eurl) evccBody.url = (eurl.value || '').trim();
+    if (elpSel && elpSel.value) evccBody.loadpoint = parseInt(elpSel.value, 10);
     var body = {
       screensaver: {
         enabled: !(en && en.checked === false),
         defaultTimeoutSec: minutes * 60
       },
-      weather: { detail: detail, size: size }
+      weather: { detail: detail, size: size },
+      evcc: evccBody
     };
     apiFetchCompat('/api/family/settings', {
       method: 'POST',
@@ -2778,6 +2931,7 @@
         lastStatus.config = lastStatus.config || {};
         lastStatus.config.screensaver = Object.assign({}, lastStatus.config.screensaver, body.screensaver);
         lastStatus.config.weather = Object.assign({}, lastStatus.config.weather, body.weather);
+        if (out.evcc) lastStatus.config.evcc = out.evcc;
       }
       // Re-render the widget immediately so the new level shows without waiting
       // for the next poll.

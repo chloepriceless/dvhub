@@ -548,3 +548,20 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
   color:rgba(255,255,255,.9);font-size:13px}
 .fam-set-select option{background:#181b27;color:#fff}
+
+/* Task #23 (2026-06-13) — EVCC charge-mode switch in the EV detail panel +
+   the EVCC section in the family settings popup. */
+.panel-evcc{margin:4px 0 18px}
+.evcc-mode-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:rgba(255,255,255,.4);margin-bottom:8px}
+.evcc-mode-row{display:flex;gap:8px}
+.evcc-mode-btn{flex:1;padding:12px 6px;border-radius:12px;font-size:14px;font-weight:700;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.8);cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
+.evcc-mode-btn:active{transform:scale(.96)}
+.evcc-mode-btn.active{background:rgba(165,94,234,.28);border-color:#a55eea;color:#fff}
+.evcc-mode-sub{margin-top:8px;font-size:12px;color:rgba(255,255,255,.5)}
+.evcc-mode-msg{margin-top:6px;font-size:12px;color:rgba(38,222,129,.9);min-height:15px}
+.fam-set-row input[type="text"]{flex:1;min-width:0;max-width:60%;padding:8px 10px;border-radius:10px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.9);font-size:13px}

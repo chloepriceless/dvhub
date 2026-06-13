@@ -2104,10 +2104,12 @@ export function createApiRoutes(ctx) {
       }
       const saver = body && body.screensaver;
       const wx = body && body.weather;
+      const ev = body && body.evcc;
       const hasSaver = saver && typeof saver === 'object';
       const hasWx = wx && typeof wx === 'object';
-      if (!hasSaver && !hasWx) {
-        return json(res, 400, { ok: false, error: 'screensaver or weather object required' });
+      const hasEvcc = ev && typeof ev === 'object';
+      if (!hasSaver && !hasWx && !hasEvcc) {
+        return json(res, 400, { ok: false, error: 'screensaver, weather or evcc object required' });
       }
       // Same merge mechanics as /api/family/mqtt-tiles: deep-copy the raw
       // config, change ONLY the family sub-blocks we were given, save the
@@ -2133,6 +2135,26 @@ export function createApiRoutes(ctx) {
         const size = SIZES.includes(wx.size) ? wx.size : 'md';
         next.family.weather = { ...(next.family.weather || {}), detail, size };
       }
+      if (hasEvcc) {
+        // EVCC base URL lives at top-level cfg.evcc.url (shared with the
+        // battery-protect poller); the Family panel's loadpoint selection lives
+        // under cfg.family.evcc.loadpoint.
+        if (typeof ev.url === 'string') {
+          const u = ev.url.trim();
+          if (u && !/^https?:\/\//i.test(u)) {
+            return json(res, 400, { ok: false, error: 'evcc.url must be http(s)://…' });
+          }
+          next.evcc = (next.evcc && typeof next.evcc === 'object') ? next.evcc : {};
+          next.evcc.url = u;
+        }
+        if (ev.loadpoint != null && ev.loadpoint !== '') {
+          const lp = Number(ev.loadpoint);
+          if (!Number.isInteger(lp) || lp < 1 || lp > 64) {
+            return json(res, 400, { ok: false, error: 'evcc.loadpoint must be 1..64' });
+          }
+          next.family.evcc = { ...(next.family.evcc || {}), loadpoint: lp };
+        }
+      }
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {
@@ -2141,9 +2163,40 @@ export function createApiRoutes(ctx) {
       }
       pushLog('family_settings_saved', {
         ...(hasSaver ? { enabled: next.family.screensaver.enabled, defaultTimeoutSec: next.family.screensaver.defaultTimeoutSec } : {}),
-        ...(hasWx ? { weatherDetail: next.family.weather.detail, weatherSize: next.family.weather.size } : {})
+        ...(hasWx ? { weatherDetail: next.family.weather.detail, weatherSize: next.family.weather.size } : {}),
+        ...(hasEvcc ? { evccUrl: next.evcc?.url || '', evccLoadpoint: next.family.evcc?.loadpoint ?? null } : {})
       }, actorContext(req));
-      return json(res, 200, { ok: true, screensaver: next.family.screensaver || null, weather: next.family.weather || null });
+      return json(res, 200, {
+        ok: true,
+        screensaver: next.family.screensaver || null,
+        weather: next.family.weather || null,
+        evcc: { url: next.evcc?.url || '', loadpoint: next.family.evcc?.loadpoint ?? null }
+      });
+    }
+
+    // Family EV panel → evcc charge-mode switch (operator request #23).
+    // Body: { loadpoint:<1-based id>, mode:'off'|'pv'|'minpv'|'now' }. Pro-gated
+    // + LAN-trust (token-less kiosk under lanTrust='open'); the actual write goes
+    // to evcc's REST API via the integration.
+    if (url.pathname === '/api/family/evcc/mode' && req.method === 'POST') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
+      let body;
+      try {
+        body = await parseBody(req);
+      } catch (e) {
+        return json(res, 400, { ok: false, error: 'invalid json' });
+      }
+      if (!ctx.evccIntegration || typeof ctx.evccIntegration.setMode !== 'function') {
+        return json(res, 503, { ok: false, error: 'evcc not available' });
+      }
+      const loadpoint = Number(body && body.loadpoint);
+      const mode = String((body && body.mode) || '');
+      const result = await ctx.evccIntegration.setMode(loadpoint, mode);
+      if (!result || result.ok !== true) {
+        return json(res, 400, result || { ok: false, error: 'mode set failed' });
+      }
+      pushLog('family_evcc_mode', { loadpoint, mode }, actorContext(req));
+      return json(res, 200, result);
     }
 
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {
