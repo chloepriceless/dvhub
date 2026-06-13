@@ -92,7 +92,7 @@
     ev: { icon: TESLA_GLYPH_SVG, iconBg: 'rgba(165,94,234,.1)', title: 'E-Auto', sub: 'Solarüberschuss-Laden', color: '#a55eea', summary: 'Lädt clever mit dem Strom den die Sonne liefert.', stats: [{ label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Akku', val: '—', delta: '', up: true }, { label: 'Modus', val: '—', delta: '', up: true }], chart: null, details: [['Wallbox', '—']] },
     grid: { icon: '&#9889;', iconBg: 'rgba(253,150,68,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#fd9644', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
     forecast: { icon: '&#9925;', iconBg: 'rgba(247,183,49,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#F7B731', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
-    price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'Stündliche EPEX Day-Ahead Börsenpreise.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
+    price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'EPEX Day-Ahead Börsenpreise (15-min). Die Kurve zeigt den kompletten verfügbaren Verlauf — heute und, sobald gegen 13 Uhr veröffentlicht, auch morgen.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
     optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'DV-EOS Vorhersage', color: '#4b7bec', summary: 'DV-EOS plant Laden, Entladen und Einspeisen aus EPEX-Preisen, PV- und Last-Prognose. Die Tabelle zeigt den geplanten Verlauf inkl. erwartetem Akkustand.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Fahrplan', '\u2014']] },
     weather: { icon: '&#9925;', iconBg: 'rgba(52,219,255,.08)', title: 'Wetter', sub: 'Open-Meteo · Standort der Anlage', color: '#34dbff', summary: 'Stundenprognose aus der Wetter-Integration, die auch die PV-Vorhersage speist.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Regen', val: '—', delta: '', up: true }], chart: null, details: [] },
   };
@@ -270,7 +270,10 @@
     var isSigned = (key === 'bat' || key === 'grid');
     var mqttUnit = isMqtt ? (d.chartUnit || '') : '';
     var unitFn;
-    if (isMqtt) {
+    // The price panel can ALSO arrive in the {labels,data} (isMqtt) shape — it
+    // carries the multi-day day-ahead curve (Task #22). It must still format as
+    // ct/kWh, so the price branch wins over the generic isMqtt unit.
+    if (isMqtt && !isPrice) {
       unitFn = function (v) {
         var n = (typeof v === 'number') ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : v;
         return mqttUnit ? n + ' ' + mqttUnit : String(n);
@@ -553,7 +556,11 @@
     // the EV panel charts a multi-day Tesla charge history (round 10), so it
     // reads "Ladehistorie". textContent only — no markup (CSP posture).
     var chartLabel = document.querySelector('.panel-chart .chart-label');
-    if (chartLabel) chartLabel.textContent = (key === 'ev') ? 'Ladehistorie' : 'Verlauf heute';
+    if (chartLabel) {
+      chartLabel.textContent = (key === 'ev') ? 'Ladehistorie'
+        : (key === 'price') ? 'Day-Ahead Verlauf (heute + morgen)'
+        : 'Verlauf heute';
+    }
     // Render the chart synchronously for the 5 main tags (d.chart is already
     // populated from the poll). MQTT tiles arrive here with d.chart === null
     // and get their history lazily fetched below.
@@ -1685,10 +1692,18 @@
       { label: 'Peak heute', val: peakHeuteKw != null && peakHeuteKw > 0 ? peakHeuteKw.toFixed(2) + ' kW' : '—', delta: '', up: true },
       { label: 'Morgen', val: tomorrowKwh, delta: tomorrowPeak !== '—' ? 'Peak ' + tomorrowPeak : 'keine Prognose', up: true }
     ];
+    // Tomorrow's day-ahead range — surfaced in the deltas once published
+    // (slots whose local day == tomorrow). Empty until ~13:00.
+    var tomKey = new Date(Date.now() + 24 * 3600 * 1000).toDateString();
+    var tomVals = (price.slots || [])
+      .filter(function (s) { return s && new Date(Number(s.ts)).toDateString() === tomKey && isFinite(Number(s.ctKwh)); })
+      .map(function (s) { return Number(s.ctKwh); });
+    var tomMin = tomVals.length ? Math.min.apply(null, tomVals) : null;
+    var tomMax = tomVals.length ? Math.max.apply(null, tomVals) : null;
     panelData.price.stats = [
-      { label: 'Jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true },
-      { label: 'Min heute', val: typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true },
-      { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) + ' ct' : '—', delta: '', up: true }
+      { label: 'Jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.importCtKwh === 'number' ? 'Bezug ' + price.importCtKwh.toFixed(1) + ' ct' : '', up: true },
+      { label: 'Min heute', val: typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) + ' ct' : '—', delta: tomMin != null ? 'morgen ' + tomMin.toFixed(1) + ' ct' : '', up: true },
+      { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) + ' ct' : '—', delta: tomMax != null ? 'morgen ' + tomMax.toFixed(1) + ' ct' : '', up: true }
     ];
     // Panel "Verlauf heute" charts — 24 hourly values per panel from
     // data.today.charts (96 for price, native 15-min EPEX resolution).
@@ -1700,7 +1715,9 @@
     panelData.home.chart = hasChartData(tc.home) ? tc.home : null;
     panelData.bat.chart = hasChartData(tc.bat) ? tc.bat : null;
     panelData.grid.chart = hasChartData(tc.grid) ? tc.grid : null;
-    panelData.price.chart = hasChartData(tc.price) ? tc.price : null;
+    // Task #22: prefer the full forward day-ahead curve (today + tomorrow);
+    // fall back to today-only history when no live price slots are present.
+    panelData.price.chart = buildFamPriceChart(price.slots) || (hasChartData(tc.price) ? tc.price : null);
     // Forecast panel: reuse today.charts.solar as the PV curve. When a real
     // forecast service is configured Phase 04 will replace this with next48h.
     panelData.forecast.chart = hasChartData(tc.solar) ? tc.solar : null;
@@ -1783,6 +1800,34 @@
         }
       });
     }
+  }
+
+  /* Task #22 (2026-06-13) — the EPEX price panel shows the COMPLETE available
+     day-ahead curve (today + tomorrow once published, up to ~36 h forward)
+     instead of the today-only history. Source: data.price.slots (the full
+     epexState series, which already carries tomorrow when published). Returns
+     the {labels,data} shape renderPanelChart understands, or null. */
+  function buildFamPriceChart(slots) {
+    if (!Array.isArray(slots) || !slots.length) return null;
+    var now = Date.now();
+    var from = now - 2 * 3600 * 1000;     // small lead-in behind "now"
+    var to = now + 36 * 3600 * 1000;      // cap forward window at 36 h
+    var todayKey = new Date(now).toDateString();
+    var labels = [], data = [];
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      var ts = Number(s && s.ts);
+      if (!isFinite(ts) || ts < from || ts > to) continue;
+      var dt = new Date(ts);
+      var hhmm = String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
+      // Prefix the weekday on days other than today so tomorrow's slots are
+      // unambiguous on the shared HH:MM axis (e.g. "Sa 14:00").
+      labels.push(dt.toDateString() === todayKey ? hhmm : (famWeekdayLabel(ts) + ' ' + hhmm));
+      var v = Number(s.ctKwh);
+      data.push(isFinite(v) ? Math.round(v * 100) / 100 : null);
+    }
+    if (!data.length) return null;
+    return { labels: labels, data: data };
   }
 
   function renderPriceWidget(price) {
