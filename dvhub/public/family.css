@@ -483,3 +483,8 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 
 /* Weather widget (2026-06-13) */
 .widget-weather .widget-main{font-size:24px;font-weight:800;letter-spacing:-.5px}
+
+/* 2026-06-13 operator tweaks: bigger sun, bigger battery power line. */
+.fam-taganim.pf-sky{width:140px;height:140px}
+.tag-bat .tag-status{font-size:15px;font-weight:800;padding:5px 14px}
+.picker-item.picker-period .picker-item-name{font-size:16px;font-weight:800}

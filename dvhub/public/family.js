@@ -43,6 +43,11 @@
         if (key) pickMetric(key);
         return;
       }
+      if (action === 'pick-period') {
+        var pkey = actionEl.getAttribute('data-period-key');
+        if (pkey) pickPeriod(pkey);
+        return;
+      }
       if (action === 'slot-click') {
         var idx = parseInt(actionEl.getAttribute('data-slot'), 10);
         if (!isNaN(idx)) slotClick(idx);
@@ -970,29 +975,123 @@
   setTimeout(positionTray, 600);
   setInterval(positionTray, 2000);
 
-  /* ===================== CONFIGURABLE METRICS BAR (D-12) ===================== */
+  /* ===================== CONFIGURABLE METRICS BAR (D-12) =====================
+     Reworked 2026-06-13 (operator request): metrics can be PERIOD-aware
+     (Heute / Monat / Jahr) — backed by payload.periods (the same history
+     KPIs the Historie page shows). Slot config entries are stored as
+     'metricId' (default period) or 'metricId:month' / 'metricId:year'.
+     calc(stats, period): stats = { live, savings, periods:{day,month,year} }. */
+  var PERIOD_LABEL = { day: 'Heute', month: 'Monat', year: 'Jahr' };
+  function pk(stats, period, field) {
+    var p = stats.periods && stats.periods[period || 'day'];
+    var v = p ? p[field] : null;
+    return (typeof v === 'number' && isFinite(v)) ? v : null;
+  }
+  function fmtOr(v, digits) {
+    return v == null ? '--' : (digits === 0 ? Math.round(v) : v.toFixed(digits));
+  }
   var allMetrics = {
-    eigenverbrauch: { id: 'eigenverbrauch', icon: '\u{1F340}', label: 'Eigenverbrauch', color: '#26de81', unit: '%', calc: function (s) { return s.sr; } },
-    autarkie: { id: 'autarkie', icon: '\u{1F3E0}', label: 'Autarkie', color: '#4b7bec', unit: '%', calc: function (s) { return s.autarkie; } },
-    gespart: { id: 'gespart', icon: '\u{1F4B0}', label: 'Heute gespart', color: '#26de81', unit: '\u20ac', calc: function (s) { return s.savedEur; } },
-    einspeisung_eur: { id: 'einspeisung_eur', icon: '\u{1F4B8}', label: 'Einnahmen', color: '#fd9644', unit: '\u20ac', calc: function (s) { return s.feedEur; } },
-    kosten_vermieden: { id: 'kosten_vermieden', icon: '\u{1F6E1}\uFE0F', label: 'Kosten vermieden', color: '#26de81', unit: '\u20ac', calc: function (s) { return s.avoidedEur; } },
-    monatsbilanz: { id: 'monatsbilanz', icon: '\u{1F4C8}', label: 'Monatsbilanz', color: '#F7B731', unit: '\u20ac', calc: function (s) { return s.monthEur; } },
-    co2: { id: 'co2', icon: '\u{1F33F}', label: 'CO\u2082 vermieden', color: '#26de81', unit: 'kg', calc: function (s) { return s.co2; } },
-    baeume: { id: 'baeume', icon: '\u{1F333}', label: 'Bäume-Äquivalent', color: '#26de81', unit: '', calc: function (s) { return s.trees; } },
-    solar_km: { id: 'solar_km', icon: '\u{1F697}', label: 'Solar-Kilometer', color: '#a55eea', unit: 'km', calc: function (s) { return s.solarKm; } },
-    waschgaenge: { id: 'waschgaenge', icon: '\u{1F455}', label: 'Waschgänge gratis', color: '#42a5f5', unit: '', calc: function (s) { return s.washes; } },
-    netflix: { id: 'netflix', icon: '\u{1F4FA}', label: 'Std Netflix gratis', color: '#e84118', unit: 'h', calc: function (s) { return s.netflixH; } },
-    tagesertrag: { id: 'tagesertrag', icon: '\u2600\uFE0F', label: 'Tagesertrag', color: '#F7B731', unit: 'kWh', calc: function (s) { return s.dayYield; } },
-    netz_bilanz: { id: 'netz_bilanz', icon: '\u26A1', label: 'Netz heute', color: '#fd9644', unit: 'kWh', calc: function (s) { return s.netBalance; } },
-    bat_zyklen: { id: 'bat_zyklen', icon: '\u{1F504}', label: 'Batterie-Zyklen', color: '#26de81', unit: '', calc: function (s) { return s.batCycles; } },
-    jahresertrag: { id: 'jahresertrag', icon: '\u{1F4CA}', label: 'Jahresertrag', color: '#F7B731', unit: 'MWh', calc: function (s) { return s.yearYield; } }
+    eigenverbrauch: { id: 'eigenverbrauch', icon: '\u{1F340}', label: 'Eigenverbrauch', color: '#26de81', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var pv = pk(s, p, 'pvKwh'); var ex = pk(s, p, 'exportKwh');
+      if (pv == null || ex == null || pv <= 0) return s.live.sr;
+      return Math.max(0, Math.min(100, Math.round((pv - ex) / pv * 100)));
+    } },
+    autarkie: { id: 'autarkie', icon: '\u{1F3E0}', label: 'Autarkie', color: '#4b7bec', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var load = pk(s, p, 'loadKwh'); var imp = pk(s, p, 'importKwh');
+      if (load == null || imp == null || load <= 0) return s.live.autarkie;
+      return Math.max(0, Math.min(100, Math.round((load - imp) / load * 100)));
+    } },
+    bilanz: { id: 'bilanz', icon: '\u{1F4C8}', label: 'Bilanz', color: '#F7B731', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var v = pk(s, p, 'netEur');
+      if (v == null && (p === 'day' || !p)) { var n = parseFloat(s.savings.todayEur); return isFinite(n) ? n.toFixed(2) : '--'; }
+      return fmtOr(v, 2);
+    } },
+    einnahmen: { id: 'einnahmen', icon: '\u{1F4B8}', label: 'Einnahmen', color: '#fd9644', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'exportRevenueEur'), 2);
+    } },
+    kosten_vermieden: { id: 'kosten_vermieden', icon: '\u{1F6E1}\uFE0F', label: 'Kosten vermieden', color: '#26de81', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'avoidedImportGrossEur'), 2);
+    } },
+    ertrag: { id: 'ertrag', icon: '\u2600\uFE0F', label: 'PV-Ertrag', color: '#F7B731', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'pvKwh'), 1);
+    } },
+    einspeisung_kwh: { id: 'einspeisung_kwh', icon: '\u{1F50C}', label: 'Eingespeist', color: '#fd9644', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'exportKwh'), 1);
+    } },
+    bezug_kwh: { id: 'bezug_kwh', icon: '\u26A1', label: 'Netzbezug', color: '#ff6b6b', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'importKwh'), 1);
+    } },
+    erzielt_ct: { id: 'erzielt_ct', icon: '\u{1F3AF}', label: 'Erzielt (Einspeisung)', color: '#a55eea', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'dvRevenueCtKwh'), 2);
+    } },
+    boerse_avg: { id: 'boerse_avg', icon: '\u{1F4B9}', label: '\u00d8 B\u00f6rsen-Verg\u00fctung', color: '#34dbff', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'periodMarketValueCtKwh'), 2);
+    } },
+    aw_mittel: { id: 'aw_mittel', icon: '\u2696\uFE0F', label: 'Anzulegender Wert', color: '#4b7bec', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'weightedApplicableValueCtKwh'), 2);
+    } },
+    jahresmarktwert: { id: 'jahresmarktwert', icon: '\u{1F4C5}', label: 'Jahresmarktwert', color: '#34dbff', unit: 'ct/kWh', periods: ['year'], calc: function (s, p) {
+      return fmtOr(pk(s, 'year', 'annualMarketValueCtKwh'), 2);
+    } },
+    zyklen: { id: 'zyklen', icon: '\u{1F504}', label: 'Akku-Zyklen', color: '#26de81', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'cycles'), 1);
+    } },
+    eeg51a: { id: 'eeg51a', icon: '\u00a7', label: '\u00a751a Verl\u00e4ngerung', color: '#a55eea', unit: 'Mon.', periods: ['month', 'year'], calc: function (s, p) {
+      return fmtOr(pk(s, p, 'eegExtensionMonths'), 2);
+    } },
+    co2: { id: 'co2', icon: '\u{1F33F}', label: 'CO\u2082 vermieden', color: '#26de81', unit: 'kg', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var sc = pk(s, p, 'selfConsumptionKwh');
+      return sc == null ? '--' : (sc * 0.4).toFixed(1);
+    } },
+    baeume: { id: 'baeume', icon: '\u{1F333}', label: 'B\u00e4ume-\u00c4quivalent', color: '#26de81', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var sc = pk(s, p, 'selfConsumptionKwh');
+      return sc == null ? '--' : (sc * 0.4 / 25).toFixed(2);
+    } },
+    solar_km: { id: 'solar_km', icon: '\u{1F697}', label: 'Solar-Kilometer', color: '#a55eea', unit: 'km', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var pv = pk(s, p, 'pvKwh');
+      return pv == null ? '--' : Math.round(pv * 6);
+    } },
+    waschgaenge: { id: 'waschgaenge', icon: '\u{1F455}', label: 'Waschg\u00e4nge gratis', color: '#42a5f5', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var pv = pk(s, p, 'pvKwh');
+      return pv == null ? '--' : Math.round(pv / 1.5);
+    } },
+    netflix: { id: 'netflix', icon: '\u{1F4FA}', label: 'Std Netflix gratis', color: '#e84118', unit: 'h', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var pv = pk(s, p, 'pvKwh');
+      return pv == null ? '--' : Math.round(pv / 0.08);
+    } },
+    netz_bilanz: { id: 'netz_bilanz', icon: '\u2696\uFE0F', label: 'Netz-Saldo', color: '#fd9644', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+      var ex = pk(s, p, 'exportKwh'); var im = pk(s, p, 'importKwh');
+      if (ex == null || im == null) return '--';
+      var net = ex - im;
+      return (net >= 0 ? '+' : '') + net.toFixed(1);
+    } }
   };
 
-  var defaultSlots = ['eigenverbrauch', 'gespart', 'co2', 'baeume', 'solar_km', 'tagesertrag'];
+  // Legacy slot-id migration (pre-2026-06-13 catalog → period-aware ids).
+  var LEGACY_METRIC_MAP = {
+    gespart: 'bilanz', einspeisung_eur: 'einnahmen', monatsbilanz: 'bilanz:month',
+    tagesertrag: 'ertrag', jahresertrag: 'ertrag:year', bat_zyklen: 'zyklen'
+  };
+
+  var defaultSlots = ['eigenverbrauch', 'bilanz', 'erzielt_ct', 'boerse_avg', 'einspeisung_kwh', 'ertrag'];
   var slotConfig = [];
   var editMode = false;
   var editingSlot = -1;
+  var pendingMetricKey = null; // picker step 2 (period choice)
+
+  function parseSlotEntry(entry) {
+    var parts = String(entry || '').split(':');
+    var id = parts[0];
+    var period = parts[1] || 'day';
+    if (LEGACY_METRIC_MAP[id]) {
+      var mapped = LEGACY_METRIC_MAP[id].split(':');
+      id = mapped[0];
+      period = mapped[1] || period;
+    }
+    var m = allMetrics[id];
+    if (m && m.periods && m.periods.indexOf(period) === -1) period = m.periods[0];
+    return { id: id, period: period, metric: m };
+  }
 
   function getSlotCount() { var w = window.innerWidth; return w > 1100 ? 6 : w > 900 ? 5 : w > 700 ? 4 : w > 500 ? 3 : 2; }
 
@@ -1011,23 +1110,23 @@
     var count = getSlotCount();
     var html = '';
     for (var i = 0; i < count; i++) {
-      var mid = slotConfig[i] || defaultSlots[i % defaultSlots.length];
-      var m = allMetrics[mid];
-      if (!m) continue;
-      html += '<div class="slot" data-slot="' + i + '" data-metric="' + mid + '" data-action="slot-click">';
+      var entry = parseSlotEntry(slotConfig[i] || defaultSlots[i % defaultSlots.length]);
+      if (!entry.metric) continue;
+      var perSuffix = (entry.metric.periods && entry.metric.periods.length > 1)
+        ? ' \u00b7 ' + PERIOD_LABEL[entry.period]
+        : '';
+      html += '<div class="slot" data-slot="' + i + '" data-action="slot-click">';
       html += '<div class="slot-edit">\u270E</div>';
-      html += '<div class="slot-icon">' + m.icon + '</div>';
+      html += '<div class="slot-icon">' + entry.metric.icon + '</div>';
       html += '<div class="slot-val" id="sv-' + i + '">--</div>';
-      html += '<div class="slot-label">' + m.label + '</div>';
+      html += '<div class="slot-label">' + entry.metric.label + perSuffix + '</div>';
       html += '</div>';
     }
     container.innerHTML = html;
-    // CSP-safe: set per-slot value color via property setter post-innerHTML.
     for (var si = 0; si < count; si++) {
-      var smid = slotConfig[si] || defaultSlots[si % defaultSlots.length];
-      var sm = allMetrics[smid];
+      var sentry = parseSlotEntry(slotConfig[si] || defaultSlots[si % defaultSlots.length]);
       var sel = document.getElementById('sv-' + si);
-      if (sel && sm) sel.style.color = sm.color;
+      if (sel && sentry.metric) sel.style.color = sentry.metric.color;
     }
   }
 
@@ -1039,21 +1138,18 @@
   }
 
   function slotClick(idx) {
-    // Always open the picker on click — requiring edit mode first left the
-    // slot bar feeling dead (users didn't realise they had to press the gear
-    // icon first). The gear toggle still tints the bar as a visual affordance
-    // for the picker action, but it's no longer a gate.
     editingSlot = idx;
     openPicker(idx);
   }
 
   function openPicker(slotIdx) {
     var grid = document.getElementById('pickerGrid');
-    var current = slotConfig[slotIdx];
+    var current = parseSlotEntry(slotConfig[slotIdx]);
+    pendingMetricKey = null;
     var html = '';
     Object.keys(allMetrics).forEach(function (key) {
       var m = allMetrics[key];
-      var sel = key === current ? ' selected' : '';
+      var sel = key === current.id ? ' selected' : '';
       html += '<div class="picker-item' + sel + '" data-action="pick-metric" data-metric-key="' + key + '">';
       html += '<div class="picker-item-icon">' + m.icon + '</div>';
       html += '<div><div class="picker-item-name">' + m.label + '</div>';
@@ -1061,33 +1157,59 @@
       html += '</div>';
     });
     grid.innerHTML = html;
-    document.getElementById('picker-title').textContent = 'Slot ' + (slotIdx + 1) + ' — Kennzahl wählen';
+    document.getElementById('picker-title').textContent = 'Slot ' + (slotIdx + 1) + ' \u2014 Kennzahl w\u00e4hlen';
     document.getElementById('pickerOverlay').classList.add('open');
   }
 
-  function closePicker() { document.getElementById('pickerOverlay').classList.remove('open'); editingSlot = -1; }
+  function closePicker() { document.getElementById('pickerOverlay').classList.remove('open'); editingSlot = -1; pendingMetricKey = null; }
+
+  /* Picker step 2: period choice for period-aware metrics. */
+  function openPeriodPicker(key) {
+    var grid = document.getElementById('pickerGrid');
+    var m = allMetrics[key];
+    if (!grid || !m) return;
+    pendingMetricKey = key;
+    var html = '';
+    m.periods.forEach(function (p) {
+      html += '<div class="picker-item picker-period" data-action="pick-period" data-period-key="' + p + '">';
+      html += '<div class="picker-item-icon">' + (p === 'day' ? '\u{1F4C6}' : p === 'month' ? '\u{1F4C5}' : '\u{1F5D3}\uFE0F') + '</div>';
+      html += '<div><div class="picker-item-name">' + PERIOD_LABEL[p] + '</div>';
+      html += '<div class="picker-item-desc">' + m.label + '</div></div>';
+      html += '</div>';
+    });
+    grid.innerHTML = html;
+    document.getElementById('picker-title').textContent = m.label + ' \u2014 Zeitraum w\u00e4hlen';
+  }
 
   function pickMetric(key) {
     if (editingSlot < 0) return;
-    slotConfig[editingSlot] = key;
-    saveSlotConfig();
-    renderSlots();
-    updateSlotValues();
-    closePicker();
+    var m = allMetrics[key];
+    if (!m) return;
+    if (m.periods && m.periods.length > 1) { openPeriodPicker(key); return; }
+    slotConfig[editingSlot] = m.periods && m.periods.length === 1 && m.periods[0] !== 'day'
+      ? key + ':' + m.periods[0] : key;
+    saveSlotConfig(); renderSlots(); updateSlotValues(); closePicker();
   }
 
-  var liveStats = { sr: '--', autarkie: '--', savedEur: '--', feedEur: '--', avoidedEur: '--', monthEur: '--', co2: '--', trees: '--', solarKm: '--', washes: '--', netflixH: '--', dayYield: '--', netBalance: '--', batCycles: '--', yearYield: '--' };
+  function pickPeriod(period) {
+    if (editingSlot < 0 || !pendingMetricKey) return;
+    slotConfig[editingSlot] = period === 'day' ? pendingMetricKey : pendingMetricKey + ':' + period;
+    saveSlotConfig(); renderSlots(); updateSlotValues(); closePicker();
+  }
+
+  // Stats snapshot for the bottom-bar metrics: live moment values + the
+  // savings strings + the per-period history KPIs from payload.periods.
+  var slotStats = { live: { sr: '--', autarkie: '--' }, savings: {}, periods: {} };
 
   function updateSlotValues() {
     var count = getSlotCount();
     for (var i = 0; i < count; i++) {
-      var mid = slotConfig[i];
-      var m = allMetrics[mid];
-      if (!m) continue;
+      var entry = parseSlotEntry(slotConfig[i] || defaultSlots[i % defaultSlots.length]);
+      if (!entry.metric) continue;
       var el = document.getElementById('sv-' + i);
       if (!el) continue;
-      var val = m.calc(liveStats);
-      el.textContent = val + (m.unit && val !== '--' ? ' ' + m.unit : '');
+      var val = entry.metric.calc(slotStats, entry.period);
+      el.textContent = val + (entry.metric.unit && val !== '--' ? ' ' + entry.metric.unit : '');
     }
   }
 
@@ -1287,70 +1409,27 @@
     });
 
     sr('family.greeting', function () {
-      // Greeting (vorkalkuliert per D-07/D-13)
+      // Rule-based status copy removed (operator request 2026-06-13) — the
+      // greeting strip keeps only hello + clock/date; g-msg / g-mood are gone
+      // from the markup.
       if (greeting.hello) setText('g-hello', greeting.hello);
-      if (greeting.message) {
-        var msgEl = document.getElementById('g-msg');
-        // Review 2026-06-10 (P2-3): the greeting is raw LLM output — never feed
-        // it to innerHTML (a model can emit markup). textContent + <br> nodes.
-        if (msgEl) {
-          msgEl.textContent = '';
-          var glines = String(greeting.message).split('\n');
-          for (var gi = 0; gi < glines.length; gi++) {
-            if (gi > 0) msgEl.appendChild(document.createElement('br'));
-            msgEl.appendChild(document.createTextNode(glines[gi]));
-          }
-        }
-      }
-      if (greeting.moodLabel) setText('g-mood', greeting.moodLabel);
-      var moodEl = document.getElementById('g-mood');
-      if (moodEl) moodEl.classList.toggle('warn', greeting.mood === 'warn');
       if (greeting.time) setText('g-time', greeting.time);
       if (greeting.date) setText('g-date', greeting.date);
     });
 
     sr('family.live-stats', function () {
-      // Live stats for bottom-bar slots (D-12). The family service emits savings
-      // values as pre-formatted strings ("0.44"), so parseFloat is required —
-      // a typeof === 'number' check would always hit the '--' fallback.
-      var savings = data.savings || {};
-      var today = data.today || {};
-      function parseNum(v) { var n = typeof v === 'number' ? v : parseFloat(v); return (typeof n === 'number' && isFinite(n)) ? n : null; }
-      var savedEurN = parseNum(savings.todayEur);
-      var feedEurN = parseNum(savings.feedInRevenueEur);
-      var avoidedEurN = parseNum(savings.avoidedCostEur);
-      var monthEurN = parseNum(savings.monthEur);
-      liveStats.sr = typeof energy.solarKw === 'number' && energy.solarKw > 0 && typeof energy.homeKw === 'number'
-        ? Math.round(Math.min(100, (Math.min(energy.solarKw, energy.homeKw) / Math.max(energy.solarKw, 0.01)) * 100))
+      // Bottom-bar stats (D-12, reworked 2026-06-13): period metrics come from
+      // data.periods (history KPIs, same numbers as the Historie page); the
+      // moment-value fallbacks (Eigenverbrauch/Autarkie before the first KPI
+      // refresh) stay live-computed.
+      slotStats.savings = data.savings || {};
+      slotStats.periods = data.periods || {};
+      slotStats.live.sr = typeof energy.solarKw === 'number' && energy.solarKw > 0
+        ? Math.max(0, Math.min(100, Math.round((energy.solarKw - Math.max(0, -(energy.gridKw || 0))) / energy.solarKw * 100)))
         : '--';
-      liveStats.autarkie = typeof energy.solarKw === 'number' && typeof energy.homeKw === 'number' && energy.homeKw > 0
+      slotStats.live.autarkie = typeof energy.homeKw === 'number' && energy.homeKw > 0
         ? Math.max(0, Math.round(Math.min(100, ((energy.homeKw - Math.max(0, energy.gridKw || 0)) / energy.homeKw) * 100)))
         : '--';
-      liveStats.savedEur = savedEurN != null ? savedEurN.toFixed(2) : '--';
-      liveStats.feedEur = feedEurN != null ? feedEurN.toFixed(2) : '--';
-      liveStats.avoidedEur = avoidedEurN != null ? avoidedEurN.toFixed(2) : '--';
-      liveStats.monthEur = monthEurN != null ? Math.round(monthEurN) : '--';
-      // Today-derived metrics from real telemetry counters in data.today. CO2
-      // factor: 0.4 kg/kWh (German grid avg 2024). Tree equivalent: ~25 kg
-      // CO2/year absorbed. Solar-km: ~6 km/kWh (EV avg 16.6 kWh/100km). Wash
-      // cycle ~1.5 kWh. Netflix streaming ~0.08 kWh/h.
-      liveStats.dayYield = typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) : '--';
-      if (typeof today.selfConsumptionKwh === 'number') {
-        var co2Kg = today.selfConsumptionKwh * 0.4;
-        liveStats.co2 = co2Kg.toFixed(1);
-        liveStats.trees = (co2Kg / 25).toFixed(2);
-      } else {
-        liveStats.co2 = '--'; liveStats.trees = '--';
-      }
-      liveStats.solarKm = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh * 6) : '--';
-      liveStats.washes = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 1.5) : '--';
-      liveStats.netflixH = typeof today.pvKwh === 'number' ? Math.round(today.pvKwh / 0.08) : '--';
-      if (typeof today.importKwh === 'number' && typeof today.exportKwh === 'number') {
-        var netKwh = today.exportKwh - today.importKwh; // positive = net export
-        liveStats.netBalance = (netKwh >= 0 ? '+' : '') + netKwh.toFixed(1);
-      } else {
-        liveStats.netBalance = '--';
-      }
       updateSlotValues();
     });
 
@@ -1940,7 +2019,7 @@
     bgFlowCtx.globalCompositeOperation = 'lighter';
     for (var i = 0; i < bgFlowDust.length; i++) {
       var d = bgFlowDust[i], s = d.s;
-      if (!s || s.kw < 0.05) continue;
+      if (!s || s.kw < (s.minKw != null ? s.minKw : 0.05)) continue;
       var rank = (d.phase * 1000) % 1;
       if (rank > Math.min(s.count / DUST_PER_STREAM, 1)) continue;
       var a = bgFlowEndpoint(s.from), b = bgFlowEndpoint(s.to);
@@ -2082,7 +2161,18 @@
       // bgFlowDraw threshold) is lifted to at least a clearly-visible trickle, so
       // a real few-hundred-watt flow against a large nameplate is never invisible.
       // An idle stream (s.kw < 0.05) is skipped by bgFlowDraw and gets no floor.
-      if (s.kw >= 0.05) {
+      var isGridStream = s.id === 's_grid' || s.id === 'k_grid';
+      if (isGridStream) {
+        // Operator request 2026-06-13: the grid flow had an effective ~50-80 W
+        // visibility floor (draw threshold 0.05 kW + min 40 dust). For small
+        // balances that overstated the flow — drop to a true trickle: visible
+        // from ~5 W, a handful of slow particles, strictly proportional above.
+        s.minKw = 0.005;
+        if (s.kw >= s.minKw) {
+          s.count = Math.max(s.count, 5);
+          s.speed = Math.max(s.speed, 0.012);
+        }
+      } else if (s.kw >= 0.05) {
         s.count = Math.max(s.count, BG_FLOW_MIN_COUNT);
         s.speed = Math.max(s.speed, BG_FLOW_MIN_SPEED);
       }

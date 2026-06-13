@@ -52,6 +52,12 @@ export function createFamilyService(ctx) {
   let todayCharts = null;
   let todayKpisAt = 0;
   let todayKpisTimer = null;
+  // Month/year KPI snapshots for the bottom-bar period metrics (2026-06-13).
+  // Refreshed every ~10 min piggybacked on the todayKpis tick — these are
+  // heavy aggregate queries, the kiosk does not need them minute-fresh.
+  let periodKpis = { month: null, year: null };
+  let periodKpisAt = 0;
+  const PERIOD_KPIS_TTL_MS = 10 * 60 * 1000;
 
   // --------------------------------------------------------------------
   // Section derivers -- each takes the already-computed status payload
@@ -547,15 +553,76 @@ export function createFamilyService(ctx) {
   }
 
   /**
+   * Curated per-period KPI subset for the bottom-bar metrics (2026-06-13).
+   * Source: historyApi.getSummary kpis (same numbers as the Historie page).
+   */
+  function pickPeriodKpis(k) {
+    if (!k || typeof k !== 'object') return null;
+    const r2 = (n) => (Number.isFinite(Number(n)) ? Math.round(Number(n) * 100) / 100 : null);
+    return {
+      pvKwh: r2(k.pvKwh),
+      exportKwh: r2(k.exportKwh),
+      importKwh: r2(k.importKwh),
+      loadKwh: r2(k.loadKwh),
+      selfConsumptionKwh: r2(k.selfConsumptionKwh),
+      exportRevenueEur: r2(k.exportRevenueEur),
+      importCostEur: r2(k.importCostEur),
+      netEur: r2(k.netEur),
+      avoidedImportGrossEur: r2(k.avoidedImportGrossEur),
+      grossReturnEur: r2(k.grossReturnEur),
+      dvRevenueCtKwh: r2(k.dvRevenueCtKwh),
+      periodMarketValueCtKwh: r2(k.periodMarketValueCtKwh),
+      annualMarketValueCtKwh: r2(k.annualMarketValueCtKwh),
+      weightedApplicableValueCtKwh: r2(k.weightedApplicableValueCtKwh),
+      cycles: r2(k.cycles),
+      eegExtensionMonths: r2(k.eegExtensionMonths)
+    };
+  }
+
+  async function refreshPeriodKpis() {
+    if (!ctx.historyApi || typeof ctx.historyApi.getSummary !== 'function') return;
+    if (Date.now() - periodKpisAt < PERIOD_KPIS_TTL_MS) return;
+    periodKpisAt = Date.now(); // set BEFORE the await so a slow query is not re-fired
+    try {
+      const now = new Date();
+      const monthDate = now.toISOString().slice(0, 8) + '01';
+      const yearDate = now.getFullYear() + '-01-01';
+      const [m, y] = await Promise.all([
+        ctx.historyApi.getSummary({ view: 'month', date: monthDate }),
+        ctx.historyApi.getSummary({ view: 'year', date: yearDate })
+      ]);
+      if (m?.body?.kpis) periodKpis.month = m.body.kpis;
+      if (y?.body?.kpis) periodKpis.year = y.body.kpis;
+      cached = null;
+    } catch (err) {
+      pushLog?.('family_period_kpis_error', { error: err.message });
+    }
+  }
+
+  /**
    * Savings section. Pre-formatted strings for direct display in the UI.
    */
   function deriveSavingsSection(costs) {
     const todayEur = Math.abs(Number(costs?.netEur || 0)).toFixed(2);
-    // Month estimate: linearly extrapolate today's net across ~30 days.
-    // Phase 04 will compute real month-to-date from history.
-    const monthEur = Math.round(Math.abs(Number(costs?.netEur || 0)) * 30).toString();
-    const feedInRevenueEur = Math.abs(Number(costs?.revenueEur || 0)).toFixed(2);
-    const avoidedCostEur = Math.abs(Number(costs?.costEur || 0)).toFixed(2);
+    // Month: REAL month-to-date net from the history KPIs when available
+    // (was: today's net × 30 extrapolation).
+    const monthNet = Number(periodKpis.month?.netEur);
+    const monthEur = Number.isFinite(monthNet)
+      ? Math.round(monthNet).toString()
+      : Math.round(Math.abs(Number(costs?.netEur || 0)) * 30).toString();
+    // Revenue: prefer the history KPI (consistent with the Historie page).
+    const histRevenue = Number(todayKpis?.exportRevenueEur);
+    const feedInRevenueEur = (Number.isFinite(histRevenue)
+      ? histRevenue
+      : Math.abs(Number(costs?.revenueEur || 0))).toFixed(2);
+    // Avoided cost: the REAL avoided-import value (self-consumed energy ×
+    // gross tariff) from the history KPIs. The old |costEur| was simply the
+    // day's ACTUAL grid bill — labelling that "Kosten vermieden" (and summing
+    // it into the crossing's "Gewinn heute") was wrong.
+    const histAvoided = Number(todayKpis?.avoidedImportGrossEur);
+    const avoidedCostEur = (Number.isFinite(histAvoided)
+      ? histAvoided
+      : Math.abs(Number(costs?.costEur || 0))).toFixed(2);
 
     return { todayEur, monthEur, feedInRevenueEur, avoidedCostEur };
   }
@@ -663,6 +730,11 @@ export function createFamilyService(ctx) {
     const price = derivePriceSection(epexNN, epexState, costs);
     const optimizer = deriveOptimizerSection(optimizerStatus);
     const weather = deriveWeatherSection();
+    const periods = {
+      day: pickPeriodKpis(todayKpis),
+      month: pickPeriodKpis(periodKpis.month),
+      year: pickPeriodKpis(periodKpis.year)
+    };
     const savings = deriveSavingsSection(costs);
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
     const today = deriveTodaySection(todayKpis, todayCharts);
@@ -680,6 +752,7 @@ export function createFamilyService(ctx) {
       price,
       optimizer,
       weather,
+      periods,
       savings,
       greeting,
       presence: { ...presence },
@@ -741,6 +814,8 @@ export function createFamilyService(ctx) {
         // fresh `today` section without waiting 2 s.
         cached = null;
       }
+      // Month/year aggregates for the bottom-bar period metrics (10-min TTL).
+      refreshPeriodKpis().catch(() => { /* logged inside */ });
     } catch (err) {
       pushLog?.('family_today_kpis_error', { error: err.message });
     }
