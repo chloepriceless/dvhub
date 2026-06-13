@@ -358,10 +358,18 @@ export function createFamilyService(ctx) {
     const charging = s.chargingState === 'Charging'
       || (typeof chargerPowerKw === 'number' && chargerPowerKw > 0);
 
+    // Stale = the car is offline/asleep/suspended → no live data, values frozen.
+    // `since` is TeslaMate's state-change timestamp so the UI can show
+    // "veraltet seit …" instead of presenting a frozen SoC as live (2026-06-13).
+    const STALE_STATES = new Set(['offline', 'asleep', 'suspended']);
+    const stale = STALE_STATES.has(s.state || '');
+
     return {
       enabled: true,
       name: s.displayName || teslaCfg.name || 'Tesla',
       state: s.state || null,                       // asleep|online|offline|charging|driving
+      since: s.since || null,                       // TeslaMate state-change timestamp (ISO)
+      stale,                                        // true → values frozen (offline/asleep/suspended)
       batteryLevel: s.batteryLevel ?? null,         // %
       usableBatteryLevel: s.usableBatteryLevel ?? null,
       rangeKm: s.estRangeKm ?? null,                // estimated range

@@ -37,6 +37,10 @@
 const TOPIC_MAP = {
   display_name:           { key: 'displayName',        parse: String },
   state:                  { key: 'state',              parse: String },
+  // TeslaMate's state-change timestamp (ISO). Used to show "veraltet seit …" when
+  // the car is offline/asleep and values are frozen (2026-06-13). Free-text like
+  // displayName/geofence — no numeric encoding, not in the fixed snapshot INSERT.
+  since:                  { key: 'since',              parse: String },
   battery_level:          { key: 'batteryLevel',       parse: Number },
   usable_battery_level:   { key: 'usableBatteryLevel', parse: Number },
   est_battery_range_km:   { key: 'estRangeKm',        parse: Number },

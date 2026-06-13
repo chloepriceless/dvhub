@@ -1557,7 +1557,16 @@
           var bar = socWrap ? socWrap.querySelector('.tag-soc-bar') : null;
           if (bar) bar.classList.toggle('is-charging', teslaCharging);
         }
-        setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
+        // When TeslaMate reports the car offline/asleep/suspended the SoC etc. are
+        // FROZEN — say so instead of presenting a stale value as live (2026-06-13).
+        if (tesla.stale) {
+          var stWord = tesla.state === 'asleep' ? 'schläft' : 'offline';
+          var sinceShort = '';
+          if (tesla.since) { try { sinceShort = new Date(tesla.since).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) {} }
+          setText('ts-ev', 'veraltet · ' + stWord + (sinceShort ? ' seit ' + sinceShort : ''));
+        } else {
+          setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
+        }
       } else if (famSelectedEvccLp(data)) {
         // No Tesla → drive the EV tag from the selected evcc loadpoint (#23).
         var elp = famSelectedEvccLp(data);

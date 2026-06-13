@@ -1196,3 +1196,16 @@
 .logs-row.level-warn .logs-level { color: #d69e2e; }
 .logs-row.level-error { background: rgba(229, 62, 62, 0.12); }
 .logs-row.level-error .logs-level { color: #e53e3e; }
+
+/* TeslaMate Live-Tab: "Werte veraltet" banner (2026-06-13) — shown when the car
+   is offline/asleep/suspended and the snapshot values are frozen. */
+.dv-snapshot-stale {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(214, 158, 46, 0.14);
+  border: 1px solid rgba(214, 158, 46, 0.35);
+  color: #e0a83a;
+  font-size: 12px;
+  line-height: 1.4;
+}

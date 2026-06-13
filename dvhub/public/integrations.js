@@ -2799,22 +2799,35 @@
       var data = await r.json();
       var t = (data && data.tesla) || {};
       var s = t.state || {};
-      var html = ''
-        + teslaSnapshotKvLine('Name', s.name || s.display_name)
+      // getState() returns camelCase keys (batteryLevel, chargingState, chargerPower …)
+      // — NOT snake_case. (Bug 2026-06-13: the grid read snake_case and so showed "—"
+      // for everything except Status/Geofence, which made the card look hung.)
+      var STALE_STATES = ['offline', 'asleep', 'suspended'];
+      var isStale = STALE_STATES.indexOf(String(s.state || '')) >= 0;
+      var html = '';
+      if (isStale) {
+        var sinceTxt = s.since ? fmtBerlinDateTime(s.since) : (t.lastUpdate ? fmtBerlinDateTime(t.lastUpdate) : '—');
+        var stLabel = s.state === 'offline' ? 'offline' : (s.state === 'asleep' ? 'schläft' : esc(String(s.state)));
+        html += '<div class="dv-snapshot-stale">&#9888; Werte veraltet &mdash; TeslaMate ' + stLabel
+          + ' seit ' + esc(sinceTxt) + '. Der Wagen sendet aktuell keine Live-Daten (SoC etc. eingefroren).</div>';
+      }
+      var pluggedTxt = s.pluggedIn === true ? 'Ja' : (s.pluggedIn === false ? 'Nein' : null);
+      html += ''
+        + teslaSnapshotKvLine('Name', s.displayName)
         + teslaSnapshotKvLine('Status', s.state)
         + teslaSnapshotKvLine('Geofence', s.geofence)
-        + teslaSnapshotKvLine('Akku-SoC', s.battery_level, '%')
-        + teslaSnapshotKvLine('Nutzbarer SoC', s.usable_battery_level, '%')
-        + teslaSnapshotKvLine('Ziel-SoC', s.charge_limit_soc, '%')
-        + teslaSnapshotKvLine('Reichweite', s.rated_battery_range_km, 'km')
-        + teslaSnapshotKvLine('Schätz-Reichweite', s.est_battery_range_km, 'km')
-        + teslaSnapshotKvLine('Lade-Status', s.charging_state)
-        + teslaSnapshotKvLine('Ladeleistung', s.charger_power, 'kW')
-        + teslaSnapshotKvLine('Ladestrom', s.charger_actual_current, 'A')
-        + teslaSnapshotKvLine('Ladespannung', s.charger_voltage, 'V')
-        + teslaSnapshotKvLine('Geladene Energie', s.charge_energy_added, 'kWh')
-        + teslaSnapshotKvLine('Stecker', s.plugged_in)
-        + teslaSnapshotKvLine('Innentemperatur', s.inside_temp, '°C');
+        + teslaSnapshotKvLine('Akku-SoC', s.batteryLevel, '%')
+        + teslaSnapshotKvLine('Nutzbarer SoC', s.usableBatteryLevel, '%')
+        + teslaSnapshotKvLine('Ziel-SoC', s.chargeLimitSoc, '%')
+        + teslaSnapshotKvLine('Reichweite', s.ratedRangeKm, 'km')
+        + teslaSnapshotKvLine('Schätz-Reichweite', s.estRangeKm, 'km')
+        + teslaSnapshotKvLine('Lade-Status', s.chargingState)
+        + teslaSnapshotKvLine('Ladeleistung', s.chargerPower, 'kW')
+        + teslaSnapshotKvLine('Ladestrom', s.chargerCurrent, 'A')
+        + teslaSnapshotKvLine('Ladespannung', s.chargerVoltage, 'V')
+        + teslaSnapshotKvLine('Geladene Energie', s.chargeEnergyAdded, 'kWh')
+        + teslaSnapshotKvLine('Stecker', pluggedTxt)
+        + teslaSnapshotKvLine('Innentemperatur', s.insideTemp, '°C');
       grid.innerHTML = html;
       if (meta) {
         meta.textContent = t.lastUpdate
