@@ -3361,8 +3361,13 @@ export function createApiRoutes(ctx) {
     // polled — this config takes effect for a direct Modbus meter.
     if (url.pathname === '/api/integrations/mid' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
+      // Show the EFFECTIVE meter (getCfg) — on Victron systems the Modbus meter
+      // block comes from the manufacturer profile, not config.json. profileManaged
+      // flags that case so the drawer can explain why the connection fields are
+      // read-only (the profile overwrites a raw cfg.meter; see applyManufacturerProfile).
+      const cfg = getCfg();
       const raw = ctx.getRawCfg?.() || {};
-      const m = raw.meter || {};
+      const m = cfg.meter || {};
       return json(res, 200, {
         ok: true,
         name: m.label || raw.mid?.name || '',
@@ -3372,7 +3377,8 @@ export function createApiRoutes(ctx) {
         address: m.address ?? 0,
         quantity: m.quantity ?? 3,
         fc: m.fc ?? 3,
-        gridPositiveMeans: raw.gridPositiveMeans || 'feed_in',
+        gridPositiveMeans: cfg.gridPositiveMeans || 'feed_in',
+        profileManaged: !!(m.host && !(raw.meter && raw.meter.host)),
         meterOk: !!ctx.state?.meter?.ok
       });
     }

@@ -2104,12 +2104,19 @@
       if (el('mid-quantity')) el('mid-quantity').value = data.quantity != null ? data.quantity : 3;
       if (el('mid-fc')) el('mid-fc').value = String(data.fc === 4 ? 4 : 3);
       if (el('mid-sign')) el('mid-sign').value = data.gridPositiveMeans === 'grid_import' ? 'grid_import' : 'feed_in';
+      // On Victron systems the connection comes from the manufacturer profile —
+      // the fields are read-only there (a raw cfg.meter would be overwritten).
+      // Only the sign convention (gridPositiveMeans) stays editable.
+      var connFields = ['mid-name', 'mid-host', 'mid-port', 'mid-unitid', 'mid-address', 'mid-quantity', 'mid-fc'];
+      connFields.forEach(function (id) { if (el(id)) el(id).disabled = !!data.profileManaged; });
       var st = el('mid-status');
       if (st) {
         st.hidden = false;
-        st.textContent = data.host
-          ? (data.meterOk ? '✓ Zähler liefert Werte.' : '⚠ Konfiguriert, aber noch keine Werte gelesen.')
-          : 'Kein Modbus-Zähler konfiguriert (Netzdaten kommen aus der Haupt-Anbindung).';
+        st.textContent = data.profileManaged
+          ? ('🔒 Verbindung kommt aus dem Victron-Herstellerprofil (' + (data.meterOk ? 'liefert Werte' : 'noch keine Werte') + '). Nur die Vorzeichen-Logik ist hier änderbar.')
+          : (data.host
+            ? (data.meterOk ? '✓ Zähler liefert Werte.' : '⚠ Konfiguriert, aber noch keine Werte gelesen.')
+            : 'Kein Modbus-Zähler konfiguriert (Netzdaten kommen aus der Haupt-Anbindung).');
       }
     } catch (e) {
       showDrawerToast('mid', 'err', '✗ Zähler laden fehlgeschlagen: ' + e.message);
