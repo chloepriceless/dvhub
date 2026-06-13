@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=13">
+<link rel="stylesheet" href="/family.css?v=14">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -45,7 +45,7 @@
        crossing, in source-mix colours. Draggable like every tile (T-0091);
        tapping opens the same home panel as before. pf-house-kw keeps its id
        (family.js live-updates it each poll). -->
-  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Zuhause</div><div class="tag-val" id="pf-house-kw">0,0 kW</div><div class="tag-status" id="ts-home">&mdash;</div></div>
+  <div class="tag tag-home" id="tag-home" data-panel="home"><span class="tag-dot"></span><div class="tag-emoji">&#127968;</div><div class="tag-friendly" id="tf-home">Zuhause</div><div class="tag-val" id="pf-house-kw">0,0 kW</div></div>
 
   <!-- Center CROSSING readout (Powerflow-2.0 rework 2026-06-13): the centre is
        the junction all flows route through — like the powerflow mockup it
@@ -116,6 +116,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-metrics"></script>
+<script src="/family.js?v=20260613-eospanel"></script>
 </body>
 </html>

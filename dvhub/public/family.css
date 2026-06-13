@@ -488,3 +488,19 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-taganim.pf-sky{width:140px;height:140px}
 .tag-bat .tag-status{font-size:15px;font-weight:800;padding:5px 14px}
 .picker-item.picker-period .picker-item-name{font-size:16px;font-weight:800}
+
+/* Task #19 (2026-06-13) — DV-EOS forecast table in the optimizer detail panel.
+   Kiosk-adapted version of the settings inspector table: 5 columns, sticky
+   header, scrollable, "now" row highlighted. */
+.fam-eos-meta{font-size:12px;color:rgba(255,255,255,.45);margin-bottom:8px}
+.fam-eos-tbl-wrap{max-height:44vh;overflow-y:auto;border-radius:12px;background:rgba(255,255,255,.03)}
+.fam-eos-tbl{width:100%;border-collapse:collapse;font-size:14px}
+.fam-eos-tbl th{position:sticky;top:0;z-index:1;background:#181b27;color:rgba(255,255,255,.55);
+  font-size:11px;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:8px 12px}
+.fam-eos-tbl td{padding:7px 12px;border-top:1px solid rgba(255,255,255,.05);color:rgba(255,255,255,.85);white-space:nowrap}
+.fam-eos-tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.fam-eos-tbl th.num{text-align:right}
+.fam-eos-exp{color:#26de81}
+.fam-eos-chg{color:#fed330}
+.fam-eos-imp{color:#fc5c65}
+.fam-eos-now td{background:rgba(75,123,236,.22)}

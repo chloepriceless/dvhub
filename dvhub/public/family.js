@@ -93,7 +93,7 @@
     grid: { icon: '&#9889;', iconBg: 'rgba(253,150,68,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#fd9644', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
     forecast: { icon: '&#9925;', iconBg: 'rgba(247,183,49,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#F7B731', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
     price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'Stündliche EPEX Day-Ahead Börsenpreise.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
-    optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'Lade-/Entlade-Strategie', color: '#4b7bec', summary: 'Der interne Optimizer plant Lade- und Entladephasen basierend auf EPEX Preisen und PV-Vorhersage.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/optimizer/status']] },
+    optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'DV-EOS Vorhersage', color: '#4b7bec', summary: 'DV-EOS plant Laden, Entladen und Einspeisen aus EPEX-Preisen, PV- und Last-Prognose. Die Tabelle zeigt den geplanten Verlauf inkl. erwartetem Akkustand.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Fahrplan', '\u2014']] },
     weather: { icon: '&#9925;', iconBg: 'rgba(52,219,255,.08)', title: 'Wetter', sub: 'Open-Meteo · Standort der Anlage', color: '#34dbff', summary: 'Stundenprognose aus der Wetter-Integration, die auch die PV-Vorhersage speist.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Regen', val: '—', delta: '', up: true }], chart: null, details: [] },
   };
 
@@ -438,6 +438,97 @@
       });
   }
 
+  /* Task #19 (operator request 2026-06-13): the optimizer detail panel shows
+     the COMPLETE DV-EOS forecast — EOS' own optimised trajectory with the
+     expected battery SoC per 15-min slot — adapted from the Settings →
+     Forecast → DV-EOS inspector table to the kiosk. Lazily fetched on panel
+     open (the inspector pulls EOS live; polling it on the 3-s tick would
+     hammer the EOS service). While loading / when EOS is off or the backend
+     has no result yet, the panel keeps the Fahrplan rows openPanel() already
+     rendered from planSlots — graceful fallback, never an error overlay. */
+  function famEosActionLabel(r, prevSocPct) {
+    if (typeof r.zeitplanAction === 'string') {
+      switch (r.zeitplanAction) {
+        case 'co_export':      return { txt: '\u26a1 PV+Akku \u2192 Netz', cls: 'fam-eos-exp' };
+        case 'battery_export': return { txt: '\u26a1 Akku \u2192 Netz', cls: 'fam-eos-exp' };
+        case 'pv_export':      return { txt: '\u26a1 PV-\u00dcberschuss', cls: 'fam-eos-exp' };
+        case 'charge':         return { txt: '\u2600 Akku l\u00e4dt', cls: 'fam-eos-chg' };
+        case 'grid_draw':      return { txt: '\u2193 Netzbezug', cls: 'fam-eos-imp' };
+        case 'hold':           return { txt: '\u2192 Halten', cls: '' };
+        default:               return { txt: r.zeitplanLabel || r.zeitplanAction, cls: '' };
+      }
+    }
+    // Older backend without zeitplanAction — same SoC-delta heuristic the
+    // settings inspector renderer falls back to.
+    var d = (typeof r.socPct === 'number' && typeof prevSocPct === 'number') ? r.socPct - prevSocPct : 0;
+    if (typeof r.gridFeedinWh === 'number' && r.gridFeedinWh > 1) return { txt: '\u26a1 Einspeisen', cls: 'fam-eos-exp' };
+    if (d >= 1) return { txt: '\u2600 Akku l\u00e4dt', cls: 'fam-eos-chg' };
+    if (d <= -1) return { txt: '\u2193 Entladen', cls: '' };
+    return { txt: '\u2192 Halten', cls: '' };
+  }
+
+  function loadEosForecastPanel(key) {
+    var now = new Date();
+    var qs = '?from=' + encodeURIComponent(now.toISOString()) +
+             '&to=' + encodeURIComponent(new Date(now.getTime() + 24 * 3600 * 1000).toISOString());
+    apiFetchCompat('/api/forecast/inspector/eos' + qs)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        var details = document.getElementById('p-details');
+        if (!details) return;
+        var output = (j && j.ok && j.available !== false) ? (j.output || null) : null;
+        var rows = (output && Array.isArray(output.rows)) ? output.rows : [];
+        if (!rows.length) return; // keep the Fahrplan fallback rows
+        function fmtSpW(w) {
+          var a = Math.abs(w);
+          return a >= 1000 ? (a / 1000).toFixed(1).replace('.', ',') + ' kW' : Math.round(a) + ' W';
+        }
+        var nowMs = Date.now();
+        var trs = '';
+        var prevSoc = null;
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var tMs = Date.parse(r.ts_utc);
+          var act = famEosActionLabel(r, prevSoc);
+          // Grid setpoint the slot would command: prefer the Zeitplan-Hebel
+          // value (what the lever pulls), fall back to the raw net setpoint.
+          var sp = (typeof r.zeitplanGridSetpointW === 'number') ? r.zeitplanGridSetpointW : r.dvhubSetpointW;
+          var spTxt = '\u2013', spCls = '';
+          if (typeof sp === 'number' && isFinite(sp)) {
+            if (sp <= -1)     { spTxt = '\u2191 ' + fmtSpW(sp); spCls = 'fam-eos-exp'; }
+            else if (sp >= 1) { spTxt = '\u2193 ' + fmtSpW(sp); spCls = 'fam-eos-imp'; }
+            else              { spTxt = '0 W'; }
+          }
+          var isNow = isFinite(tMs) && tMs <= nowMs && nowMs < tMs + 15 * 60000;
+          trs += '<tr' + (isNow ? ' class="fam-eos-now"' : '') + '>' +
+            '<td>' + escapeMsg(famOptimizerHHMM(tMs)) + '</td>' +
+            '<td class="num">' + (r.socPct != null ? escapeMsg(String(r.socPct)) + '\u202f%' : '\u2013') + '</td>' +
+            '<td class="' + act.cls + '">' + escapeMsg(act.txt) + '</td>' +
+            '<td class="num ' + spCls + '">' + escapeMsg(spTxt) + '</td>' +
+            '<td class="num">' + ((typeof r.feedInCtKwh === 'number' && isFinite(r.feedInCtKwh)) ? escapeMsg(r.feedInCtKwh.toFixed(1)) + ' ct' : '\u2013') + '</td>' +
+            '</tr>';
+          if (r.socPct != null) prevSoc = r.socPct;
+        }
+        var genLbl = (output && output.generatedAt) ? famOptimizerHHMM(Date.parse(output.generatedAt)) : '';
+        details.innerHTML =
+          '<div class="fam-eos-meta">DV-EOS Vorhersage \u00b7 ' + rows.length + ' Slots (15 min)' +
+            (genLbl ? ' \u00b7 Stand ' + escapeMsg(genLbl) : '') + '</div>' +
+          '<div class="fam-eos-tbl-wrap"><table class="fam-eos-tbl">' +
+            '<thead><tr><th>Zeit</th><th class="num">SoC</th><th>Aktion</th><th class="num">Netz</th><th class="num">B\u00f6rse</th></tr></thead>' +
+            '<tbody>' + trs + '</tbody>' +
+          '</table></div>';
+        // Scroll the table to the "now" row so the operator lands in the present.
+        var nowRow = details.querySelector('.fam-eos-now');
+        var wrap = details.querySelector('.fam-eos-tbl-wrap');
+        if (nowRow && wrap) wrap.scrollTop = Math.max(0, nowRow.offsetTop - 60);
+      })
+      .catch(function (err) {
+        if (typeof console !== 'undefined' && console.warn) console.warn('eos inspector fetch failed', err);
+      });
+  }
+
   function openPanel(key) {
     var d = panelData[key]; if (!d) return;
     currentPanelKey = key;
@@ -479,6 +570,11 @@
     // panel chart, the same way an MQTT tile renders its "Verlauf heute".
     if (key === 'ev') {
       loadTeslaHistoryChart(key);
+    }
+    // Task #19 — optimizer panel lazily loads the full DV-EOS forecast table
+    // (incl. expected SoC); until it lands, the Fahrplan rows above show.
+    if (key === 'optimizer') {
+      loadEosForecastPanel(key);
     }
     document.getElementById('overlay').classList.add('open');
     document.getElementById('panel').scrollTop = 0;
@@ -2133,20 +2229,11 @@
     BG_FLOWS_BASE[5].mix = bgFlowBuildMix([[SRC_PV_COL, solar], [SRC_BAT_COL, batOutKw]]);   // k_grid
     BG_FLOWS_BASE[6].mix = bgFlowSourceMix;                                                  // k_home
 
-    // House tile status line: show WHERE the energy comes from (shares >= 5 %).
-    var tsHome = document.getElementById('ts-home');
-    if (tsHome) {
-      var totSrc = solar + batOutKw + gridImpKw;
-      if (totSrc > 0.05) {
-        var srcParts = [];
-        if (solar / totSrc >= 0.05) srcParts.push('PV ' + Math.round(solar / totSrc * 100) + '%');
-        if (batOutKw / totSrc >= 0.05) srcParts.push('Akku ' + Math.round(batOutKw / totSrc * 100) + '%');
-        if (gridImpKw / totSrc >= 0.05) srcParts.push('Netz ' + Math.round(gridImpKw / totSrc * 100) + '%');
-        tsHome.textContent = srcParts.join(' · ') || '—';
-      } else {
-        tsHome.textContent = 'Standby';
-      }
-    }
+    // Task #20 (operator request 2026-06-13): the house tile no longer prints
+    // a textual source breakdown ("PV x% / Akku y% / Netz z%") — at night it
+    // read "Akku 100%" and looked like a battery gauge on the house, redundant
+    // with the battery tile on the left. Provenance is already visible in the
+    // source-mix particle colours flowing into the house.
 
     BG_FLOWS_BASE.forEach(function (s) {
       var eff   = bgFlowEffectiveKw(s.kw, s.maxKw);   // scale by stream's nameplate
