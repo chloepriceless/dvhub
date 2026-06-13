@@ -87,6 +87,16 @@
       category: 'Wetter & Solarprognose',
       logo: 'FP',
       accent: 'violet'
+    },
+    // #23 (2026-06-13): EVCC wallbox — charge-mode control surfaced on the
+    // Family EV panel. Click opens #dv-drawer-evcc (URL, battery-protect,
+    // loadpoint selection). Status from /api/integrations/status.evcc.
+    {
+      key: 'evcc',
+      label: 'EVCC Wallbox',
+      category: 'Wallbox · Lademodus',
+      logo: 'EV',
+      accent: 'cyan'
     }
   ];
 
@@ -398,6 +408,11 @@
         if (solcastOn && pvnodeOn) return 'online';
         return 'stale';
       }
+      case 'evcc':
+        // #23: data from /api/integrations/status.evcc {enabled, url, reachable}.
+        // No URL = not configured. URL set but unreachable = stale (warn).
+        if (!data || !data.url) return 'disabled';
+        return data.reachable ? 'online' : 'stale';
       default: return 'disabled';
     }
   }
@@ -537,6 +552,13 @@
           { label: 'Last fetch', value: fmtRel(data.lastFetchAt) }
         ];
       }
+      case 'evcc':
+        return [
+          { label: 'Status', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : 'Nicht konfiguriert' },
+          { label: 'Ladepunkte', value: data.url ? fmtCount(data.loadpointCount) : '—' },
+          { label: 'Akkuschutz', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
+          { label: 'Dashboard-LP', value: data.dashboardLoadpoint != null ? ('#' + data.dashboardLoadpoint) : 'Auto' }
+        ];
       default:
         return [
           { label: '—', value: '—' },
@@ -1421,6 +1443,14 @@
       if (inst3) inst3.open();
       return;
     }
+    var evccCard = e.target.closest('.conn-card[data-system="evcc"]');
+    if (evccCard) {
+      e.preventDefault();
+      var instEvcc = getOrCreateDrawer('evcc');
+      if (instEvcc) instEvcc.open();
+      setTimeout(loadEvccDrawer, 0);
+      return;
+    }
     // Phase 21 (2026-05-23): TeslaMate card → drawer (Einstellungen + Live +
     // Ladevorgänge). loadTeslaSettings/Snapshot are queued via setTimeout(0)
     // so the drawer animation paints before the GET kicks off.
@@ -1959,6 +1989,93 @@
     if (saveBtn) { saveVrmDrawer(saveBtn); return; }
     var rmBtn = e.target.closest('#vrm-remove');
     if (rmBtn) { removeVrmCreds(rmBtn); return; }
+  });
+
+  // === EVCC Drawer Wiring (#23, 2026-06-13) ===
+  // Loads/saves cfg.evcc.{url, enabled (battery-protect), dashboardLoadpoint}
+  // via the dedicated /api/integrations/evcc server-side-merge endpoint. The
+  // loadpoint <select> is populated from the live loadpoint list the GET
+  // returns. The Family EV panel then shows/controls the chosen loadpoint.
+  async function loadEvccDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/evcc');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (!data || !data.ok) return;
+      if (el('evcc-url')) el('evcc-url').value = data.url || '';
+      if (el('evcc-enabled')) el('evcc-enabled').checked = !!data.enabled;
+      var sel = el('evcc-loadpoint');
+      if (sel) {
+        var lps = Array.isArray(data.loadpoints) ? data.loadpoints : [];
+        if (lps.length) {
+          sel.innerHTML = '<option value="">Automatisch (erster Ladepunkt)</option>'
+            + lps.map(function (l) { return '<option value="' + l.id + '">#' + l.id + ' · ' + esc(l.title) + '</option>'; }).join('');
+          sel.disabled = false;
+          sel.value = data.dashboardLoadpoint != null ? String(data.dashboardLoadpoint) : '';
+        } else {
+          sel.innerHTML = '<option value="">' + (data.url ? '— kein Ladepunkt erreichbar —' : '— erst Adresse speichern —') + '</option>';
+          sel.disabled = true;
+        }
+      }
+      var st = el('evcc-status');
+      if (st) {
+        st.hidden = false;
+        st.textContent = data.url
+          ? (data.reachable ? ('✓ Erreichbar · ' + data.loadpointCount + ' Ladepunkt(e)') : ('✗ Nicht erreichbar' + (data.lastError ? ' (' + data.lastError + ')' : '')))
+          : 'Noch keine Adresse konfiguriert.';
+      }
+    } catch (e) {
+      showDrawerToast('evcc', 'err', '✗ EVCC laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  async function saveEvccDrawer(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var el = function (id) { return document.getElementById(id); };
+    var banner = el('evcc-banner');
+    var urlVal = ((el('evcc-url') && el('evcc-url').value) || '').trim();
+    if (urlVal && !/^https?:\/\//i.test(urlVal)) {
+      if (banner) { banner.textContent = 'Adresse muss mit http:// oder https:// beginnen.'; banner.hidden = false; }
+      return;
+    }
+    if (banner) banner.hidden = true;
+    var lpRaw = (el('evcc-loadpoint') && el('evcc-loadpoint').value) || '';
+    var body = {
+      url: urlVal,
+      enabled: !!(el('evcc-enabled') && el('evcc-enabled').checked),
+      dashboardLoadpoint: lpRaw === '' ? null : parseInt(lpRaw, 10)
+    };
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/evcc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('evcc', 'ok', '✓ Gespeichert.');
+        // Re-poll after a beat so a freshly-saved URL has a chance to connect
+        // and the loadpoint list/status refresh.
+        setTimeout(loadEvccDrawer, 1200);
+      } else {
+        showDrawerToast('evcc', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('evcc', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var evccSave = e.target.closest('#evcc-save');
+    if (evccSave) { saveEvccDrawer(evccSave); return; }
+    var evccRefresh = e.target.closest('#evcc-refresh');
+    if (evccRefresh) { loadEvccDrawer(); return; }
   });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===

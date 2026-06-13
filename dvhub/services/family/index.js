@@ -264,8 +264,9 @@ export function createFamilyService(ctx) {
       pushLog?.('family_evcc_error', { error: err.message });
       return { available: false, loadpoints: [] };
     }
-    const famEvcc = (getCfg?.() || {}).family?.evcc || {};
-    const selRaw = Number(famEvcc.loadpoint);
+    // Loadpoint selection is configured on the Integrations page
+    // (cfg.evcc.dashboardLoadpoint, 1-based); fall back to the first loadpoint.
+    const selRaw = Number((getCfg?.() || {}).evcc?.dashboardLoadpoint);
     const selected = (Number.isInteger(selRaw) && lps.some((l) => l.id === selRaw))
       ? selRaw
       : (lps[0]?.id ?? null);
@@ -822,11 +823,7 @@ export function createFamilyService(ctx) {
       config: {
         screensaver: cfg?.family?.screensaver || null,
         presence: cfg?.family?.presence || null,
-        weather: cfg?.family?.weather || null,
-        evcc: {
-          url: cfg?.evcc?.url || '',
-          loadpoint: cfg?.family?.evcc?.loadpoint ?? null
-        }
+        weather: cfg?.family?.weather || null
       }
     };
 

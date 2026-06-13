@@ -59,6 +59,7 @@
     "/api/history/viz/spaghetti",
     "/api/history/viz/stack",
     "/api/history/viz/top10",
+    "/api/integrations/evcc",
     "/api/integrations/health",
     "/api/integrations/mqtt/topics",
     "/api/integrations/status",

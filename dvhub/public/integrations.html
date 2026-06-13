@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=26" />
+  <link rel="stylesheet" href="/integrations.css?v=27" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -386,6 +386,48 @@
         <div class="dv-drawer-toast" id="dv-drawer-vrm-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- EVCC config drawer (#23, 2026-06-13). URL + battery-protect toggle +
+           loadpoint selection for the Family EV panel's charge-mode control. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-evcc-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-evcc" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-evcc-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-evcc-title">EVCC Wallbox</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-evcc-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-evcc-body">
+          <p class="dv-drawer-intro">
+            Verbindet DVhub mit deiner <strong>EVCC</strong>-Instanz. Damit kannst du den
+            Lademodus (Aus / PV / Min+PV / Schnell) direkt vom Familien-Dashboard
+            (Auto-Kachel) umschalten.
+          </p>
+          <label class="dv-field">
+            <span class="field-label">EVCC-Adresse</span>
+            <input type="text" class="input mono" id="evcc-url" placeholder="http://192.168.x.x:7070" autocomplete="off" spellcheck="false" inputmode="url">
+            <span class="field-hint">Basis-URL der EVCC-Weboberfl&auml;che inkl. Port (Standard 7070).</span>
+          </label>
+          <label class="dv-field">
+            <span class="field-label">Ladepunkt f&uuml;rs Dashboard</span>
+            <select class="input" id="evcc-loadpoint" disabled><option value="">&mdash; erst Adresse speichern &mdash;</option></select>
+            <span class="field-hint">Welchen Ladepunkt die Auto-Kachel anzeigt &amp; steuert.</span>
+          </label>
+          <label class="dv-field-row">
+            <input type="checkbox" class="dv-field-check" id="evcc-enabled">
+            <span>Akkuschutz aktivieren (Batterie nicht ins Auto entladen w&auml;hrend des Ladens)</span>
+          </label>
+          <div class="dv-field-validation" id="evcc-status" hidden>&mdash;</div>
+          <div class="dv-field-validation" id="evcc-banner" hidden></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm ghost" id="evcc-refresh">Status aktualisieren</button>
+            <button type="button" class="btn sm primary" id="evcc-save">Speichern</button>
+          </div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-evcc-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- Forecast-Provider config drawer (Phase 20-06). Static markup; 2 tabs. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-forecast-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-forecast" role="dialog" aria-modal="true"
@@ -660,6 +702,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=26"></script>
+  <script src="/integrations.js?v=27"></script>
 </body>
 </html>

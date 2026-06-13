@@ -2872,23 +2872,7 @@
     var ws = document.getElementById('famSetWeatherSize');
     if (wd) wd.value = (['compact', 'normal', 'detailed'].indexOf(wxCfg.detail) >= 0) ? wxCfg.detail : 'normal';
     if (ws) ws.value = (['sm', 'md', 'lg'].indexOf(wxCfg.size) >= 0) ? wxCfg.size : 'md';
-    // EVCC (#23) — URL + loadpoint picker (loadpoints come from the live state).
-    var ecfg = (lastStatus && lastStatus.config && lastStatus.config.evcc) || {};
-    var eurl = document.getElementById('famSetEvccUrl');
-    if (eurl) eurl.value = ecfg.url || '';
-    var elpSel = document.getElementById('famSetEvccLoadpoint');
-    if (elpSel) {
-      var elps = (lastStatus && lastStatus.evcc && lastStatus.evcc.loadpoints) || [];
-      if (elps.length) {
-        elpSel.innerHTML = elps.map(function (l) { return '<option value="' + l.id + '">' + escapeMsg(l.title) + '</option>'; }).join('');
-        elpSel.disabled = false;
-        var esel = ecfg.loadpoint != null ? Number(ecfg.loadpoint) : (lastStatus.evcc && lastStatus.evcc.selectedLoadpoint);
-        if (esel != null) elpSel.value = String(esel);
-      } else {
-        elpSel.innerHTML = '<option value="">— kein Ladepunkt gefunden —</option>';
-        elpSel.disabled = true;
-      }
-    }
+    // EVCC (#23) is configured on the Integrations page, not here.
     setText('famSetMsg', '');
     ov.classList.add('open');
   }
@@ -2906,18 +2890,12 @@
     var ws = document.getElementById('famSetWeatherSize');
     var detail = (wd && ['compact', 'normal', 'detailed'].indexOf(wd.value) >= 0) ? wd.value : 'normal';
     var size = (ws && ['sm', 'md', 'lg'].indexOf(ws.value) >= 0) ? ws.value : 'md';
-    var eurl = document.getElementById('famSetEvccUrl');
-    var elpSel = document.getElementById('famSetEvccLoadpoint');
-    var evccBody = {};
-    if (eurl) evccBody.url = (eurl.value || '').trim();
-    if (elpSel && elpSel.value) evccBody.loadpoint = parseInt(elpSel.value, 10);
     var body = {
       screensaver: {
         enabled: !(en && en.checked === false),
         defaultTimeoutSec: minutes * 60
       },
-      weather: { detail: detail, size: size },
-      evcc: evccBody
+      weather: { detail: detail, size: size }
     };
     apiFetchCompat('/api/family/settings', {
       method: 'POST',
@@ -2931,7 +2909,6 @@
         lastStatus.config = lastStatus.config || {};
         lastStatus.config.screensaver = Object.assign({}, lastStatus.config.screensaver, body.screensaver);
         lastStatus.config.weather = Object.assign({}, lastStatus.config.weather, body.weather);
-        if (out.evcc) lastStatus.config.evcc = out.evcc;
       }
       // Re-render the widget immediately so the new level shows without waiting
       // for the next poll.

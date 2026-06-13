@@ -2104,12 +2104,10 @@ export function createApiRoutes(ctx) {
       }
       const saver = body && body.screensaver;
       const wx = body && body.weather;
-      const ev = body && body.evcc;
       const hasSaver = saver && typeof saver === 'object';
       const hasWx = wx && typeof wx === 'object';
-      const hasEvcc = ev && typeof ev === 'object';
-      if (!hasSaver && !hasWx && !hasEvcc) {
-        return json(res, 400, { ok: false, error: 'screensaver, weather or evcc object required' });
+      if (!hasSaver && !hasWx) {
+        return json(res, 400, { ok: false, error: 'screensaver or weather object required' });
       }
       // Same merge mechanics as /api/family/mqtt-tiles: deep-copy the raw
       // config, change ONLY the family sub-blocks we were given, save the
@@ -2135,26 +2133,6 @@ export function createApiRoutes(ctx) {
         const size = SIZES.includes(wx.size) ? wx.size : 'md';
         next.family.weather = { ...(next.family.weather || {}), detail, size };
       }
-      if (hasEvcc) {
-        // EVCC base URL lives at top-level cfg.evcc.url (shared with the
-        // battery-protect poller); the Family panel's loadpoint selection lives
-        // under cfg.family.evcc.loadpoint.
-        if (typeof ev.url === 'string') {
-          const u = ev.url.trim();
-          if (u && !/^https?:\/\//i.test(u)) {
-            return json(res, 400, { ok: false, error: 'evcc.url must be http(s)://…' });
-          }
-          next.evcc = (next.evcc && typeof next.evcc === 'object') ? next.evcc : {};
-          next.evcc.url = u;
-        }
-        if (ev.loadpoint != null && ev.loadpoint !== '') {
-          const lp = Number(ev.loadpoint);
-          if (!Number.isInteger(lp) || lp < 1 || lp > 64) {
-            return json(res, 400, { ok: false, error: 'evcc.loadpoint must be 1..64' });
-          }
-          next.family.evcc = { ...(next.family.evcc || {}), loadpoint: lp };
-        }
-      }
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {
@@ -2163,15 +2141,9 @@ export function createApiRoutes(ctx) {
       }
       pushLog('family_settings_saved', {
         ...(hasSaver ? { enabled: next.family.screensaver.enabled, defaultTimeoutSec: next.family.screensaver.defaultTimeoutSec } : {}),
-        ...(hasWx ? { weatherDetail: next.family.weather.detail, weatherSize: next.family.weather.size } : {}),
-        ...(hasEvcc ? { evccUrl: next.evcc?.url || '', evccLoadpoint: next.family.evcc?.loadpoint ?? null } : {})
+        ...(hasWx ? { weatherDetail: next.family.weather.detail, weatherSize: next.family.weather.size } : {})
       }, actorContext(req));
-      return json(res, 200, {
-        ok: true,
-        screensaver: next.family.screensaver || null,
-        weather: next.family.weather || null,
-        evcc: { url: next.evcc?.url || '', loadpoint: next.family.evcc?.loadpoint ?? null }
-      });
+      return json(res, 200, { ok: true, screensaver: next.family.screensaver || null, weather: next.family.weather || null });
     }
 
     // Family EV panel → evcc charge-mode switch (operator request #23).
@@ -2866,7 +2838,22 @@ export function createApiRoutes(ctx) {
             apiKeySet: !!(getCfg().forecast?.pvnode?.apiKey),
             nowcastEnabled: !!(getCfg().forecast?.pvnode?.nowcastEnabled)
           }
-        }
+        },
+        // EVCC wallbox (#23, 2026-06-13). Card consumes this via
+        // getSystemStatus('evcc') + buildStats('evcc'). reachable/loadpointCount
+        // come from the live integration poll (never a secret).
+        evcc: (() => {
+          const es = ctx.evccIntegration?.getStatus?.() || {};
+          const lps = Array.isArray(es.loadpoints) ? es.loadpoints : [];
+          return {
+            enabled: !!(getCfg().evcc?.enabled),
+            url: getCfg().evcc?.url || null,
+            reachable: lps.length > 0,
+            loadpointCount: lps.length,
+            dashboardLoadpoint: getCfg().evcc?.dashboardLoadpoint ?? null,
+            lastError: es.lastError || null
+          };
+        })()
       };
       return json(res, 200, payload);
     }
@@ -3354,6 +3341,71 @@ export function createApiRoutes(ctx) {
         tokenSet: !!token
       }, actorContext(req));
       return json(res, 200, { ok: true });
+    }
+
+    // === EVCC integration config (operator request #23, 2026-06-13) ===
+    // Configured on the Integrations page (sibling of /api/integrations/vrm).
+    // cfg.evcc.{url, enabled (battery-protect), dashboardLoadpoint}. GET also
+    // returns the live loadpoint list + reachability so the page can populate
+    // the loadpoint picker. POST does a dedicated server-side merge (never the
+    // POST /api/config foot-gun).
+    if (url.pathname === '/api/integrations/evcc' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const e = raw.evcc || {};
+      const status = ctx.evccIntegration?.getStatus?.() || {};
+      return json(res, 200, {
+        ok: true,
+        enabled: !!e.enabled,
+        url: e.url || '',
+        dashboardLoadpoint: e.dashboardLoadpoint ?? null,
+        reachable: Array.isArray(status.loadpoints) && status.loadpoints.length > 0,
+        lastError: status.lastError || null,
+        lastPolledAt: status.lastPolledAt || null,
+        loadpoints: Array.isArray(status.loadpoints) ? status.loadpoints : []
+      });
+    }
+
+    if (url.pathname === '/api/integrations/evcc' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      if (typeof body.url === 'string' && body.url.trim() && !/^https?:\/\//i.test(body.url.trim())) {
+        return json(res, 400, { ok: false, error: 'url must be http(s)://…' });
+      }
+      let lp = null;
+      if (body.dashboardLoadpoint != null && body.dashboardLoadpoint !== '') {
+        lp = Number(body.dashboardLoadpoint);
+        if (!Number.isInteger(lp) || lp < 1 || lp > 64) {
+          return json(res, 400, { ok: false, error: 'dashboardLoadpoint must be 1..64' });
+        }
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.evcc = (next.evcc && typeof next.evcc === 'object') ? next.evcc : {};
+      next.evcc.enabled = !!body.enabled;
+      next.evcc.url = String(body.url == null ? (next.evcc.url || '') : body.url).trim().slice(0, 256);
+      next.evcc.dashboardLoadpoint = lp;
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('evcc_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('evcc_config_saved', {
+        enabled: next.evcc.enabled,
+        urlSet: !!next.evcc.url,
+        dashboardLoadpoint: next.evcc.dashboardLoadpoint
+      }, actorContext(req));
+      return json(res, 200, {
+        ok: true,
+        enabled: next.evcc.enabled,
+        url: next.evcc.url,
+        dashboardLoadpoint: next.evcc.dashboardLoadpoint
+      });
     }
 
     // === Phase 20-06: Solcast credential endpoints (D-09/D-10/D-12) ===

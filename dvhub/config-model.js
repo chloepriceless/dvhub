@@ -2587,7 +2587,10 @@ export function createDefaultConfig() {
       pollIntervalMs: 15000,
       requestTimeoutMs: 5000,
       holdValueW: 0,
-      releaseValueW: -1
+      releaseValueW: -1,
+      // #23 (2026-06-13): which evcc loadpoint the Family EV panel shows/controls
+      // (1-based; null = first available). Configured on the Integrations page.
+      dashboardLoadpoint: null
     },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
