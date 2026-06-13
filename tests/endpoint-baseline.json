@@ -68,7 +68,6 @@
     "/api/license/remove",
     "/api/license/revalidate",
     "/api/license/state",
-    "/api/llm/models",
     "/api/log",
     "/api/log/dv-signals?limit=500",
     "/api/log?limit=1000",

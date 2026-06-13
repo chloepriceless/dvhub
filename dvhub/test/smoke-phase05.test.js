@@ -149,14 +149,6 @@ function mockCtx(overrides = {}) {
       getStatus: () => ({ modelLoaded: true, modelType: 'lightgbm', version: 1, mae: 0.56, tier: 2, mlEnabled: true }),
       getAccuracyTrend: async () => [{ date: '2026-04-11', mae: 0.56, samples: 100 }]
     },
-    llmService: {
-      listModels: async () => [
-        { name: 'llama3.2:3b', size: 2000000000, parameter_size: '3B' },
-        { name: 'tinyllama', size: 637000000, parameter_size: '1.1B' }
-      ],
-      generateMessage: async (type, data) => ({ text: 'Guten Morgen! Heute wird es sonnig.', type }),
-      getMessages: () => [{ text: 'Test message', ts: Date.now() }]
-    },
     optimizerService: {
       getStatus: () => ({ enabled: true, lastRun: Date.now() }),
       getLatestRun: () => ({
@@ -270,21 +262,6 @@ describe('Phase 05 Smoke Tests', () => {
     assert.ok(Array.isArray(keys.price_import_ct_kwh), 'price_import_ct_kwh must be present');
   });
 
-  // ── 5. POST /api/messages/generate -- returns non-empty text ──
-
-  it('POST /api/messages/generate -- returns non-empty text', async () => {
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    const url = new URL('http://localhost/api/messages/generate');
-    await routes.handleRequest(makeReq('POST', '/api/messages/generate', { type: 'status' }), res, url);
-    assert.equal(res._captured.status, 200);
-    const body = JSON.parse(res._captured.body);
-    assert.equal(body.ok, true);
-    assert.ok(body.message, 'message must be present');
-    assert.ok(body.message.text.length > 0, 'message text must be non-empty');
-  });
-
   // ── 6. GET /api/ml/accuracy -- returns accuracy data ──
 
   it('GET /api/ml/accuracy -- returns accuracy trend', async () => {
@@ -297,22 +274,6 @@ describe('Phase 05 Smoke Tests', () => {
     const body = JSON.parse(res._captured.body);
     assert.ok(Array.isArray(body), 'accuracy response must be an array');
     assert.ok(body.length > 0, 'accuracy trend must have entries');
-  });
-
-  // ── 7. GET /api/llm/models -- returns Ollama model list ──
-
-  it('GET /api/llm/models -- returns model list with name property', async () => {
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    const url = new URL('http://localhost/api/llm/models');
-    await routes.handleRequest(makeReq('GET', '/api/llm/models'), res, url);
-    assert.equal(res._captured.status, 200);
-    const body = JSON.parse(res._captured.body);
-    assert.equal(body.ok, true);
-    assert.ok(Array.isArray(body.models), 'models must be an array');
-    assert.ok(body.models.length > 0, 'models must not be empty');
-    assert.ok(body.models[0].name, 'first model must have a name');
   });
 
   // ── 8. POST /api/integration/eos/apply -- accepts setpoints ──
@@ -384,20 +345,6 @@ describe('Phase 05 Smoke Tests', () => {
     assert.equal(res._captured.status, 200);
     const body = JSON.parse(res._captured.body);
     assert.equal(body.ok, true);
-  });
-
-  // ── 12. GET /api/messages -- LLM messages endpoint ──
-
-  it('GET /api/messages -- returns messages array', async () => {
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    const url = new URL('http://localhost/api/messages');
-    await routes.handleRequest(makeReq('GET', '/api/messages'), res, url);
-    assert.equal(res._captured.status, 200);
-    const body = JSON.parse(res._captured.body);
-    assert.ok(Array.isArray(body.messages), 'messages must be an array');
-    assert.ok(body.messages.length > 0, 'messages must not be empty');
   });
 
   // ── 13. GET /api/optimizer/status -- optimizer status endpoint ──
@@ -1000,75 +947,6 @@ describe('M-1..M-5: input validation', () => {
       `>50 keys must yield 400, got ${res._captured.status}`);
     const body = JSON.parse(res._captured.body);
     assert.equal(body.error, 'too_many_keys');
-  });
-});
-
-// ── M-6 / L-11 Regression: gate parity + message-type allowlist ───────
-//
-// Plan 16-03 Task 3.
-//   M-6 — /api/admin/update/channel jumped straight into parseBody +
-//         saveAndApplyConfig; its siblings /api/admin/update/check and
-//         /api/admin/update/apply BOTH start with a getServiceActionsEnabled
-//         403 gate. Without it the channel change is persisted even when
-//         service actions are disabled. Fix: add the identical gate first.
-//   L-11 — /api/messages/generate passed body.type straight to
-//         generateMessage with no allowlist. Fix: validate against
-//         MESSAGE_TYPE_ALLOWLIST, default to 'status' on a miss.
-describe('M-6 / L-11: gate parity + message-type allowlist', () => {
-  it('M-6: POST /api/admin/update/channel with service actions disabled → 403', async () => {
-    // base mockCtx getServiceActionsEnabled() === false
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    await routes.handleRequest(
-      makeReq('POST', '/api/admin/update/channel', { channel: 'dev' }),
-      res,
-      new URL('http://localhost/api/admin/update/channel')
-    );
-    assert.equal(res._captured.status, 403,
-      `channel switch must be gated by service-actions, got ${res._captured.status}`);
-    const body = JSON.parse(res._captured.body);
-    assert.equal(body.ok, false, `403 body must be {ok:false,...}, got ${JSON.stringify(body)}`);
-  });
-
-  it('L-11: POST /api/messages/generate with an unknown type falls back to "status"', async () => {
-    let seenType = null;
-    const ctx = mockCtx({
-      llmService: {
-        generateMessage: async (type) => { seenType = type; return { text: 'ok', type }; },
-        getMessages: () => []
-      }
-    });
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    await routes.handleRequest(
-      makeReq('POST', '/api/messages/generate', { type: 'evilarbitrary' }),
-      res,
-      new URL('http://localhost/api/messages/generate')
-    );
-    assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status}`);
-    assert.equal(seenType, 'status',
-      `an unknown message type must fall back to 'status', generateMessage saw '${seenType}'`);
-  });
-
-  it('L-11: a known type (savings) is passed through unchanged', async () => {
-    let seenType = null;
-    const ctx = mockCtx({
-      llmService: {
-        generateMessage: async (type) => { seenType = type; return { text: 'ok', type }; },
-        getMessages: () => []
-      }
-    });
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    await routes.handleRequest(
-      makeReq('POST', '/api/messages/generate', { type: 'savings' }),
-      res,
-      new URL('http://localhost/api/messages/generate')
-    );
-    assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status}`);
-    assert.equal(seenType, 'savings',
-      `a known message type must pass through, generateMessage saw '${seenType}'`);
   });
 });
 

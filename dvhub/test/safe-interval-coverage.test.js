@@ -35,8 +35,6 @@ const TARGET_FILES = [
   'system-discovery.js',
   'schedule-eval.js',
   'services/python-bridge/index.js',
-  'services/llm/index.js',
-  'services/llm/ollama-client.js'
 ];
 
 for (const rel of TARGET_FILES) {

@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=11">
+<link rel="stylesheet" href="/family.css?v=12">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -60,17 +60,6 @@
   </div>
 
   <div class="devices-tray" id="devices-tray"></div>
-
-  <!-- D-15 Message widget (Phase 05 — ML/LLM messages) -->
-  <div class="msg-tray" id="msgTray">
-    <div class="msg-card" id="msgLatest">
-      <div class="msg-icon" id="msgIcon">&#128225;</div>
-      <div class="msg-body">
-        <div class="msg-text msg-text-empty" id="msgText">Keine aktuellen Nachrichten</div>
-        <div class="msg-meta" id="msgMeta"></div>
-      </div>
-    </div>
-  </div>
 
   <!-- D-10 Forecast/Preis/Optimizer widgets (right side) -->
   <div class="widgets" id="widgets">
@@ -122,27 +111,11 @@
 </div>
 <div class="overlay" id="overlay"><div class="overlay-bg" data-action="close-panel"></div><div class="panel" id="panel"><div class="panel-handle"></div><div class="panel-head"><div><div class="panel-icon" id="p-icon"></div><div class="panel-title" id="p-title"></div><div class="panel-subtitle" id="p-sub"></div></div><button class="panel-close" data-action="close-panel">&times;</button></div><div class="panel-summary" id="p-summary"></div><div class="panel-stats" id="p-stats"></div><div class="panel-chart"><div class="chart-label">Verlauf heute</div><canvas id="p-chart"></canvas></div><div class="panel-details" id="p-details"></div><div class="api-hint u-hidden" id="p-api"></div></div></div>
 
-<!-- D-18 Message history overlay (Phase 05) -->
-<div class="overlay u-hidden" id="msgOverlay">
-  <div class="overlay-bg" id="msgOverlayBg"></div>
-  <div class="panel">
-    <div class="panel-handle"></div>
-    <div class="panel-head">
-      <div>
-        <div class="panel-title">Nachrichten</div>
-        <div class="panel-subtitle">Letzte 24 Stunden</div>
-      </div>
-      <button class="panel-close" id="msgOverlayClose">&times;</button>
-    </div>
-    <div class="panel-details" id="msgHistory"></div>
-  </div>
-</div>
-
 <script src="/common.js"></script>
 <script src="/dv-modal.js"></script>
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260613-weather"></script>
+<script src="/family.js?v=20260613-nollm"></script>
 </body>
 </html>

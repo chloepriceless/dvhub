@@ -576,23 +576,11 @@ export function createFamilyService(ctx) {
 
     const surplus = energy.surplus;
 
-    // Prefer the latest LLM-generated status message (Phase 05 Edge-LLM) when
-    // available and reasonably fresh (≤ 60 minutes). The LLM emits a warm,
-    // human-toned sentence built from live state — much more useful than the
-    // static surplus/deficit fallback. Falls back to the hardcoded sentence
-    // when the LLM is disabled, the buffer is empty (e.g. right after restart
-    // before the 60s eager-generate), or the latest message is too stale.
-    const HOUR_MS = 60 * 60 * 1000;
-    let message = surplus
+    // LLM stack removed 2026-06-13 (operator decision: no generated copy,
+    // run on small hardware) — the greeting is the rule-based sentence only.
+    const message = surplus
       ? 'Dein Haus produziert mehr Strom als es braucht'
       : 'Dein Haus braucht gerade mehr als die Sonne liefert';
-    const llmLatest = (typeof ctx.llmService?.getLatest === 'function')
-      ? ctx.llmService.getLatest()
-      : null;
-    if (llmLatest && typeof llmLatest.text === 'string' && llmLatest.text.trim()
-        && typeof llmLatest.ts === 'number' && Date.now() - llmLatest.ts < HOUR_MS) {
-      message = llmLatest.text;
-    }
 
     const mood = surplus ? 'good' : 'warn';
     let moodLabel = surplus ? 'Alles läuft perfekt' : 'Batterie hilft aus';
@@ -679,25 +667,6 @@ export function createFamilyService(ctx) {
     const greeting = deriveGreetingSection(energy, optimizerStatus, cfg);
     const today = deriveTodaySection(todayKpis, todayCharts);
 
-    // LLM-generated friendly captions for the 5 status tiles (Sonne/Haus/
-    // Akku/Auto/Netz). Cached server-side by llmService; refreshed every
-    // llmStatusIntervalMin (15 min default) + once 60s after service start.
-    // Null when LLM is disabled, the cache is empty, or the entry is stale
-    // (> 1h) — frontend falls back to its rule-based strings in that case.
-    let tileFriendlies = null;
-    const tfCache = typeof ctx.llmService?.getTileFriendlies === 'function'
-      ? ctx.llmService.getTileFriendlies()
-      : null;
-    if (tfCache && typeof tfCache.ts === 'number' && Date.now() - tfCache.ts < 60 * 60 * 1000) {
-      tileFriendlies = {
-        solar: tfCache.solar || null,
-        home: tfCache.home || null,
-        battery: tfCache.battery || null,
-        ev: tfCache.ev || null,
-        grid: tfCache.grid || null
-      };
-    }
-
     const payload = {
       now,
       energy,
@@ -713,7 +682,6 @@ export function createFamilyService(ctx) {
       weather,
       savings,
       greeting,
-      tileFriendlies,
       presence: { ...presence },
       config: {
         screensaver: cfg?.family?.screensaver || null,

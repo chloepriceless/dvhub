@@ -50,14 +50,6 @@ export function buildTierFeatures(tier, cfg) {
       feature: 'persistent_python',
       status: tier >= 3 ? 'active' : 'unavailable',
       requiredTier: 3
-    },
-    {
-      feature: 'edge_llm',
-      // Phase 5 Plan 04/05 shipped — Ollama + services/llm/* are live. Mirror
-      // the ml_training / statsforecast pattern: report 'active' when the
-      // operator has enabled it via cfg.llm.llmEnabled, else 'inactive'.
-      status: tier >= 3 && cfg.llm?.llmEnabled ? 'active' : tier >= 3 ? 'inactive' : 'unavailable',
-      requiredTier: 3
     }
   ];
   return features;
@@ -129,10 +121,6 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoad
       sfEnabled: ml.sfEnabled || false,
       sfUseMstl: tier >= 3 && (ml.sfUseMstl || false),
       tierFeatures: buildTierFeatures(tier, cfg),
-      // LLM surface for settings display
-      llmModel: cfg.llm?.llmModel || null,
-      llmEnabled: cfg.llm?.llmEnabled || false,
-      llmStatus: (tier >= 3 && cfg.llm?.llmEnabled) ? 'aktiv' : 'inaktiv',
       // Phase 07 FORE-12 D-D2 exposure
       load_forecast: loadForecast
     };

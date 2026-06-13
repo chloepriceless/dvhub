@@ -109,12 +109,6 @@ const SECTIONS = [
     label: 'ML & Forecast-Korrektur',
     description: 'ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
     destination: 'services'
-  },
-  {
-    id: 'llm',
-    label: 'LLM & Nachrichten',
-    description: 'TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-    destination: 'services'
   }
 ];
 
@@ -2311,94 +2305,6 @@ function buildFieldDefinitions() {
       help: 'MSTL Multi-Saisonalitaet (Tier 3). Tier 2 nutzt einfaches AutoARIMA.'
     },
 
-    // --- LLM & Nachrichten ---
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmEnabled',
-      label: 'LLM aktiviert',
-      type: 'boolean',
-      help: 'Aktiviert TinyLlama Nachrichtengenerierung (Tier 3 only).'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmOllamaUrl',
-      label: 'Ollama URL',
-      type: 'text',
-      help: 'URL des lokalen Ollama REST API.'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmModel',
-      label: 'LLM Modell',
-      type: 'select',
-      default: 'qwen3.5:2b',
-      options: [
-        { value: 'qwen3.5:0.8b', label: 'Qwen3.5 0.8B — sparsam (~1,0 GB)' },
-        { value: 'qwen3.5:2b',   label: 'Qwen3.5 2B — Standard/empfohlen (~2,7 GB), gutes Deutsch' },
-        { value: 'qwen3.5:4b',   label: 'Qwen3.5 4B — besser (~3,4 GB)' },
-        { value: 'qwen3.5:9b',   label: 'Qwen3.5 9B — beste Qualität (~6,6 GB), braucht ≥8–12 GB RAM' },
-        { value: 'tinyllama',    label: 'TinyLlama — Legacy, NICHT empfohlen (schwaches Deutsch)' }
-      ],
-      help: 'Sprachmodell für die generierten Status-Nachrichten (lokal via Ollama). Qwen3.5 erzeugt deutlich besseres Deutsch als das alte TinyLlama. Größere Modelle = bessere Sprache, mehr RAM/langsamer. Das gewählte Modell wird beim Setup/Update via "ollama pull" geladen; ein Wechsel kann beim ersten Lauf eine Verzögerung verursachen, bis das Modell gezogen ist.'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmMaxMessagesPerDay',
-      label: 'Max. Nachrichten/Tag',
-      type: 'number',
-      min: 5,
-      max: 50,
-      help: 'Maximale Anzahl LLM-generierter Nachrichten pro Tag.'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmStatusIntervalMin',
-      label: 'Status-Intervall (min)',
-      type: 'number',
-      min: 15,
-      max: 180,
-      help: 'Intervall fuer stuendliche Status-Nachrichten in Minuten.'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmTemperature',
-      label: 'Temperatur',
-      type: 'number',
-      min: 0,
-      max: 1.5,
-      step: 0.1,
-      help: 'LLM Sampling-Temperatur (0.0=deterministisch, 1.0=kreativ).'
-    },
-    {
-      section: 'llm',
-      group: 'llmMessages',
-      groupLabel: 'LLM & Nachrichten',
-      groupDescription: 'Konfiguration fuer TinyLlama Edge-AI Nachrichten und Template-Fallback.',
-      path: 'llm.llmMaxTokens',
-      label: 'Max. Tokens',
-      type: 'number',
-      min: 50,
-      max: 500,
-      help: 'Maximale Antwortlaenge in Tokens.'
-    }
   ];
 
   return addSetupWizardMetadata(fields.filter((entry) => entry.path));
@@ -2647,15 +2553,6 @@ export function createDefaultConfig() {
       mlSlidingWindowMonths: 12,
       sfEnabled: true,
       sfUseMstl: true
-    },
-    llm: {
-      llmEnabled: true,
-      llmOllamaUrl: 'http://127.0.0.1:11434',
-      llmModel: 'qwen3.5:2b',
-      llmMaxMessagesPerDay: 20,
-      llmStatusIntervalMin: 60,
-      llmTemperature: 0.7,
-      llmMaxTokens: 200
     },
     optimizer: {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },

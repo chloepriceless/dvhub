@@ -567,7 +567,7 @@
         </section><!-- /#tab-forecast -->
 
         <section id="tab-ml" class="settings-tab-panel" hidden>
-          <header class="sa-section-head"><h2>ML &amp; AI</h2><p class="sub">Modell-Status, Genauigkeits-Trend, Tier-Features, LLM.</p></header>
+          <header class="sa-section-head"><h2>ML &amp; AI</h2><p class="sub">Modell-Status, Genauigkeits-Trend, Tier-Features.</p></header>
           <div class="config-grid">
 
             <!-- Modell-Status -->
@@ -618,31 +618,6 @@
               <div class="config-group-kicker">Training-Log</div>
               <div class="panel-details" id="mlTrainingLog">
                 <!-- Last 5 training runs rendered by settings.js -->
-              </div>
-            </div>
-
-            <!-- LLM Status (Tier 3 only) -->
-            <div class="config-group" data-accent="cyan" id="mlLlmGroup" hidden>
-              <div class="config-group-kicker">LLM Modell</div>
-              <div class="config-row">
-                <label for="llmModelSelect" class="config-label">Aktives Modell</label>
-                <select id="llmModelSelect" class="form-control llm-select-narrow">
-                  <option value="">-- Modelle laden... --</option>
-                </select>
-              </div>
-              <div class="panel-stats">
-                <div class="stat-card">
-                  <div class="stat-label">Status</div>
-                  <div class="stat-val" id="llmStatus">--</div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Nachrichten heute</div>
-                  <div class="stat-val" id="llmMsgCount">--</div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Avg. Inferenz</div>
-                  <div class="stat-val" id="llmInferenceMs">--</div>
-                </div>
               </div>
             </div>
 

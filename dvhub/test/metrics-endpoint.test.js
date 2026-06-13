@@ -133,7 +133,7 @@ describe('Plan 09-06 metrics-endpoint — D-07 LAN bypass', () => {
   it('Cardinality control: dynamic-id paths surface as canonical :id labels in matchRouteLabel', async () => {
     const { matchRouteLabel } = await import('../routes-api.js');
     assert.equal(matchRouteLabel('/api/devices/abc-123'), '/api/devices/:id');
-    assert.equal(matchRouteLabel('/api/messages/m-77'), '/api/messages/:id');
+    // /api/messages/:id pattern removed with the LLM stack (2026-06-13).
     assert.equal(matchRouteLabel('/api/status'), '/api/status');
     // Belt-and-braces: increment counter with both labels, verify metrics
     // output keeps the canonical form (no abc-123 leak).

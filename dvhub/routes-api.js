@@ -19,9 +19,6 @@ import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump } from './services/db-backup.js';
-// L-11 (Plan 16-03): MESSAGE_TYPES is the single source of truth for the
-// /api/messages/generate type allowlist — see MESSAGE_TYPE_ALLOWLIST below.
-import { MESSAGE_TYPES } from './services/llm/message-types.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -152,7 +149,6 @@ const AUDIT_LOG_EVENT_ALLOWLIST = new Set([
 // route is added.
 const ROUTE_LABEL_PATTERNS = [
   [/^\/api\/devices\/[^/]+$/, '/api/devices/:id'],
-  [/^\/api\/messages\/[^/]+$/, '/api/messages/:id'],
   [/^\/api\/forecast\/[^/]+$/, '/api/forecast/:id'],
   [/^\/api\/control\/events\/[^/]+$/, '/api/control/events/:id'],
   [/^\/api\/optimizer\/runs\/[^/]+$/, '/api/optimizer/runs/:id'],
@@ -246,33 +242,6 @@ export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
-// L-11 (Plan 16-03): /api/messages/generate body.type allowlist. Derived from
-// the LLM service's MESSAGE_TYPES enum (single source of truth) so adding a
-// new message type there automatically extends the allowlist. An unknown type
-// is normalised to 'status' before reaching generateMessage (T-16-12 Tampering).
-export const MESSAGE_TYPE_ALLOWLIST = new Set(Object.values(MESSAGE_TYPES));
-// /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
-// and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
-// with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
-export const SEMVER_TAG = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/;
-// /api/messages/generate prompt-injection markers. Not a complete LLM-injection
-// defence — just a first-pass filter for obvious overrides (`ignore instructions`,
-// system-prompt tags, jailbreak phrasing, Llama/Mistral/ChatML prompt templates).
-export const PROMPT_INJECTION_PATTERNS = [
-  /\bignore\b.*\binstructions?\b/i,
-  /\bsystem\s*prompt\b/i,
-  /\bjailbreak\b/i,
-  /<\|im_start\|>|<\|im_end\|>/,
-  /\[\[SYSTEM\]\]|\[INST\]|<<SYS>>/
-];
-// /api/messages/generate body.data cap — 4 KB is plenty for status/savings
-// message context and bounds how much attacker text can reach the LLM per call.
-export const MAX_MESSAGE_DATA_BYTES = 4 * 1024;
-// Rate-limit Map eviction ceiling. Before this was unbounded, so IPv6-rotation
-// attackers could pin Node heap. Key normalisation (v4 verbatim, v6 /64 prefix)
-// further collapses per-address fan-out.
-export const RATE_LIMIT_MAX_KEYS = 5000;
-
 // ── Plan 09-01 (D-03 / D-04): token strength + audit fingerprint ────────
 // Locked decisions:
 //   D-03: minimum 32 chars AND Shannon entropy ≥ 3.5 bits/char (matches the
@@ -494,6 +463,15 @@ export function assertNoDowngrade(targetVersion, currentVersion, { allowDowngrad
 // Deep-path validation is plan 08-06's scope — this plan only covers
 // root-level strictness so an attacker cannot sneak in `__proto__`-ish keys
 // or bogus sections that get persisted and later consumed by unvalidated code.
+// /api/admin/update/apply body.version allowlist — blocks shell-metachar payloads
+// and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
+// with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
+export const SEMVER_TAG = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/;
+// Rate-limit Map eviction ceiling. Before this was unbounded, so IPv6-rotation
+// attackers could pin Node heap. Key normalisation (v4 verbatim, v6 /64 prefix)
+// further collapses per-address fan-out.
+export const RATE_LIMIT_MAX_KEYS = 5000;
+
 export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   ...Object.keys(createDefaultConfig()),
   // Migration-seeded / optional sections
@@ -533,7 +511,11 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   // ({ localUser, tunnel }) into config.json. The settings UI GETs the whole
   // config and POSTs it back verbatim, so without `support` here EVERY settings
   // save on a provisioned appliance is rejected with unknown_config_paths.
-  'support'
+  'support',
+  // LLM stack removed 2026-06-13 — existing config.json files still carry the
+  // `llm` block and the settings UI round-trips the whole config, so the root
+  // must stay allowlisted (legacy echo) or every save is rejected.
+  'llm'
 ]));
 
 // Plan 08-09 Task 2: actor context extracted from a request — feeds the
@@ -906,8 +888,6 @@ export function createApiRoutes(ctx) {
     '/api/vpn/history',
     '/dv/control-value',
     '/api/devices',                // Phase 04 — device list (INTG-05)
-    '/api/messages',               // Phase 05 — LLM messages (family tablet)
-    '/api/messages/history',       // Phase 05 — message history (family tablet)
     // Phase 09.2 — history exports + integrations health are appliance reads
     // consumed by the LAN browser (Explorer page chart + downloads + Integrations
     // page polling). D-15's Bearer-only gate was wrong for this deployment:
@@ -972,8 +952,7 @@ export function createApiRoutes(ctx) {
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
     ['/api/vpn/status', 'integrations'], ['/api/vpn/history', 'integrations'],
-    ['/api/devices', 'integrations'], ['/api/messages', 'integrations'],
-    ['/api/messages/history', 'integrations'], ['/api/log/dv-signals', 'integrations'],
+    ['/api/devices', 'integrations'], ['/api/log/dv-signals', 'integrations'],
     ['/api/epex/zones', 'integrations'], ['/api/epex/gaps', 'integrations'],
   ]);
   function endpointGroupFor(pathname) {
@@ -1401,35 +1380,6 @@ export function createApiRoutes(ctx) {
   function consumeBootstrapToken() {
     const tokenPath = getBootstrapTokenPath();
     try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
-  }
-
-  // Plan 08-04 Task 1 Step 5: walk a JSON payload depth-first, return the first
-  // path+pattern that matches any PROMPT_INJECTION_PATTERNS entry. Returns null
-  // when the payload is clean. Strings only — numbers / booleans / null skipped
-  // since they cannot carry prose instructions. Arrays and nested objects are
-  // recursed. Path uses `foo.0.bar` dotted form for error reporting.
-  function scanForInjection(obj, path = '') {
-    if (obj == null) return null;
-    if (typeof obj === 'string') {
-      for (const rx of PROMPT_INJECTION_PATTERNS) {
-        if (rx.test(obj)) return { path, pattern: rx.source };
-      }
-      return null;
-    }
-    if (Array.isArray(obj)) {
-      for (let i = 0; i < obj.length; i++) {
-        const hit = scanForInjection(obj[i], path ? `${path}.${i}` : String(i));
-        if (hit) return hit;
-      }
-      return null;
-    }
-    if (typeof obj === 'object') {
-      for (const [k, v] of Object.entries(obj)) {
-        const hit = scanForInjection(v, path ? `${path}.${k}` : k);
-        if (hit) return hit;
-      }
-    }
-    return null;
   }
 
   // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
@@ -6373,91 +6323,6 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { days, results });
       } catch (e) {
         return json(res, 500, { error: e.message });
-      }
-    }
-
-    // GET /api/messages — latest LLM messages (LAN-safe for family tablet)
-    if (url.pathname === '/api/messages' && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      try {
-        const messages = ctx.llmService?.getMessages()?.slice(0, 5) || [];
-        return json(res, 200, { messages });
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // GET /api/messages/history — full 24h message history (LAN-safe)
-    if (url.pathname === '/api/messages/history' && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      try {
-        const messages = ctx.llmService?.getMessages() || [];
-        return json(res, 200, { messages });
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // POST /api/messages/generate — manually trigger LLM message generation (auth required)
-    // Optional body: { type?: 'status'|'savings'|'alert'|..., data?: object }
-    if (url.pathname === '/api/messages/generate' && req.method === 'POST') {
-      if (!checkAuth(req, res)) return;
-      if (!ctx.llmService) return json(res, 503, { error: 'LLM service not available' });
-      try {
-        // Parse optional body (4 KB cap — Plan 08-04 Step 5 MAX_MESSAGE_DATA_BYTES).
-        let body = {};
-        try {
-          const raw = await readRawBody(req, MAX_MESSAGE_DATA_BYTES);
-          if (raw) body = JSON.parse(raw);
-        } catch { /* ignore body parse errors */ }
-
-        // Plan 08-04 Task 1 Step 5: prompt-injection guard. Walk body.data and
-        // reject any string matching the injection patterns BEFORE it reaches
-        // the LLM. This is a coarse first-pass filter — deeper LLM-defence is
-        // the LLM service's concern, not a route handler — but it blocks the
-        // obvious attacker payloads (`ignore all previous instructions`,
-        // ChatML/Llama/Mistral template tags, `jailbreak` phrasing).
-        const injection = scanForInjection(body?.data);
-        if (injection) {
-          pushLog('prompt_injection_rejected', { path: injection.path });
-          return json(res, 400, { ok: false, error: 'prompt_injection_detected', path: injection.path });
-        }
-
-        // Default: build status message from current state. Reuse the LLM
-        // service's buildLiveData() so the manual trigger emits the same
-        // structured fields (socPercent, pvKw, loadKw, priceCtKwh, ...) that
-        // the interval ticker uses — otherwise the prompt templates' Watt-vs-kW
-        // interpolation resolves to undefined and the LLM produces "Fehlende
-        // Daten" output even when state.victron is fully populated.
-        // L-11 (Plan 16-03): validate body.type against MESSAGE_TYPE_ALLOWLIST.
-        // An unknown / attacker-supplied type is normalised to 'status' rather
-        // than passed verbatim into generateMessage (graceful default per the
-        // review's recommendation — no 400, the LLM still produces output).
-        const safeType = MESSAGE_TYPE_ALLOWLIST.has(body.type) ? body.type : 'status';
-        const liveData = typeof ctx.llmService.getLiveData === 'function'
-          ? ctx.llmService.getLiveData()
-          : {};
-        const data = { ...liveData, ...(body.data || {}) };
-
-        const msg = await ctx.llmService.generateMessage(safeType, data);
-        return json(res, 200, { ok: true, message: msg });
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // GET /api/llm/models -- Ollama model list for settings UI dropdown (LLM-01)
-    // T-06-07: Gated by checkAuth. T-06-08: 10s timeout, empty array on error.
-    if (url.pathname === '/api/llm/models' && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      if (!ctx.llmService?.listModels) {
-        return json(res, 503, { ok: false, error: 'LLM service not available' });
-      }
-      try {
-        const models = await ctx.llmService.listModels();
-        return json(res, 200, { ok: true, models });
-      } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
       }
     }
 
