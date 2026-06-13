@@ -483,7 +483,10 @@ export function createFamilyService(ctx) {
         case 'self_consume': return 'Batterie nutzt Solar';
         case 'discharge': return 'Batterie entlädt';
         case 'hold': return 'Batterie hält';
-        default: return action || 'unbekannt';
+        // null (not 'unbekannt') when there is no internal-schedule action —
+        // with EOS as primary source the schedule is always empty and the
+        // family panel falls back to its own planSlots ('Wartet'/'—').
+        default: return action || null;
       }
     };
 

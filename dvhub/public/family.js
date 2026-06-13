@@ -1608,7 +1608,17 @@
     panelData.home.stats = [
       { label: 'Gerade', val: formatKw(energy.homeKw), delta: '', up: true },
       { label: 'Heute', val: typeof today.loadKwh === 'number' ? today.loadKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Eigenverbrauch', val: slotStats.live.sr === '--' ? '—' : slotStats.live.sr + '%', delta: '', up: true }
+      // Eigenverbrauchsquote: live (momentary) while PV produces; at night the
+      // live ratio is undefined, so fall back to the day quota
+      // (PV − Einspeisung)/PV from the real telemetry counters.
+      (function () {
+        if (slotStats.live.sr !== '--') return { label: 'Eigenverbrauch', val: slotStats.live.sr + '%', delta: '', up: true };
+        if (typeof today.pvKwh === 'number' && today.pvKwh > 0 && typeof today.exportKwh === 'number') {
+          var srDay = Math.max(0, Math.min(100, Math.round((today.pvKwh - today.exportKwh) / today.pvKwh * 100)));
+          return { label: 'Eigenverbrauch', val: srDay + '%', delta: 'heute', up: true };
+        }
+        return { label: 'Eigenverbrauch', val: '—', delta: 'keine PV', up: true };
+      })()
     ];
     panelData.bat.stats = [
       { label: 'Stand', val: formatPct(battery.socPct), delta: battery.mode || '', up: true },
@@ -1703,7 +1713,7 @@
       else if (activeSlots[psi].startTs > nowMs && !nextSlot) nextSlot = activeSlots[psi];
     }
     panelData.optimizer.stats = [
-      { label: 'Jetzt', val: curSlot ? famOptimizerSlotLabel(curSlot) : (optimizer.currentActionLabel || '—'), delta: '', up: true },
+      { label: 'Jetzt', val: curSlot ? famOptimizerSlotLabel(curSlot) : (nextSlot ? 'Wartet' : (optimizer.currentActionLabel || '—')), delta: '', up: true },
       { label: 'Als nächstes', val: nextSlot ? famOptimizerHHMM(nextSlot.startTs) + ' ' + famOptimizerSlotLabel(nextSlot) : (optimizer.nextActionLabel || '—'), delta: '', up: true },
       { label: 'Status', val: optimizer.enabled ? 'Aktiv' : 'Aus', delta: optimizer.source ? ('Quelle: ' + optimizer.source) : '', up: !!optimizer.enabled }
     ];
