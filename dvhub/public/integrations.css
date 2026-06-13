@@ -1250,3 +1250,5 @@
 .dv-ha-note code { background: rgba(0, 0, 0, 0.3); padding: 1px 5px; border-radius: 4px; }
 .dv-ha-fallback-intro { margin: 8px 0 4px; font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, 0.7); }
 .dv-ha-fallback-intro code { background: rgba(0, 0, 0, 0.3); padding: 1px 5px; border-radius: 4px; }
+
+.dv-code-actions { margin-top: 8px; }

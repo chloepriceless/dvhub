@@ -2542,7 +2542,49 @@
 
   // === Home Assistant MQTT-Discovery Drawer Wiring (2026-06-13) ===
   // Enable/disable + prefix + "Speichern & Resync" (republish without a restart).
+  // Copy-paste REST fallback (no MQTT) with THIS appliance's address pre-filled —
+  // window.location.origin is exactly how the user reached DVhub, so every user
+  // gets a ready-to-paste snippet with their own IP (operator request 2026-06-13).
+  function buildHaRestYaml() {
+    var base = (window.location && window.location.origin) ? window.location.origin : 'http://DVHUB-IP';
+    return [
+      '# Home Assistant — DVhub via REST (ohne MQTT).',
+      '# In configuration.yaml einfügen, dann HA neu starten. Adresse ist bereits eingetragen.',
+      'rest:',
+      '  - resource: "' + base + '/api/status"',
+      '    scan_interval: 30',
+      '    # Nur falls in DVhub ein API-Token gesetzt ist (LAN-Zugriff ohne Token braucht das nicht):',
+      '    # headers:',
+      '    #   Authorization: "Bearer DEIN_API_TOKEN"',
+      '    sensor:',
+      '      - name: "DVhub Batterie SoC"',
+      '        value_template: "{{ value_json.victron.soc }}"',
+      '        unit_of_measurement: "%"',
+      '        device_class: battery',
+      '      - name: "DVhub Batterieleistung"',
+      '        value_template: "{{ value_json.victron.batteryPowerW }}"',
+      '        unit_of_measurement: "W"',
+      '        device_class: power',
+      '      - name: "DVhub Netzleistung"',
+      '        value_template: "{{ value_json.meter.grid_total_w }}"',
+      '        unit_of_measurement: "W"',
+      '        device_class: power',
+      '      - name: "DVhub PV gesamt"',
+      '        value_template: "{{ value_json.victron.pvTotalW }}"',
+      '        unit_of_measurement: "W"',
+      '        device_class: power',
+      '      - name: "DVhub Strompreis"',
+      '        value_template: "{{ value_json.costs.priceNowCtKwh }}"',
+      '        unit_of_measurement: "ct/kWh"',
+      '      - name: "DVhub Netto heute"',
+      '        value_template: "{{ value_json.costs.netEur }}"',
+      '        unit_of_measurement: "EUR"',
+      '        device_class: monetary'
+    ].join('\n');
+  }
   async function loadHaDrawer() {
+    var yamlEl = document.getElementById('ha-rest-yaml');
+    if (yamlEl) yamlEl.textContent = buildHaRestYaml();
     var el = function (id) { return document.getElementById(id); };
     try {
       var res = await apiFetch('/api/integrations/homeassistant');
@@ -2607,6 +2649,21 @@
   document.addEventListener('click', function (e) {
     var haSave = e.target.closest('#ha-save');
     if (haSave) { saveHaDrawer(haSave); return; }
+    var haCopy = e.target.closest('#ha-rest-copy');
+    if (haCopy) {
+      var pre = document.getElementById('ha-rest-yaml');
+      var txt = pre ? pre.textContent : '';
+      if (txt && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function () {
+          showDrawerToast('homeassistant', 'ok', '✓ REST-Vorlage kopiert.');
+        }).catch(function () {
+          showDrawerToast('homeassistant', 'err', 'Kopieren fehlgeschlagen — Block manuell markieren.');
+        });
+      } else {
+        showDrawerToast('homeassistant', 'err', 'Zwischenablage nicht verfügbar — Block manuell markieren.');
+      }
+      return;
+    }
   });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===

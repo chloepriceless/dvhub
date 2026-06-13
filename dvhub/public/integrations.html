@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=38" />
+  <link rel="stylesheet" href="/integrations.css?v=39" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -713,34 +713,16 @@
           <details class="dv-ha-fallback">
             <summary>Kein gemeinsamer Broker? Werte per REST in HA holen (ohne MQTT)</summary>
             <p class="dv-ha-fallback-intro">
-              H&auml;ngt HA an einem anderen Broker, ist der einfachste Weg ohne MQTT ein
-              <strong>REST-Sensor</strong>: Home Assistant fragt DVhubs <code>/api/status</code>
-              periodisch ab. Das Folgende in die HA-<code>configuration.yaml</code> kopieren,
-              <code>DVHUB-IP</code> + <code>DEIN_API_TOKEN</code> anpassen, dann HA neu starten.
-              Weitere Werte per zus&auml;tzlicher <code>value_template</code>-Zeile erg&auml;nzen.
+              Der einfachste Weg ohne MQTT ist ein <strong>REST-Sensor</strong>: Home Assistant fragt
+              DVhubs <code>/api/status</code> periodisch ab. Die <strong>DVhub-Adresse ist unten bereits
+              eingetragen</strong> (die, &uuml;ber die diese Seite ge&ouml;ffnet wurde). Block kopieren, in die
+              HA-<code>configuration.yaml</code> einf&uuml;gen, HA neu starten. Nur falls in DVhub ein
+              API-Token gesetzt ist, die <code>headers</code>-Zeilen aktivieren.
             </p>
-            <pre class="dv-code">rest:
-  - resource: "http://DVHUB-IP/api/status"
-    headers:
-      Authorization: "Bearer DEIN_API_TOKEN"
-    scan_interval: 30
-    sensor:
-      - name: "DVhub Batterie SoC"
-        value_template: "{{ value_json.victron.soc }}"
-        unit_of_measurement: "%"
-        device_class: battery
-      - name: "DVhub Netzleistung"
-        value_template: "{{ value_json.meter.grid_total_w }}"
-        unit_of_measurement: "W"
-        device_class: power
-      - name: "DVhub PV gesamt"
-        value_template: "{{ value_json.victron.pvTotalW }}"
-        unit_of_measurement: "W"
-        device_class: power
-      - name: "DVhub Netto heute"
-        value_template: "{{ value_json.costs.netEur }}"
-        unit_of_measurement: "EUR"
-        device_class: monetary</pre>
+            <div class="dv-code-actions">
+              <button type="button" class="btn sm ghost" id="ha-rest-copy">&#128203; Kopieren</button>
+            </div>
+            <pre class="dv-code" id="ha-rest-yaml">&mdash;</pre>
           </details>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-homeassistant-toast" role="status" aria-live="polite" hidden>&mdash;</div>
@@ -1020,6 +1002,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=39"></script>
+  <script src="/integrations.js?v=40"></script>
 </body>
 </html>
