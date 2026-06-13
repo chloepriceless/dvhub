@@ -1529,16 +1529,25 @@ if (IS_RUNTIME_PROCESS) {
       teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
     });
     familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
-    try {
-      publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION);
-    } catch (err) {
-      console.error('HA Discovery error:', err.message);
-    }
     // Republish/clear hooks so the Integrations HA card can (re)sync discovery
-    // WITHOUT a restart (the boot call above only runs once). Defined here where
-    // mqttHub is in scope; consumed by /api/integrations/homeassistant.
-    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION);
+    // WITHOUT a restart. Defined here where mqttHub is in scope; consumed by
+    // /api/integrations/homeassistant.
+    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel);
     ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride);
+    // Boot publish — DELAYED. Publishing the retained discovery configs in the
+    // raw connect .then() raced an un-settled client (and the LAN broker's
+    // frequent reconnects), so the retained configs never landed and the HA card
+    // looked "dead" despite enabled=true (2026-06-13). A short delay lets the
+    // session stabilise; the configs are retained so they then persist across
+    // restarts. The card's "Resync" is the manual fallback.
+    setTimeout(() => {
+      try {
+        const n = publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel);
+        if (n) console.log(`HA Discovery: published ${n} entity configs`);
+      } catch (err) {
+        console.error('HA Discovery error:', err.message);
+      }
+    }, 6000);
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));
