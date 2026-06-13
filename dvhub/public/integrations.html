@@ -5,8 +5,8 @@
      - theme.js is the SOLE writer of localStorage['dvhub.theme']
        (AURORA-02 single-writer); integrations.js MUST NOT call setItem on
        that key.
-     - Binding contract: integrations.js binds against #intg-list, #intg-empty,
-       and dynamically renders .conn-card entries inside #intg-list. Status
+     - Binding contract: integrations.js binds against #intg-list and
+       dynamically renders .conn-card entries inside #intg-list. Status
        segmented filter uses #intg-filter-all / #intg-filter-connected /
        #intg-filter-disabled (data-status-filter delegation).
      - Mockup fidelity: .conn-grid + .conn-card layout matches
@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=27" />
+  <link rel="stylesheet" href="/integrations.css?v=28" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -87,14 +87,11 @@
       </section>
 
       <!-- Connection grid — integrations.js renders one .conn-card per known
-           system. #intg-empty is retained as an empty, hidden stub: the binding
-           contract (integrations.js:getElementById('intg-empty')) requires the
-           id, but the visible "Keine Integrationen konfiguriert" card was
-           removed on operator request (2026-06-13) — SYSTEMS is always
-           non-empty, so the empty state never actually showed. -->
-      <section id="intg-list" class="conn-grid" aria-label="Verbundene Systeme">
-        <div class="conn-card is-empty" id="intg-empty" hidden></div>
-      </section>
+           system into #intg-list. The "Keine Integrationen konfiguriert" empty
+           card was removed on operator request (2026-06-13): SYSTEMS is always
+           non-empty so it never showed, and its is-empty CSS overrode [hidden]
+           → a blank full-width card. renderAll no longer references it. -->
+      <section id="intg-list" class="conn-grid" aria-label="Verbundene Systeme"></section>
 
       <!-- Family-Dashboard MQTT tiles editor — operator configures generic
            MQTT topics (Wallbox, any consumer, sensor) that appear as cards
@@ -684,6 +681,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=27"></script>
+  <script src="/integrations.js?v=28"></script>
 </body>
 </html>

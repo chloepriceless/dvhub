@@ -725,7 +725,6 @@
 
   function renderAll(data) {
     var list = document.getElementById('intg-list');
-    var empty = document.getElementById('intg-empty');
     if (!list) return;
     if (!data) return;
 
@@ -748,15 +747,11 @@
       cards.push(buildCard(sys, sysData, status));
     }
 
-    // Always preserve #intg-empty in the DOM as the list's first child —
-    // hidden when we have data, visible when we don't. Keeps the
-    // Wave-5 binding contract (#intg-empty always present) stable across
-    // poll states. Playwright + binding-contract.mjs both check static IDs.
+    // The static "Keine Integrationen konfiguriert" empty card was removed on
+    // operator request (2026-06-13): SYSTEMS is always non-empty, so the empty
+    // state never showed in practice — and the `is-empty` card's CSS display
+    // overrode [hidden], leaving a blank full-width card on the page.
     list.innerHTML = '';
-    if (empty) {
-      empty.hidden = anyData;
-      list.appendChild(empty);
-    }
     if (!anyData) {
       updateFilterCounts({ all: 0, connected: 0, disabled: 0 });
       return;

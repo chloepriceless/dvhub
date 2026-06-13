@@ -4,7 +4,7 @@
 // renders cleanly:
 //  - No blocking console / resource errors (benign /api/* auth-gate
 //    responses on the dev-server-without-apiToken setup are tolerated).
-//  - Both static IDs the markup must carry are present: #intg-list, #intg-empty.
+//  - The static ID the markup must carry is present: #intg-list.
 //  - theme.js IS loaded; <html data-theme> applies; clicking .theme-toggle
 //    cycles the attribute.
 //  - AURORA-02 single-writer: integrations.js never writes
@@ -12,7 +12,7 @@
 //  - styles.css is NOT linked (Wave-5 link migration — full port).
 //  - dvhub-app.css + integrations.css ARE linked.
 //  - Mockup-fidelity layout present: segmented filter toolbar with the 3
-//    expected buttons, VRM Backfill notice, and conn-grid container.
+//    expected buttons and the conn-grid container.
 //
 // Requires a dev server on http://localhost:8080.
 
@@ -20,7 +20,6 @@ import { test, expect } from '@playwright/test';
 
 const EXPECTED_IDS = [
   'intg-list',
-  'intg-empty',
   'intg-filter-all',
   'intg-filter-connected',
   'intg-filter-disabled',
@@ -109,7 +108,7 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     expect(after, `theme-toggle click must change data-theme — was ${before}, still ${after}`).not.toBe(before);
   });
 
-  test('Option-B layout: filter toolbar segmented control + VRM notice + conn-grid present', async ({ page }) => {
+  test('Option-B layout: filter toolbar segmented control + conn-grid present', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');
     // Filter toolbar with 3-way segmented control
@@ -120,12 +119,7 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     // "Alle" must be initially active
     const allBtn = page.locator('#intg-filter-all');
     await expect(allBtn).toHaveClass(/is-active/);
-    // VRM Backfill notice
-    const vrm = page.locator('.vrm-backfill-notice');
-    await expect(vrm).toBeAttached();
-    const vrmText = await vrm.textContent();
-    expect(vrmText).toContain('VRM Backfill');
-    // Connection grid
+    // Connection grid (VRM Backfill notice removed on operator request 2026-06-13)
     const grid = page.locator('#intg-list.conn-grid');
     await expect(grid).toBeAttached();
   });
@@ -317,9 +311,8 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
     // D-01 — the tracker-tile count is invariant: every populated card carries
-    // exactly 4 .conn-stat tiles (the #intg-empty .is-empty placeholder is
-    // excluded — it has no .conn-stats). On the no-apiToken dev server the grid
-    // may be empty; soft-skip in that case.
+    // exactly 4 .conn-stat tiles. On the no-apiToken dev server the grid may be
+    // empty; soft-skip in that case. (.is-empty placeholder removed 2026-06-13.)
     const cards = page.locator('#intg-list .conn-card:not(.is-empty)');
     const count = await cards.count();
     if (count === 0) {
