@@ -565,3 +565,14 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-set-row input[type="text"]{flex:1;min-width:0;max-width:60%;padding:8px 10px;border-radius:10px;
   background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
   color:rgba(255,255,255,.9);font-size:13px}
+
+/* iPad / Tablet-Querformat (z.B. iPad 2018 = 1024×768, Operator-Report 2026-06-13):
+   Die .widgets-Sidebar (Wetter etc.) ist ein absolutes Overlay rechts-mittig
+   (z-index 21); der Netz-Tag (.tag-grid, right:6%, z-index 20) lag in deren Spalte
+   und konnte dahinter/darunter verschwinden. Den Netz-Tag klar links neben die
+   Sidebar ziehen, in die freie Lücke unter dem EV-Tag, und z-index über die Sidebar
+   heben (Sicherheit). Flow-Linien folgen via getBoundingClientRect automatisch. */
+@media (min-width: 769px) and (max-width: 1100px) {
+  .widgets { max-width: 170px; }
+  .tag-grid { top: 30%; right: 26%; z-index: 22; }
+}
