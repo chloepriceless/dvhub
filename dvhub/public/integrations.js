@@ -1418,6 +1418,11 @@
   function openDrawerForSystem(key) {
     var inst;
     if (key === 'mqtt') { openMqttDrawer(); return true; }
+    if (key === 'victron') {
+      inst = getOrCreateDrawer('victron');
+      if (inst) { inst.open(); setTimeout(loadVictronDrawer, 0); }
+      return true;
+    }
     if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
     if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
     if (key === 'forecast-providers') { inst = getOrCreateDrawer('forecast'); if (inst) inst.open(); return true; }
@@ -2426,6 +2431,109 @@
       showDrawerToast('logs', 'err', '✗ Logs laden fehlgeschlagen: ' + e.message);
     }
   }
+
+  // === Victron Wechselrichter / Anlage Drawer Wiring (2026-06-13) ===
+  // Editable per appliance: Hersteller, Anlagenadresse (victron.host), PV-Anbindung.
+  // Transport + register map come from the manufacturer profile → read-only.
+  async function loadVictronDrawer() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/integrations/victron');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var d = await res.json();
+      if (!d || !d.ok) return;
+      var manSel = el('victron-manufacturer');
+      if (manSel) {
+        var opts = Array.isArray(d.manufacturers) ? d.manufacturers : [];
+        manSel.textContent = '';
+        opts.forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o.value; opt.textContent = o.label || o.value;
+          manSel.appendChild(opt);
+        });
+        manSel.value = d.manufacturer || 'victron';
+      }
+      if (el('victron-host')) el('victron-host').value = d.host || '';
+      if (el('victron-pvcoupling')) el('victron-pvcoupling').value = ['ac_dc', 'ac', 'dc'].indexOf(d.pvCoupling) >= 0 ? d.pvCoupling : 'ac_dc';
+      if (el('victron-transport')) {
+        var tr = d.transport === 'mqtt'
+          ? ('MQTT' + (d.mqttBroker ? (' · ' + d.mqttBroker) : ''))
+          : ('Modbus TCP · Port ' + (d.port != null ? d.port : 502) + ' · Unit ' + (d.unitId != null ? d.unitId : 100));
+        el('victron-transport').textContent = tr + ' (aus Herstellerprofil)';
+      }
+      // Read-only register summary from the profile.
+      var regBox = el('victron-regs');
+      if (regBox) {
+        regBox.textContent = '';
+        var r = d.registers || {};
+        var addRow = function (labelTxt, valTxt) {
+          var row = document.createElement('div');
+          row.className = 'dv-info-row';
+          var l = document.createElement('span'); l.className = 'dv-info-label'; l.textContent = labelTxt;
+          var v = document.createElement('span'); v.className = 'dv-info-value mono'; v.textContent = valTxt;
+          row.appendChild(l); row.appendChild(v); regBox.appendChild(row);
+        };
+        if (r.meter) addRow('Zähler-Register', 'FC' + (r.meter.fc != null ? r.meter.fc : '?') + ' · Adr ' + (r.meter.address != null ? r.meter.address : '?') + ' ×' + (r.meter.quantity != null ? r.meter.quantity : '?'));
+        var readNames = (r.read || []).map(function (x) { return x.name + (x.address != null ? ('@' + x.address) : ''); });
+        var writeNames = (r.write || []).map(function (x) { return x.name + (x.address != null ? ('@' + x.address) : ''); });
+        addRow('Lese-Register (' + readNames.length + ')', readNames.join(', ') || '—');
+        addRow('Schreib-Register (' + writeNames.length + ')', writeNames.join(', ') || '—');
+      }
+      var st = el('victron-status');
+      if (st) {
+        st.hidden = false;
+        var hb = d.heartbeatSec != null ? (d.heartbeatSec + ' s' ) : '—';
+        st.textContent = (d.meterOk ? '✓ Anlage liefert Werte' : '⚠ Noch keine frischen Werte')
+          + ' · Heartbeat ' + hb
+          + (d.firmware ? (' · FW ' + d.firmware) : '');
+      }
+    } catch (e) {
+      showDrawerToast('victron', 'err', '✗ Anlage laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  async function saveVictronDrawer(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    var el = function (id) { return document.getElementById(id); };
+    var banner = el('victron-banner');
+    var host = ((el('victron-host') && el('victron-host').value) || '').trim();
+    if (host && /\s/.test(host)) {
+      if (banner) { banner.textContent = 'Anlagenadresse darf keine Leerzeichen enthalten.'; banner.hidden = false; }
+      return;
+    }
+    if (banner) banner.hidden = true;
+    var body = {
+      manufacturer: (el('victron-manufacturer') && el('victron-manufacturer').value) || undefined,
+      host: host,
+      pvCoupling: (el('victron-pvcoupling') && el('victron-pvcoupling').value) || 'ac_dc'
+    };
+    buttonEl.disabled = true;
+    var origText = buttonEl.textContent;
+    buttonEl.textContent = 'Wird gespeichert …';
+    try {
+      var res = await apiFetch('/api/integrations/victron', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
+        showDrawerToast('victron', 'ok', '✓ Gespeichert.');
+        setTimeout(loadVictronDrawer, 1000);
+      } else {
+        showDrawerToast('victron', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('victron', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
+      buttonEl.textContent = origText;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var vSave = e.target.closest('#victron-save');
+    if (vSave) { saveVictronDrawer(vSave); return; }
+  });
 
   // === Phase 20-06: Forecast-Provider Drawer Wiring (D-09/D-10/D-11/D-12) ===
   // Loads/saves cfg.forecast.solcast.* and cfg.forecast.pvnode.* via dedicated

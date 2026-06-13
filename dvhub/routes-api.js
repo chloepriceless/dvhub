@@ -3516,6 +3516,84 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true });
     }
 
+    // === Victron Wechselrichter / Anlage config (operator request 2026-06-13) ===
+    // Surfaces the Einstellungen→Anlage block on the Victron card. Editable per
+    // appliance: manufacturer (validated vs the hersteller/ folder), victron.host
+    // (Anlagenadresse), pvCoupling. Transport/port/unitId/mqtt + the register map
+    // are MANUFACTURER_MANAGED (come from hersteller/<manufacturer>.json) → shown
+    // read-only. The full inverter-register editor stays future work.
+    if (url.pathname === '/api/integrations/victron' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const cfg = getCfg();
+      const raw = ctx.getRawCfg?.() || {};
+      const v = cfg.victron || {};
+      const snap = ctx.healthTracker?.snapshot?.()?.victron || {};
+      let heartbeatSec = null;
+      if (snap.lastSampleAt) {
+        const ageMs = Date.now() - new Date(snap.lastSampleAt).getTime();
+        if (Number.isFinite(ageMs) && ageMs >= 0) heartbeatSec = Math.round(ageMs / 1000);
+      }
+      const regSummary = (obj) => Object.keys(obj || {})
+        .filter((k) => k !== 'enabled' && k !== 'negativePriceProtection' && obj[k] && typeof obj[k] === 'object')
+        .map((k) => ({ name: k, address: obj[k].address != null ? obj[k].address : null }));
+      const meter = cfg.meter || {};
+      return json(res, 200, {
+        ok: true,
+        manufacturer: raw.manufacturer || 'victron',
+        manufacturers: listManufacturerProfiles(ctx),
+        host: v.host || '',
+        pvCoupling: cfg.pvCoupling || 'ac_dc',
+        transport: v.transport || 'modbus',
+        port: v.port ?? 502,
+        unitId: v.unitId ?? 100,
+        mqttBroker: v.mqtt?.broker || '',
+        modelId: v.modelId || null,
+        firmware: snap.firmware || null,
+        meterOk: !!ctx.state?.meter?.ok,
+        heartbeatSec,
+        registers: {
+          meter: { fc: meter.fc ?? null, address: meter.address ?? null, quantity: meter.quantity ?? null },
+          read: regSummary(cfg.points),
+          write: regSummary(cfg.controlWrite)
+        }
+      });
+    }
+
+    if (url.pathname === '/api/integrations/victron' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'object required' });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      if (typeof body.manufacturer === 'string' && body.manufacturer.trim()) {
+        const wanted = body.manufacturer.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        const known = listManufacturerProfiles(ctx).map((x) => x.value);
+        if (wanted && (known.includes(wanted) || wanted === 'victron')) next.manufacturer = wanted;
+      }
+      if (typeof body.host === 'string') {
+        next.victron = (next.victron && typeof next.victron === 'object') ? next.victron : {};
+        next.victron.host = body.host.trim().slice(0, 128);
+      }
+      if (body.pvCoupling === 'ac_dc' || body.pvCoupling === 'ac' || body.pvCoupling === 'dc') {
+        next.pvCoupling = body.pvCoupling;
+      }
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('victron_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('victron_config_saved', {
+        manufacturer: next.manufacturer,
+        hostSet: !!(next.victron && next.victron.host),
+        pvCoupling: next.pvCoupling
+      }, actorContext(req));
+      return json(res, 200, { ok: true });
+    }
+
     // === EVCC integration config (operator request #23, 2026-06-13) ===
     // Configured on the Integrations page (sibling of /api/integrations/vrm).
     // cfg.evcc.{url, enabled (battery-protect), dashboardLoadpoint}. GET also
