@@ -86,32 +86,14 @@
         </div>
       </section>
 
-      <!-- VRM Backfill notice (Phase 08-12): real info — explains the 6-month
-           availability window so operators don't think missing pre-6-month data
-           is a bug. -->
-      <section class="card vrm-backfill-notice" aria-label="VRM Backfill Status">
-        <div class="vrm-backfill-head">
-          <span class="vrm-backfill-icon" aria-hidden="true">&#x2601;</span>
-          <div class="vrm-backfill-copy">
-            <strong>VRM Backfill (Victron Cloud)</strong>
-            <span class="u-text-muted">Verf&uuml;gbar: letzte 6 Monate</span>
-          </div>
-        </div>
-        <p class="vrm-backfill-body">
-          Der <strong>VRM History Import</strong> l&auml;dt historische Energie-Daten aus Ihrem Victron VRM-Account.
-          &Auml;ltere Daten sind im VRM-Cloud-Backend nicht mehr abrufbar (API-Einschr&auml;nkung).
-          Den Backfill starten Sie unter <a href="/settings.html#system">Einstellungen &rarr; Status &rarr; Historie</a>.
-        </p>
-      </section>
-
       <!-- Connection grid — integrations.js renders one .conn-card per known
-           system. #intg-empty is the empty state shown when no integration
-           reports any state at all. -->
+           system. #intg-empty is retained as an empty, hidden stub: the binding
+           contract (integrations.js:getElementById('intg-empty')) requires the
+           id, but the visible "Keine Integrationen konfiguriert" card was
+           removed on operator request (2026-06-13) — SYSTEMS is always
+           non-empty, so the empty state never actually showed. -->
       <section id="intg-list" class="conn-grid" aria-label="Verbundene Systeme">
-        <div class="conn-card is-empty" id="intg-empty">
-          <h3>Keine Integrationen konfiguriert</h3>
-          <p>MQTT, TeslaMate und andere Systeme werden in der config.json konfiguriert. Siehe Dokumentation.</p>
-        </div>
+        <div class="conn-card is-empty" id="intg-empty" hidden></div>
       </section>
 
       <!-- Family-Dashboard MQTT tiles editor — operator configures generic
