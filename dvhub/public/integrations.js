@@ -11,8 +11,8 @@
   var SYSTEMS = [
     {
       key: 'victron',
-      label: 'Victron VRM',
-      category: 'Inverter · Modbus',
+      label: 'Victron Wechselrichter',
+      category: 'Wechselrichter · lokal (Modbus)',
       logo: 'V',
       accent: 'green'
     },
@@ -74,7 +74,7 @@
     {
       key: 'vrm',
       label: 'VRM Cloud',
-      category: 'Victron · History Import',
+      category: 'Victron-Cloud · History-Import',
       logo: 'VR',
       accent: 'orange'
     },
