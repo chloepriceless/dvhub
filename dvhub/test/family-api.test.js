@@ -409,7 +409,9 @@ describe('null-safety', () => {
     const ctx = createMockCtx({ optimizerService: null });
     const svc = createFamilyService(ctx);
     const status = svc.buildFamilyStatus();
-    assert.deepStrictEqual(status.optimizer, { enabled: false });
+    // 2026-06-13: planSlots (the DV-EOS Fahrplan from forecast_optimizer
+    // schedule rules) is always present — empty when no plan exists.
+    assert.deepStrictEqual(status.optimizer, { enabled: false, planSlots: [] });
   });
 
   it('buildFamilyStatus returns today=null when historyApi is not provided', () => {

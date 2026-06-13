@@ -444,10 +444,30 @@ export function createFamilyService(ctx) {
    * Optimizer section. Returns { enabled: false } when optimizer missing (D-22).
    */
   function deriveOptimizerSection(optimizerStatus) {
-    if (!optimizerStatus || !optimizerStatus.enabled) {
-      return { enabled: false };
+    // Operator request 2026-06-13: the Family optimizer widget shows the LIVE
+    // DV-EOS/optimizer PLAN — the forecast_optimizer schedule rules (the same
+    // slots the Leitstand/Einstellungen table renders), not just the internal-
+    // optimizer status (whose schedule is empty when EOS is the primary source).
+    const nowTs = Date.now();
+    const rules = Array.isArray(ctx.state?.schedule?.rules) ? ctx.state.schedule.rules : [];
+    const planSlots = rules
+      .filter((r) => r && r.source === 'forecast_optimizer'
+        && Number.isFinite(Number(r.slotTs)) && Number(r.slotEndTs) > nowTs)
+      .sort((a, b) => Number(a.slotTs) - Number(b.slotTs))
+      .slice(0, 16)
+      .map((r) => ({
+        startTs: Number(r.slotTs),
+        endTs: Number(r.slotEndTs),
+        target: r.target || null,
+        gridW: r.target === 'gridSetpointW' && Number.isFinite(Number(r.value)) ? Number(r.value) : null,
+        value: Number.isFinite(Number(r.value)) ? Number(r.value) : null,
+        enabled: r.enabled !== false
+      }));
+
+    if ((!optimizerStatus || !optimizerStatus.enabled) && planSlots.length === 0) {
+      return { enabled: false, planSlots: [] };
     }
-    const schedule = Array.isArray(optimizerStatus.schedule) ? optimizerStatus.schedule : [];
+    const schedule = Array.isArray(optimizerStatus?.schedule) ? optimizerStatus.schedule : [];
     const first = schedule[0] || null;
     const second = schedule[1] || null;
 
@@ -463,13 +483,14 @@ export function createFamilyService(ctx) {
 
     return {
       enabled: true,
-      source: optimizerStatus.source || null,
-      lastRunAt: optimizerStatus.lastRunAt || null,
-      currentAction: first?.action || optimizerStatus.currentAction || null,
-      currentActionLabel: actionLabel(first?.action || optimizerStatus.currentAction),
+      source: optimizerStatus?.source || (planSlots.length ? 'eos' : null),
+      lastRunAt: optimizerStatus?.lastRunAt || null,
+      currentAction: first?.action || optimizerStatus?.currentAction || null,
+      currentActionLabel: actionLabel(first?.action || optimizerStatus?.currentAction),
       nextActionAt: second?.ts || null,
       nextActionLabel: second ? actionLabel(second.action) : null,
-      schedule
+      schedule,
+      planSlots
     };
   }
 

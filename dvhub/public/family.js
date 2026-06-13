@@ -1517,11 +1517,28 @@
     // Forecast panel: reuse today.charts.solar as the PV curve. When a real
     // forecast service is configured Phase 04 will replace this with next48h.
     panelData.forecast.chart = hasChartData(tc.solar) ? tc.solar : null;
+    var planSlots = optimizer.planSlots || [];
+    var activeSlots = planSlots.filter(function (s) { return s.enabled !== false; });
+    var nowMs = Date.now();
+    var curSlot = null, nextSlot = null;
+    for (var psi = 0; psi < activeSlots.length; psi++) {
+      if (activeSlots[psi].startTs <= nowMs && nowMs < activeSlots[psi].endTs) curSlot = activeSlots[psi];
+      else if (activeSlots[psi].startTs > nowMs && !nextSlot) nextSlot = activeSlots[psi];
+    }
     panelData.optimizer.stats = [
-      { label: 'Jetzt', val: optimizer.currentActionLabel || optimizer.currentAction || '—', delta: '', up: true },
-      { label: 'Als nächstes', val: optimizer.nextActionLabel || '—', delta: '', up: true },
-      { label: 'Status', val: optimizer.enabled ? 'Aktiv' : 'Aus', delta: '', up: !!optimizer.enabled }
+      { label: 'Jetzt', val: curSlot ? famOptimizerSlotLabel(curSlot) : (optimizer.currentActionLabel || '—'), delta: '', up: true },
+      { label: 'Als nächstes', val: nextSlot ? famOptimizerHHMM(nextSlot.startTs) + ' ' + famOptimizerSlotLabel(nextSlot) : (optimizer.nextActionLabel || '—'), delta: '', up: true },
+      { label: 'Status', val: optimizer.enabled ? 'Aktiv' : 'Aus', delta: optimizer.source ? ('Quelle: ' + optimizer.source) : '', up: !!optimizer.enabled }
     ];
+    // Fahrplan list in the detail panel — one row per upcoming EOS slot.
+    panelData.optimizer.details = planSlots.length
+      ? planSlots.map(function (s) {
+          return [
+            famOptimizerHHMM(s.startTs) + '–' + famOptimizerHHMM(s.endTs),
+            famOptimizerSlotLabel(s) + (s.enabled === false ? ' (deaktiviert)' : '')
+          ];
+        })
+      : [['Fahrplan', 'Keine geplanten Slots']];
   }
 
   /* ===================== OFFLINE BANNER (D-22) — REMOVED 08-11 =====================
@@ -1590,11 +1607,46 @@
     if (elMax) elMax.textContent = typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—';
   }
 
+  /* DV-EOS plan slot → human label (operator request 2026-06-13: the widget
+     shows the live EOS Fahrplan — the forecast_optimizer schedule slots). */
+  function famOptimizerSlotLabel(s) {
+    if (!s) return '—';
+    if (s.target === 'gridSetpointW' && typeof s.gridW === 'number') {
+      if (s.gridW < 0) return 'Einspeisen ' + formatKw(Math.abs(s.gridW) / 1000);
+      if (s.gridW > 0) return 'Netzladen ' + formatKw(s.gridW / 1000);
+      return 'Halten (0 W)';
+    }
+    if (s.target === 'feedExcessDcPv') return '100% Einspeisung';
+    if (s.target === 'chargeCurrentA' && typeof s.value === 'number') return 'Laden ' + s.value + ' A';
+    if (s.target === 'minSocPct' && typeof s.value === 'number') return 'Min-SOC ' + s.value + ' %';
+    return s.target || '—';
+  }
+
+  function famOptimizerHHMM(ts) {
+    return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+
   function renderOptimizerWidget(optimizer) {
     var el = document.getElementById('optimizer-action');
-    if (el) el.textContent = optimizer.currentActionLabel || optimizer.currentAction || '—';
     var next = document.getElementById('optimizer-next');
-    if (next) next.textContent = optimizer.nextActionLabel || '—';
+    var slots = (optimizer.planSlots || []).filter(function (s) { return s.enabled !== false; });
+    var nowTs = Date.now();
+    var current = null, upcoming = null;
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].startTs <= nowTs && nowTs < slots[i].endTs) { current = slots[i]; }
+      else if (slots[i].startTs > nowTs && !upcoming) { upcoming = slots[i]; }
+    }
+    if (current || upcoming) {
+      if (el) el.textContent = current ? famOptimizerSlotLabel(current) : 'Wartet';
+      if (next) {
+        next.textContent = upcoming
+          ? famOptimizerHHMM(upcoming.startTs) + ' · ' + famOptimizerSlotLabel(upcoming)
+          : (current ? 'bis ' + famOptimizerHHMM(current.endTs) : '—');
+      }
+      return;
+    }
+    if (el) el.textContent = optimizer.currentActionLabel || optimizer.currentAction || (optimizer.enabled ? 'Kein Fahrplan' : '—');
+    if (next) next.textContent = optimizer.nextActionLabel || (optimizer.enabled ? '' : 'Optimizer aus');
   }
 
   /* ===================== VISIBILITY HANDLER (Pitfall 2) ===================== */

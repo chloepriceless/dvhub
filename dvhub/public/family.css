@@ -464,3 +464,19 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-set-btn.ghost{background:rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
 .fam-set-btn.primary{background:#26de81;border-color:#26de81;color:#06281a}
 .fam-set-msg{margin-top:10px;font-size:12px;color:rgba(255,255,255,.55);min-height:16px}
+
+/* Native sun + battery (operator request 2026-06-13): no glass card around
+   the animated sky/pill — they sit directly on the scene like in the
+   powerflow mockup. Still .tag elements: draggable (T-0091), tappable
+   (detail panel), value/label centred under the animation. */
+.tag-solar,.tag-bat{
+  background:transparent;border:none;box-shadow:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  padding:6px 10px;text-align:center;min-width:110px;
+}
+.tag-solar:hover,.tag-solar:active,.tag-bat:hover,.tag-bat:active{background:transparent}
+.tag-solar .tag-dot,.tag-bat .tag-dot{display:none}
+/* Readability without the glass: soft text shadow against the photo bg. */
+.tag-solar .tag-friendly,.tag-bat .tag-friendly,
+.tag-solar .tag-val,.tag-bat .tag-val{text-shadow:0 1px 8px rgba(0,0,0,.8)}
+.tag-bat .tag-status{background:rgba(8,10,16,.55)}
