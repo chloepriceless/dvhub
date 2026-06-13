@@ -1608,7 +1608,7 @@
     panelData.home.stats = [
       { label: 'Gerade', val: formatKw(energy.homeKw), delta: '', up: true },
       { label: 'Heute', val: typeof today.loadKwh === 'number' ? today.loadKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Eigenverbrauch', val: liveStats.sr === '--' ? '—' : liveStats.sr + '%', delta: '', up: true }
+      { label: 'Eigenverbrauch', val: slotStats.live.sr === '--' ? '—' : slotStats.live.sr + '%', delta: '', up: true }
     ];
     panelData.bat.stats = [
       { label: 'Stand', val: formatPct(battery.socPct), delta: battery.mode || '', up: true },
