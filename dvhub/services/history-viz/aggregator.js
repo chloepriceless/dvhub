@@ -73,6 +73,11 @@ export function createHistoryVizAggregator(ctx) {
   const { getCfg, pushLog, db, telemetryStore } = ctx; // eslint-disable-line no-unused-vars
 
   const CACHE_TTL_MS = 5 * 60 * 1000;
+  // A period that still contains "now" (today / current week-month-year / all)
+  // keeps accumulating slots + prices every ~15 min. Caching it for the full
+  // 5 min freezes the live view (VIZ-CACHE-TIME-OMITTED). Such keys get a short
+  // TTL so the latest slots surface; immutable past periods keep the full TTL.
+  const CACHE_LIVE_TTL_MS = 45 * 1000;
   const CACHE_CAP = 200;
   const VALID_VIEWS = new Set(['day', 'week', 'month', 'year', 'all']);
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -91,6 +96,21 @@ export function createHistoryVizAggregator(ctx) {
     return entry.payload;
   }
 
+  // True when the key's period still contains "now" (so it is still mutating).
+  // Parses the trailing `:${view}:${date}` of the cache key; any mismatch falls
+  // back to "not live" (full TTL) — never throws.
+  function isLivePeriodKey(key) {
+    const parts = String(key).split(':');
+    const date = parts[parts.length - 1];
+    const view = parts[parts.length - 2];
+    if (!VALID_VIEWS.has(view) || !DATE_RE.test(date)) return false;
+    try {
+      const { start, end } = resolveRange(view, date);
+      const now = Date.now();
+      return Date.parse(start) <= now && now < Date.parse(end);
+    } catch (_) { return false; }
+  }
+
   function putCached(key, payload) {
     if (cache.size >= CACHE_CAP) {
       // FIFO eviction — Map preserves insertion order, so .keys().next().value
@@ -98,7 +118,8 @@ export function createHistoryVizAggregator(ctx) {
       const oldest = cache.keys().next().value;
       cache.delete(oldest);
     }
-    cache.set(key, { payload, expiresAt: Date.now() + CACHE_TTL_MS });
+    const ttl = isLivePeriodKey(key) ? CACHE_LIVE_TTL_MS : CACHE_TTL_MS;
+    cache.set(key, { payload, expiresAt: Date.now() + ttl });
   }
 
   function bustCache(prefix) {

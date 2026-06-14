@@ -1354,9 +1354,21 @@ export function createHistoryRuntime({
     const evFullCtKwh = getFeedInCompensationCtKwh({ applicableValueCtKwh: awFullCtKwh });
     const evPartialCtKwh = getFeedInCompensationCtKwh({ applicableValueCtKwh: weightedApplicableValueCtKwh });
 
-    // Negative price curtailment rule for the configured plants
+    // Negative price curtailment rule for the configured plants.
+    // Use the EARLIEST-commissioned plant deterministically (ISO dates sort
+    // chronologically) — NOT pvPlants[0], whose array order is arbitrary and
+    // could flip the §51 rule between saves on a multi-plant site. The oldest
+    // plant defines the site's longest-standing funding regime.
+    const earliestCommissionedAt = (() => {
+      const plants = Array.isArray(pricingConfig?.pvPlants) ? pricingConfig.pvPlants : [];
+      const dates = plants
+        .map((p) => (typeof p?.commissionedAt === 'string' ? p.commissionedAt : ''))
+        .filter(Boolean)
+        .sort();
+      return dates[0] || pricingConfig?.pvPlants?.[0]?.commissionedAt;
+    })();
     const negPriceRule = getEegNegativePriceRule({
-      commissionedAt: pricingConfig?.pvPlants?.[0]?.commissionedAt,
+      commissionedAt: earliestCommissionedAt,
       kwp: summarizeConfiguredPvCapacity(pricingConfig?.pvPlants)
     });
 
