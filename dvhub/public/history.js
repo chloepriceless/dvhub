@@ -402,8 +402,17 @@ function renderKpis(summary) {
   // Pot. Erlös der abgeregelten Energie: bewertet mit dem Börsen-Durchschnittspreis
   // des Zeitraums (Christin 2026-06-14) — NICHT mit Produktionskosten/Marktwert.
   const avgSpotCtKwh = hasFiniteNumber(kpis?.avgSpotPriceCtKwh) ? Number(kpis.avgSpotPriceCtKwh) : null;
+  // Bewertungsbasis des Börsen-Ø (Christin 2026-06-14): Tagesschnitt ist
+  // nichtssagend → Monat (Tag/Woche/Monat) bzw. Jahr (Jahresansicht).
+  const spotBasis = kpis?.avgSpotPriceBasis;
+  const spotBasisLabel = spotBasis === 'year' ? 'Jahr' : spotBasis === 'all' ? 'Gesamt' : 'Monat';
   const curtailedRevenueEur = (curtailedKwh != null && avgSpotCtKwh != null)
     ? (curtailedKwh * avgSpotCtKwh) / 100
+    : null;
+  // Ø abgeregelte Energie je abgeregelter Stunde (Christin 2026-06-14): zeigt,
+  // wie sich der Gesamtwert zusammenbaut (z.B. Mai 689 / 78,75 h = 8,75 kWh/h).
+  const curtailedPerHourKwh = (curtailedKwh != null && negSlots != null && negSlots > 0)
+    ? curtailedKwh / (negSlots * 0.25)
     : null;
   const negRule = kpis?.negPriceRule;
   const curtailCard = document.getElementById('historyKpiCurtailmentCard');
@@ -420,9 +429,12 @@ function renderKpis(summary) {
       setText('historyKpiVlvDetail', vlv != null
         ? `${vlv.toLocaleString('de-DE')} (${fmtHours(vlv * 0.25)})` : '-');
       setText('historyKpiActualPv', actualPvKwh != null ? fmtKwh(actualPvKwh) : '-');
-      // Pot. Erlös via Börsen-Durchschnittspreis des Zeitraums (Rate im Label).
+      // Ø je abgeregelter Stunde — macht den Aufbau des Gesamtwerts sichtbar.
+      setText('historyKpiCurtailedPerHour',
+        curtailedPerHourKwh != null ? `${fmtKwh(curtailedPerHourKwh)}/h` : '-');
+      // Pot. Erlös via Börsen-Durchschnittspreis auf Monats-/Jahresbasis (Rate + Basis im Label).
       setText('historyKpiCurtailedRevenueLabel',
-        avgSpotCtKwh != null ? `Pot. Erlös (Börse Ø ${fmtCt(avgSpotCtKwh)})` : 'Pot. Erlös (Börsen-Ø)');
+        avgSpotCtKwh != null ? `Pot. Erlös (Börse Ø ${spotBasisLabel} ${fmtCt(avgSpotCtKwh)})` : 'Pot. Erlös (Börsen-Ø)');
       setText('historyKpiCurtailedRevenue',
         curtailedRevenueEur != null ? fmtEur(curtailedRevenueEur) : 'noch nicht verfügbar');
       // Akzent: orange wenn im Zeitraum §51-Viertelstunden auftraten.
