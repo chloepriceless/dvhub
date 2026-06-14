@@ -760,20 +760,38 @@ function computeExpectedPvKwh({ view, range, pricingConfig }) {
   return round2(expectedKwh);
 }
 
-function applyCurtailmentEstimate({ view, range, kpis, pricingConfig }) {
+async function applyCurtailmentEstimate({ view, range, kpis, pricingConfig, curtailmentService = null }) {
+  // expectedPvKwh stays the PVGIS whole-range expectation: it drives the card's
+  // visibility + the curtailed/expected ratio accent. null (e.g. view='all')
+  // hides the card and skips the (potentially expensive) calibrated query.
   const expectedPvKwh = computeExpectedPvKwh({ view, range, pricingConfig });
   if (expectedPvKwh == null) {
     return { ...kpis, expectedPvKwh: null, curtailedPvKwh: null };
   }
   const actualPvKwh = Number(kpis?.pvKwh || 0);
-  // Negative Werte = mehr produziert als erwartet (gutes Wetter etc.) → 0
-  // setzen, "Abregelung" ist konzeptionell nur die Lücke nach unten.
-  const curtailedPvKwh = round2(Math.max(0, expectedPvKwh - actualPvKwh));
-  return {
-    ...kpis,
-    expectedPvKwh,
-    curtailedPvKwh
-  };
+  // PVGIS fallback (weather-blind): the gap below the monthly-average Soll.
+  const pvgisCurtailedPvKwh = round2(Math.max(0, expectedPvKwh - actualPvKwh));
+
+  // T-CURTAIL Increment 3: prefer the irradiance-calibrated curtailment — a
+  // per-slot, negative-price-gated estimate from measured GHI (no longer
+  // conflating cloudy/missing-data days with curtailment). Falls back to PVGIS
+  // when the service is absent, errors, or the window has neg-price slots that
+  // could not be computed at all (no GHI / no calibration yet).
+  if (curtailmentService?.computeForRange && range?.startDate && range?.endDateExclusive) {
+    try {
+      const from = localDateTimeToUtcIso(range.startDate, 0, 0);
+      const to = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
+      const r = await curtailmentService.computeForRange({ from, to });
+      // negSlots===0 -> legitimately zero curtailment (not a fallback case);
+      // computed/fallback>0 -> we produced a real estimate.
+      if (r && r.ok && (r.negSlots === 0 || r.computedSlots > 0 || r.fallbackSlots > 0)) {
+        return { ...kpis, expectedPvKwh, curtailedPvKwh: round2(r.curtailedKwh), curtailmentSource: 'calibrated' };
+      }
+    } catch {
+      // fall through to PVGIS
+    }
+  }
+  return { ...kpis, expectedPvKwh, curtailedPvKwh: pvgisCurtailedPvKwh, curtailmentSource: 'pvgis' };
 }
 
 function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, applicableValueSummary }) {
@@ -1187,7 +1205,12 @@ export function createHistoryRuntime({
   getOptimizerConfig = () => ({}),
   getSolarMarketValueSummary = () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} }),
   getApplicableValueSummary = () => ({ applicableValueCtKwhByMonth: {} }),
-  getCurrentDate = currentBerlinDate
+  getCurrentDate = currentBerlinDate,
+  // T-CURTAIL Increment 3: irradiance-calibrated curtailment. Returns the
+  // curtailment service (or null). When present, the "Abgeregelte Energie" KPI
+  // uses the per-slot, negative-price-gated calibrated estimate instead of the
+  // weather-blind PVGIS gap. null (e.g. in tests) => PVGIS fallback, unchanged.
+  getCurtailmentService = () => null
 }) {
   function batteryNominalCapacityKwh() {
     const cfg = getOptimizerConfig() || {};
@@ -1813,16 +1836,18 @@ export function createHistoryRuntime({
     // Abregelungs-Schaetzung: erwartete vs. tatsaechliche PV-Erzeugung.
     // Schreibt expectedPvKwh / curtailedPvKwh ins finalK direkt (statt eines
     // neuen kpis-Spreads, weil periodPremiumApplied.kpis bereits die Quelle ist).
-    const curtailKpis = applyCurtailmentEstimate({
+    const curtailKpis = await applyCurtailmentEstimate({
       view,
       range,
       kpis: periodPremiumApplied.kpis,
-      pricingConfig
+      pricingConfig,
+      curtailmentService: getCurtailmentService()
     });
     if (curtailKpis.expectedPvKwh != null || curtailKpis.curtailedPvKwh != null) {
       Object.assign(periodPremiumApplied.kpis, {
         expectedPvKwh: curtailKpis.expectedPvKwh,
-        curtailedPvKwh: curtailKpis.curtailedPvKwh
+        curtailedPvKwh: curtailKpis.curtailedPvKwh,
+        curtailmentSource: curtailKpis.curtailmentSource ?? null
       });
     }
     const rows = solarApplied.rows;

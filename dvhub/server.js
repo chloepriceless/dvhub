@@ -1434,7 +1434,10 @@ const telemetryReady = (async () => {
     store: telemetryStore,
     getPricingConfig: () => cfg.userEnergyPricing || {},
     getOptimizerConfig: () => cfg.optimizer || {},
-    getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants })
+    getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants }),
+    // T-CURTAIL Increment 3: feed the calibrated curtailment estimator into the
+    // "Abgeregelte Energie" KPI (read lazily so it's wired by request time).
+    getCurtailmentService: () => ctx.curtailmentService
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,

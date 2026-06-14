@@ -204,17 +204,34 @@ export function createForecastService(ctx) {
     }
     pushLog('forecast_started', { tier, subsystems: started });
 
-    // T-CURTAIL: kick the observed-GHI backfill ~25s after boot (let the DB +
-    // telemetry settle), then top up daily. Detached — never blocks startup,
-    // never throws. The gap computation makes every run after the first cheap.
+    // T-CURTAIL: ~25s after boot (DB/telemetry settled) fill the observed-GHI
+    // gaps, THEN refit the curtailment calibration so fresh clean days are
+    // reflected; repeat daily. Detached — never blocks startup, never throws.
     ghiBackfillTimer = setTimeout(() => {
-      runOpportunisticGhiBackfill().catch(() => {});
+      runGhiAndRecalibrate().catch(() => {});
       ghiBackfillTimer = setInterval(() => {
-        runOpportunisticGhiBackfill().catch(() => {});
+        runGhiAndRecalibrate().catch(() => {});
       }, 24 * 60 * 60 * 1000);
       if (ghiBackfillTimer.unref) ghiBackfillTimer.unref();
     }, 25_000);
     if (ghiBackfillTimer.unref) ghiBackfillTimer.unref();
+  }
+
+  // Backfill observed GHI, then refit the PV<->GHI calibration. The recalibration
+  // is what keeps the "Abgeregelte Energie" KPI fresh (and self-bootstraps a new
+  // install once it has accumulated clean days). curtailmentService is wired on
+  // ctx after this service is constructed; by the +25s timer it is present.
+  async function runGhiAndRecalibrate() {
+    await runOpportunisticGhiBackfill().catch(() => {});
+    try {
+      if (ctx.curtailmentService?.recalibrate) {
+        const calTo = new Date(Date.now()).toISOString().slice(0, 10);
+        const r = await ctx.curtailmentService.recalibrate({ calFrom: '2024-01-01', calTo });
+        if (r?.ok) pushLog('curtail_recalibrate', { trustedBins: r.trustedBins, samples: r.sampleCount });
+      }
+    } catch (e) {
+      pushLog('curtail_recalibrate_error', { error: e?.message ?? String(e) });
+    }
   }
 
   /**
