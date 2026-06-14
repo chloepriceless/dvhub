@@ -384,23 +384,36 @@ function renderKpis(summary) {
   const netValue = document.getElementById('historyKpiNet');
   if (netValue) netValue.style.color = net >= 0 ? 'var(--flow-green)' : 'var(--flow-orange)';
 
-  // Karte 6a: Abgeregelte Energie.
-  // Backend liefert kpis.expectedPvKwh / kpis.curtailedPvKwh — daraus zusammen
-  // mit der Marktwert-Fallback-Kaskade (mvCtKwh / mvSource oben) den Pot. Erlös
-  // rechnen. Karte versteckt sich wenn Soll-Daten fehlen (z.B. view='all').
-  const expectedPv = hasFiniteNumber(kpis?.expectedPvKwh) ? Number(kpis.expectedPvKwh) : null;
+  // Karte 6a: §51 Förderverlängerung (umgestellt 2026-06-14).
+  // Prominent: Volllastviertelstunden (§51a Abs. 2: Negativpreis-15min × 0,5).
+  // Zeilen: Negativpreis-Viertelstunden (+ Stunden), VLV (+ Stunden),
+  // Förderverlängerung in Monaten NUR in der Jahresansicht. Nebenzeilen:
+  // kalibrierte abgeregelte Energie, tatsächliche Erzeugung, Pot. Erlös.
+  // „Erwartet (Soll)" entfernt — war der alte statische PVGIS-Wert von vor der
+  // Kalibrier-Umstellung. Sichtbar nur wenn die Anlage §51-betroffen ist.
+  const negSlots = hasFiniteNumber(kpis?.negPriceQuarterHourCount) ? Number(kpis.negPriceQuarterHourCount) : null;
+  const vlv = hasFiniteNumber(kpis?.volllastViertelstunden) ? Number(kpis.volllastViertelstunden) : null;
   const actualPvKwh = hasFiniteNumber(kpis?.pvKwh) ? Number(kpis.pvKwh) : null;
   const curtailedKwh = hasFiniteNumber(kpis?.curtailedPvKwh) ? Number(kpis.curtailedPvKwh) : null;
   const curtailedRevenueEur = (curtailedKwh != null && mvCtKwh != null)
     ? (curtailedKwh * mvCtKwh) / 100
     : null;
+  const negRule = kpis?.negPriceRule;
   const curtailCard = document.getElementById('historyKpiCurtailmentCard');
   if (curtailCard) {
-    const visible = expectedPv != null;
+    const visible = !!negRule && negRule !== 'none';
     curtailCard.style.display = visible ? '' : 'none';
     if (visible) {
+      // Prominent: Volllastviertelstunden.
+      setText('historyKpiVlv', vlv != null ? vlv.toLocaleString('de-DE') : '-');
+      // Negativpreis-Viertelstunden + Stunden in Klammern.
+      setText('historyKpiNegSlots', negSlots != null
+        ? `${negSlots.toLocaleString('de-DE')} (${fmtHours(negSlots * 0.25)})` : '-');
+      // Volllastviertelstunden + Stunden in Klammern.
+      setText('historyKpiVlvDetail', vlv != null
+        ? `${vlv.toLocaleString('de-DE')} (${fmtHours(vlv * 0.25)})` : '-');
+      // Nebenzeilen: kalibrierte abgeregelte Energie, Ist, Pot. Erlös.
       setText('historyKpiCurtailedKwh', curtailedKwh != null ? fmtKwh(curtailedKwh) : '-');
-      setText('historyKpiExpectedPv', expectedPv != null ? fmtKwh(expectedPv) : '-');
       setText('historyKpiActualPv', actualPvKwh != null ? fmtKwh(actualPvKwh) : '-');
       let revLabel = 'Pot. Erlös (Marktwert)';
       if (mvSource === 'year_derived') revLabel = 'Pot. Erlös (JMW laufend)';
@@ -409,28 +422,22 @@ function renderKpis(summary) {
       setText('historyKpiCurtailedRevenueLabel', revLabel);
       setText('historyKpiCurtailedRevenue',
         curtailedRevenueEur != null ? fmtEur(curtailedRevenueEur) : 'noch nicht verfügbar');
-      // Akzent: orange wenn >5 % Abregelung, sonst grün.
-      const ratio = expectedPv > 0 ? (curtailedKwh / expectedPv) : 0;
-      const isHigh = ratio > 0.05;
+      // Akzent: orange wenn im Zeitraum §51-Viertelstunden auftraten.
+      const isHigh = (vlv || 0) > 0;
       curtailCard.dataset.accent = isHigh ? 'orange' : 'green';
-      const totalEl = document.getElementById('historyKpiCurtailedKwh');
+      const totalEl = document.getElementById('historyKpiVlv');
       if (totalEl) totalEl.style.color = isHigh ? 'var(--flow-orange)' : 'var(--flow-green)';
 
-      // §51 EEG Förder-Verlängerung (Solarspitzengesetz): betroffene Negativpreis-
-      // Viertelstunden hängen sich ans Ende des 20-Jahre-Förderzeitraums. Zeile
-      // nur einblenden wenn die Anlage §51-betroffen ist (rule != 'none').
+      // Förderverlängerung in Monaten — NUR Jahresansicht (Backend liefert
+      // eegExtensionMonthsVlv nur dann ≠ null; Monatsverteilung der VVL zu ungleich).
       const eegRow = document.getElementById('historyKpiEegExtensionRow');
       if (eegRow) {
-        const negRule = kpis?.negPriceRule;
-        const extHours = hasFiniteNumber(kpis?.eegExtensionHours) ? Number(kpis.eegExtensionHours) : null;
-        const subject = negRule && negRule !== 'none' && extHours != null;
+        const extMonths = hasFiniteNumber(kpis?.eegExtensionMonthsVlv) ? Number(kpis.eegExtensionMonthsVlv) : null;
+        const subject = summaryView === 'year' && extMonths != null;
         eegRow.hidden = !subject;
         if (subject) {
-          const months = hasFiniteNumber(kpis?.eegExtensionMonths) ? Number(kpis.eegExtensionMonths) : 0;
-          const monthSuffix = months >= 0.01
-            ? ` (~${months.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Mon.)`
-            : '';
-          setText('historyKpiEegExtension', `${fmtHours(extHours)}${monthSuffix}`);
+          setText('historyKpiEegExtension',
+            `${extMonths.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Mon.`);
         }
       }
     }

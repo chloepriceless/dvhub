@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
+import { vollastViertelstunden, extensionFromVollast } from './eeg-extension.js';
 // Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
 import { round2 } from './server-utils.js';
 // WS3 (2026-05-30): PVGIS-derived monthly expected production (real array
@@ -1665,11 +1666,21 @@ export function createHistoryRuntime({
     // 730,5 h/Monat (8766 h/Jahr ÷ 12). negPriceRule='none' ⇒ Anlage nicht §51-
     // betroffen ⇒ Karte blendet die Zeile aus (Frontend prüft die rule).
     const eegExtensionSlotHours = SLOT_BUCKET_SECONDS / 3600; // 0,25 h bei 15-min Slots
-    const eegExtensionHours = round2(Number(kpis.negPriceAffectedSlots || 0) * eegExtensionSlotHours);
+    const negSlotCount = Number(kpis.negPriceAffectedSlots || 0);
+    const eegExtensionHours = round2(negSlotCount * eegExtensionSlotHours);
     kpis.negPriceRule = negPriceRule.rule;
     kpis.negPriceRuleDescription = negPriceRule.description || null;
     kpis.eegExtensionHours = eegExtensionHours;
     kpis.eegExtensionMonths = eegExtensionHours > 0 ? round2(eegExtensionHours / 730.5) : 0;
+    // §51a-Solarspitzengesetz-Mechanik (Karte „§51 Förderverlängerung", 2026-06-14):
+    //   Volllastviertelstunden = ceil(Negativ-15min × 0,5); Förderverlängerung in
+    //   Monaten via gesetzlicher Monatstabelle (extensionFromVollast). Die
+    //   Monatszahl ist nur über ein VOLLES Jahr sinnvoll (die VVL-Verteilung auf
+    //   Monate ist stark ungleich) → nur in der Jahresansicht gesetzt.
+    const vlv = vollastViertelstunden(negSlotCount);
+    kpis.negPriceQuarterHourCount = negSlotCount;
+    kpis.volllastViertelstunden = vlv;
+    kpis.eegExtensionMonthsVlv = view === 'year' ? round2(extensionFromVollast(vlv).accruedMonths) : null;
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.
