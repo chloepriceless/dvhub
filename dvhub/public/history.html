@@ -174,6 +174,8 @@
             <div class="calc-row-line is-sub"><span>davon aus Akku</span><strong id="historyKpiConsBattery">-</strong></div>
             <div class="calc-row-line is-sub"><span>davon aus Netz</span><strong id="historyKpiConsGrid">-</strong></div>
             <div class="calc-row-line"><span>Einspeisung</span><strong id="historyKpiExport">-</strong></div>
+            <div class="calc-row-line is-sub"><span>davon PV</span><strong id="historyKpiExportPv">-</strong></div>
+            <div class="calc-row-line is-sub" title="Akku→Netz: Arbitrage-Entladung der Batterie ins Netz (DV-Vermarktung / EOS)."><span>davon Akku</span><strong id="historyKpiExportBattery">-</strong></div>
             <div class="calc-row-line"><span>Gesamtverlust</span><strong id="historyKpiTotalLoss">-</strong></div>
             <div class="calc-row-line is-sub"><span>Akku-Verlust</span><strong id="historyKpiBatteryLoss">-</strong></div>
             <div class="calc-row-line is-sub"><span>Akku-Wirkungsgrad</span><strong id="historyKpiBatteryEff">-</strong></div>
@@ -598,7 +600,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260614-eeg51card2"></script>
+  <script src="/history.js?v=20260614-exportsplit"></script>
   <script src="/history-viz.js?v=20260613-autarkyfix"></script>
 </body>
 </html>

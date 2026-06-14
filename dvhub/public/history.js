@@ -195,6 +195,10 @@ function renderKpis(summary) {
   setText('historyKpiConsBattery', fmtKwh(kpis?.batteryShareKwh));
   setText('historyKpiConsGrid', fmtKwh(kpis?.gridShareKwh));
   setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
+  // Einspeisung aufschlüsseln: PV→Netz vs Akku→Netz (Arbitrage). Akku-Export war
+  // bisher in der Gesamt-Einspeisung unsichtbar (Christin 2026-06-14).
+  setText('historyKpiExportPv', hasFiniteNumber(kpis?.solarToGridKwh) ? fmtKwh(kpis.solarToGridKwh) : '-');
+  setText('historyKpiExportBattery', hasFiniteNumber(kpis?.batteryToGridKwh) ? fmtKwh(kpis.batteryToGridKwh) : '-');
   // Energieverluste:
   //  - Akku-Verlust = geladen − entladen (Round-Trip-Verlust des Akkus)
   //  - Akku-Wirkungsgrad = entladen / geladen
