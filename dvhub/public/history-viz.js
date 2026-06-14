@@ -178,79 +178,154 @@
   const INTERACTION_INDEX = { mode: 'index', intersect: false };
   const INTERACTION_NEAREST = { mode: 'nearest', intersect: false };
 
-  async function buildSankey(view, date) {
+  // Sankey layout level. 'flat' = Quellen→Senken (the battery is split into two
+  // disconnected nodes, Akku-Laden sink / Akku-Entladen source, so the DAG
+  // renders left→right). 'layered' = PV→Akku→Verbrauch/Netz with a single Akku
+  // hub node in the middle column (charge flows in, discharge flows out). The
+  // toggle in the card head flips this; both layouts derive from the SAME
+  // payload (data.flows for flat, data.breakdown for layered) so switching
+  // re-renders client-side with no refetch.
+  let sankeyLayout = 'flat';
+  let lastSankeyData = null;
+
+  // Forced column placement for the layered layout: sources left (0), the Akku
+  // hub middle (1), sinks right (2). PV→Verbrauch / PV→Einspeisung span 0→2 and
+  // pass the middle column — standard for a multi-layer Sankey.
+  const SANKEY_COLUMNS = { PV: 0, Netzbezug: 0, Akku: 1, Verbrauch: 2, Einspeisung: 2 };
+  // Vertical stacking order within each column (lower = higher up).
+  const SANKEY_PRIORITY = { PV: 0, Netzbezug: 1, Akku: 0, Verbrauch: 0, Einspeisung: 1 };
+
+  // Build the link list for a given layout from one Sankey payload.
+  function sankeyLinksFor(layout, data) {
+    if (layout === 'layered') {
+      const b = data.breakdown || {};
+      const n = (v) => Number(v) || 0;
+      return [
+        { from: 'PV',        to: 'Verbrauch',   flow: n(b.pvToLoad) },
+        { from: 'PV',        to: 'Akku',        flow: n(b.pvToBattery) },
+        { from: 'PV',        to: 'Einspeisung', flow: n(b.pvToExport) },
+        { from: 'Netzbezug', to: 'Verbrauch',   flow: n(b.gridToLoad) },
+        { from: 'Netzbezug', to: 'Akku',        flow: n(b.gridToBattery) },
+        { from: 'Akku',      to: 'Verbrauch',   flow: n(b.batteryToLoad) },
+        { from: 'Akku',      to: 'Einspeisung', flow: n(b.batteryToExport) },
+      ].filter((l) => l.flow > 0.01);
+    }
+    return (data.flows || []).map((f) => ({ from: f.from, to: f.to, flow: f.flow }));
+  }
+
+  // Render (or re-render) the Sankey chart from a cached payload + the current
+  // sankeyLayout. Split out from buildSankey so the layout toggle re-renders
+  // without a network round-trip.
+  function renderSankeyChart(data) {
     const mount = document.getElementById('sankeySvg');
-    if (!mount) return;
-    if (typeof Chart === 'undefined') return;
-    try {
-      const data = await fetchCardData('sankey', view, date);
-      if (historyVizCharts.sankey) {
-        try { historyVizCharts.sankey.destroy(); } catch (_) { /* dead */ }
-        delete historyVizCharts.sankey;
-      }
-      const canvas = mountCanvas(mount, 'sankeyCanvas');
-      // Round-2 — per-source link colors. chartjs-chart-sankey calls
-      // colorFrom/colorTo with the flow-context; ctx.dataset.data[ctx.dataIndex]
-      // carries {from,to,flow}. Color each link by its `from` node so PV
-      // (yellow), Netzbezug (pink), Akku-Entladen (green) read distinctly.
-      const NODE_COLORS = {
-        'PV':            cssVar('--yellow', '#ffd421'),
-        'Netzbezug':     cssVar('--pink',   '#ff7eb6'),
-        'Akku-Entladen': cssVar('--green',  '#3ee0a0'),
-        'Eigenverbrauch': cssVar('--cyan',  '#34dbff'),
-        'Akku-Laden':    cssVar('--green',  '#3ee0a0'),
-        'Einspeisung':   cssVar('--violet', '#a78bfa'),
-      };
-      const linkColorFrom = (ctx) => {
-        const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
-        return (d && NODE_COLORS[d.from]) || cssVar('--cyan', '#34dbff');
-      };
-      const linkColorTo = (ctx) => {
-        const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
-        return (d && NODE_COLORS[d.to]) || cssVar('--green', '#3ee0a0');
-      };
-      historyVizCharts.sankey = new Chart(canvas.getContext('2d'), {
-        type: 'sankey',
-        data: { datasets: [{
-          data: (data.flows || []).map((f) => ({ from: f.from, to: f.to, flow: f.flow })),
-          colorFrom: linkColorFrom,
-          colorTo:   linkColorTo,
-          colorMode: 'gradient',
-          // RC-E — node labels otherwise paint in Chart.defaults dark grey and
-          // vanish on the dark Aurora theme. Force a light token + readable font.
-          color: cssVar('--text-soft', '#cbd5e1'),
-          font: { size: 12, weight: '600' },
-        }] },
-        options: {
-          responsive: true, maintainAspectRatio: false, animation: false,
-          interaction: INTERACTION_NEAREST,
-          plugins: {
-            // Round-2 — make the magnitudes legible: the sankey tooltip
-            // otherwise shows only the bare flow number. Append the unit.
-            tooltip: { callbacks: {
-              label(c) {
-                const d = c.dataset && c.dataset.data && c.dataset.data[c.dataIndex];
-                if (!d) return '';
-                return `${d.from} → ${d.to}: ${Number(d.flow || 0).toFixed(2)} kWh`;
-              },
-            } },
-          },
+    if (!mount || typeof Chart === 'undefined' || !data) return;
+    if (historyVizCharts.sankey) {
+      try { historyVizCharts.sankey.destroy(); } catch (_) { /* dead */ }
+      delete historyVizCharts.sankey;
+    }
+    const canvas = mountCanvas(mount, 'sankeyCanvas');
+    // Round-2 — per-node link colors. chartjs-chart-sankey calls
+    // colorFrom/colorTo with the flow-context; ctx.dataset.data[ctx.dataIndex]
+    // carries {from,to,flow}. Both layouts share this map (layered adds the
+    // single 'Akku' hub + the 'Verbrauch' sink alias).
+    const NODE_COLORS = {
+      'PV':             cssVar('--yellow', '#ffd421'),
+      'Netzbezug':      cssVar('--pink',   '#ff7eb6'),
+      'Akku-Entladen':  cssVar('--green',  '#3ee0a0'),
+      'Akku-Laden':     cssVar('--green',  '#3ee0a0'),
+      'Akku':           cssVar('--green',  '#3ee0a0'),
+      'Eigenverbrauch': cssVar('--cyan',   '#34dbff'),
+      'Verbrauch':      cssVar('--cyan',   '#34dbff'),
+      'Einspeisung':    cssVar('--violet', '#a78bfa'),
+    };
+    const linkColorFrom = (ctx) => {
+      const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
+      return (d && NODE_COLORS[d.from]) || cssVar('--cyan', '#34dbff');
+    };
+    const linkColorTo = (ctx) => {
+      const d = ctx.dataset && ctx.dataset.data && ctx.dataset.data[ctx.dataIndex];
+      return (d && NODE_COLORS[d.to]) || cssVar('--green', '#3ee0a0');
+    };
+    const layered = sankeyLayout === 'layered';
+    const dataset = {
+      data: sankeyLinksFor(sankeyLayout, data),
+      colorFrom: linkColorFrom,
+      colorTo:   linkColorTo,
+      colorMode: 'gradient',
+      // RC-E — node labels otherwise paint in Chart.defaults dark grey and
+      // vanish on the dark Aurora theme. Force a light token + readable font.
+      color: cssVar('--text-soft', '#cbd5e1'),
+      font: { size: 12, weight: '600' },
+    };
+    // Layered layout pins the Akku into the middle column so the multi-layer
+    // PV→Akku→Verbrauch/Netz reading is explicit. Flat layout leaves column
+    // placement automatic (its split battery nodes already separate cleanly).
+    if (layered) { dataset.column = SANKEY_COLUMNS; dataset.priority = SANKEY_PRIORITY; }
+    historyVizCharts.sankey = new Chart(canvas.getContext('2d'), {
+      type: 'sankey',
+      data: { datasets: [dataset] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: INTERACTION_NEAREST,
+        plugins: {
+          // Round-2 — make the magnitudes legible: the sankey tooltip
+          // otherwise shows only the bare flow number. Append the unit.
+          tooltip: { callbacks: {
+            label(c) {
+              const d = c.dataset && c.dataset.data && c.dataset.data[c.dataIndex];
+              if (!d) return '';
+              return `${d.from} → ${d.to}: ${Number(d.flow || 0).toFixed(2)} kWh`;
+            },
+          } },
         },
-      });
-      // Round-2 — surface the kWh unit + period totals in the card-sub so the
-      // user knows the link widths are kWh. textContent only (D-22 XSS guard).
-      const t = data.totals || {};
-      const sub = document.getElementById('sankeySub');
-      if (sub) {
+      },
+    });
+    // Surface the kWh unit + context in the card-sub. textContent only (D-22).
+    const t = data.totals || {};
+    const sub = document.getElementById('sankeySub');
+    if (sub) {
+      if (layered) {
+        const b = data.breakdown || {};
+        const n = (v) => Number(v) || 0;
+        const akkuIn = n(b.pvToBattery) + n(b.gridToBattery);
+        const akkuOut = n(b.batteryToLoad) + n(b.batteryToExport);
+        const delta = akkuIn - akkuOut;
+        sub.textContent =
+          `Werte in kWh · PV→Akku→Verbrauch/Netz · `
+          + `Akku Δ ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} (Ladung−Entladung)`;
+      } else {
         sub.textContent =
           `Werte in kWh · PV ${Number(t.pvKwh || 0).toFixed(1)} · `
           + `Eigenverbrauch ${Number(t.eigenverbrauchKwh || 0).toFixed(1)} · `
           + `Einspeisung ${Number(t.einspeisungKwh || 0).toFixed(1)}`;
       }
-      setTimeout(() => {
-        try { historyVizCharts.sankey && historyVizCharts.sankey.resize && historyVizCharts.sankey.resize(); }
-        catch (_) { /* dead chart */ }
-      }, 0);
+    }
+    setTimeout(() => {
+      try { historyVizCharts.sankey && historyVizCharts.sankey.resize && historyVizCharts.sankey.resize(); }
+      catch (_) { /* dead chart */ }
+    }, 0);
+  }
+
+  // Mark the active layout button in the card head.
+  function syncSankeyToggle() {
+    const toggle = document.querySelector('[data-viz-card="sankey"] .sankey-layout-toggle');
+    if (!toggle) return;
+    toggle.querySelectorAll('[data-sankey-layout]').forEach((btn) => {
+      const isActive = btn.dataset.sankeyLayout === sankeyLayout;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+
+  async function buildSankey(view, date) {
+    const mount = document.getElementById('sankeySvg');
+    if (!mount) return;
+    if (typeof Chart === 'undefined') return;
+    try {
+      syncSankeyToggle();
+      const data = await fetchCardData('sankey', view, date);
+      lastSankeyData = data;
+      renderSankeyChart(data);
     } catch (e) {
       console.error('history-viz: buildSankey failed', e);
       showFriendlyError(mount, 'Sankey');
@@ -1542,6 +1617,26 @@
           delete historyVizCharts.heatmap;
         }
         applyView(viewSel ? viewSel.value : 'day', dateInp ? dateInp.value : '');
+      });
+    }
+    // Sankey flat/layered layout toggle. Event-delegated (CSP). A click flips
+    // the module layout state and re-renders from the cached payload — both
+    // layouts derive from the same numbers, so NO refetch and NO memo bust is
+    // needed (unlike the heatmap, whose granularity changes the fetched data).
+    const sankeyToggle = document.querySelector('[data-viz-card="sankey"] .sankey-layout-toggle');
+    if (sankeyToggle) {
+      sankeyToggle.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest('[data-sankey-layout]');
+        if (!btn || !sankeyToggle.contains(btn)) return;
+        const next = btn.dataset.sankeyLayout === 'layered' ? 'layered' : 'flat';
+        if (next === sankeyLayout) return;
+        sankeyLayout = next;
+        syncSankeyToggle();
+        if (lastSankeyData) {
+          renderSankeyChart(lastSankeyData);
+        } else {
+          applyView(viewSel ? viewSel.value : 'day', dateInp ? dateInp.value : '');
+        }
       });
     }
     // First-render dispatch — co-listens to the same #historyView / #historyDate

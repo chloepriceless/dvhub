@@ -686,6 +686,21 @@ export function createHistoryVizAggregator(ctx) {
         { from: 'Akku-Entladen', to: 'Eigenverbrauch', flow: round3(f.batteryToLoad) },
         { from: 'Akku-Entladen', to: 'Einspeisung',    flow: round3(f.batteryToExport) },
       ].filter(fl => fl.flow > 0.01);
+      // breakdown: the 7 raw decomposed flow magnitudes (kWh). The flat `flows`
+      // above splits the battery into two disconnected nodes (Akku-Laden sink /
+      // Akku-Entladen source) so the DAG renders left→right. The frontend's
+      // "Mehrlagig" toggle rebuilds links from this breakdown with a single
+      // Akku hub node (PV→Akku→Verbrauch/Netz) — no refetch needed since both
+      // layouts are derivable from the same numbers.
+      const breakdown = {
+        pvToLoad: round3(f.pvToLoad),
+        pvToBattery: round3(f.pvToBattery),
+        pvToExport: round3(f.pvToExport),
+        gridToLoad: round3(f.gridToLoad),
+        gridToBattery: round3(f.gridToBattery),
+        batteryToLoad: round3(f.batteryToLoad),
+        batteryToExport: round3(f.batteryToExport),
+      };
       const payload = {
         ok: true,
         card: 'sankey',
@@ -694,6 +709,7 @@ export function createHistoryVizAggregator(ctx) {
         generatedAt: new Date().toISOString(),
         cached: false,
         flows,
+        breakdown,
         totals: {
           pvKwh: round3(pvKwh),
           eigenverbrauchKwh: round3(eigenverbrauchKwh),

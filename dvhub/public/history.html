@@ -370,6 +370,14 @@
             <span class="card-title"><span class="dot dot-violet"></span>Energiefluss · Sankey</span>
             <p class="card-sub" id="sankeySub">Wohin geht die kWh — Quellen → Senken</p>
           </div>
+          <!-- Layout-Umschalter: flach (Quellen→Senken) vs. mehrlagig
+               (PV→Akku→Verbrauch/Netz, Akku als Mittel-Knoten). Buttons tragen
+               data-sankey-layout; history-viz.js event-delegiert den Klick
+               (keine inline-Handler — CSP). -->
+          <div class="chart-mode sankey-layout-toggle" role="group" aria-label="Sankey-Ebene">
+            <button type="button" class="seg-btn is-active" data-sankey-layout="flat" aria-pressed="true">Quellen&nbsp;→&nbsp;Senken</button>
+            <button type="button" class="seg-btn" data-sankey-layout="layered" aria-pressed="false">Mehrlagig</button>
+          </div>
         </div>
         <div class="sankey-wrap viz-chart-shell"><div id="sankeySvg"></div></div>
         <div class="viz-foot">
@@ -601,6 +609,6 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/history.js?v=20260614-exportsplit"></script>
-  <script src="/history-viz.js?v=20260613-autarkyfix"></script>
+  <script src="/history-viz.js?v=20260614-sankeylayered"></script>
 </body>
 </html>
