@@ -8,6 +8,7 @@ import {
   topicSuffix,
   buildWeather4loxRows,
   buildCustomNowcastRow,
+  buildRealizedObservedRow,
   resolveMqttWeatherConfig,
   LOXONE_EPOCH_OFFSET_S,
   WEATHER4LOX_DEFAULT_PREFIX
@@ -137,6 +138,35 @@ test('buildCustomNowcastRow returns null without a GHI value', () => {
   assert.equal(buildCustomNowcastRow({ ghi: null }, Date.now()), null);
 });
 
+// --- buildRealizedObservedRow (T-CURTAIL 1b) ---
+
+test('buildRealizedObservedRow (weather4lox) reads cur_sr/cur_temp, stamps the 15-min slot', () => {
+  const row = buildRealizedObservedRow('weather4lox', { cur_sr: 712, cur_temp: 21.3, hfc1_sr: 9999 }, Date.parse('2026-06-09T15:23:45Z'));
+  assert.equal(row.source, 'loxone_measured');
+  assert.equal(row.ts_utc, '2026-06-09T15:15:00.000Z'); // floored to the 15-min slot, NOT the hour
+  assert.equal(row.ghi_wm2, 712);
+  assert.equal(row.temperature_c, 21.3);
+  assert.equal(row.resolution_seconds, 900);
+});
+
+test('buildRealizedObservedRow (custom) reads the mapped live ghi/temperature', () => {
+  const row = buildRealizedObservedRow('custom', { ghi: 88, temperature: 12 }, Date.parse('2026-06-09T15:46:00Z'));
+  assert.equal(row.source, 'loxone_measured');
+  assert.equal(row.ts_utc, '2026-06-09T15:45:00.000Z');
+  assert.equal(row.ghi_wm2, 88);
+  assert.equal(row.temperature_c, 12);
+});
+
+test('buildRealizedObservedRow returns null when no realized GHI is present', () => {
+  assert.equal(buildRealizedObservedRow('weather4lox', { cur_temp: 20 }, Date.now()), null); // no cur_sr
+  assert.equal(buildRealizedObservedRow('weather4lox', { cur_sr: -5 }, Date.now()), null);   // negative is invalid
+  assert.equal(buildRealizedObservedRow('custom', { temperature: 14 }, Date.now()), null);   // no ghi
+  // GHI 0 (night) IS valid — a measured zero is real data, not a missing value.
+  const night = buildRealizedObservedRow('weather4lox', { cur_sr: 0 }, Date.parse('2026-06-09T02:07:00Z'));
+  assert.equal(night.ghi_wm2, 0);
+  assert.equal(night.temperature_c, null);
+});
+
 // --- resolveMqttWeatherConfig ---
 
 test('resolveMqttWeatherConfig: enabled only when provider === mqtt', () => {
@@ -221,15 +251,36 @@ test('ingest drops a value when the sentinel arrives', async () => {
   assert.equal('hfc1_tt' in svc._raw(), false);
 });
 
-test('flush is a no-op when no complete slots are buffered', async () => {
+test('flush is a no-op when the buffer is entirely empty', async () => {
   const cfg = { forecast: { weather: { provider: 'mqtt', mqtt: { preset: 'weather4lox' } } }, mqtt: { brokerUrl: 'mqtt://x:1883' } };
   const ctx = makeCtx(cfg);
   let writes = 0;
   const svc = createMqttWeather(ctx, { store: { insertWeather: async () => { writes++; } } });
-  svc.ingest('weather4lox/cur_sr', '67'); // only a live value, no forecast slot
+  // Nothing buffered (no forecast slot AND no realized cur_sr).
   await svc._flush();
   assert.equal(writes, 0);
   assert.ok(ctx._logs.some(l => l.key === 'mqtt_weather_flush_skip'));
+});
+
+test('T-CURTAIL 1b: a live cur_sr (no forecast slot) tees a loxone_measured observed row', async () => {
+  const cfg = { forecast: { weather: { provider: 'mqtt', mqtt: { preset: 'weather4lox' } } }, mqtt: { brokerUrl: 'mqtt://x:1883' } };
+  const ctx = makeCtx(cfg);
+  let forecastWrites = 0;
+  const observed = [];
+  const svc = createMqttWeather(ctx, { store: {
+    insertWeather: async () => { forecastWrites++; },
+    insertObservedWeatherBatch: async (rows) => { observed.push(...rows); return { written: rows.length }; },
+  } });
+  svc.ingest('weather4lox/cur_sr', '67');   // realized live measurement, no hfc slot
+  svc.ingest('weather4lox/cur_temp', '18.4');
+  await svc._flush();
+  assert.equal(forecastWrites, 0, 'no forecast row written (no complete hfc slot)');
+  assert.equal(observed.length, 1, 'one observed row teed');
+  assert.equal(observed[0].source, 'loxone_measured');
+  assert.equal(observed[0].ghi_wm2, 67);
+  assert.equal(observed[0].temperature_c, 18.4);
+  assert.equal(observed[0].resolution_seconds, 900);
+  assert.ok(ctx._logs.some(l => l.key === 'mqtt_weather_flush_ok' && l.data.observed === 1));
 });
 
 test('custom preset maps configured topics to a nowcast row', async () => {

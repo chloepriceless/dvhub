@@ -5,7 +5,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  hourKey, berlinDate, buildGhiByHour, buildDirtyDays, buildActualByTs,
+  hourKey, slotKey, berlinDate, buildGhiByHour, buildGhiIndex, resolveGhi,
+  buildDirtyDays, buildActualByTs,
   buildSamples, computeCurtailment, calibrationInputsHash,
 } from '../services/curtailment/index.js';
 import { binKeyFor } from '../services/curtailment/calibration.js';
@@ -32,6 +33,43 @@ test('buildGhiByHour: prefers loxone_measured over open_meteo_archive for the sa
   const g = m.get(hourKey(Date.parse('2025-06-21T13:00:00Z')));
   assert.equal(g.ghi, 850);
   assert.equal(g.source, 'loxone_measured');
+});
+
+test('slotKey: truncates ms to the start of the 15-min slot', () => {
+  assert.equal(slotKey(Date.parse('2025-06-21T13:47:30Z')), Date.parse('2025-06-21T13:45:00Z'));
+  assert.equal(slotKey(Date.parse('2025-06-21T13:14:59Z')), Date.parse('2025-06-21T13:00:00Z'));
+});
+
+test('buildGhiIndex + resolveGhi: a 15-min measured value wins for its slot; hourly fills the rest', () => {
+  const rows = [
+    // hourly archive at 13:00 covers the whole hour
+    { ts_utc: '2025-06-21T13:00:00Z', ghi_wm2: 800, temperature_c: 24, source: 'open_meteo_archive', resolution_seconds: 3600 },
+    // one fine measured slot at 13:15
+    { ts_utc: '2025-06-21T13:15:00Z', ghi_wm2: 905, temperature_c: 26, source: 'loxone_measured', resolution_seconds: 900 },
+  ];
+  const idx = buildGhiIndex(rows);
+  // 13:15 slot -> the per-slot measurement
+  const at1315 = resolveGhi(idx, Date.parse('2025-06-21T13:15:10Z'));
+  assert.equal(at1315.ghi, 905);
+  assert.equal(at1315.source, 'loxone_measured');
+  // 13:30 slot has no fine measurement -> falls back to the hourly archive
+  const at1330 = resolveGhi(idx, Date.parse('2025-06-21T13:30:00Z'));
+  assert.equal(at1330.ghi, 800);
+  assert.equal(at1330.source, 'open_meteo_archive');
+});
+
+test('buildGhiIndex: hourly-resolution measured rows do NOT enter the slot map', () => {
+  const rows = [
+    { ts_utc: '2025-06-21T13:00:00Z', ghi_wm2: 850, temperature_c: 25, source: 'loxone_measured', resolution_seconds: 3600 },
+  ];
+  const idx = buildGhiIndex(rows);
+  assert.equal(idx.bySlot.size, 0);                 // hourly measured -> hour map only
+  assert.equal(resolveGhi(idx, Date.parse('2025-06-21T13:00:00Z')).ghi, 850);
+});
+
+test('resolveGhi: back-compat with a plain hourly Map', () => {
+  const m = new Map([[hourKey(Date.parse('2025-06-21T13:00:00Z')), { ghi: 777, temp: 20, source: 'x' }]]);
+  assert.equal(resolveGhi(m, Date.parse('2025-06-21T13:42:00Z')).ghi, 777);
 });
 
 test('buildDirtyDays: any negative-price slot marks the whole local day dirty', () => {

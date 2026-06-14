@@ -157,6 +157,35 @@ export function buildCustomNowcastRow(values, nowMs, { provider = 'mqtt' } = {})
 }
 
 /**
+ * T-CURTAIL 1b — build a REALIZED observed-GHI row from the live buffer for the
+ * immutable weather_observed store (source 'loxone_measured'). This is the
+ * station's actual current measurement — NOT a forecast:
+ *   - weather4lox: `cur_sr` (the live nowcast solar radiation, buffered but
+ *     never written as a forecast row); temperature from `cur_temp`.
+ *   - custom: the mapped live `ghi` topic; temperature from the live `temperature`.
+ * Stamped at the current 15-min SLOT (not the hour) so the curtailment
+ * calibration can pair each PV quarter-hour with its own irradiance once the
+ * station accumulates fine values. resolution_seconds=900 marks it sub-hourly.
+ * @param {string} preset - 'weather4lox' | 'custom'
+ * @param {Object<string, number>} raw - the live topic buffer
+ * @param {number} nowMs - injected current time (ms) for testability
+ * @returns {object|null} a weather_observed row, or null if no realized GHI
+ */
+export function buildRealizedObservedRow(preset, raw, nowMs) {
+  const ghi = preset === 'custom' ? raw?.ghi : raw?.cur_sr;
+  const temp = preset === 'custom' ? raw?.temperature : raw?.cur_temp;
+  if (ghi == null || !Number.isFinite(Number(ghi)) || Number(ghi) < 0) return null;
+  const slotMs = Math.floor(nowMs / 900_000) * 900_000;
+  return {
+    source: 'loxone_measured',
+    ts_utc: new Date(slotMs).toISOString(),
+    ghi_wm2: Number(ghi),
+    temperature_c: Number.isFinite(Number(temp)) ? Number(temp) : null,
+    resolution_seconds: 900,
+  };
+}
+
+/**
  * Resolve the effective MQTT-weather config from the full config object.
  * @param {object} cfg
  * @returns {{ enabled: boolean, brokerUrl: string|null, username?: string, password?: string,
@@ -252,7 +281,10 @@ export function createMqttWeather(ctx, { store }) {
     const c = cfgSnapshot || resolveMqttWeatherConfig(getCfg());
     if (!c.enabled) return;
     const rows = buildRows(c);
-    if (rows.length === 0) {
+    // T-CURTAIL 1b — the realized current GHI (station measurement) is teed to
+    // weather_observed independently of forecast-slot completeness.
+    const observedRow = buildRealizedObservedRow(c.preset, raw, Date.now());
+    if (rows.length === 0 && !observedRow) {
       pushLog('mqtt_weather_flush_skip', { reason: 'no_complete_slots', preset: c.preset });
       return;
     }
@@ -261,12 +293,18 @@ export function createMqttWeather(ctx, { store }) {
       for (const row of rows) {
         await store.insertWeather(row);
       }
+      // Tee realized GHI -> immutable weather_observed (source 'loxone_measured').
+      // Best-effort: a failure here must not lose the forecast write above.
+      if (observedRow && store.insertObservedWeatherBatch) {
+        try { await store.insertObservedWeatherBatch([observedRow]); }
+        catch (err) { pushLog('mqtt_weather_observed_error', { error: err?.message ?? String(err) }); }
+      }
       if (ctx.state?.forecast?.weather) {
         ctx.state.forecast.weather.lastFetchAt = Date.now();
         ctx.state.forecast.weather.error = null;
       }
       ctx.bumpForecastVersion?.();
-      pushLog('mqtt_weather_flush_ok', { rows: rows.length, preset: c.preset });
+      pushLog('mqtt_weather_flush_ok', { rows: rows.length, observed: observedRow ? 1 : 0, preset: c.preset });
     } catch (err) {
       if (ctx.state?.forecast?.weather) ctx.state.forecast.weather.error = err?.message ?? String(err);
       pushLog('mqtt_weather_flush_error', { error: err?.message ?? String(err) });

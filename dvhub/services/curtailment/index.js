@@ -25,6 +25,11 @@ export function hourKey(tsMs) {
   return Math.floor(tsMs / 3600000) * 3600000;
 }
 
+/** Start of the 15-min slot (ms) — for sub-hourly measured-GHI matching. */
+export function slotKey(tsMs) {
+  return Math.floor(tsMs / 900000) * 900000;
+}
+
 /** Local (Europe/Berlin) calendar date 'YYYY-MM-DD' for an instant. Deterministic. */
 export function berlinDate(tsMs) {
   return new Date(tsMs).toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
@@ -47,6 +52,57 @@ export function buildGhiByHour(rows) {
     }
   }
   return map;
+}
+
+/**
+ * Slot-aware GHI index. `byHour` is the hourly ranking above (all sources);
+ * `bySlot` holds ONLY sub-hourly MEASURED GHI (source 'loxone_measured',
+ * stamped at 15-min slots by the mqtt-weather tee — T-CURTAIL 1b) keyed by
+ * 15-min slot. resolveGhi() prefers a per-slot measurement, falling back to the
+ * hour — so when a fine measured source exists, each 15-min PV slot is paired
+ * with its OWN irradiance instead of four quarters sharing one hourly value.
+ * Archive/forecast (hourly) only ever populate byHour.
+ * @param {Array<{ts_utc,ghi_wm2,temperature_c,source,resolution_seconds?}>} rows
+ * @returns {{byHour: Map, bySlot: Map}}
+ */
+export function buildGhiIndex(rows) {
+  const bySlot = new Map();
+  const hourlyRows = [];
+  for (const r of rows) {
+    const res = r.resolution_seconds == null ? null : Number(r.resolution_seconds);
+    const isFineMeasured = r.source === 'loxone_measured' && (res == null || res < 3600);
+    if (isFineMeasured) {
+      const k = slotKey(new Date(r.ts_utc).getTime());
+      if (!bySlot.has(k)) {
+        bySlot.set(k, {
+          ghi: r.ghi_wm2 == null ? null : Number(r.ghi_wm2),
+          temp: r.temperature_c == null ? null : Number(r.temperature_c),
+          source: r.source,
+        });
+      }
+    } else {
+      // archive / forecast / hourly-measured -> the hourly fallback bucket.
+      hourlyRows.push(r);
+    }
+  }
+  return { byHour: buildGhiByHour(hourlyRows), bySlot };
+}
+
+/**
+ * Resolve GHI for a slot instant. Accepts EITHER a slot-aware index
+ * ({byHour, bySlot}) — prefers a per-15-min measurement, else the hour — OR a
+ * plain hourly Map (back-compat with callers/tests passing buildGhiByHour's
+ * result directly).
+ */
+export function resolveGhi(g, ts) {
+  if (!g) return undefined;
+  if (g.byHour instanceof Map) {
+    const fine = g.bySlot && g.bySlot.get(slotKey(ts));
+    if (fine && fine.ghi != null) return fine;
+    return g.byHour.get(hourKey(ts));
+  }
+  if (typeof g.get === 'function') return g.get(hourKey(ts));  // plain hourly Map
+  return undefined;
 }
 
 /** Set of Berlin dates that contain at least one negative-price slot. */
@@ -76,7 +132,7 @@ export function buildSamples({ actualByTs, ghiByHour, dirtyDays, kWp, lat, lon }
   const samples = [];
   for (const [ts, actualKwh] of actualByTs) {
     if (dirtyDays.has(berlinDate(ts))) continue;           // skip throttled days
-    const g = ghiByHour.get(hourKey(ts));
+    const g = resolveGhi(ghiByHour, ts);
     if (!g || g.ghi == null) continue;
     const elev = solarElevationDeg(lat, lon, new Date(ts));
     const band = elevationBand(elev);
@@ -124,7 +180,7 @@ export function computeCurtailment({ priceRows, actualByTs, ghiByHour, bins, pAc
     if (!(Number(r.value_num) < 0)) continue;               // only curtailed (neg-price) slots
     negSlots++;
     const ts = new Date(r.ts_utc).getTime();
-    const g = ghiByHour.get(hourKey(ts));
+    const g = resolveGhi(ghiByHour, ts);
     if (!g || g.ghi == null) { skippedSlots++; continue; }
     const elev = solarElevationDeg(lat, lon, new Date(ts));
     const band = elevationBand(elev);
@@ -184,7 +240,7 @@ export function createCurtailmentService(ctx, { store }) {
            WHERE series_key='price_ct_kwh' AND value_num IS NOT NULL
              AND ts_utc >= $1 AND ts_utc < $2 ORDER BY ts_utc ASC`, [fromIso, toIso]),
       store.query(
-        `SELECT ts_utc, ghi_wm2, temperature_c, source FROM weather_observed
+        `SELECT ts_utc, ghi_wm2, temperature_c, source, resolution_seconds FROM weather_observed
            WHERE ts_utc >= $1 AND ts_utc < $2 ORDER BY ts_utc ASC`, [fromIso, toIso]),
     ];
     // GHI fallback (T-CURTAIL §10): recent days the ERA5 archive hasn't reached
@@ -215,7 +271,7 @@ export function createCurtailmentService(ctx, { store }) {
     const { kWp, lat, lon } = resolveInputs();
     if (!kWp || lat == null || lon == null) return { ok: false, error: 'missing_kwp_or_location' };
     const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(calFrom), isoTs(calTo));
-    const ghiByHour = buildGhiByHour(ghiRows);
+    const ghiByHour = buildGhiIndex(ghiRows);
     const dirtyDays = buildDirtyDays(priceRows);
     const actualByTs = buildActualByTs(pvRows);
     const samples = buildSamples({ actualByTs, ghiByHour, dirtyDays, kWp, lat, lon });
@@ -247,7 +303,7 @@ export function createCurtailmentService(ctx, { store }) {
     const { kWp, lat, lon } = resolveInputs();
     if (!kWp || lat == null || lon == null) return { ok: false, error: 'missing_kwp_or_location' };
     const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(from), isoTs(to), { includeForecast: true });
-    const ghiByHour = buildGhiByHour(ghiRows);
+    const ghiByHour = buildGhiIndex(ghiRows);
     const actualByTs = buildActualByTs(pvRows);
     const binRows = await store.getCalibrationBins(ARRAY_ID);
     const bins = new Map();
