@@ -636,6 +636,10 @@ function renderKpis(summary) {
     // sonst zeigen wir die Backend-Werte, die mit den eigentlichen kpis-DV-Zahlen
     // konsistent sind.
     const hypSurplusEur = hasFiniteNumber(kpis?.hypSurplusFeedInEur) ? Number(kpis.hypSurplusFeedInEur) : null;
+    // Bugfix (Christin 2026-06-14): der Überschuss-Einspeisung-WERT wurde nie
+    // gesetzt (nur die Detail-Formel oben) → Karte zeigte „—" trotz Formel.
+    // Analog zur Voll-Einspeisung (historyKpiHypFullFeedIn) jetzt befüllt.
+    setText('historyKpiHypSurplusFeedIn', hypSurplusEur != null ? fmtEur(hypSurplusEur) : '-');
     const dvCostEur = hasFiniteNumber(kpis?.dvCostEur) ? Number(kpis.dvCostEur) : null;
     let effDvExcessEur;
     let effDvNetAdvantageEur;
