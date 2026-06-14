@@ -2606,12 +2606,15 @@
 
       var s = bgFlowMqttStreams[tile.id];
       if (!s) {
-        // New stream — create with the card↔hub endpoints and individually
+        // New stream — create with the card↔HOUSE endpoints and individually
         // seed its dust (BG_FLOWS_BASE.forEach(bgFlowSeedDust) ran once at
-        // init; streams added later are NOT auto-seeded).
+        // init; streams added later are NOT auto-seeded). Operator request
+        // (2026-06-14): the in-house MQTT/Shelly devices draw their power from
+        // the HOUSE (#tag-home), NOT from the central crossing/"Kosten Heute"
+        // shield (#pfCenter) — they are sub-consumers of the house load.
         s = {
           id: 's_mqtt_' + tile.id,
-          from: cardId, to: 'pfCenter',
+          from: cardId, to: 'tag-home',
           color: hexToRgb(meta.color)
         };
         bgFlowMqttStreams[tile.id] = s;
@@ -2620,21 +2623,21 @@
       // Keep the accent colour in sync if the tile was re-themed.
       s.color = hexToRgb(meta.color);
 
-      // D-07/D-08 direction: positive-only tile → SINK (hub → card). Once a
+      // D-07/D-08 direction: positive-only tile → SINK (house → card). Once a
       // negative value has been seen, follow the live sign. Encode direction
       // in from/to (mirrors the base streams) — reverse stays false.
       if (!st.everNegative) {
-        s.from = 'pfCenter'; s.to = cardId;           // consumer/sink
+        s.from = 'tag-home'; s.to = cardId;           // consumer/sink (from the House)
       } else if (valW >= 0) {
-        s.from = 'pfCenter'; s.to = cardId;           // positive → into the card
+        s.from = 'tag-home'; s.to = cardId;           // positive → into the card
       } else {
-        s.from = cardId; s.to = 'pfCenter';           // negative → out of the card
+        s.from = cardId; s.to = 'tag-home';           // negative (producing) → out to the House
       }
       s.reverse = false;
       // Provenance mix (2026-06-13): a consuming device receives particles in
       // the live source-share colours (same mix as the house/EV sinks). A
       // PRODUCING device (negative value) keeps its own accent colour.
-      s.mix = (s.from === 'pfCenter') ? bgFlowSourceMix : null;
+      s.mix = (s.to === cardId) ? bgFlowSourceMix : null;
 
       var absW = Math.abs(valW);
 
