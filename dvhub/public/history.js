@@ -395,8 +395,11 @@ function renderKpis(summary) {
   const vlv = hasFiniteNumber(kpis?.volllastViertelstunden) ? Number(kpis.volllastViertelstunden) : null;
   const actualPvKwh = hasFiniteNumber(kpis?.pvKwh) ? Number(kpis.pvKwh) : null;
   const curtailedKwh = hasFiniteNumber(kpis?.curtailedPvKwh) ? Number(kpis.curtailedPvKwh) : null;
-  const curtailedRevenueEur = (curtailedKwh != null && mvCtKwh != null)
-    ? (curtailedKwh * mvCtKwh) / 100
+  // Pot. Erlös der abgeregelten Energie: bewertet mit dem Börsen-Durchschnittspreis
+  // des Zeitraums (Christin 2026-06-14) — NICHT mit Produktionskosten/Marktwert.
+  const avgSpotCtKwh = hasFiniteNumber(kpis?.avgSpotPriceCtKwh) ? Number(kpis.avgSpotPriceCtKwh) : null;
+  const curtailedRevenueEur = (curtailedKwh != null && avgSpotCtKwh != null)
+    ? (curtailedKwh * avgSpotCtKwh) / 100
     : null;
   const negRule = kpis?.negPriceRule;
   const curtailCard = document.getElementById('historyKpiCurtailmentCard');
@@ -404,28 +407,24 @@ function renderKpis(summary) {
     const visible = !!negRule && negRule !== 'none';
     curtailCard.style.display = visible ? '' : 'none';
     if (visible) {
-      // Prominent: Volllastviertelstunden.
-      setText('historyKpiVlv', vlv != null ? vlv.toLocaleString('de-DE') : '-');
+      // Prominent (große Zahl): kalibrierte abgeregelte Energie.
+      setText('historyKpiCurtailedKwh', curtailedKwh != null ? fmtKwh(curtailedKwh) : '-');
       // Negativpreis-Viertelstunden + Stunden in Klammern.
       setText('historyKpiNegSlots', negSlots != null
         ? `${negSlots.toLocaleString('de-DE')} (${fmtHours(negSlots * 0.25)})` : '-');
       // Volllastviertelstunden + Stunden in Klammern.
       setText('historyKpiVlvDetail', vlv != null
         ? `${vlv.toLocaleString('de-DE')} (${fmtHours(vlv * 0.25)})` : '-');
-      // Nebenzeilen: kalibrierte abgeregelte Energie, Ist, Pot. Erlös.
-      setText('historyKpiCurtailedKwh', curtailedKwh != null ? fmtKwh(curtailedKwh) : '-');
       setText('historyKpiActualPv', actualPvKwh != null ? fmtKwh(actualPvKwh) : '-');
-      let revLabel = 'Pot. Erlös (Marktwert)';
-      if (mvSource === 'year_derived') revLabel = 'Pot. Erlös (JMW laufend)';
-      else if (mvSource === 'period_official') revLabel = summaryView === 'month' ? 'Pot. Erlös (Monatsmarktwert)' : 'Pot. Erlös (Jahresmarktwert)';
-      else if (mvSource === 'annual_official') revLabel = 'Pot. Erlös (Jahresmarktwert)';
-      setText('historyKpiCurtailedRevenueLabel', revLabel);
+      // Pot. Erlös via Börsen-Durchschnittspreis des Zeitraums (Rate im Label).
+      setText('historyKpiCurtailedRevenueLabel',
+        avgSpotCtKwh != null ? `Pot. Erlös (Börse Ø ${fmtCt(avgSpotCtKwh)})` : 'Pot. Erlös (Börsen-Ø)');
       setText('historyKpiCurtailedRevenue',
         curtailedRevenueEur != null ? fmtEur(curtailedRevenueEur) : 'noch nicht verfügbar');
       // Akzent: orange wenn im Zeitraum §51-Viertelstunden auftraten.
       const isHigh = (vlv || 0) > 0;
       curtailCard.dataset.accent = isHigh ? 'orange' : 'green';
-      const totalEl = document.getElementById('historyKpiVlv');
+      const totalEl = document.getElementById('historyKpiCurtailedKwh');
       if (totalEl) totalEl.style.color = isHigh ? 'var(--flow-orange)' : 'var(--flow-green)';
 
       // Förderverlängerung in Monaten — NUR Jahresansicht (Backend liefert

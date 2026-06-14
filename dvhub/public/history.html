@@ -190,17 +190,15 @@
              tatsächliche Erzeugung, Pot. Erlös. -->
         <article class="card calc-card" id="historyKpiCurtailmentCard" data-accent="curtail">
           <div class="calc-head"><span class="calc-kicker">&sect;51 F&ouml;rderverl&auml;ngerung</span></div>
-          <div id="historyKpiVlv" class="calc-total" title="Volllastviertelstunden (§51a Abs. 2 EEG): Negativpreis-Viertelstunden × 0,5, aufgerundet.">-</div>
+          <div id="historyKpiCurtailedKwh" class="calc-total" title="Abgeregelte PV-Energie (strahlungs-kalibriert) während der Negativpreis-Viertelstunden.">-</div>
           <div class="calc-rows">
             <div class="calc-row-line"><span>Negativpreis-Viertelstunden</span><strong id="historyKpiNegSlots">-</strong></div>
             <div class="calc-row-line" title="§51a Abs. 2 EEG: Negativpreis-Viertelstunden × 0,5 (aufgerundet) = Volllastviertelstunden."><span>Volllastviertelstunden (&times; 0,5)</span><strong id="historyKpiVlvDetail">-</strong></div>
             <!-- Förderverlängerung in Monaten — nur Jahresansicht (sinnvoll nur über
                  ein volles Jahr; Monatsverteilung der VVL ist stark ungleich). -->
             <div class="calc-row-line" id="historyKpiEegExtensionRow" hidden title="§51a Abs. 2 EEG: Volllastviertelstunden → Förderverlängerung in Monaten über die gesetzliche Monatstabelle (Jan 87 … Dez 73). Nur über ein volles Jahr aussagekräftig."><span>F&ouml;rderverl&auml;ngerung (&sect;51a)</span><strong id="historyKpiEegExtension">-</strong></div>
-            <!-- Nebenzeilen (kalibriert, T-CURTAIL). -->
-            <div class="calc-row-line"><span>Abgeregelte Energie</span><strong id="historyKpiCurtailedKwh">-</strong></div>
             <div class="calc-row-line"><span>Tats&auml;chlich (Ist)</span><strong id="historyKpiActualPv">-</strong></div>
-            <div class="calc-row-line"><span id="historyKpiCurtailedRevenueLabel">Pot. Erl&ouml;s (Marktwert)</span><strong id="historyKpiCurtailedRevenue">-</strong></div>
+            <div class="calc-row-line" title="Potentieller Erlös der abgeregelten Energie, bewertet mit dem Börsen-Durchschnittspreis des Zeitraums."><span id="historyKpiCurtailedRevenueLabel">Pot. Erl&ouml;s (B&ouml;rsen-&Oslash;)</span><strong id="historyKpiCurtailedRevenue">-</strong></div>
             <!-- T-0004: §51a-Lebenszeit-Zähler seit Inbetriebnahme (separater Fetch). -->
             <div class="calc-row-line" id="historyKpiEegLifetimeRow" hidden title="§51a Abs. 2 EEG: Negativpreis-Viertelstunden seit Inbetriebnahme × 0,5 (aufgerundet) = Volllastviertelstunden. Umrechnung in Monate über die gesetzliche Monatstabelle (Jan 87 … Dez 73), Abbau ab Januar nach Förderende."><span>&sect;51a seit Inbetriebnahme</span><strong id="historyKpiEegLifetime">-</strong></div>
           </div>
@@ -600,7 +598,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260614-eeg51card"></script>
+  <script src="/history.js?v=20260614-eeg51card2"></script>
   <script src="/history-viz.js?v=20260613-autarkyfix"></script>
 </body>
 </html>

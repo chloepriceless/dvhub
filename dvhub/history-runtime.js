@@ -1681,6 +1681,14 @@ export function createHistoryRuntime({
     kpis.negPriceQuarterHourCount = negSlotCount;
     kpis.volllastViertelstunden = vlv;
     kpis.eegExtensionMonthsVlv = view === 'year' ? round2(extensionFromVollast(vlv).accruedMonths) : null;
+    // Börsen-Durchschnittspreis des Zeitraums (Christin 2026-06-14): der Pot.
+    // Erlös der abgeregelten Energie wird mit dem Spot-Mittel der Periode bewertet
+    // (nicht mit Produktionskosten/Marktwert). Einfaches Mittel ALLER Spot-15min
+    // (inkl. negativer), wie an der Börse.
+    const spotPrices = priceRows.map((r) => Number(r.priceCtKwh)).filter(Number.isFinite);
+    kpis.avgSpotPriceCtKwh = spotPrices.length
+      ? round2(spotPrices.reduce((a, b) => a + b, 0) / spotPrices.length)
+      : null;
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.
