@@ -128,6 +128,48 @@ Am Ende werden alle Viertelstunden eines Tages, Monats oder Jahres
 
 ---
 
+## Was die Zahl genau ist – und was nicht
+
+Ein wichtiger Punkt zum Verständnis: Das „Ist" (was die Anlage wirklich
+produziert hat) enthält **schon alles**, was die Anlage genutzt hat –
+**Eigenverbrauch im Haus, Akku-Laden und Auto-Laden**. Denn jede erzeugte
+Kilowattstunde fließt ja irgendwohin (Haus, Akku, Auto oder Netz).
+
+Weil das „Ist" **abgezogen** wird, ist die abgeregelte Energie **nur die
+unterdrückte Erzeugung** – das, was die Anlage **gekonnt, aber nicht gemacht**
+hat. Sie ist **nicht** „produzierte + gespeicherte + abgeregelte Energie in einer
+Zahl". Was genutzt oder gespeichert wurde, ist bereits herausgerechnet.
+
+> Beispiel: Die Anlage hätte 18 kW gekonnt, hat aber nur 5 kW gemacht (davon
+> 2 ins Haus, 2 in den Akku, 1 ins Auto). Abgeregelt sind die **13 kW, die sie
+> gar nicht erst gemacht hat** – die 5 genutzten kWh sind raus.
+
+### Die feine Unterscheidung: „erzwungen" vs. „vermeidbar"
+
+Was die Rechnung **bewusst nicht** prüft: ob für die unterdrückte Energie
+überhaupt noch eine **Senke frei** gewesen wäre.
+
+- War der **Akku voll**, das **Auto fertig** und das **Haus gedeckt** → die
+  Energie war **zwangsläufig** abgeregelt (echter Verlust).
+- Hätte der **Akku noch Platz** gehabt → ein Teil hätte theoretisch
+  *gespeichert* werden können statt abgeregelt → das wäre **vermeidbare** statt
+  erzwungener Abregelung.
+
+Die angezeigte Zahl ist die **physikalisch unterdrückte Erzeugung** – sie mischt
+beide Fälle. Die *streng erzwungene* Abregelung wäre etwas kleiner. DVhub bleibt
+**bewusst** bei dieser Definition, weil:
+
+1. Sie ein **ehrlicher, üblicher** Maßstab für „abgeregelte Energie" ist.
+2. Die Trennung erzwungen/vermeidbar **mehrdeutig** ist – bei negativen Preisen
+   ist „nicht laden" oft eine **richtige** Entscheidung (Akku-Kapazität für später
+   sparen), kein Fehler.
+3. In der Praxis lädt die Optimierung (EOS) den Akku bei Überschuss **zuerst
+   voll** – und nur der Überschuss **darüber hinaus** wird abgeregelt. Da das
+   Akku-Laden im „Ist" steckt, fängt `Soll − Ist` den erzwungenen Anteil bereits
+   weitgehend ein.
+
+---
+
 ## Woher die Sonnendaten kommen
 
 DVhub nutzt mehrere Quellen für die Globalstrahlung, in dieser Reihenfolge:
@@ -164,13 +206,50 @@ sie sich über längere Zeiträume sammelt.
 
 ---
 
-## Der Erlös (Börsen-Durchschnitt)
+## Der Erlös (Börsenpreis)
 
 Auf der Karte steht auch ein **potenzieller Erlös**: Was hätte der abgeregelte
 Strom ungefähr **eingebracht**, wenn er hätte verkauft werden können?
 
-Dafür wird die abgeregelte Energie mit dem **Monatsdurchschnitt des Börsenpreises**
-multipliziert. Das ist ein grober Richtwert, kein exakter Geldbetrag.
+Dafür wird die abgeregelte Energie mit dem **Börsen-Durchschnittspreis** des
+Zeitraums multipliziert. Wichtig: Das ist **genau derselbe Börsenpreis, den auch
+die Direktvermarktungs-Karte zeigt** – nämlich der **mengengewichtete** Preis
+(Börsenerlös ÷ tatsächlich eingespeiste kWh = was real je kWh erlöst wurde),
+nicht ein einfacher Zeitmittelwert. So zeigen beide Karten **denselben** Wert.
+
+Die Bewertungsbasis richtet sich nach der Ansicht (Tag/Woche/Monat/Jahr). Das ist
+ein grober Richtwert, kein exakter Geldbetrag – zumal der Strom in den
+Negativstunden ja **gar nicht** zu einem positiven Preis hätte verkauft werden
+können; der Börsen-Schnitt ist nur ein fairer Vergleichsmaßstab.
+
+## Der Durchschnitt pro abgeregelter Stunde
+
+Damit man sieht, **wie sich die Gesamtzahl aufbaut**, zeigt die Karte zusätzlich
+den Durchschnitt **je abgeregelter Stunde**: abgeregelte kWh geteilt durch die
+Anzahl der Negativpreis-Stunden. Beispiel: 689 kWh ÷ 78,75 Stunden ≈ **8,75 kWh
+pro Stunde**.
+
+---
+
+## Verwandte Rechnung: Akku-Verlust & Wirkungsgrad
+
+Auf der Energiebilanz-Karte steht der **Akku-Verlust** (und daraus der
+Wirkungsgrad). Grundgedanke: Was in den Akku geladen wurde, kommt nie ganz wieder
+heraus – die Differenz ist der Verlust.
+
+> Akku-Verlust = **geladene kWh − entladene kWh** (im Zeitraum).
+
+Dabei gibt es eine **Falle**: Am Monatsanfang ist vielleicht schon Energie im
+Akku (vom Vormonat), am Monatsende nimmt man Energie mit in den nächsten Monat.
+Dieser **Übertrag an den Rändern** würde den Verlust verfälschen. Deshalb
+korrigiert DVhub um die **SoC-Änderung**:
+
+> Korrektur = (**Ladestand am Ende − Ladestand am Anfang**) × Akku-Kapazität.
+
+Ist der Akku am Ende voller als am Anfang, steckt diese Differenz noch drin (kein
+Verlust) und wird abgezogen. So bleibt nur der **echte** Round-Trip-Verlust
+übrig. Der Ladestand (SoC) wird seit Aufzeichnungsbeginn laufend gemessen; fehlt
+er für einen Zeitraum, bleibt der Wert eben unkorrigiert.
 
 ---
 
@@ -189,6 +268,18 @@ selbst.
 
 ---
 
-*Für Technik-Interessierte: Die genaue Methode (Hüllkurven-Fit, Sonnenstands-Bänder,
-Temperatur-Korrektur, Wechselrichter-Begrenzung) steht in
-`services/curtailment/` und in `.planning/T-CURTAIL-IRRADIANCE-DESIGN.md`.*
+*Für Technik-Interessierte – wo die Rechenwege im Code stehen:*
+
+- *Abregelung & Hüllkurven-Fit (p85), Sonnenstands-Bänder, Temperatur-Korrektur,
+  Wechselrichter-Begrenzung: `services/curtailment/` (`calibration.js`
+  `fitUpperEnvelope`/`estimateWouldHaveW`, `index.js` `computeCurtailment`) und
+  `.planning/T-CURTAIL-IRRADIANCE-DESIGN.md`.*
+- *Recency-Fenster (Config `forecast.ghiCalibrationLookbackDays`, Default 270 d):
+  `services/forecast/index.js` `runGhiAndRecalibrate`.*
+- *GHI-Quellen-Priorität (Config `forecast.ghiPrimarySource`): `buildGhiByHour`/
+  `rankFor` in `services/curtailment/index.js`.*
+- *Börse Ø (export-gewichtet), §51-Volllastviertelstunden, Ø/Stunde, Akku-Verlust
+  mit SoC-Randkorrektur: `history-runtime.js` (`getSummary`).*
+- *Idempotenz: die Kalibrierung liest nur unveränderliche `weather_observed`/
+  Archiv-GHI; die Anwendung füllt fehlende Tage mit Forecast-GHI nur als Lücken-
+  füller.*
