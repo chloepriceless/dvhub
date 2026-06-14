@@ -167,8 +167,13 @@ export function createCurtailmentService(ctx, { store }) {
     return { kWp, lat, lon };
   }
 
-  async function readWindow(fromIso, toIso) {
-    const [pv, price, ghi] = await Promise.all([
+  // includeForecast: merge weather_forecasts GHI as a low-priority fallback.
+  // ONLY for the APPLY path (computeForRange) — NOT for calibration, because
+  // weather_forecasts mutates (ON CONFLICT UPDATE per fetch) + is pruned, which
+  // would make the fitted slopes non-deterministic. The fit stays on the
+  // immutable observed/archive GHI only.
+  async function readWindow(fromIso, toIso, { includeForecast = false } = {}) {
+    const queries = [
       store.query(
         `SELECT slot_start_utc, value_num FROM energy_slots_15m
            WHERE series_key='pv_total_w' AND source_kind IN ('local_live','vrm_import')
@@ -181,8 +186,26 @@ export function createCurtailmentService(ctx, { store }) {
       store.query(
         `SELECT ts_utc, ghi_wm2, temperature_c, source FROM weather_observed
            WHERE ts_utc >= $1 AND ts_utc < $2 ORDER BY ts_utc ASC`, [fromIso, toIso]),
-    ]);
-    return { pvRows: pv.rows, priceRows: price.rows, ghiRows: ghi.rows };
+    ];
+    // GHI fallback (T-CURTAIL §10): recent days the ERA5 archive hasn't reached
+    // get the Open-Meteo forecast GHI so neg-price slots aren't skipped (which
+    // would drop the KPI to the weather-blind PVGIS estimate). Ranked below
+    // measured/archive in buildGhiByHour -> only fills gaps.
+    if (includeForecast) {
+      queries.push(store.query(
+        `SELECT ts_utc, ghi_wm2, temperature_c, provider FROM weather_forecasts
+           WHERE ghi_wm2 IS NOT NULL AND ts_utc >= $1 AND ts_utc < $2 ORDER BY ts_utc ASC`, [fromIso, toIso]));
+    }
+    const res = await Promise.all(queries);
+    const [pv, price, ghi] = res;
+    let ghiRows = ghi.rows;
+    if (includeForecast && res[3]) {
+      ghiRows = ghiRows.concat(res[3].rows.map((r) => ({
+        ts_utc: r.ts_utc, ghi_wm2: r.ghi_wm2, temperature_c: r.temperature_c,
+        source: `forecast:${r.provider || 'open_meteo'}`,
+      })));
+    }
+    return { pvRows: pv.rows, priceRows: price.rows, ghiRows };
   }
 
   /**
@@ -223,7 +246,7 @@ export function createCurtailmentService(ctx, { store }) {
   async function computeForRange({ from, to }) {
     const { kWp, lat, lon } = resolveInputs();
     if (!kWp || lat == null || lon == null) return { ok: false, error: 'missing_kwp_or_location' };
-    const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(from), isoTs(to));
+    const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(from), isoTs(to), { includeForecast: true });
     const ghiByHour = buildGhiByHour(ghiRows);
     const actualByTs = buildActualByTs(pvRows);
     const binRows = await store.getCalibrationBins(ARRAY_ID);
