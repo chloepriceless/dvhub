@@ -23,6 +23,24 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_weather_forecasts_ts ON weather_forecasts(ts_utc);
 
+  -- T-CURTAIL (2026-06-14): IMMUTABLE observed-weather time-series, deliberately
+  -- separate from the overwriting weather_forecasts cache. Feeds the
+  -- irradiance-calibrated curtailment estimator (.planning/T-CURTAIL-IRRADIANCE-DESIGN.md
+  -- §3a/§10). NOT pruned by runSmartRetention — historical GHI is productive data
+  -- (needed to recompute past curtailed-PV). One row per (source, ts_utc); source
+  -- e.g. 'open_meteo_archive' (universal backfill) or 'loxone_measured' (live).
+  CREATE TABLE IF NOT EXISTS weather_observed (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL,
+    ts_utc TIMESTAMPTZ NOT NULL,
+    ghi_wm2 DOUBLE PRECISION,
+    temperature_c DOUBLE PRECISION,
+    resolution_seconds INTEGER,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(source, ts_utc)
+  );
+  CREATE INDEX IF NOT EXISTS idx_weather_observed_ts ON weather_observed(ts_utc);
+
   CREATE TABLE IF NOT EXISTS pv_forecasts (
     id BIGSERIAL PRIMARY KEY,
     model TEXT NOT NULL,
@@ -493,9 +511,78 @@ export function createForecastStore(ctx) {
     return r.rows[0]?.calls_used ?? 0;
   }
 
+  // --- T-CURTAIL: observed-GHI store (immutable measured/reanalysis weather) ---
+
+  /**
+   * Batch-upsert observed-weather rows into weather_observed. Idempotent via
+   * ON CONFLICT (source, ts_utc) DO UPDATE — re-running the same backfill window
+   * overwrites identical values (no duplicates, no accumulation). Internally
+   * sub-chunked to stay well under the Postgres 65535-bound-parameter limit.
+   * @param {Array<{source,ts_utc,ghi_wm2,temperature_c,resolution_seconds}>} rows
+   * @returns {Promise<{written:number}>}
+   */
+  async function insertObservedWeatherBatch(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return { written: 0 };
+    const COLS = 5; // source, ts_utc, ghi_wm2, temperature_c, resolution_seconds
+    const SUB = 5000; // 5000 * 5 = 25000 params << 65535
+    let written = 0;
+    for (let off = 0; off < rows.length; off += SUB) {
+      const slice = rows.slice(off, off + SUB);
+      const params = [];
+      const groups = [];
+      for (let i = 0; i < slice.length; i++) {
+        const r = slice[i];
+        const o = i * COLS;
+        groups.push(`($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5})`);
+        params.push(r.source, r.ts_utc, r.ghi_wm2 ?? null, r.temperature_c ?? null, r.resolution_seconds ?? null);
+      }
+      await pool.query(`
+        INSERT INTO weather_observed (source, ts_utc, ghi_wm2, temperature_c, resolution_seconds)
+        VALUES ${groups.join(', ')}
+        ON CONFLICT (source, ts_utc) DO UPDATE SET
+          ghi_wm2 = EXCLUDED.ghi_wm2, temperature_c = EXCLUDED.temperature_c,
+          resolution_seconds = EXCLUDED.resolution_seconds, observed_at = NOW()
+      `, params);
+      written += slice.length;
+    }
+    return { written };
+  }
+
+  /**
+   * Read observed-weather rows for a time range (ASC). Optional source filter.
+   * @param {{start, end, source?}} opts
+   */
+  async function getObservedWeather({ start, end, source } = {}) {
+    const cond = ['ts_utc >= $1', 'ts_utc <= $2'];
+    const params = [start, end];
+    if (source) { params.push(source); cond.push(`source = $${params.length}`); }
+    const r = await pool.query(`
+      SELECT source, ts_utc, ghi_wm2, temperature_c, resolution_seconds
+      FROM weather_observed WHERE ${cond.join(' AND ')} ORDER BY ts_utc ASC
+    `, params);
+    return r.rows;
+  }
+
+  /**
+   * Per-source coverage of the observed-GHI store (for diagnostics + the
+   * opportunistic backfill gap computation).
+   * @returns {Promise<Array<{source,min_ts,max_ts,n,n_ghi}>>}
+   */
+  async function getObservedGhiCoverage() {
+    const r = await pool.query(`
+      SELECT source, MIN(ts_utc) AS min_ts, MAX(ts_utc) AS max_ts,
+             COUNT(*)::int AS n, COUNT(ghi_wm2)::int AS n_ghi
+      FROM weather_observed GROUP BY source ORDER BY source
+    `);
+    return r.rows;
+  }
+
   return {
     ensureSchema,
     insertWeather,
+    insertObservedWeatherBatch,
+    getObservedWeather,
+    getObservedGhiCoverage,
     insertPvForecast,
     insertPvForecastBatch, // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
     // Phase 18-01d: forecast-solar / open-meteo-solar / pvnode-client all call

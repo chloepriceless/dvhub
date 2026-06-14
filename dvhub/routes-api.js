@@ -937,6 +937,10 @@ export function createApiRoutes(ctx) {
     '/api/forecast/inspector/eos',
     '/api/forecast/inspector/stage2',
     '/api/forecast/inspector/optimizer-cold',
+    // T-CURTAIL: observed-GHI coverage diagnostic (read-only). Same forecast
+    // appliance-trust model. The POST /api/forecast/ghi-backfill trigger stays
+    // OUT (Bearer required).
+    '/api/forecast/ghi-coverage',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -965,6 +969,7 @@ export function createApiRoutes(ctx) {
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
     ['/api/forecast/inspector/ml-correction', 'forecast'], ['/api/forecast/inspector/eos', 'forecast'],
     ['/api/forecast/inspector/stage2', 'forecast'], ['/api/forecast/inspector/optimizer-cold', 'forecast'],
+    ['/api/forecast/ghi-coverage', 'forecast'],
     // integrations — integration status, schedule read, meter scan, vpn status,
     // devices, messages, signals, epex, mqtt inspector, health
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
@@ -5118,6 +5123,36 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         pushLog('inspector_eos_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // T-CURTAIL: observed-GHI store coverage (diagnostic). GET-only LAN bypass
+    // per appliance trust model (forecast group). Shows what historical
+    // irradiance the curtailment estimator has, per source.
+    if (url.pathname === '/api/forecast/ghi-coverage' && req.method === 'GET') {
+      const store = ctx.forecastService?.store;
+      if (!store?.getObservedGhiCoverage) return json(res, 503, { ok: false, error: 'forecast store not available' });
+      try {
+        const coverage = await store.getObservedGhiCoverage();
+        return json(res, 200, { ok: true, coverage });
+      } catch (e) {
+        pushLog('ghi_coverage_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'ghi_coverage_failed' });
+      }
+    }
+
+    // T-CURTAIL: manually trigger the opportunistic observed-GHI backfill (admin
+    // write — NOT in LAN_SAFE_GET, so a Bearer token is required). Idempotent;
+    // fills only the missing head/tail gaps. Also runs automatically ~25s after
+    // boot and daily.
+    if (url.pathname === '/api/forecast/ghi-backfill' && req.method === 'POST') {
+      if (!ctx.forecastService?.runGhiBackfill) return json(res, 503, { ok: false, error: 'forecast service not available' });
+      try {
+        const result = await ctx.forecastService.runGhiBackfill();
+        return json(res, 200, { ok: true, result });
+      } catch (e) {
+        pushLog('ghi_backfill_trigger_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'ghi_backfill_failed' });
       }
     }
 

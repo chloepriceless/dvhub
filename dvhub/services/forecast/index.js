@@ -26,6 +26,10 @@ import { createPvForecast } from './pv-forecast.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
 import { createPythonBridge } from '../python-bridge/index.js';
+// T-CURTAIL: observed-GHI backfill from the Open-Meteo Archive (universal,
+// location-based, no key) — fills weather_observed so the curtailment estimator
+// has historical irradiance. See .planning/T-CURTAIL-IRRADIANCE-DESIGN.md.
+import { backfillObservedGhi, computeBackfillWindows, ARCHIVE_SOURCE } from './open-meteo-archive.js';
 
 /**
  * Create the forecast service. Detects RAM tier, initializes subsystems,
@@ -107,6 +111,66 @@ export function createForecastService(ctx) {
   const loadForecast = createLoadForecast(ctx, { store, vrmForecast, pythonBridge });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
 
+  // T-CURTAIL: opportunistic observed-GHI backfill timer (daily top-up).
+  let ghiBackfillTimer = null;
+
+  /**
+   * Resolve lat/lon from config (same precedence as weather-fetch.resolveLocation).
+   */
+  function resolveLocationForGhi() {
+    const cfg = getCfg();
+    let lat = cfg.forecast?.location?.latitude;
+    let lon = cfg.forecast?.location?.longitude;
+    if (lat == null || lon == null) {
+      lat = cfg.schedule?.smallMarketAutomation?.location?.latitude;
+      lon = cfg.schedule?.smallMarketAutomation?.location?.longitude;
+    }
+    if (lat == null || lon == null) return null;
+    return { lat, lon };
+  }
+
+  /**
+   * Fill weather_observed gaps from the Open-Meteo Archive so the curtailment
+   * estimator has historical irradiance. Universal + self-bootstrapping:
+   *   - desired window = [earliest measured PV-actual slot .. yesterday] (UTC)
+   *   - a brand-new install with NO PV history is a clean no-op (forward MQTT
+   *     capture, added later, seeds the store going forward)
+   *   - only the missing head/tail gaps are fetched (idempotent, cheap after the
+   *     first full run); re-runs overwrite identical rows.
+   * Best-effort: never throws into the caller; logs and returns null on failure.
+   */
+  async function runOpportunisticGhiBackfill() {
+    if (!store.isReady?.()) return null;
+    try {
+      const loc = resolveLocationForGhi();
+      if (!loc) return null;
+      // Earliest measured PV-actual slot bounds how far back curtailment is computable.
+      const r = await store.query(
+        `SELECT MIN(slot_start_utc) AS min_ts FROM energy_slots_15m
+           WHERE series_key = 'pv_total_w' AND source_kind IN ('local_live', 'vrm_import')`
+      );
+      const earliest = r.rows?.[0]?.min_ts;
+      if (!earliest) return null; // no PV history yet — nothing to backfill
+      const startDate = new Date(earliest).toISOString().slice(0, 10);
+      // Archive (ERA5) lags a few days; end 2 days back and let the daily top-up close it.
+      const endDate = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+      const cov = await store.getObservedGhiCoverage();
+      const arch = (cov || []).find(c => c.source === ARCHIVE_SOURCE) || null;
+      const windows = computeBackfillWindows(arch, startDate, endDate);
+      if (windows.length === 0) return { skipped: true, reason: 'covered', from: startDate, to: endDate };
+      let total = 0;
+      for (const w of windows) {
+        const res = await backfillObservedGhi(ctx, { store, lat: loc.lat, lon: loc.lon, startDate: w.startDate, endDate: w.endDate });
+        total += res.written || 0;
+      }
+      pushLog('ghi_backfill_done', { from: startDate, to: endDate, windows: windows.length, written: total });
+      return { written: total, windows: windows.length, from: startDate, to: endDate };
+    } catch (e) {
+      pushLog('ghi_backfill_error', { error: e?.message ?? String(e) });
+      return null;
+    }
+  }
+
   /**
    * Start the forecast service: ensure DB schema, start all subsystems.
    */
@@ -139,12 +203,25 @@ export function createForecastService(ctx) {
       }
     }
     pushLog('forecast_started', { tier, subsystems: started });
+
+    // T-CURTAIL: kick the observed-GHI backfill ~25s after boot (let the DB +
+    // telemetry settle), then top up daily. Detached — never blocks startup,
+    // never throws. The gap computation makes every run after the first cheap.
+    ghiBackfillTimer = setTimeout(() => {
+      runOpportunisticGhiBackfill().catch(() => {});
+      ghiBackfillTimer = setInterval(() => {
+        runOpportunisticGhiBackfill().catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+      if (ghiBackfillTimer.unref) ghiBackfillTimer.unref();
+    }, 25_000);
+    if (ghiBackfillTimer.unref) ghiBackfillTimer.unref();
   }
 
   /**
    * Graceful shutdown. Stop all subsystems.
    */
   async function close() {
+    if (ghiBackfillTimer) { clearTimeout(ghiBackfillTimer); clearInterval(ghiBackfillTimer); ghiBackfillTimer = null; }
     weatherFetch.close();
     mqttWeather.close();
     pvForecast.close();
@@ -485,6 +562,8 @@ export function createForecastService(ctx) {
     // 14-day retrain gate. Without this admin path the gate never opens on a fresh
     // prod box because the tracker only writes one row per day at 02:00 UTC.
     accuracyTracker,
+    // T-CURTAIL: manual trigger + diagnostics for the observed-GHI backfill.
+    runGhiBackfill: runOpportunisticGhiBackfill,
     buildForecastResponse,
     // Phase 07 FORE-12 D-D2: load-forecast degradation visibility via /api/ml/status.
     getLoadForecastState: () => loadForecast.getState?.() ?? {
