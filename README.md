@@ -221,6 +221,8 @@ PostgreSQL-Telemetrie als eigene Analyseansicht (`/history.html`):
 - Solar-Zusammenfassung mit Jahres-Marktwert
 - **14 Visualisierungs-Karten**: u. a. Heatmap, Sankey-Energiefluss, Autarkie-Kalender,
   Tagesprofil, Lastdauerlinie, Ladezyklen, Streudiagramm, Preis-Heatmap, Jahres-Ring
+- **Abgeregelte Energie**: strahlungskalibrierte Schätzung des durch §51/Direktvermarkter
+  gedrosselten Stroms — [in einfacher Sprache erklärt](dvhub/docs/ABREGELUNG-ERKLAERT.md)
 - gezielter Preis-Backfill für Buckets ohne historischen Marktpreis
 - CSV- und Parquet-Export der Rohdaten
 
