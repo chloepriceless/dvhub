@@ -41,6 +41,24 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_weather_observed_ts ON weather_observed(ts_utc);
 
+  -- T-CURTAIL Inkrement 2b: persisted PV<->GHI calibration slopes, one row per
+  -- (array, month, elevation-band) bin. Auditable + reusable; refit only when
+  -- inputs_hash changes. Replace-upsert (a refit overwrites, never accumulates).
+  CREATE TABLE IF NOT EXISTS pv_calibration (
+    array_id TEXT NOT NULL,
+    month SMALLINT NOT NULL,
+    elev_band SMALLINT NOT NULL,
+    slope DOUBLE PRECISION,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    trusted BOOLEAN NOT NULL DEFAULT FALSE,
+    p_ac_rated DOUBLE PRECISION,
+    inputs_hash TEXT,
+    computed_from TEXT,
+    computed_to TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(array_id, month, elev_band)
+  );
+
   CREATE TABLE IF NOT EXISTS pv_forecasts (
     id BIGSERIAL PRIMARY KEY,
     model TEXT NOT NULL,
@@ -577,12 +595,54 @@ export function createForecastStore(ctx) {
     return r.rows;
   }
 
+  // --- T-CURTAIL Inkrement 2b: PV<->GHI calibration slopes ---
+
+  /**
+   * Replace-upsert calibration bins. Idempotent: re-running a calibration over
+   * the same data overwrites identical slopes (never accumulates).
+   * @param {Array<{array_id,month,elev_band,slope,sample_count,trusted,p_ac_rated,inputs_hash,computed_from,computed_to}>} rows
+   */
+  async function upsertCalibrationBins(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return { written: 0 };
+    const COLS = 10;
+    const params = [];
+    const groups = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const o = i * COLS;
+      groups.push(`($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5}, $${o + 6}, $${o + 7}, $${o + 8}, $${o + 9}, $${o + 10})`);
+      params.push(
+        r.array_id, r.month, r.elev_band, r.slope ?? null, r.sample_count ?? 0,
+        !!r.trusted, r.p_ac_rated ?? null, r.inputs_hash ?? null, r.computed_from ?? null, r.computed_to ?? null
+      );
+    }
+    await pool.query(`
+      INSERT INTO pv_calibration (array_id, month, elev_band, slope, sample_count, trusted, p_ac_rated, inputs_hash, computed_from, computed_to)
+      VALUES ${groups.join(', ')}
+      ON CONFLICT (array_id, month, elev_band) DO UPDATE SET
+        slope = EXCLUDED.slope, sample_count = EXCLUDED.sample_count, trusted = EXCLUDED.trusted,
+        p_ac_rated = EXCLUDED.p_ac_rated, inputs_hash = EXCLUDED.inputs_hash,
+        computed_from = EXCLUDED.computed_from, computed_to = EXCLUDED.computed_to, updated_at = NOW()
+    `, params);
+    return { written: rows.length };
+  }
+
+  async function getCalibrationBins(arrayId) {
+    const sql = arrayId
+      ? `SELECT * FROM pv_calibration WHERE array_id = $1 ORDER BY month, elev_band`
+      : `SELECT * FROM pv_calibration ORDER BY array_id, month, elev_band`;
+    const r = await pool.query(sql, arrayId ? [arrayId] : []);
+    return r.rows;
+  }
+
   return {
     ensureSchema,
     insertWeather,
     insertObservedWeatherBatch,
     getObservedWeather,
     getObservedGhiCoverage,
+    upsertCalibrationBins,
+    getCalibrationBins,
     insertPvForecast,
     insertPvForecastBatch, // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
     // Phase 18-01d: forecast-solar / open-meteo-solar / pvnode-client all call

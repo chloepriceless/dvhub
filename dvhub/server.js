@@ -107,6 +107,7 @@ import { createPvnodeBackfill } from './services/forecast/pvnode-backfill.js';
 import { createPvnodeQuota } from './services/forecast/pvnode-quota.js';
 // Phase 19 Plan 19-01: Forecast Inspector — read-only diagnostic factory.
 import { createInspector } from './services/forecast/inspector.js';
+import { createCurtailmentService } from './services/curtailment/index.js';
 // Phase 19 Plan 19-05: dedicated 5s-timeout EOS adapter for the Inspector read
 // path (T-19-05 mitigation — Pitfall 7 in 19-RESEARCH). The optimizer pipeline
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
@@ -965,6 +966,10 @@ const evccIntegration = createEvccIntegration(ctx);
 ctx.evccIntegration = evccIntegration;
 const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
+// T-CURTAIL Increment 2b: irradiance-calibrated curtailment estimator. Reads the
+// forecast store (weather_observed GHI + pv_calibration) + telemetry. Computation
+// only — does not yet drive the displayed KPI (that is Increment 3).
+ctx.curtailmentService = createCurtailmentService(ctx, { store: forecast.store });
 
 // Phase 07 Plan 07-04: Wave-2 forecast services wired for routes-api.js consumption.
 // - pvnodeQuota: single quota authority (REVIEWS L2). Backs /api/forecast/pvnode/quota.

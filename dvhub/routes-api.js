@@ -941,6 +941,9 @@ export function createApiRoutes(ctx) {
     // appliance-trust model. The POST /api/forecast/ghi-backfill trigger stays
     // OUT (Bearer required).
     '/api/forecast/ghi-coverage',
+    // T-CURTAIL Increment 2b: calibrated-curtailment preview (read-only history
+    // diagnostic). POST /api/curtailment/recalibrate stays OUT (Bearer required).
+    '/api/curtailment/preview',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -964,6 +967,7 @@ export function createApiRoutes(ctx) {
     ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
     ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
     ['/api/db/backup', 'history'], ['/api/db/backup/status', 'history'],
+    ['/api/curtailment/preview', 'history'],
     // forecast — forecast reads + inspector
     ['/api/forecast', 'forecast'],
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
@@ -5153,6 +5157,40 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         pushLog('ghi_backfill_trigger_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'ghi_backfill_failed' });
+      }
+    }
+
+    // T-CURTAIL Increment 2b: recalibrate the PV<->GHI slopes over a window
+    // (admin write — Bearer required). Defaults to the full available history.
+    // Idempotent (replace-upsert); does NOT yet change the displayed KPI.
+    if (url.pathname === '/api/curtailment/recalibrate' && req.method === 'POST') {
+      if (!ctx.curtailmentService) return json(res, 503, { ok: false, error: 'curtailment service not available' });
+      const calFrom = url.searchParams.get('from') || '2024-01-01';
+      const calTo = url.searchParams.get('to') || new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      if (isNaN(Date.parse(calFrom)) || isNaN(Date.parse(calTo))) return json(res, 400, { ok: false, error: 'invalid_window' });
+      try {
+        const result = await ctx.curtailmentService.recalibrate({ calFrom, calTo });
+        return json(res, result.ok ? 200 : 422, result);
+      } catch (e) {
+        pushLog('curtail_recalibrate_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'recalibrate_failed' });
+      }
+    }
+
+    // T-CURTAIL Increment 2b: preview the calibrated curtailment for a window
+    // using the persisted slopes (read-only; GET-only LAN bypass). Compare this
+    // to the current PVGIS-based KPI before Increment 3 swaps it in.
+    if (url.pathname === '/api/curtailment/preview' && req.method === 'GET') {
+      if (!ctx.curtailmentService) return json(res, 503, { ok: false, error: 'curtailment service not available' });
+      const from = url.searchParams.get('from');
+      const to = url.searchParams.get('to');
+      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) return json(res, 400, { ok: false, error: 'invalid_window' });
+      try {
+        const result = await ctx.curtailmentService.computeForRange({ from, to });
+        return json(res, result.ok ? 200 : 422, result);
+      } catch (e) {
+        pushLog('curtail_preview_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'preview_failed' });
       }
     }
 
