@@ -203,15 +203,35 @@ function renderKpis(summary) {
   //    energie wieder raus kam (Akku-Round-Trip + Wechselrichter + Standby).
   const batChargeKwh = Number(kpis?.batteryChargeKwh || 0);
   const batDischargeKwh = Number(kpis?.batteryDischargeKwh || 0);
-  const batteryLoss = round2(batChargeKwh - batDischargeKwh);
-  const batteryEff = batChargeKwh > 0 ? round2((batDischargeKwh / batChargeKwh) * 100) : null;
+  // SoC-Randkorrektur (Christin 2026-06-14): der Akku-Ladestand am Anfang/Ende
+  // des Fensters überträgt Energie über die Grenze (abends voll aus dem Vormonat,
+  // Akku mit in den Folgemonat). batteryStoredDeltaKwh = (SoC_Ende − SoC_Start) ×
+  // Kapazität wird von Akku- UND Gesamtverlust abgezogen, sonst zählt gespeicherte
+  // (nicht verlorene) Energie als Verlust. Fehlt das Feld (kein SoC, z.B. vor
+  // 2026-03-26) → 0 → unkorrigiert wie früher.
+  const storedDeltaKwh = Number(kpis?.batteryStoredDeltaKwh || 0);
+  const batteryLoss = round2(batChargeKwh - batDischargeKwh - storedDeltaKwh);
+  // Wirkungsgrad über die abgeschlossenen Zyklen: entladen / (geladen − gespeichert).
+  const effDenom = batChargeKwh - storedDeltaKwh;
+  const batteryEff = effDenom > 0 ? round2((batDischargeKwh / effDenom) * 100) : null;
   const totalLoss = round2(
     (Number(kpis?.pvKwh || 0) + Number(kpis?.importKwh || 0))
     - (Number(kpis?.loadKwh || 0) + Number(kpis?.exportKwh || 0))
+    - storedDeltaKwh
   );
   setText('historyKpiBatteryLoss', fmtKwh(batteryLoss));
   setText('historyKpiBatteryEff', batteryEff != null ? fmtPct(batteryEff) : '-');
   setText('historyKpiTotalLoss', fmtKwh(totalLoss));
+  // Transparenz: SoC-Korrektur im Tooltip, wenn angewandt.
+  const lossEl = document.getElementById('historyKpiBatteryLoss');
+  if (lossEl) {
+    if (kpis?.batteryStoredDeltaKwh != null && hasFiniteNumber(kpis?.batterySocStartPct)) {
+      lossEl.title = `SoC-korrigiert: Ladestand ${fmtPct(kpis.batterySocStartPct)} → ${fmtPct(kpis.batterySocEndPct)} `
+        + `(ΔSpeicher ${fmtKwh(storedDeltaKwh)} abgezogen). Roh: geladen ${fmtKwh(batChargeKwh)} − entladen ${fmtKwh(batDischargeKwh)}.`;
+    } else {
+      lossEl.title = 'Akku-Verlust = geladen − entladen. (Keine SoC-Daten für dieses Fenster → ohne Randkorrektur.)';
+    }
+  }
   setText('historyKpiVbh', hasFiniteNumber(kpis?.pvFullLoadHours) ? fmtHours(kpis?.pvFullLoadHours) : '-');
   const cyclesEl = byId('historyKpiCycles');
   const cyclesLabelEl = byId('historyKpiCyclesLabel');

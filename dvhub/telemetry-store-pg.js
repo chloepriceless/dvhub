@@ -1087,9 +1087,31 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     return rows;
   }
 
+  // T-CURTAIL/SoC: first + last value of a series within [start, end). Used by
+  // the history battery-loss KPI to read the boundary SoC so the round-trip
+  // loss/efficiency can be ΔSoC-corrected (charge carried across the window
+  // boundary must not be mistaken for loss). Returns nulls if no samples exist.
+  async function getSeriesBoundaryValues({ seriesKey, start, end }) {
+    const { rows } = await pool.query(`
+      SELECT
+        (SELECT value_num FROM timeseries_samples
+           WHERE series_key = $1 AND ts_utc >= $2 AND ts_utc < $3
+           ORDER BY ts_utc ASC LIMIT 1) AS start_value,
+        (SELECT value_num FROM timeseries_samples
+           WHERE series_key = $1 AND ts_utc >= $2 AND ts_utc < $3
+           ORDER BY ts_utc DESC LIMIT 1) AS end_value
+    `, [seriesKey, isoTimestamp(start), isoTimestamp(end)]);
+    const r = rows[0] || {};
+    return {
+      startValue: r.start_value == null ? null : Number(r.start_value),
+      endValue: r.end_value == null ? null : Number(r.end_value),
+    };
+  }
+
   return {
     dbPath: 'postgresql',
     querySeries,
+    getSeriesBoundaryValues,
     queryBucketedSeries,
     async listTables() {
       const result = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);

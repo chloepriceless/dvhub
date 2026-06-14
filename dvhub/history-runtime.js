@@ -1850,6 +1850,34 @@ export function createHistoryRuntime({
         curtailmentSource: curtailKpis.curtailmentSource ?? null
       });
     }
+
+    // SoC-Randkorrektur (Christin 2026-06-14): Akku-/Gesamt-Verlust = geladen −
+    // entladen vergleicht ZWEI Energieflüsse über ein festes Fenster, ignoriert
+    // aber den SoC-Übertrag an den Rändern (abends voll aus dem Vormonat / Akku
+    // mit in den Folgemonat). batteryStoredDeltaKwh = (SoC_Ende − SoC_Start) ×
+    // Kapazität; das Frontend zieht es von Akku- UND Gesamtverlust ab und
+    // korrigiert den Wirkungsgrad. Kein SoC (z.B. vor 2026-03-26) ⇒ Feld fehlt ⇒
+    // unkorrigiert wie bisher.
+    try {
+      const cap = batteryNominalCapacityKwh();
+      if (cap != null && typeof store.getSeriesBoundaryValues === 'function'
+          && range?.startDate && range?.endDateExclusive) {
+        const soc = await store.getSeriesBoundaryValues({
+          seriesKey: 'battery_soc_pct',
+          start: localDateTimeToUtcIso(range.startDate, 0, 0),
+          end: localDateTimeToUtcIso(range.endDateExclusive, 0, 0)
+        });
+        if (soc.startValue != null && soc.endValue != null) {
+          Object.assign(periodPremiumApplied.kpis, {
+            batterySocStartPct: round2(soc.startValue),
+            batterySocEndPct: round2(soc.endValue),
+            batteryStoredDeltaKwh: round2(((soc.endValue - soc.startValue) / 100) * cap)
+          });
+        }
+      }
+    } catch {
+      // no SoC series for this window -> leave KPIs uncorrected (legacy behaviour)
+    }
     const rows = solarApplied.rows;
     const charts = view === 'day'
       ? buildDayCharts(slots)
