@@ -1,5 +1,39 @@
 // services/history-viz/aggregator.js
 //
+// T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
+// cells in UTC, while the negative-price overlay (getNegPrice) and price heatmap
+// (getPheat) already extract their day/hour AT TIME ZONE 'Europe/Berlin'. That
+// 1–2 h offset visibly shifted the neg-price overlay against the PV cells.
+// `berlinParts(ts)` gives the Berlin-local calendar parts so getHeatmap labels in
+// the same zone. Deterministic (Intl with a fixed zone), DST-correct.
+const BERLIN_PARTS_DTF = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+function berlinParts(ts) {
+  const o = {};
+  for (const p of BERLIN_PARTS_DTF.formatToParts(ts)) {
+    if (p.type !== 'literal') o[p.type] = p.value;
+  }
+  return {
+    year: parseInt(o.year, 10),
+    month: parseInt(o.month, 10), // 1..12
+    day: parseInt(o.day, 10),
+    hour: parseInt(o.hour, 10),   // 0..23 (hourCycle h23)
+    minute: parseInt(o.minute, 10),
+    date: `${o.year}-${o.month}-${o.day}`,
+  };
+}
+// UTC epoch-ms of Berlin-local 00:00 on (y, m1[1..12], d). DST-safe: the Berlin
+// offset (1 or 2 h) equals the Berlin hour observed at the corresponding UTC
+// midnight, and DST never switches at midnight. Date.UTC handles month overflow
+// (m1=13 → next-year January), so "next month" is berlinMidnightUtcMs(y, m+1, 1).
+function berlinMidnightUtcMs(y, m1, d) {
+  const guess = Date.UTC(y, m1 - 1, d, 0, 0, 0);
+  const offH = berlinParts(new Date(guess)).hour; // 1 (CET) or 2 (CEST)
+  return guess - offH * 3600000;
+}
+//
 // Plan 09.3-01 Wave 1 — Phase 09.3 Aurora History-Viz Cards aggregator
 // foundation. Implements D-08 (factory under dvhub/services/history-viz),
 // D-09 (5min in-memory cache, cap 200 entries, FIFO eviction, 3-segment key
@@ -809,7 +843,27 @@ export function createHistoryVizAggregator(ctx) {
     const hit = getCached(key);
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
-      const { start, end } = resolveRange(view, date);
+      // T-09.3-19 (2026-06-14): Berlin-aligned window so cells line up with
+      // wall-clock time AND fill the grid (resolveRange is UTC-aligned, which left
+      // the first 1–2 Berlin hours empty + spilled past the end). week/month/year
+      // only (validated above). Day/all are rejected earlier.
+      const [ay, am, ad] = date.split('-').map(Number);
+      let startMsB; let endMsB;
+      if (view === 'week') {
+        const sUtc = Date.UTC(ay, am - 1, ad) - 6 * 86_400_000;
+        const eUtc = Date.UTC(ay, am - 1, ad) + 86_400_000;
+        const sD = new Date(sUtc); const eD = new Date(eUtc);
+        startMsB = berlinMidnightUtcMs(sD.getUTCFullYear(), sD.getUTCMonth() + 1, sD.getUTCDate());
+        endMsB = berlinMidnightUtcMs(eD.getUTCFullYear(), eD.getUTCMonth() + 1, eD.getUTCDate());
+      } else if (view === 'month') {
+        startMsB = berlinMidnightUtcMs(ay, am, 1);
+        endMsB = berlinMidnightUtcMs(ay, am + 1, 1);
+      } else { // year
+        startMsB = berlinMidnightUtcMs(ay, 1, 1);
+        endMsB = berlinMidnightUtcMs(ay + 1, 1, 1);
+      }
+      const start = new Date(startMsB).toISOString();
+      const end = new Date(endMsB).toISOString();
       // For 15-min week/month rows, fetch at a 15-minute SQL bucket so each
       // slot maps to one cell (the view default for week/month is '1 hour').
       const fineGran = gran === '15min' && (view === 'week' || view === 'month');
@@ -841,18 +895,25 @@ export function createHistoryVizAggregator(ctx) {
       const endMs = Date.parse(end);
       if (view === 'week' || view === 'month') {
         // x = day (YYYY-MM-DD); y = hour 0..23 ('1h') OR 15-min slot 0..95
-        // ('15min', labelled HH:MM); v = PV-kWh integrated.
-        const days = Math.round((endMs - startMs) / 86_400_000);
+        // ('15min', labelled HH:MM); v = PV-kWh integrated. Iterate BERLIN
+        // calendar days (stepping a noon cursor — DST-safe, never near the
+        // 02:00/03:00 switch) so a 23h/25h DST day still yields one column.
         xLabels = [];
-        for (let i = 0; i < days; i++) {
-          const d = new Date(startMs + i * 86_400_000);
-          xLabels.push(d.toISOString().slice(0, 10));
+        {
+          const sB = berlinParts(new Date(startMs));
+          let cur = Date.UTC(sB.year, sB.month - 1, sB.day, 12, 0, 0);
+          while (true) {
+            const cb = berlinParts(new Date(cur));
+            if (berlinMidnightUtcMs(cb.year, cb.month, cb.day) >= endMs) break;
+            xLabels.push(cb.date);
+            cur += 86_400_000;
+          }
         }
         const slots = gran === '15min' ? 96 : 24;
-        // slotOf(ts) → 0..(slots-1) row index for a timestamp.
+        // slotOf(ts) → 0..(slots-1) row index for a timestamp (Berlin-local hour).
         const slotOf = gran === '15min'
-          ? (ts) => ts.getUTCHours() * 4 + Math.floor(ts.getUTCMinutes() / 15)
-          : (ts) => ts.getUTCHours();
+          ? (ts) => { const b = berlinParts(ts); return b.hour * 4 + Math.floor(b.minute / 15); }
+          : (ts) => berlinParts(ts).hour;
         yLabels = gran === '15min'
           ? Array.from({ length: 96 }, (_, i) => (
             `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`
@@ -866,7 +927,7 @@ export function createHistoryVizAggregator(ctx) {
         const priceCells = new Map(); // key=`${xLabel}:${y}` → { sum, count }
         for (const r of rows) {
           const ts = new Date(r.ts);
-          const xLabel = ts.toISOString().slice(0, 10);
+          const xLabel = berlinParts(ts).date; // Berlin-local day (was UTC)
           const y = slotOf(ts);
           const k = `${xLabel}:${y}`;
           if (r.key === PRICE_SERIES_KEY) {
@@ -906,14 +967,14 @@ export function createHistoryVizAggregator(ctx) {
         const cells = new Map(); // key=`${monthIdx}:${day}` → kWh
         // Plan 09.4 — per-cell mean spot price (see week/month branch).
         const priceCells = new Map(); // key=`${monthIdx}:${day}` → { sum, count }
-        const startDate = new Date(start);
-        const startY = startDate.getUTCFullYear();
-        const startM = startDate.getUTCMonth();
+        const startBer = berlinParts(new Date(start));
+        const startY = startBer.year;
+        const startM = startBer.month - 1; // 0..11
         for (const r of rows) {
-          const ts = new Date(r.ts);
-          const monthIdx = (ts.getUTCFullYear() - startY) * 12 + (ts.getUTCMonth() - startM);
+          const b = berlinParts(new Date(r.ts)); // Berlin-local (was UTC)
+          const monthIdx = (b.year - startY) * 12 + ((b.month - 1) - startM);
           if (monthIdx < 0 || monthIdx > 11) continue;
-          const day = ts.getUTCDate();
+          const day = b.day;
           const k = `${monthIdx}:${day}`;
           if (r.key === PRICE_SERIES_KEY) {
             const p = Number(r.value);
