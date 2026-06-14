@@ -1944,6 +1944,21 @@ function buildFieldDefinitions() {
     },
     {
       section: 'forecast',
+      group: 'ghi',
+      groupLabel: 'Globalstrahlung (Abregelungs-Berechnung)',
+      groupDescription: 'Quelle der gemessenen Globalstrahlung (GHI) f\u00fcr die strahlungskalibrierte "Abgeregelte Energie".',
+      path: 'forecast.ghiPrimarySource',
+      label: 'Prim\u00e4re Strahlungsquelle',
+      type: 'select',
+      default: 'measured',
+      options: [
+        { value: 'measured', label: 'Lokale Messung bevorzugt (Wetterstation \u2192 ERA5-Archiv \u2192 Prognose)' },
+        { value: 'archive', label: 'ERA5-Archiv bevorzugt (Reanalyse \u2192 lokale Station \u2192 Prognose)' }
+      ],
+      help: 'Bestimmt, welche GHI-Quelle bei der Abregelungs-Berechnung Vorrang hat. "Lokale Messung" nutzt die per MQTT eingebundene Wetterstation (15-min) zuerst und f\u00e4llt auf das Open-Meteo-ERA5-Archiv (st\u00fcndlich) und zuletzt auf die Vorhersage zur\u00fcck. "ERA5-Archiv" kehrt die ersten beiden um \u2014 sinnvoll, wenn der lokale Sensor unzuverl\u00e4ssig ist. Die Vorhersage f\u00fcllt immer nur verbleibende L\u00fccken.'
+    },
+    {
+      section: 'forecast',
       group: 'pv',
       groupLabel: 'PV-Anlage',
       groupDescription: 'PV-Konfiguration f\u00fcr die Ertragsprognose.',

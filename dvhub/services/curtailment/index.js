@@ -41,8 +41,19 @@ export function berlinDate(tsMs) {
  * @param {Array<{ts_utc,ghi_wm2,temperature_c,source}>} rows
  * @returns {Map<number,{ghi:number|null,temp:number|null,source:string}>}
  */
-export function buildGhiByHour(rows) {
-  const rank = (s) => (s === 'loxone_measured' ? 0 : s === 'open_meteo_archive' ? 1 : 2);
+// Source-priority for GHI ranking, driven by forecast.ghiPrimarySource.
+//   'measured' (default): local station > ERA5 archive > forecast.
+//   'archive'           : ERA5 archive > local station > forecast.
+// The forecast (source 'forecast:*') is always the last-resort gap-filler.
+export function rankFor(primary) {
+  if (primary === 'archive') {
+    return (s) => (s === 'open_meteo_archive' ? 0 : s === 'loxone_measured' ? 1 : 2);
+  }
+  return (s) => (s === 'loxone_measured' ? 0 : s === 'open_meteo_archive' ? 1 : 2);
+}
+
+export function buildGhiByHour(rows, { primary = 'measured' } = {}) {
+  const rank = rankFor(primary);
   const map = new Map();
   for (const r of rows) {
     const k = hourKey(new Date(r.ts_utc).getTime());
@@ -65,12 +76,16 @@ export function buildGhiByHour(rows) {
  * @param {Array<{ts_utc,ghi_wm2,temperature_c,source,resolution_seconds?}>} rows
  * @returns {{byHour: Map, bySlot: Map}}
  */
-export function buildGhiIndex(rows) {
+export function buildGhiIndex(rows, { primary = 'measured' } = {}) {
   const bySlot = new Map();
   const hourlyRows = [];
+  // When the operator prefers the ERA5 archive, the local 15-min station is
+  // demoted to a fallback — so its fine measurements do NOT pre-empt the hourly
+  // archive at slot level (bySlot stays empty for loxone_measured).
+  const useFineMeasured = primary !== 'archive';
   for (const r of rows) {
     const res = r.resolution_seconds == null ? null : Number(r.resolution_seconds);
-    const isFineMeasured = r.source === 'loxone_measured' && (res == null || res < 3600);
+    const isFineMeasured = useFineMeasured && r.source === 'loxone_measured' && (res == null || res < 3600);
     if (isFineMeasured) {
       const k = slotKey(new Date(r.ts_utc).getTime());
       if (!bySlot.has(k)) {
@@ -81,11 +96,12 @@ export function buildGhiIndex(rows) {
         });
       }
     } else {
-      // archive / forecast / hourly-measured -> the hourly fallback bucket.
+      // archive / forecast / hourly-measured (and ALL rows when primary=archive)
+      // -> the hourly fallback bucket, ranked per the operator's preference.
       hourlyRows.push(r);
     }
   }
-  return { byHour: buildGhiByHour(hourlyRows), bySlot };
+  return { byHour: buildGhiByHour(hourlyRows, { primary }), bySlot };
 }
 
 /**
@@ -271,7 +287,8 @@ export function createCurtailmentService(ctx, { store }) {
     const { kWp, lat, lon } = resolveInputs();
     if (!kWp || lat == null || lon == null) return { ok: false, error: 'missing_kwp_or_location' };
     const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(calFrom), isoTs(calTo));
-    const ghiByHour = buildGhiIndex(ghiRows);
+    const primary = getCfg()?.forecast?.ghiPrimarySource || 'measured';
+    const ghiByHour = buildGhiIndex(ghiRows, { primary });
     const dirtyDays = buildDirtyDays(priceRows);
     const actualByTs = buildActualByTs(pvRows);
     const samples = buildSamples({ actualByTs, ghiByHour, dirtyDays, kWp, lat, lon });
@@ -303,7 +320,8 @@ export function createCurtailmentService(ctx, { store }) {
     const { kWp, lat, lon } = resolveInputs();
     if (!kWp || lat == null || lon == null) return { ok: false, error: 'missing_kwp_or_location' };
     const { pvRows, priceRows, ghiRows } = await readWindow(isoTs(from), isoTs(to), { includeForecast: true });
-    const ghiByHour = buildGhiIndex(ghiRows);
+    const primary = getCfg()?.forecast?.ghiPrimarySource || 'measured';
+    const ghiByHour = buildGhiIndex(ghiRows, { primary });
     const actualByTs = buildActualByTs(pvRows);
     const binRows = await store.getCalibrationBins(ARRAY_ID);
     const bins = new Map();

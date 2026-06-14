@@ -72,6 +72,29 @@ test('resolveGhi: back-compat with a plain hourly Map', () => {
   assert.equal(resolveGhi(m, Date.parse('2025-06-21T13:42:00Z')).ghi, 777);
 });
 
+test('buildGhiIndex {primary:archive}: ERA5 wins the hour and the local 15-min is NOT used per-slot', () => {
+  const rows = [
+    { ts_utc: '2025-06-21T13:00:00Z', ghi_wm2: 800, temperature_c: 24, source: 'open_meteo_archive', resolution_seconds: 3600 },
+    { ts_utc: '2025-06-21T13:15:00Z', ghi_wm2: 905, temperature_c: 26, source: 'loxone_measured', resolution_seconds: 900 },
+  ];
+  const idx = buildGhiIndex(rows, { primary: 'archive' });
+  assert.equal(idx.bySlot.size, 0, 'local fine measurements demoted -> not in slot map');
+  // 13:15 now resolves to the hourly ERA5 archive, not the local station
+  const at1315 = resolveGhi(idx, Date.parse('2025-06-21T13:15:10Z'));
+  assert.equal(at1315.ghi, 800);
+  assert.equal(at1315.source, 'open_meteo_archive');
+});
+
+test('buildGhiByHour {primary:archive}: archive outranks loxone_measured for the same hour', () => {
+  const rows = [
+    { ts_utc: '2025-06-21T13:00:00Z', ghi_wm2: 800, temperature_c: 24, source: 'open_meteo_archive' },
+    { ts_utc: '2025-06-21T13:00:00Z', ghi_wm2: 850, temperature_c: 25, source: 'loxone_measured' },
+  ];
+  const g = buildGhiByHour(rows, { primary: 'archive' }).get(hourKey(Date.parse('2025-06-21T13:00:00Z')));
+  assert.equal(g.ghi, 800);
+  assert.equal(g.source, 'open_meteo_archive');
+});
+
 test('buildDirtyDays: any negative-price slot marks the whole local day dirty', () => {
   const rows = [
     { ts_utc: '2025-06-14T11:00:00Z', value_num: 5 },
