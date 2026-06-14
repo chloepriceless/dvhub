@@ -23,6 +23,20 @@ export const CLIP_PERCENTILE = 0.99;   // P_ac_rated estimate = 99th pct of clea
 export const TEMP_REF_C = 25;          // STC cell temperature
 export const TEMP_COEFF = -0.004;      // /°C — crystalline-Si power temp coefficient
 export const MAD_K = 3;                // outlier cut at K * median-absolute-deviation
+// --- upper-envelope fit (T-CURTAIL fix 2026-06-14) ------------------------
+// The clean-day reference is NOT truly unthrottled: the plant is curtailed by
+// the Direktvermarkter / §51 / battery-full self-limiting on many days that
+// carry no negative EPEX spot price, AND the plant grew ~4x over the data
+// window — so a least-squares MEAN fit converges on the throttled/small-plant
+// majority and the MAD pass discards the few full-output slots as "outliers",
+// collapsing the slope (summer bins fell to 0.07–0.35 vs a healthy ~0.8). We
+// instead fit the slope to the UPPER ENVELOPE of the per-slot ratios
+// actualW/(GHI·kWp·derate) — the plant's demonstrated CAPABILITY — which is
+// robust to both throttling and the size change (the high ratios are the
+// recent full-size unthrottled slots). See .planning/T-CURTAIL-IRRADIANCE-DESIGN.md.
+export const ENV_PERCENTILE = 0.85;    // slope = this percentile of per-slot ratios
+export const ENV_GHI_MIN = 200;        // W/m² floor for ratio points (low-GHI ratios are diffuse-inflated)
+export const SLOPE_MAX = 1.0;          // physical ceiling — AC power / (GHI·kWp_DC) cannot exceed ~1
 
 /** Deterministic median of a numeric array (does not mutate input). */
 export function median(arr) {
@@ -85,6 +99,37 @@ export function fitZeroIntercept(pts) {
   return { slope: sxy2 / sxx2, n: survivors.length };
 }
 
+/**
+ * Fit y = slope*x to the UPPER ENVELOPE of per-point ratios y/x (each point is
+ * its own slope estimate; the high percentile = the plant's demonstrated
+ * capability, ignoring throttled/under-sized low points). Deterministic.
+ * Points below ENV_GHI_MIN are excluded from the ratio (low-GHI ratios are
+ * diffuse-inflated) but still count toward n (bin trust). Falls back to all
+ * positive-x points if the GHI floor leaves too few.
+ * @param {Array<{ts:number,x:number,y:number}>} pts
+ * @param {object} [opts] - { pEnv, ghiMin, slopeMax }
+ * @returns {{slope:number|null, n:number}}
+ */
+export function fitUpperEnvelope(pts, opts = {}) {
+  if (!Array.isArray(pts) || pts.length === 0) return { slope: null, n: 0 };
+  const pEnv = opts.pEnv ?? ENV_PERCENTILE;
+  const ghiMin = opts.ghiMin ?? ENV_GHI_MIN;
+  const slopeMax = opts.slopeMax ?? SLOPE_MAX;
+  let ratios = [];
+  for (const p of pts) {
+    if (p.x >= ghiMin && p.x > 0 && Number.isFinite(p.y) && p.y >= 0) ratios.push(p.y / p.x);
+  }
+  if (ratios.length < 5) {
+    ratios = [];
+    for (const p of pts) { if (p.x > 0 && Number.isFinite(p.y) && p.y >= 0) ratios.push(p.y / p.x); }
+  }
+  if (ratios.length === 0) return { slope: null, n: pts.length };
+  let slope = percentile(ratios, pEnv);
+  if (!Number.isFinite(slope)) return { slope: null, n: pts.length };
+  if (slope > slopeMax) slope = slopeMax;
+  return { slope, n: pts.length };
+}
+
 /** Stable bin key. */
 export function binKeyFor(arrayId, month, elevBand) {
   return `${arrayId}|${month}|${elevBand}`;
@@ -101,6 +146,7 @@ export function calibrate(samples, opts = {}) {
   const ghiMin = opts.ghiMinFit ?? GHI_MIN_FIT;
   const clipFrac = opts.clipFraction ?? CLIP_FRACTION;
   const clipPct = opts.clipPercentile ?? CLIP_PERCENTILE;
+  const envPercentile = opts.envPercentile ?? ENV_PERCENTILE;
 
   // 1) P_ac_rated per array = high percentile of clean actualW (empirical AC cap).
   const byArray = new Map();
@@ -128,10 +174,11 @@ export function calibrate(samples, opts = {}) {
     buckets.get(key).pts.push({ ts: s.ts, x: s.ghi, y: yNorm });
   }
 
-  // 3) fit each bin.
+  // 3) fit each bin to the upper envelope (demonstrated capability, robust to
+  // throttling + the plant's size growth over the data window).
   const bins = new Map();
   for (const [key, b] of buckets) {
-    const fit = fitZeroIntercept(b.pts);
+    const fit = fitUpperEnvelope(b.pts, { pEnv: envPercentile });
     bins.set(key, {
       arrayId: b.arrayId,
       month: b.month,

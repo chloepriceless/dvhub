@@ -226,7 +226,13 @@ export function createForecastService(ctx) {
     try {
       if (ctx.curtailmentService?.recalibrate) {
         const calTo = new Date(Date.now()).toISOString().slice(0, 10);
-        const r = await ctx.curtailmentService.recalibrate({ calFrom: '2024-01-01', calTo });
+        // Recency window (T-CURTAIL fix 2026-06-14): the plant grew ~4x over its
+        // lifetime, so calibrating from 2024 poisons the per-month slopes with
+        // small-plant data. Bound the fit to the recent period so it reflects
+        // the CURRENT plant; the upper-envelope fit handles residual throttling.
+        const lookbackDays = Number(ctx.getCfg?.()?.forecast?.ghiCalibrationLookbackDays) || 270;
+        const calFrom = new Date(Date.now() - lookbackDays * 86400000).toISOString().slice(0, 10);
+        const r = await ctx.curtailmentService.recalibrate({ calFrom, calTo });
         if (r?.ok) pushLog('curtail_recalibrate', { trustedBins: r.trustedBins, samples: r.sampleCount });
       }
     } catch (e) {

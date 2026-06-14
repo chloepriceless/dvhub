@@ -5161,11 +5161,15 @@ export function createApiRoutes(ctx) {
     }
 
     // T-CURTAIL Increment 2b: recalibrate the PV<->GHI slopes over a window
-    // (admin write — Bearer required). Defaults to the full available history.
-    // Idempotent (replace-upsert); does NOT yet change the displayed KPI.
+    // (admin write — Bearer required). Defaults to a RECENCY window (the plant
+    // grows over time; fitting from the full history poisons slopes with old
+    // small-plant data — see forecast/index.js runGhiAndRecalibrate). Pass
+    // ?from= to override. Idempotent (replace-upsert).
     if (url.pathname === '/api/curtailment/recalibrate' && req.method === 'POST') {
       if (!ctx.curtailmentService) return json(res, 503, { ok: false, error: 'curtailment service not available' });
-      const calFrom = url.searchParams.get('from') || '2024-01-01';
+      const lookbackDays = Number(ctx.getCfg?.()?.forecast?.ghiCalibrationLookbackDays) || 270;
+      const calFrom = url.searchParams.get('from')
+        || new Date(Date.now() - lookbackDays * 86400000).toISOString().slice(0, 10);
       const calTo = url.searchParams.get('to') || new Date(Date.now() + 86400000).toISOString().slice(0, 10);
       if (isNaN(Date.parse(calFrom)) || isNaN(Date.parse(calTo))) return json(res, 400, { ok: false, error: 'invalid_window' });
       try {

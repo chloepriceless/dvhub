@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { solarElevationDeg, elevationBand, ELEV_BANDS } from '../services/curtailment/solar-position.js';
 import {
-  calibrate, estimateWouldHaveW, fitZeroIntercept, percentile, median, tempDerate, binKeyFor,
+  calibrate, estimateWouldHaveW, fitZeroIntercept, fitUpperEnvelope, percentile, median, tempDerate, binKeyFor,
 } from '../services/curtailment/calibration.js';
 
 // --- solar position ---
@@ -75,6 +75,27 @@ test('fitZeroIntercept: a gross outlier is removed by the MAD pass', () => {
   pts.push({ ts: 9999, x: 500, y: 50000 }); // wild outlier (y=100x)
   const { slope } = fitZeroIntercept(pts);
   assert.ok(Math.abs(slope - 5) < 0.1, `outlier not rejected, slope ${slope}`);
+});
+
+test('fitUpperEnvelope: throttled MAJORITY + unthrottled minority -> recovers the capability slope', () => {
+  // 70% of clean-day slots are throttled (ratio ~0.2); 30% ran at full output
+  // (ratio 0.8 — the "what the plant would have produced" we want to recover).
+  const pts = [];
+  for (let i = 0; i < 70; i++) { const x = 300 + i * 8; pts.push({ ts: i, x, y: 0.2 * x }); }       // throttled
+  for (let i = 0; i < 30; i++) { const x = 300 + i * 8; pts.push({ ts: 100 + i, x, y: 0.8 * x }); }  // full output
+  // A MEAN fit would land near 0.2*0.7 + 0.8*0.3 ≈ 0.38 and the MAD pass would
+  // discard the 0.8 cluster as outliers; the envelope keeps it.
+  const env = fitUpperEnvelope(pts);
+  assert.ok(env.slope > 0.7, `envelope slope too low: ${env.slope}`);
+  const mean = fitZeroIntercept(pts);
+  assert.ok(mean.slope < 0.5, `control: mean fit should sit low, got ${mean.slope}`);
+});
+
+test('fitUpperEnvelope: caps the slope at SLOPE_MAX (diffuse-inflated low-GHI ratios)', () => {
+  const pts = [];
+  for (let i = 0; i < 30; i++) { const x = 250 + i * 10; pts.push({ ts: i, x, y: 1.6 * x }); } // ratio 1.6
+  const env = fitUpperEnvelope(pts);
+  assert.ok(env.slope <= 1.0 + 1e-9, `slope not capped: ${env.slope}`);
 });
 
 // --- calibrate / estimate ---
