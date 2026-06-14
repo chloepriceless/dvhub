@@ -1693,33 +1693,20 @@ export function createHistoryRuntime({
     kpis.negPriceQuarterHourCount = negSlotCount;
     kpis.volllastViertelstunden = vlv;
     kpis.eegExtensionMonthsVlv = view === 'year' ? round2(extensionFromVollast(vlv).accruedMonths) : null;
-    // Börsen-Durchschnittspreis als Bewertungsbasis für den Pot. Erlös der
-    // abgeregelten Energie (Christin 2026-06-14, präzisiert 2026-06-14): ein
-    // einzelner TAGES-Spot-Schnitt ist nichtssagend. Der Erlös muss auf einer
-    // STABILEN Basis bewertet werden — dem enthaltenen MONAT (Tag/Woche/Monat)
-    // bzw. dem JAHR (Jahresansicht). Bei schmalerer Ansicht als ein Monat wird
-    // das breitere Fenster nachgeladen. Einfaches Mittel ALLER Spot-15min (inkl.
-    // negativer), wie an der Börse.
-    let spotBasisRows = priceRows;
-    let avgSpotBasis = 'month';
-    if (view === 'year') {
-      avgSpotBasis = 'year';
-    } else if (view === 'all') {
-      avgSpotBasis = 'all';
-    } else if (view === 'day' || view === 'week') {
-      // Spot-Mittel des enthaltenen Monats nachladen (priceRows deckt nur die
-      // schmale Ansicht ab).
-      const mRange = normalizeViewRange('month', date);
-      spotBasisRows = await store.listPriceSlots({
-        start: localDateTimeToUtcIso(mRange.startDate, 0, 0),
-        end: localDateTimeToUtcIso(mRange.endDateExclusive, 0, 0)
-      });
-    }
-    const spotPrices = spotBasisRows.map((r) => Number(r.priceCtKwh)).filter(Number.isFinite);
-    kpis.avgSpotPriceCtKwh = spotPrices.length
-      ? round2(spotPrices.reduce((a, b) => a + b, 0) / spotPrices.length)
+    // Börse Ø als Bewertungsbasis für den Pot. Erlös der abgeregelten Energie
+    // (Christin 2026-06-14, mehrfach präzisiert): Der Wert muss dem in der DV-
+    // Karte gezeigten Börsenpreis ENTSPRECHEN — das ist der export-GEWICHTETE
+    // Spotpreis (Börsenerlös ÷ exportierte kWh = was real je kWh erlöst wurde),
+    // NICHT das flache Zeitmittel (das wich ab: Mai 9,75 statt 10,78). Es wird
+    // über die VIEW-Periode gerechnet — identisch zur DV-Karte (die ebenfalls
+    // kpis.exportRevenueEur/kpis.exportKwh nutzt) → beide Karten zeigen denselben
+    // Börsenpreis. Der avgSpotPriceBasis-Hinweis steuert nur das Label.
+    const weightedExpKwh = Number(kpis.exportKwh || 0);
+    const weightedExpRev = Number(kpis.exportRevenueEur || 0);
+    kpis.avgSpotPriceCtKwh = weightedExpKwh > 0
+      ? round2((weightedExpRev / weightedExpKwh) * 100)
       : null;
-    kpis.avgSpotPriceBasis = avgSpotBasis; // 'month' | 'year' | 'all' — Label-Hinweis fürs Frontend
+    kpis.avgSpotPriceBasis = view; // 'day'|'week'|'month'|'year'|'all'
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.

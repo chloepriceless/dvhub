@@ -21,6 +21,24 @@ function writeEnergyChartMode(mode) {
   } catch (e) { /* ignore */ }
 }
 
+// Karten-Dichte (Christin 2026-06-14): max. Karten pro Reihe auf breiten Schirmen
+// (Default 4 = Breite der dv-grid). CSS-Media-Queries kappen --history-cols auf
+// schmalen Schirmen; hier wird nur der User-Wunschwert auf :root gesetzt.
+const CARD_COLS_KEY = 'dvhub.history.cardCols';
+const CARD_COLS_DEFAULT = 4;
+function readCardCols() {
+  try {
+    const n = parseInt(window?.localStorage?.getItem(CARD_COLS_KEY), 10);
+    return (n >= 1 && n <= 6) ? n : CARD_COLS_DEFAULT;
+  } catch (e) { return CARD_COLS_DEFAULT; }
+}
+function writeCardCols(n) {
+  try { window?.localStorage?.setItem(CARD_COLS_KEY, String(n)); } catch (e) { /* ignore */ }
+}
+function applyCardCols(n) {
+  try { document.documentElement.style.setProperty('--history-cols', String(n)); } catch (e) { /* ignore */ }
+}
+
 const historyState = {
   loading: false,
   backfillBusy: false,
@@ -402,10 +420,14 @@ function renderKpis(summary) {
   // Pot. Erlös der abgeregelten Energie: bewertet mit dem Börsen-Durchschnittspreis
   // des Zeitraums (Christin 2026-06-14) — NICHT mit Produktionskosten/Marktwert.
   const avgSpotCtKwh = hasFiniteNumber(kpis?.avgSpotPriceCtKwh) ? Number(kpis.avgSpotPriceCtKwh) : null;
-  // Bewertungsbasis des Börsen-Ø (Christin 2026-06-14): Tagesschnitt ist
-  // nichtssagend → Monat (Tag/Woche/Monat) bzw. Jahr (Jahresansicht).
+  // Bewertungsbasis des Börsen-Ø (Christin 2026-06-14): export-gewichteter
+  // Spotpreis = identisch zur DV-Karte. Tag→Monatsfenster, sonst View-Periode.
   const spotBasis = kpis?.avgSpotPriceBasis;
-  const spotBasisLabel = spotBasis === 'year' ? 'Jahr' : spotBasis === 'all' ? 'Gesamt' : 'Monat';
+  const spotBasisLabel = spotBasis === 'year' ? 'Jahr'
+    : spotBasis === 'all' ? 'Gesamt'
+    : spotBasis === 'week' ? 'Woche'
+    : spotBasis === 'day' ? 'Tag'
+    : 'Monat';
   const curtailedRevenueEur = (curtailedKwh != null && avgSpotCtKwh != null)
     ? (curtailedKwh * avgSpotCtKwh) / 100
     : null;
@@ -2412,6 +2434,18 @@ function bindHistoryControls() {
   const dbRunBtn = byId('historyDbBackupRunBtn');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
+  // Karten-Dichte: persistierten Wert anwenden + Selektor spiegeln + binden.
+  const cardCols = byId('historyCardCols');
+  const cols = readCardCols();
+  applyCardCols(cols);
+  if (cardCols) {
+    cardCols.value = String(cols);
+    cardCols.addEventListener('change', () => {
+      const n = parseInt(cardCols.value, 10) || CARD_COLS_DEFAULT;
+      writeCardCols(n);
+      applyCardCols(n);
+    });
+  }
   if (view) view.addEventListener('change', loadHistorySummary);
   if (date) date.addEventListener('change', loadHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);

@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/history.css?v=12" />
+  <link rel="stylesheet" href="/history.css?v=13" />
   <link rel="stylesheet" href="/history-viz.css?v=5" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
@@ -97,6 +97,19 @@
         <div class="hist-toolbar-group">
           <span class="hist-toolbar-lbl">Datum</span>
           <input id="historyDate" type="date" class="hist-toolbar-date" />
+        </div>
+        <!-- Karten-Dichte (Christin 2026-06-14): max. Karten pro Reihe auf
+             breiten Schirmen; schmale Schirme reduzieren automatisch (CSS-
+             Media-Queries kappen --history-cols). Standard 4 = Breite der
+             Direktvermarktungs-Karte mit 4 Unterkarten. -->
+        <div class="hist-toolbar-group">
+          <span class="hist-toolbar-lbl">Karten/Reihe</span>
+          <select id="historyCardCols" class="hist-toolbar-select" aria-label="Karten pro Reihe">
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+          </select>
         </div>
       </section>
 
@@ -609,7 +622,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260614-curtailbasis"></script>
+  <script src="/history.js?v=20260614-spotweighted"></script>
   <script src="/history-viz.js?v=20260614-sankeylayered"></script>
 </body>
 </html>
