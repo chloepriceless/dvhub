@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
   hourKey, slotKey, berlinDate, buildGhiByHour, buildGhiIndex, resolveGhi,
   buildDirtyDays, buildActualByTs,
-  buildSamples, computeCurtailment, calibrationInputsHash,
+  buildSamples, computeCurtailment, calibrationInputsHash, latestGenerationBins,
 } from '../services/curtailment/index.js';
 import { binKeyFor } from '../services/curtailment/calibration.js';
 
@@ -180,4 +180,46 @@ test('calibrationInputsHash: deterministic + sensitive to inputs', () => {
   assert.equal(h1, h2);
   const h3 = calibrationInputsHash({ kWp: 29.7, samples: [{ ghi: 801, actualW: 6400 }, { ghi: 500, actualW: 4000 }] });
   assert.notEqual(h1, h3);
+});
+
+// --- latestGenerationBins (#31: stale bins outside the recency window) -------
+
+test('latestGenerationBins: keeps only the most-recent generation, drops the stale full-history bins', () => {
+  // Mirrors the prod state: Jan/Feb fitted by the 2025-09-18 recency window;
+  // Jul/Aug are leftover bins from the old 2024-01-01 full-history run with
+  // collapsed slopes that recalibrate never overwrites (out of window).
+  const rows = [
+    { month: 1, elev_band: 1, slope: 1.0,   inputs_hash: 'recency', updated_at: '2026-06-15T03:00:00Z' },
+    { month: 2, elev_band: 1, slope: 0.76,  inputs_hash: 'recency', updated_at: '2026-06-15T03:00:00Z' },
+    { month: 7, elev_band: 5, slope: 0.073, inputs_hash: 'fullhist', updated_at: '2026-06-14T03:00:00Z' },
+    { month: 8, elev_band: 0, slope: 0.063, inputs_hash: 'fullhist', updated_at: '2026-06-14T03:00:00Z' },
+  ];
+  const kept = latestGenerationBins(rows);
+  assert.equal(kept.length, 2);
+  assert.deepEqual(kept.map(r => r.month).sort((a, b) => a - b), [1, 2]);
+  assert.ok(kept.every(r => r.inputs_hash === 'recency'));
+});
+
+test('latestGenerationBins: single generation passes through unchanged', () => {
+  const rows = [
+    { month: 5, elev_band: 2, slope: 0.99, inputs_hash: 'h', updated_at: '2026-06-15T03:00:00Z' },
+    { month: 6, elev_band: 3, slope: 1.0,  inputs_hash: 'h', updated_at: '2026-06-15T03:00:00Z' },
+  ];
+  assert.deepEqual(latestGenerationBins(rows), rows);
+});
+
+test('latestGenerationBins: legacy rows without inputs_hash group by newest write timestamp', () => {
+  const rows = [
+    { month: 5, slope: 0.9, updated_at: '2026-06-15T03:00:00Z' },
+    { month: 6, slope: 1.0, updated_at: '2026-06-15T03:00:00Z' },
+    { month: 7, slope: 0.07, updated_at: '2026-06-10T03:00:00Z' },
+  ];
+  const kept = latestGenerationBins(rows);
+  assert.deepEqual(kept.map(r => r.month).sort((a, b) => a - b), [5, 6]);
+});
+
+test('latestGenerationBins: empty / non-array input -> empty array', () => {
+  assert.deepEqual(latestGenerationBins([]), []);
+  assert.deepEqual(latestGenerationBins(null), []);
+  assert.deepEqual(latestGenerationBins(undefined), []);
 });

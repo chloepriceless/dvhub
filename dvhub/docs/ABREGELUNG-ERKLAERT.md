@@ -275,7 +275,12 @@ selbst.
   `fitUpperEnvelope`/`estimateWouldHaveW`, `index.js` `computeCurtailment`) und
   `.planning/T-CURTAIL-IRRADIANCE-DESIGN.md`.*
 - *Recency-Fenster (Config `forecast.ghiCalibrationLookbackDays`, Default 270 d):
-  `services/forecast/index.js` `runGhiAndRecalibrate`.*
+  `services/forecast/index.js` `runGhiAndRecalibrate`. Liegt ein Monat außerhalb
+  des Fensters (z. B. Juli/August bei <1-Jahr-Fenster), nutzt die Anwendung nur
+  die jüngste Kalibrier-Generation (`latestGenerationBins` in
+  `services/curtailment/index.js`) und fällt für solche Monate auf den globalen
+  Slope zurück — alte, überholte Bins werden ignoriert statt fälschlich
+  angewendet.*
 - *GHI-Quellen-Priorität (Config `forecast.ghiPrimarySource`): `buildGhiByHour`/
   `rankFor` in `services/curtailment/index.js`.*
 - *Börse Ø (export-gewichtet), §51-Volllastviertelstunden, Ø/Stunde, Akku-Verlust

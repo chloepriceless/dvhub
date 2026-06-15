@@ -176,6 +176,39 @@ export function calibrationInputsHash({ kWp, samples }) {
 }
 
 /**
+ * Keep only the bins from the MOST-RECENT calibration generation.
+ *
+ * recalibrate() upserts and never deletes, so when the recency window or the
+ * fit method changes, bins for months the latest run did NOT cover linger from
+ * an older run. Seen on prod: a sub-1-year recency window anchored "now" starts
+ * in September, so it never re-fits July/August — those months keep the OLD
+ * full-history bins whose summer slopes had collapsed to ~0.07 (exactly the
+ * pre-2026-06-14 fit that the recency + upper-envelope change repaired).
+ * Applying them would massively UNDER-estimate curtailment for Jul/Aug. A bin
+ * is "current" iff it shares the inputs_hash of the most-recently-written row —
+ * every bin from one recalibrate run shares one inputs_hash AND one write
+ * timestamp (the upsert stamps updated_at = NOW() across the whole batch).
+ * Stale months then correctly fall back to the current global slope in
+ * computeCurtailment. No deletion needed — the stale rows just stop being read.
+ * Back-compat: a single generation (one shared hash, or legacy null-hash rows)
+ * passes through unchanged.
+ * @param {Array<{inputs_hash?:string|null, updated_at?:string|Date}>} binRows
+ * @returns {Array} subset of binRows belonging to the latest generation
+ */
+export function latestGenerationBins(binRows) {
+  if (!Array.isArray(binRows) || binRows.length === 0) return [];
+  let best = null;
+  for (const r of binRows) {
+    const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    if (best == null || t > best.t) best = { t, hash: r.inputs_hash ?? null };
+  }
+  if (best && best.hash != null) return binRows.filter(r => (r.inputs_hash ?? null) === best.hash);
+  // Legacy rows without inputs_hash -> group by the newest write timestamp.
+  const newest = best ? best.t : 0;
+  return binRows.filter(r => (r.updated_at ? new Date(r.updated_at).getTime() : 0) === newest);
+}
+
+/**
  * Compute calibrated curtailment over the negative-price slots in range.
  * Fallback ladder per slot: trusted (month,band) slope -> array-global trusted
  * slope -> skipped (counted). Pure given resolved inputs.
@@ -323,7 +356,12 @@ export function createCurtailmentService(ctx, { store }) {
     const primary = getCfg()?.forecast?.ghiPrimarySource || 'measured';
     const ghiByHour = buildGhiIndex(ghiRows, { primary });
     const actualByTs = buildActualByTs(pvRows);
-    const binRows = await store.getCalibrationBins(ARRAY_ID);
+    // Only the latest calibration generation — recalibrate upserts (never
+    // deletes), so months the current recency window doesn't cover (e.g.
+    // Jul/Aug under a <1y window) would otherwise keep stale collapsed-slope
+    // bins from the old full-history fit. latestGenerationBins drops them; those
+    // months then fall back to the current global slope.
+    const binRows = latestGenerationBins(await store.getCalibrationBins(ARRAY_ID));
     const bins = new Map();
     let pAcRated = null;
     for (const r of binRows) {
