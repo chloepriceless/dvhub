@@ -528,3 +528,62 @@ describe('Family LAN-bypass + license gate (Option B / CONTEXT Amendment)', () =
     });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 24 Plan 04 — /family.html static-shell Pro-Gate (T-24-PRO-SHELL)
+//
+// /family (no .html) is gated via requirePro('family-dashboard'), but a direct
+// GET /family.html previously matched NO route in handleRequest → fell through
+// to serveStatic → served public/family.html RAW (path/MIME check only, no
+// gate). That is a Pro-gate bypass via the static shell. This plan adds an
+// explicit '/family.html' route with the SAME requirePro guard BEFORE the
+// static fallback. The inert assets /family.js + /family.css stay UNGATED
+// (T-24-ASSET-OVERGATE: source-only, no shell → accept).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Phase 24-04 /family.html shell behind the Pro-gate (T-24-PRO-SHELL)', () => {
+  it('registers an explicit GET /family.html branch in handleRequest', () => {
+    const src = readFile(ROUTES_API_PATH);
+    assert.match(
+      src,
+      /url\.pathname\s*===\s*['"]\/family\.html['"][\s\S]{0,120}req\.method\s*===\s*['"]GET['"]/,
+      'an explicit /family.html GET branch must exist (before the static fallback)',
+    );
+  });
+
+  it('gates the /family.html branch with requirePro(req, res, \'family-dashboard\')', () => {
+    const src = readFile(ROUTES_API_PATH);
+    // Slice the region from the /family.html branch and assert the requirePro
+    // guard fires inside it, in front of the servePage call.
+    const start = src.indexOf("'/family.html'");
+    assert.ok(start > 0, '/family.html branch must exist');
+    const region = src.slice(start, start + 300);
+    assert.match(
+      region,
+      /requirePro\(\s*req\s*,\s*res\s*,\s*['"]family-dashboard['"]\s*\)/,
+      'the /family.html branch must call requirePro(req,res,\'family-dashboard\') before serving',
+    );
+    assert.match(
+      region,
+      /servePage\(\s*res\s*,\s*['"]family\.html['"]\s*\)/,
+      'the /family.html branch must serve family.html via servePage after the gate',
+    );
+  });
+
+  it('does NOT gate /family.js or /family.css (inert assets stay ungated — T-24-ASSET-OVERGATE)', () => {
+    const src = readFile(ROUTES_API_PATH);
+    // Negative assertion: no requirePro-gated explicit route is added for the
+    // static asset paths. There must be NO '/family.js' or '/family.css'
+    // pathname branch carrying a requirePro guard.
+    assert.doesNotMatch(
+      src,
+      /url\.pathname\s*===\s*['"]\/family\.js['"][\s\S]{0,200}requirePro/,
+      '/family.js must stay ungated (inert source without the shell)',
+    );
+    assert.doesNotMatch(
+      src,
+      /url\.pathname\s*===\s*['"]\/family\.css['"][\s\S]{0,200}requirePro/,
+      '/family.css must stay ungated (inert source without the shell)',
+    );
+  });
+});
