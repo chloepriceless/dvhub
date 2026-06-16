@@ -6,6 +6,9 @@ export const REDACTED_PATHS = Object.freeze([
   'telemetry.historyImport.vrmToken',
   'telemetry.database.password',
   'dbBackup.smb.password',
+  // Phase 24-05 (§5): the SMB service-account NAME also leaks an internal
+  // identity — whole-field redaction (covers redact + restore automatically).
+  'dbBackup.smb.username',
   'forecast.solcast.apiKey',
   'forecast.pvnode.apiKey',
   'mqtt.username',
@@ -55,6 +58,19 @@ export function redactUrlCreds(raw) {
     // left-hand side rather than leak creds.
     return raw.includes('@') ? '***@redacted' : raw;
   }
+}
+
+// Phase 24-05 (§5): redact embedded credentials from a SCHEMELESS host string
+// (e.g. a modbus `user:pass@192.168.1.7`). Unlike redactUrlCreds, this does NOT
+// run `new URL()` — for a schemeless input `new URL('user:pass@host')` parses
+// `user:` as the scheme and silently leaks the rest. A bare `@` here is always a
+// userinfo separator, so strip everything left of the LAST `@`. A credential-free
+// host (no `@`) is returned untouched (no-op for the normal bare-IP case).
+export function redactHostCreds(raw) {
+  if (typeof raw !== 'string' || raw.length === 0) return raw;
+  const at = raw.lastIndexOf('@');
+  if (at < 0) return raw;
+  return `***@${raw.slice(at + 1)}`;
 }
 
 // T-0113 support bundle: scrub FREE TEXT (log-ring lines, audit_log payloads)
@@ -155,6 +171,20 @@ export function redactConfig(config) {
   if (weatherMqtt && typeof weatherMqtt.brokerUrl === 'string') {
     weatherMqtt.brokerUrl = redactUrlCreds(weatherMqtt.brokerUrl);
   }
+  // Phase 24-05 (§5): the meter HTTP source URL can carry `user:pass@host`
+  // credentials; strip only the userinfo so host/path survive (same shape as
+  // mqtt.brokerUrl above). redactUrlCreds is a no-op on a credential-free host.
+  if (copy?.meterSource?.http && typeof copy.meterSource.http.url === 'string') {
+    copy.meterSource.http.url = redactUrlCreds(copy.meterSource.http.url);
+  }
+  // Phase 24-05 (§5): modbus host is normally a bare IP (no-op), but defend
+  // against an `@`-bearing value leaking embedded creds (RESEARCH A2). A modbus
+  // host is never a `scheme://` URL, so `redactUrlCreds` (which parses
+  // `user:pass@host` as scheme `user:` + path and would leak the userinfo) is
+  // the wrong tool here — use the schemeless `userinfo@host` strip instead.
+  if (copy?.meterSource?.modbus && typeof copy.meterSource.modbus.host === 'string') {
+    copy.meterSource.modbus.host = redactHostCreds(copy.meterSource.modbus.host);
+  }
   return copy;
 }
 
@@ -163,7 +193,10 @@ export function redactConfig(config) {
 // original so we don't overwrite live credentials with masked tokens.
 function looksUrlRedacted(raw) {
   if (typeof raw !== 'string') return false;
-  return raw.includes('***:***@') || raw.includes('***@redacted') || raw.includes('://***@');
+  // Phase 24-05 (§5): a leading `***@` is the schemeless redactHostCreds marker
+  // (e.g. modbus `***@192.168.1.7`) — a real host never starts with it.
+  return raw.includes('***:***@') || raw.includes('***@redacted')
+    || raw.includes('://***@') || raw.startsWith('***@');
 }
 
 export function restoreRedacted(incoming, current) {
@@ -198,6 +231,18 @@ export function restoreRedacted(incoming, current) {
   if (wmIn && typeof wmIn.brokerUrl === 'string' && looksUrlRedacted(wmIn.brokerUrl)
       && wmCur && typeof wmCur.brokerUrl === 'string') {
     wmIn.brokerUrl = wmCur.brokerUrl;
+  }
+  // Phase 24-05 (§5): mirror the meterSource URL-cred redaction so a GUI-Save
+  // (POST /api/config REPLACES verbatim) never writes the masked URL back.
+  if (copy?.meterSource?.http && typeof copy.meterSource.http.url === 'string'
+      && looksUrlRedacted(copy.meterSource.http.url)
+      && current?.meterSource?.http && typeof current.meterSource.http.url === 'string') {
+    copy.meterSource.http.url = current.meterSource.http.url;
+  }
+  if (copy?.meterSource?.modbus && typeof copy.meterSource.modbus.host === 'string'
+      && looksUrlRedacted(copy.meterSource.modbus.host)
+      && current?.meterSource?.modbus && typeof current.meterSource.modbus.host === 'string') {
+    copy.meterSource.modbus.host = current.meterSource.modbus.host;
   }
   return copy;
 }
