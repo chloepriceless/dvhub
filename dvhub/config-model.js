@@ -1151,19 +1151,6 @@ function buildFieldDefinitions() {
       group: 'optimizer',
       groupLabel: 'Batterie-Optimierung',
       groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
-      path: 'optimizer.minSocPct',
-      label: 'Min. SOC (%)',
-      type: 'number',
-      min: 0,
-      max: 100,
-      step: 1,
-      help: 'Minimaler Ladestand \u2014 der Optimizer entl\u00e4dt nie unter diesen Wert.'
-    },
-    {
-      section: 'schedule',
-      group: 'optimizer',
-      groupLabel: 'Batterie-Optimierung',
-      groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
       path: 'optimizer.maxSocPct',
       label: 'Max. SOC (%)',
       type: 'number',
@@ -1178,13 +1165,13 @@ function buildFieldDefinitions() {
       groupLabel: 'Batterie-Optimierung',
       groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
       path: 'optimizer.hardFloorSocPct',
-      label: 'Harter SoC-Floor (%)',
+      label: 'Min. SoC / Entlade-Floor (%)',
       type: 'number',
       default: 5,
       min: 0,
       max: 100,
       step: 1,
-      help: 'Absoluter Sicherheits-Floor: Bei oder unter diesem SoC wird JEDE erzwungene Entladung im Steuerpfad unterdr\u00fcckt (Hold), egal welche Quelle (Optimizer/Regel/Override/EOS). Sollte nicht unter dem Hardware-Minimum (Victron minSoc) liegen. Standard 5 %.'
+      help: 'Der EINE effektive Entlade-Floor f\u00fcr ALLE Quellen inkl. EOS: bei oder unter diesem SoC wird jede erzwungene Entladung im Steuerpfad unterdr\u00fcckt (Hold). Dies ist der Min-SoC, den Optimizer und EOS respektieren (der fr\u00fchere separate weiche \u201eMin. SOC" wurde entfernt \u2014 er galt f\u00fcr den EOS-Pfad nie). Sollte nicht unter dem Hardware-Minimum (Victron minSoc) liegen. Standard 5 %.'
     },
     {
       section: 'schedule',

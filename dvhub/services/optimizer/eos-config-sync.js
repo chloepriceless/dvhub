@@ -96,10 +96,11 @@ export function buildEosBatteries(cfg, opts = {}) {
     // a sane modulation floor for most hybrid inverters; configurable later).
     min_charge_power_w: 50,
     charge_rates: chargeRates,
-    // min_soc defaults to the soft optimizer floor, but the sync passes DVhub's
-    // hard floor (Victron BMS minSocPct) so EOS may discharge as deep as DVhub
-    // does (avoids overnight grid-import to hold an artificially high floor).
-    min_soc_percentage: Number.isFinite(Number(opts.minSocPct)) ? Number(opts.minSocPct) : (Number(opt.minSocPct) || 0),
+    // Single-floor model (2026-06-16): EOS discharges down to DVhub's hard floor
+    // (optimizer.hardFloorSocPct, = the live Victron BMS min). The caller passes
+    // that floor via opts.minSocPct; fall back to the configured hard floor, then
+    // a safe 5%. (The legacy soft optimizer.minSocPct knob was retired.)
+    min_soc_percentage: Number.isFinite(Number(opts.minSocPct)) ? Number(opts.minSocPct) : (Number(opt.hardFloorSocPct) || 5),
     max_soc_percentage: Number(opt.maxSocPct) || 100,
   }];
 }
@@ -340,13 +341,19 @@ export function createEosConfigSync(ctx) {
       return { ok: true, applied: [], errors: {}, skipped: 'eosProxy.enabled=false' };
     }
 
-    // EOS min_soc should be DVhub's HARD floor (the live Victron BMS minSocPct,
-    // = the absolute level DVhub itself discharges to, default 5%), NOT the soft
-    // optimizer.minSocPct (10%). With min_soc=10 EOS hits 10% overnight and then
-    // *imports from grid* to hold it instead of riding the battery down to 5%
-    // and refilling via PV in the morning (operator request 2026-05-29).
-    const hardFloorSocPct = Number(state?.victron?.minSocPct);
-    const eosMinSocPct = Number.isFinite(hardFloorSocPct) ? hardFloorSocPct : 5;
+    // Single-floor model (2026-06-16): EOS min_soc = DVhub's ONE discharge floor.
+    // Source of truth = the live Victron BMS min (the absolute level DVhub itself
+    // discharges to); fall back to the configured optimizer.hardFloorSocPct, then
+    // 5%. The legacy soft optimizer.minSocPct (10%) was retired from the UI — it
+    // never governed the EOS path. (Rationale, operator request 2026-05-29: with
+    // a 10% floor EOS would hit 10% overnight and *import from grid* to hold it
+    // instead of riding down to 5% and refilling via PV.) NOTE: this flat floor
+    // does NOT reserve overnight load — see the planned overnight-reserve work
+    // (battery→grid arbitrage can still drain the pack and force a dawn import).
+    const liveVictronMin = Number(state?.victron?.minSocPct);
+    const configHardFloor = Number(cfg?.optimizer?.hardFloorSocPct);
+    const eosMinSocPct = Number.isFinite(liveVictronMin) ? liveVictronMin
+      : (Number.isFinite(configHardFloor) ? configHardFloor : 5);
 
     const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(cfg);

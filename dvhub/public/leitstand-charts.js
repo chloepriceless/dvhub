@@ -1018,7 +1018,7 @@
     // Battery state from /api/status
     var soc = statusData?.victron?.soc;
     var battCapWh = statusData?.config?.optimizer?.batteryCapacityWh || 43000;
-    var minSoc = statusData?.config?.optimizer?.minSocPct || 10;
+    var minSoc = statusData?.config?.optimizer?.hardFloorSocPct ?? statusData?.config?.optimizer?.minSocPct ?? 5;
     var battKwh = soc != null ? (soc / 100) * battCapWh / 1000 : null;
     var usableKwh = soc != null ? Math.max(0, ((soc - minSoc) / 100) * battCapWh / 1000) : null;
 

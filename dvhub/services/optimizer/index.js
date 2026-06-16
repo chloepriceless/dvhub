@@ -241,8 +241,13 @@ export function createOptimizerService(ctx) {
       const confidence = averageSlotConfidence([...pvSlots, ...enrichedPriceSlots]);
 
       // 4. Battery params from config + confidence gating
+      //    Single-floor model (2026-06-16): the internal optimizer's discharge
+      //    floor IS the hard floor (optimizer.hardFloorSocPct). The legacy soft
+      //    optimizer.minSocPct knob was retired from the UI (it never governed
+      //    the EOS path); honour it only if a legacy config still carries it,
+      //    else fall back to the single hard floor.
       const batteryParams = {
-        minSocPct: cfg.optimizer.minSocPct ?? 10,
+        minSocPct: cfg.optimizer.minSocPct ?? cfg.optimizer.hardFloorSocPct ?? 5,
         maxSocPct: cfg.optimizer.maxSocPct ?? 100,
         maxChargeW: cfg.optimizer.maxChargeW ?? 3000,
         maxDischargeW: cfg.optimizer.maxDischargeW ?? 3000

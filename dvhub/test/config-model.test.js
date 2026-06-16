@@ -70,3 +70,26 @@ test('getConfigDefinition and createDefaultConfig remain importable', () => {
   const defaults = createDefaultConfig();
   assert.ok(defaults && typeof defaults === 'object');
 });
+
+// Single-floor model (2026-06-16): the misleading soft `optimizer.minSocPct`
+// knob was retired from the settings UI — it never governed the EOS control
+// path (EOS discharges to optimizer.hardFloorSocPct), so showing it as
+// "Min. SOC — der Optimizer entlädt nie unter diesen Wert" was a footgun. The
+// hard floor is now the ONE operator-facing discharge floor. Guard against the
+// soft knob being reintroduced as a UI field.
+test('single-floor model: no optimizer.minSocPct UI field, hard floor present', () => {
+  const def = getConfigDefinition();
+  const optPaths = (def.fields || [])
+    .map((f) => f && f.path)
+    .filter((p) => typeof p === 'string' && p.startsWith('optimizer.'));
+  assert.equal(
+    optPaths.includes('optimizer.minSocPct'),
+    false,
+    'optimizer.minSocPct must NOT be a settings field (retired soft floor)'
+  );
+  assert.equal(
+    optPaths.includes('optimizer.hardFloorSocPct'),
+    true,
+    'optimizer.hardFloorSocPct must remain the single discharge floor'
+  );
+});
