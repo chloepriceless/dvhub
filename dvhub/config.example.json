@@ -124,7 +124,7 @@
       "name": "dvhub",
       "user": "dvhub",
       "password": "",
-      "timescaledb": true
+      "timescaledb": false
     },
     "rawRetentionDays": 45,
     "historyImport": {
