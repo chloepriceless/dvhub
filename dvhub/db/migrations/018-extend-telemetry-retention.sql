@@ -38,9 +38,20 @@
 --     if_not_exists => TRUE
 --   );
 
-SELECT remove_retention_policy('timeseries_samples', if_exists => TRUE);
+-- Only attempt the TimescaleDB call when the extension is actually installed.
+-- On stock Postgres remove_retention_policy() does not exist and a raw call
+-- crashes the whole migration — even when the runner's timescaledb flag is off.
+-- The guard checks the REAL extension state (more robust than a flag-skip: it
+-- also covers "flag true but package missing"). No-op without the extension.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+    PERFORM remove_retention_policy('timeseries_samples', if_exists => TRUE);
+  END IF;
+END $$;
 
--- Register migration (idempotent).
+-- Register migration (idempotent). MUST stay OUTSIDE the guard above so 018
+-- always records itself even on a timescaledb-less box (else: endless re-run).
 INSERT INTO schema_migrations (version, description, applied_at)
 VALUES (18, 'Remove 45d retention on timeseries_samples — keep granular 5s data indefinitely (compression at 7d still active)', NOW())
 ON CONFLICT (version) DO NOTHING;
