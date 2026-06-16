@@ -100,3 +100,48 @@ test('B4: weather brokerUrl credentials are URL-redacted and restored', () => {
   assert.equal(restored.forecast.weather.mqtt.brokerUrl, 'mqtt://lox:geheim@192.168.0.10:1883');
   assert.equal(restored.forecast.weather.mqtt.password, 'pw');
 });
+
+// --- Phase 24-05 (§5): meterSource / dbBackup redaction gaps ---
+// Three verified leaks closed: dbBackup.smb.username (whole-field),
+// meterSource.http.url + meterSource.modbus.host (URL-cred). All three must
+// roundtrip mask→restore so a GUI-Save (POST /api/config REPLACES verbatim —
+// MEMORY feedback_config_save_replaces) never overwrites the cleartext with ***.
+
+test('24-05: dbBackup.smb.username is whole-field redacted and restored', () => {
+  const cfg = { dbBackup: { smb: { host: 'nas.lan', share: 'backups', username: 'svc-backup', password: 'pw' } } };
+  const masked = redactConfig(cfg);
+  assert.equal(masked.dbBackup.smb.username, '***', 'SMB service-account name must be masked in the dump');
+  assert.equal(masked.dbBackup.smb.password, '***');
+  // host/share are not secrets → untouched
+  assert.equal(masked.dbBackup.smb.host, 'nas.lan');
+  // UI echoes the masked copy back on save → restore brings the cleartext back.
+  const restored = restoreRedacted(masked, cfg);
+  assert.equal(restored.dbBackup.smb.username, 'svc-backup');
+  assert.equal(restored.dbBackup.smb.password, 'pw');
+});
+
+test('24-05: meterSource.http.url credentials are URL-redacted and restored', () => {
+  const cfg = { meterSource: { http: { url: 'http://meter:s3cret@192.168.1.9/api', jsonPath: '$.power' } } };
+  const masked = redactConfig(cfg);
+  assert.ok(!JSON.stringify(masked).includes('s3cret'), 'embedded meter password must not survive redaction');
+  // host/path survive — only the user:pass@ component is stripped.
+  assert.ok(masked.meterSource.http.url.includes('192.168.1.9'), 'host must survive URL-cred redaction');
+  // UI echoes the redacted URL back → looksUrlRedacted guard restores the original.
+  const restored = restoreRedacted(masked, cfg);
+  assert.equal(restored.meterSource.http.url, 'http://meter:s3cret@192.168.1.9/api');
+});
+
+test('24-05: meterSource.modbus.host — plain host is a no-op, @-credential form is redacted+restored', () => {
+  // Plain host (the normal case): redactUrlCreds is a no-op, roundtrip stable.
+  const plain = { meterSource: { modbus: { host: '192.168.1.7', port: 502 } } };
+  const maskedPlain = redactConfig(plain);
+  assert.equal(maskedPlain.meterSource.modbus.host, '192.168.1.7', 'plain modbus host must pass through untouched');
+  const restoredPlain = restoreRedacted(maskedPlain, plain);
+  assert.equal(restoredPlain.meterSource.modbus.host, '192.168.1.7');
+  // Edge: an @-bearing host (defensive — RESEARCH A2) is masked then restored.
+  const creds = { meterSource: { modbus: { host: 'user:pass@192.168.1.7', port: 502 } } };
+  const maskedCreds = redactConfig(creds);
+  assert.ok(!JSON.stringify(maskedCreds).includes('user:pass'), 'embedded modbus creds must not survive redaction');
+  const restoredCreds = restoreRedacted(maskedCreds, creds);
+  assert.equal(restoredCreds.meterSource.modbus.host, 'user:pass@192.168.1.7');
+});
