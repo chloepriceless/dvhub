@@ -1397,7 +1397,24 @@ export function createApiRoutes(ctx) {
     let expected = '';
     try { expected = fs.readFileSync(tokenPath, 'utf8').trim(); } catch (_) { /* fall through */ }
     const given = String(req.headers['x-bootstrap-token'] || '').trim();
-    if (!expected || !given || given !== expected) {
+    // Plan 24-03: empty/missing token rejected up front — a constant-time
+    // compare on a missing token is pointless, and the length-guard below
+    // would otherwise need a non-empty buffer to compare against.
+    if (!expected || !given) {
+      pushLog('setup_bootstrap_rejected', {}, actorContext(req));
+      res.writeHead(403, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'bootstrap_token_required_or_invalid' }));
+      return false;
+    }
+    // Plan 24-03: constant-time compare (T-24-TIMING). A `given !== expected`
+    // short-circuits on the first mismatching byte and leaks the correct token
+    // prefix length over timing. The length-guard runs BEFORE timingSafeEqual
+    // so unequal-length buffers yield a clean 403 instead of a RangeError → 500
+    // (T-24-CRASH-500). Same pattern as the Bearer paths (:1330/:1337/:4320).
+    const giv = Buffer.from(given);
+    const exp = Buffer.from(expected);
+    const ok = giv.length === exp.length && crypto.timingSafeEqual(giv, exp);
+    if (!ok) {
       // Plan 08-09 Task 2: bootstrap-token rejection is a high-signal auth
       // failure — durable + actor-attributed.
       pushLog('setup_bootstrap_rejected', {}, actorContext(req));
