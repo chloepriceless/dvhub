@@ -220,3 +220,61 @@ describe('24-01 regression: blocklist enforcement (behaviour)', () => {
     assert.equal(sanitizeProfileName('@@@'), '');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Plan 24-03 regression sentinel for the Bootstrap-Setup-Token constant-time
+// compare in requireBootstrapToken (routes-api.js).
+//
+// The bootstrap-token path was the LAST `given !== expected` secret compare in
+// the auth surface (the Bearer paths at :1330/:1337/:4320 already use
+// crypto.timingSafeEqual). A `!==`/`===` secret compare short-circuits on the
+// first mismatching byte, leaking the correct token prefix length over timing
+// (Information Disclosure, T-24-TIMING). These file-level regex assertions
+// (same style as the 24-01 sentinel above) nail the constant-time pattern so a
+// refactor cannot SILENTLY reintroduce the non-constant-time compare, and so
+// the empty-guard (which prevents a RangeError → 500 from timingSafeEqual on
+// unequal-length buffers, T-24-CRASH-500) cannot be dropped. They assert
+// against the SOURCE TEXT because requireBootstrapToken is module-private.
+//
+// RED against the un-patched bootstrap compare; GREEN after Task 2 patches it.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('24-03 regression: bootstrap-token constant-time compare (static)', () => {
+  it('requireBootstrapToken no longer uses a non-constant-time `given !== expected`', () => {
+    const src = readSource(ROUTES_API_PATH);
+    // Strip line comments so a documentary mention of the old pattern in a
+    // comment cannot satisfy (or break) the assertion.
+    const code = src.replace(/^\s*\/\/.*$/gm, '');
+    assert.doesNotMatch(code, /given\s*!==\s*expected/,
+      'the bootstrap compare must not short-circuit on `given !== expected`');
+  });
+
+  it('the bootstrap path (x-bootstrap-token) uses crypto.timingSafeEqual', () => {
+    const src = readSource(ROUTES_API_PATH);
+    // Isolate the requireBootstrapToken body so the assertion is anchored to the
+    // bootstrap path, not to one of the unrelated Bearer timingSafeEqual sites.
+    const fn = src.match(
+      /function requireBootstrapToken\(req,\s*res\)\s*\{([\s\S]*?)\n {2}\}/
+    );
+    assert.ok(fn, 'requireBootstrapToken function body must be locatable');
+    const body = fn[1];
+    assert.match(body, /x-bootstrap-token/,
+      'the bootstrap path must read the x-bootstrap-token header');
+    assert.match(body, /crypto\.timingSafeEqual\s*\(/,
+      'the bootstrap compare must use crypto.timingSafeEqual (constant time)');
+    // The length-guard MUST precede timingSafeEqual or unequal-length buffers
+    // throw a RangeError → 500 instead of a clean 403.
+    assert.match(body, /\.length\s*===\s*\w+\.length\s*&&\s*crypto\.timingSafeEqual/,
+      'a buffer-length guard must short-circuit BEFORE timingSafeEqual');
+  });
+
+  it('the empty-guard `!expected || !given` is retained (clean 403, no 500)', () => {
+    const src = readSource(ROUTES_API_PATH);
+    const fn = src.match(
+      /function requireBootstrapToken\(req,\s*res\)\s*\{([\s\S]*?)\n {2}\}/
+    );
+    assert.ok(fn, 'requireBootstrapToken function body must be locatable');
+    assert.match(fn[1], /!expected\s*\|\|\s*!given/,
+      'the empty/missing-token guard must stay present for a clean 403');
+  });
+});
