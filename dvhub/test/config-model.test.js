@@ -71,6 +71,52 @@ test('getConfigDefinition and createDefaultConfig remain importable', () => {
   assert.ok(defaults && typeof defaults === 'object');
 });
 
+// --- Phase 24-02: sichere Out-of-Box-Security-Defaults (Wave-0-Assertions) ---
+//
+// 24-01-AUDIT zeigt: die root-fähige VPN-Apply-Route hängt am
+// `security.lanTrust:'open'`-Default — ein Neuinstall lässt out-of-box jeden
+// LAN-Client token-frei schreiben/admin/VPN steuern. Diese Wave-0-Assertions
+// nageln die sichere Default-Posture für `createDefaultConfig` (Neuinstalls)
+// fest. BEACHTE die Verschachtelung: `cfg.security.lanTrust` liegt im
+// security-Block, aber `cfg.allowedHosts`/`cfg.corsAllowedOrigins`/
+// `cfg.trustProxy`/`cfg.trustedProxyIps` sind Geschwister EINE Ebene höher.
+test('Phase 24-02: createDefaultConfig liefert eine sichere LAN-Trust-Default-Posture', () => {
+  const cfg = createDefaultConfig();
+
+  // Minimum-Security-Posture (unabhängig vom konkreten Operator-Wert): ein
+  // ausgelieferter Neuinstall darf NICHT den blanket-LAN-Bypass 'open' tragen.
+  // Gegen den ungepatchten config-model.js ist diese Assertion RED; sie wird
+  // erst durch Task 3 (Operator-freigegebener Default != 'open') GREEN.
+  assert.notEqual(
+    cfg.security.lanTrust,
+    'open',
+    'Neuinstall-Default lanTrust darf nicht "open" sein (kein blanket-LAN-Bypass out-of-box)'
+  );
+
+  // TODO(Task 3): hardcodierte assert.equal(cfg.security.lanTrust, '<wert>')
+  // mit dem im Operator-Checkpoint (Task 2) entschiedenen konkreten Wert
+  // (Empfehlung 'restricted', NICHT 'open') ergänzen.
+
+  // Feld-Coverage-Assertions: die übrigen Security-Default-Felder bleiben auf
+  // ihren konservativen Out-of-Box-Werten (DNS-Rebinding-Schutz NICHT vorbefüllt,
+  // kein Reverse-Proxy-Vertrauen ohne Operator-Opt-in).
+  assert.deepEqual(
+    cfg.allowedHosts,
+    [],
+    'allowedHosts bleibt out-of-box leer (Vorbefüllung ist Setup-Wizard-Logik, kein Default)'
+  );
+  assert.deepEqual(
+    cfg.corsAllowedOrigins,
+    [],
+    'corsAllowedOrigins bleibt out-of-box leer'
+  );
+  assert.equal(
+    cfg.trustProxy,
+    false,
+    'trustProxy bleibt out-of-box false (kein Reverse-Proxy-Vertrauen ohne Operator-Opt-in)'
+  );
+});
+
 // Single-floor model (2026-06-16): the misleading soft `optimizer.minSocPct`
 // knob was retired from the settings UI — it never governed the EOS control
 // path (EOS discharges to optimizer.hardFloorSocPct), so showing it as
