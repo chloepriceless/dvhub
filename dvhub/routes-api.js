@@ -2760,6 +2760,19 @@ export function createApiRoutes(ctx) {
       return servePage(res, 'family.html');
     }
 
+    // Phase 24-04 (T-24-PRO-SHELL): a direct GET /family.html previously matched
+    // NO route here → fell through to serveStatic → served public/family.html
+    // RAW (path/MIME check only, no gate), bypassing the Pro-gate that /family
+    // (above) and every /api/family/* route enforce. Gate the static shell with
+    // the SAME requirePro guard, BEFORE the serveStatic fallback. The inert
+    // assets /family.js + /family.css stay ungated (see the comment above the
+    // /family route): without the gated shell no browser loads them, and a raw
+    // curl returns inert source (no application logic runs).
+    if (url.pathname === '/family.html' && req.method === 'GET') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
+      return servePage(res, 'family.html');
+    }
+
     // --- Device API (D-15, INTG-05) ---
     // GET /api/devices — device list
     if (url.pathname === '/api/devices' && req.method === 'GET') {
