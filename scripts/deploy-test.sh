@@ -261,6 +261,31 @@ done
 [[ $schema_ok -eq 1 ]] && ok "Schema/Migrationen angewendet: ${schema_detail}" \
                        || bad "Schema/Migrationen: keine populierte DB nach ${HEALTH_RETRIES}s (PG dvhub / SQLite unter $DATA_DIR/$INSTALL_DIR)"
 
+# T-23-04: ECHTE Migrations-Versionsprüfung gegen schema_migrations.
+# Der count(*)-Check oben ist NUR eine Liveness-Probe — er ist FALSCH-GRÜN, wenn
+# der Migrations-Runner crasht: ensurePgSchema() (server.js:509) legt die
+# Basistabellen VOR dem Runner (server.js:514) an, also ist
+# count(information_schema.tables)>0 auch bei halb-migrierter, dunkler DB grün.
+# Der maßgebliche Schema-Beweis ist daher die Versionsprüfung. 015-020 sind HART
+# gefordert (fehlt eine → ROT). 014 (TimescaleDB) ist BEDINGT: eine korrekte
+# timescaledb-LOSE Box überspringt 014 legitim → 14 fehlt dort erwartbar in
+# schema_migrations und darf den Test NIE rot machen (nur optionale Info).
+expected="15 16 17 18 19 20"
+missing=""
+for v in $expected; do
+  has="$(su - postgres -c "psql -d dvhub -tAc \"SELECT 1 FROM schema_migrations WHERE version=$v\"" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$has" == "1" ]] || missing="$missing $v"
+done
+if [[ -z "$missing" ]]; then
+  ok "schema_migrations vollständig (Versionen:$expected angewendet)"
+else
+  bad "schema_migrations UNVOLLSTÄNDIG — fehlende Versionen:$missing (Migration crashte? halb-migrierte/dunkle DB)"
+fi
+# 014 (TimescaleDB) BEDINGT — reine Info, NIE über bad erzwingen (Pitfall 3):
+ts14="$(su - postgres -c "psql -d dvhub -tAc \"SELECT 1 FROM schema_migrations WHERE version=14\"" 2>/dev/null | tr -d '[:space:]')"
+[[ "$ts14" == "1" ]] && ok "schema_migrations: 014 (TimescaleDB) angewendet (optional)" \
+                     || skip "schema_migrations: 014 (TimescaleDB) übersprungen — auf timescaledb-loser Box erwartbar (optional)"
+
 # ============================================================================
 section "EOS (optional, --with-eos)"
 # ============================================================================
