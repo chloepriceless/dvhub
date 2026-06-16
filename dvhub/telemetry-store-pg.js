@@ -385,7 +385,16 @@ export async function runPendingMigrations(pool, cfg = {}) {
     const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
     // eslint-disable-next-line no-console
     console.log(`[migration] applying ${f}`);
-    await pool.query(sql);
+    // T-0106-Doktrin (vgl. ensurePgSchema-Per-Item-try/catch oben): ein einzelner
+    // Migrationsfehler darf NIE die ganze Kette killen. best-effort-continue —
+    // KEIN throw, sodass die Folge-Migrationen (z.B. 019/020) trotzdem laufen.
+    // Sichtbarkeit kommt über die Diagnose-Zeile + 23-04 (deploy-test Versionsprüfung).
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[migration] FAILED ${f} (v${version}): ${err.code || ''} ${err.message}`);
+    }
   }
 }
 
