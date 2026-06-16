@@ -106,6 +106,16 @@ else
   caller_repo=0
   for a in "${INSTALL_ARGS[@]:-}"; do [[ "$a" == "--repo" ]] && caller_repo=1; done
   if [[ $caller_repo -eq 0 ]]; then
+    # T-0224: the local-tree snapshot needs git BEFORE install.sh apt-installs it.
+    # On minimal Debian/Ubuntu templates git is absent — without it deploy-test
+    # would otherwise SILENTLY fall back to install.sh's public-main default and
+    # test the WRONG code (false green). Ensure git up front (we run as root and
+    # install.sh pulls it in anyway); fail loudly below if it cannot be obtained.
+    if ! command -v git >/dev/null 2>&1; then
+      echo "  git fehlt — installiere es vorab für den Tree-Snapshot…"
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq git >/dev/null 2>&1 || true
+    fi
     if command -v git >/dev/null 2>&1; then
       echo "  Snapshot: lokales Git-Repo aus $REPO_ROOT (aktuelle Software) für install.sh"
       # Der entpackte Tree gehoert ggf. einem fremden Owner (uid 1000 aus dem
@@ -126,7 +136,10 @@ else
       # erzwingt den direkten Branch-Checkout (kein Tag-Resolve auf dem Snapshot).
       INSTALL_ARGS+=(--repo "$REPO_ROOT" --branch "$SNAPSHOT_BRANCH" --channel dev)
     else
-      skip "Tree-Snapshot (git fehlt) — install.sh nutzt seinen Default-Repo (public main)"
+      # git could not be obtained → ABORT. Silently running install.sh against
+      # its public-main default would test the WRONG code and report a false green.
+      bad "git nicht verfügbar — kann den lokalen Tree nicht snapshotten. ABBRUCH statt stillem Test gegen public main. Fix: 'apt-get install -y git' auf der Box, dann erneut. (Oder explizit --repo <url> --branch <ref> übergeben, um bewusst ein Remote zu testen.)"
+      exit 2
     fi
   else
     echo "  Repo-Quelle: vom Aufrufer via --repo vorgegeben (kein Tree-Snapshot)"
