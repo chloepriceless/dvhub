@@ -93,9 +93,13 @@ test('Phase 24-02: createDefaultConfig liefert eine sichere LAN-Trust-Default-Po
     'Neuinstall-Default lanTrust darf nicht "open" sein (kein blanket-LAN-Bypass out-of-box)'
   );
 
-  // TODO(Task 3): hardcodierte assert.equal(cfg.security.lanTrust, '<wert>')
-  // mit dem im Operator-Checkpoint (Task 2) entschiedenen konkreten Wert
-  // (Empfehlung 'restricted', NICHT 'open') ergänzen.
+  // Operator-Checkpoint (Task 2) entschied 2026-06-16 (Christin): 'restricted'
+  // (RESEARCH-Empfehlung A1). Hardcodierte Assertion auf den entschiedenen Wert.
+  assert.equal(
+    cfg.security.lanTrust,
+    'restricted',
+    'Neuinstall-Default lanTrust ist der operator-freigegebene Wert "restricted"'
+  );
 
   // Feld-Coverage-Assertions: die übrigen Security-Default-Felder bleiben auf
   // ihren konservativen Out-of-Box-Werten (DNS-Rebinding-Schutz NICHT vorbefüllt,

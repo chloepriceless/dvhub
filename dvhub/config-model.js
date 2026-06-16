@@ -2648,7 +2648,14 @@ export function createDefaultConfig() {
     //   trustedClientIps:[] = any LAN ip is trusted. Non-empty = ONLY these exact
     //                    IPs get the LAN bypass (an explicit per-device allowlist).
     security: {
-      lanTrust: 'open',
+      // Phase 24-02 (Operator-Freigabe 2026-06-16, Christin): sicherer
+      // Out-of-Box-Default für Neuinstalls — 'restricted' statt 'open'. Kiosk-/
+      // Tablet-GET (lanSafeGroups) bleibt token-frei, jeder schreibende/admin/
+      // control/VPN-Call braucht out-of-box einen Bearer-Token. Schließt die in
+      // 24-01-AUDIT belegte VPN-Apply-LAN-Lücke. Wirkt NUR auf createDefaultConfig
+      // (Neuinstalls); bestehende /etc/dvhub/config.json behält ihren Wert
+      // (Migration-Kompat: checkAuth liest absent → fail-safe 'open').
+      lanTrust: 'restricted',
       lanCidrs: [],
       lanSafeGroups: ['status', 'dashboard', 'history', 'forecast', 'integrations'],
       trustedClientIps: []
