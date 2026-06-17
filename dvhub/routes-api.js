@@ -218,7 +218,7 @@ export const SECURITY_HEADERS = {
     "style-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/ https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://dvhub.de https://*.tile.openstreetmap.org https://unpkg.com/leaflet@1.9.4/",
-    "connect-src 'self' https://api.dvhub.de",
+    "connect-src 'self' https://dvhub.online",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -5272,7 +5272,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/epex/zones' && req.method === 'GET') {
       const cfg = getCfg();
       try {
-        const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+        const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
         const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await readJsonCapped(r);
@@ -5288,7 +5288,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/epex/gaps' && req.method === 'GET') {
       const cfg = getCfg();
       try {
-        const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+        const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
         const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
         const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -5305,7 +5305,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/epex/backfill' && req.method === 'POST') {
       const cfg = getCfg();
       try {
-        const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+        const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
         const body = await parseBody(req);
         const zone = body?.zone || cfg.epex.bzn || 'DE-LU';
         const start = body?.start || '2020-01-01';

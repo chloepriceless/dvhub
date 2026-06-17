@@ -723,7 +723,7 @@ describe('H-3: EPEX priceApiUrl SSRF guard', () => {
     const routes = createApiRoutes(ctx);
     const res = mockRes();
     await routes.handleRequest(
-      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'https://api.dvhub.de' } } }),
+      makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: 'https://dvhub.online' } } }),
       res,
       new URL('http://localhost/api/config')
     );

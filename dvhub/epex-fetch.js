@@ -19,7 +19,7 @@ export function createEpexFetcher(ctx) {
   // --- Private: fetchEpexFromDvhubApi ---
   async function fetchEpexFromDvhubApi(day, day2, bzn) {
     const cfg = getCfg();
-    const baseUrl = cfg.epex.priceApiUrl || 'https://api.dvhub.de';
+    const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
     const url = `${baseUrl}/api/prices?start=${day}&end=${addDays(day2, 1)}&zone=${encodeURIComponent(bzn)}`;
     const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
     if (!r.ok) throw new Error(`DVhub Price API HTTP ${r.status}`);
@@ -72,14 +72,23 @@ export function createEpexFetcher(ctx) {
     // here so the failure path can also report wall-clock latency.
     const __t0 = Date.now();
     try {
+      // Preisquelle (2026-06-17): 'dvhub' = dvhub.online primär + Energy-Charts als
+      // stiller Fallback; 'public' = direkt Energy-Charts (dvhub.online wird
+      // übersprungen). Unset → 'dvhub' (Altverhalten beibehalten).
+      const priceSource = cfg.epex.priceSource || 'dvhub';
       let data = null;
-      try {
-        data = await fetchEpexFromDvhubApi(day, day2, bzn);
-      } catch (apiErr) {
-        pushLog('epex_dvhub_api_fallback', { error: apiErr.message });
+      let activeSource = null;
+      if (priceSource === 'dvhub') {
+        try {
+          data = await fetchEpexFromDvhubApi(day, day2, bzn);
+          if (data && data.length > 0) activeSource = 'dvhub';
+        } catch (apiErr) {
+          pushLog('epex_dvhub_api_fallback', { error: apiErr.message });
+        }
       }
       if (!data || data.length === 0) {
         data = await fetchEpexFromEnergyCharts(day, day2, bzn);
+        if (data && data.length > 0) activeSource = 'energy_charts';
       }
       // Review 2026-06-10 (P2-6): if BOTH sources came back empty this is a
       // FAILED refresh — do not stamp state.epex.ok=true with data:[] (that
@@ -103,7 +112,7 @@ export function createEpexFetcher(ctx) {
         scope: 'forecast',
         resolutionSeconds: slotSpacingSec
       })));
-      pushLog('epex_refresh_ok', { count: data.length });
+      pushLog('epex_refresh_ok', { count: data.length, priceSource, activeSource });
       // Bridge-timing fix (2026-05-31): the moment tomorrow's day-ahead first
       // lands, push it to EOS so the optimizer stops forward-filling a flat
       // tomorrow (which makes it dump the battery tonight instead of holding for

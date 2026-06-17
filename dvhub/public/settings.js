@@ -1492,7 +1492,7 @@ function renderEpexPriceSourceInfo() {
   section.dataset.accent = 'green';
   section.innerHTML = `
     <div class="config-group-kicker" data-accent="green">Preisquelle</div>
-    <p class="sa-help">Day-Ahead Börsenstrompreise von <strong>api.dvhub.de</strong> (EPEX SPOT).</p>
+    <p class="sa-help">Day-Ahead Börsenstrompreise (EPEX SPOT). Quelle wählbar oben unter <strong>Preisquelle</strong>.</p>
     <div id="epexBacklogInfo" class="config-banner info sa-banner-inline-loose">
       Lade Preis-Backlog...
     </div>
@@ -1510,6 +1510,8 @@ function renderEpexPriceSourceInfo() {
       const epex = status?.epex || {};
       const data = epex.data || [];
       const bzn = config?.epex?.bzn || status?.config?.epex?.bzn || 'DE-LU';
+      const priceSource = config?.epex?.priceSource || status?.config?.epex?.priceSource || 'dvhub';
+      const sourceLabel = priceSource === 'public' ? 'Energy-Charts (öffentlich)' : 'dvhub.online';
       const updatedAt = fmtTs(epex.updatedAt);
       const datapoints = data.length;
       const hoursAvailable = Math.round(datapoints * 0.25); // 15min slots → hours
@@ -1523,7 +1525,7 @@ function renderEpexPriceSourceInfo() {
         <strong>Letztes Update:</strong> ${escapeHtml(updatedAt)} &nbsp;|&nbsp;
         <strong>Heute:</strong> ${escapeHtml(datapoints)} Slots (${escapeHtml(hoursAvailable)}h)
         ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${escapeHtml(backlogRange)}` : ''}
-        <br><small class="sa-text-mute">Quelle: api.dvhub.de → EPEX SPOT Day-Ahead Auktion</small>
+        <br><small class="sa-text-mute">Quelle: ${escapeHtml(sourceLabel)} → EPEX SPOT Day-Ahead Auktion</small>
       `;
     }).catch(() => {
       const el = document.getElementById('epexBacklogInfo');

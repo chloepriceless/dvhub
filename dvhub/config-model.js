@@ -2177,7 +2177,7 @@ function buildFieldDefinitions() {
       label: 'Preiszone',
       type: 'dynamicSelect',
       dynamicOptionsUrl: '/api/epex/zones',
-      help: 'EPEX Day-Ahead Bidding Zone. Wird von api.dvhub.de geladen.'
+      help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen.'
     },
     {
       section: 'epex',
@@ -2194,15 +2194,28 @@ function buildFieldDefinitions() {
       group: 'market',
       groupLabel: 'EPEX',
       groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
+      path: 'epex.priceSource',
+      label: 'Preisquelle',
+      type: 'select',
+      options: [
+        { value: 'dvhub', label: 'DVhub (dvhub.online)' },
+        { value: 'public', label: 'Öffentlich (Energy-Charts)' }
+      ],
+      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
+    },
+    {
+      section: 'epex',
+      group: 'market',
+      groupLabel: 'EPEX',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
       path: 'epex.priceApiUrl',
-      label: 'Preis-API',
+      label: 'DVhub Preis-API (erweitert)',
       type: 'select',
       hidden: true,
       options: [
-        { value: 'https://api.dvhub.de', label: 'DVhub API (api.dvhub.de)' },
-        { value: 'https://api.awattar.com', label: 'Fallback (aWATTar)' }
+        { value: 'https://dvhub.online', label: 'DVhub (dvhub.online)' }
       ],
-      help: 'DVhub Price API Endpunkt. Standard: https://api.dvhub.de'
+      help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
     },
 
     // --- ML & Forecast-Korrektur ---
@@ -2561,7 +2574,8 @@ export function createDefaultConfig() {
       enabled: true,
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
-      priceApiUrl: 'https://api.dvhub.de'
+      priceSource: 'dvhub',
+      priceApiUrl: 'https://dvhub.online'
     },
     ml: {
       mlEnabled: true,
@@ -3374,8 +3388,15 @@ export function normalizeConfigInput(rawInput) {
   if (!Array.isArray(persistedConfig.schedule?.rules)) persistedConfig.schedule.rules = [];
   // Default BZN to DE-LU when EPEX is enabled but no zone is set
   if (persistedConfig.epex?.enabled && !persistedConfig.epex?.bzn) persistedConfig.epex.bzn = 'DE-LU';
+  // Price source: default to dvhub when unset (legacy configs predate the field)
+  if (persistedConfig.epex && !persistedConfig.epex.priceSource) persistedConfig.epex.priceSource = 'dvhub';
+  // Endpoint migration (2026-06-17): api.dvhub.de retired — all public endpoints
+  // moved to dvhub.online. Rewrite the exact legacy base only; leave custom URLs alone.
+  if (persistedConfig.epex && /^https?:\/\/api\.dvhub\.de\/?$/i.test(String(persistedConfig.epex.priceApiUrl || ''))) {
+    persistedConfig.epex.priceApiUrl = 'https://dvhub.online';
+  }
   // Ensure priceApiUrl is always set (legacy configs may omit it)
-  if (persistedConfig.epex && !persistedConfig.epex.priceApiUrl) persistedConfig.epex.priceApiUrl = 'https://api.dvhub.de';
+  if (persistedConfig.epex && !persistedConfig.epex.priceApiUrl) persistedConfig.epex.priceApiUrl = 'https://dvhub.online';
   const effectiveConfig = applyVictronDefaults(persistedConfig);
   return { rawConfig: raw, persistedConfig, effectiveConfig, warnings };
 }

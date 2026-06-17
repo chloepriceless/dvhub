@@ -75,7 +75,7 @@
     "/api/epex/refresh": {
       "post": {
         "summary": "EPEX-Preise aktualisieren",
-        "description": "Holt aktuelle Day-Ahead-Preise von api.dvhub.de (primär) oder Energy Charts (Fallback). Preise in EUR/MWh.",
+        "description": "Holt aktuelle Day-Ahead-Preise von dvhub.online (primär) oder Energy Charts (Fallback bzw. Quelle 'Öffentlich'). Preise in EUR/MWh.",
         "tags": ["EPEX / Preise"],
         "responses": { "200": { "description": "{ ok, error }" } }
       }
@@ -83,7 +83,7 @@
     "/api/epex/zones": {
       "get": {
         "summary": "Verfügbare Preiszonen",
-        "description": "Proxy zu api.dvhub.de/api/zones. Listet alle 44 EPEX Day-Ahead Bidding Zones mit Abdeckungsstatistiken.",
+        "description": "Proxy zu dvhub.online/api/zones. Listet alle 44 EPEX Day-Ahead Bidding Zones mit Abdeckungsstatistiken.",
         "tags": ["EPEX / Preise"],
         "responses": { "200": { "description": "Zonen-Liste mit Coverage" } }
       }
@@ -91,7 +91,7 @@
     "/api/epex/gaps": {
       "get": {
         "summary": "Fehlende Preisdaten",
-        "description": "Proxy zu api.dvhub.de/api/prices/gaps. Zeigt Tage mit unvollständigen Preisdaten.",
+        "description": "Proxy zu dvhub.online/api/prices/gaps. Zeigt Tage mit unvollständigen Preisdaten.",
         "tags": ["EPEX / Preise"],
         "parameters": [
           { "name": "zone", "in": "query", "schema": { "type": "string", "default": "DE-LU" } }
@@ -102,7 +102,7 @@
     "/api/epex/backfill": {
       "post": {
         "summary": "Preis-Backfill anstoßen",
-        "description": "Proxy zu api.dvhub.de. Startet Backfill fehlender Preisdaten für eine Zone.",
+        "description": "Proxy zu dvhub.online. Startet Backfill fehlender Preisdaten für eine Zone.",
         "tags": ["EPEX / Preise"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "zone": { "type": "string" }, "start": { "type": "string" } } } } } },
         "responses": { "200": { "description": "Backfill gestartet" } }
