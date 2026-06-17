@@ -344,6 +344,24 @@ export function createScheduleEvaluator(ctx) {
     // User memory: these flags are legally relevant — never auto-flip, never flip for demos.
     // Runs BEFORE the prev-value short-circuit so a flag flip between identical writes
     // cannot produce a silently-skipped illegal write.
+    //
+    // 25-01/25-02 Verfeinerung des Entlade-Zweigs (Befund 1+2): Ein negativer
+    // gridSetpointW ist NICHT pauschal eine verbotene Akku→Netz-Entladung. Der
+    // Reject (grid_discharge_not_allowed) feuert nur noch, wenn ALLE DREI gelten:
+    //   (i)  numericValue <= FORCED_EXPORT_THRESHOLD_W (= -1000, :23) — eine ECHTE
+    //        erzwungene Netzentladung. Kleinere Negativwerte (-40 Idle-Default,
+    //        -100 Self-Consumption) sind kein Verkauf und passieren.
+    //   (ii) !isMandatoryControlSource(source) — Pflicht-Quellen
+    //        (negative_price_protection §51, manual_override_soc_floor, emergency_stop)
+    //        passieren immer.
+    //   (iii) source !== 'dc_export_mode' — PV-Überschuss-Einspeisung ist eine
+    //        eigene legale Klasse (exportW <= 0, keine Akku→Netz-Entladung).
+    // Sonst: keine Aktion — der Write läuft durch zum nachgelagerten T-0075-Floor.
+    // ⚠ Die echte Akku→Netz-Sperre bleibt rechtlich wirksam: ein diskretionärer
+    // <=-1000-Setpoint (EOS/Optimizer/manuell) wird bei allowGridDischarge=false
+    // weiterhin abgelehnt. Der §51-Pflicht-Abregelungspfad (applyDvVictronControl,
+    // reg 2707/2709) umgeht dieses Gate und ist hiervon unberührt. Die NOT-HALT-Achse
+    // (:306) ist getrennt und unverändert. Schwelle -1000 = checkpoint:human-verify.
     if (target === 'gridSetpointW') {
       const numericValue = Number(value);
       const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
@@ -352,7 +370,10 @@ export function createScheduleEvaluator(ctx) {
         pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
         return { ok: false, error: 'grid_charge_not_allowed' };
       }
-      if (numericValue < 0 && !allowGridDischarge) {
+      const isForcedGridDischarge = numericValue <= FORCED_EXPORT_THRESHOLD_W
+        && !isMandatoryControlSource(source)
+        && source !== 'dc_export_mode';
+      if (isForcedGridDischarge && !allowGridDischarge) {
         pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_discharge_not_allowed' });
         return { ok: false, error: 'grid_discharge_not_allowed' };
       }
