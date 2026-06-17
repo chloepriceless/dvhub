@@ -527,7 +527,7 @@ describe('devices section', () => {
     const ctx = createMockCtx();
     ctx.deviceService = {
       getDevices: () => [
-        { id: 'shelly_kitchen', name: 'Küche', powerW: 31.9, energyTodayWh: 49.9, online: true, lastSeen: Date.now() },
+        { id: 'shelly_kitchen', name: 'Küche', powerW: 31.9, energyTodayWh: 49.9, output: true, switchable: true, online: true, lastSeen: Date.now() },
         { id: 'mqtt_pump', name: 'Pumpe', powerW: 800, energyTodayWh: 1200, online: true, lastSeen: Date.now() }
       ]
     };
@@ -538,7 +538,12 @@ describe('devices section', () => {
     assert.equal(kitchen.name, 'Küche');
     assert.equal(kitchen.watts, 32);            // powerW gerundet
     assert.equal(kitchen.online, true);
+    assert.equal(kitchen.output, true);         // Shelly-Relais-Status durchgereicht
+    assert.equal(kitchen.switchable, true);
     assert.equal(typeof kitchen.watts, 'number');
+    const pump = devices.find(d => d.id === 'mqtt_pump');
+    assert.equal(pump.switchable, false);       // mqtt: nicht schaltbar
+    assert.equal(pump.output, null);
   });
 
   it('reports watts 0 for offline devices so the client threshold hides them', () => {

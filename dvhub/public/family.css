@@ -100,6 +100,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   transition:opacity .4s;
 }
 .dev-card{
+  position:relative;
   background:rgba(8,10,16,.6);backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2);
   border:1px solid rgba(255,255,255,.1);border-radius:14px;
   padding:10px 14px 12px;text-align:center;min-width:95px;
@@ -466,6 +467,17 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-zoom-ctl{display:inline-flex;align-items:center;gap:10px}
 .fam-zoom-btn{flex:0 0 auto;min-width:44px;width:44px;padding:8px 0;font-size:20px;line-height:1;text-align:center}
 .fam-zoom-val{min-width:3.6em;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9)}
+/* Shelly: Aus-Button auf der Geräte-Karte (oben rechts) */
+.dev-toggle{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:8px;border:1px solid rgba(255,138,138,.4);background:rgba(255,80,80,.16);color:#ff8a8a;font-size:13px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}
+.dev-toggle:active{transform:scale(.92)}
+/* Schwebendes Symbol zum Wieder-Einschalten (display via JS umgeschaltet) */
+.shelly-reenable-fab{display:none;position:fixed;bottom:18px;right:18px;z-index:60;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;border:1px solid rgba(38,222,129,.4);background:rgba(38,222,129,.16);color:#26de81;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.shelly-reenable-icon{line-height:1}
+.shelly-reenable-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;background:#26de81;color:#06281a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.shelly-reenable-list{display:flex;flex-direction:column;gap:10px;margin:8px 0 4px}
+.shelly-off-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.shelly-off-name{font-size:15px;color:rgba(255,255,255,.9)}
+.shelly-on-btn{flex:0 0 auto;min-width:120px}
 .fam-set-msg{margin-top:10px;font-size:12px;color:rgba(255,255,255,.55);min-height:16px}
 
 /* Native sun + battery (operator request 2026-06-13): no glass card around

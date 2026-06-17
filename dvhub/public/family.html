@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=18">
+<link rel="stylesheet" href="/family.css?v=19">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -128,6 +128,24 @@
     <div class="fam-set-msg" id="famSetMsg"></div>
   </div>
 </div>
+
+<!-- Schwebendes Symbol: ausgeschaltete (aber verbundene) Shellys wieder einschalten.
+     Standard versteckt (CSS display:none); family.js blendet es nur ein, wenn ≥1
+     verbundene+ausgeschaltete Shelly existiert. -->
+<button class="shelly-reenable-fab" id="shellyReenableBtn" data-action="open-shelly-reenable" type="button" aria-label="Ausgeschaltete Ger&auml;te einschalten">
+  <span class="shelly-reenable-icon">&#9211;</span>
+  <span class="shelly-reenable-badge" id="shellyReenableCount">0</span>
+</button>
+<div class="picker-overlay" id="shellyReenableOverlay">
+  <div class="overlay-bg" data-action="close-shelly-reenable"></div>
+  <div class="picker fam-settings">
+    <div class="picker-title">Ausgeschaltete Ger&auml;te</div>
+    <div id="shellyReenableList" class="shelly-reenable-list"></div>
+    <div class="fam-set-actions">
+      <button class="fam-set-btn ghost" data-action="close-shelly-reenable" type="button">Schlie&szlig;en</button>
+    </div>
+  </div>
+</div>
 <div class="picker-overlay" id="pickerOverlay">
   <div class="overlay-bg" data-action="close-picker"></div>
   <div class="picker" id="picker">
@@ -142,6 +160,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260617-zoom-devices"></script>
+<script src="/family.js?v=20260617-shelly-control"></script>
 </body>
 </html>

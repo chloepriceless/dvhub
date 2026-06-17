@@ -318,6 +318,8 @@ export function createFamilyService(ctx) {
         name: String(d.name || d.id),
         watts,
         online: !!d.online,
+        output: (typeof d.output === 'boolean') ? d.output : null,
+        switchable: !!d.switchable,
         energyTodayWh: Number.isFinite(energyTodayWh) ? energyTodayWh : null,
         emoji: '🔌',
         color: 'var(--device)'

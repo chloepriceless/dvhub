@@ -107,14 +107,29 @@ export function createDeviceService(ctx, hub) {
     for (const r of readings) {
       try {
         await db.query(
-          `INSERT INTO device_readings (device_id, ts_utc, power_w, energy_today_wh, online)
-           VALUES ($1, now(), $2, $3, $4)`,
-          [r.id, r.powerW, r.energyTodayWh, r.online]
+          `INSERT INTO device_readings (device_id, ts_utc, power_w, energy_today_wh, online, meta_json)
+           VALUES ($1, now(), $2, $3, $4, $5)`,
+          [r.id, r.powerW, r.energyTodayWh, r.online, (r.output != null ? JSON.stringify({ output: r.output }) : null)]
         );
       } catch (err) {
         pushLog('device_persist_error', { device: r.id, error: err.message });
       }
     }
+  }
+
+  /**
+   * Toggle a switchable device's relay (e.g. Shelly). Routes to the owning
+   * adapter's setOutput(). Returns { ok, output } or { ok:false, error }.
+   */
+  async function setDeviceOutput(deviceId, on) {
+    for (const adapter of adapters) {
+      if (typeof adapter.setOutput !== 'function') continue;
+      const r = await adapter.setOutput(deviceId, on);
+      if (r && r.ok) return r;
+      // 'unknown_device' → device belongs to another adapter; keep looking.
+      if (r && r.error && r.error !== 'unknown_device') return r;
+    }
+    return { ok: false, error: 'device_not_found_or_not_switchable' };
   }
 
   async function close() {
@@ -132,6 +147,7 @@ export function createDeviceService(ctx, hub) {
     start,
     close,
     getDevices,
+    setDeviceOutput,
     // Test helper: allows tests to trigger manual persistence
     _persistReadings: persistReadings,
   };

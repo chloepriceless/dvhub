@@ -48,6 +48,7 @@ export function createShellyHttpAdapter(deviceConfigs, pushLog) {
       pollIntervalSec: cfg.shelly.pollIntervalSec || DEFAULT_POLL_INTERVAL_SEC,
       powerW: null,
       energyTodayWh: null,
+      output: null,        // Relais-Zustand (an/aus) aus Switch.GetStatus
       lastSeen: 0,
       failCount: 0,
       online: false,
@@ -81,6 +82,7 @@ export function createShellyHttpAdapter(deviceConfigs, pushLog) {
 
       dev.powerW = Number.isFinite(powerW) ? powerW : null;
       dev.energyTodayWh = Number.isFinite(energyTotal) ? energyTotal : null;
+      dev.output = (typeof data.output === 'boolean') ? data.output : null;
       dev.lastSeen = Date.now();
       dev.failCount = 0;
       dev.online = true;
@@ -89,6 +91,30 @@ export function createShellyHttpAdapter(deviceConfigs, pushLog) {
       if (dev.failCount >= OFFLINE_AFTER_FAILURES) {
         dev.online = false;
       }
+    }
+  }
+
+  /**
+   * Toggle a Shelly relay via Switch.Set (Gen2/3 RPC). Re-polls on success so the
+   * cached output/power reflects the new state immediately. SSRF-safe: host was
+   * validated at construction; no user-controlled host reaches here.
+   */
+  async function setOutput(deviceId, on) {
+    const dev = devices.get(deviceId);
+    if (!dev) return { ok: false, error: 'unknown_device' };
+    const url = `http://${dev.host}/rpc/Switch.Set?id=0&on=${on ? 'true' : 'false'}`;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await pollDevice(deviceId);  // refresh output/power from the device
+      pushLog('shelly_set_ok', { deviceId, on: !!on, output: dev.output });
+      return { ok: true, output: dev.output };
+    } catch (e) {
+      pushLog('shelly_set_error', { deviceId, on: !!on, error: e.message });
+      return { ok: false, error: e.message };
     }
   }
 
@@ -121,6 +147,8 @@ export function createShellyHttpAdapter(deviceConfigs, pushLog) {
         name: dev.name,
         powerW: dev.powerW,
         energyTodayWh: dev.energyTodayWh,
+        output: dev.output,
+        switchable: true,        // Shelly relay supports on/off via setOutput
         online: dev.online,
         lastSeen: dev.lastSeen,
       });
@@ -133,5 +161,5 @@ export function createShellyHttpAdapter(deviceConfigs, pushLog) {
     await pollDevice(deviceId);
   }
 
-  return { type: 'shelly-http', start, close, getDevices, _pollDevice };
+  return { type: 'shelly-http', start, close, getDevices, setOutput, _pollDevice };
 }

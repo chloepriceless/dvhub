@@ -2218,6 +2218,29 @@ export function createApiRoutes(ctx) {
       return json(res, 200, result);
     }
 
+    // Shelly relay on/off from the family dashboard (2026-06-17). Same Pro-gate
+    // as the other /api/family/* control writes. Routes to the device service →
+    // owning adapter's setOutput (Switch.Set RPC). Host was SSRF-validated at
+    // device-config save time and again in the adapter constructor.
+    if (url.pathname === '/api/family/device-output' && req.method === 'POST') {
+      if (!requirePro(req, res, 'family-dashboard')) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!ctx.deviceService || typeof ctx.deviceService.setDeviceOutput !== 'function') {
+        return json(res, 503, { ok: false, error: 'device_service_unavailable' });
+      }
+      const id = String((body && body.id) || '').slice(0, 64);
+      const on = body && (body.on === true || body.on === 'true');
+      if (!id) return json(res, 400, { ok: false, error: 'device_id_required' });
+      const result = await ctx.deviceService.setDeviceOutput(id, on);
+      if (!result || result.ok !== true) {
+        return json(res, 400, result || { ok: false, error: 'toggle_failed' });
+      }
+      pushLog('family_device_output', { id, on: !!on, output: result.output }, actorContext(req));
+      return json(res, 200, result);
+    }
+
     if (url.pathname === '/api/family/mqtt-tiles' && req.method === 'GET') {
       if (!requirePro(req, res, 'family-dashboard')) return;
       const fam = ctx.getRawCfg?.()?.family;

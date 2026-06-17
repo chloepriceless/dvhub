@@ -187,7 +187,8 @@ describe('createDeviceService', () => {
     const insertQuery = db._queries.find(q => q.sql.includes('INSERT INTO device_readings'));
     assert.ok(insertQuery, 'INSERT executed');
     assert.ok(insertQuery.sql.includes('$1'), 'parameterized query');
-    assert.deepEqual(insertQuery.params, ['waschmaschine', 200, 3.5, true]);
+    // 5th param = meta_json (output state JSON; null for non-switchable mqtt devices)
+    assert.deepEqual(insertQuery.params, ['waschmaschine', 200, 3.5, true, null]);
 
     await service.close();
   });

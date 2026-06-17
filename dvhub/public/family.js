@@ -39,6 +39,10 @@
       if (action === 'close-fam-settings') { closeFamSettings(); return; }
       if (action === 'zoom-in') { zoomNudge(1); return; }
       if (action === 'zoom-out') { zoomNudge(-1); return; }
+      if (action === 'shelly-off') { shellyToggle(actionEl.getAttribute('data-id'), false, actionEl); return; }
+      if (action === 'shelly-on') { shellyToggle(actionEl.getAttribute('data-id'), true, actionEl); return; }
+      if (action === 'open-shelly-reenable') { openShellyReenable(); return; }
+      if (action === 'close-shelly-reenable') { closeShellyReenable(); return; }
       if (action === 'close-panel') { closePanel(); return; }
       if (action === 'pick-metric') {
         var key = actionEl.getAttribute('data-metric-key');
@@ -386,6 +390,46 @@
       });
   }
 
+  /* Lazily fetch a Geräte-Verlauf (device_readings) and render it as the panel
+     "Verlauf"-Chart — Leistung (W) über Zeit. Mirrors loadTileHistoryChart():
+     openPanel() bleibt synchron, der Fetch rendert nur die Chart-Sektion nach.
+     /api/devices/:id liefert { ...device, history:[{ts_utc,power_w,...}] } (DESC). */
+  function loadDeviceHistoryChart(key, deviceId) {
+    if (!deviceId) return;
+    fetch('/api/devices/' + encodeURIComponent(deviceId))
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (currentPanelKey !== key) return;
+        if (!document.getElementById('overlay').classList.contains('open')) return;
+        var d = panelData[key];
+        if (!d) return;
+        var rows = (body && Array.isArray(body.history)) ? body.history.slice() : [];
+        if (!rows.length) {
+          d.chart = null;
+          if (panelChart) { panelChart.destroy(); panelChart = null; }
+          var box = document.querySelector('.panel-chart');
+          var canvas = document.getElementById('p-chart');
+          if (box) box.style.display = '';
+          if (canvas) canvas.style.display = 'none';
+          setPanelChartMessage('Noch keine Verlaufsdaten — die Kurve erscheint, sobald Werte aufgezeichnet sind.');
+          return;
+        }
+        rows.sort(function (a, b) { return new Date(a.ts_utc) - new Date(b.ts_utc); });
+        var labels = [], values = [];
+        rows.forEach(function (r) {
+          labels.push(fmtTileHistTime(r.ts_utc));
+          var w = Number(r.power_w);
+          values.push(Number.isFinite(w) ? w : 0);
+        });
+        d.chart = { labels: labels, data: values };
+        d.chartUnit = 'W';
+        renderPanelChart(d, key);
+      })
+      .catch(function (err) {
+        if (typeof console !== 'undefined' && console.warn) console.warn('device-history fetch failed', err);
+      });
+  }
+
   /* Format a Tesla-history sample timestamp into a kiosk label. The tesla
      window spans several days (sparse charge events), so include the day. */
   function fmtTeslaHistTime(ts) {
@@ -580,6 +624,10 @@
     if (key.indexOf('fam-') === 0) {
       loadTileHistoryChart(key, key.slice(4));
     }
+    // Geräte-Karte (Shelly/Smart-Plug): Leistungs-Verlauf aus device_readings.
+    if (key.indexOf('dev-') === 0) {
+      loadDeviceHistoryChart(key, key.slice(4));
+    }
     // Plan 11-06 round 10 — the EV detail panel lazily fetches the Tesla
     // charge history (GET /api/family/tesla-history) and renders it as the
     // panel chart, the same way an MQTT tile renders its "Verlauf heute".
@@ -616,7 +664,20 @@
   var lastDeviceFlowKey = '';
   function updateDevices(devices) {
     var tray = document.getElementById('devices-tray');
-    var visible = (devices || []).filter(function (d) { return d && d.watts >= DEVICE_THRESHOLD_W; });
+    // Anzeige-Logik (2026-06-17): schaltbare Shellys sind zustandsgesteuert —
+    // EIN (output=true, auch 0W) → Karte mit Aus-Button; AUS (output=false) →
+    // ausgeblendet, nur im schwebenden Re-Enable-Symbol; offline → ganz weg.
+    // Nicht-schaltbare Geräte (mqtt/unbekannt) folgen weiter der Watt-Schwelle.
+    var offShellys = [];
+    var visible = (devices || []).filter(function (d) {
+      if (!d) return false;
+      if (d.switchable) {
+        if (!d.online) return false;
+        if (d.output === false) { offShellys.push(d); return false; }
+        return true; // eingeschaltet → Karte (unabhängig von Watt)
+      }
+      return d.watts >= DEVICE_THRESHOLD_W;
+    });
     visible.sort(function (a, b) { return b.watts - a.watts; });
 
     var currentIds = {};
@@ -646,7 +707,10 @@
         // Review 2026-06-10 (P2-3): device name/emoji are operator/MQTT-sourced
         // strings — escape before the innerHTML sink (same rule as the MQTT
         // tiles below, which already run everything through escapeMsg()).
-        el.innerHTML = '<div class="dev-emoji">' + escapeMsg(d.emoji) + '</div><div class="dev-name">' + escapeMsg(d.name) + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>';
+        var toggleHtml = d.switchable
+          ? '<button class="dev-toggle" data-action="shelly-off" data-id="' + escapeMsg(d.id) + '" type="button" aria-label="Ausschalten" title="Ausschalten">&#9211;</button>'
+          : '';
+        el.innerHTML = '<div class="dev-emoji">' + escapeMsg(d.emoji) + '</div><div class="dev-name">' + escapeMsg(d.name) + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>' + toggleHtml;
         el.querySelector('.dev-watts').style.color = col;
         el.querySelector('.dev-bar').style.width = barPct + '%';
         el.querySelector('.dev-bar').style.background = col;
@@ -681,9 +745,75 @@
       lastDeviceFlowKey = newKey;
       rebuildAllWithDevices(visible);
     }
+
+    updateOffShellys(offShellys);
   }
 
   function formatW(w) { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
+
+  /* ===================== Ausgeschaltete Shellys (Re-Enable) =====================
+     Schwebendes Symbol unten rechts, sichtbar NUR wenn ≥1 verbundene + ausge-
+     schaltete Shelly existiert (etwas einzuschalten, das schon an ist, bringt
+     nichts). Klick öffnet eine Liste mit Einschalt-Buttons. */
+  var lastOffShellys = [];
+  function updateOffShellys(offShellys) {
+    lastOffShellys = offShellys || [];
+    var btn = document.getElementById('shellyReenableBtn');
+    if (btn) {
+      if (lastOffShellys.length > 0) {
+        btn.style.display = 'flex';
+        var badge = document.getElementById('shellyReenableCount');
+        if (badge) badge.textContent = String(lastOffShellys.length);
+      } else {
+        btn.style.display = 'none';
+        var ovHide = document.getElementById('shellyReenableOverlay');
+        if (ovHide) ovHide.classList.remove('open');
+      }
+    }
+    var ov = document.getElementById('shellyReenableOverlay');
+    if (ov && ov.classList.contains('open')) renderShellyReenableList();
+  }
+
+  function renderShellyReenableList() {
+    var list = document.getElementById('shellyReenableList');
+    if (!list) return;
+    if (!lastOffShellys.length) { list.textContent = 'Keine ausgeschalteten Geräte.'; return; }
+    var html = '';
+    lastOffShellys.forEach(function (d) {
+      html += '<div class="shelly-off-row"><span class="shelly-off-name">' + escapeMsg(d.emoji) + ' ' + escapeMsg(d.name) + '</span>'
+        + '<button class="fam-set-btn primary shelly-on-btn" data-action="shelly-on" data-id="' + escapeMsg(d.id) + '" type="button">Einschalten</button></div>';
+    });
+    list.innerHTML = html;
+  }
+
+  function openShellyReenable() {
+    var ov = document.getElementById('shellyReenableOverlay');
+    if (!ov) return;
+    renderShellyReenableList();
+    ov.classList.add('open');
+  }
+  function closeShellyReenable() {
+    var ov = document.getElementById('shellyReenableOverlay');
+    if (ov) ov.classList.remove('open');
+  }
+
+  /* Relais an/aus über /api/family/device-output. Der nächste 5s-Status-Poll
+     spiegelt den neuen Zustand (Karte erscheint/verschwindet, Off-Liste aktualisiert). */
+  function shellyToggle(id, on, btnEl) {
+    if (!id) return;
+    if (btnEl) btnEl.disabled = true;
+    apiFetchCompat('/api/family/device-output', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: id, on: !!on })
+    }).then(function (r) { return r.json(); }).then(function (out) {
+      if (!out || out.ok !== true) throw new Error((out && out.error) || 'fehlgeschlagen');
+      if (on) closeShellyReenable(); // eingeschaltet → Karte kommt beim nächsten Poll
+    }).catch(function (e) {
+      if (typeof console !== 'undefined' && console.warn) console.warn('shelly toggle failed', e);
+      if (btnEl) btnEl.disabled = false;
+    });
+  }
 
   /* ===================== FAMILY EXTRAS: MQTT tiles + Tesla ===================== */
   // Operator-configured generic MQTT value tiles (family.mqttTiles) + the full
