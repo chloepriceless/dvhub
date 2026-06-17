@@ -648,3 +648,62 @@ test('A1: EOS autoManaged dcExportMode rule bypasses the SoC guard and exports',
   assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -4900),
     `expected -4900 write, got ${JSON.stringify(writes)}`);
 });
+
+// --- 25-01/25-02: EEG/§14a-Gate-Verfeinerung (Self-Consumption + dc_export) ----
+// Befund 1+2: Das EEG-Gate (schedule-eval.js EEG-Block) lehnt heute JEDEN
+// gridSetpointW < 0 bei allowGridDischarge=false als grid_discharge_not_allowed
+// ab — auch den legalen Idle-Default (-40, source='default') und die PV-
+// Überschuss-Einspeisung (dc_export_mode). Nach der Verfeinerung darf das Gate
+// nur noch eine ECHTE erzwungene Netzentladung (value <= FORCED_EXPORT_THRESHOLD_W
+// = -1000, aus diskretionärer Nicht-dc_export-Quelle) blockieren. SoC ist hier
+// frisch + über dem Hardfloor gesetzt, damit der nachgelagerte T-0075-Floor die
+// Gate-Aussage nicht verfälscht — die Assertion zielt gezielt auf die An-/
+// Abwesenheit von reason='grid_discharge_not_allowed'.
+
+test('25-01: Idle-Default (-40, source=default) passiert das EEG-Gate bei allowGridDischarge=false', async () => {
+  const { ctx, state, logs, writes } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: false };
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = { soc: Date.now() }; // frisch → T-0075 greift nicht
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  const r = await evaluator.applyControlTarget('gridSetpointW', -40, 'default');
+
+  assert.equal(r.ok, true, 'der legale Self-Consumption-Idle-Setpoint muss passieren');
+  assert.notEqual(r.error, 'grid_discharge_not_allowed',
+    'kein grid_discharge_not_allowed für einen -40 Idle-Setpoint');
+  assert.equal(
+    logs.filter((l) => l.event === 'control_write_rejected' && l.payload.reason === 'grid_discharge_not_allowed').length,
+    0,
+    'das EEG-Gate darf den Idle-Default nicht als Netzentladung ablehnen'
+  );
+  assert.equal(writes.filter((w) => w.target === 'gridSetpointW' && w.value === -40).length, 1,
+    'der -40 Setpoint erreicht die Hardware');
+});
+
+test('25-02: dc_export_mode (-3000) passiert das EEG-Gate bei allowGridDischarge=false', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: false };
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = { soc: Date.now() }; // frisch → T-0075 greift nicht
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+
+  const r = await evaluator.applyControlTarget('gridSetpointW', -3000, 'dc_export_mode');
+
+  // dc_export_mode ist PV-Überschuss-Einspeisung (eigene legale Klasse, Befund 2),
+  // KEIN Akku→Netz-Verkauf. Das EEG-Gate darf es NICHT als Netzentladung ablehnen.
+  // Ein anderer Floor/Bounds darf greifen — nur grid_discharge_not_allowed nicht.
+  assert.notEqual(r.error, 'grid_discharge_not_allowed',
+    'dc_export_mode darf nicht als grid_discharge_not_allowed abgelehnt werden');
+  assert.equal(
+    logs.filter((l) => l.event === 'control_write_rejected' && l.payload.reason === 'grid_discharge_not_allowed').length,
+    0,
+    'kein grid_discharge_not_allowed-Reject für dc_export_mode'
+  );
+});

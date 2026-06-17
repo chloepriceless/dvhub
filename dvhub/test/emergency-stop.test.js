@@ -143,6 +143,47 @@ test('resume: clearing the flag restores discretionary writes', async () => {
   assert.equal(writes.length, 1, 'write goes through after resume');
 });
 
+// ─── Part 2b: 25-01 EEG-Gate Mandatory-Source-Ausnahme + NOT-HALT-Regression ──
+// Das EEG-Gate (Legalität im Normalbetrieb) und das NOT-HALT-Gate sind ZWEI
+// getrennte source-prüfende Achsen (Pitfall 2 / Threat T-25-01-03).
+//  - Test 4: Mandatory-Quellen (negative_price_protection) passieren das EEG-Gate
+//    auch bei allowGridDischarge=false — die §51-Begrenzung darf nie gegatet werden.
+//  - Test 5: dc_export_mode bleibt im NOT-HALT (discretionaryWritesPaused) WEITERHIN
+//    BLOCKIERT — die EEG-Gate-Verfeinerung darf die NOT-HALT-Achse NICHT verändern.
+
+test('25-01: mandatory negative_price_protection (-40) passiert das EEG-Gate bei allowGridDischarge=false', async () => {
+  const { evaluator, state, cfg, writes, logs } = makeEvalCtx();
+  cfg.optimizer.allowGridDischarge = false; // legale Sperre aktiv
+  state.victron.fieldUpdatedAt = { soc: Date.now() }; // frisch — kein T-0075-Reject
+
+  const r = await evaluator.applyControlTarget('gridSetpointW', -40, 'negative_price_protection');
+
+  assert.equal(r.ok, true, '§51-Begrenzung (mandatory) muss das EEG-Gate immer passieren');
+  assert.notEqual(r.error, 'grid_discharge_not_allowed');
+  assert.equal(
+    logs.filter((l) => l.event === 'control_write_rejected' && l.payload.reason === 'grid_discharge_not_allowed').length,
+    0,
+    'eine Mandatory-Quelle darf nicht als Netzentladung abgelehnt werden'
+  );
+  assert.equal(writes.length, 1, 'der -40 Schutzwert erreicht die Hardware');
+  assert.equal(writes[0].value, -40);
+});
+
+test('25-02: dc_export_mode (-3000) bleibt im NOT-HALT BLOCKIERT (NOT-HALT-Achse unverändert)', async () => {
+  const { evaluator, state, writes, logs } = makeEvalCtx();
+  state.ctrl.discretionaryWritesPaused = true; // NOT-HALT aktiv
+
+  const r = await evaluator.applyControlTarget('gridSetpointW', -3000, 'dc_export_mode');
+
+  // dc_export_mode ist bewusst DISKRETIONÄR (Christin 2026-06-12) → im NOT-HALT
+  // blockiert. Die EEG-Gate-Verfeinerung (eigene Achse) darf das NICHT aufheben.
+  assert.equal(r.ok, false);
+  assert.equal(r.blocked, true, 'dc_export_mode bleibt im NOT-HALT blockiert');
+  assert.equal(r.error, 'emergency_stop_active');
+  assert.equal(writes.length, 0, 'kein Hardware-Export im NOT-HALT');
+  assert.equal(logs.filter((l) => l.event === 'control_write_blocked_nothalt').length, 1);
+});
+
 // ─── Part 3: stop/resume endpoints ───────────────────────────────────────────
 
 const LAN_IP = '192.168.1.5';

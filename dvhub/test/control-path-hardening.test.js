@@ -510,3 +510,33 @@ test('25-03: ein zweiter Write überschreibt atomar (keine .tmp-Leiche, neuer St
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- 9. 25-01: EEG-Gate Legal-Regression — echte Akku→Netz-Entladung bleibt gesperrt ---
+// Rechts-Sicherung (Pitfall 1 / Threat T-25-01-01): Die Gate-Verfeinerung darf die
+// echte Akku→Netz-Sperre NICHT aufweichen. Ein diskretionärer Setpoint
+// (value <= FORCED_EXPORT_THRESHOLD_W = -1000) aus einer Nicht-Mandatory-,
+// Nicht-dc_export-Quelle (z. B. eos_optimization) MUSS bei allowGridDischarge=false
+// WEITERHIN mit grid_discharge_not_allowed abgelehnt werden (§14a EnWG). Dieser
+// Test ist heute schon GREEN und MUSS auch nach der Gate-Verfeinerung GREEN bleiben.
+
+test('25-01: echte erzwungene Netzentladung (-5000, eos_optimization) bleibt bei allowGridDischarge=false abgelehnt', async () => {
+  const { evaluator, writes, logs } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer.allowGridDischarge = false; // legale Sperre aktiv
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = { soc: Date.now() }; // frisch — Reject kommt aus dem EEG-Gate, nicht T-0075
+    }
+  });
+
+  const r = await evaluator.applyControlTarget('gridSetpointW', -5000, 'eos_optimization');
+
+  assert.equal(r.ok, false, 'die echte Akku→Netz-Entladung muss abgelehnt werden');
+  assert.equal(r.error, 'grid_discharge_not_allowed',
+    'ein diskretionärer <=-1000 Verkauf bleibt rechtlich gesperrt');
+  assert.equal(gridWrites(writes).length, 0, 'keine Hardware-Entladung bei gesperrtem Verkauf');
+  assert.equal(
+    logs.filter((l) => l.event === 'control_write_rejected' && l.payload.reason === 'grid_discharge_not_allowed').length,
+    1,
+    'der Reject wird einmal als control_write_rejected geloggt'
+  );
+});
