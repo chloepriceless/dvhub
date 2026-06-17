@@ -1237,6 +1237,18 @@
       }
       lastFlowDirection[fl.id] = dir;
     });
+    // Geräte-Flows (df-*) sind nicht Teil von `states` (nur f1–f4 base flows);
+    // sie werden hier sichtbar gesetzt, solange ihre Karte sichtbar ist — eine
+    // Geräte-Karte erscheint ohnehin nur für aktive/eingeschaltete Verbraucher
+    // (≥5W bzw. eingeschaltete Shelly). Ohne dies bleiben df-Gruppen auf der
+    // :1089-Default-visibility 'hidden' → das Gerät zieht keine Partikel (2026-06-18).
+    lastDeviceFlows.forEach(function (fl) {
+      var fg = document.getElementById('fg-' + fl.id);
+      if (!fg) return;
+      var fe = document.getElementById(fl.from), te = document.getElementById(fl.to);
+      var visible = !!(fe && te && fe.offsetParent !== null && te.offsetParent !== null);
+      fg.style.visibility = visible ? 'visible' : 'hidden';
+    });
   }
   function rebuildAll() { rebuildAllWithDevices(null); }
 
@@ -2807,9 +2819,12 @@
 
       var absW = Math.abs(valW);
 
-      // bgFlowDraw's `s.kw < 0.05` skip guard works in kW — keep it intact so a
-      // genuinely zero/idle tile still paints nothing.
+      // bgFlowDraw's skip guard works in kW. Per-stream minKw lowered to 0.005
+      // (5 W, 2026-06-18) so small consumers (z.B. 31 W Shelly/Klima) noch
+      // Partikel ziehen — Default 0.05 (50 W) blendete sie aus. Eine echte
+      // Null-Last (<5 W) malt weiterhin nichts.
       s.kw = absW / 1000;
+      s.minKw = 0.005;
 
       // (f) STRICTLY PROPORTIONAL particle intensity — operator request. Each
       // device stream is sized by its SHARE of the total house consumption:
@@ -2835,7 +2850,7 @@
       // governs ABOVE the floor — a device that is a big share of the house
       // still draws a correspondingly bigger stream. A genuinely idle device
       // (s.kw < 0.05) is skipped by bgFlowDraw and gets NO floor.
-      if (s.kw >= 0.05) {
+      if (s.kw >= s.minKw) {
         s.count = Math.max(s.count, BG_FLOW_MIN_COUNT);
         s.speed = Math.max(s.speed, BG_FLOW_MIN_SPEED);
       }
