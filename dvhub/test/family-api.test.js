@@ -512,15 +512,47 @@ describe('caching', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 10: devices is empty array (Phase 04 INTG-05 will populate)
+// Test 10: devices section (INTG-05 verdrahtet 2026-06-17)
 // ---------------------------------------------------------------------------
 
 describe('devices section', () => {
-  it('is an empty array in Phase 03 (INTG-05 deferred)', () => {
+  it('is an empty array when no deviceService is wired', () => {
     const svc = createFamilyService(createMockCtx());
     const { devices } = svc.buildFamilyStatus();
     assert.ok(Array.isArray(devices));
     assert.equal(devices.length, 0);
+  });
+
+  it('maps deviceService.getDevices() readings to {id,name,watts,online}', () => {
+    const ctx = createMockCtx();
+    ctx.deviceService = {
+      getDevices: () => [
+        { id: 'shelly_kitchen', name: 'Küche', powerW: 31.9, energyTodayWh: 49.9, online: true, lastSeen: Date.now() },
+        { id: 'mqtt_pump', name: 'Pumpe', powerW: 800, energyTodayWh: 1200, online: true, lastSeen: Date.now() }
+      ]
+    };
+    const svc = createFamilyService(ctx);
+    const { devices } = svc.buildFamilyStatus();
+    assert.equal(devices.length, 2);
+    const kitchen = devices.find(d => d.id === 'shelly_kitchen');
+    assert.equal(kitchen.name, 'Küche');
+    assert.equal(kitchen.watts, 32);            // powerW gerundet
+    assert.equal(kitchen.online, true);
+    assert.equal(typeof kitchen.watts, 'number');
+  });
+
+  it('reports watts 0 for offline devices so the client threshold hides them', () => {
+    const ctx = createMockCtx();
+    ctx.deviceService = {
+      getDevices: () => [
+        { id: 'shelly_off', name: 'Aus', powerW: 120, energyTodayWh: 5, online: false, lastSeen: Date.now() - 999999 }
+      ]
+    };
+    const svc = createFamilyService(ctx);
+    const { devices } = svc.buildFamilyStatus();
+    assert.equal(devices.length, 1);
+    assert.equal(devices[0].watts, 0);
+    assert.equal(devices[0].online, false);
   });
 });
 

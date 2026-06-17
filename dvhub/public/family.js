@@ -16,7 +16,7 @@
   var FAMILY_STATUS_URL = '/api/family/status';
   var FAMILY_PRESENCE_URL = '/api/family/presence';
   var POLL_INTERVAL_MS = 5000;              // D-06 (match 5s Victron poll cycle)
-  var DEVICE_THRESHOLD_W = 50;              // Geräte erst ab 50W anzeigen (D-11)
+  var DEVICE_THRESHOLD_W = 5;               // Geräte erst ab 5W anzeigen (D-11; 50→5 am 2026-06-17 für kleine Verbraucher/Shelly)
   var LS_SLOTS_KEY = 'dvhub.family.slots';  // Pitfall 3 — namespaced
   var LS_OFFLINE_GRACE_POLLS = 2;           // D-22 — show banner after 2 failed polls
   var lastStatus = null;

@@ -299,10 +299,31 @@ export function createFamilyService(ctx) {
   }
 
   /**
-   * Devices section. Phase 04 INTG-05 will populate with detected 50W+ loads.
+   * Devices section (INTG-05, verdrahtet 2026-06-17). Bündelt die Live-Messwerte
+   * des Geräte-Service (Shelly-HTTP + mqtt-generic Adapter) als Dashboard-Karten.
+   * deviceService.getDevices() liefert {id,name,powerW,energyTodayWh,online,lastSeen};
+   * das Family-Dashboard erwartet {id,name,watts,...} und filtert clientseitig per
+   * DEVICE_THRESHOLD_W. Offline-Geräte → watts 0 (fallen unter die Schwelle).
    */
   function deriveDevicesSection() {
-    return []; // Phase 04 INTG-05
+    const list = ctx.deviceService?.getDevices?.() || [];
+    const out = [];
+    for (const d of list) {
+      if (!d || d.id == null) continue;
+      const powerW = Number(d.powerW);
+      const watts = d.online && Number.isFinite(powerW) ? Math.max(0, Math.round(powerW)) : 0;
+      const energyTodayWh = Number(d.energyTodayWh);
+      out.push({
+        id: String(d.id),
+        name: String(d.name || d.id),
+        watts,
+        online: !!d.online,
+        energyTodayWh: Number.isFinite(energyTodayWh) ? energyTodayWh : null,
+        emoji: '🔌',
+        color: 'var(--device)'
+      });
+    }
+    return out;
   }
 
   /**
