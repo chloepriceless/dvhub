@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { createScheduleEvaluator } from '../schedule-eval.js';
+// Item 25-03: NOT-HALT-Persistenz muss atomar sein (tmp+rename), damit ein
+// Crash/Stromausfall mitten im Write keine halbe control_state.json hinterlässt,
+// die loadControlState() in den Normalbetrieb fallen lässt (= stilles Aufheben
+// des aktiven NOT-HALT). Der reine Helper lebt in einem eigenen Modul, das KEINEN
+// HTTP-Server bootet (server.js würde web.listen() auslösen).
+import { atomicWriteControlState } from '../control-state-io.js';
 
 // T-0002 Control-Path-Hardening contract:
 //   1. Reg-2700 keepalive — identical-value writes are normally short-circuited
@@ -433,4 +442,71 @@ test('T-0080: a valid value still writes (no regression)', async () => {
   assert.equal(r.ok, true);
   assert.notEqual(r.skipped, true);
   assert.equal(gridWrites(writes).length, 1);
+});
+
+// --- 8. 25-03: atomare NOT-HALT-Persistenz (tmp+rename, kein .tmp-Rest) --------
+// persistControlState() schrieb control_state.json bisher direkt mit
+// fs.writeFileSync (server.js:783). Ein abgebrochener Write konnte eine halbe/
+// korrupte Datei hinterlassen; loadControlState() FÄLLT bei Parse-Fehler in den
+// Normalbetrieb → ein aktiver NOT-HALT würde stillschweigend aufgehoben. Der
+// atomare Helper (writeFileSync(tmp) + renameSync(tmp, ziel)) macht das unmöglich:
+// loadControlState sieht nie eine halbe Datei. KEIN echtes /var/lib, kein EOS/PG —
+// nur ein temporäres Verzeichnis.
+
+const mkTmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dvctrl-'));
+
+test('25-03: atomicWriteControlState schreibt valide JSON, keinen .tmp-Rest, round-trip', () => {
+  const dir = mkTmpDir();
+  try {
+    const filePath = path.join(dir, 'control_state.json');
+    const stateObj = {
+      discretionaryWritesPaused: true,
+      pausedAt: 1718660000000,
+      pausedBy: 'operator'
+    };
+
+    atomicWriteControlState(filePath, stateObj);
+
+    // 1. Zieldatei existiert + ist VALIDE JSON mit dem NOT-HALT-State.
+    assert.ok(fs.existsSync(filePath), 'Zieldatei wurde geschrieben');
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw); // wirft bei korrupter/halber Datei
+    assert.equal(parsed.discretionaryWritesPaused, true);
+    assert.equal(parsed.pausedAt, 1718660000000);
+    assert.equal(parsed.pausedBy, 'operator');
+
+    // 2. KEINE .tmp-Leiche im Verzeichnis (rename hat die tmp-Datei konsumiert).
+    const entries = fs.readdirSync(dir);
+    assert.ok(
+      !entries.some((e) => e.endsWith('.tmp')),
+      `kein .tmp-Rest erwartet, gefunden: ${entries.join(', ')}`
+    );
+    assert.deepEqual(entries.sort(), ['control_state.json']);
+
+    // 3. Round-trip: das Wieder-Laden ergibt denselben State (atomar geschriebene
+    //    Datei wird korrekt restauriert).
+    assert.deepEqual(parsed, stateObj);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('25-03: ein zweiter Write überschreibt atomar (keine .tmp-Leiche, neuer State)', () => {
+  const dir = mkTmpDir();
+  try {
+    const filePath = path.join(dir, 'control_state.json');
+
+    atomicWriteControlState(filePath, { discretionaryWritesPaused: true, pausedAt: 1, pausedBy: 'a' });
+    atomicWriteControlState(filePath, { discretionaryWritesPaused: false, pausedAt: 0, pausedBy: null });
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    assert.equal(parsed.discretionaryWritesPaused, false);
+    assert.equal(parsed.pausedBy, null);
+
+    const entries = fs.readdirSync(dir);
+    assert.ok(!entries.some((e) => e.endsWith('.tmp')), 'kein .tmp-Rest nach Re-Write');
+    assert.deepEqual(entries.sort(), ['control_state.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
