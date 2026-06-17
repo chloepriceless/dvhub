@@ -467,9 +467,10 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-zoom-ctl{display:inline-flex;align-items:center;gap:10px}
 .fam-zoom-btn{flex:0 0 auto;min-width:44px;width:44px;padding:8px 0;font-size:20px;line-height:1;text-align:center}
 .fam-zoom-val{min-width:3.6em;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9)}
-/* Shelly: Aus-Button auf der Geräte-Karte (oben rechts) */
-.dev-toggle{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:8px;border:1px solid rgba(255,138,138,.4);background:rgba(255,80,80,.16);color:#ff8a8a;font-size:13px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}
-.dev-toggle:active{transform:scale(.92)}
+/* Shelly: An/Aus-Schalter im Geräte-Detail-Panel (in der Chart-Ansicht) */
+.panel-device-toggle{margin:4px 0 14px}
+.panel-device-toggle[hidden]{display:none}
+.p-device-toggle-btn{width:100%}
 /* Schwebendes Symbol zum Wieder-Einschalten (display via JS umgeschaltet) */
 .shelly-reenable-fab{display:none;position:fixed;bottom:18px;right:18px;z-index:60;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;border:1px solid rgba(38,222,129,.4);background:rgba(38,222,129,.16);color:#26de81;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
 .shelly-reenable-icon{line-height:1}

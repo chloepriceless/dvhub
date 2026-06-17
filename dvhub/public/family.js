@@ -641,6 +641,9 @@
     }
     // Task #23 — EV panel evcc charge-mode switch (hidden for other panels).
     renderEvccModes(key);
+    // Shelly an/aus-Schalter im Geräte-Panel (2026-06-18) — nur für schaltbare
+    // Geräte sichtbar, hier in der Detail-Ansicht statt auf der Karte.
+    renderDeviceToggle(key);
     document.getElementById('overlay').classList.add('open');
     document.getElementById('panel').scrollTop = 0;
   }
@@ -707,10 +710,7 @@
         // Review 2026-06-10 (P2-3): device name/emoji are operator/MQTT-sourced
         // strings — escape before the innerHTML sink (same rule as the MQTT
         // tiles below, which already run everything through escapeMsg()).
-        var toggleHtml = d.switchable
-          ? '<button class="dev-toggle" data-action="shelly-off" data-id="' + escapeMsg(d.id) + '" type="button" aria-label="Ausschalten" title="Ausschalten">&#9211;</button>'
-          : '';
-        el.innerHTML = '<div class="dev-emoji">' + escapeMsg(d.emoji) + '</div><div class="dev-name">' + escapeMsg(d.name) + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>' + toggleHtml;
+        el.innerHTML = '<div class="dev-emoji">' + escapeMsg(d.emoji) + '</div><div class="dev-name">' + escapeMsg(d.name) + '</div><div class="dev-watts">' + formatW(d.watts) + '</div><div class="dev-bar-wrap"><div class="dev-bar"></div></div>';
         el.querySelector('.dev-watts').style.color = col;
         el.querySelector('.dev-bar').style.width = barPct + '%';
         el.querySelector('.dev-bar').style.background = col;
@@ -725,12 +725,28 @@
       // Review 2026-06-10 (P2-3): panelData feeds openPanel()'s innerHTML sinks
       // (p-title / p-summary / detail rows) — escape the device-sourced strings
       // at the source. Static panels above keep raw HTML icons by design.
+      var statusTxt = d.switchable ? (d.output ? 'Eingeschaltet' : 'Ausgeschaltet') : (d.online ? 'Live' : 'Offline');
+      var energyTxt = (d.energyTodayWh != null && isFinite(d.energyTodayWh))
+        ? (d.energyTodayWh >= 1000 ? (d.energyTodayWh / 1000).toFixed(2) + ' kWh' : Math.round(d.energyTodayWh) + ' Wh')
+        : '—';
       panelData[cardId] = {
-        icon: escapeMsg(d.emoji), iconBg: 'rgba(120,144,156,.1)', title: escapeMsg(d.name), sub: 'Einzelverbraucher', color: d.color || '#78909c',
+        icon: escapeMsg(d.emoji), iconBg: 'rgba(120,144,156,.1)', title: escapeMsg(d.name), sub: d.switchable ? 'Schaltbare Steckdose' : 'Einzelverbraucher', color: d.color || '#78909c',
         summary: escapeMsg(d.name) + ' verbraucht gerade ' + formatW(d.watts) + '.',
-        stats: [{ label: 'Gerade', val: formatW(d.watts), delta: d.watts > 500 ? 'Hoher Verbrauch' : 'Normal', up: d.watts < 500 }],
+        stats: [
+          { label: 'Leistung', val: formatW(d.watts), delta: d.watts > 500 ? 'Hoher Verbrauch' : 'Normal', up: d.watts < 500 },
+          { label: 'Energie', val: energyTxt, delta: '', up: true },
+          { label: 'Status', val: statusTxt, delta: '', up: !(d.switchable && !d.output) }
+        ],
         chart: null,
-        details: [['Aktueller Verbrauch', formatW(d.watts)], ['Quelle', 'Shelly / Smart Plug'], ['Gerät', escapeMsg(d.name)]]
+        switchable: !!d.switchable,
+        output: d.output,
+        details: [
+          ['Aktuelle Leistung', formatW(d.watts)],
+          ['Energie (Zähler)', energyTxt],
+          ['Status', statusTxt],
+          ['Quelle', 'Shelly / Smart Plug'],
+          ['Gerät', escapeMsg(d.name)]
+        ]
       };
     });
 
@@ -809,10 +825,28 @@
     }).then(function (r) { return r.json(); }).then(function (out) {
       if (!out || out.ok !== true) throw new Error((out && out.error) || 'fehlgeschlagen');
       if (on) closeShellyReenable(); // eingeschaltet → Karte kommt beim nächsten Poll
+      // Aus dem Detail-Panel geschaltet → Panel schließen (Karte erscheint/
+      // verschwindet beim nächsten Poll, je nach neuem Zustand).
+      if (currentPanelKey === 'dev-' + id) closePanel();
     }).catch(function (e) {
       if (typeof console !== 'undefined' && console.warn) console.warn('shelly toggle failed', e);
       if (btnEl) btnEl.disabled = false;
     });
+  }
+
+  /* An/Aus-Schalter im Geräte-Detail-Panel — nur für schaltbare Geräte (Shelly).
+     Label/Action richten sich nach dem aktuellen output-Status. */
+  function renderDeviceToggle(key) {
+    var box = document.getElementById('p-device-toggle');
+    if (!box) return;
+    var d = (key && key.indexOf('dev-') === 0) ? panelData[key] : null;
+    if (!d || !d.switchable) { box.hidden = true; box.innerHTML = ''; return; }
+    var id = key.slice(4);
+    var on = d.output === true;
+    var action = on ? 'shelly-off' : 'shelly-on';
+    var label = on ? 'Ausschalten' : 'Einschalten';
+    box.innerHTML = '<button class="fam-set-btn ' + (on ? 'ghost' : 'primary') + ' p-device-toggle-btn" data-action="' + action + '" data-id="' + escapeMsg(id) + '" type="button">' + label + '</button>';
+    box.hidden = false;
   }
 
   /* ===================== FAMILY EXTRAS: MQTT tiles + Tesla ===================== */
