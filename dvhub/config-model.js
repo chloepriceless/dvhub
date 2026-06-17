@@ -939,6 +939,20 @@ function buildFieldDefinitions() {
       step: 1000,
       help: 'Maximales Alter eines erfolgreichen SoC-/Akku-Reads, bevor die Telemetrie als veraltet gilt. \u00c4ltere Werte unterdr\u00fccken jede erzwungene Entladung (Hold), damit ein eingefrorener Messwert nach einem Kommunikationsausfall den Akku nicht tiefentl\u00e4dt. ~3-6 Poll-Zyklen.'
     },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.modbusConnectTimeoutMs',
+      label: 'Modbus Connect-Timeout (ms)',
+      type: 'number',
+      default: 5000,
+      min: 1000,
+      max: 30000,
+      step: 500,
+      help: 'Maximale Wartezeit f\u00fcr den Modbus-TCP-Verbindungsaufbau; danach gilt der Host als nicht erreichbar und der Poll-Zyklus blockiert nicht. Sch\u00fctzt vor einem toten/firewalled Ger\u00e4t, das den SYN ohne Antwort schluckt (sonst h\u00e4lt das OS die Verbindung bis zum Default-Timeout ~75-130 s offen). Greift nur in der Connect-Phase, nicht als Idle-Timeout an laufenden Polls.'
+    },
 
     {
       section: 'schedule',
@@ -2395,6 +2409,10 @@ export function createDefaultConfig() {
       // T-0075: max age (ms) of a successful SoC/battery poll before telemetry is
       // treated as stale and forced discharge is suppressed (chokepoint floor).
       telemetryMaxAgeMs: 90000,
+      // Plan 25-04 (Befund 4): Connect-Timeout (ms) für den Modbus-TCP-Verbindungs-
+      // aufbau. Default 5000 (config-getrieben). Verhindert, dass ein toter/firewalled
+      // Host den Poll-Zyklus bis zum OS-Default-TCP-Timeout (~75-130 s) blockiert.
+      modbusConnectTimeoutMs: 5000,
       mqtt: {
         // T-0080 P1: was a fleet-specific LAN IP baked into the shipped default
         // (same class as victron.host above — prod reads /etc/dvhub/config.json

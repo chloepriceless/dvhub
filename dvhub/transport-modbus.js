@@ -16,9 +16,13 @@ import { safeInterval } from './services/safe-async.js';
  * Modbus TCP Transport für Victron-Kommunikation.
  * Extrahiert aus server.js — reiner Modbus-Client (kein Server).
  */
-export function createModbusTransport() {
+export function createModbusTransport(opts = {}) {
   const mbPool = new Map();
   const MB_IDLE_MS = 30000;
+  // Plan 25-04 (Befund 4): Connect-Timeout-Guard. Default 5000 ms (config-getrieben
+  // über victron.modbusConnectTimeoutMs). Bricht einen hängenden TCP-Connect zu einem
+  // toten/firewalled Host ab, bevor der OS-Default (~75-130 s) den Poll-Zyklus blockiert.
+  const connectTimeoutMs = Number(opts.connectTimeoutMs) > 0 ? Number(opts.connectTimeoutMs) : 5000;
   let tidCounter = 1;
 
   function getMbConn(host, port) {
@@ -34,11 +38,29 @@ export function createModbusTransport() {
       pending: null,
       queue: [],
       idleTimer: null,
+      connectTimer: null,
       connect() {
         if (this.sock && !this.sock.destroyed) return;
         this.sock = new net.Socket();
         this.sock.setKeepAlive(true, 10000);
         this.sock.connect(port, host);
+        // Plan 25-04 (Befund 4 / Pitfall 3): Connect-Timeout-Guard. Greift NUR in
+        // der Connect-Phase. Bei ausbleibendem 'connect' (stiller SYN-Drop eines
+        // toten/firewalled Hosts) wird der Socket über denselben _fail-Pfad
+        // destroyed wie ein echter Connect-Fehler → konsistente Rejection an die
+        // Poll-Schleife, kein OS-Default-Hang. NACH 'connect' wird der Timer
+        // ge-clear-t, damit langlebige/seltene Polls NICHT als Idle abgebrochen
+        // werden (setTimeout ist KEIN Idle-Timeout — vgl. Pitfall 3).
+        if (this.connectTimer) clearTimeout(this.connectTimer);
+        this.connectTimer = setTimeout(() => {
+          this.connectTimer = null;
+          this._fail(new Error('modbus connect timeout'));
+        }, connectTimeoutMs);
+        this.connectTimer.unref();
+        this.sock.once('connect', () => {
+          clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+        });
         this.sock.on('data', (chunk) => {
           this.buf = Buffer.concat([this.buf, chunk]);
           this._drain();
@@ -70,6 +92,12 @@ export function createModbusTransport() {
           clearTimeout(this.idleTimer);
           this.idleTimer = null;
         }
+        // Plan 25-04: Connect-Guard ebenfalls clearen, damit ein bereits über
+        // _fail abgebrochener Connect keinen verwaisten Timer hinterlässt.
+        if (this.connectTimer) {
+          clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+        }
         const p = this.pending;
         if (p) {
           this.pending = null;
@@ -90,6 +118,11 @@ export function createModbusTransport() {
         if (this.idleTimer) {
           clearTimeout(this.idleTimer);
           this.idleTimer = null;
+        }
+        // Plan 25-04: Connect-Guard beim Pool-Cleanup ebenfalls clearen.
+        if (this.connectTimer) {
+          clearTimeout(this.connectTimer);
+          this.connectTimer = null;
         }
         // Reject pending/queued requests without killing the socket yet
         const p = this.pending;

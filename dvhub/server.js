@@ -328,10 +328,10 @@ const state = {
 // ── Transport erstellen (Modbus oder MQTT) ──────────────────────────
 const transport = cfg.victron?.transport === 'mqtt'
   ? createMqttTransport(cfg.victron)
-  : createModbusTransport();
+  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
-const scanTransport = createModbusTransport();
+const scanTransport = createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
 let telemetryStore = null;
 let historyImportManager = null;
 let historyRuntime = null;
