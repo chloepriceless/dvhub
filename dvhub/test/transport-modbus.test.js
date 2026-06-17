@@ -82,3 +82,65 @@ test('mbWriteMultiple surfaces Modbus exception responses', async () => {
     await server.close();
   }
 });
+
+// Plan 25-04 (Befund 4) — Connect-Timeout gegen toten/firewalled Host.
+// Ein stiller SYN-Drop (totes Gerät / Firewall-DROP) darf den Poll-Zyklus NICHT
+// bis zum OS-Default-TCP-Connect-Timeout (~75-130 s) blockieren. Test verbindet
+// auf die nicht-routbare TEST-NET/Blackhole-Adresse 10.255.255.1, die SYN ohne
+// Antwort schluckt, und prüft, dass die Promise innerhalb einer Zeitschranke
+// rejected statt zu hängen.
+test('mbWriteSingle rejects within connect timeout against a blackhole host', async () => {
+  const transport = createModbusTransport({ connectTimeoutMs: 300 });
+  const start = Date.now();
+
+  try {
+    await assert.rejects(
+      () => transport.mbWriteSingle({
+        host: '10.255.255.1',
+        port: 502,
+        unitId: 1,
+        address: 100,
+        value: 0,
+        timeoutMs: 5000
+      }),
+      /connect timeout/
+    );
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 2000,
+      `connect timeout did not abort in time: ${elapsed}ms (expected < 2000ms)`
+    );
+  } finally {
+    await transport.destroy();
+  }
+});
+
+// Plan 25-04 — Lebend-Regression: der Connect-Timeout-Guard darf gesunde Connects
+// NICHT killen. Ein normaler Write gegen einen lebenden lokalen Server muss
+// erfolgreich antworten (kein fälschlicher Connect-Timeout-Abbruch).
+test('mbWriteSingle still succeeds against a live server with connect timeout set', async () => {
+  const server = await startModbusServer((request) => {
+    // Echo a valid FC=6 write-single ack back.
+    const response = Buffer.alloc(12);
+    request.copy(response, 0, 0, 12);
+    response.writeUInt16BE(6, 4);
+    return response;
+  });
+  const transport = createModbusTransport({ connectTimeoutMs: 5000 });
+
+  try {
+    const ack = await transport.mbWriteSingle({
+      host: '127.0.0.1',
+      port: server.port,
+      unitId: 100,
+      address: 2848,
+      value: 1,
+      timeoutMs: 1000
+    });
+    assert.equal(ack.addr, 2848);
+    assert.equal(ack.value, 1);
+  } finally {
+    await transport.destroy();
+    await server.close();
+  }
+});
