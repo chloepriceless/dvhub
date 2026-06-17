@@ -19,7 +19,7 @@
   'unsafe-inline' (see routes-api.js SECURITY_HEADERS).
 -->
 <link rel="stylesheet" href="/dvhub-app.css">
-<link rel="stylesheet" href="/family.css?v=17">
+<link rel="stylesheet" href="/family.css?v=18">
 <link rel="stylesheet" href="/dvhub-powerflow.css">
 </head>
 <body>
@@ -113,6 +113,14 @@
         <option value="lg">Gro&szlig;</option>
       </select>
     </label>
+    <div class="fam-set-sep">Anzeige</div>
+    <div class="fam-set-row"><span>Zoom <small>(nur dieses Ger&auml;t)</small></span>
+      <span class="fam-zoom-ctl">
+        <button class="fam-set-btn ghost fam-zoom-btn" data-action="zoom-out" type="button" aria-label="Verkleinern">&minus;</button>
+        <span class="fam-zoom-val" id="famSetZoomVal">100&#8201;%</span>
+        <button class="fam-set-btn ghost fam-zoom-btn" data-action="zoom-in" type="button" aria-label="Vergr&ouml;&szlig;ern">+</button>
+      </span>
+    </div>
     <div class="fam-set-actions">
       <button class="fam-set-btn ghost" id="famSetLayoutReset" type="button">Kachel-Layout zur&uuml;cksetzen</button>
       <button class="fam-set-btn primary" id="famSetSave" type="button">Speichern</button>
@@ -134,6 +142,6 @@
 <script src="/chart.min.js"></script>
 <script src="/dvhub-powerflow.js"></script>
 <script type="module" src="/family-screensaver-logic.js"></script>
-<script src="/family.js?v=20260614-devfromhouse"></script>
+<script src="/family.js?v=20260617-zoom-devices"></script>
 </body>
 </html>

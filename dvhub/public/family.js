@@ -37,6 +37,8 @@
       if (action === 'toggle-edit') { toggleEdit(); return; }
       if (action === 'close-picker') { closePicker(); return; }
       if (action === 'close-fam-settings') { closeFamSettings(); return; }
+      if (action === 'zoom-in') { zoomNudge(1); return; }
+      if (action === 'zoom-out') { zoomNudge(-1); return; }
       if (action === 'close-panel') { closePanel(); return; }
       if (action === 'pick-metric') {
         var key = actionEl.getAttribute('data-metric-key');
@@ -2936,7 +2938,32 @@
     });
   }
 
+  /* ===================== Anzeige-Zoom (pro Gerät) =====================
+     Operator-Wunsch (2026-06-17): kleine/große Displays brauchen unterschiedliche
+     Skalierung. Zoom wird pro Browser/Gerät in localStorage gehalten (NICHT in der
+     Server-Config, die für ALLE Family-Displays gälte) und sofort via CSS-zoom auf
+     <html> angewandt. CSP-konform: kein inline-style, nur CSSOM (element.style). */
+  var ZOOM_KEY = 'dvhub.family.zoom.v1';
+  var ZOOM_MIN = 0.5, ZOOM_MAX = 1.6, ZOOM_STEP = 0.1, ZOOM_DEFAULT = 1.0;
+  function zoomLoad() {
+    var v = parseFloat(localStorage.getItem(ZOOM_KEY));
+    return (isFinite(v) && v >= ZOOM_MIN && v <= ZOOM_MAX) ? v : ZOOM_DEFAULT;
+  }
+  function zoomApply(level) {
+    var v = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(Number(level) * 10) / 10));
+    document.documentElement.style.zoom = String(v);
+    var lbl = document.getElementById('famSetZoomVal');
+    if (lbl) lbl.textContent = Math.round(v * 100) + ' %';
+    return v;
+  }
+  function zoomSet(level) {
+    var v = zoomApply(level);
+    try { localStorage.setItem(ZOOM_KEY, String(v)); } catch (e) { /* private mode */ }
+  }
+  function zoomNudge(dir) { zoomSet(zoomLoad() + dir * ZOOM_STEP); }
+
   function initFamSettings() {
+    zoomApply(zoomLoad());
     var clock = document.getElementById('g-time');
     if (clock) clock.addEventListener('click', openFamSettings);
     var save = document.getElementById('famSetSave');
