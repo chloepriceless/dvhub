@@ -60,6 +60,10 @@ import {
   gridDirection,
   shouldAlarmTelemetryDown
 } from './server-utils.js';
+// Item 25-03: atomarer Schreibpfad für die NOT-HALT-Persistenz (tmp+rename).
+// Eigenes server-freies Modul, damit der Helper unit-testbar bleibt, ohne den
+// HTTP-Server zu booten (server-utils.js ist bewusst importfrei).
+import { atomicWriteControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
@@ -780,11 +784,13 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 
 function persistControlState() {
   try {
-    fs.writeFileSync(CONTROL_STATE_PATH, JSON.stringify({
+    // Item 25-03: atomar via tmp+rename (control-state-io.js) — ein abgebrochener
+    // Write kann den aktiven NOT-HALT nicht mehr stillschweigend aufheben.
+    atomicWriteControlState(CONTROL_STATE_PATH, {
       discretionaryWritesPaused: !!state.ctrl.discretionaryWritesPaused,
       pausedAt: state.ctrl.pausedAt || 0,
       pausedBy: state.ctrl.pausedBy || null
-    }) + '\n');
+    });
   } catch (e) {
     pushLog('control_state_persist_error', { error: e.message }, 'error');
   }
