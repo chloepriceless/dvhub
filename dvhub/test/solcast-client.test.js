@@ -53,18 +53,68 @@ test('computeSolcastConfidence returns 1.0 for zero spread', () => {
 
 // --- parseSolcastResponse ---
 
-test('parseSolcastResponse maps kW to W and extracts timestamps', () => {
+test('parseSolcastResponse maps kW to W and normalizes ts to period-START (15-min-aligned)', () => {
+  // 26-03: Solcast emits the interval END as period_end; the ts must be normalized
+  // to the period START (= period_end - period duration), floored to the 15-min axis,
+  // so it collides with pvnode/pvlib slots in ensemble.mergeForecasts (exact ts_utc match).
   const forecasts = [
-    { period_end: '2026-04-03T10:00:00Z', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 },
-    { period_end: '2026-04-03T11:00:00Z', pv_estimate: 5.0, pv_estimate10: 4.0, pv_estimate90: 6.0 }
+    { period_end: '2026-04-03T10:30:00Z', period: 'PT30M', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 },
+    { period_end: '2026-04-03T11:30:00Z', period: 'PT30M', pv_estimate: 5.0, pv_estimate10: 4.0, pv_estimate90: 6.0 }
   ];
   const { rows } = parseSolcastResponse(forecasts);
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].ts, '2026-04-03T10:00:00Z');
-  assert.equal(rows[0].powerW, 3500); // 3.5 kW * 1000
+  assert.equal(rows[0].ts, '2026-04-03T10:00:00.000Z'); // START = 10:30 - 30min
+  assert.equal(rows[0].powerW, 3500); // 3.5 kW * 1000 — unchanged
   assert.equal(typeof rows[0].confidence, 'number');
-  assert.equal(rows[1].ts, '2026-04-03T11:00:00Z');
-  assert.equal(rows[1].powerW, 5000); // 5.0 kW * 1000
+  assert.equal(rows[1].ts, '2026-04-03T11:00:00.000Z'); // START = 11:30 - 30min
+  assert.equal(rows[1].powerW, 5000); // 5.0 kW * 1000 — unchanged
+});
+
+// --- 26-03: period-START normalization (period_end -> period_start, 15-min-aligned) ---
+//
+// Fix #3 (Welle 4): parseSolcastResponse set ts: f.period_end. Solcast delivers the
+// interval END as the timestamp; in ensemble.mergeForecasts (exact ts_utc string match)
+// this caused a 15-/30-min offset against pvnode/pvlib (which use the period START), so
+// Solcast slots NEVER collided with pvnode/pvlib slots -> Solcast got its own slots with
+// Solcast-only weight (a co-cause of the quality drift). Fix: ts on the period START
+// = period_end - interval duration, duration derived from the (previously unused) `period`
+// field (PT30M/PT15M), plus quarter-flooring onto the 15-min axis.
+
+test('26-03 (A): PT30M — ts is period-START = period_end - 30min, 15-min-aligned', () => {
+  const { rows } = parseSolcastResponse([
+    { period_end: '2026-04-03T10:30:00Z', period: 'PT30M', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ts, '2026-04-03T10:00:00.000Z');
+  assert.equal(rows[0].powerW, 3500); // W-conversion unchanged
+});
+
+test('26-03 (B): PT15M — ts is period-START = period_end - 15min', () => {
+  const { rows } = parseSolcastResponse([
+    { period_end: '2026-04-03T10:15:00Z', period: 'PT15M', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ts, '2026-04-03T10:00:00.000Z');
+  assert.equal(rows[0].powerW, 3500);
+});
+
+test('26-03 (C): missing period field -> 30-min fallback', () => {
+  const { rows } = parseSolcastResponse([
+    { period_end: '2026-04-03T10:30:00Z', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ts, '2026-04-03T10:00:00.000Z'); // 30-min default
+  assert.equal(rows[0].powerW, 3500);
+});
+
+test('26-03 (D): quarter-flooring — off-axis START floored onto the 15-min axis', () => {
+  // period_end 10:37, PT30M -> START 10:07 -> floored to 10:00 (pvnode axis).
+  const { rows } = parseSolcastResponse([
+    { period_end: '2026-04-03T10:37:00Z', period: 'PT30M', pv_estimate: 3.5, pv_estimate10: 2.5, pv_estimate90: 4.5 }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ts, '2026-04-03T10:00:00.000Z');
+  assert.equal(rows[0].powerW, 3500);
 });
 
 test('parseSolcastResponse handles empty array', () => {
