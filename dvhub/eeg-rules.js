@@ -137,6 +137,14 @@ export function isNegativePriceSlotAffected({ rule, marketPriceCtKwh, consecutiv
     case '15min':
       return Number(marketPriceCtKwh) < 0;
     case 'tiered': {
+      // Observability only: when tiers are configured but the requested year is
+      // not in the map, the lookup silently falls back to 4. Warn exactly once
+      // per call so the swallowed §51 tier assumption is visible. This does NOT
+      // change the returned boolean or the fallback threshold of 4 — the warn
+      // must NOT fire on the legitimate tiers==null path nor for a known year.
+      if (tiers && year != null && tiers[Number(year)] === undefined) {
+        console.warn('eeg_tiered_unknown_year', { year: Number(year), fallbackThreshold: 4 });
+      }
       const threshold = (tiers && year != null) ? (tiers[Number(year)] ?? 4) : 4;
       return Number(consecutiveNegativeHours) >= threshold;
     }
