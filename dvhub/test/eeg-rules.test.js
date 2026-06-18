@@ -132,6 +132,55 @@ test('isNegativePriceSlotAffected returns false for rule=tiered in 2024 with onl
   assert.equal(isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2024, consecutiveNegativeHours: 2 }), false);
 });
 
+// ── isNegativePriceSlotAffected: tiered unknown-year warn (observability) ────
+//
+// Capture console.warn by replacing it with a counting stub; restore in finally
+// so a thrown assertion can never leak the stub into sibling tests (the full
+// suite shares one process). The warn is a pure observability add-on: the
+// returned boolean and the fallback threshold of 4 MUST stay unchanged.
+
+function captureWarn(fn) {
+  const original = console.warn;
+  const calls = [];
+  console.warn = (...args) => { calls.push(args); };
+  try {
+    const result = fn();
+    return { result, calls };
+  } finally {
+    console.warn = original;
+  }
+}
+
+test('isNegativePriceSlotAffected (tiered) warns exactly once for a year not in tiers, threshold stays 4', () => {
+  const { result, calls } = captureWarn(() =>
+    isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2025, consecutiveNegativeHours: 4 })
+  );
+  // Behaviour unchanged: unknown year falls back to threshold 4, 4 >= 4 -> true.
+  assert.equal(result, true);
+  // Exactly one warn fired, carrying a stable identifier + the fallback context.
+  assert.equal(calls.length, 1, `Expected exactly 1 console.warn, got ${calls.length}`);
+  assert.equal(calls[0][0], 'eeg_tiered_unknown_year');
+  assert.deepEqual(calls[0][1], { year: 2025, fallbackThreshold: 4 });
+});
+
+test('isNegativePriceSlotAffected (tiered) does NOT warn for a known year', () => {
+  const { result, calls } = captureWarn(() =>
+    isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2024, consecutiveNegativeHours: 2 })
+  );
+  // Known year 2024 -> threshold 3, 2 >= 3 -> false; no warn for a configured year.
+  assert.equal(result, false);
+  assert.equal(calls.length, 0, `Expected no console.warn for a known year, got ${calls.length}`);
+});
+
+test('isNegativePriceSlotAffected (tiered) does NOT warn when tiers is undefined (legitimate no-tiers path)', () => {
+  const { result, calls } = captureWarn(() =>
+    isNegativePriceSlotAffected({ rule: 'tiered', tiers: undefined, year: 2025, consecutiveNegativeHours: 4 })
+  );
+  // No tiers configured is a legitimate path -> default threshold 4, 4 >= 4 -> true, no warn.
+  assert.equal(result, true);
+  assert.equal(calls.length, 0, `Expected no console.warn for the tiers==null path, got ${calls.length}`);
+});
+
 // ── NEGATIVE_PRICE_RULES and EV_DEDUCTION_CT_KWH exports ───────────────────
 
 test('NEGATIVE_PRICE_RULES is a non-empty array', () => {
