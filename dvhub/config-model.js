@@ -3351,6 +3351,22 @@ function isFiniteIntInRange(value, lo, hi) {
   return Number.isInteger(numeric) && numeric >= lo && numeric <= hi;
 }
 
+// IANA-Timezone-Guard (Phase 26-04). Reuses the same Intl.DateTimeFormat idiom
+// already established in formatLocalDate/localMinutesOfDay — a string that is not
+// a valid IANA zone makes the constructor throw RangeError. We treat throw =
+// invalid. No external dependency, deterministic, no behaviour change for a
+// valid zone.
+function isValidTimeZone(tz) {
+  if (typeof tz !== 'string' || !tz) return false;
+  try {
+    // eslint-disable-next-line no-new
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validateConfigSchema(raw, warnings) {
   if (!isPlainObject(raw)) return;
   const defaults = createDefaultConfig();
@@ -3393,6 +3409,23 @@ function validateConfigSchema(raw, warnings) {
     if (section in raw && raw[section] != null && !isPlainObject(raw[section])) {
       warnings.push(`config.${section} is not an object (got ${typeof raw[section]}) — section reset to default`);
       delete raw[section];
+    }
+  }
+
+  // schedule.timezone / epex.timezone — free-text IANA zones. An invalid value
+  // (e.g. 'Europe/Berln') would reach new Intl.DateTimeFormat({ timeZone }) in
+  // formatLocalDate/localMinutesOfDay and throw RangeError. Reset an invalid
+  // zone to the Europe/Berlin default HERE (before deepMerge runs in
+  // normalizeConfigInput) so the merged config carries a guaranteed-valid zone
+  // and no RangeError-capable value ever reaches downstream. A valid zone is
+  // left untouched. The section object must still be a plain object after the
+  // epex/optimizer guard above, so an undefined access cannot occur.
+  for (const section of ['schedule', 'epex']) {
+    const sec = raw[section];
+    if (isPlainObject(sec) && 'timezone' in sec && !isValidTimeZone(sec.timezone)) {
+      const def = defaults[section]?.timezone ?? BERLIN_TIME_ZONE;
+      warnings.push(`config.${section}.timezone (${JSON.stringify(sec.timezone)}) is not a valid IANA time zone — using default ${def}`);
+      sec.timezone = def;
     }
   }
 }
