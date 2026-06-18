@@ -314,11 +314,23 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
     const pvnodeSlots  = normalizeProviderRows(pvnodeResult);
     const solcastSlots = normalizeProviderRows(solcastResult);
     const pvlibSlots   = normalizeProviderRows(pvlibResult);
+    // Phase 26-01: vrm/forecast_solar/open_meteo were fetched + normalized but only ever
+    // consumed by the single-fallback else-if chain below — they never entered the weighted
+    // ensemble. Lift them through the SAME three-step (normalize → present-push →
+    // providersBySlot) as pvnode/solcast/pvlib so mergePvForecastsWeighted mixes them. They
+    // ride the uniform-weight path (no MAE column by design — see 26-01 plan); the inverse-MAE
+    // path stays on pvnode/solcast/pvlib only (computeWeights filters out the keys without MAE).
+    const vrmSlots           = normalizeProviderRows(vrmResult);
+    const forecastSolarSlots = normalizeProviderRows(forecastSolarResult);
+    const openMeteoSlots     = normalizeProviderRows(openMeteoResult);
 
     const presentProviders = [];
     if (pvnodeSlots.length  > 0) presentProviders.push('pvnode');
     if (solcastSlots.length > 0) presentProviders.push('solcast');
     if (pvlibSlots.length   > 0) presentProviders.push('pvlib');
+    if (vrmSlots.length           > 0) presentProviders.push('vrm');
+    if (forecastSolarSlots.length > 0) presentProviders.push('forecast_solar');
+    if (openMeteoSlots.length     > 0) presentProviders.push('open_meteo');
 
     let ensembleWeights = null;
     let mergedSlots = null;
@@ -326,7 +338,14 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
 
     if (presentProviders.length >= 2) {
       // Multiple providers → inverse-MAE ensemble merge (D-A4 + D-C3)
-      const providersBySlot = { pvnode: pvnodeSlots, solcast: solcastSlots, pvlib: pvlibSlots };
+      const providersBySlot = {
+        pvnode: pvnodeSlots,
+        solcast: solcastSlots,
+        pvlib: pvlibSlots,
+        vrm: vrmSlots,
+        forecast_solar: forecastSolarSlots,
+        open_meteo: openMeteoSlots
+      };
       try {
         const { merged, weights } = await mergePvForecastsWeighted({
           providersBySlot, store, pushLog
@@ -489,6 +508,11 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
           pvnode: pvnodeSlots,
           solcast: solcastSlots,
           pvlib: pvlibSlots,
+          // Phase 26-01: persist the three additional provider layers so they are not
+          // missing from the snapshot once they participate in the ensemble.
+          vrm: vrmSlots,
+          forecast_solar: forecastSolarSlots,
+          open_meteo: openMeteoSlots,
           merged: Array.isArray(mergedSlots) && mergedSlots.length > 0
             ? mergedSlots
             : normalizeProviderRows(state.forecast.pv?.data),
