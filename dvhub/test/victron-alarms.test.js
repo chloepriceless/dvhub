@@ -21,6 +21,7 @@ import {
 } from '../victron-alarms.js';
 import { createPoller } from '../polling.js';
 import { loadConfigFile } from '../config-model.js';
+import { buildVictronSnapshot } from '../runtime-state.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function vebusBlock(overrides = {}) {
@@ -281,4 +282,20 @@ test('loadConfigFile: no persisted alarms → profile default (feature present b
   );
   assert.equal(eff.victron.alarms.enabled, true);
   assert.equal(eff.victron.alarms.vebusUnitId, null, 'no unit-ids → inactive (no banner), safe default');
+});
+
+// ── IPC snapshot whitelist (split-process) ───────────────────────────────────
+// The poller runs in a separate runtime-worker process; state.victron crosses to
+// the web process via buildVictronSnapshot (a field whitelist). `alarms` MUST be
+// whitelisted or payload.victron.alarms is dropped and the banner is permanently
+// empty in split-process mode — the live-deploy gap.
+test('buildVictronSnapshot: carries state.victron.alarms across the IPC snapshot', () => {
+  const snap = buildVictronSnapshot({
+    soc: 50,
+    alarms: { configured: true, active: [{ key: 'vebus.highTemp', severity: 2, since: '2026-06-18T00:00:00.000Z' }], updatedAt: '2026-06-18T00:00:01.000Z' }
+  });
+  assert.ok(snap.alarms, 'alarms must survive the victron snapshot whitelist');
+  assert.equal(snap.alarms.configured, true);
+  assert.equal(snap.alarms.active[0].key, 'vebus.highTemp');
+  assert.equal(snap.alarms.active[0].severity, 2);
 });

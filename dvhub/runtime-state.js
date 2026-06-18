@@ -41,7 +41,12 @@ const VICTRON_FIELDS = [
   'gridToBatteryW',
   'batteryDirectUseW',
   'batteryToGridW',
-  'errors'
+  'errors',
+  // Victron device-alarm banner: the poller (a separate runtime-worker process)
+  // writes state.victron.alarms; it MUST be whitelisted here or the IPC snapshot
+  // drops it and the web process serves payload.victron.alarms = undefined
+  // (banner permanently empty in split-process mode).
+  'alarms'
 ];
 
 const SCHEDULE_FIELDS = [
