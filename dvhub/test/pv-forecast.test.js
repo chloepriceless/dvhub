@@ -203,3 +203,146 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
   assert.equal(firstSlot.power_w, 4500, 'Merged power should be average of Solcast and pvlib');
   assert.equal(firstSlot.model, 'combined', 'Model should be "combined" for merged results');
 });
+
+// --- Phase 26-01: VRM/forecast_solar/open_meteo feed the WEIGHTED ensemble ---
+//
+// These three providers were fetched + normalized but only ever consumed by the
+// single-fallback else-if chain — they never entered presentProviders/providersBySlot,
+// so they could not participate in mergePvForecastsWeighted. Phase 26-01 lifts them into
+// the same three-step (normalize → present-push → providersBySlot) as pvnode/solcast/pvlib,
+// relying on the 26-02 per-slot effective-weight renorm for correct partial-coverage merge.
+
+/**
+ * Shared mock-store: getForecastAccuracyRow returns nothing → mergePvForecastsWeighted
+ * falls into the uniform-weight path (the new providers have no MAE column by design —
+ * 26-01 weighting decision: new providers ride the uniform path, inverse-MAE stays on
+ * pvnode/solcast/pvlib only).
+ */
+function makeEnsembleMockStore() {
+  const storedRows = [];
+  return {
+    storedRows,
+    insertPvForecast: async (row) => { storedRows.push(row); },
+    insertPvForecastBatch: async (rows) => {
+      if (Array.isArray(rows)) for (const row of rows) storedRows.push(row);
+    },
+    getLatestWeather: async () => [],
+    // present → uniform fallback (no inverse-MAE row)
+    getForecastAccuracyRow: async () => null
+  };
+}
+
+function makeAutoCtx(state, extra = {}) {
+  return {
+    state,
+    getCfg: () => ({
+      forecast: {
+        location: { latitude: 48.15, longitude: 9.48 },
+        // model 'auto' so forecast_solar + open_meteo are attempted; pvnode only if configured.
+        pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'auto' },
+        solcast: {} // no apiKey → solcast not fetched
+      }
+    }),
+    pushLog: () => {},
+    bumpForecastVersion: () => {},
+    ...extra
+  };
+}
+
+test('26-01 Test A: vrm + forecast_solar (2 present) → combined ensemble path, not single-fallback', async () => {
+  const mockStore = makeEnsembleMockStore();
+  const mockState = { forecast: { pv: {} } };
+  const ctx = makeAutoCtx(mockState);
+
+  const pv = createPvForecast(ctx, {
+    tier: 1,
+    store: mockStore,
+    pythonBridge: { call: async () => [] },
+    solcastClient: { fetchPvForecast: async () => [] },
+    forecastSolar: {
+      fetchForecast: async () => [
+        { ts_utc: '2026-04-03T12:00:00Z', power_w: 3000 },
+        { ts_utc: '2026-04-03T12:15:00Z', power_w: 3200 }
+      ]
+    },
+    vrmForecast: {
+      isAvailable: () => true,
+      readPvForecast: async () => [
+        { ts_utc: '2026-04-03T12:00:00Z', power_w: 5000 },
+        { ts_utc: '2026-04-03T12:15:00Z', power_w: 5400 }
+      ]
+    },
+    openMeteoSolar: { generateForecast: async () => [] },
+    pvnodeClient: { isConfigured: false, fetchForecast: async () => [] }
+  });
+
+  await pv.runForecast();
+  // With vrm + forecast_solar both present, presentProviders.length === 2 → ensemble path.
+  assert.equal(mockState.forecast.pv.model, 'combined',
+    'vrm + forecast_solar should enter the combined ensemble path, NOT the single-fallback chain');
+  // Uniform two-way merge of vrm (5000) + forecast_solar (3000) = 4000 at 12:00.
+  const slot12 = mockState.forecast.pv.data.find(r => r.ts_utc === '2026-04-03T12:00:00Z');
+  assert.ok(slot12, 'merged data should include the 12:00 slot');
+  assert.equal(slot12.power_w, 4000, 'uniform 2-way merge of 5000 + 3000 = 4000');
+});
+
+test('26-01 Test B: writeSnapshot receives vrm/forecast_solar/open_meteo layers', async () => {
+  const mockStore = makeEnsembleMockStore();
+  const mockState = { forecast: { pv: {} } };
+  let snapshotArg = null;
+  const ctx = makeAutoCtx(mockState, {
+    forecastSnapshots: {
+      writeSnapshot: async (arg) => { snapshotArg = arg; }
+    }
+  });
+
+  const pv = createPvForecast(ctx, {
+    tier: 1,
+    store: mockStore,
+    pythonBridge: { call: async () => [] },
+    solcastClient: { fetchPvForecast: async () => [] },
+    forecastSolar: {
+      fetchForecast: async () => [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 3000 }]
+    },
+    vrmForecast: {
+      isAvailable: () => true,
+      readPvForecast: async () => [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 5000 }]
+    },
+    openMeteoSolar: {
+      generateForecast: async () => [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 6000 }]
+    },
+    pvnodeClient: { isConfigured: false, fetchForecast: async () => [] }
+  });
+
+  await pv.runForecast();
+  assert.ok(snapshotArg, 'writeSnapshot should have been called');
+  assert.ok('vrm' in snapshotArg, 'snapshot should carry a vrm layer');
+  assert.ok('forecast_solar' in snapshotArg, 'snapshot should carry a forecast_solar layer');
+  assert.ok('open_meteo' in snapshotArg, 'snapshot should carry an open_meteo layer');
+  assert.equal(snapshotArg.vrm?.[0]?.power_w, 5000, 'vrm layer carries normalized slots');
+  assert.equal(snapshotArg.forecast_solar?.[0]?.power_w, 3000, 'forecast_solar layer carries normalized slots');
+  assert.equal(snapshotArg.open_meteo?.[0]?.power_w, 6000, 'open_meteo layer carries normalized slots');
+});
+
+test('26-01 Test C: single provider (open_meteo only) → single-fallback preserved', async () => {
+  const mockStore = makeEnsembleMockStore();
+  const mockState = { forecast: { pv: {} } };
+  const ctx = makeAutoCtx(mockState);
+
+  const pv = createPvForecast(ctx, {
+    tier: 1,
+    store: mockStore,
+    pythonBridge: { call: async () => [] },
+    solcastClient: { fetchPvForecast: async () => [] },
+    forecastSolar: { fetchForecast: async () => [] },
+    vrmForecast: { isAvailable: () => false, readPvForecast: async () => [] },
+    openMeteoSolar: {
+      generateForecast: async () => [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 6000 }]
+    },
+    pvnodeClient: { isConfigured: false, fetchForecast: async () => [] }
+  });
+
+  await pv.runForecast();
+  assert.equal(mockState.forecast.pv.model, 'open_meteo',
+    'with only open_meteo present, the single-fallback path must still set model=open_meteo');
+});
