@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createPvForecast, buildPvlibInput } from '../services/forecast/pv-forecast.js';
+import { createPvForecast, buildPvlibInput, mergePvForecastsWeighted } from '../services/forecast/pv-forecast.js';
 
 // --- buildPvlibInput tests ---
 
@@ -202,6 +202,48 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
   assert.ok(firstSlot, 'Should store a row for 12:00');
   assert.equal(firstSlot.power_w, 4500, 'Merged power should be average of Solcast and pvlib');
   assert.equal(firstSlot.model, 'combined', 'Model should be "combined" for merged results');
+});
+
+// --- WR-01: MAE-weighted path surfaces which present providers it excludes ---
+// When inverse-MAE weighting is active (accuracy data exists), only the tracked
+// providers (pvnode/solcast/pvlib) carry a weight. A present provider WITHOUT an
+// MAE column (vrm/forecast_solar/open_meteo — lifted into the ensemble by 26-01)
+// has an undefined weight and is skipped by mergeForecasts. Log that exclusion so
+// an operator can distinguish "excluded by design" from a fetch error.
+// Pure observability — the weights + merged result are unchanged.
+
+test('WR-01: mergePvForecastsWeighted logs ensemble_mae_providers_excluded for present MAE-less providers', async () => {
+  const events = [];
+  const store = {
+    getForecastAccuracyRow: async () => ({ mae_7d_pvnode: 100, mae_7d_solcast: 200, mae_7d_pvlib: 300 })
+  };
+  const providersBySlot = {
+    pvnode: [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4000 }],
+    vrm:    [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 5000 }] // no MAE column → excluded by the inverse-MAE path
+  };
+  const { weights } = await mergePvForecastsWeighted({
+    providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data })
+  });
+  assert.ok(Number.isFinite(weights.pvnode), 'pvnode (tracked) must carry a finite weight');
+  assert.ok(!Number.isFinite(weights.vrm), 'vrm (no MAE column) must not carry a weight');
+  const excludedEvent = events.find(e => e.ev === 'ensemble_mae_providers_excluded');
+  assert.ok(excludedEvent, 'an ensemble_mae_providers_excluded event must be logged');
+  assert.deepEqual(excludedEvent.data.excluded, ['vrm']);
+  assert.ok(excludedEvent.data.weighted.includes('pvnode'), 'weighted list names the MAE-tracked providers');
+});
+
+test('WR-01: no exclusion event when every present provider is MAE-tracked', async () => {
+  const events = [];
+  const store = {
+    getForecastAccuracyRow: async () => ({ mae_7d_pvnode: 100, mae_7d_solcast: 200, mae_7d_pvlib: 300 })
+  };
+  const providersBySlot = {
+    pvnode:  [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4000 }],
+    solcast: [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4200 }]
+  };
+  await mergePvForecastsWeighted({ providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data }) });
+  assert.ok(!events.some(e => e.ev === 'ensemble_mae_providers_excluded'),
+    'no exclusion event when every present provider is MAE-tracked');
 });
 
 // --- Phase 26-01: VRM/forecast_solar/open_meteo feed the WEIGHTED ensemble ---

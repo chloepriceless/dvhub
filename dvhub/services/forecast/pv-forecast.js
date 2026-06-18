@@ -196,6 +196,25 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
     return { merged: mergeForecasts(providersBySlot, uniform), weights: uniform };
   }
 
+  // WR-01 observability: the inverse-MAE path only carries weights for the
+  // accuracy-tracked providers (pvnode/solcast/pvlib). Any OTHER present provider
+  // (vrm/forecast_solar/open_meteo — fed into the ensemble in 26-01) has no MAE
+  // column, so its weight is undefined → mergeForecasts skips it. Surface that
+  // exclusion so the operator can tell "excluded by design (no accuracy data)"
+  // from a fetch error. Pure logging — no change to weights or the merged result.
+  if (typeof pushLog === 'function') {
+    const presentProviders = Object.entries(providersBySlot)
+      .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
+      .map(([k]) => k);
+    const excluded = presentProviders.filter(k => !Number.isFinite(weights[k]));
+    if (excluded.length > 0) {
+      pushLog('ensemble_mae_providers_excluded', {
+        excluded,
+        weighted: Object.keys(weights).filter(k => Number.isFinite(weights[k]))
+      });
+    }
+  }
+
   return { merged: mergeForecasts(providersBySlot, weights), weights };
 }
 
