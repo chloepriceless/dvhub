@@ -683,6 +683,154 @@ test('history runtime reports no §51 Förder-Verlängerung for plants not subje
   assert.equal(month.kpis.eegExtensionMonths, 0);
 });
 
+// --- Fix #6 (26-06): §51 hour-streak must count ACROSS the lower view-range boundary. ---
+//
+// A negative-price streak that begins the calendar day BEFORE range.startDate and runs
+// over midnight into the first in-range hours must keep its running consecutive-hour count.
+// The pre-pass loaded slots only for the View-Range window, so the streak counter reset to 0
+// at the lower boundary → the first in-range hours were §51-UNDER-counted, and the affected
+// result of one and the same hour depended on which View-Range was chosen.
+//
+// Berlin is UTC+1 in early March 2026 (DST starts 2026-03-29), so:
+//   2026-03-09T20:00Z → Berlin 2026-03-09 21:00   (pre-range for a 2026-03-10 day view)
+//   2026-03-09T21:00Z → Berlin 2026-03-09 22:00   (pre-range)
+//   2026-03-09T22:00Z → Berlin 2026-03-09 23:00   (pre-range)
+//   2026-03-09T23:00Z → Berlin 2026-03-10 00:00   (FIRST in-range hour)
+//   2026-03-10T00:00Z → Berlin 2026-03-10 01:00   (in-range)
+//
+// 4h rule (EEG 2021, ≥400 kWp): affected once consecutiveNegativeHours >= 4. Three pre-range
+// negative hours + the first in-range negative hour = 4 → the first in-range hour is affected.
+//
+// The store mocks are RANGE-AWARE: they filter a master dataset by the requested {start,end}.
+// So the current (range-only) load never sees the pre-range hours (RED), while a lookback-
+// extended pre-pass that requests an earlier start WILL pull them in (GREEN), without changing
+// the existing range-bounded behaviour of the other KPIs.
+
+function createCrossBoundaryStreakStore(masterEnergy, masterPrices) {
+  // Hour-bucketed master slots; each carries a single mid-hour quarter-slot for simplicity.
+  const inWindow = (ts, start, end) => ts >= start && ts < end;
+  return {
+    listAggregatedEnergySlots({ start, end, bucketSeconds }) {
+      assert.equal(bucketSeconds, 900);
+      return masterEnergy.filter((s) => inWindow(s.ts, start, end));
+    },
+    listPriceSlots({ start, end }) {
+      return masterPrices.filter((p) => inWindow(p.ts, start, end));
+    }
+  };
+}
+
+const CROSS_BOUNDARY_PRICING = {
+  // Commissioned 2021 → 2021–2022 window, ≥400 kWp → 4h rule.
+  pvPlants: [{ kwp: 500, commissionedAt: '2021-04-15' }],
+  costs: { pvCtKwh: 6.38, batteryBaseCtKwh: 2, batteryLossMarkupPct: 20 }
+};
+
+// Master data: a 4-hour negative streak spanning the 2026-03-10 lower range boundary.
+// Each hour gets one quarter-slot at :00 of the UTC hour; the hourly average is that price.
+const CROSS_BOUNDARY_ENERGY = [
+  // pre-range (Berlin 2026-03-09 21:00 / 22:00 / 23:00)
+  { ts: '2026-03-09T20:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+  { ts: '2026-03-09T21:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+  { ts: '2026-03-09T22:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+  // first in-range hour (Berlin 2026-03-10 00:00) — 4th consecutive negative hour → affected
+  { ts: '2026-03-09T23:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+  // second in-range hour (Berlin 2026-03-10 01:00) — 5th consecutive negative hour → affected
+  { ts: '2026-03-10T00:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false }
+];
+const CROSS_BOUNDARY_PRICES = [
+  { ts: '2026-03-09T20:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+  { ts: '2026-03-09T21:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+  { ts: '2026-03-09T22:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+  { ts: '2026-03-09T23:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+  { ts: '2026-03-10T00:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 }
+];
+
+function findSlot(summary, ts) {
+  return summary.slots.find((s) => s.ts === ts);
+}
+
+test('§51 cross-boundary streak: first in-range hour is affected (4h rule, day view)', async () => {
+  const runtime = createHistoryRuntime({
+    store: createCrossBoundaryStreakStore(CROSS_BOUNDARY_ENERGY, CROSS_BOUNDARY_PRICES),
+    getPricingConfig: () => CROSS_BOUNDARY_PRICING,
+    getSolarMarketValueSummary: () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: { 2026: 5.5 } }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: { '2021-04': 7.5 } }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const day = await runtime.getSummary({ view: 'day', date: '2026-03-10' });
+  assert.equal(day.kpis.negPriceRule, '4h');
+
+  // The first in-range hour (Berlin 2026-03-10 00:00 == 2026-03-09T23:00Z) is the 4th
+  // consecutive negative hour of a streak that started the previous evening → MUST be affected.
+  const firstInRange = findSlot(day, '2026-03-09T23:00:00.000Z');
+  assert.ok(firstInRange, 'first in-range hour slot present in day view');
+  assert.equal(
+    firstInRange.isNegPriceAffected, true,
+    'first in-range hour must be §51-affected (streak crosses the lower range boundary)'
+  );
+});
+
+test('§51 cross-boundary streak: same hour is window-INDEPENDENT (day vs week)', async () => {
+  const make = () => createHistoryRuntime({
+    store: createCrossBoundaryStreakStore(CROSS_BOUNDARY_ENERGY, CROSS_BOUNDARY_PRICES),
+    getPricingConfig: () => CROSS_BOUNDARY_PRICING,
+    getSolarMarketValueSummary: () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: { 2026: 5.5 } }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: { '2021-04': 7.5 } }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  // The week containing 2026-03-10 starts Monday 2026-03-09, so the pre-range negative hours
+  // fall INSIDE the week window — the week view naturally counts the full streak. The day view
+  // starts exactly on the boundary. The affected result of the SAME hour must be identical.
+  const day = await make().getSummary({ view: 'day', date: '2026-03-10' });
+  const week = await make().getSummary({ view: 'week', date: '2026-03-10' });
+
+  const hourTs = '2026-03-09T23:00:00.000Z'; // Berlin 2026-03-10 00:00, in BOTH ranges
+  const dayHour = findSlot(day, hourTs);
+  const weekHour = findSlot(week, hourTs);
+  assert.ok(dayHour && weekHour, 'the boundary hour is present in both day and week views');
+  assert.equal(
+    dayHour.isNegPriceAffected, weekHour.isNegPriceAffected,
+    'same hour must yield the same §51-affected result regardless of the chosen View-Range'
+  );
+  assert.equal(weekHour.isNegPriceAffected, true, 'week view counts the full cross-midnight streak');
+});
+
+test('§51 streak at the absolute data start legitimately begins at 0 (no artificial lookahead)', async () => {
+  // No slot exists before the in-range data. Only 3 consecutive in-range negative hours, which
+  // is BELOW the 4h threshold → NOTHING may be marked affected. This must hold before AND after
+  // the lookback fix: an empty lookback must NOT fabricate a streak.
+  const energy = [
+    { ts: '2026-03-10T08:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+    { ts: '2026-03-10T09:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false },
+    { ts: '2026-03-10T10:00:00.000Z', importKwh: 0, exportKwh: 0.5, gridKwh: 0, pvKwh: 0.5, batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0, loadKwh: 0, estimated: false, incomplete: false }
+  ];
+  const prices = [
+    { ts: '2026-03-10T08:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+    { ts: '2026-03-10T09:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 },
+    { ts: '2026-03-10T10:00:00.000Z', priceCtKwh: -2, priceEurMwh: -20 }
+  ];
+  const runtime = createHistoryRuntime({
+    store: createCrossBoundaryStreakStore(energy, prices),
+    getPricingConfig: () => CROSS_BOUNDARY_PRICING,
+    getSolarMarketValueSummary: () => ({ monthlyCtKwhByMonth: {}, annualCtKwhByYear: { 2026: 5.5 } }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: { '2021-04': 7.5 } }),
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  });
+
+  const day = await runtime.getSummary({ view: 'day', date: '2026-03-10' });
+  assert.equal(day.kpis.negPriceRule, '4h');
+  for (const slot of day.slots) {
+    assert.equal(
+      slot.isNegPriceAffected, false,
+      `no slot may be §51-affected — only 3 in-range negative hours (< 4h threshold), no pre-range data (${slot.ts})`
+    );
+  }
+  assert.equal(day.kpis.negPriceAffectedSlots, 0, 'zero §51-affected slots at the data start');
+});
+
 test('history runtime omits slot-level series payloads for annual responses', async () => {
   const runtime = createHistoryRuntime({
     store: createStoreFixture(),
