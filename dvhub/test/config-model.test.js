@@ -143,3 +143,86 @@ test('single-floor model: no optimizer.minSocPct UI field, hard floor present', 
     'optimizer.hardFloorSocPct must remain the single discharge floor'
   );
 });
+
+// --- Phase 26-04: schedule.timezone / epex.timezone Intl-Guard (warn+reset) ---
+//
+// schedule.timezone (:962) und epex.timezone (:2201) sind Freitext-Felder. Ein
+// ungültiger Wert (z. B. 'Europe/Berln') erreicht später new Intl.DateTimeFormat
+// ({ timeZone }) in formatLocalDate/localMinutesOfDay und wirft dort RangeError.
+// validateConfigSchema läuft VOR deepMerge — der Reset auf Europe/Berlin hier
+// sorgt dafür, dass der Merge den gültigen Default trägt und downstream kein
+// RangeError-fähiger Wert ankommt. RED bis 26-04 Task 2 den Guard ergänzt.
+
+const DEFAULT_TZ = 'Europe/Berlin';
+
+test('26-04 Test A: ungültige schedule.timezone → warn+reset auf Europe/Berlin', () => {
+  const normalized = normalizeConfigInput({
+    schedule: { timezone: 'Europe/Berln' }
+  });
+  assert.equal(
+    normalized.rawConfig.schedule.timezone,
+    DEFAULT_TZ,
+    'ungültige schedule.timezone muss auf Europe/Berlin zurückgesetzt werden'
+  );
+  assert.equal(
+    normalized.persistedConfig.schedule.timezone,
+    DEFAULT_TZ,
+    'nach deepMerge muss der gültige Default getragen werden'
+  );
+  assert.ok(
+    normalized.warnings.some((w) => /schedule\.timezone/.test(String(w))),
+    'eine Warnung muss schedule.timezone referenzieren'
+  );
+});
+
+test('26-04 Test B: ungültige epex.timezone → warn+reset auf Europe/Berlin', () => {
+  const normalized = normalizeConfigInput({
+    epex: { timezone: 'Nonsense/Zone' }
+  });
+  assert.equal(
+    normalized.rawConfig.epex.timezone,
+    DEFAULT_TZ,
+    'ungültige epex.timezone muss auf Europe/Berlin zurückgesetzt werden'
+  );
+  assert.equal(
+    normalized.persistedConfig.epex.timezone,
+    DEFAULT_TZ
+  );
+  assert.ok(
+    normalized.warnings.some((w) => /epex\.timezone/.test(String(w))),
+    'eine Warnung muss epex.timezone referenzieren'
+  );
+});
+
+test('26-04 Test C: gültige IANA-TZ (America/New_York) bleibt unverändert, keine TZ-Warnung', () => {
+  const normalized = normalizeConfigInput({
+    schedule: { timezone: 'America/New_York' }
+  });
+  assert.equal(
+    normalized.rawConfig.schedule.timezone,
+    'America/New_York',
+    'eine gültige IANA-Zone darf NICHT zurückgesetzt werden'
+  );
+  assert.equal(
+    normalized.persistedConfig.schedule.timezone,
+    'America/New_York'
+  );
+  assert.equal(
+    normalized.warnings.some((w) => /timezone/.test(String(w))),
+    false,
+    'für eine gültige Zone darf KEINE timezone-Warnung erscheinen'
+  );
+});
+
+test('26-04 Test D: kein RangeError downstream nach Reset einer ungültigen TZ', () => {
+  const normalized = normalizeConfigInput({
+    schedule: { timezone: 'Europe/Berln' }
+  });
+  const tz = normalized.persistedConfig.schedule.timezone;
+  // Der downstream-Pfad (formatLocalDate/localMinutesOfDay) baut genau dieses
+  // Intl-Objekt. Nach dem Reset muss es ohne RangeError konstruierbar sein.
+  assert.doesNotThrow(() => {
+    // eslint-disable-next-line no-new
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+  }, 'die zurückgesetzte Zeitzone darf in Intl.DateTimeFormat keinen RangeError werfen');
+});
