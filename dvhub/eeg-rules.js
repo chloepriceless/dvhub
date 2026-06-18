@@ -14,6 +14,14 @@
 import { round2 as sharedRound2 } from './server-utils.js';
 const round2 = (value) => sharedRound2(value, { nullOnInvalid: true });
 
+// WR-02 dedup: the swallowed tiered-year assumption is worth surfacing, but
+// isNegativePriceSlotAffected runs per-slot in history aggregation, so a raw
+// per-call warn floods the log (~720 identical lines per month view). Warn at
+// most once per unknown year per process lifetime.
+const _warnedTieredYears = new Set();
+// Test hook: reset the dedup cache so unit tests stay isolated.
+export function __resetEegTieredWarnCache() { _warnedTieredYears.clear(); }
+
 /**
  * Ordered from newest to oldest commissioning date so the first match wins.
  * Each entry defines: commissionedFrom, commissionedBefore (exclusive upper bound),
@@ -138,12 +146,17 @@ export function isNegativePriceSlotAffected({ rule, marketPriceCtKwh, consecutiv
       return Number(marketPriceCtKwh) < 0;
     case 'tiered': {
       // Observability only: when tiers are configured but the requested year is
-      // not in the map, the lookup silently falls back to 4. Warn exactly once
-      // per call so the swallowed §51 tier assumption is visible. This does NOT
-      // change the returned boolean or the fallback threshold of 4 — the warn
-      // must NOT fire on the legitimate tiers==null path nor for a known year.
+      // not in the map, the lookup silently falls back to 4. Warn once per
+      // unknown year per process (deduped via _warnedTieredYears, WR-02) so the
+      // swallowed §51 tier assumption is visible without flooding the log. This
+      // does NOT change the returned boolean or the fallback threshold of 4 —
+      // the warn must NOT fire on the legitimate tiers==null path nor a known year.
       if (tiers && year != null && tiers[Number(year)] === undefined) {
-        console.warn('eeg_tiered_unknown_year', { year: Number(year), fallbackThreshold: 4 });
+        const unknownYear = Number(year);
+        if (!_warnedTieredYears.has(unknownYear)) {
+          _warnedTieredYears.add(unknownYear);
+          console.warn('eeg_tiered_unknown_year', { year: unknownYear, fallbackThreshold: 4 });
+        }
       }
       const threshold = (tiers && year != null) ? (tiers[Number(year)] ?? 4) : 4;
       return Number(consecutiveNegativeHours) >= threshold;

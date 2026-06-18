@@ -6,7 +6,8 @@ import {
   EV_DEDUCTION_CT_KWH,
   getEegNegativePriceRule,
   getFeedInCompensationCtKwh,
-  isNegativePriceSlotAffected
+  isNegativePriceSlotAffected,
+  __resetEegTieredWarnCache
 } from '../eeg-rules.js';
 
 // ── getEegNegativePriceRule ─────────────────────────────────────────────────
@@ -152,6 +153,7 @@ function captureWarn(fn) {
 }
 
 test('isNegativePriceSlotAffected (tiered) warns exactly once for a year not in tiers, threshold stays 4', () => {
+  __resetEegTieredWarnCache(); // WR-02: warn is process-deduped — isolate this test
   const { result, calls } = captureWarn(() =>
     isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2025, consecutiveNegativeHours: 4 })
   );
@@ -161,6 +163,20 @@ test('isNegativePriceSlotAffected (tiered) warns exactly once for a year not in 
   assert.equal(calls.length, 1, `Expected exactly 1 console.warn, got ${calls.length}`);
   assert.equal(calls[0][0], 'eeg_tiered_unknown_year');
   assert.deepEqual(calls[0][1], { year: 2025, fallbackThreshold: 4 });
+});
+
+test('isNegativePriceSlotAffected (tiered) warns only ONCE per unknown year across repeated calls (WR-02 dedup)', () => {
+  __resetEegTieredWarnCache();
+  const { calls } = captureWarn(() => {
+    // Same unknown year hit many times (mirrors the per-slot history-aggregation hot path)
+    for (let i = 0; i < 5; i++) {
+      isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2025, consecutiveNegativeHours: 4 });
+    }
+    // A DIFFERENT unknown year still warns (dedup is per-year, not global)
+    isNegativePriceSlotAffected({ rule: 'tiered', tiers: { 2023: 4, 2024: 3 }, year: 2026, consecutiveNegativeHours: 4 });
+  });
+  assert.equal(calls.length, 2, `Expected 2 warns (one per distinct unknown year), got ${calls.length}`);
+  assert.deepEqual(calls.map(c => c[1].year).sort(), [2025, 2026]);
 });
 
 test('isNegativePriceSlotAffected (tiered) does NOT warn for a known year', () => {
