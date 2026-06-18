@@ -146,10 +146,13 @@ test('18-01i: parseSolcastResponse drops rows where pv_estimate AND pv_estimate_
   // Row 1: valid point-endpoint shape — survives.
   // Row 2: NaN pv_estimate — dropped (NaN-guard would have silently zeroed it).
   // Row 3: no pv field at all (future API drift past both known shapes) — dropped.
+  // 26-03: period_end must be a parseable ISO timestamp now (period-START
+  // derivation drops rows with an unparseable period_end — threat T-26-03-01).
+  // The drop-logic-under-test here is the pv_estimate fallback chain.
   const forecasts = [
-    { period_end: 't1', pv_estimate: 3.0, pv_estimate10: 2.5, pv_estimate90: 3.5 },
-    { period_end: 't2', pv_estimate: NaN },
-    { period_end: 't3', unknown_field: 5.0 }
+    { period_end: '2026-04-03T10:30:00Z', period: 'PT30M', pv_estimate: 3.0, pv_estimate10: 2.5, pv_estimate90: 3.5 },
+    { period_end: '2026-04-03T11:00:00Z', period: 'PT30M', pv_estimate: NaN },
+    { period_end: '2026-04-03T11:30:00Z', period: 'PT30M', unknown_field: 5.0 }
   ];
   const { rows, dropped, firstRawKeys } = parseSolcastResponse(forecasts);
   assert.equal(rows.length, 1, 'only the row with valid pv_estimate survives');

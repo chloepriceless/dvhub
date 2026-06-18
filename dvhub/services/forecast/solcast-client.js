@@ -29,6 +29,62 @@ export function computeSolcastConfidence(f) {
   return Math.max(0.3, Math.min(1.0, 1.0 - range));
 }
 
+const DEFAULT_PERIOD_MS = 30 * 60_000; // Solcast free-tier default interval (30 min).
+
+/**
+ * Parse a Solcast `period` field (ISO-8601 duration, e.g. "PT30M"/"PT15M") to
+ * milliseconds. Minimal parser supporting optional hours + minutes; returns the
+ * 30-min default when the field is missing or unparseable (deterministic
+ * fallback — never throws, never NaN; threat T-26-03-01).
+ *
+ * @param {string|undefined} period - ISO-8601 duration string
+ * @returns {number} duration in milliseconds (default 30 min)
+ */
+export function parseIsoDurationMs(period) {
+  if (typeof period !== 'string') return DEFAULT_PERIOD_MS;
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?$/.exec(period.trim());
+  if (!m || (m[1] === undefined && m[2] === undefined)) return DEFAULT_PERIOD_MS;
+  const hours = m[1] !== undefined ? Number(m[1]) : 0;
+  const minutes = m[2] !== undefined ? Number(m[2]) : 0;
+  const ms = (hours * 60 + minutes) * 60_000;
+  return ms > 0 ? ms : DEFAULT_PERIOD_MS;
+}
+
+/**
+ * Floor a UTC timestamp string onto the nearest 15-minute boundary — identical
+ * to pvnode-client.js floorToQuarterIso (the sibling-client established pattern),
+ * so all providers merge on the same 15-min axis in ensemble.mergeForecasts
+ * (exact ts_utc string match).
+ *
+ * @param {string} tsUtc - ISO-8601 UTC timestamp
+ * @returns {string} ISO-8601 timestamp floored to XX:00, :15, :30, or :45
+ */
+export function floorToQuarterIso(tsUtc) {
+  const d = new Date(tsUtc);
+  const minutes = d.getUTCMinutes();
+  d.setUTCMinutes(Math.floor(minutes / 15) * 15, 0, 0);
+  return d.toISOString();
+}
+
+/**
+ * Derive the period-START slot timestamp from a Solcast forecast entry. Solcast
+ * delivers the interval END (period_end); the START = period_end - interval
+ * duration (from the `period` field; 30-min fallback), then floored onto the
+ * 15-min axis so it collides with pvnode/pvlib in the ensemble merge (26-03).
+ *
+ * Returns null when period_end is missing/unparseable so the caller can drop the
+ * row instead of pushing a NaN timestamp into the slot path (threat T-26-03-01).
+ *
+ * @param {object} f - Solcast forecast entry with { period_end, period? }
+ * @returns {string|null} ISO-8601 period-START on the 15-min axis, or null
+ */
+export function solcastPeriodStartIso(f) {
+  const endMs = new Date(f?.period_end).getTime();
+  if (!Number.isFinite(endMs)) return null;
+  const startMs = endMs - parseIsoDurationMs(f?.period);
+  return floorToQuarterIso(new Date(startMs).toISOString());
+}
+
 /**
  * Pick the power estimate (kW) from a Solcast forecast entry.
  *
@@ -83,8 +139,13 @@ export function parseSolcastResponse(forecasts) {
     // pickEstimate). Rows missing BOTH fields are dropped + counted.
     const estKw = pickEstimate(f);
     if (estKw == null) { dropped++; continue; }
+    // 26-03: normalize ts to the period START (period_end - interval duration),
+    // floored onto the 15-min axis, so Solcast slots collide with pvnode/pvlib in
+    // ensemble.mergeForecasts. Drop rows with an unparseable period_end (no NaN ts).
+    const ts = solcastPeriodStartIso(f);
+    if (ts == null) { dropped++; continue; }
     rows.push({
-      ts: f.period_end,
+      ts,
       powerW: Math.round(estKw * 1000),
       confidence: computeSolcastConfidence(f)
     });
@@ -253,7 +314,9 @@ export async function probeSolcast({ apiKey, siteId }) {
     return {
       ok: true,
       sample: {
-        ts: first.period_end,
+        // 26-03: same period-START normalization as parseSolcastResponse (UI-sample
+        // consistency; state-free). Fall back to the raw period_end if unparseable.
+        ts: solcastPeriodStartIso(first) ?? first.period_end,
         // Solcast emits kW; convert to W for the UI sample-block.
         watts: Math.round((first.pv_estimate || 0) * 1000)
       }
