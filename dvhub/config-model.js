@@ -331,7 +331,13 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   const persistedVictron = isPlainObject(persistedConfig?.victron) ? persistedConfig.victron : {};
   const profileVictron = isPlainObject(manufacturerProfile?.victron) ? manufacturerProfile.victron : {};
 
-  effectiveConfig.victron = deepMerge(profileVictron, { host: persistedVictron.host ?? '' });
+  // The manufacturer profile owns the victron transport/register map; the
+  // operator-settable parts come from the persisted config. `host` is per-install
+  // — so is `alarms` (device-alarm unit-ids are GX-instance specific), so carry it
+  // through the profile merge too (deepMerge skips it cleanly only when present).
+  const victronOverride = { host: persistedVictron.host ?? '' };
+  if (isPlainObject(persistedVictron.alarms)) victronOverride.alarms = persistedVictron.alarms;
+  effectiveConfig.victron = deepMerge(profileVictron, victronOverride);
 
   if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
   if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);

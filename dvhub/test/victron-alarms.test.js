@@ -7,6 +7,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   decodeAlarmValue,
@@ -17,6 +20,7 @@ import {
   BATTERY_BLOCK
 } from '../victron-alarms.js';
 import { createPoller } from '../polling.js';
+import { loadConfigFile } from '../config-model.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function vebusBlock(overrides = {}) {
@@ -235,4 +239,46 @@ test('poller: MQTT transport → alarm poll guarded out (no block reads attempte
   transport.readPoint = async () => ({ mqttValue: 50 });
   await poller.requestPoll();
   assert.equal(state.victron.alarms, undefined, 'MQTT transport: pollVictronAlarms returns before touching state');
+});
+
+// ── full config-load path (manufacturer profile merge) ───────────────────────
+// Regression for the live-deploy gap: victron config is rebuilt from the
+// manufacturer profile (hersteller/victron.json); only operator-settable parts
+// (host, alarms) are carried from the persisted config. The earlier poller tests
+// hand-build cfg.victron.alarms and would NOT catch alarms being dropped by the
+// profile merge — so assert it through loadConfigFile().
+function withProfileFixture(persistedVictron, profileAlarms) {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-victron-alarms-cfg-'));
+  const manuDir = path.join(rootDir, 'hersteller');
+  fs.mkdirSync(manuDir, { recursive: true });
+  const profileVictron = { transport: 'modbus', port: 502, unitId: 100, timeoutMs: 1000 };
+  if (profileAlarms !== undefined) profileVictron.alarms = profileAlarms;
+  fs.writeFileSync(path.join(manuDir, 'victron.json'), JSON.stringify({
+    victron: profileVictron,
+    meter: { fc: 4, address: 820, quantity: 3 },
+    points: { soc: { enabled: true, fc: 4, address: 843, quantity: 1, signed: false, scale: 1, offset: 0 } }
+  }));
+  const configPath = path.join(rootDir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ manufacturer: 'victron', victron: persistedVictron }));
+  return loadConfigFile(configPath).effectiveConfig;
+}
+
+test('loadConfigFile: persisted victron.alarms unit-ids SURVIVE the profile merge (live-deploy gap)', () => {
+  const eff = withProfileFixture(
+    { host: 'cerbo.local', alarms: { vebusUnitId: 229, batteryUnitId: 225 } },
+    { enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: null, batteryUnitId: null }
+  );
+  assert.equal(eff.victron.alarms.vebusUnitId, 229, 'persisted vebusUnitId must survive applyManufacturerProfile');
+  assert.equal(eff.victron.alarms.batteryUnitId, 225);
+  assert.equal(eff.victron.alarms.enabled, true, 'profile default fills the rest');
+  assert.equal(eff.victron.alarms.pollIntervalMs, 30000);
+});
+
+test('loadConfigFile: no persisted alarms → profile default (feature present but inactive)', () => {
+  const eff = withProfileFixture(
+    { host: 'cerbo.local' },
+    { enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: null, batteryUnitId: null }
+  );
+  assert.equal(eff.victron.alarms.enabled, true);
+  assert.equal(eff.victron.alarms.vebusUnitId, null, 'no unit-ids → inactive (no banner), safe default');
 });

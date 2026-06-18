@@ -9,6 +9,13 @@
       "portalId": "",
       "keepaliveIntervalMs": 30000,
       "qos": 0
+    },
+    "alarms": {
+      "enabled": true,
+      "pollIntervalMs": 30000,
+      "timeoutMs": 1500,
+      "vebusUnitId": null,
+      "batteryUnitId": null
     }
   },
   "meter": {
