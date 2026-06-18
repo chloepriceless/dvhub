@@ -1383,7 +1383,7 @@ export function createHistoryRuntime({
     // For hour-based rules (6h/4h/tiered), track consecutive negative hours using hourly averages.
     // For 15min rule: just check slot price directly.
     // For 'none': always false.
-    const negPriceAffectedByTs = (() => {
+    const negPriceAffectedByTs = await (async () => {
       const result = new Map();
       if (negPriceRule.rule === 'none') return result; // all false (map returns undefined -> falsy)
 
@@ -1393,6 +1393,7 @@ export function createHistoryRuntime({
       });
 
       if (negPriceRule.rule === '15min') {
+        // Per-slot price check, no streak — the range-bounded slots are sufficient.
         for (const slot of rawFiltered) {
           const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
           const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
@@ -1401,10 +1402,36 @@ export function createHistoryRuntime({
         return result;
       }
 
+      // Hour-based rules (6h/4h/tiered): the consecutive-negative-hour counter must NOT reset
+      // at the lower View-Range boundary. A streak that began the previous day and crosses
+      // range.startDate has to keep its running count, otherwise the first in-range hours are
+      // §51-UNDER-counted and the affected result of one and the same hour depends on the
+      // chosen View-Range (Fix #6, 26-06).
+      //
+      // Solution: feed the hour-bucketing/streak loop a LOOKBACK-extended slice that starts a
+      // safe warm-up window before range.startDate. A full prior calendar day comfortably covers
+      // the longest rule window (6h). The warm-up slots feed ONLY the counter — result.set still
+      // writes exclusively for in-range slots, so no §51 status leaks into neighbouring days and
+      // the UI output filter further below stays untouched. At the absolute data start no older
+      // slot exists, so the streak legitimately begins at 0 (no artificial lookahead).
+      const lookbackStart = addDays(range.startDate, -1); // one full Vortag ≥ 6h warm-up
+      const lookbackStartUtc = localDateTimeToUtcIso(lookbackStart, 0, 0);
+      const lookbackSlots = await listEnergySlotsForRange({ start: lookbackStartUtc, end });
+      const lookbackPriceRows = await store.listPriceSlots({ start: lookbackStartUtc, end });
+      const lookbackPriceByTs = new Map(lookbackPriceRows.map((row) => [row.ts, row]));
+      const lookbackPriceByBucketTs = new Map(lookbackPriceRows.map((row) => [bucketTimestamp(row.ts), row]));
+
+      // Pre-pass scope: every slot from the warm-up start through the end of the View-Range.
+      // (The warm-up tail before range.startDate only ever feeds the streak counter.)
+      const prePassSlots = lookbackSlots.filter((slot) => {
+        const localDate = localDateString(slot.ts);
+        return localDate >= lookbackStart && localDate < range.endDateExclusive;
+      });
+
       // Hour-based rules: group slots by hour key, compute hourly average price,
       // then track consecutive negative hours
       const slotsByHour = new Map();
-      for (const slot of rawFiltered) {
+      for (const slot of prePassSlots) {
         const ts = new Date(slot.ts);
         // Review 2026-06-10 (P2-1): keys MUST sort chronologically — the
         // unpadded form ("2026-9-30-2") sorted lexicographically as
@@ -1423,7 +1450,10 @@ export function createHistoryRuntime({
         let priceSum = 0;
         let priceCount = 0;
         for (const slot of hourSlots) {
-          const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
+          // Use the lookback-extended price maps: warm-up (pre-range) slot prices are not in
+          // the range-bounded priceByTs. For in-range slots these maps are a strict superset,
+          // so the resolved price is bit-identical to before.
+          const price = lookbackPriceByTs.get(slot.ts) || lookbackPriceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
           const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
           if (priceCtKwh != null) { priceSum += priceCtKwh; priceCount += 1; }
         }
@@ -1446,7 +1476,12 @@ export function createHistoryRuntime({
           tiers: negPriceRule.tiers
         });
         for (const slot of slotsByHour.get(hourKey)) {
-          result.set(slot.ts, affected);
+          // Warm-up (pre-range) slots feed ONLY the streak counter — never write a result
+          // entry outside the View-Range, so no §51 status leaks into neighbouring days.
+          const localDate = localDateString(slot.ts);
+          if (localDate >= range.startDate && localDate < range.endDateExclusive) {
+            result.set(slot.ts, affected);
+          }
         }
       }
       return result;
