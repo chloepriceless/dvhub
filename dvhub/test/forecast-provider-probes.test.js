@@ -56,7 +56,8 @@ describe('Plan 20-06: probeSolcast (single-shot operator probe)', () => {
     const result = await probeSolcast({ apiKey: 'mock-key-abcdefghijklmno', siteId: '00000000-0000-0000-0000-000000000000' });
     assert.equal(result.ok, true, 'ok should be true on a 200 with forecasts');
     assert.ok(result.sample, 'sample must be present');
-    assert.equal(result.sample.ts, '2026-01-01T12:00:00Z');
+    assert.equal(result.sample.ts, '2026-01-01T11:30:00.000Z',
+      'sample ts is the 15-min-aligned period-START (period_end 12:00 minus 30-min default), consistent with the 26-03 ensemble normalization');
     assert.equal(result.sample.watts, 1500, '1.5 kW must convert to 1500 W');
     assert.match(observedUrl, /api\.solcast\.com\.au.*hours=1/,
       'probe MUST use hours=1 (Pitfall 3: smallest call still burns 1/10 quota)');
