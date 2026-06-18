@@ -2422,6 +2422,20 @@ export function createDefaultConfig() {
         portalId: '',
         keepaliveIntervalMs: 30000,
         qos: 0
+      },
+      // Victron device-alarm polling (read-only DISPLAY feature, no control path).
+      // Reads the VE.Bus + Battery/BMS alarm registers on a slow cadence
+      // (decoupled from the ~1 Hz control poll) and surfaces active alarms as a
+      // sticky GUI banner (analogous to the Not-Halt banner). The Modbus unit-ids
+      // are installation-specific (per GX device-instance, e.g. VE.Bus=229,
+      // Battery=225 on the reference plant) → the operator configures them;
+      // null = that service's alarms are not polled (no banner from it).
+      alarms: {
+        enabled: true,
+        pollIntervalMs: 30000,
+        timeoutMs: 1500,
+        vebusUnitId: null,
+        batteryUnitId: null
       }
     },
     meter: {

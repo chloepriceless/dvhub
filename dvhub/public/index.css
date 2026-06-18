@@ -1100,3 +1100,24 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   flex-shrink:0; cursor:pointer;
 }
 .nothalt-banner-resume:hover { background:#fef2f2; color:#7f1d1d; }
+/* Victron device-alarm banner (read-only, info-only). Mirrors .nothalt-banner
+   layout; colour by severity: alarm=rot, warn=gelb/amber, stale=neutral-grau. */
+.victron-alarm-banner {
+  position:sticky; top:0; z-index:9998;
+  display:flex; align-items:center; justify-content:center; gap:12px;
+  padding:8px 16px; text-align:center;
+  font-weight:600; font-size:14px;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);
+}
+.victron-alarm-banner.alarm {
+  background:linear-gradient(90deg, #7f1d1d, #b91c1c);
+  color:#fef2f2; border-bottom:1px solid #ef4444;
+}
+.victron-alarm-banner.warn {
+  background:linear-gradient(90deg, #92660a, #b8860b);
+  color:#fffbeb; border-bottom:1px solid #f59e0b;
+}
+.victron-alarm-banner.stale {
+  background:linear-gradient(90deg, #374151, #4b5563);
+  color:#e5e7eb; border-bottom:1px solid #6b7280;
+}

@@ -14,6 +14,7 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
+import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
@@ -1777,6 +1778,16 @@ export function createApiRoutes(ctx) {
       active: !!state.ctrl.discretionaryWritesPaused,
       pausedAt: state.ctrl.pausedAt || null
     };
+    // Victron device alarms (read-only display). Source is payload.victron.alarms,
+    // which the POLLER (possibly a separate runtime-worker process) writes and
+    // which reaches here through the runtime IPC snapshot — NOT web-process-local
+    // `state` (unlike emergencyStop, which is web-process state.ctrl). Reading
+    // local state here would be permanently empty in split-process mode.
+    payload.victronAlarms = buildVictronAlarmsPayload(
+      payload.victron?.alarms,
+      now,
+      getCfg().victron?.alarms?.pollIntervalMs
+    );
     return payload;
   }
 

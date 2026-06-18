@@ -1801,6 +1801,55 @@ function renderEmergencyStop(es) {
   }
 }
 
+// Victron device-alarm banner (read-only). Source: /api/status.victronAlarms
+// (3 s poll). Sticky, info-only (no action button), coexists with the Not-Halt
+// banner. Severity → colour: warn (sev 1) gelb, alarm (sev 2) rot. When the
+// alarm poll is stale (no fresh Cerbo read) the banner degrades to a neutral
+// grey "veraltet" state — a stale "all clear" would be more dangerous than none.
+function renderVictronAlarms(va) {
+  const id = 'victronAlarmBanner';
+  const existing = document.getElementById(id);
+  const data = va && typeof va === 'object' ? va : null;
+  const active = data && Array.isArray(data.active) ? data.active : [];
+  const stale = !!(data && data.configured && data.stale);
+  // nothing to show: not configured, or fresh with no active alarms
+  if (!data || !data.configured || (!stale && active.length === 0)) {
+    if (existing) existing.remove();
+    return;
+  }
+  let cls;
+  let text;
+  if (stale) {
+    cls = 'victron-alarm-banner stale';
+    const last = active.length ? ' — letzter Stand: ' + active.map((a) => a.label).join(' · ') : '';
+    text = '⏳ Victron-Alarm-Überwachung veraltet — keine frische Verbindung zum Cerbo' + last + '.';
+  } else {
+    const sev = Number(data.severity) || active.reduce((m, a) => Math.max(m, Number(a.severity) || 0), 0);
+    const parts = active.map((a) => a.label
+      + (a.text ? ` (${a.text})` : '')
+      + (a.since ? ` seit ${fmtTs(a.since)}` : ''));
+    if (sev >= 2) {
+      cls = 'victron-alarm-banner alarm';
+      text = '\u{1F534} Victron-Alarm: ' + parts.join(' · ');
+    } else {
+      cls = 'victron-alarm-banner warn';
+      text = '⚠️ Victron-Warnung: ' + parts.join(' · ');
+    }
+  }
+  let banner = existing;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = id;
+    const span = document.createElement('span');
+    span.id = 'victronAlarmBannerText';
+    banner.append(span);
+    document.body.prepend(banner);
+  }
+  banner.className = cls;
+  const span = document.getElementById('victronAlarmBannerText');
+  if (span) span.textContent = text;
+}
+
 async function handleEmergencyStop() {
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
     ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nPflicht-Abregelung (§51/§9) und Live-Anzeige laufen weiter.')
@@ -1856,6 +1905,10 @@ function renderDashboardStatus(status) {
 
   safeRender('dashboard.emergency-stop', () => {
     renderEmergencyStop(status.emergencyStop);
+  });
+
+  safeRender('dashboard.victron-alarms', () => {
+    renderVictronAlarms(status.victronAlarms);
   });
 
   safeRender('dashboard.dv-status', () => {

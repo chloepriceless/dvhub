@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
+import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms } from './victron-alarms.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
@@ -201,6 +202,87 @@ export function createPoller(ctx) {
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
+    }
+  }
+
+  // --- Victron device-alarm polling (read-only DISPLAY feature) ---------------
+  // Reads the VE.Bus + Battery/BMS alarm registers and surfaces active alarms as
+  // state.victron.alarms → /api/status.victronAlarms → sticky GUI banner.
+  //
+  // DECOUPLED from the ~1 Hz control poll: throttled to victron.alarms.pollIntervalMs
+  // (~30 s) so device alarms (minute-scale) don't add 1 Hz Modbus load on two
+  // extra unit-ids. ISOLATED: a fully self-contained try/catch — an alarm-read
+  // failure must NEVER touch state.meter / the control-telemetry path. Runs INSIDE
+  // the serial pollMeter runner (after the energy Promise.all) so there is no real
+  // socket concurrency: the transport's send-queue pulls control + alarm reads
+  // one at a time, tid-matched (see transport-modbus.js send()/_next).
+  let lastAlarmPollMs = 0;
+
+  // null/''/undefined/out-of-range → null (Number(null)===0 is finite, so an
+  // explicit null/empty guard is required before the finite check).
+  function alarmUnitIdOrNull(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 1 && n <= 255 ? n : null;
+  }
+
+  async function readAlarmBlock(victronConf, unitId, block) {
+    if (unitId == null || !Number.isFinite(Number(unitId))) return null;
+    try {
+      const regs = await transport.mbRequest({
+        host: victronConf.host,
+        port: victronConf.port,
+        unitId: Number(unitId),
+        fc: 4,
+        address: block.start,
+        quantity: block.count,
+        timeoutMs: Number(victronConf?.alarms?.timeoutMs) || 1500
+      });
+      return Array.isArray(regs) ? regs : null;
+    } catch {
+      return null; // read failure → treated as a failed cycle by the caller
+    }
+  }
+
+  async function pollVictronAlarms(cfg) {
+    try {
+      if (transport.type !== 'modbus') return; // MQTT transport has no block reads
+      const aCfg = cfg?.victron?.alarms;
+      if (!aCfg || aCfg.enabled === false) return;
+      const vebusUnitId = alarmUnitIdOrNull(aCfg.vebusUnitId);
+      const batteryUnitId = alarmUnitIdOrNull(aCfg.batteryUnitId);
+      if (vebusUnitId == null && batteryUnitId == null) {
+        // no unit-ids configured → mark not-configured so the read-side shows no
+        // banner (absence of banner ≠ a trusted "all OK").
+        const prev = state.victron.alarms;
+        state.victron.alarms = { configured: false, active: [], updatedAt: prev?.updatedAt || null };
+        return;
+      }
+      const intervalMs = Number(aCfg.pollIntervalMs) || 30000;
+      const now = Date.now();
+      if (now - lastAlarmPollMs < intervalMs) return; // throttle (decouple from 1 Hz)
+      lastAlarmPollMs = now;
+
+      const reads = await Promise.all([
+        vebusUnitId == null ? Promise.resolve('skip') : readAlarmBlock(cfg.victron, vebusUnitId, VEBUS_BLOCK),
+        batteryUnitId == null ? Promise.resolve('skip') : readAlarmBlock(cfg.victron, batteryUnitId, BATTERY_BLOCK)
+      ]);
+      const vebus = reads[0] === 'skip' ? null : reads[0];
+      const battery = reads[1] === 'skip' ? null : reads[1];
+      // a CONFIGURED unit returning null = read failure this cycle. Keep the
+      // last-known active list but do NOT bump updatedAt → the read-side flags it
+      // stale and degrades the banner (no stale "all clear" masquerade).
+      const failed = (vebusUnitId != null && vebus == null) || (batteryUnitId != null && battery == null);
+      if (failed) {
+        state.victron.alarms = { ...(state.victron.alarms || { active: [] }), configured: true };
+        return;
+      }
+      const prevActive = state.victron.alarms?.active || [];
+      const active = buildActiveAlarms({ vebus, battery }, prevActive, now);
+      state.victron.alarms = { configured: true, active, updatedAt: new Date(now).toISOString() };
+    } catch (e) {
+      // alarm polling must NEVER disturb the control/telemetry path
+      try { pushLog('victron_alarm_poll_error', { error: e?.message }); } catch { /* never throw */ }
     }
   }
 
@@ -411,6 +493,12 @@ export function createPoller(ctx) {
       meter: { ...state.meter },
       victron: { ...state.victron }
     });
+
+    // Read-only device-alarm poll — throttled (~30 s) + fully isolated. Placed
+    // AFTER onPollComplete so it never delays the powerflow snapshot; its result
+    // (state.victron.alarms) rides the next snapshot and is read by the route via
+    // the runtime IPC snapshot (payload.victron.alarms), NOT web-process state.
+    await pollVictronAlarms(cfg);
   }
 
   // --- Poll loop infrastructure ---
