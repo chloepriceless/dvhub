@@ -44,8 +44,17 @@ export function computeWeights(mae7d) {
  * Weights: weights[providerName] is the multiplier. Providers missing from weights OR with
  * weight 0 are skipped entirely (per Plan 07-02 spec).
  *
- * Output: merged array sorted by ts_utc ascending, each slot power_w = sum over providers of
- * power_w * weight (rounded to 1 decimal place, matching pvnode-client rounding).
+ * Output: merged array sorted by ts_utc ascending, each slot power_w = the weighted MEAN over
+ * the providers actually present in THAT slot — Σ(power_w * weight) / Σ(weight_present) — rounded
+ * to 1 decimal place (matching pvnode-client rounding). Phase 26-02: dividing by the effective
+ * present-provider weight sum (not by a hardcoded 1.0) fixes systematic PV underestimation when
+ * a provider has partial slot coverage (e.g. solcast 48h vs pvnode 72h). At full coverage with
+ * Σw = 1.0 the renorm is the identity → result stays bit-identical to the legacy behaviour.
+ *
+ * Determinism: both accumulators are summed across ALL providers/slots FIRST, then divided once
+ * per slot — never normalized incrementally — so provider/slot iteration order cannot change the
+ * result. A slot whose effective weightSum is <= 0 or non-finite is dropped (no NaN/Inf escapes
+ * into the battery control path).
  *
  * @param {Record<string, Array<{ts_utc:string, power_w:number}>>} providersBySlot
  * @param {Record<string, number>} weights
@@ -53,6 +62,7 @@ export function computeWeights(mae7d) {
  */
 export function mergeForecasts(providersBySlot, weights) {
   const slotMap = new Map();
+  const weightSum = new Map();
   if (!providersBySlot || typeof providersBySlot !== 'object') return [];
   if (!weights || typeof weights !== 'object') return [];
 
@@ -66,10 +76,17 @@ export function mergeForecasts(providersBySlot, weights) {
       if (!Number.isFinite(p)) continue;
       const acc = slotMap.get(s.ts_utc) ?? 0;
       slotMap.set(s.ts_utc, acc + p * w);
+      const wAcc = weightSum.get(s.ts_utc) ?? 0;
+      weightSum.set(s.ts_utc, wAcc + w);
     }
   }
 
-  return [...slotMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([ts_utc, power_w]) => ({ ts_utc, power_w: Math.round(power_w * 10) / 10 }));
+  const out = [];
+  for (const [ts_utc, power_w] of slotMap.entries()) {
+    const wSum = weightSum.get(ts_utc);
+    // Guard: drop slots with no positive/finite effective weight (no NaN/Inf in control path).
+    if (!Number.isFinite(wSum) || wSum <= 0) continue;
+    out.push({ ts_utc, power_w: Math.round((power_w / wSum) * 10) / 10 });
+  }
+  return out.sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
 }
