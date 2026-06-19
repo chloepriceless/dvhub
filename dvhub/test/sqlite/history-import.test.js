@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { createHistoryImportManager } from '../history-import.js';
-import { createTelemetryStore } from '../telemetry-store.js';
+import { createHistoryImportManager } from '../../history-import.js';
+import { createTelemetryStore } from '../../telemetry-store.js';
 
 function createStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-history-import-'));
@@ -43,7 +43,7 @@ test('history import status reports provider readiness', () => {
   }
 });
 
-test('manual history import writes backfilled samples and import job metadata', () => {
+test('manual history import writes backfilled samples and import job metadata', async () => {
   const store = createStore();
   try {
     const manager = createHistoryImportManager({
@@ -58,7 +58,7 @@ test('manual history import writes backfilled samples and import job metadata', 
       }
     });
 
-    const result = manager.importSamples({
+    const result = await manager.importSamples({
       provider: 'manual',
       requestedFrom: '2026-01-01T00:00:00.000Z',
       requestedTo: '2026-01-02T00:00:00.000Z',
@@ -82,7 +82,7 @@ test('manual history import writes backfilled samples and import job metadata', 
   }
 });
 
-test('vrm imports materialize slot rows without deleting existing local live slots', () => {
+test('vrm imports materialize slot rows without deleting existing local live slots', async () => {
   const store = createStore();
   try {
     store.writeSamples([
@@ -110,7 +110,7 @@ test('vrm imports materialize slot rows without deleting existing local live slo
       }
     });
 
-    const result = manager.importSamples({
+    const result = await manager.importSamples({
       provider: 'vrm',
       requestedFrom: '2026-01-01T00:00:00.000Z',
       requestedTo: '2026-01-01T00:15:00.000Z',
@@ -1845,7 +1845,7 @@ test('automatic VRM backfill stays idle when the lookback horizon is already cov
       }
     });
 
-    const result = manager.startAutomaticBackfill({
+    const result = await manager.startAutomaticBackfill({
       now: '2026-03-10T00:00:00.000Z',
       lookbackDays: 7
     });
@@ -1890,7 +1890,7 @@ test('automatic VRM backfill ignores a tiny uncovered tail inside the current ut
       }
     });
 
-    const result = manager.startAutomaticBackfill({
+    const result = await manager.startAutomaticBackfill({
       now: '2026-03-10T04:15:00.000Z',
       lookbackDays: 7
     });

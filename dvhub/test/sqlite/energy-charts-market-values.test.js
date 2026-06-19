@@ -7,8 +7,8 @@ import path from 'node:path';
 import {
   createEnergyChartsMarketValueService,
   fetchEnergyChartsSolarMarketValues
-} from '../energy-charts-market-values.js';
-import { createTelemetryStore } from '../telemetry-store.js';
+} from '../../energy-charts-market-values.js';
+import { createTelemetryStore } from '../../telemetry-store.js';
 
 function createTempDbPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-market-values-'));

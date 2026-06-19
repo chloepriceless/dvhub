@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { createTelemetryStore } from '../telemetry-store.js';
+import { createTelemetryStore } from '../../telemetry-store.js';
 
 function createTempDbPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-telemetry-'));
