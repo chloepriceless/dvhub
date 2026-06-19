@@ -1,0 +1,115 @@
+# DVhub CI — runs the existing (green) test suite on every push/PR to v1.0-dev.
+#
+# The npm project lives in dvhub/ (scripts use ../tests/... relative paths and the
+# lockfile is dvhub/package-lock.json), so every job sets working-directory: dvhub.
+#
+# RESEARCH.md Open Q1 (RUNNER LOCATION — operator decision):
+#   This workflow assumes GitHub-hosted `ubuntu-latest` (zero infra, ephemeral,
+#   isolated, no LAN exposure; the suite needs only Node 22 + an ephemeral Postgres
+#   + Chromium for e2e). If you require a self-hosted runner instead (e.g. to reach
+#   internal-only resources during CI), change `runs-on:` accordingly and re-confirm
+#   the postgres service + playwright install steps. Confirm at the plan checkpoint.
+#
+# SECURITY: checkout uses the built-in GITHUB_TOKEN only — NEVER the plaintext PAT in
+# .git/config (rotate that separately). Never echo secrets, DATABASE_URL, or git
+# remotes. DATABASE_URL points ONLY at the ephemeral `dvhub_ci` service DB, NEVER prod.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - v1.0-dev
+  pull_request:
+    branches:
+      - v1.0-dev
+
+# Least-privilege: CI only needs to read the repo for checkout.
+permissions:
+  contents: read
+
+jobs:
+  # Fast, DB-free job: node --test + the 5 lint gates, plus the sqlite suite.
+  # No DATABASE_URL → the migration describe blocks skip here (covered by pg-integration).
+  fast:
+    name: fast (no database)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:sqlite
+
+  # Integration job: spins up an ephemeral pinned Postgres so the DATABASE_URL-gated
+  # migration tests finally execute (they skip everywhere else).
+  pg-integration:
+    name: pg-integration (ephemeral postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dvhub_ci
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      # Ephemeral CI database ONLY — never the prod `dvhub` DB. Hostname is localhost
+      # (port-mapped to the runner), not `postgres`, because steps run on the runner.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dvhub_ci
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      # DATABASE_URL is set → the { skip: !DATABASE_URL } migration describe blocks run.
+      - run: npm test
+
+  # Optional e2e job: Playwright setup-wizard happy-path against a DB-free server boot.
+  e2e:
+    name: e2e (playwright setup wizard)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Boot the server DB-free on :8080 with a throwaway data dir so the e2e never
+      # touches real license_state.json/config; brief readiness wait before the spec.
+      - name: Boot server (DB-free) on :8080
+        run: |
+          DV_DATA_DIR="$(mktemp -d)" node server.js &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/ >/dev/null 2>&1; then
+              echo "server ready"
+              break
+            fi
+            sleep 1
+          done
+      - run: npm run test:e2e
