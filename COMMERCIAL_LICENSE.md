@@ -36,7 +36,7 @@ Examples where a commercial license may be required:
 ## Requesting a commercial license
 
 If your company would like to use this software commercially,
-please contact the author.
+please contact Bikini Bottom Capital GmbH at info@bikinibottom.capital.
 
 Commercial licenses can include:
 
@@ -49,5 +49,8 @@ Commercial licenses can include:
 
 ## Contact
 
-For licensing inquiries please open a GitHub issue or contact the
-repository owner.
+For licensing inquiries please contact Bikini Bottom Capital GmbH at
+info@bikinibottom.capital.
+
+This commercial license is governed by the laws of the Federal Republic of
+Germany (Deutschland).

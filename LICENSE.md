@@ -1,6 +1,6 @@
 # Energy Community License (ECL-1.0)
 
-Copyright (c) 2026 chloepriceless
+Copyright (c) 2026 Bikini Bottom Capital GmbH (chloepriceless)
 
 Permission is granted to any person or organization to use, copy,
 modify, and distribute this software and its source code, subject to
