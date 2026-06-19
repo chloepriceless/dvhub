@@ -311,3 +311,25 @@ test('push does NOT send FeedInTariffImport in fixed mode', async () => {
     await mock.close();
   }
 });
+
+// --- Self-heal reconcile hook (2026-06-19): start({afterPush}) re-runs config-sync each tick ---
+test('start({fireImmediately:false}): no immediate tick; afterPush runs on the interval (EOS-restart self-heal)', async () => {
+  const ctx = { getCfg: () => ({ optimizer: { eosProxy: { enabled: false } } }), pushLog: () => {}, forecastService: { buildForecastResponse: async () => ({}) }, state: {} };
+  const bridge = createEosForecastBridge(ctx);
+  let after = 0;
+  bridge.start({ fireImmediately: false, intervalMs: 25, afterPush: async () => { after += 1; } });
+  assert.equal(after, 0, 'fireImmediately:false must not tick at start');
+  await new Promise((r) => setTimeout(r, 90));
+  bridge.stop();
+  assert.ok(after >= 1, 'afterPush must run on the interval tick (config-sync self-heal)');
+});
+
+test('start(): default fireImmediately runs exactly one immediate tick', async () => {
+  const ctx = { getCfg: () => ({ optimizer: { eosProxy: { enabled: false } } }), pushLog: () => {}, forecastService: { buildForecastResponse: async () => ({}) }, state: {} };
+  const bridge = createEosForecastBridge(ctx);
+  let after = 0;
+  bridge.start({ intervalMs: 100000, afterPush: async () => { after += 1; } });
+  await new Promise((r) => setTimeout(r, 25));
+  bridge.stop();
+  assert.equal(after, 1, 'default fireImmediately should run one immediate tick');
+});

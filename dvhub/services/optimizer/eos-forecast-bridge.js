@@ -392,14 +392,37 @@ export function createEosForecastBridge(ctx) {
    * forecast pipelines update at most hourly — pushing more often than that
    * sends EOS the same numbers redundantly.
    */
-  function start() {
+  /**
+   * Start the periodic reconcile timer.
+   *
+   * @param {object} [opts]
+   * @param {() => (void|Promise<void>)} [opts.afterPush] - run AFTER each push,
+   *   on the same tick. This is how the integration SELF-HEALS after an *EOS*
+   *   restart: an EOS restart resets all API-set config (elecprice/load/
+   *   pvforecast providers, optimization.interval, battery efficiency) back to
+   *   its EOS.config.json defaults, and eos-config-sync otherwise only runs on
+   *   DVhub boot/save. Wiring config-sync in here re-asserts that config every
+   *   tick, so a reverted provider (e.g. elecprice -> EnergyCharts spot) is
+   *   auto-reconciled within <=1 interval instead of needing a manual DVhub
+   *   restart. push() runs BEFORE afterPush so the *Import series are fresh when
+   *   the providers are re-flipped at them.
+   * @param {number} [opts.intervalMs] - tick interval, default 3600_000 (1 h).
+   * @param {boolean} [opts.fireImmediately=true] - run one tick now. Pass false
+   *   when the caller already ran a boot reconcile (push->sync) just before.
+   */
+  function start(opts = {}) {
     if (tickHandle) return;
-    // Fire once at boot (after eos-config-sync.sync() has set the providers
-    // to *Import variants); callers schedule the start() invocation.
-    push().catch(() => {});
-    tickHandle = setInterval(() => {
-      push().catch(() => {});
-    }, 3600 * 1000);
+    const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : 3600 * 1000;
+    const tick = async () => {
+      // push() and afterPush each log + swallow their own errors; the timer
+      // callback must never throw.
+      try { await push(); } catch { /* push() already logs */ }
+      if (typeof opts.afterPush === 'function') {
+        try { await opts.afterPush(); } catch { /* afterPush logs/swallows */ }
+      }
+    };
+    if (opts.fireImmediately !== false) tick();
+    tickHandle = setInterval(tick, intervalMs);
   }
 
   function stop() {

@@ -1649,7 +1649,25 @@ if (IS_RUNTIME_PROCESS) {
       try { pushLog('eos_config_sync_error', { phase: 'boot', error: err?.message || String(err) }); }
       catch { /* swallow */ }
     }
-    try { eosForecastBridge.start(); }
+    try {
+      // Self-heal (2026-06-19): each hourly tick re-pushes forecasts AND re-runs
+      // config-sync. An *EOS* restart resets all API-set config (providers/
+      // interval/efficiency) to EOS.config.json defaults, and config-sync
+      // otherwise only runs on DVhub boot/save — so without this the providers
+      // silently revert (e.g. elecprice -> spot) until a manual DVhub restart.
+      // The boot one-shot above already ran push->sync, so fireImmediately:false
+      // avoids a redundant immediate cycle.
+      eosForecastBridge.start({
+        fireImmediately: false,
+        afterPush: async () => {
+          try { await eosConfigSync.sync(); }
+          catch (e) {
+            try { pushLog('eos_config_sync_error', { phase: 'reconcile', error: e?.message || String(e) }); }
+            catch { /* swallow */ }
+          }
+        },
+      });
+    }
     catch (err) {
       try { pushLog('eos_forecast_bridge_error', { phase: 'start', error: err?.message || String(err) }); }
       catch { /* swallow */ }
