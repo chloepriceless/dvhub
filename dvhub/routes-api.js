@@ -469,6 +469,22 @@ export function assertNoDowngrade(targetVersion, currentVersion, { allowDowngrad
 // and random attacker-controlled git refs. Accepts plain semver `1.2.3`, `v1.2.3`,
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
 export const SEMVER_TAG = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/;
+
+// W5.1 (Phase 28-01): shared, defensive self-update tag selector. Callers keep
+// fetching the tag list via `git tag --sort=-v:refname` (so the list is already
+// ranked highest-first); this pure helper just picks the FIRST line that is a real
+// semver RELEASE tag — reusing the canonical SEMVER_TAG guard above — so a stray
+// non-semver tag (a CI build tag, a bare numeric ref, `main`, …) can never be the
+// selected checkout target. Returns null for an empty / all-junk list (callers
+// already handle the no-tag case: `if (!selectedTag) throw …` / install.sh else).
+// Pure + exported so the decision is unit-testable without git (see test/tag-select.test.js).
+export function selectLatestSemverTag(tagListString) {
+  return String(tagListString || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .find((t) => SEMVER_TAG.test(t)) || null;
+}
 // Rate-limit Map eviction ceiling. Before this was unbounded, so IPv6-rotation
 // attackers could pin Node heap. Key normalisation (v4 verbatim, v6 /64 prefix)
 // further collapses per-address fan-out.
