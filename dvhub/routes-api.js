@@ -5908,7 +5908,7 @@ export function createApiRoutes(ctx) {
           } catch { /* not on a tag */ }
           let latestTag = null;
           try {
-            latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0] || null;
+            latestTag = selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
           } catch { /* no tags */ }
           let changelog = '';
           if (currentTag && latestTag && currentTag !== latestTag) {
@@ -5920,7 +5920,9 @@ export function createApiRoutes(ctx) {
           let availableVersions = [];
           try {
             const allTags = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-            availableVersions = allTags ? allTags.split('\n').filter(Boolean).slice(0, 10) : [];
+            availableVersions = allTags
+              ? allTags.split('\n').map((t) => t.trim()).filter((t) => SEMVER_TAG.test(t)).slice(0, 10)
+              : [];
           } catch { /* ignore */ }
           return json(res, 200, {
             ok: true, channel,
@@ -5995,7 +5997,7 @@ export function createApiRoutes(ctx) {
           const allowDowngrade = body?.allowDowngrade === true;
           if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-            const selectedTag = targetVersion || (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+            const selectedTag = targetVersion || selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
             if (!selectedTag) throw new Error('No release tags found');
             // Explicit targetVersion was already downgrade-checked; guard an auto-selected tag.
             if (!targetVersion) assertNoDowngrade(selectedTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
@@ -6092,7 +6094,7 @@ export function createApiRoutes(ctx) {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
 
             if (channel === 'stable') {
-              const latestTag = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim().split('\n')[0];
+              const latestTag = selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
               if (!latestTag) throw new Error('No release tags found');
               await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
               gitOutput = `Switched to stable: ${latestTag}`;

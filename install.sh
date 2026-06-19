@@ -315,7 +315,10 @@ fi
 
 # Channel-aware checkout
 if [[ "$UPDATE_CHANNEL" == "stable" ]]; then
-  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --sort=-v:refname | head -1)"
+  # W5.1: semver-filter so a stray non-release tag (CI/build/bare-numeric) can never
+  # win; kept in spirit with the JS SEMVER_TAG export in dvhub/routes-api.js. The
+  # else-branch below already handles "nothing matched" (falls back to REPO_BRANCH).
+  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)"
   if [[ -n "$LATEST_TAG" ]]; then
     echo "   Channel: stable — checkout $LATEST_TAG"
     git -C "$INSTALL_DIR" checkout "$LATEST_TAG"
