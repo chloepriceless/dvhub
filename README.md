@@ -23,7 +23,7 @@
 
 | | |
 |---|---|
-| **Status** | `v1.0-dev` — Version 0.8.0 |
+| **Status** | `v1.0-dev` — Version 1.0.0 |
 | **Getestet mit** | LUOX Energy, Victron Ekrano-GX / Cerbo-GX, Fronius AC-PV |
 | **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
 | **Drittlizenzen** | [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) |
@@ -688,75 +688,30 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 
 ## Changelog
 
-### 0.8.0 (2026-05-18) — HEMS-Ausbau
+Die vollständige Versionshistorie steht in [`CHANGELOG.md`](CHANGELOG.md)
+(Keep-a-Changelog-Format, SemVer).
 
-Großer Funktionssprung von der reinen DV-Schnittstelle zum Home Energy Management
-System. Verdichtete Übersicht der Arbeit seit 0.4.0:
+### 1.0.0 (2026-06-19)
 
-**Prognose-Engine:**
+Erstes öffentliches v1.0-Release. Konsolidiert den HEMS-Funktionsumfang aus 0.8.0
+(Prognose-Engine, MILP-/EOS-Optimierung, Forecast-aware Börsenautomatik, Aurora-UI,
+Familien-Dashboard, Integrationen, Lizenz-Gating) und ergänzt fünf Go-Live-
+Härtungswellen:
 
-- PV-Ertragsprognose über pvlib mit Standort-/Anlagenparametern
-- Lastvorhersage über statistische Modelle (statsforecast) und LightGBM
-- Multi-Modell-Ensemble, Nebel-Korrektur, Accuracy-Tracking und Forecast-Snapshots
-- optionale Cloud-PV-Provider (Solcast, pvnode.de) als zusätzliche Eingangsdaten
+- **Deploy-Blocker** — Frischinstall läuft sauber durch (TimescaleDB-Default,
+  gegatete Migrationen, fehlertoleranter Migrations-Runner)
+- **Sichere Defaults** — gehärtete LAN-Trust-/Host-/Proxy-Defaults, Bootstrap-Token
+  constant-time, Redaction-Lücken geschlossen, `family.html` hinter Pro-Gate
+- **Steuerpfad-Korrektheit** — EEG-Gate verfeinert, atomare Not-Halt-Persistenz,
+  konfigurierbarer Modbus-Connect-Timeout
+- **Forecast-Qualität** — VRM/forecast_solar/open_meteo im gewichteten Ensemble,
+  Slot-Renorm, Solcast-Perioden-START, Zeitzonen-Guard
+- **Test-Fundament & CI** — reparierte SQLite-Suite, `pickMilpPlan`-Coverage,
+  GitHub-Actions-CI (Fast-Lane + ephemeres Postgres + e2e)
 
-**Optimierung &amp; Börsenautomatik:**
-
-- interner MILP-Batterieoptimizer (HiGHS-Solver) und schnelle Heuristik
-- Anbindung von Akkudoktor-EOS als externer Optimizer-Dienst
-- Confidence-Gate verwirft Optimierungen bei zu unsicherer Prognose
-- zweistufige Forecast-aware Börsenautomatik: Stufe 1 dimensioniert Reserve/Hoarding-Gate
-  aus dem PV-Forecast, Stufe 2 („Forecast Aware++“) leert den Akku vorausschauend
-  mit Soft-/Hard-Limit-Taper und Live-Runtime-Clamp
-
-**ML &amp; Edge-KI:**
-
-- selbstlernende ML-Korrektur des Prognosefehlers mit atomarem Modell-Swap und Schema-Guard
-- Hintergrund-Retraining als Jobs, ML-Health-Überwachung
-- optionales lokales LLM (TinyLlama via Ollama) für natürlichsprachige Dashboard-Kacheln
-  mit deterministischem Template-Fallback und Spracherkennung
-- hardware-abhängige Leistungsstufen (RAM-Tiers) im Installer
-
-**Oberfläche &amp; Familien-Dashboard:**
-
-- vollständige Portierung aller Seiten auf das Aurora Design System
-- Familien-Dashboard mit Haus-zentriertem Energy-Flow, MQTT-Kacheln,
-  Tesla-/EV-Integration und Screensaver-Modus
-- History-Seite mit 14 Visualisierungs-Karten und CSV-/Parquet-Export
-- eigene Integrations-Seite inkl. MQTT-Inspector, eigener Explorer
-- Tools-Seite in die Einstellungen / Status integriert
-
-**Integrationen &amp; Betrieb:**
-
-- MQTT-Publisher mit Home-Assistant-Auto-Discovery, eingebauter Broker (aedes)
-- TeslaMate-Anbindung mit DB-historisierten Fahrzeugwerten
-- Telegram-/Pushover-Benachrichtigungen
-- VPN-Manager für OpenVPN-/WireGuard-/IPsec-Tunnel
-- Hersteller-Adapter-Layer, Service-orientierte Architektur
-- Prometheus-Metriken unter `/api/metrics`
-- TimescaleDB-Unterstützung (Continuous Aggregates &amp; Retention)
-- Multi-Schema-Telemetrie, Defence-in-Depth-Security-Hardening
-- `THIRD-PARTY-LICENSES.md` als Attributionsdatei ergänzt
-
-> Hinweis zur Versionierung: v1.0 ist für eine Veröffentlichung mit echtem
-> Nutzerkreis und Lizenzschlüssel-Mechanik reserviert; der aktuelle Stand wird
-> bewusst als 0.8 geführt.
-
-### 0.4.0 (2026-03-24)
-
-- Responsive Dashboard (iPhone-Viewport), Hamburger-Navigation ohne JS
-- PV-Export-Modus (nutzt `pvTotalW` statt nur DC-PV), Negativpreis-Pause
-- sinnvolle Defaults bei Erstinstallation, PV-Kopplungsauswahl (AC/DC/AC+DC)
-- Standort-Eingabe mit OpenStreetMap-Picker, MILP als Default-Engine
-
-### Ältere Versionen (0.3.x)
-
-- **0.3.10** — Update-Channel-System (Stable/Dev), PostgreSQL Auto-Schema
-- **0.3.9** — Schedule-gesteuerte DC-Einspeisung, `dcExportMode` nur per Schedule
-- **0.3.6** — DVhub Price API, Preiszonen-Selektor, Migration SQLite → PostgreSQL,
-  DV-Schaltsignal-Log
-- **0.3.5.1** — Kleine Börsenautomatik, History-Marktwerte, Security-Hardening
-  (Timing-Safe Token, CSP, Config `0600`, SQL-Injection-Schutz)
+> Hinweis zur Versionierung: v1.0 markiert die Veröffentlichung mit echtem
+> Nutzerkreis und Lizenzschlüssel-Mechanik. Ältere Einträge (0.8.0, 0.4.0, 0.3.x)
+> stehen vollständig in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
