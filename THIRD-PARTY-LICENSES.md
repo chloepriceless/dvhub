@@ -1,6 +1,6 @@
 # Third-Party Licenses — Lizenzhinweise Dritter
 
-> Attributionsdatei für DVhub. Stand: 2026-05-15 · DVhub-Version 0.8.0
+> Attributionsdatei für DVhub. Stand: 2026-06-19 · DVhub-Version 1.0.0
 
 DVhub selbst steht unter der **Energy Community License (ECL-1.0)** — siehe
 [`LICENSE.md`](LICENSE.md). Diese Datei erfüllt die **Attributionspflicht** der
@@ -21,17 +21,18 @@ WireGuard, strongSwan) und zur Timescale License siehe Abschnitt 4.
 | Lizenz | Pakete | Eigenschaft |
 |---|---|---|
 | MIT | 113 | permissiv |
-| Apache-2.0 | 57 | permissiv (+ Patentgewährung, NOTICE) |
+| Apache-2.0 | 54 | permissiv (+ Patentgewährung, NOTICE) |
 | ISC | 9 | permissiv |
 | BSD-3-Clause | 2 | permissiv |
 | 0BSD | 1 | permissiv (ohne Attributionspflicht) |
-| **Summe** | **182** | (direkte + transitive Abhängigkeiten, dedupliziert nach Paket@Version) |
+| **Summe** | **179** | (direkte + transitive Abhängigkeiten, dedupliziert nach Paket@Version) |
 
 Davon sind 10 direkte Produktiv-Abhängigkeiten (`@dsnp/parquetjs`, `aedes`,
 `franc`, `highs`, `mqtt`, `multicast-dns`, `p-retry`, `pg`, `pg-cursor`,
-`prom-client`); der Rest sind transitive Abhängigkeiten. `@playwright/test`
-ist eine reine devDependency (Tests) und wird **nicht** mit dem Produkt
-ausgeliefert — der Vollständigkeit halber dennoch gelistet.
+`prom-client`); der Rest sind transitive Abhängigkeiten. Diese Liste enthält
+ausschließlich Produktiv-Abhängigkeiten (`npx license-checker --production`);
+reine devDependencies (z. B. `@playwright/test`) werden **nicht** mit dem
+Produkt ausgeliefert und sind hier folgerichtig **nicht** gelistet.
 
 ---
 
@@ -45,8 +46,8 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `@dsnp/parquetjs` | 1.8.7 | Copyright for portions of the project are (c) 2017 ironSource Ltd. https://github.com/ironSource/parquetjs; Copyright for portions of the project are https://github.com/ZJONSSON/parquetjs |
 | `@leichtgewicht/ip-codec` | 2.0.5 | Copyright (c) 2021 Martin Heidegger |
 | `@nodable/entities` | 2.1.0 | Amit Gupta (https://solothought.com) |
-| `@types/node` | 25.6.0 | Copyright (c) Microsoft Corporation. |
 | `@types/node` | 22.19.19 | Copyright (c) Microsoft Corporation. |
+| `@types/node` | 25.6.0 | Copyright (c) Microsoft Corporation. |
 | `@types/node-int64` | 0.4.32 | Copyright (c) Microsoft Corporation. |
 | `@types/q` | 1.5.8 | Copyright (c) Microsoft Corporation. |
 | `@types/readable-stream` | 4.0.23 | Copyright (c) Microsoft Corporation. |
@@ -66,8 +67,8 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `bowser` | 2.14.1 | Copyright 2015, Dustin Diaz (the "Original Author") |
 | `broker-factory` | 3.1.14 | Copyright (c) 2026 Christoph Guttandin |
 | `browser-or-node` | 1.3.0 | Copyright (c) 2018 Dineshkumar Pandiyan <flexdinesh@gmail.com> |
-| `buffer` | 6.0.3 | Copyright (c) Feross Aboukhadijeh, and other contributors. |
 | `buffer` | 5.7.1 | Copyright (c) Feross Aboukhadijeh, and other contributors. |
+| `buffer` | 6.0.3 | Copyright (c) Feross Aboukhadijeh, and other contributors. |
 | `buffer-from` | 1.1.2 | Copyright (c) 2016, 2018 Linus Unnebäck |
 | `collapse-white-space` | 2.1.0 | Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com> |
 | `commist` | 3.2.0 | Copyright (c) 2014-2022 Matteo Collina |
@@ -78,8 +79,8 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `event-target-shim` | 5.0.1 | Copyright (c) 2015 Toru Nagashima |
 | `eventemitter3` | 5.0.4 | Copyright (c) 2014 Arnout Kazemier |
 | `events` | 3.3.0 | Copyright Joyent, Inc. and other Node contributors. |
-| `fast-unique-numbers` | 9.0.27 | Copyright (c) 2026 Christoph Guttandin |
 | `fast-unique-numbers` | 8.0.13 | Copyright (c) 2023 Christoph Guttandin |
+| `fast-unique-numbers` | 9.0.27 | Copyright (c) 2026 Christoph Guttandin |
 | `fast-xml-builder` | 1.2.0 | Copyright (c) 2026 Natural Intelligence |
 | `fast-xml-parser` | 5.7.3 | Copyright (c) 2017 Amit Kumar Gupta |
 | `fastfall` | 1.5.1 | Copyright (c) 2015 Matteo Collina |
@@ -117,8 +118,8 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `process` | 0.11.10 | Copyright (c) 2013 Roman Shtylman <shtylman@gmail.com> |
 | `process-nextick-args` | 2.0.1 | Copyright (c) 2015 Calvin Metcalf |
 | `q` | 1.5.1 | Copyright 2009–2017 Kristopher Michael Kowal. All rights reserved. |
-| `qlobber` | 8.0.1 | Copyright (c) 2016 David Halls <https://github.com/davedoesdev/> |
 | `qlobber` | 7.0.1 | Copyright (c) 2016 David Halls <https://github.com/davedoesdev/> |
+| `qlobber` | 8.0.1 | Copyright (c) 2016 David Halls <https://github.com/davedoesdev/> |
 | `readable-stream` | 3.6.2 | Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved. |
 | `readable-stream` | 4.7.0 | Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved. |
 | `retimer` | 4.0.0 | Copyright (c) 2015 Matteo Collina |
@@ -138,8 +139,8 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `undici-types` | 7.19.2 | Copyright (c) Matteo Collina and Undici contributors |
 | `util-deprecate` | 1.0.2 | Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net> |
 | `utilium` | 1.10.1 | James Prevett <jp@jamespre.dev> (https://jamespre.dev) |
-| `uuid` | 8.3.2 | Copyright (c) 2010-2020 Robert Kieffer and other contributors |
 | `uuid` | 10.0.0 | Copyright (c) 2010-2020 Robert Kieffer and other contributors |
+| `uuid` | 8.3.2 | Copyright (c) 2010-2020 Robert Kieffer and other contributors |
 | `uuid-parse` | 1.1.0 | Copyright (c) 2010-2012 Robert Kieffer |
 | `varint` | 6.0.0 | Chris Dickinson <chris@neversaw.us> |
 | `worker-factory` | 7.0.49 | Copyright (c) 2026 Christoph Guttandin |
@@ -155,7 +156,7 @@ ausgeliefert — der Vollständigkeit halber dennoch gelistet.
 | `xtend` | 4.0.2 | Copyright (c) 2012-2014 Raynos. |
 | `xxhash-wasm` | 1.1.0 | Copyright © 2017 Michael Jungo |
 
-### 1.2 Apache-2.0 (57)
+### 1.2 Apache-2.0 (54)
 
 Apache-2.0-Pakete gewähren zusätzlich eine Patentlizenz und verlangen, dass
 Änderungen gekennzeichnet und vorhandene NOTICE-Dateien weitergegeben werden.
@@ -204,7 +205,6 @@ Der Großteil dieser Pakete (AWS SDK / Smithy) wird transitiv über
 | `@aws-sdk/xml-builder` | 3.972.24 | Amazon.com, Inc. or its affiliates |
 | `@aws/lambda-invoke-store` | 0.2.4 | Amazon.com, Inc. or its affiliates |
 | `@opentelemetry/api` | 1.9.1 | OpenTelemetry Authors |
-| `@playwright/test` | 1.60.0 | Microsoft Corporation |
 | `@smithy/core` | 3.24.2 | Amazon.com, Inc. or its affiliates |
 | `@smithy/credential-provider-imds` | 4.3.2 | Amazon.com, Inc. or its affiliates |
 | `@smithy/fetch-http-handler` | 5.4.2 | Amazon.com, Inc. or its affiliates |
@@ -217,8 +217,6 @@ Der Großteil dieser Pakete (AWS SDK / Smithy) wird transitiv über
 | `brotli-wasm` | 3.0.1 | Tim Perry / HTTP Toolkit |
 | `bson` | 6.10.3 | MongoDB, Inc. |
 | `long` | 5.3.2 | Daniel Wirtz |
-| `playwright` | 1.60.0 | Microsoft Corporation |
-| `playwright-core` | 1.60.0 | Microsoft Corporation |
 | `prom-client` | 15.1.3 | Simon Nyberg and contributors |
 | `thrift` | 0.21.0 | The Apache Software Foundation |
 
@@ -596,7 +594,7 @@ TinyLlama und Akkudoktor-EOS.
 
 ---
 
-*Erzeugt am 2026-05-15 aus `dvhub/node_modules` (npm), `dvhub/python/requirements.txt`
+*Erzeugt am 2026-06-19 aus `dvhub/node_modules` (npm), `dvhub/python/requirements.txt`
 (Python), `dvhub/public/` (Frontend) und `install.sh` (Systemsoftware).
 Bei Änderungen an den Abhängigkeiten ist diese Datei zu aktualisieren —
 empfohlenes Werkzeug: `npx license-checker --production`.*
