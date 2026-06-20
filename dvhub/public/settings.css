@@ -160,7 +160,10 @@
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   box-sizing: border-box;
   min-width: 0;
-  overflow: hidden;
+  /* overflow:visible, damit Hilfe-Tooltips (.config-help-icon::after, position:absolute)
+     nicht an der Kartenbox abgeschnitten werden. Pro-Gate-Karten behalten ihr eigenes
+     overflow:hidden (spezifischere Regel weiter unten) fuer die Blur-Ueberlagerung. */
+  overflow: visible;
   overflow-wrap: break-word;
 }
 .config-group[data-accent="green"]  { border-left-color: var(--flow-green, #4CE36C); }
