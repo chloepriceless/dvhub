@@ -13,6 +13,54 @@
    no behavioural change.
    ============================================================ */
 
+/* ============================================================
+   DESIGN-UNIFY (2026-06-20): Token-Brücke Legacy -> Aurora/Web.
+   Die historisch hier genutzten Legacy-Tokens (--flow-*, --font-*,
+   --dvhub-*) waren NICHT definiert (liefen in Fallbacks wie
+   'Space Grotesk'/#4CE36C) und divergierten vom geteilten
+   Aurora-System (dvhub-app.css, "geteilt mit Web" / dvhub.online
+   Variante C). Hier werden sie 1:1 auf die kanonischen Aurora-/Web-
+   Tokens gemappt -> vereinheitlicht Farben + Typografie der ganzen
+   Einstellungen-Seite ohne Klassen-/JS-Aenderung. settings.css wird
+   NUR von settings.html geladen -> dieses :root ist settings-scoped.
+   ============================================================ */
+:root {
+  /* Typografie -> System-Font-Stack (DSGVO, = Web --f-sans/--f-mono) */
+  --font-title: var(--f-brand);
+  --font-brand: var(--f-brand);
+  --font-body:  var(--f-body);
+  --font-mono:  var(--f-mono);
+
+  /* Flow-Palette -> Aurora-Brand-Akzente */
+  --flow-green:  var(--green);
+  --flow-yellow: var(--yellow);
+  --flow-blue:   var(--blue);
+  --flow-cyan:   var(--cyan);
+  --flow-purple: var(--violet);
+  --flow-orange: var(--orange);
+  --flow-red:    var(--red);
+  --flow-text:       var(--text);
+  --flow-text-muted: var(--text-dim);
+  --flow-border:  var(--glass-brd);
+  --flow-surface: var(--glass-2);
+  --flow-radius:  var(--r-md);
+
+  /* dvhub-* Legacy -> Aurora */
+  --dvhub-text:           var(--text);
+  --dvhub-text-secondary: var(--text-2);
+  --dvhub-text-muted:     var(--text-dim);
+  --dvhub-border:    var(--glass-brd);
+  --dvhub-panel:     var(--bg-2);
+  --dvhub-card:      var(--bg-elev);
+  --dvhub-blue:        var(--blue);
+  --dvhub-blue-hover:  var(--cyan);
+  --dvhub-electric:    var(--blue);
+  --dvhub-green: var(--green);
+  --dvhub-lime:  var(--green);
+  --dvhub-warn:   var(--warn);
+  --dvhub-danger: var(--danger);
+}
+
 /* [hidden] normalize (Wave-3 addition to index.css; mirrored here so
    any settings/setup markup that uses both .config-row + hidden=""
    attribute, or .config-banner + hidden, hides correctly when JS
