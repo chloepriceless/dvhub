@@ -316,23 +316,26 @@ body.has-changes .config-save-bar { transform: translateY(0); }
    Source: styles.css lines 4340-5453 — SETTINGS · AURORA (Layers 1-7)
    ============================================================ */
 .settings-aurora {
-  --sa-bg-0: #030610;
-  --sa-bg-1: #050a17;
+  /* DESIGN-UNIFY Inc 2 (2026-06-20): --sa-* lokale Tokens auf die geteilten
+     Aurora-/Web-Tokens gezogen (Akzente/Text/Border/Radius exakt = Brand-Palette
+     der Website Variante C). Dunkles Glass-Panel bleibt (on-brand). */
+  --sa-bg-0: var(--bg-0);
+  --sa-bg-1: var(--bg-1);
   --sa-glass: rgba(10, 20, 40, 0.45);
   --sa-glass-strong: rgba(14, 24, 44, 0.78);
-  --sa-glass-brd: rgba(120, 180, 255, 0.14);
-  --sa-glass-brd-hot: rgba(120, 210, 255, 0.32);
-  --sa-text: #e8f1ff;
-  --sa-text-dim: #8aa3c7;
-  --sa-text-mute: #4a5d7c;
-  --sa-blue: #1f8dff;
-  --sa-cyan: #34dbff;
-  --sa-green: #46d344;
-  --sa-yellow: #ffd421;
-  --sa-orange: #ff9f43;
-  --sa-purple: #bc8cff;
-  --sa-red: #ff6868;
-  --sa-r: 12px;
+  --sa-glass-brd: var(--glass-brd);
+  --sa-glass-brd-hot: var(--glass-brd-strong);
+  --sa-text: var(--text);
+  --sa-text-dim: var(--text-2);
+  --sa-text-mute: var(--text-dim);
+  --sa-blue: var(--blue);
+  --sa-cyan: var(--cyan);
+  --sa-green: var(--green);
+  --sa-yellow: var(--yellow);
+  --sa-orange: var(--orange);
+  --sa-purple: var(--violet);
+  --sa-red: var(--red);
+  --sa-r: var(--r-lg);
 
   position: relative;
   padding: 14px 16px 88px;
@@ -541,7 +544,7 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 .settings-aurora select:not(.sa-no-aurora) {
   background: rgba(5, 10, 22, .5);
   border: 1px solid var(--sa-glass-brd);
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   color: var(--sa-text);
   font-family: var(--font-mono, 'JetBrains Mono', monospace);
   font-size: 12px;
@@ -626,7 +629,7 @@ body.has-changes .config-save-bar { transform: translateY(0); }
   background:
     radial-gradient(ellipse at 18% -8%, rgba(31, 141, 255, .22) 0%, transparent 55%),
     radial-gradient(ellipse at 110% 110%, rgba(52, 219, 255, .14) 0%, transparent 55%),
-    radial-gradient(ellipse at 50% 120%, rgba(70, 211, 68, .08) 0%, transparent 60%);
+    radial-gradient(ellipse at 50% 120%, rgba(62, 224, 160, .08) 0%, transparent 60%);
   opacity: 1;
 }
 
@@ -636,7 +639,7 @@ body.has-changes .config-save-bar { transform: translateY(0); }
 }
 .settings-aurora .config-group:hover {
   transform: translateY(-1px);
-  border-color: rgba(120, 210, 255, 0.22);
+  border-color: var(--sa-glass-brd-hot);
   box-shadow: 0 14px 36px rgba(0, 0, 0, .35);
 }
 
