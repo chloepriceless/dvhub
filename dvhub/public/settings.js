@@ -913,11 +913,11 @@ function openLocationPicker(locationBasePath) {
     if (!document.querySelector('link[href*="leaflet"]')) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      link.href = '/vendor/leaflet/leaflet.css';
       document.head.appendChild(link);
     }
     const script = document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.src = '/vendor/leaflet/leaflet.js';
     script.onload = () => initLeafletMap();
     document.head.appendChild(script);
   }

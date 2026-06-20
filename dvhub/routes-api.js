@@ -173,8 +173,9 @@ export { metricsRegistry };
 
 // Plan 08-05 Task 2: HSTS + tightened CSP.
 //   - Strict-Transport-Security: 1 year, includeSubDomains (preload deferred).
-//   - script-src: pinned to swagger-ui-dist@5.11.0 and leaflet@1.9.4 paths
-//     (no more wildcard unpkg / jsdelivr reach).
+//   - script-src: pinned to the swagger-ui-dist@5.11.0 path
+//     (no more wildcard unpkg / jsdelivr reach). Leaflet is vendored
+//     same-origin under /vendor/leaflet/ (served by 'self', Plan 29-02).
 //   - style-src unsafe-inline token removed in Plan 09.1-07 Task 3 (wave 6).
 //     All inline style= attrs were stripped from HTML in Plan 08-11; all
 //     innerHTML/cssText-injected inline styles in JS were refactored to
@@ -207,18 +208,18 @@ export const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Content-Security-Policy': [
     "default-src 'self'",
-    // script-src: pinned CDN paths ONLY. swagger-ui-dist@5.11.0 for /api-docs.html,
-    // leaflet@1.9.4 for the settings map overlay.
-    "script-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/",
+    // script-src: pinned CDN paths ONLY. swagger-ui-dist@5.11.0 for /api-docs.html.
+    // (Leaflet is vendored same-origin under /vendor/leaflet/ — covered by 'self', Plan 29-02.)
+    "script-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/",
     // Plan 09.1-07 Task 3: unsafe-inline token removed after Aurora port stripped
     // all inline style= attrs in HTML (Plan 08-11 phase) AND innerHTML/cssText
     // sites in JS were refactored to className + .style.property setters
     // (Plan 09.1-07 wave 6 commits 16f321c..0564118). Aurora design ships
     // per-page CSS files (dvhub-app.css + family.css + history.css + ...)
     // and one external api-docs.css — all linked, none inline.
-    "style-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://unpkg.com/leaflet@1.9.4/ https://fonts.googleapis.com",
+    "style-src 'self' https://unpkg.com/swagger-ui-dist@5.11.0/ https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
-    "img-src 'self' data: blob: https://dvhub.de https://*.tile.openstreetmap.org https://unpkg.com/leaflet@1.9.4/",
+    "img-src 'self' data: blob: https://dvhub.de https://*.tile.openstreetmap.org",
     "connect-src 'self' https://dvhub.online",
     "frame-ancestors 'none'",
     "base-uri 'self'",
