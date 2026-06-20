@@ -52,7 +52,14 @@ export function buildTierFeatures(tier, cfg) {
       requiredTier: 3
     }
   ];
-  return features;
+
+  // ML-Korrektur + ML-Training nur listen, wenn ML aktiv ist (selbstheilend:
+  // taucht automatisch wieder auf, sobald ml.mlEnabled=true gesetzt wird).
+  // Hintergrund: ML auf prod deaktiviert seit 2026-05-22 (lightgbm-v1 verschlechterte
+  // die PV-Prognose, MAE ~2658W statt ~550W). Bis zum Modell-Fix (#999.17) sollen die
+  // beiden Zeilen nicht als "inaktiv" erscheinen, statt den Kunden zu verwirren.
+  const ML_ONLY = new Set(['ml_correction', 'ml_training']);
+  return ml.mlEnabled ? features : features.filter(f => !ML_ONLY.has(f.feature));
 }
 
 /**
