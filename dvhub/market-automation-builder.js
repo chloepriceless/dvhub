@@ -45,6 +45,13 @@ export const SLOT_DURATION_MS = 15 * 60 * 1000;
 const STAGE2_BASELOAD_FALLBACK_W = 400;
 // SOC tolerance when checking whether the pre-empty target has been reached.
 const STAGE2_TARGET_TOLERANCE_PCT = 1;
+// Cold-start / read-failure fallback for the live Victron min-SoC
+// (state.victron.minSocPct is null at boot — server.js:272). Fires ONLY in the
+// transient window before the first device read lands; once the live value is
+// present, the real device floor is used. Value 5 = the Victron 5% blackout
+// hard floor ("Böden 5/5/5" prod policy). The Victron itself enforces its own
+// configured floors regardless of this fallback (operator-confirmed 2026-06-20).
+export const VICTRON_MIN_SOC_FALLBACK_PCT = 5;
 
 export function isSmallMarketAutomationRule(rule) {
   if (!rule || typeof rule !== 'object') return false;
@@ -270,7 +277,7 @@ export function createMarketAutomationBuilder(ctx) {
     const pvEstimate = estimateWindowPvKwh({ pvSlots, window });
 
     // D-08 / D-09 / D-10: size the forecast-confidence-gated target SOC.
-    const hardFloorSocPct = state.victron?.minSocPct ?? 5;
+    const hardFloorSocPct = state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT;
     const targetSoc = computePreEmptyTargetSoc({
       windowPvKwh: pvEstimate.totalKwh,
       confidence: pvEstimate.avgConfidence,
@@ -590,7 +597,7 @@ export function createMarketAutomationBuilder(ctx) {
       currentSocPct,
       batteryCapacityKwh,
       configuredMinSocPct: automationConfig?.minSocPct,
-      globalMinSocPct: state.victron?.minSocPct ?? 5,
+      globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
       safetyMarginKwh: 1.5,
       confidenceThreshold: 0.25
     });
@@ -743,7 +750,7 @@ export function createMarketAutomationBuilder(ctx) {
           currentSocPct,
           batteryCapacityKwh,
           configuredMinSocPct: automationConfig?.minSocPct,
-          globalMinSocPct: state.victron?.minSocPct ?? 5,
+          globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
           safetyMarginKwh: 1.5,
           // Ensemble forecast confidences on prod sit at 0.25-0.30 (PV baseline, load baseline).
           // 0.25 is the lowest meaningful threshold that lets the forecast actually drive the
@@ -821,7 +828,7 @@ export function createMarketAutomationBuilder(ctx) {
           .map(ts => {
             const dynamicMin = computeDynamicAutomationMinSocPct({
               automationMinSocPct: baseMinSocPct,
-              globalMinSocPct: state.victron?.minSocPct ?? 10,
+              globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
               sunsetTs: sunsetMsForPlanning,
               sunriseTs: sunriseMsForPlanning,
               nowTs: ts
@@ -848,7 +855,7 @@ export function createMarketAutomationBuilder(ctx) {
         const lastSlotTs = Math.max(...perSlotBudgets.map(b => b.ts));
         effectiveMinSocPct = Math.round(computeDynamicAutomationMinSocPct({
           automationMinSocPct: baseMinSocPct,
-          globalMinSocPct: state.victron?.minSocPct ?? 10,
+          globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
           sunsetTs: sunsetMsForPlanning,
           sunriseTs: sunriseMsForPlanning,
           nowTs: lastSlotTs
@@ -1005,7 +1012,7 @@ export function createMarketAutomationBuilder(ctx) {
       const slotFloorSocPct = (sunsetMsForPlanning != null && sunriseMsForPlanning != null)
         ? Math.round(computeDynamicAutomationMinSocPct({
             automationMinSocPct: automationConfig?.minSocPct ?? 30,
-            globalMinSocPct: state.victron?.minSocPct ?? 10,
+            globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
             sunsetTs: sunsetMsForPlanning,
             sunriseTs: sunriseMsForPlanning,
             nowTs: slot.ts
@@ -1041,7 +1048,7 @@ export function createMarketAutomationBuilder(ctx) {
       const lastSelectedTs = Math.max(...rules.map((r) => Number(r.slotTs) || 0));
       const dynMin = computeDynamicAutomationMinSocPct({
         automationMinSocPct: baseMinSocPct,
-        globalMinSocPct: state.victron?.minSocPct ?? 10,
+        globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
         sunsetTs: sunsetMsForPlanning,
         sunriseTs: sunriseMsForPlanning,
         nowTs: lastSelectedTs

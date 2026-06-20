@@ -674,6 +674,14 @@ function assertValidRuntimeCommand(type, payload) {
 let runtimeWorkerRestartCount = 0;
 let runtimeWorkerStableTimer = null;
 let shuttingDown = false;
+// Plan 29-07A: module-scoped handles for the IS_RUNTIME_PROCESS interval timers +
+// monitoring heartbeat so gracefulShutdown can clear them. They are armed inside the
+// runtime blocks below and stay null in other process roles (clear = guarded no-op).
+let expireLeaseIntervalId = null;
+let liveTelemetryFlushIntervalId = null;
+let runtimeSnapshotIntervalId = null;
+let marketValueBackfillIntervalId = null;
+let monitoringTimerId = null;
 
 function startDedicatedRuntimeWorker() {
   const worker = startRuntimeWorker({
@@ -1577,15 +1585,15 @@ if (IS_RUNTIME_PROCESS) {
       pushLog('vpn_start_error', { error: err.message }, 'error');
     });
   }
-  setInterval(() => {
+  expireLeaseIntervalId = setInterval(() => {
     try { expireLeaseIfNeeded(); }
     catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
   }, 1000);
-  setInterval(() => {
+  liveTelemetryFlushIntervalId = setInterval(() => {
     try { liveTelemetryBuffer?.flush(); }
     catch (err) { pushLog('live_telemetry_flush_error', { error: err?.message ?? String(err) }); }
   }, 1000);
-  setInterval(() => {
+  runtimeSnapshotIntervalId = setInterval(() => {
     try { publishRuntimeSnapshot(); }
     catch (err) { pushLog('runtime_snapshot_publish_error', { error: err?.message ?? String(err) }); }
   }, 1000);
@@ -1674,14 +1682,14 @@ if (IS_RUNTIME_PROCESS) {
     }
   }, 15000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies
-  setInterval(() => {
+  marketValueBackfillIntervalId = setInterval(() => {
     startAutomaticMarketValueBackfill().catch(err => {
       pushLog('market_value_backfill_error', { error: err?.message ?? String(err) });
     });
   }, MARKET_VALUE_BACKFILL_INTERVAL_MS);
 
-  // Remote monitoring heartbeat (hot-reloadable)
-  let monitoringTimerId = null;
+  // Remote monitoring heartbeat (hot-reloadable). monitoringTimerId is module-scoped
+  // (Plan 29-07A) so gracefulShutdown can clear it; startMonitoringHeartbeat self-clears on re-arm.
   // Plan 08-04 Task 2 Step 4: SSRF guard for monitoring.pushUrl. The heartbeat
   // is a legitimate outbound call (Uptime Kuma / hosted monitor), but the URL
   // comes from config and could be weaponised to pivot into internal networks
@@ -1794,6 +1802,19 @@ async function gracefulShutdown(signal) {
   // Phase 07 Plan 07-04: stop Wave-2 recovery scheduler before forecast.close() tears down the store.
   safeSync('forecastSnapshots.close', () => forecastSnapshots.close());
 
+  // Plan 29-07A: clear the IS_RUNTIME_PROCESS interval timers + monitoring heartbeat
+  // + evcc integration so nothing keeps firing into a tearing-down store (handles are
+  // null in non-runtime roles -> guarded no-op).
+  safeSync('expireLeaseInterval.clear', () => { if (expireLeaseIntervalId) clearInterval(expireLeaseIntervalId); });
+  safeSync('liveTelemetryFlushInterval.clear', () => { if (liveTelemetryFlushIntervalId) clearInterval(liveTelemetryFlushIntervalId); });
+  safeSync('runtimeSnapshotInterval.clear', () => { if (runtimeSnapshotIntervalId) clearInterval(runtimeSnapshotIntervalId); });
+  safeSync('marketValueBackfillInterval.clear', () => { if (marketValueBackfillIntervalId) clearInterval(marketValueBackfillIntervalId); });
+  safeSync('monitoringHeartbeat.stop', () => {
+    if (monitoringTimerId) { clearInterval(monitoringTimerId); monitoringTimerId = null; }
+    monitoringHeartbeatSend = null;
+  });
+  safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
+
   // 2. Parallel async closes — one rejection must NOT block the others.
   //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).
   await Promise.all([
@@ -1812,6 +1833,8 @@ async function gracefulShutdown(signal) {
     safeAsync('transport.destroy', () => transport.destroy()),
     safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
     safeAsync('vpnManager.close', () => vpnManager.close()),
+    // Plan 29-07A: license poller has a 24h setInterval + boot timeout (close() at services/license/index.js).
+    safeAsync('licenseService.close', () => licenseService.close?.()),
     // Phase 09.2 D-02: persist health-tracker snapshots BEFORE pool teardown.
     // Lives inside Promise.all (section 2) so the pg.Pool used by UPSERT is
     // still alive — telemetryStore.close() runs in section 3 below.

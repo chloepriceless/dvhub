@@ -108,7 +108,9 @@ export function createMqttPublisher(hub, ctx) {
     pushLog(`[MQTT Publisher] Starting with ${interval}ms interval`);
     // Publish immediately on start, then on interval
     publishOnce();
-    timer = setInterval(publishOnce, interval);
+    // Plan 29-07B: .unref() so an idle publisher timer never holds the event loop
+    // open; close() (below) still clearInterval's it on shutdown (unchanged).
+    timer = setInterval(publishOnce, interval).unref();
   }
 
   function close() {

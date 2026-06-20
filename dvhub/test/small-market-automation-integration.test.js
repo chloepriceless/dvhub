@@ -2,9 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { filterSlotsByTimeWindow, computeNextPeriodBounds } from '../small-market-automation.js';
-import { buildNeedsRegeneration, createMarketAutomationBuilder } from '../market-automation-builder.js';
+import { buildNeedsRegeneration, createMarketAutomationBuilder, VICTRON_MIN_SOC_FALLBACK_PCT } from '../market-automation-builder.js';
 
 const SLOT_MS = 15 * 60 * 1000;
+
+test('VICTRON_MIN_SOC_FALLBACK_PCT pins the cold-start min-SoC fallback to 5 (Victron 5% blackout floor)', () => {
+  // 29-05 (D-A1): all 7 `state.victron?.minSocPct ?? N` sites resolve to this
+  // single named constant during the boot/read-failure window. Drift-guard so the
+  // battery cold-start floor cannot silently change. Operator-confirmed value 5.
+  assert.equal(VICTRON_MIN_SOC_FALLBACK_PCT, 5);
+  // Mirror the runtime `??` resolution: a null/absent live device min -> the constant.
+  const coldStartState = { victron: {} };
+  assert.equal(coldStartState.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT, 5);
+  // A present live device value always wins over the fallback (steady-state unchanged).
+  const liveState = { victron: { minSocPct: 12 } };
+  assert.equal(liveState.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT, 12);
+});
 
 function slotAt(iso, ctKwh = 0) {
   return { ts: Date.parse(iso), ct_kwh: ctKwh };

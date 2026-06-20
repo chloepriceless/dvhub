@@ -192,8 +192,7 @@ describe('createMlTraining', () => {
         mlEnabled: true,
         mlModelDir: '/tmp/ml-models',
         mlMinDataDays: 7,
-        mlSlidingWindowMonths: 6,
-        mlRollbackThreshold: 1.1
+        mlSlidingWindowMonths: 6
       },
       forecast: { pv: { tilt: 30, azimuth: 180, kwp: 10 } }
     });
