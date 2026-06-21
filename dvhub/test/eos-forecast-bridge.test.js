@@ -31,7 +31,9 @@ function createMockEos(handler) {
       let body = '';
       req.on('data', (c) => { body += c; });
       req.on('end', () => {
-        requests.push({ method: req.method, url: req.url });
+        let parsed = null;
+        if (body) { try { parsed = JSON.parse(body); } catch { parsed = body; } }
+        requests.push({ method: req.method, url: req.url, body: parsed });
         handler(req, res);
       });
     });
@@ -332,4 +334,100 @@ test('start(): default fireImmediately runs exactly one immediate tick', async (
   await new Promise((r) => setTimeout(r, 25));
   bridge.stop();
   assert.equal(after, 1, 'default fireImmediately should run one immediate tick');
+});
+
+// ── Marktprämien-Modulation (2026-06-21) ───────────────────────────────────
+// Export-Signal = spot + Marktprämie (premium = max(0, AW − MW)), §51: kein
+// Aufschlag bei negativem Preis; config-gated, default OFF (byte-identisch).
+
+const FEED_KEY = 'feed_in_tariff_wh';
+const LAST_YEAR = new Date().getUTCFullYear() - 1;
+const closeTo = (a, b, eps = 1e-12) => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`);
+
+function premiumCtx(mock, { gate, overrideAw, mwByYear, applicableSummary, pvPlants, onLog } = {}) {
+  return {
+    getCfg: () => ({
+      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'spot', feedInSpotFactor: 1, feedInIncludeMarketPremium: gate } },
+      userEnergyPricing: { applicableValueOverrideCtKwh: overrideAw, pvPlants: pvPlants || [] },
+    }),
+    pushLog: onLog || (() => {}),
+    forecastService: { buildForecastResponse: async () => ({
+      pv: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 1000 }] },
+      load: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 500 }] },
+      price: { slots: [{ start: '2026-05-24T12:00:00.000Z', ctKwh: 30 }, { start: '2026-05-24T12:15:00.000Z', ctKwh: -5 }] },
+    }) },
+    state: { victron: { soc: 50 } },
+    getSolarMarketValueSummary: async () => ({ annualCtKwhByYear: mwByYear || {} }),
+    getApplicableValueSummary: async () => applicableSummary || { applicableValueCtKwhByMonth: {} },
+  };
+}
+
+function feedMap(mock) {
+  const req = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/FeedInTariffImport'));
+  assert.ok(req && req.body && req.body.data, 'FeedInTariffImport body present');
+  // Body is datetime-first (PydanticDateTimeDataFrame): data[iso][FEED_KEY].
+  // Flatten to {iso: value} so the assertions read naturally.
+  return Object.fromEntries(
+    Object.entries(req.body.data).map(([iso, cell]) => [iso, cell?.[FEED_KEY]]),
+  );
+}
+
+test('premium ON: adds max(0,AW−MW) to positive spot, NOT to negative (§51)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = premiumCtx(mock, { gate: true, overrideAw: 10, mwByYear: { [LAST_YEAR]: 6 } }); // premium = 4 ct
+    await createEosForecastBridge(ctx).push();
+    const d = feedMap(mock);
+    closeTo(d['2026-05-24T12:00:00Z'], (30 + 4) / 100 / 1000); // +premium on positive
+    closeTo(d['2026-05-24T12:15:00Z'], -5 / 100 / 1000);       // no premium on negative
+  } finally { await mock.close(); }
+});
+
+test('premium OFF (gate false): byte-identical raw spot even with services present', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = premiumCtx(mock, { gate: false, overrideAw: 10, mwByYear: { [LAST_YEAR]: 6 } });
+    await createEosForecastBridge(ctx).push();
+    const d = feedMap(mock);
+    closeTo(d['2026-05-24T12:00:00Z'], 30 / 100 / 1000);
+    closeTo(d['2026-05-24T12:15:00Z'], -5 / 100 / 1000);
+  } finally { await mock.close(); }
+});
+
+test('premium ON but MW unavailable: falls back to raw spot + logs skip', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const ctx = premiumCtx(mock, { gate: true, overrideAw: 10, mwByYear: {}, onLog: (ev, d) => logs.push({ ev, d }) });
+    await createEosForecastBridge(ctx).push();
+    const d = feedMap(mock);
+    closeTo(d['2026-05-24T12:00:00Z'], 30 / 100 / 1000); // no premium
+    assert.ok(logs.some((l) => l.ev === 'eos_feedin_premium_skip'), 'skip logged when MW missing');
+  } finally { await mock.close(); }
+});
+
+test('premium clamp: AW < MW yields zero premium (no negative add)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = premiumCtx(mock, { gate: true, overrideAw: 5, mwByYear: { [LAST_YEAR]: 8 } }); // max(0,-3)=0
+    await createEosForecastBridge(ctx).push();
+    const d = feedMap(mock);
+    closeTo(d['2026-05-24T12:00:00Z'], 30 / 100 / 1000);
+  } finally { await mock.close(); }
+});
+
+test('premium ON: auto AW from BNetzA summary (no override) + MW → premium applied', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = premiumCtx(mock, {
+      gate: true,
+      overrideAw: undefined, // force the async auto path
+      mwByYear: { [LAST_YEAR]: 6 },
+      pvPlants: [{ kwp: 10, commissionedAt: '2026-01' }],
+      applicableSummary: { getApplicableValueCtKwh: () => 7 }, // AW=7 → premium=1
+    });
+    await createEosForecastBridge(ctx).push();
+    const d = feedMap(mock);
+    closeTo(d['2026-05-24T12:00:00Z'], (30 + 1) / 100 / 1000);
+  } finally { await mock.close(); }
 });

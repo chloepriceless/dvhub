@@ -595,7 +595,7 @@ function applySolarMarketValues({ rows, view, date, kpis, meta, solarMarketValue
   };
 }
 
-function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary, applicableValueOverrideCtKwh = null }) {
+export function summarizeWeightedApplicableValue({ pvPlants, applicableValueSummary, applicableValueOverrideCtKwh = null }) {
   const plants = Array.isArray(pvPlants) ? pvPlants : [];
   const overrideValue = Number(applicableValueOverrideCtKwh);
   if (Number.isFinite(overrideValue) && overrideValue > 0) {

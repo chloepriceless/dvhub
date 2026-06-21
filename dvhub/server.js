@@ -1109,6 +1109,16 @@ ctx.eosConfigSync = eosConfigSync;
 // *Import providers. ctx.eosConfigSync switches EOS to those providers; this
 // bridge feeds them. push()/start() are wired into the boot path and the
 // saveAndApplyConfig hook below so the data lands BEFORE the provider flip.
+// Marktprämien-Modulation (2026-06-21): give the bridge lazy read access to the
+// fixed prior-year Solar market value (MW) and the BNetzA applicable value (AW)
+// so it can value EOS feed-in at spot + Marktprämie instead of raw spot. Both
+// underlying services are module-level (applicableValueService is a const above;
+// energyChartsMarketValueService is assigned during init) — these closures
+// resolve them lazily at push() time, long after init has wired them.
+ctx.getSolarMarketValueSummary = ({ year }) =>
+  energyChartsMarketValueService?.getSolarMarketValueSummary?.({ year });
+ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
+  applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
 const eosForecastBridge = createEosForecastBridge(ctx);
 ctx.eosForecastBridge = eosForecastBridge;
 

@@ -1134,6 +1134,16 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'optimizer',
       groupLabel: 'Batterie-Optimierung',
+      groupDescription: 'Einspeiseverg\u00fctung: Bestimmt wie der Optimizer den Verkaufserl\u00f6s bewertet.',
+      path: 'optimizer.tariff.feedInIncludeMarketPremium',
+      label: 'Marktpr\u00e4mie auf Einspeisesignal (Direktvermarktung)',
+      type: 'boolean',
+      help: 'Nur im Spot-Modus. Wenn aktiv, bewertet EOS die Einspeisung zu Spot + Marktpr\u00e4mie statt nur zum reinen B\u00f6rsenpreis \u2014 denn in der EEG-Direktvermarktung gibt es bei positivem Preis zus\u00e4tzlich die Marktpr\u00e4mie (= anzulegender Wert \u2212 Jahresmarktwert des Vorjahres, fix). Bei NEGATIVEM Preis greift \u00a751: keine Pr\u00e4mie. So priorisiert der Optimizer das Speichern der Negativpreis-PV und das Einspeisen der pr\u00e4mientragenden Energie korrekt. Standard: aus (erst gegen die Live-EOS-Plan verifizieren).'
+    },
+    {
+      section: 'schedule',
+      group: 'optimizer',
+      groupLabel: 'Batterie-Optimierung',
       groupDescription: 'Batterie-Eckdaten f\u00fcr die automatische Optimierung.',
       path: 'optimizer.batteryCapacityWh',
       label: 'Akkukapazit\u00e4t (Wh)',

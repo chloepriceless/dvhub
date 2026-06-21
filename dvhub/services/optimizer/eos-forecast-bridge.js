@@ -28,6 +28,7 @@
 // contract — { ok, pushed: string[], errors: object } per call.
 
 import http from 'node:http';
+import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -185,9 +186,98 @@ function eosHttpRequest(baseUrl, method, path, body) {
  * }}
  */
 export function createEosForecastBridge(ctx) {
-  const { getCfg, pushLog, forecastService, state } = ctx;
+  const {
+    getCfg,
+    pushLog,
+    forecastService,
+    state,
+    // Optional (Marktprämien-Modulation, 2026-06-21). Lazy accessors wired in
+    // server.js; absent in tests/older builds → premium silently disabled.
+    getSolarMarketValueSummary,
+    getApplicableValueSummary,
+  } = ctx;
 
   let tickHandle = null;
+
+  /**
+   * Resolve the weighted "anzulegender Wert" (AW) in ct/kWh for the configured
+   * PV plants. Prefers the explicit operator override; otherwise auto-computes
+   * from BNetzA applicable values + pvPlants (same source the Historie page
+   * uses, so the dispatch signal and the revenue KPI agree). Never throws —
+   * returns null when AW can't be resolved (→ premium disabled, raw spot).
+   *
+   * @param {object} cfg
+   * @returns {Promise<number|null>}
+   */
+  async function resolveApplicableValueCtKwh(cfg) {
+    const uep = cfg?.userEnergyPricing || {};
+    const override = Number(uep.applicableValueOverrideCtKwh);
+    if (Number.isFinite(override) && override > 0) return override; // fast path, no async
+    if (typeof getApplicableValueSummary !== 'function') return null;
+    const pvPlants = Array.isArray(uep.pvPlants) ? uep.pvPlants : [];
+    let summary;
+    try {
+      summary = await getApplicableValueSummary({ year: new Date().getUTCFullYear(), pvPlants });
+    } catch {
+      return null;
+    }
+    const r = summarizeWeightedApplicableValue({
+      pvPlants,
+      applicableValueSummary: summary,
+      applicableValueOverrideCtKwh: uep.applicableValueOverrideCtKwh,
+    });
+    const aw = Number(r?.weightedApplicableValueCtKwh);
+    return Number.isFinite(aw) ? aw : null;
+  }
+
+  /**
+   * Resolve the *fixed* prior-year annual Solar market value (Jahresmarktwert)
+   * in ct/kWh. Per operator directive (2026-06-21) the previous year's official
+   * value is final and used as a constant — no rolling re-derivation. Never
+   * throws — returns null when unavailable (→ premium disabled, raw spot).
+   *
+   * @returns {Promise<number|null>}
+   */
+  async function resolveAnnualMarketValueCtKwh() {
+    if (typeof getSolarMarketValueSummary !== 'function') return null;
+    const lastYear = new Date().getUTCFullYear() - 1;
+    let summary;
+    try {
+      summary = await getSolarMarketValueSummary({ year: lastYear });
+    } catch {
+      return null;
+    }
+    const mw = Number(summary?.annualCtKwhByYear?.[lastYear]);
+    return Number.isFinite(mw) ? mw : null;
+  }
+
+  /**
+   * Market premium (ct/kWh) to add onto the spot export signal for EOS, so the
+   * genetic optimizer values feed-in at the real EEG-Direktvermarktung margin
+   * (spot + Marktprämie) instead of raw spot. Premium = max(0, AW − MW). Gated
+   * behind optimizer.tariff.feedInIncludeMarketPremium (default OFF). Returns 0
+   * when the gate is off or inputs are missing → push falls back to raw spot
+   * (byte-identical to the pre-feature behaviour). Never throws.
+   *
+   * §51 (negative-price windows) is handled at the slot level by the caller:
+   * the premium is only added to non-negative spot slots.
+   *
+   * @param {object} cfg
+   * @returns {Promise<number>}
+   */
+  async function resolveFeedInMarketPremiumCtKwh(cfg) {
+    const tariff = cfg?.optimizer?.tariff || {};
+    if (tariff.feedInIncludeMarketPremium !== true) return 0;
+    const [aw, mw] = await Promise.all([
+      resolveApplicableValueCtKwh(cfg),
+      resolveAnnualMarketValueCtKwh(),
+    ]);
+    if (!Number.isFinite(aw) || !Number.isFinite(mw)) {
+      if (pushLog) pushLog('eos_feedin_premium_skip', { reason: 'AW or MW unavailable', aw, mw });
+      return 0;
+    }
+    return Math.max(0, aw - mw);
+  }
 
   /**
    * Push the current battery (and, when available, EV) State-of-Charge into
@@ -319,10 +409,23 @@ export function createEosForecastBridge(ctx) {
     const tariff = cfg?.optimizer?.tariff || {};
     const feedInSpot = String(tariff.feedInMode || 'fixed').toLowerCase() === 'spot';
     const feedInFactor = Number.isFinite(Number(tariff.feedInSpotFactor)) ? Number(tariff.feedInSpotFactor) : 1.0;
+    // Market premium (ct/kWh) added onto non-negative spot slots so EOS values
+    // feed-in at the real Direktvermarktung margin (spot + Marktprämie), not raw
+    // spot. 0 when the gate is OFF (default) → the else-branch below reproduces
+    // the exact original expression → byte-identical push. 2026-06-21.
+    const premiumCt = await resolveFeedInMarketPremiumCtKwh(cfg);
     const feedInSlots = feedInSpot
       ? priceSlotsCt
           .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)))
-          .map((s) => ({ start: s.start, powerW: (Number(s.ctKwh) / 100 / 1000) * feedInFactor }))
+          .map((s) => {
+            const spotCt = Number(s.ctKwh);
+            // §51: premium only on non-negative spot. Gate OFF (premiumCt===0)
+            // keeps the original (spot/100/1000)*factor expression untouched.
+            const powerW = premiumCt > 0 && spotCt >= 0
+              ? (spotCt * feedInFactor + premiumCt) / 100 / 1000
+              : (spotCt / 100 / 1000) * feedInFactor;
+            return { start: s.start, powerW };
+          })
       : [];
 
     const tasks = [
