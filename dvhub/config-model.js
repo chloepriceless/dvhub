@@ -1998,9 +1998,10 @@ function buildFieldDefinitions() {
         { value: 'auto', label: 'Auto (bester verf\u00fcgbarer Dienst)' },
         { value: 'pvlib', label: 'pvlib (lokal, Open-Meteo Wetter)' },
         { value: 'solcast', label: 'Solcast (Cloud API)' },
+        { value: 'both', label: 'Solcast + pvlib (Ensemble)' },
         { value: 'pvnode', label: 'pvnode (Cloud API)' }
       ],
-      help: 'Welcher Dienst die PV-Prognose berechnet. Auto w\u00e4hlt den besten verf\u00fcgbaren.'
+      help: 'Welcher Dienst die PV-Prognose berechnet. Auto w\u00e4hlt den besten verf\u00fcgbaren. \u201eSolcast + pvlib (Ensemble)\u201c mischt beide (plus die freien Wetterdienste) inverse-MAE-gewichtet.'
     },
     {
       section: 'forecast',
