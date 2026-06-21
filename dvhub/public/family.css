@@ -71,7 +71,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-ev{top:58%;left:6%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
 .tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(165,94,234,.12);color:var(--ev)}
 .tag-ev .tag-dot{background:var(--ev);box-shadow:0 0 12px var(--ev-g);left:-12px;top:50%;transform:translateY(-50%)}
-.tag-grid{top:10%;right:6%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
+.tag-grid{top:38%;left:62%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
 .tag-grid .tag-val{color:var(--grid)}.tag-grid .tag-status{background:rgba(253,150,68,.12);color:var(--grid)}
 .tag-grid .tag-dot{background:var(--grid);box-shadow:0 0 12px var(--grid-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
@@ -248,7 +248,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   /* Phase 11-06 round 9: on <768px the .widgets cluster becomes a static
      horizontal row (no overlap), so the desktop occlusion does not occur here —
      the EV tag keeps its mirrored position opposite .tag-bat. */
-  .tag-solar{left:34%;top:6%}.tag-bat{left:3%;top:34%}.tag-grid{right:3%;top:34%}.tag-ev{left:3%;top:62%}
+  .tag-solar{left:34%;top:6%}.tag-bat{left:3%;top:34%}.tag-grid{right:3%;left:auto;top:34%}.tag-ev{left:3%;top:62%}
   /* Phase 11-06 round 3: narrower centre House readout on small viewports. */
   .pf-center-readout{padding:11px 18px}
   .pf-center-readout .v{font-size:30px}

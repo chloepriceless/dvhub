@@ -1878,6 +1878,10 @@
       // shows. Converted to W so it is unit-consistent with the MQTT device value.
       var houseW = Math.max(0, Number((data.energy && data.energy.homeKw) || 0)) * 1000;
       updateBgFlowMqttStreams(data.mqttTiles || [], houseW);
+      // Shelly / generic device cards (#dev-card-<id>) get the same visible dust
+      // streams as the MQTT tiles — they render via updateDevices (already called
+      // above), so their endpoints resolve here.
+      updateBgFlowDeviceStreams(data.devices || [], houseW);
       // #pfCenter centre readout — the House: Hausverbrauch (kW) primary,
       // day-net-Euro balance secondary (Phase 11-06 round 3).
       updatePfCenterReadout(data);
@@ -2865,6 +2869,72 @@
         if (bgFlowDust[i].s === s) bgFlowDust.splice(i, 1);
       }
       delete bgFlowMqttStreams[tileId];
+    });
+  }
+
+  /* Visible dust streams for the Shelly / generic device cards (#dev-card-<id>)
+     in the devices-tray. The MQTT tiles (#fam-card-mqtt-<id>) get their streams
+     from updateBgFlowMqttStreams above; the Shelly cards render via a SEPARATE
+     code path (updateDevices) and were previously left WITHOUT any visible flow
+     — only the suppressed legacy SVG carried them (operator report 2026-06-21:
+     "kein Flow Richtung den 30 W" for the 29 W Ventilator-Shelly). Same
+     proportional sizing + min-visibility floor as the MQTT streams, in a
+     SEPARATE map so the MQTT teardown does not reap these. A small consumer
+     (z.B. 29 W) still draws individual particles out of the House (#pfCenter);
+     a genuinely idle card (<5 W) stays particle-free via the bgFlowDraw guard. */
+  var bgFlowDeviceStreams = {};
+  function updateBgFlowDeviceStreams(devices, houseW) {
+    var list = devices || [];
+    var houseLoadW = Math.max(0, Number(houseW) || 0);
+    var seen = {};
+
+    list.forEach(function (d) {
+      if (!d || d.id == null) return;
+      var cardElId = 'dev-card-' + d.id;
+      // Only stream to a card that is actually on screen — guarantees the
+      // endpoint resolves (bgFlowDraw silently skips a null endpoint).
+      if (!document.getElementById(cardElId)) return;
+      var watts = Number(d.watts);
+      if (!isFinite(watts)) return;
+      var absW = Math.abs(watts);
+
+      seen[d.id] = true;
+      var s = bgFlowDeviceStreams[d.id];
+      if (!s) {
+        s = bgFlowDeviceStreams[d.id] = {
+          id: 's_dev_' + d.id,
+          from: 'pfCenter', to: cardElId,
+          color: hexToRgb(d.color && String(d.color).charAt(0) === '#' ? d.color : '#78909c')
+        };
+        bgFlowSeedDust(s);                              // pushes DUST_PER_STREAM particles
+      }
+      // Consumer: particles flow House → card in the live source-share colours
+      // (same provenance mix as the house/EV/MQTT sinks).
+      s.from = 'pfCenter'; s.to = cardElId; s.reverse = false;
+      s.mix = bgFlowSourceMix;
+      s.kw = absW / 1000;
+      s.minKw = 0.005;                                  // 5 W draw threshold (matches MQTT)
+
+      // STRICTLY PROPORTIONAL share of house consumption, then the same
+      // min-visibility floor the MQTT streams use so small loads stay visible.
+      var frac = bgFlowClamp01(absW / Math.max(houseLoadW, 1));
+      s.count = Math.round(frac * MQTT_FLOW_MAX_COUNT);
+      s.speed = frac * MQTT_FLOW_MAX_SPEED;
+      if (s.kw >= s.minKw) {
+        s.count = Math.max(s.count, BG_FLOW_MIN_COUNT);
+        s.speed = Math.max(s.speed, BG_FLOW_MIN_SPEED);
+      }
+    });
+
+    // Tear down streams for device cards that vanished (switched off, offline,
+    // dropped below threshold) — drop their dust so no orphan particles remain.
+    Object.keys(bgFlowDeviceStreams).forEach(function (devId) {
+      if (seen[devId]) return;
+      var s = bgFlowDeviceStreams[devId];
+      for (var i = bgFlowDust.length - 1; i >= 0; i--) {
+        if (bgFlowDust[i].s === s) bgFlowDust.splice(i, 1);
+      }
+      delete bgFlowDeviceStreams[devId];
     });
   }
 
