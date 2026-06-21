@@ -2774,7 +2774,7 @@ var forecastInspectorVisibilityHandler = null;
 var forecastInspectorSparkCharts = {};
 // Plan 19-02 — fixed column order for the B1 PV-Provider table. `combined` is
 // the ensemble output and rendered separately as the rightmost column.
-var PV_INSPECTOR_PROVIDER_COLUMNS = ['solcast', 'forecast_solar', 'open_meteo_solar', 'pvnode', 'vrm'];
+var PV_INSPECTOR_PROVIDER_COLUMNS = ['solcast', 'forecast_solar', 'open_meteo', 'pvnode', 'vrm', 'pvlib'];
 
 function setInspectorPollState(slug, state) {
   // Both the gated overlay and the live scaffold may exist for Pro sections.
@@ -3004,7 +3004,7 @@ function renderPvProvidersInspector(payload) {
       html += '</tr>';
     }
     if (!ts.length) {
-      html = '<tr><td colspan="7" class="dv-log-empty">Keine PV-Forecast-Daten — prüfe Phase 18-01i.</td></tr>';
+      html = '<tr><td colspan="8" class="dv-log-empty">Keine PV-Forecast-Daten — prüfe Phase 18-01i.</td></tr>';
     }
     tbody.innerHTML = html;
   }
