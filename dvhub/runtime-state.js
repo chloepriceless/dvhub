@@ -16,6 +16,10 @@ const METER_FIELDS = [
 
 const VICTRON_FIELDS = [
   'updatedAt',
+  // Connection flag for the settings banner (Christin 2026-06-21). Whitelisted so
+  // pickFields carries it through the web-side re-snapshot pass (where the raw
+  // fieldUpdatedAt is no longer present). Computed in buildVictronSnapshot.
+  'connected',
   'soc',
   'batteryPowerW',
   'pvPowerW',
@@ -150,7 +154,21 @@ function buildMeterSnapshot(meter = {}) {
 }
 
 export function buildVictronSnapshot(victron = {}) {
-  return pickFields(victron, VICTRON_FIELDS);
+  const snapshot = pickFields(victron, VICTRON_FIELDS);
+  // Live-connection flag for the settings banner (Christin 2026-06-21): the banner
+  // read victron.connected, which was NEVER populated → it always showed "Keine
+  // Verbindung zum Victron-System" even while fresh live data was flowing in.
+  // Derive it from the real per-field SUCCESS freshness (fieldUpdatedAt.soc), NOT
+  // updatedAt (which is bumped on every attempt incl. failures). Only compute on
+  // the poller-side pass where fieldUpdatedAt exists; on the web-side re-snapshot
+  // (filtered input) pickFields has already carried the whitelisted `connected`
+  // through, so we must not clobber it back to false. Threshold mirrors the
+  // telemetryMaxAgeMs default (90 s ≈ many ~1 Hz poll cycles).
+  const socOkAt = Number(victron?.fieldUpdatedAt?.soc);
+  if (Number.isFinite(socOkAt)) {
+    snapshot.connected = (Date.now() - socOkAt) <= 90000;
+  }
+  return snapshot;
 }
 
 function buildScheduleSnapshot(schedule = {}) {
