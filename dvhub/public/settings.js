@@ -1273,7 +1273,14 @@ const HIDDEN_FIELD_PATHS = [
   'userEnergyPricing.module3Windows.window3.label',
   'userEnergyPricing.module3Windows.window3.start',
   'userEnergyPricing.module3Windows.window3.end',
-  'userEnergyPricing.module3Windows.window3.priceCtKwh'
+  'userEnergyPricing.module3Windows.window3.priceCtKwh',
+  // #2 (Christin 2026-06-21): rein technische Schutz-Parameter, die den User nicht
+  // interessieren. Ausblenden — die sinnvollen Defaults (90 s / 5 s) greifen
+  // garantiert über die Runtime-Fallbacks auch bei leerem/fehlendem Feld
+  // (schedule-eval: `?? 90000`, createModbusTransport: `?? 5000`). Schema-Zeilen
+  // bleiben in config-model.js (weiter validiert/persistiert).
+  'victron.telemetryMaxAgeMs',
+  'victron.modbusConnectTimeoutMs'
 ];
 
 function renderDestinationGrid(destinationId) {
