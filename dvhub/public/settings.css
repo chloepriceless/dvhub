@@ -716,6 +716,21 @@ body:has(.settings-aurora) .config-save-bar {
   border-color: var(--sa-glass-brd-hot);
 }
 
+/* #2 Increment 2 (Christin 2026-06-21): alle Settings-Action-Buttons auf EINE
+   konsistente Größe/Form ("aus einem Guss"). Normalisiert nur die Geometrie —
+   auch das unangenehm kleine btn-small (war 10px/5px) wächst auf das einheitliche
+   Maß. Semantische Farben (ghost/danger/primary/VPN-lila) + Funktionen bleiben
+   unverändert (FIND SYSTEM IP & Co. nur optisch angeglichen, nicht entfernt). Die
+   Save-Bar liegt außerhalb von .settings-aurora (body:has-Selektor) → unberührt. */
+.settings-aurora .btn,
+.settings-aurora .btn.btn-small,
+.settings-aurora .btn.sm {
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  line-height: 1.2;
+}
+
 /* Stat cards in System/ML tab align with glass language */
 .settings-aurora .stat-card {
   background: rgba(5, 10, 22, .42);
