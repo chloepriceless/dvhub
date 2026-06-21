@@ -161,6 +161,38 @@ test('held write logs control_write_skipped once per (target,value) transition',
   assert.equal(countLogs(logs, 'control_write_skipped'), 2, 'new transition logs again');
 });
 
+test('keepalive re-writes are aggregated in the log (no per-cycle control_write spam)', async () => {
+  const { evaluator, state, cfg, logs, writes } = makeCtx();
+  cfg.schedule.controlKeepaliveMs = 5000;
+  state.schedule.lastWrite.gridSetpointW = { value: -5000, at: Date.now() - 6000 };
+
+  // First keepalive re-write: the hardware is still re-asserted, but the operator
+  // log is NOT spammed — no control_write line, and the control_keepalive summary
+  // is still inside its throttle window.
+  const r1 = await evaluator.applyControlTarget('gridSetpointW', -5000, 'test');
+  assert.equal(r1.keepalive, true);
+  assert.equal(gridWrites(writes).length, 1, 'keepalive still re-writes the hardware');
+  assert.equal(countLogs(logs, 'control_write'), 0, 'keepalive must not log control_write');
+  assert.equal(countLogs(logs, 'control_keepalive'), 0, 'first keepalive is within the throttle window');
+
+  // Backdate the aggregation window + re-arm keepalive → the next keepalive emits
+  // exactly ONE summary line carrying the suppressed count.
+  state.schedule._kaAgg.gridSetpointW.lastLogAt = Date.now() - 3600000;
+  state.schedule.lastWrite.gridSetpointW.at = Date.now() - 6000;
+  await evaluator.applyControlTarget('gridSetpointW', -5000, 'test');
+  assert.equal(countLogs(logs, 'control_keepalive'), 1, 'one aggregated summary after the window');
+  const ka = logs.find((l) => l.event === 'control_keepalive');
+  assert.equal(ka.payload.keepalive, true);
+  assert.ok(ka.payload.count >= 2, 'summary carries the suppressed keepalive count');
+
+  // A real (changed-value) write is still surfaced immediately and clears the
+  // keepalive aggregation for that target.
+  state.schedule.lastWrite.gridSetpointW.at = Date.now() - 6000;
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(countLogs(logs, 'control_write'), 1, 'changed value logs control_write');
+  assert.equal(state.schedule._kaAgg.gridSetpointW, undefined, 'real write resets keepalive aggregation');
+});
+
 // --- 3. Persistent override ----------------------------------------------------
 
 test('persistent override survives past manualOverrideTtlMs', async () => {

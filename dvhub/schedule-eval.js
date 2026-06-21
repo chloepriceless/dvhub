@@ -28,6 +28,14 @@ const FORCED_EXPORT_THRESHOLD_W = -1000;
 // limit cannot flap the Stage-2 LEEREN gridSetpointW every control cycle.
 const STAGE2_CLAMP_HYSTERESIS_W = 500;
 
+// Operator request (Christin 2026-06-21): the /api/log ring was flooded by one
+// identical `control_write` line every control cycle for the reg-2716 keepalive
+// re-writes (~5 s), drowning out everything else within ~1–2 min. Keepalive
+// writes are now aggregated in the log: at most ONE `control_keepalive` summary
+// per target per this window, carrying the suppressed count. The hardware write
+// and DB telemetry still happen every cycle — only the operator log is thinned.
+const KEEPALIVE_LOG_THROTTLE_MS = 60000;
+
 // T-0075: per-target classifier for the universal discharge floor. The "enables
 // battery discharge" direction is NOT uniform across write targets, so a naive
 // `value < 0` would be wrong for maxDischargeW. Returns the safe "no discharge"
@@ -516,19 +524,33 @@ export function createScheduleEvaluator(ctx) {
         keepalive: isKeepalive
       };
       state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
-      pushLog('control_write', {
-        target,
-        value,
-        raw: encoded.raw,
-        words,
-        scaled: encoded.scaled,
-        writeType: encoded.writeType,
-        wordOrder: encoded.wordOrder,
-        fc,
-        address: conf.address,
-        source,
-        keepalive: isKeepalive
-      });
+      // Real writes (value changed) are always surfaced. Keepalive re-writes
+      // (identical value re-asserted every controlKeepaliveMs — ~5 s for the
+      // volatile reg-2716 setpoint) used to flood the /api/log ring with one
+      // identical line per cycle. Aggregate them: at most ONE `control_keepalive`
+      // summary per target per KEEPALIVE_LOG_THROTTLE_MS, carrying the suppressed
+      // count. The hardware write above + DB telemetry below still run every
+      // cycle — only the in-memory operator log is thinned.
+      const writeFields = {
+        target, value,
+        raw: encoded.raw, words, scaled: encoded.scaled,
+        writeType: encoded.writeType, wordOrder: encoded.wordOrder,
+        fc, address: conf.address, source
+      };
+      if (!isKeepalive) {
+        pushLog('control_write', { ...writeFields, keepalive: false });
+        if (state.schedule._kaAgg) delete state.schedule._kaAgg[target];
+      } else {
+        const agg = (state.schedule._kaAgg || (state.schedule._kaAgg = {}));
+        const a = agg[target] || (agg[target] = { count: 0, lastLogAt: Date.now(), value });
+        if (Number(a.value) !== Number(value)) { a.count = 0; a.lastLogAt = Date.now(); a.value = value; }
+        a.count += 1;
+        if (Date.now() - (a.lastLogAt || 0) >= KEEPALIVE_LOG_THROTTLE_MS) {
+          pushLog('control_keepalive', { ...writeFields, keepalive: true, count: a.count, throttleMs: KEEPALIVE_LOG_THROTTLE_MS });
+          a.count = 0;
+          a.lastLogAt = Date.now();
+        }
+      }
       telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
         eventType: 'control_write',
         target,
