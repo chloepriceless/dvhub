@@ -71,3 +71,26 @@ test('mergeForecasts is invariant to provider iteration order', () => {
   const reversed = mergeForecasts({ solcast, pvnode }, weights);
   assert.deepEqual(reversed, forward);
 });
+
+// Regression (2026-06-21) — providers at different resolutions emit the SAME
+// instant in DIFFERENT ISO string formats. Those must collapse to ONE merged
+// row, else the `combined` INSERT … ON CONFLICT (model, ts_utc) batch targets
+// the same timestamptz twice → Postgres "ON CONFLICT DO UPDATE command cannot
+// affect row a second time" → the whole forecast cycle throws and `combined`
+// is never persisted (the ensemble never goes live).
+test('mergeForecasts collapses same instant across differing ts_utc string formats', () => {
+  const providersBySlot = {
+    // identical instant, three real-world formats: millis-Z, bare-Z, +00:00 offset
+    solcast:        [{ ts_utc: '2026-06-21T12:00:00.000Z', power_w: 1000 }],
+    forecast_solar: [{ ts_utc: '2026-06-21T12:00:00Z',      power_w: 2000 }],
+    open_meteo:     [{ ts_utc: '2026-06-21T12:00:00+00:00', power_w: 3000 }]
+  };
+  const result = mergeForecasts(providersBySlot, { solcast: 1, forecast_solar: 1, open_meteo: 1 });
+  // ONE row only — not three — so the combined batch has a unique timestamptz.
+  assert.equal(result.length, 1);
+  // Uniform weights → mean of 1000/2000/3000 = 2000.
+  assert.equal(result[0].power_w, 2000);
+  // No two output rows may normalise to the same instant.
+  const instants = result.map(r => new Date(r.ts_utc).toISOString());
+  assert.equal(new Set(instants).size, result.length);
+});

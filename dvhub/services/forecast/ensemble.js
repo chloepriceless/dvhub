@@ -63,6 +63,7 @@ export function computeWeights(mae7d) {
 export function mergeForecasts(providersBySlot, weights) {
   const slotMap = new Map();
   const weightSum = new Map();
+  const tsRepr = new Map();   // canonical instant -> first-seen original ts_utc string
   if (!providersBySlot || typeof providersBySlot !== 'object') return [];
   if (!weights || typeof weights !== 'object') return [];
 
@@ -74,19 +75,31 @@ export function mergeForecasts(providersBySlot, weights) {
       if (!s || typeof s.ts_utc !== 'string') continue;
       const p = Number(s.power_w);
       if (!Number.isFinite(p)) continue;
-      const acc = slotMap.get(s.ts_utc) ?? 0;
-      slotMap.set(s.ts_utc, acc + p * w);
-      const wAcc = weightSum.get(s.ts_utc) ?? 0;
-      weightSum.set(s.ts_utc, wAcc + w);
+      // Canonicalise the timestamp so providers that emit the SAME instant in
+      // different string formats (e.g. '…T12:00:00.000Z' vs '…T12:00:00+00:00',
+      // a real consequence of mixing 30/38/60-min providers) collapse to ONE
+      // slot. Without this, mergedSlots carries two distinct ts_utc strings for
+      // one instant → the combined `INSERT … ON CONFLICT (model, ts_utc)` batch
+      // targets the same timestamptz twice → Postgres aborts the whole forecast
+      // cycle with "ON CONFLICT DO UPDATE command cannot affect row a second
+      // time", so `combined` was never persisted and the ensemble never went live.
+      const d = new Date(s.ts_utc);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = d.toISOString();
+      if (!tsRepr.has(key)) tsRepr.set(key, s.ts_utc);
+      const acc = slotMap.get(key) ?? 0;
+      slotMap.set(key, acc + p * w);
+      const wAcc = weightSum.get(key) ?? 0;
+      weightSum.set(key, wAcc + w);
     }
   }
 
   const out = [];
-  for (const [ts_utc, power_w] of slotMap.entries()) {
-    const wSum = weightSum.get(ts_utc);
+  for (const [key, power_w] of slotMap.entries()) {
+    const wSum = weightSum.get(key);
     // Guard: drop slots with no positive/finite effective weight (no NaN/Inf in control path).
     if (!Number.isFinite(wSum) || wSum <= 0) continue;
-    out.push({ ts_utc, power_w: Math.round((power_w / wSum) * 10) / 10 });
+    out.push({ ts_utc: tsRepr.get(key), power_w: Math.round((power_w / wSum) * 10) / 10 });
   }
   return out.sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
 }
