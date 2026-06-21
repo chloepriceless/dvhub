@@ -1121,3 +1121,25 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   background:linear-gradient(90deg, #374151, #4b5563);
   color:#e5e7eb; border-bottom:1px solid #6b7280;
 }
+
+/* PV-Forecast-Provider card (Leitstand, operator request 2026-06-21) — compact
+   provider breakdown ported from the Settings Forecast-Inspector: per-provider
+   day-peak + freshness dot + ensemble status. Rendered by
+   leitstand-charts.js#renderForecastProviders. */
+.forecast-providers-card { margin-top:14px; }
+.forecast-providers-card .card-sub.is-active { color:var(--green); }
+.forecast-providers-body { display:flex; flex-direction:column; gap:1px; margin-top:8px; }
+.forecast-providers-empty { font-size:13px; color:var(--text-dim); padding:6px 2px; }
+.fp-row {
+  display:grid; grid-template-columns:14px 1fr auto auto; align-items:center;
+  gap:10px; padding:6px 2px; border-bottom:1px solid var(--hairline);
+  font-variant-numeric:tabular-nums;
+}
+.fp-row:last-child { border-bottom:none; }
+.fp-dot { width:9px; height:9px; border-radius:50%; justify-self:center; }
+.fp-dot.is-live  { background:var(--green);  box-shadow:0 0 8px rgba(70,211,68,.5); }
+.fp-dot.is-stale { background:var(--orange); box-shadow:0 0 8px rgba(255,176,32,.4); }
+.fp-dot.is-off   { background:rgba(255,255,255,.18); }
+.fp-name { font-size:13px; font-weight:600; color:var(--text); }
+.fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
+.fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }

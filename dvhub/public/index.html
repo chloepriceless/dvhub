@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css">
-  <link rel="stylesheet" href="/index.css?v=20260618-victron-alarms">
+  <link rel="stylesheet" href="/index.css?v=20260621-forecast-providers">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -418,6 +418,23 @@
         <div class="chart-day-summary" id="forecastDaySummary"></div>
       </div>
 
+      <!-- PV-Forecast-Provider (operator request 2026-06-21): bring the Settings
+           Forecast-Inspector provider breakdown into the Leitstand — which PV
+           forecast providers are feeding (incl. pvlib), each provider's day-peak,
+           how fresh it is, and whether the inverse-MAE ensemble is active. Driven
+           by leitstand-charts.js#renderForecastProviders from
+           /api/forecast/inspector/pv-providers (the merged /api/forecast does NOT
+           expose per-source series). -->
+      <div class="forecast-providers-card" id="forecastProvidersCard">
+        <div class="chart-head">
+          <span class="card-title">PV-Forecast-Provider</span>
+          <span class="card-sub" id="forecastProvidersEnsemble">&mdash;</span>
+        </div>
+        <div class="forecast-providers-body" id="forecastProvidersBody">
+          <div class="forecast-providers-empty">Lade Forecast-Provider &hellip;</div>
+        </div>
+      </div>
+
       <!-- Optimizer plan chart -->
       <div class="forecast-chart-shell u-hidden" id="optimizerPlanCard">
         <div class="chart-skeleton" id="optimizerPlanSkeleton">
@@ -467,6 +484,6 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20260621-akku-static"></script>
 <script src="/app.js?v=20260618-victron-alarms"></script>
-<script src="/leitstand-charts.js?v=20260616-socfloor"></script>
+<script src="/leitstand-charts.js?v=20260621-forecast-providers"></script>
 </body>
 </html>

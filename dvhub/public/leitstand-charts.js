@@ -1083,6 +1083,85 @@
     }
   }
 
+  // PV-Forecast-Provider card (operator request 2026-06-21) — surfaces the
+  // Settings Forecast-Inspector provider breakdown in the Leitstand: which PV
+  // forecast providers feed (incl. pvlib), each one's day-peak (kW), how fresh it
+  // is, and whether the inverse-MAE ensemble is active. Self-contained: own fetch
+  // of /api/forecast/inspector/pv-providers (the merged /api/forecast does NOT
+  // expose per-source series), own render, errors swallowed so it can never abort
+  // the chart refresh cycle. Provider keys are server-defined (no user input).
+  var FORECAST_PROVIDER_LABELS = {
+    solcast: 'Solcast', pvlib: 'pvlib', pvnode: 'pvnode', vrm: 'VRM',
+    forecast_solar: 'Forecast.Solar', open_meteo: 'Open-Meteo',
+    'eos-akkudoktor': 'EOS', combined: 'Ensemble'
+  };
+  function forecastProviderAgeLabel(iso) {
+    if (!iso) return '';
+    var t = new Date(iso).getTime();
+    if (!isFinite(t)) return '';
+    var min = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (min < 1) return 'gerade eben';
+    if (min < 60) return 'vor ' + min + ' min';
+    var h = Math.floor(min / 60);
+    return 'vor ' + h + ' h' + (min % 60 ? ' ' + (min % 60) + ' min' : '');
+  }
+  async function renderForecastProviders() {
+    var body = document.getElementById('forecastProvidersBody');
+    var ensEl = document.getElementById('forecastProvidersEnsemble');
+    if (!body) return;
+    try {
+      var now = new Date();
+      var to = new Date(now.getTime() + 24 * 3600 * 1000);
+      var qs = '?from=' + encodeURIComponent(now.toISOString()) + '&to=' + encodeURIComponent(to.toISOString());
+      var res = await apiFetch('/api/forecast/inspector/pv-providers' + qs);
+      var j = (res && res.ok) ? await res.json() : null;
+      if (!j || !j.ok || !j.providers) {
+        body.innerHTML = '<div class="forecast-providers-empty">Keine Provider-Daten verf&uuml;gbar.</div>';
+        if (ensEl) { ensEl.textContent = ''; ensEl.classList.remove('is-active'); }
+        return;
+      }
+      var fetched = j.oldestFetchedAt || {};
+      var rows = Object.keys(j.providers).map(function (key) {
+        var slots = j.providers[key] || [];
+        var peakW = 0;
+        for (var i = 0; i < slots.length; i++) {
+          var w = Number(slots[i] && slots[i].power_w);
+          if (isFinite(w) && w > peakW) peakW = w;
+        }
+        var ageMin = null;
+        if (fetched[key]) {
+          var t = new Date(fetched[key]).getTime();
+          if (isFinite(t)) ageMin = Math.max(0, (Date.now() - t) / 60000);
+        }
+        return {
+          label: FORECAST_PROVIDER_LABELS[key] || key,
+          peakKw: peakW / 1000,
+          age: fetched[key],
+          stale: ageMin != null && ageMin > 180,
+          has: slots.length > 0
+        };
+      });
+      // Active providers first, then by day-peak descending.
+      rows.sort(function (a, b) { return (b.has - a.has) || (b.peakKw - a.peakKw); });
+      body.innerHTML = rows.map(function (r) {
+        var dotCls = !r.has ? 'is-off' : r.stale ? 'is-stale' : 'is-live';
+        return '<div class="fp-row">' +
+          '<span class="fp-dot ' + dotCls + '"></span>' +
+          '<span class="fp-name">' + r.label + '</span>' +
+          '<span class="fp-peak">' + (r.has ? r.peakKw.toFixed(1).replace('.', ',') + ' kW' : '—') + '</span>' +
+          '<span class="fp-age">' + forecastProviderAgeLabel(r.age) + '</span>' +
+          '</div>';
+      }).join('');
+      if (ensEl) {
+        var n = (j.meta && j.meta.modelCount) || rows.filter(function (r) { return r.has; }).length;
+        ensEl.textContent = 'Ensemble: ' + (j.ensembleActive ? 'aktiv' : 'inaktiv') + ' · ' + n + ' Modelle';
+        ensEl.classList.toggle('is-active', !!j.ensembleActive);
+      }
+    } catch (e) {
+      body.innerHTML = '<div class="forecast-providers-empty">Forecast-Provider nicht erreichbar.</div>';
+    }
+  }
+
   async function refreshAllCharts() {
     var results = await Promise.allSettled([
       fetchForecastData(),
@@ -1105,6 +1184,7 @@
     var sr = (window.DVhubCommon && window.DVhubCommon.safeRender) || function (_, fn) { try { fn(); } catch (e) { console.error('[leitstand-chart-fallback]', _, e); } };
 
     sr('leitstand.forecast-summary', function () { updateForecastSummary(forecastData, statusData); });
+    sr('leitstand.forecast-providers', function () { renderForecastProviders(); });
     // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
     // (Ist + Last-Prognose are now both there) — keeping the call would draw
     // duplicate datasets in a removed canvas anyway.
