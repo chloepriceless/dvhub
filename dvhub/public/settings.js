@@ -1248,14 +1248,32 @@ const HIDDEN_FIELD_PATHS = [
   // rows stay in config-model.js (still validated/persisted). syncRenderedFieldsToDraft
   // skips inputs that aren't rendered, so hiding them preserves the values in
   // currentDraftConfig; the editor's change-handlers write them back via setPath.
-  // §14a (usesParagraph14aModule3 + module3Windows) is a separate grid-fee module
-  // and deliberately stays in the auto-form card.
+  // §14a Modul 3 (Christin 2026-06-21): zeitabhängige reduzierte Brutto-Bezugspreise
+  // sind eine KOMPONENTE des Strompreises — daher ebenfalls in den vereinten
+  // Preis-Editor gefaltet (nicht in der Auto-Form-Karte). Karte bleibt durch AW /
+  // costs / dvCost trotzdem nicht-leer → Pricing-Editor wird weiter gemountet.
   'userEnergyPricing.mode',
   'userEnergyPricing.fixedGrossImportCtKwh',
   'userEnergyPricing.dynamicComponents.energyMarkupCtKwh',
   'userEnergyPricing.dynamicComponents.gridChargesCtKwh',
   'userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh',
-  'userEnergyPricing.dynamicComponents.vatPct'
+  'userEnergyPricing.dynamicComponents.vatPct',
+  'userEnergyPricing.usesParagraph14aModule3',
+  'userEnergyPricing.module3Windows.window1.enabled',
+  'userEnergyPricing.module3Windows.window1.label',
+  'userEnergyPricing.module3Windows.window1.start',
+  'userEnergyPricing.module3Windows.window1.end',
+  'userEnergyPricing.module3Windows.window1.priceCtKwh',
+  'userEnergyPricing.module3Windows.window2.enabled',
+  'userEnergyPricing.module3Windows.window2.label',
+  'userEnergyPricing.module3Windows.window2.start',
+  'userEnergyPricing.module3Windows.window2.end',
+  'userEnergyPricing.module3Windows.window2.priceCtKwh',
+  'userEnergyPricing.module3Windows.window3.enabled',
+  'userEnergyPricing.module3Windows.window3.label',
+  'userEnergyPricing.module3Windows.window3.start',
+  'userEnergyPricing.module3Windows.window3.end',
+  'userEnergyPricing.module3Windows.window3.priceCtKwh'
 ];
 
 function renderDestinationGrid(destinationId) {
@@ -1596,19 +1614,68 @@ function renderPricingPeriodsEditor() {
     </div>
   `;
 
+  // #3 (Christin 2026-06-21): §14a Modul 3 ist eine Komponente des Strompreises
+  // (zeitabhängige reduzierte Brutto-Bezugspreise) → ebenfalls hier im vereinten
+  // Editor, gebunden an currentDraftConfig.userEnergyPricing.
+  const m3Active = uep.usesParagraph14aModule3 === true;
+  const m3Win = uep.module3Windows || {};
+  const m3WindowHtml = (n) => {
+    const w = m3Win[`window${n}`] || {};
+    return `
+      <div class="sa-divider-top">
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Fenster ${n} aktiv</span>
+            <input class="config-checkbox" type="checkbox" data-std-path="module3Windows.window${n}.enabled"${w.enabled ? ' checked' : ''} />
+          </div>
+          <div class="config-row">
+            <span class="config-row-label">Bezeichnung</span>
+            <input class="config-input sa-w-label" type="text" data-std-path="module3Windows.window${n}.label" data-std-type="text" value="${escapeHtml(w.label || '')}" />
+          </div>
+        </div>
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Start (HH:MM)</span>
+            <input class="config-input sa-w-date" type="text" data-std-path="module3Windows.window${n}.start" data-std-type="text" value="${escapeHtml(w.start || '')}" />
+          </div>
+          <div class="config-row">
+            <span class="config-row-label">Ende (HH:MM)</span>
+            <input class="config-input sa-w-date" type="text" data-std-path="module3Windows.window${n}.end" data-std-type="text" value="${escapeHtml(w.end || '')}" />
+          </div>
+        </div>
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+            <input class="config-input sa-w-num" type="number" step="0.01" data-std-path="module3Windows.window${n}.priceCtKwh" value="${escapeHtml(w.priceCtKwh ?? '')}" />
+          </div>
+        </div>
+      </div>`;
+  };
+  const m3Html = `
+    <div class="sa-divider-top"></div>
+    <div class="config-group-kicker" data-accent="yellow">§14a Modul 3 — zeitabhängige Netzentgelte (optional)</div>
+    <div class="svc-meta">Reduzierte Brutto-Bezugspreise in definierten Tageszeitfenstern — eine Komponente des Strompreises.</div>
+    <div class="config-row">
+      <span class="config-row-label">§14a Modul 3 aktiv</span>
+      <input class="config-checkbox" type="checkbox" data-std-path="usesParagraph14aModule3" data-std-rerender="1"${m3Active ? ' checked' : ''} />
+    </div>
+    ${m3Active ? m3WindowHtml(1) + m3WindowHtml(2) + m3WindowHtml(3) : ''}
+  `;
+
   section.innerHTML = `
     <div class="config-group-kicker" data-accent="yellow">Standard-Tarif (immer gültig)</div>
     <div class="svc-meta">Basis-Bezugspreis für alle Zeiträume ohne eigene Abweichung.</div>
     <div class="config-row-grid">
       <div class="config-row">
         <span class="config-row-label">Modus</span>
-        <select class="config-select" data-std-path="mode">
+        <select class="config-select" data-std-path="mode" data-std-rerender="1">
           <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
           <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
         </select>
       </div>
     </div>
     ${stdFieldsHtml}
+    ${m3Html}
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Abweichungen nach Zeitraum (optional)</div>
     <div class="config-row">
@@ -1707,16 +1774,24 @@ function renderPricingPeriodsEditor() {
   // no focus jump). collectConfigFromForm clones currentDraftConfig, so these persist.
   section.querySelectorAll('[data-std-path]').forEach((input) => {
     input.addEventListener('change', () => {
-      const fullPath = `userEnergyPricing.${input.dataset.stdPath}`;
-      if (input.dataset.stdPath === 'mode') {
+      const path = input.dataset.stdPath;
+      const fullPath = `userEnergyPricing.${path}`;
+      const rerender = input.dataset.stdRerender === '1';
+      let value;
+      if (input.type === 'checkbox') value = input.checked;
+      else if (path === 'mode') value = input.value === 'dynamic' ? 'dynamic' : 'fixed';
+      else if (input.dataset.stdType === 'text') value = String(input.value ?? '');
+      else { const raw = String(input.value ?? '').trim(); value = raw === '' ? null : Number(raw); }
+      if (rerender) {
+        // Toggles that change which fields are shown (mode, §14a master) rebuild
+        // the form — sync visible auto-form inputs first so no unsaved edit is lost.
         syncRenderedFieldsToDraft();
-        setPath(currentDraftConfig, fullPath, input.value === 'dynamic' ? 'dynamic' : 'fixed');
+        setPath(currentDraftConfig, fullPath, value);
         renderSettingsShell();
-        return;
+      } else {
+        setPath(currentDraftConfig, fullPath, value);
+        updateSaveBar();
       }
-      const raw = String(input.value ?? '').trim();
-      setPath(currentDraftConfig, fullPath, raw === '' ? null : Number(raw));
-      updateSaveBar();
     });
   });
 
