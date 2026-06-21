@@ -68,6 +68,9 @@ dvhub/config.backup-*.json
 dvhub/bootstrap.token
 eos-vendor/
 
+# Operator-seitiges Support-Werkzeug (NICHT Teil der ausgelieferten Appliance)
+support-console.html
+
 # Phase 29-01: Repo-Cruft enttrackt (Dateien bleiben lokal, sollen nicht (wieder) ins Repo)
 # Live-Screenshots (interne Anlagen-Aufnahmen), interne-IP-Vollseite, personenbezogene Auskunft
 live-screenshots/
