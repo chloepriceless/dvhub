@@ -125,6 +125,12 @@ export function createForecastSnapshots(ctx, { store, forecastService } = {}) {
       pvnode: Array.isArray(params.pvnode) ? params.pvnode : [],
       solcast: Array.isArray(params.solcast) ? params.solcast : [],
       pvlib: Array.isArray(params.pvlib) ? params.pvlib : [],
+      // Operator request 2026-06-21: persist the three Phase-26-01 providers so the
+      // accuracy-tracker can compute their MAE → inverse-MAE merge weights them too.
+      // The caller (pv-forecast.js writeSnapshot) already passes these arrays.
+      vrm: Array.isArray(params.vrm) ? params.vrm : [],
+      forecast_solar: Array.isArray(params.forecast_solar) ? params.forecast_solar : [],
+      open_meteo: Array.isArray(params.open_meteo) ? params.open_meteo : [],
       merged: Array.isArray(params.merged) ? params.merged : [],
       ml: Array.isArray(params.ml) ? params.ml : []
     };

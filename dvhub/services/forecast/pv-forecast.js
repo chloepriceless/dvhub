@@ -161,6 +161,16 @@ function normalizeProviderRows(rows) {
  * @returns {Promise<{merged: Array<{ts_utc,power_w}>, weights: Record<string,number>}>}
  */
 export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog }) {
+  // Present providers (non-empty slots) in THIS forecast cycle — the merge only
+  // ever weights what is actually here.
+  const present = Object.entries(providersBySlot)
+    .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
+    .map(([k]) => k);
+
+  // Read each provider's rolling-7d MAE from yesterday's accuracy row. Operator
+  // request 2026-06-21: ALL PV providers are accuracy-tracked now (was
+  // pvnode/solcast/pvlib only) — read the full set so every present provider can
+  // be weighted by its own accuracy.
   let mae7d = {};
   try {
     const yesterday = new Date();
@@ -173,21 +183,47 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
       mae7d = {
         pvnode: row.mae_7d_pvnode,
         solcast: row.mae_7d_solcast,
-        pvlib: row.mae_7d_pvlib
+        pvlib: row.mae_7d_pvlib,
+        vrm: row.mae_7d_vrm,
+        forecast_solar: row.mae_7d_forecast_solar,
+        open_meteo: row.mae_7d_open_meteo
       };
     }
   } catch (err) {
     if (typeof pushLog === 'function') pushLog('ensemble_mae_read_error', { error: err?.message ?? String(err) });
   }
 
-  const weights = computeWeights(mae7d);
+  // Neutral prior (operator request 2026-06-21): a present provider WITHOUT its
+  // own 7-day MAE (just added, or no snapshot that day) is weighted at the MEAN
+  // MAE of the providers that DO have one — so it participates at average accuracy
+  // instead of being dropped, and the ensemble never collapses to a single tracked
+  // provider during the warm-up days. computeWeights then turns these MAEs into
+  // inverse-MAE weights over ALL present providers.
+  const finiteMaes = present
+    .map(p => Number(mae7d[p]))
+    .filter(v => Number.isFinite(v) && v > 0);
+  const priorMae = finiteMaes.length > 0
+    ? finiteMaes.reduce((s, v) => s + v, 0) / finiteMaes.length
+    : null;
+
+  const maeForWeights = {};
+  const priored = [];
+  for (const p of present) {
+    const v = Number(mae7d[p]);
+    if (Number.isFinite(v) && v > 0) {
+      maeForWeights[p] = v;
+    } else if (priorMae != null) {
+      maeForWeights[p] = priorMae;
+      priored.push(p);
+    }
+    // else: NO provider has any MAE → leave undefined → computeWeights → {} → uniform below.
+  }
+
+  const weights = computeWeights(maeForWeights);
   const hasValidWeights = Object.keys(weights).length > 0;
 
   if (!hasValidWeights) {
-    // Uniform fallback (pre-14-day period OR MAE unavailable). Log once per cycle.
-    const present = Object.entries(providersBySlot)
-      .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
-      .map(([k]) => k);
+    // Uniform fallback: no present provider has ANY accuracy data yet. Log once per cycle.
     const uniformWeight = present.length > 0 ? 1 / present.length : 0;
     const uniform = Object.fromEntries(present.map(k => [k, uniformWeight]));
     if (typeof pushLog === 'function') {
@@ -196,23 +232,14 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
     return { merged: mergeForecasts(providersBySlot, uniform), weights: uniform };
   }
 
-  // WR-01 observability: the inverse-MAE path only carries weights for the
-  // accuracy-tracked providers (pvnode/solcast/pvlib). Any OTHER present provider
-  // (vrm/forecast_solar/open_meteo — fed into the ensemble in 26-01) has no MAE
-  // column, so its weight is undefined → mergeForecasts skips it. Surface that
-  // exclusion so the operator can tell "excluded by design (no accuracy data)"
-  // from a fetch error. Pure logging — no change to weights or the merged result.
-  if (typeof pushLog === 'function') {
-    const presentProviders = Object.entries(providersBySlot)
-      .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
-      .map(([k]) => k);
-    const excluded = presentProviders.filter(k => !Number.isFinite(weights[k]));
-    if (excluded.length > 0) {
-      pushLog('ensemble_mae_providers_excluded', {
-        excluded,
-        weighted: Object.keys(weights).filter(k => Number.isFinite(weights[k]))
-      });
-    }
+  // Observability: which present providers ran on the neutral prior (no own MAE
+  // yet) vs their own accuracy. With the prior, no present provider is excluded.
+  if (typeof pushLog === 'function' && priored.length > 0) {
+    pushLog('ensemble_mae_neutral_prior', {
+      priored,
+      weighted: present.filter(p => !priored.includes(p)),
+      priorMaeW: Math.round(priorMae)
+    });
   }
 
   return { merged: mergeForecasts(providersBySlot, weights), weights };

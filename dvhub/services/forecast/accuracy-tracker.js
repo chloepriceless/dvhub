@@ -269,7 +269,10 @@ export function createAccuracyTracker(ctx, { store }) {
 
   // --- Phase 07 Plan 07-04: per-provider + rolling-7d accuracy pipeline ---
 
-  const PROVIDERS = ['pvnode', 'solcast', 'pvlib', 'merged', 'ml'];
+  // Operator request 2026-06-21: track accuracy for ALL PV providers (the three
+  // Phase-26-01 additions vrm/forecast_solar/open_meteo included) so the inverse-MAE
+  // merge can weight every provider, not just pvnode/solcast/pvlib.
+  const PROVIDERS = ['pvnode', 'solcast', 'pvlib', 'vrm', 'forecast_solar', 'open_meteo', 'merged', 'ml'];
 
   /**
    * Helper: yyyy-mm-dd → {start, end} UTC ISO strings covering that full day.
@@ -296,6 +299,9 @@ export function createAccuracyTracker(ctx, { store }) {
       mae_daily_pvnode: null,
       mae_daily_solcast: null,
       mae_daily_pvlib: null,
+      mae_daily_vrm: null,
+      mae_daily_forecast_solar: null,
+      mae_daily_open_meteo: null,
       mae_daily_merged: null,
       mae_daily_ml: null
     };
@@ -372,6 +378,9 @@ export function createAccuracyTracker(ctx, { store }) {
           mae_7d_pvnode  = sub.mae_7d_pvnode,
           mae_7d_solcast = sub.mae_7d_solcast,
           mae_7d_pvlib   = sub.mae_7d_pvlib,
+          mae_7d_vrm            = sub.mae_7d_vrm,
+          mae_7d_forecast_solar = sub.mae_7d_forecast_solar,
+          mae_7d_open_meteo     = sub.mae_7d_open_meteo,
           mae_7d_merged  = sub.mae_7d_merged,
           mae_7d_ml      = sub.mae_7d_ml
         FROM (
@@ -379,6 +388,9 @@ export function createAccuracyTracker(ctx, { store }) {
             AVG(mae_daily_pvnode)  FILTER (WHERE mae_daily_pvnode  IS NOT NULL) AS mae_7d_pvnode,
             AVG(mae_daily_solcast) FILTER (WHERE mae_daily_solcast IS NOT NULL) AS mae_7d_solcast,
             AVG(mae_daily_pvlib)   FILTER (WHERE mae_daily_pvlib   IS NOT NULL) AS mae_7d_pvlib,
+            AVG(mae_daily_vrm)            FILTER (WHERE mae_daily_vrm            IS NOT NULL) AS mae_7d_vrm,
+            AVG(mae_daily_forecast_solar) FILTER (WHERE mae_daily_forecast_solar IS NOT NULL) AS mae_7d_forecast_solar,
+            AVG(mae_daily_open_meteo)     FILTER (WHERE mae_daily_open_meteo     IS NOT NULL) AS mae_7d_open_meteo,
             AVG(mae_daily_merged)  FILTER (WHERE mae_daily_merged  IS NOT NULL) AS mae_7d_merged,
             AVG(mae_daily_ml)      FILTER (WHERE mae_daily_ml      IS NOT NULL) AS mae_7d_ml
           FROM forecast_accuracy
@@ -411,18 +423,23 @@ export function createAccuracyTracker(ctx, { store }) {
       await store.query(`
         INSERT INTO forecast_accuracy (
           forecast_type, model, evaluation_date,
-          mae_daily_pvnode, mae_daily_solcast, mae_daily_pvlib, mae_daily_merged, mae_daily_ml
-        ) VALUES ('pv', 'ensemble_daily', $1, $2, $3, $4, $5, $6)
+          mae_daily_pvnode, mae_daily_solcast, mae_daily_pvlib, mae_daily_merged, mae_daily_ml,
+          mae_daily_vrm, mae_daily_forecast_solar, mae_daily_open_meteo
+        ) VALUES ('pv', 'ensemble_daily', $1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (forecast_type, model, evaluation_date) DO UPDATE SET
           mae_daily_pvnode  = EXCLUDED.mae_daily_pvnode,
           mae_daily_solcast = EXCLUDED.mae_daily_solcast,
           mae_daily_pvlib   = EXCLUDED.mae_daily_pvlib,
           mae_daily_merged  = EXCLUDED.mae_daily_merged,
-          mae_daily_ml      = EXCLUDED.mae_daily_ml
+          mae_daily_ml      = EXCLUDED.mae_daily_ml,
+          mae_daily_vrm            = EXCLUDED.mae_daily_vrm,
+          mae_daily_forecast_solar = EXCLUDED.mae_daily_forecast_solar,
+          mae_daily_open_meteo     = EXCLUDED.mae_daily_open_meteo
       `, [
         dateStr,
         daily.mae_daily_pvnode, daily.mae_daily_solcast, daily.mae_daily_pvlib,
-        daily.mae_daily_merged, daily.mae_daily_ml
+        daily.mae_daily_merged, daily.mae_daily_ml,
+        daily.mae_daily_vrm, daily.mae_daily_forecast_solar, daily.mae_daily_open_meteo
       ]);
     } catch (err) {
       pushLog('accuracy_upsert_error', { dateStr, error: err?.message ?? String(err) });

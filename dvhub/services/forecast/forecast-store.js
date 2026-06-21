@@ -150,6 +150,16 @@ const SCHEMA_SQL = `
   ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_pvlib DOUBLE PRECISION;
   ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_merged DOUBLE PRECISION;
   ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_ml DOUBLE PRECISION;
+  -- Operator request 2026-06-21: weight ALL PV providers by accuracy. The three
+  -- providers added to the ensemble in Phase 26-01 (vrm/forecast_solar/open_meteo)
+  -- now get their own daily + rolling-7d MAE columns so the inverse-MAE merge can
+  -- weight them too (previously only pvnode/solcast/pvlib were accuracy-tracked).
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_vrm DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_forecast_solar DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_daily_open_meteo DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_vrm DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_forecast_solar DOUBLE PRECISION;
+  ALTER TABLE forecast_accuracy ADD COLUMN IF NOT EXISTS mae_7d_open_meteo DOUBLE PRECISION;
 `;
 
 // --- Disk free check (Linux/macOS) ---

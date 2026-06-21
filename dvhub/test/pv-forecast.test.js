@@ -212,27 +212,31 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
 // an operator can distinguish "excluded by design" from a fetch error.
 // Pure observability — the weights + merged result are unchanged.
 
-test('WR-01: mergePvForecastsWeighted logs ensemble_mae_providers_excluded for present MAE-less providers', async () => {
+// Operator request 2026-06-21: weight ALL providers by accuracy. A present
+// provider WITHOUT its own 7-day MAE is no longer dropped — it rides the NEUTRAL
+// PRIOR (mean MAE of the providers that do have one) so it participates at average
+// accuracy. The merge never collapses to a single tracked provider.
+test('mergePvForecastsWeighted: a present provider without its own MAE rides the neutral prior (not excluded)', async () => {
   const events = [];
   const store = {
     getForecastAccuracyRow: async () => ({ mae_7d_pvnode: 100, mae_7d_solcast: 200, mae_7d_pvlib: 300 })
   };
   const providersBySlot = {
     pvnode: [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4000 }],
-    vrm:    [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 5000 }] // no MAE column → excluded by the inverse-MAE path
+    vrm:    [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 5000 }] // no own MAE → neutral prior, NOT excluded
   };
   const { weights } = await mergePvForecastsWeighted({
     providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data })
   });
-  assert.ok(Number.isFinite(weights.pvnode), 'pvnode (tracked) must carry a finite weight');
-  assert.ok(!Number.isFinite(weights.vrm), 'vrm (no MAE column) must not carry a weight');
-  const excludedEvent = events.find(e => e.ev === 'ensemble_mae_providers_excluded');
-  assert.ok(excludedEvent, 'an ensemble_mae_providers_excluded event must be logged');
-  assert.deepEqual(excludedEvent.data.excluded, ['vrm']);
-  assert.ok(excludedEvent.data.weighted.includes('pvnode'), 'weighted list names the MAE-tracked providers');
+  assert.ok(Number.isFinite(weights.pvnode), 'pvnode (tracked) carries a finite weight');
+  assert.ok(Number.isFinite(weights.vrm), 'vrm (no own MAE) is weighted via the neutral prior, NOT excluded');
+  const priorEvent = events.find(e => e.ev === 'ensemble_mae_neutral_prior');
+  assert.ok(priorEvent, 'a neutral-prior event is logged');
+  assert.deepEqual(priorEvent.data.priored, ['vrm']);
+  assert.ok(priorEvent.data.weighted.includes('pvnode'), 'weighted list names the MAE-tracked providers');
 });
 
-test('WR-01: no exclusion event when every present provider is MAE-tracked', async () => {
+test('mergePvForecastsWeighted: no neutral-prior event when every present provider has its own MAE', async () => {
   const events = [];
   const store = {
     getForecastAccuracyRow: async () => ({ mae_7d_pvnode: 100, mae_7d_solcast: 200, mae_7d_pvlib: 300 })
@@ -241,9 +245,10 @@ test('WR-01: no exclusion event when every present provider is MAE-tracked', asy
     pvnode:  [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4000 }],
     solcast: [{ ts_utc: '2026-04-03T12:00:00Z', power_w: 4200 }]
   };
-  await mergePvForecastsWeighted({ providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data }) });
-  assert.ok(!events.some(e => e.ev === 'ensemble_mae_providers_excluded'),
-    'no exclusion event when every present provider is MAE-tracked');
+  const { weights } = await mergePvForecastsWeighted({ providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data }) });
+  assert.ok(Number.isFinite(weights.pvnode) && Number.isFinite(weights.solcast), 'both tracked providers weighted');
+  assert.ok(!events.some(e => e.ev === 'ensemble_mae_neutral_prior'),
+    'no neutral-prior event when every present provider has its own MAE');
 });
 
 // --- Phase 26-01: VRM/forecast_solar/open_meteo feed the WEIGHTED ensemble ---
