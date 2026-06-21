@@ -1239,7 +1239,23 @@ const HIDDEN_FIELD_PATHS = [
   // /settings#tab-system, matching the VRM (20-05) and Solcast/pvnode (20-06)
   // treatment.
   'monitoring.pushUrl',
-  'monitoring.pushIntervalSec'
+  'monitoring.pushIntervalSec',
+  // #3 (Christin 2026-06-21): merge the two price-entry surfaces into ONE editor.
+  // The global import-price fields are hidden from the auto-form card and instead
+  // rendered as the non-deletable "Standard-Tarif (immer gültig)" entry at the top
+  // of renderPricingPeriodsEditor, with the date-range periods below as
+  // "Abweichungen (optional)". Pure UI: no data-model/resolution change. The schema
+  // rows stay in config-model.js (still validated/persisted). syncRenderedFieldsToDraft
+  // skips inputs that aren't rendered, so hiding them preserves the values in
+  // currentDraftConfig; the editor's change-handlers write them back via setPath.
+  // §14a (usesParagraph14aModule3 + module3Windows) is a separate grid-fee module
+  // and deliberately stays in the auto-form card.
+  'userEnergyPricing.mode',
+  'userEnergyPricing.fixedGrossImportCtKwh',
+  'userEnergyPricing.dynamicComponents.energyMarkupCtKwh',
+  'userEnergyPricing.dynamicComponents.gridChargesCtKwh',
+  'userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh',
+  'userEnergyPricing.dynamicComponents.vatPct'
 ];
 
 function renderDestinationGrid(destinationId) {
@@ -1543,8 +1559,58 @@ function renderPricingPeriodsEditor() {
     ? `<div class="config-banner error">${pricingPeriodsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
     : '';
 
+  // #3 (Christin 2026-06-21): the global import price ("Standard-Tarif") is now the
+  // first, non-deletable entry of THIS editor — bound directly to
+  // currentDraftConfig.userEnergyPricing (the hidden schema fields). One canonical
+  // price editor: Standard-Tarif on top, date-range "Abweichungen" below.
+  const uep = (currentDraftConfig && currentDraftConfig.userEnergyPricing) || {};
+  const stdMode = uep.mode === 'dynamic' ? 'dynamic' : 'fixed';
+  const stdDc = uep.dynamicComponents || {};
+  const stdFieldsHtml = stdMode === 'fixed' ? `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+        <input class="config-input sa-w-num" data-std-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(uep.fixedGrossImportCtKwh ?? '')}" />
+      </div>
+    </div>
+  ` : `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Energie-Aufschlag</span>
+        <input class="config-input sa-w-num" data-std-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.energyMarkupCtKwh ?? '')}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Netzentgelte</span>
+        <input class="config-input sa-w-num" data-std-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.gridChargesCtKwh ?? '')}" />
+      </div>
+    </div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Umlagen &amp; Abgaben</span>
+        <input class="config-input sa-w-num" data-std-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.leviesAndFeesCtKwh ?? '')}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">MwSt (%)</span>
+        <input class="config-input sa-w-num" data-std-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(stdDc.vatPct ?? '')}" />
+      </div>
+    </div>
+  `;
+
   section.innerHTML = `
-    <div class="config-group-kicker" data-accent="yellow">Bezugspreise nach Zeitraum</div>
+    <div class="config-group-kicker" data-accent="yellow">Standard-Tarif (immer gültig)</div>
+    <div class="svc-meta">Basis-Bezugspreis für alle Zeiträume ohne eigene Abweichung.</div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Modus</span>
+        <select class="config-select" data-std-path="mode">
+          <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
+          <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+        </select>
+      </div>
+    </div>
+    ${stdFieldsHtml}
+    <div class="sa-divider-top"></div>
+    <div class="config-group-kicker" data-accent="yellow">Abweichungen nach Zeitraum (optional)</div>
     <div class="config-row">
       <span class="config-row-label">Tarifzeiträume</span>
       <strong class="config-row-value">${pricingPeriodsDraft.length} definiert</strong>
@@ -1631,6 +1697,26 @@ function renderPricingPeriodsEditor() {
       updatePricingPeriodField(input.dataset.periodId, input.dataset.periodPath, input.value);
       pricingPeriodsValidation = [];
       renderSettingsShell();
+    });
+  });
+
+  // #3: Standard-Tarif fields write straight into currentDraftConfig.userEnergyPricing
+  // (the hidden schema paths). Flipping the mode re-renders to swap fixed/dynamic
+  // fields; for that we first sync the visible auto-form inputs so no unsaved edit is
+  // lost on rebuild. Value fields just setPath + refresh the save bar (no rebuild →
+  // no focus jump). collectConfigFromForm clones currentDraftConfig, so these persist.
+  section.querySelectorAll('[data-std-path]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const fullPath = `userEnergyPricing.${input.dataset.stdPath}`;
+      if (input.dataset.stdPath === 'mode') {
+        syncRenderedFieldsToDraft();
+        setPath(currentDraftConfig, fullPath, input.value === 'dynamic' ? 'dynamic' : 'fixed');
+        renderSettingsShell();
+        return;
+      }
+      const raw = String(input.value ?? '').trim();
+      setPath(currentDraftConfig, fullPath, raw === '' ? null : Number(raw));
+      updateSaveBar();
     });
   });
 
