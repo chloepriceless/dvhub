@@ -1095,6 +1095,32 @@ body:has(.settings-aurora) .location-picker-footer {
   margin-left: auto;
 }
 
+/* #2 Increment 1 (Christin 2026-06-21): editable config rows render as a tight
+   label+field pair on ONE line — label fixed-width left, field directly beside it
+   filling the rest, LEFT-aligned. Replaces the key-value "space-between" scatter
+   (field pushed to the far right via margin-left:auto + text-align:right). Scoped
+   via :has() to rows that actually contain an input/select, so read-only value rows
+   and checkbox/toggle rows keep their right-aligned layout. */
+.settings-aurora .config-row:has(> .config-input),
+.settings-aurora .config-row:has(> .config-select) {
+  justify-content: flex-start;
+  gap: 12px;
+}
+.settings-aurora .config-row:has(> .config-input) > .config-row-label,
+.settings-aurora .config-row:has(> .config-select) > .config-row-label {
+  flex: 0 0 40%;
+  max-width: 40%;
+}
+.settings-aurora .config-row:has(> .config-input) > .config-input,
+.settings-aurora .config-row:has(> .config-select) > .config-select {
+  margin-left: 0;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  text-align: left;
+}
+
 /* ============================================================
    SETTINGS · AURORA · LAYER 6 (utility classes)
    Replaces inline-style debt in settings.js. After migration,
