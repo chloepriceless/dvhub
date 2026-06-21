@@ -45,15 +45,16 @@
   'use strict';
 
   // ─── Feature whitelist + per-feature body text ─────────────────────────
-  // Synced with 17-06-PLAN.md FEATURE_BODY map (2026-05-22 expansion: was
-  // 1-feature, now 4 to match the requirePro() callsites in routes-api.js
-  // after Phase 19-01 added the 3 Inspector subsections).
+  // Synced with the requirePro() callsites in routes-api.js. History:
+  // 1 feature → 4 (Phase 19-01 added the 3 Inspector subsections, 2026-05-22)
+  // → 5 (vpn-manager gated, 2026-06-21).
 
   var ALLOWED_FEATURES = {
     'family-dashboard': true,
     'forecast-inspector-ml': true,
     'forecast-inspector-eos': true,
-    'forecast-inspector-stage2': true
+    'forecast-inspector-stage2': true,
+    'vpn-manager': true
   };
 
   var FEATURE_BODY = {
@@ -64,7 +65,9 @@
     'forecast-inspector-eos':
       'Der EOS-Output-Inspector zeigt push/pull pro Slot — ein DVhub-Pro-Feature.',
     'forecast-inspector-stage2':
-      'Der SMA-Stage-2 Plan-Inspector + Backtest zeigt vergangene Pläne inklusive Operator-Overrides — ein DVhub-Pro-Feature.'
+      'Der SMA-Stage-2 Plan-Inspector + Backtest zeigt vergangene Pläne inklusive Operator-Overrides — ein DVhub-Pro-Feature.',
+    'vpn-manager':
+      'Der VPN-Manager (OpenVPN / WireGuard / IPSec) für den sicheren Fernzugriff und den Tunnel zum Direktvermarkter ist ein DVhub-Pro-Feature.'
   };
 
   var FALLBACK_BODY = 'Diese Funktion erfordert eine aktive DVhub-Pro-Lizenz.';

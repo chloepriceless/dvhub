@@ -556,3 +556,57 @@ test('GET /family page returns 403 pro_required when license !== active', async 
   assert.equal(body.error, 'pro_required');
   assert.equal(body.feature, 'family-dashboard');
 });
+
+// ── VPN routes are Pro-gated (feature 'vpn-manager', 2026-06-21) ───────────
+// Mirror of the family-dashboard gate: requirePro('vpn-manager') runs inside
+// each /api/vpn/* handler BEFORE any business logic, so a box without an active
+// license sees 403 {error:'pro_required', feature:'vpn-manager'} — even on the
+// LAN (the LAN-bypass only waives the API token, never the Pro license check).
+
+test('GET /api/vpn/status returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/vpn/status'), res, urlFor('/api/vpn/status'));
+  assert.equal(res._captured.status, 403, `expected 403, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'vpn-manager');
+});
+
+test('POST /api/vpn/start returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/vpn/start', {}), res, urlFor('/api/vpn/start'));
+  assert.equal(res._captured.status, 403, `expected 403, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'vpn-manager');
+});
+
+test('POST /api/vpn/config/upload returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/vpn/config/upload', {}), res, urlFor('/api/vpn/config/upload'));
+  assert.equal(res._captured.status, 403, `expected 403, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'vpn-manager');
+});
+
+test('GET /api/vpn/status returns 200 when license === active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('active');
+  ctx.vpnManager = { getStatus: () => ({ profileName: 'home', status: 'down' }) };
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/vpn/status'), res, urlFor('/api/vpn/status'));
+  assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.status, 'down');
+});

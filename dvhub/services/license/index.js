@@ -61,6 +61,7 @@ const ALLOWED_FEATURES = new Set([
   'forecast-inspector-ml',     // Phase 19 Plan 19-04 (B3 ML-Korrektur-Inspector)
   'forecast-inspector-eos',    // Phase 19 Plan 19-05 (B4 EOS-Output-Inspector)
   'forecast-inspector-stage2', // Phase 19 Plan 19-06 (B5 Stage-2-Backtest-Inspector)
+  'vpn-manager',               // 2026-06-21: VPN-Manager als Pro-Feature gegated (/api/vpn/*)
 ]);
 
 /**

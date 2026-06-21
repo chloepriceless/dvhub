@@ -156,6 +156,13 @@ function mockCtx({
       stop: async () => {},
       restart: async () => {},
     },
+    // VPN routes are Pro-gated (2026-06-21). This audit test verifies logging,
+    // not licensing — a pass-through licenseService keeps requirePro() happy.
+    licenseService: {
+      requirePro: () => true,
+      getState: () => ({ status: 'active' }),
+      getStatus: () => 'active',
+    },
   };
 }
 

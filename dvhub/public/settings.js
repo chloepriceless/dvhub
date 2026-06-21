@@ -2345,6 +2345,10 @@ function renderVpnUploadPanel() {
   // fetch VPN status
   function refreshVpnSettingsStatus() {
     apiFetch('/api/vpn/status').then(r => r.json()).then(vpn => {
+      if (vpn && vpn.error === 'pro_required') {
+        statusDiv.innerHTML = '<span class="sa-text-warn">Der VPN-Manager ist ein DVhub-Pro-Feature. <a href="#license">Lizenz aktivieren</a></span>';
+        return;
+      }
       const labels = { connected: 'Verbunden', connecting: 'Verbinde...', disconnected: 'Getrennt', error: 'Fehler' };
       const status = vpn.status || 'unknown';
       let html = `<span class="sa-vpn-dot" data-status="${status}"></span>`;
@@ -2374,6 +2378,10 @@ function renderVpnUploadPanel() {
   panel.appendChild(configDiv);
 
   apiFetch('/api/vpn/config').then(r => r.json()).then(cfg => {
+    if (cfg && cfg.error === 'pro_required') {
+      configDiv.innerHTML = '<span class="sa-empty">Der VPN-Manager ist ein DVhub-Pro-Feature und benötigt eine aktive Lizenz.</span>';
+      return;
+    }
     if (!cfg || !cfg.configExists) {
       configDiv.innerHTML = '<span class="sa-empty">Kein VPN-Profil importiert.</span>';
       return;

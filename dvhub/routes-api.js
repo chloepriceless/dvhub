@@ -6562,17 +6562,20 @@ export function createApiRoutes(ctx) {
 
     // --- VPN Endpoints ---
     if (url.pathname === '/api/vpn/status' && req.method === 'GET') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       return json(res, 200, ctx.vpnManager.getStatus());
     }
 
     if (url.pathname === '/api/vpn/config' && req.method === 'GET') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       const details = await ctx.vpnManager.getConfigDetails();
       return json(res, 200, details);
     }
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       // Plan 08-09 Task 2: VPN start/stop/restart are operator-initiated
       // network changes that need a durable audit trail with actor context.
@@ -6592,6 +6595,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/stop' && req.method === 'POST') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       const actor = actorContext(req);
       try {
@@ -6607,6 +6611,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/restart' && req.method === 'POST') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       const actor = actorContext(req);
       try {
@@ -6624,6 +6629,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/history' && req.method === 'GET') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       const vpnEvents = state.log
         .filter(e => e.event && e.event.startsWith('vpn_'))
         .slice(-50);
@@ -6631,6 +6637,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
+      if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
 
       const contentType = req.headers['content-type'] || '';
