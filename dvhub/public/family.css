@@ -49,7 +49,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-val{font-size:20px;font-weight:800;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1;pointer-events:none}
 .tag-status{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:600;pointer-events:none}
 .tag-dot{position:absolute;width:8px;height:8px;border-radius:50%;pointer-events:none}
-.tag-solar{top:6%;left:32%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
+.tag-solar{top:6%;left:43%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
 .tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
 .tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 /* Powerflow-2.0 rework (2026-06-13): the House tile is BACK — the centre is a
@@ -58,7 +58,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-home{top:58%;left:12%;border:1px solid rgba(52,219,255,.2);animation-delay:.3s}
 .tag-home .tag-val{color:#34dbff}.tag-home .tag-status{background:rgba(52,219,255,.12);color:#34dbff}
 .tag-home .tag-dot{background:#34dbff;box-shadow:0 0 12px rgba(52,219,255,.6);right:-12px;top:50%;transform:translateY(-50%)}
-.tag-bat{top:32%;left:5%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
+.tag-bat{top:36%;left:4%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
 .tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
 /* Phase 11-06 round 9: the EV tag grew much taller after round 5 added the
@@ -68,7 +68,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
    widgets horizontally — the full tall tag (icon + charge power + SoC block +
    status) is now entirely visible. The bgFlow k_ev stream still resolves via
    bgFlowEndpoint('tag-ev') (id unchanged) and draws to the new position. */
-.tag-ev{top:13%;right:23%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
+.tag-ev{top:58%;left:6%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
 .tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(165,94,234,.12);color:var(--ev)}
 .tag-ev .tag-dot{background:var(--ev);box-shadow:0 0 12px var(--ev-g);left:-12px;top:50%;transform:translateY(-50%)}
 .tag-grid{top:10%;right:6%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
@@ -248,12 +248,15 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
   /* Phase 11-06 round 9: on <768px the .widgets cluster becomes a static
      horizontal row (no overlap), so the desktop occlusion does not occur here —
      the EV tag keeps its mirrored position opposite .tag-bat. */
-  .tag-solar{left:22%}.tag-bat{left:3%;top:28%}.tag-ev{right:3%;top:28%}.tag-grid{right:3%}.tag-home{left:3%;top:56%}
+  .tag-solar{left:34%;top:6%}.tag-bat{left:3%;top:34%}.tag-grid{right:3%;top:34%}.tag-ev{left:3%;top:62%}
   /* Phase 11-06 round 3: narrower centre House readout on small viewports. */
   .pf-center-readout{padding:11px 18px}
   .pf-center-readout .v{font-size:30px}
   .pf-center-readout .pf-house-icon{font-size:22px}
   .pf-center-readout .pf-divider{width:96px}
+  .pf-center-readout .pf-house-mix{gap:4px;margin-top:6px}
+  .pf-center-readout .pf-mix-pill{font-size:10px;padding:2px 7px}
+  .pf-center-readout .pf-net{font-size:12px}
   .glass{padding:12px 16px}.glass-top{flex-wrap:wrap;gap:8px}.glass-metric{min-width:70px}
   .panel-stats{grid-template-columns:repeat(2,1fr)}.panel{max-height:85vh}
   .dev-card{min-width:78px;padding:8px 10px}.dev-watts{font-size:14px}
@@ -358,12 +361,18 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 /* Secondary line: the daily net-Euro balance, smaller than the House figure. */
 .pf-center-readout .pf-net{
   font-family:'JetBrains Mono','SF Mono',monospace;
-  font-size:15px;
+  font-size:13px;
   font-variant-numeric:tabular-nums;
   color:#e8f1ff;
   font-weight:500;
   letter-spacing:.01em;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:3px;
 }
+.pf-center-readout .pf-net-eur{color:rgba(232,241,255,.82)}
+.pf-center-readout .pf-net-eur #pf-center-d{color:rgba(120,180,255,.55);margin-right:5px}
 .pf-center-readout .pf-net-label{
   font-size:11px;
   letter-spacing:.22em;
@@ -372,6 +381,27 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   text-transform:uppercase;
 }
 .pf-center-readout.loss .pf-net-label{color:#ff9a3c}
+
+/* House-centre redesign (2026-06-21): source-mix pills under the Hausverbrauch
+   figure — PV / Akku / Netz share of the live consumption, same proportional
+   split as the dust streams. Colours mirror the constellation node hues. */
+.pf-center-readout .pf-house-mix{
+  display:flex;justify-content:center;flex-wrap:wrap;gap:6px;margin-top:8px;
+}
+.pf-center-readout .pf-mix-pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 9px;border-radius:100px;
+  background:rgba(255,255,255,.06);
+  font-family:'JetBrains Mono','SF Mono',monospace;
+  font-size:11px;font-weight:600;color:rgba(255,255,255,.82);
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;
+}
+.pf-center-readout .pf-mix-pill .d{width:7px;height:7px;border-radius:50%;flex:none}
+.pf-center-readout .pf-mix-pill b{font-weight:800;color:#fff}
+.pf-center-readout .pf-mix-pv .d{background:#ffd421;box-shadow:0 0 8px rgba(255,212,33,.6)}
+.pf-center-readout .pf-mix-bt .d{background:#46d344;box-shadow:0 0 8px rgba(70,211,68,.5)}
+.pf-center-readout .pf-mix-gd .d{background:#ff7ac6;box-shadow:0 0 8px rgba(255,122,198,.5)}
+.pf-center-readout .pf-mix-idle .d{background:rgba(255,255,255,.3)}
 
 /* =========================================================================
    Phase 19 Plan 19-07 — Family-dashboard Optimizer-Cold banner.
