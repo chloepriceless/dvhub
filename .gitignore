@@ -24,7 +24,11 @@ dvhub/diag-*.png
 # Node
 node_modules/
 npm-debug.log*
+# Lockfiles are ignored by default, but dvhub's is tracked on purpose: CI runs
+# `npm ci` and the actions/setup-node npm cache, both of which require
+# dvhub/package-lock.json to exist in the repo (see .github/workflows/ci.yml).
 package-lock.json
+!dvhub/package-lock.json
 
 # OS
 .DS_Store
