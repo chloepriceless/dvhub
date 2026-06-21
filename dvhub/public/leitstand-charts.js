@@ -1189,6 +1189,26 @@
     var h = Math.floor(min / 60);
     return 'vor ' + h + ' h' + (min % 60 ? ' ' + (min % 60) + ' min' : '');
   }
+  // Expected total PV energy (kWh) the provider predicts over its forecast
+  // horizon — the integral of power over time. Computed from the real Δt between
+  // consecutive slots (robust to a provider's native resolution / a short
+  // horizon like forecast_solar's 18h), with a guard so a large gap never
+  // inflates the sum.
+  function providerForecastEnergyKwh(slots) {
+    if (!slots || !slots.length) return 0;
+    var s = slots.slice().sort(function (a, b) { return new Date(a.ts_utc) - new Date(b.ts_utc); });
+    var kwh = 0;
+    for (var i = 0; i < s.length; i++) {
+      var w = Number(s[i].power_w) || 0;
+      var dtH;
+      if (i < s.length - 1) dtH = (new Date(s[i + 1].ts_utc) - new Date(s[i].ts_utc)) / 3600000;
+      else if (i > 0) dtH = (new Date(s[i].ts_utc) - new Date(s[i - 1].ts_utc)) / 3600000;
+      else dtH = 0.25;
+      if (!isFinite(dtH) || dtH <= 0 || dtH > 1) dtH = 0.25;
+      kwh += w * dtH / 1000;
+    }
+    return kwh;
+  }
   async function renderForecastProviders() {
     var body = document.getElementById('forecastProvidersBody');
     var ensEl = document.getElementById('forecastProvidersEnsemble');
@@ -1220,6 +1240,7 @@
         return {
           label: FORECAST_PROVIDER_LABELS[key] || key,
           peakKw: peakW / 1000,
+          energyKwh: providerForecastEnergyKwh(slots),
           age: fetched[key],
           stale: ageMin != null && ageMin > 180,
           has: slots.length > 0
@@ -1229,13 +1250,16 @@
       rows.sort(function (a, b) { return (b.has - a.has) || (b.peakKw - a.peakKw); });
       var headerRow = '<div class="fp-row fp-head">' +
         '<span></span><span class="fp-name">Provider</span>' +
-        '<span class="fp-peak">Tages-Peak</span><span class="fp-age">aktualisiert</span></div>';
+        '<span class="fp-peak">Tages-Peak</span>' +
+        '<span class="fp-energy">Energie</span>' +
+        '<span class="fp-age">aktualisiert</span></div>';
       body.innerHTML = headerRow + rows.map(function (r) {
         var dotCls = !r.has ? 'is-off' : r.stale ? 'is-stale' : 'is-live';
         return '<div class="fp-row">' +
           '<span class="fp-dot ' + dotCls + '"></span>' +
           '<span class="fp-name">' + r.label + '</span>' +
           '<span class="fp-peak">' + (r.has ? r.peakKw.toFixed(1).replace('.', ',') + ' kW' : '—') + '</span>' +
+          '<span class="fp-energy">' + (r.has ? r.energyKwh.toFixed(1).replace('.', ',') + ' kWh' : '—') + '</span>' +
           '<span class="fp-age">' + forecastProviderAgeLabel(r.age) + '</span>' +
           '</div>';
       }).join('');

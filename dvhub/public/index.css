@@ -1131,7 +1131,7 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .forecast-providers-body { display:flex; flex-direction:column; gap:1px; margin-top:8px; }
 .forecast-providers-empty { font-size:13px; color:var(--text-dim); padding:6px 2px; }
 .fp-row {
-  display:grid; grid-template-columns:14px 1fr auto auto; align-items:center;
+  display:grid; grid-template-columns:14px 1fr auto auto auto; align-items:center;
   gap:10px; padding:6px 2px; border-bottom:1px solid var(--hairline);
   font-variant-numeric:tabular-nums;
 }
@@ -1142,9 +1142,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-dot.is-off   { background:rgba(255,255,255,.18); }
 .fp-name { font-size:13px; font-weight:600; color:var(--text); }
 .fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
+.fp-energy { font-size:13px; font-weight:700; color:var(--cyan); }
 .fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }
-/* Spalten-Kopf (Provider · Tages-Peak · aktualisiert) — klein/dimm/uppercase. */
+/* Spalten-Kopf (Provider · Tages-Peak · Energie · aktualisiert) — klein/dimm/uppercase. */
 .fp-row.fp-head { padding-top:0; padding-bottom:4px; }
 .fp-row.fp-head .fp-name,
 .fp-row.fp-head .fp-peak,
+.fp-row.fp-head .fp-energy,
 .fp-row.fp-head .fp-age { font-size:10px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); }
