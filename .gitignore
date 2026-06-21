@@ -6,6 +6,17 @@ dv-control-webapp/energy_state.json
 # app dir and overwrites the in-repo file — a tracked runtime file makes the tree
 # dirty and breaks the `git checkout`-based self-update. Keep it out of git.
 dvhub/energy_state.json
+# Same DV_DATA_DIR-fallback hazard (A-3): the Pro license state, the not-halt
+# (emergency-stop) state and the EOS opt-out marker are written to
+# ${DV_DATA_DIR} at runtime (prod: /var/lib/dvhub) but fall back to the app dir
+# when DV_DATA_DIR is unset. The operator's license must NEVER be committed and
+# must survive a `git checkout`-based self-update — keep all of it out of git.
+license_state.json
+dvhub/license_state.json
+control_state.json
+dvhub/control_state.json
+.no-eos
+eos-provision.log
 # Local diagnostic scratch files (background-flow probes, ad-hoc screenshots).
 dvhub/diag-*.mjs
 dvhub/diag-*.png
