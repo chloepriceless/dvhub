@@ -2659,7 +2659,10 @@ function initSettingsPage() {
   const tabContainer = document.querySelector('.settings-tabs');
   if (tabContainer) {
     setTimeout(function () {
-      try { initMlTab(); } catch (_) {}
+      // initMlTab() ausgesetzt 2026-06-21: der Machine-Learning-Tab (LightGBM) ist ausgeblendet
+      // (Feature nicht live, ml.mlEnabled=false) → kein /api/ml/status|accuracy-Fetch nötig.
+      // Wieder einkommentieren, wenn der ML-Tab reaktiviert wird.
+      // try { initMlTab(); } catch (_) {}
       try { initVpnTab(); } catch (_) {}
       try { loadHealth().catch(function(){}); } catch (_) {}
       if (typeof checkForUpdate === 'function') {

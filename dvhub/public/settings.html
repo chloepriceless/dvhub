@@ -125,7 +125,11 @@
             <div class="sa-nav-group">System</div>
             <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9670;</span>Status</button>
             <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Forecast</button>
-            <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>Machine Learning</button>
+            <!-- Machine-Learning-Tab (LightGBM) ausgeblendet 2026-06-21: Feature ist nicht live
+                 (ml.mlEnabled=false). Das Panel #tab-ml bleibt im DOM (hidden) → Re-Aktivierung =
+                 nur diese Zeile wieder einkommentieren. Die Provider-Gewichtung (Inverse-MAE-
+                 Ensemble) ist davon unabhängig und bleibt im Forecast-Tab sichtbar. -->
+            <!-- <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>Machine Learning</button> -->
             <button class="settings-tab" data-tab="eos" type="button"><span class="sa-ico">&#9881;</span>EOS</button>
             <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
@@ -732,7 +736,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20260621-pvlib-col"></script>
+  <script src="/settings.js?v=20260621-hide-ml-tab"></script>
   <script src="/tools.js?v=20260610-tokenui"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
