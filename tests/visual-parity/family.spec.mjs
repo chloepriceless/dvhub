@@ -17,7 +17,9 @@ const EXPECTED_IDS = [
   'flowSvg', 'gl', 'flowGroup',
   // 5 main tags + friendly/value/status spans
   'tag-solar', 'tf-solar', 'v-s', 'ts-solar',
-  'tag-home',  'tf-home',  'v-h',
+  // House is the centre readout now (#pfCenter), not a constellation tile —
+  // tag-home / tf-home / v-h were removed in the 2026-06-21 House-centre redesign;
+  // the live Hausverbrauch + source-mix moved into #pfCenter (pf-house-kw / -mix).
   'tag-bat',   'tf-bat',   'v-b', 'ts-bat',
   'tag-ev',    'tf-ev',    'v-e', 'ts-ev',
   'tag-grid',  'tf-grid',  'v-g', 'ts-grid',
@@ -35,7 +37,7 @@ const EXPECTED_IDS = [
   'overlay', 'panel',
   'p-icon', 'p-title', 'p-sub', 'p-summary', 'p-stats', 'p-chart', 'p-details', 'p-api',
   // Aurora additions (5 new — bgFlow, pfCenter overlay, pf-center-v/d, leitstandPowerflow mount):
-  'bgFlow', 'pfCenter', 'pf-center-v', 'pf-center-d', 'leitstandPowerflow',
+  'bgFlow', 'pfCenter', 'pf-house-kw', 'pf-house-mix', 'pf-center-v', 'pf-center-d', 'leitstandPowerflow',
 ];
 
 test.describe('Family page (Aurora pilot, AURORA-03/04/05/06)', () => {

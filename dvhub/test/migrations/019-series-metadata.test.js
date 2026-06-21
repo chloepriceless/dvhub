@@ -47,8 +47,17 @@ describe('migration 019 — series_metadata', { skip: !RUN_PG_TESTS }, () => {
     // node_modules). When we get here, RUN_PG_TESTS is true so the deps are
     // expected to be available.
     const pg = (await import('pg')).default;
-    ({ createTelemetryStorePg } = await import('../../telemetry-store-pg.js'));
+    const storeMod = await import('../../telemetry-store-pg.js');
+    ({ createTelemetryStorePg } = storeMod);
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    // Ensure the base telemetry schema exists FIRST. The JOIN subtests below
+    // read/write timeseries_samples, which is created by the telemetry store's
+    // schema bootstrap (ensurePgSchema) — NOT by migration 019 (D-06: 019 only
+    // adds the series_metadata lookup table, with no ALTER on timeseries_samples).
+    // Against a fresh CI postgres without this, the JOIN/INSERT hit
+    // 42P01 "relation \"timeseries_samples\" does not exist". Idempotent CREATE
+    // TABLE IF NOT EXISTS → safe when the table is already present.
+    await storeMod.ensurePgSchema(pool);
     // Apply migration once at suite start. CREATE TABLE IF NOT EXISTS + INSERT
     // ON CONFLICT DO NOTHING make this safe even if the DB already has the table.
     const sql = fs.readFileSync(MIGRATION_FILE, 'utf8');
