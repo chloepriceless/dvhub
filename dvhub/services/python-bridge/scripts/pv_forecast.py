@@ -37,9 +37,19 @@ def compute_pv_forecast(params):
         surface_tilt=params.get('tilt', 35),
         surface_azimuth=params.get('azimuth', 180),
         module_parameters={'pdc0': params['kwp'] * 1000, 'gamma_pdc': -0.004},
-        inverter_parameters={'pdc0': params['kwp'] * 1000}
+        inverter_parameters={'pdc0': params['kwp'] * 1000},
+        temperature_model_parameters=pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_glass']
     )
-    mc = pvlib.modelchain.ModelChain(system, location)
+    # PVWatts DC/AC models are inferred from the pdc0/gamma_pdc parameters, but
+    # pvlib >= 0.10 can no longer INFER the AOI/spectral loss models from a
+    # PVWatts-only module_parameters dict — they must be set explicitly or
+    # ModelChain.__init__ raises ("could not infer AOI model"). 'no_loss'
+    # disables the optical-loss correction (negligible for a yield forecast).
+    mc = pvlib.modelchain.ModelChain(
+        system, location,
+        aoi_model='no_loss',
+        spectral_model='no_loss'
+    )
 
     if params.get('weather'):
         weather_df = pd.DataFrame(params['weather'])
