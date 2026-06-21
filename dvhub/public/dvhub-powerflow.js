@@ -46,23 +46,7 @@
       </div>
       <div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">PV · DC + AC</div><div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div>
     </div>
-    <div class="pf-node pf-nBat">
-      <div class="pf-bat-anim" aria-hidden="true">
-        <div class="pf-bat-rotor">
-          <div class="pf-bat-body">
-            <div class="pf-bat-fill"></div>
-            <div class="pf-bat-sparks"></div>
-            <div class="pf-bat-warning">&#9888;</div>
-          </div>
-          <div class="pf-bat-bolts">
-            <div class="pf-bat-bolt b1"></div>
-            <div class="pf-bat-bolt b2"></div>
-            <div class="pf-bat-bolt b3"></div>
-          </div>
-        </div>
-      </div>
-      <div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Akku</div>      <div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div>
-    </div>
+    <div class="pf-node pf-nBat">   <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Akku</div>      <div class="pf-sub chart-skeleton" aria-busy="true">&nbsp;</div></div>
     <div class="pf-node pf-nHouse"> <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Haus</div>      <div class="pf-mix"></div></div>
     <div class="pf-node pf-nGrid">  <div class="pf-star"></div><div class="pf-v chart-skeleton" aria-busy="true">&nbsp;</div><div class="pf-lbl">Netz</div>      <div class="pf-mix"></div></div>
     <div class="pf-center"><div class="l">Bilanz heute</div><div class="v chart-skeleton" aria-busy="true">&nbsp;</div><div class="d">€ Netto</div></div>
@@ -196,22 +180,6 @@
         f.bat > 0 ? `entlädt mit ${fmt(f.bat)} kW`
         : f.bat < 0 ? `lädt mit ${fmt(-f.bat)} kW`
         : 'Standby';
-
-      // Battery pill (Powerflow 2.0): SoC drives fill width + HSL colour ramp
-      // (red → green) + glow; charging turns on the sweep + floating bolts;
-      // SoC < 18 % blinks the danger icon. Note the component's bat sign:
-      // positive = discharging, NEGATIVE = charging.
-      const bat = $('.pf-nBat .pf-bat-anim');
-      if (bat && state.soc != null && Number.isFinite(Number(state.soc))) {
-        const soc = Math.max(0, Math.min(Number(state.soc), 100));
-        const charging = f.bat < 0;
-        const passive = Math.max(0, Math.min((soc - 35) / 65, 1));
-        bat.style.setProperty('--p', soc.toFixed(2));
-        bat.style.setProperty('--fill', soc.toFixed(2) + '%');
-        bat.style.setProperty('--glow', Math.max(0, Math.min((soc - 18) / 82, 1)).toFixed(3));
-        bat.style.setProperty('--charge', (charging ? 1 : passive).toFixed(3));
-        bat.style.setProperty('--danger', Math.max(0, Math.min((18 - soc) / 18, 1)).toFixed(3));
-      }
 
       $('.pf-nHouse .pf-v').textContent = fmt(f.house) + ' kW';
       $('.pf-nHouse .pf-mix').innerHTML = pillsHTML([
