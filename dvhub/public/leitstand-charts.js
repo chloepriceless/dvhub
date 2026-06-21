@@ -307,6 +307,42 @@
   // To re-add them, extend buildForecastResponse() to expose per-source slot arrays.
   // Plan 09.1-04: colours resolved per-build via Aurora tokens, not stored in the
   // const. Each call re-reads tokens so theme switches repaint the legend + lines.
+  // PV-Forecast provider overlay lines (operator request 2026-06-21): the
+  // Forecast-Vergleich chart historically showed only Ist / Prognose-historisch /
+  // Basis-Prognose because /api/forecast merges the per-source curves before the
+  // response. We now overlay each provider as its own thin line, fed from
+  // /api/forecast/inspector/pv-providers (see renderForecastProviders), resampled
+  // onto the SAME 15-min grid as the base datasets so peaks line up on the X axis.
+  var FORECAST_PROVIDER_SERIES = [
+    { key: 'solcast',        label: 'Solcast',        color: '#ff9f1c' },
+    { key: 'pvlib',          label: 'pvlib',          color: '#ff6b9d' },
+    { key: 'vrm',            label: 'VRM',            color: '#1dd1a1' },
+    { key: 'forecast_solar', label: 'Forecast.Solar', color: '#feca57' },
+    { key: 'open_meteo',     label: 'Open-Meteo',     color: '#c8d6e5' },
+    { key: 'pvnode',         label: 'pvnode',         color: '#54a0ff' }
+  ];
+  function forecastChartGridTs() {
+    var SLOT = 15 * 60 * 1000, now = Date.now();
+    var from = Math.floor((now - 12 * 3600000) / SLOT) * SLOT;
+    var to = Math.ceil((now + 24 * 3600000) / SLOT) * SLOT;
+    var ts = [];
+    for (var t = from; t < to; t += SLOT) ts.push(t);
+    return ts;
+  }
+  function forecastResampleToGrid(points, gridTs) {
+    if (!points.length) return gridTs.map(function (ts) { return { x: ts, y: null }; });
+    points.sort(function (a, b) { return a.x - b.x; });
+    var first = points[0].x, last = points[points.length - 1].x, i = 0;
+    return gridTs.map(function (ts) {
+      if (ts < first || ts > last) return { x: ts, y: null };
+      while (i < points.length - 1 && points[i + 1].x < ts) i++;
+      if (points[i].x === ts) return { x: ts, y: points[i].y };
+      if (i >= points.length - 1) return { x: ts, y: points[i].y };
+      var a = points[i], b = points[i + 1], r = (ts - a.x) / (b.x - a.x);
+      return { x: ts, y: a.y + r * (b.y - a.y) };
+    });
+  }
+
   function getComparisonDatasets() {
     return [
       { key: 'actual', label: 'Ist (gemessen)',        color: _aur('--green', 'rgba(46, 204, 113, 1)'),       dash: [],     width: 2   },
@@ -341,6 +377,19 @@
         spanGaps: false,
         fill: false
       };
+    });
+
+    // Overlay one thin line per PV-forecast provider (data filled each cycle by
+    // renderForecastProviders from the inspector endpoint). Tagged dvProvider so
+    // the update can find each by key — these live at indices 5+, which the base
+    // updateForecastComparisonChart never writes (it only sets datasets[0..4]).
+    FORECAST_PROVIDER_SERIES.forEach(function (ps) {
+      datasets.push({
+        label: ps.label, data: [], dvProvider: ps.key,
+        borderColor: ps.color, backgroundColor: 'transparent',
+        borderWidth: 1.2, borderDash: [], pointRadius: 0, tension: 0,
+        spanGaps: false, fill: false
+      });
     });
 
     var nowMs = Date.now();
@@ -467,6 +516,41 @@
 
       item.addEventListener('click', function () {
         var meta = forecastCompChart.getDatasetMeta(i);
+        meta.hidden = !meta.hidden;
+        item.style.opacity = meta.hidden ? '0.3' : '1';
+        forecastCompChart.update('none');
+      });
+
+      container.appendChild(item);
+    });
+
+    // Provider overlay lines (datasets 5+) — same toggle behaviour, offset index.
+    var baseCount = getComparisonDatasets().length;
+    FORECAST_PROVIDER_SERIES.forEach(function (ps, j) {
+      var dsIndex = baseCount + j;
+      var item = document.createElement('span');
+      item.dataset.dsIndex = String(dsIndex);
+      item.style.display = 'inline-flex';
+      item.style.alignItems = 'center';
+      item.style.gap = '4px';
+      item.style.cursor = 'pointer';
+      item.style.color = ps.color;
+      item.style.fontWeight = '600';
+      item.style.userSelect = 'none';
+
+      var swatch = document.createElement('span');
+      swatch.style.display = 'inline-block';
+      swatch.style.width = '12px';
+      swatch.style.height = '3px';
+      swatch.style.background = ps.color;
+      swatch.style.borderRadius = '2px';
+
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(ps.label));
+
+      item.addEventListener('click', function () {
+        var meta = forecastCompChart.getDatasetMeta(dsIndex);
+        if (!meta) return;
         meta.hidden = !meta.hidden;
         item.style.opacity = meta.hidden ? '0.3' : '1';
         forecastCompChart.update('none');
@@ -1156,6 +1240,30 @@
         var n = (j.meta && j.meta.modelCount) || rows.filter(function (r) { return r.has; }).length;
         ensEl.textContent = 'Ensemble: ' + (j.ensembleActive ? 'aktiv' : 'inaktiv') + ' · ' + n + ' Modelle';
         ensEl.classList.toggle('is-active', !!j.ensembleActive);
+      }
+
+      // Overlay the provider curves on the Forecast-Vergleich chart (operator
+      // request 2026-06-21) — resampled onto the same 15-min grid as the base
+      // datasets so the peaks line up on the X axis.
+      if (forecastCompChart && forecastCompChart.data && forecastCompChart.data.datasets) {
+        var gridTs = forecastChartGridTs();
+        var dss = forecastCompChart.data.datasets;
+        FORECAST_PROVIDER_SERIES.forEach(function (ps) {
+          var idx = -1;
+          for (var di = 0; di < dss.length; di++) { if (dss[di].dvProvider === ps.key) { idx = di; break; } }
+          if (idx < 0) return;
+          var slots = j.providers[ps.key] || [];
+          var pts = slots.map(function (s) {
+            return { x: new Date(s.ts_utc).getTime(), y: (Number(s.power_w) || 0) / 1000 };
+          }).filter(function (pt) { return isFinite(pt.x); });
+          dss[idx].data = forecastResampleToGrid(pts, gridTs);
+          // Hide the legend chip for a provider with no data (e.g. pvnode while
+          // deactivated) so there's no dangling toggle. Only the chip — NOT
+          // meta.hidden — so a user's manual show/hide toggle is never overridden.
+          var legItem = document.querySelector('#forecastCompLegend [data-ds-index="' + idx + '"]');
+          if (legItem) legItem.style.display = pts.length ? 'inline-flex' : 'none';
+        });
+        forecastCompChart.update('none');
       }
     } catch (e) {
       body.innerHTML = '<div class="forecast-providers-empty">Forecast-Provider nicht erreichbar.</div>';
