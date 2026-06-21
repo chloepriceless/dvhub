@@ -226,5 +226,44 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   fi
 fi
 
+# ── 10. EOS-Provisionierung / Retrofit (idempotent, entkoppelt) ──
+# EOS läuft seit v1.0 standardmäßig als DV-Fork. Boxen, die vor dieser Änderung
+# ohne EOS installiert wurden, werden hier nachgerüstet (Provisioning-Logik in
+# der gemeinsamen eos-provision.sh, geteilt mit install.sh). Das schwere
+# clone+pip darf den Service-Start NIE blockieren (ExecStartPre, TimeoutStartSec=
+# 120): fehlt EOS, wird die Provisionierung ENTKOPPELT über eine eigene transient
+# systemd-Unit gestartet (überlebt dvhub-Restarts). Bereits provisioniertes EOS
+# wird nur schnell auf "läuft" geprüft (kein fetch/pip pro Boot). Opt-out via
+# $DATA_DIR/.no-eos. NON-FATAL durchgängig.
+EOS_DIR="$INSTALL_DIR/eos"
+if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
+  EOS_RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+  if [[ "$EOS_RAM_MB" -lt 3000 ]]; then
+    echo "  EOS: Uebersprungen (RAM ${EOS_RAM_MB}MB < 3GB)"
+  elif [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service ]]; then
+    # Bereits provisioniert — nur sicherstellen, dass der Dienst läuft (schnell).
+    systemctl enable eos.service >/dev/null 2>&1 || true
+    systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
+    echo "  EOS: OK (bereits provisioniert)"
+  elif systemctl is-active --quiet dvhub-eos-provision.service 2>/dev/null; then
+    echo "  EOS: Hintergrund-Provisionierung läuft bereits"
+  else
+    # Fehlt -> entkoppelt nachrüsten, damit clone+pip den Boot nicht blockiert.
+    echo "  EOS: nicht installiert — starte entkoppelte Hintergrund-Provisionierung (DV-Fork)..."
+    if command -v systemd-run >/dev/null 2>&1; then
+      systemd-run --collect --quiet --unit "dvhub-eos-provision" \
+        --description "DVhub EOS provisioning (retrofit)" \
+        --setenv=SERVICE_USER="$SERVICE_USER" \
+        --setenv=INSTALL_DIR="$INSTALL_DIR" \
+        --setenv=DATA_DIR="$DATA_DIR" \
+        bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
+        || echo "  WARN: EOS-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
+    else
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" \
+        setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
+    fi
+  fi
+fi
+
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"

@@ -19,6 +19,12 @@ LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 # box while the customer holds a tunnel open (UI button). Disable with
 # --no-support-user (no user, no key, no remote support possible).
 SUPPORT_LOCAL_USER="${SUPPORT_LOCAL_USER:-1}"
+# Akkudoktor-EOS is installed BY DEFAULT as the DVhub Direktvermarktung fork
+# (DV-EOS: 15-min slots, slot-aware battery/inverter math, battery->grid
+# arbitrage export) when RAM >= 3GB. It is the productive optimizer DVhub ships
+# with — no longer opt-in. Opt out with --no-eos (e.g. low-RAM/headless boxes).
+# --with-eos is kept as a backwards-compatible no-op (EOS is already the default).
+EOS_INSTALL="${EOS_INSTALL:-1}"
 
 function parse_branch_from_installer_url() {
   local url="${1:-}"
@@ -227,7 +233,13 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --with-eos)
+      # Backwards-compatible no-op: EOS is installed by default now.
       EOS_INSTALL=1
+      shift
+      ;;
+    --no-eos)
+      # Opt out of the default DV-EOS install (e.g. low-RAM/headless boxes).
+      EOS_INSTALL=0
       shift
       ;;
     --no-support-user)
@@ -420,103 +432,32 @@ install_ml_deps() {
 # `exit`/set -e failure) — the essential tail (config/DB/systemd) must always run.
 ( install_ml_deps ) || echo "  ML: optionaler Tier-2-Schritt fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 
-# --- EOS (Akkudoktor) Installation (Tier 3 only, --with-eos flag) ---
+# --- EOS (Akkudoktor) Installation — DEFAULT (DV fork), RAM-gated >=3GB, opt-out via --no-eos ---
+# The provisioning logic lives in the shared eos-provision.sh (single source of
+# truth, mirrors the support-provision.sh pattern) so install.sh and
+# post-update.sh never drift. The repo is already cloned to $INSTALL_DIR here, so
+# $INSTALL_DIR/eos-provision.sh exists.
 install_eos() {
-  local RAM_MB
-  RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-  if [ "$RAM_MB" -lt 3000 ]; then
-    echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier < 3)"
+  if [ ! -f "$INSTALL_DIR/eos-provision.sh" ]; then
+    echo "  EOS: eos-provision.sh nicht gefunden ($INSTALL_DIR) — uebersprungen"
     return 0
   fi
-
-  local EOS_DIR="/opt/dvhub/eos"
-  local EOS_VENV="/opt/dvhub/eos-venv"
-  # T-0121: install the DVhub DV-EOS *fork* (15-min slots, slot-aware
-  # battery/inverter math, battery->grid arbitrage export, EnergyCharts spot
-  # feed-in, pydantic /v1/prediction/import fix) directly from the public fork
-  # branch. The branch already carries every patch on top of upstream v0.3.0, so
-  # the legacy eos-patches/apply.sh step is no longer needed. Cloning vanilla
-  # upstream here (the pre-T-0121 behaviour) shipped an EOS that clamps to hourly
-  # slots and never exports the battery -> i.e. no arbitrage. EOS_DIR is now
-  # /opt/dvhub/eos to match the path prod + eos-adapter.js expect (was the
-  # divergent /opt/dvhub/eos-src). Override repo/branch via env for testing.
-  local EOS_REPO_URL="${EOS_REPO_URL:-https://github.com/chloepriceless/DV-EOS.git}"
-  local EOS_BRANCH="${EOS_BRANCH:-dvhub-fork}"
-
-  echo "  EOS: Installiere DV-EOS Fork (${EOS_BRANCH}) bare-metal venv..."
-
-  # Idempotent clone / fetch of the fork branch
-  if [ ! -d "$EOS_DIR/.git" ]; then
-    sudo rm -rf "$EOS_DIR"
-    sudo git clone --branch "$EOS_BRANCH" --depth 1 \
-      "$EOS_REPO_URL" "$EOS_DIR" \
-      || { echo "  EOS: git clone ${EOS_REPO_URL}@${EOS_BRANCH} fehlgeschlagen"; return 1; }
-  else
-    sudo git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_BRANCH"
-    sudo git -C "$EOS_DIR" checkout -B "$EOS_BRANCH" "origin/$EOS_BRANCH"
-  fi
-
-  # Python venv (Python 3.11+ required by EOS v0.3.0)
-  if [ ! -d "$EOS_VENV" ]; then
-    sudo python3 -m venv "$EOS_VENV"
-  fi
-  sudo "$EOS_VENV/bin/pip" install --upgrade pip
-  # T-0118: akkudoktor-EOS v0.3.0 ships pyproject.toml, NOT requirements.txt —
-  # only honour a requirements.txt if it actually exists; the editable install
-  # below resolves the project's dependencies from pyproject.toml regardless.
-  if [ -f "$EOS_DIR/requirements.txt" ]; then
-    sudo "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
-  fi
-  sudo "$EOS_VENV/bin/pip" install -e "$EOS_DIR"
-
-  # Phase 18-03: starlette 1.x dropped the `on_startup` kwarg in favour of
-  # `lifespan`, but fasthtml 0.12.x (pinned by monsterui 1.0.44, which the EOS
-  # v0.3.0 requirements pull in) still calls Starlette.__init__(on_startup=…).
-  # Result on Debian 13 / Python 3.13 with pip default-resolving starlette to
-  # the latest 1.x: EOSdash subprocess crashes on every restart with
-  #   TypeError: Starlette.__init__() got an unexpected keyword argument 'on_startup'
-  # while the EOS HTTP API itself stays up. Pin starlette to the 0.x line until
-  # EOS upstream upgrades fasthtml; verified working on prod 2026-05-20 at
-  # starlette 0.52.1. Idempotent — pip re-resolves the constraint on every run.
-  sudo "$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
-
-  # Ownership: systemd user `dvhub` must execute the venv
-  sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
-
-  # systemd unit — bind 127.0.0.1:8503 only (no external access)
-  cat <<UNIT | sudo tee /etc/systemd/system/eos.service >/dev/null
-[Unit]
-Description=Akkudoktor EOS (Energy Optimization System)
-After=network.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$EOS_DIR
-ExecStart=$EOS_VENV/bin/python -m akkudoktoreos.server.eos
-Environment=EOS_SERVER__HOST=127.0.0.1
-Environment=EOS_SERVER__PORT=8503
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable eos.service
-  sudo systemctl restart eos.service
-  echo "  EOS: systemd eos.service gestartet (127.0.0.1:8503)"
+  # EOS_REPO_URL/EOS_BRANCH overrides flow through the inherited environment.
+  SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" \
+    bash "$INSTALL_DIR/eos-provision.sh"
 }
 
-if [ "${EOS_INSTALL:-0}" = "1" ]; then
+if [ "${EOS_INSTALL:-1}" = "1" ]; then
+  # Clear any stale opt-out marker so post-update.sh keeps EOS reconciled.
+  rm -f "$DATA_DIR/.no-eos" 2>/dev/null || true
   # T-0118: subshell + `|| true` — an EOS install failure must not abort the
   # essential tail (config/DB/systemd) that follows.
   ( install_eos ) || echo "  EOS: Installation fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 else
-  echo "  EOS: Uebersprungen (--with-eos Flag nicht gesetzt)"
+  echo "  EOS: Uebersprungen (--no-eos gesetzt) — Opt-out wird fuer Updates gemerkt"
+  # Persist the opt-out so post-update.sh does NOT retrofit EOS on this box.
+  mkdir -p "$DATA_DIR" 2>/dev/null || true
+  touch "$DATA_DIR/.no-eos" 2>/dev/null || true
 fi
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
