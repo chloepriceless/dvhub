@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css">
-  <link rel="stylesheet" href="/index.css?v=20260621-forecast-providers">
+  <link rel="stylesheet" href="/index.css?v=20260621-eos-plan">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -435,6 +435,25 @@
         </div>
       </div>
 
+      <!-- DV-EOS day plan (operator request 2026-06-21): the EOS optimiser's
+           Fahrplan for the full ~27h horizon — planned battery SoC trajectory
+           (right axis) + PV-Prognose + Netz-Einspeisung (left kW axis) + KPIs.
+           From /api/forecast/inspector/eos (output.rows), rendered by
+           leitstand-charts.js#renderEosPlanChart. -->
+      <div class="forecast-chart-shell" id="eosPlanCard">
+        <div class="chart-skeleton" id="eosPlanSkeleton">
+          <div class="skeleton-bar"></div>
+        </div>
+        <div class="chart-head">
+          <span class="card-title">EOS-Fahrplan (Akku-SoC &amp; PV)</span>
+          <span class="card-sub" id="eosPlanSubtitle">&mdash;</span>
+        </div>
+        <div class="forecast-chart-host forecast-chart-host-tall">
+          <canvas id="eosPlanChart"></canvas>
+        </div>
+        <div class="chart-day-summary" id="eosPlanKpis"></div>
+      </div>
+
       <!-- Optimizer plan chart -->
       <div class="forecast-chart-shell u-hidden" id="optimizerPlanCard">
         <div class="chart-skeleton" id="optimizerPlanSkeleton">
@@ -484,6 +503,6 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20260621-akku-static"></script>
 <script src="/app.js?v=20260618-victron-alarms"></script>
-<script src="/leitstand-charts.js?v=20260621-forecast-providers-3"></script>
+<script src="/leitstand-charts.js?v=20260621-eos-plan"></script>
 </body>
 </html>

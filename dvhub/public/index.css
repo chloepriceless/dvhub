@@ -1143,3 +1143,8 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-name { font-size:13px; font-weight:600; color:var(--text); }
 .fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
 .fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }
+/* Spalten-Kopf (Provider · Tages-Peak · aktualisiert) — klein/dimm/uppercase. */
+.fp-row.fp-head { padding-top:0; padding-bottom:4px; }
+.fp-row.fp-head .fp-name,
+.fp-row.fp-head .fp-peak,
+.fp-row.fp-head .fp-age { font-size:10px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); }

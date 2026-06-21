@@ -1227,7 +1227,10 @@
       });
       // Active providers first, then by day-peak descending.
       rows.sort(function (a, b) { return (b.has - a.has) || (b.peakKw - a.peakKw); });
-      body.innerHTML = rows.map(function (r) {
+      var headerRow = '<div class="fp-row fp-head">' +
+        '<span></span><span class="fp-name">Provider</span>' +
+        '<span class="fp-peak">Tages-Peak</span><span class="fp-age">aktualisiert</span></div>';
+      body.innerHTML = headerRow + rows.map(function (r) {
         var dotCls = !r.has ? 'is-off' : r.stale ? 'is-stale' : 'is-live';
         return '<div class="fp-row">' +
           '<span class="fp-dot ' + dotCls + '"></span>' +
@@ -1270,13 +1273,154 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // DV-EOS day plan (operator request 2026-06-21) — the EOS optimiser's Fahrplan
+  // for the full horizon: planned battery SoC trajectory (right axis) + PV
+  // forecast + grid feed-in (left kW axis), plus the run's KPIs. Sourced from
+  // /api/forecast/inspector/eos (output.rows are 15-min slots). Distinct from the
+  // existing optimizerPlanCard, which charts the DVhub /api/optimizer run.
+  // ---------------------------------------------------------------------------
+  var eosPlanChart = null;
+  async function fetchEosPlan() {
+    try {
+      var now = new Date();
+      var to = new Date(now.getTime() + 24 * 3600 * 1000);
+      var qs = '?from=' + encodeURIComponent(now.toISOString()) + '&to=' + encodeURIComponent(to.toISOString());
+      var res = await apiFetch('/api/forecast/inspector/eos' + qs);
+      return (res && res.ok) ? await res.json() : null;
+    } catch (e) { return null; }
+  }
+  function renderEosPlanChart(eos) {
+    var canvas = document.getElementById('eosPlanChart');
+    var skeleton = document.getElementById('eosPlanSkeleton');
+    var subtitle = document.getElementById('eosPlanSubtitle');
+    var kpiEl = document.getElementById('eosPlanKpis');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    var output = eos && eos.output;
+    var rows = (output && Array.isArray(output.rows)) ? output.rows : [];
+    if (!eos || eos.available === false || rows.length === 0) {
+      if (skeleton) {
+        skeleton.style.display = '';
+        skeleton.textContent = (eos && eos.reason) ? ('EOS: ' + eos.reason) : 'Kein EOS-Fahrplan verfügbar';
+        skeleton.style.lineHeight = '200px';
+        skeleton.style.textAlign = 'center';
+        skeleton.style.color = _aur('--chart-axis', '#5a6a8a');
+        skeleton.style.fontSize = '0.85rem';
+        skeleton.style.animation = 'none';
+      }
+      if (kpiEl) kpiEl.textContent = '';
+      return;
+    }
+    if (skeleton) skeleton.style.display = 'none';
+
+    // 15-min slot energy (Wh) → average power (kW): Wh / (slotMin/60 h) / 1000.
+    var slotMin = Number(output.slotMinutes) || 15;
+    function whToKw(wh) { return (Number(wh) || 0) / (slotMin / 60) / 1000; }
+
+    var socPts = [], pvPts = [], feedPts = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var x = new Date(r.ts_utc).getTime();
+      if (!isFinite(x)) continue;
+      socPts.push({ x: x, y: Number(r.socPct) });
+      pvPts.push({ x: x, y: whToKw(r.pvWh) });
+      feedPts.push({ x: x, y: whToKw(r.gridFeedinWh) });
+    }
+
+    var datasets = [
+      { label: 'PV-Prognose', data: pvPts, yAxisID: 'kw',
+        borderColor: _aur('--yellow', '#e3b341'), backgroundColor: _aurA('--yellow', 0.12, 'rgba(227,179,65,.12)'),
+        borderWidth: 1.2, pointRadius: 0, tension: 0, fill: true, spanGaps: false },
+      { label: 'Netz-Einspeisung', data: feedPts, yAxisID: 'kw',
+        borderColor: _aur('--pink', '#ff7ac6'), backgroundColor: 'transparent',
+        borderWidth: 1.2, borderDash: [3, 3], pointRadius: 0, tension: 0, fill: false, spanGaps: false },
+      { label: 'Akku-SoC', data: socPts, yAxisID: 'soc',
+        borderColor: _aur('--green', '#39E06F'), backgroundColor: 'transparent',
+        borderWidth: 2.4, pointRadius: 0, tension: 0.1, fill: false, spanGaps: false }
+    ];
+
+    var xmin = socPts.length ? socPts[0].x : Date.now();
+    var xmax = socPts.length ? socPts[socPts.length - 1].x : (Date.now() + 24 * 3600000);
+    var nowMs = Date.now();
+
+    var options = JSON.parse(JSON.stringify(getChartDefaults()));
+    options.scales = {
+      x: {
+        type: 'linear', min: xmin, max: xmax,
+        grid: { color: _aur('--chart-grid', 'rgba(90,106,138,0.15)') },
+        afterBuildTicks: function (axis) {
+          var d = new Date(axis.min); d.setMinutes(0, 0, 0);
+          if (d.getTime() < axis.min) d.setHours(d.getHours() + 1);
+          var step = 3 * 3600000, ticks = [];
+          for (var t = d.getTime(); t <= axis.max; t += step) ticks.push({ value: t });
+          axis.ticks = ticks;
+        },
+        ticks: { maxRotation: 0, color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 10 },
+          callback: function (v) { return new Date(v).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); } }
+      },
+      kw: {
+        position: 'left', beginAtZero: true,
+        grid: { color: _aur('--chart-grid', 'rgba(90,106,138,0.15)') },
+        ticks: { color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 9 } },
+        title: { display: true, text: 'kW', color: _aur('--chart-axis', '#5a6a8a'), font: { size: 10 } }
+      },
+      soc: {
+        position: 'right', min: 0, max: 100,
+        grid: { drawOnChartArea: false },
+        ticks: { color: _aur('--green', '#39E06F'), font: { family: 'JetBrains Mono', size: 9 }, callback: function (v) { return v + ' %'; } },
+        title: { display: true, text: 'Akku-SoC', color: _aur('--green', '#39E06F'), font: { size: 10 } }
+      }
+    };
+    options.plugins.tooltip.callbacks = {
+      label: function (ctx) {
+        var soc = ctx.dataset.yAxisID === 'soc';
+        return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(soc ? 0 : 2) : '--') + (soc ? ' %' : ' kW');
+      },
+      title: function (items) { return items.length ? new Date(items[0].parsed.x).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
+    };
+    options.plugins.annotation = {
+      annotations: { nowLine: {
+        type: 'line', xMin: nowMs, xMax: nowMs,
+        borderColor: _aurA('--chart-now', 0.8, 'rgba(255,165,0,0.8)'), borderWidth: 2, borderDash: [6, 3],
+        label: { display: true, content: 'jetzt', position: 'start',
+          backgroundColor: _aurA('--chart-now', 0.7, 'rgba(255,165,0,0.7)'), color: _aur('--text', '#fff'), font: { size: 11 } }
+      } }
+    };
+
+    var config = { type: 'line', data: { datasets: datasets }, options: options };
+    if (eosPlanChart) {
+      eosPlanChart.data = config.data;
+      eosPlanChart.options = config.options;
+      eosPlanChart.update('none');
+    } else {
+      eosPlanChart = new Chart(canvas, config);
+      enableZoomReset(eosPlanChart);
+    }
+
+    var kpis = output.kpis || {};
+    if (kpiEl) {
+      var rev = Number(kpis.totalRevenuesAmt), cost = Number(kpis.totalCostsAmt), lossKwh = Number(kpis.totalLossesWh) / 1000;
+      var parts = [];
+      if (isFinite(rev)) parts.push('Erlös ' + rev.toFixed(2).replace('.', ',') + ' €');
+      if (isFinite(cost) && cost > 0.005) parts.push('Kosten ' + cost.toFixed(2).replace('.', ',') + ' €');
+      if (isFinite(lossKwh)) parts.push('Verluste ' + lossKwh.toFixed(1).replace('.', ',') + ' kWh');
+      kpiEl.textContent = parts.join('  ·  ');
+    }
+    if (subtitle && output.validFrom && output.validUntil) {
+      var fmtHm = function (d) { return new Date(d).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
+      subtitle.textContent = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
+    }
+  }
+
   async function refreshAllCharts() {
     var results = await Promise.allSettled([
       fetchForecastData(),
       fetchOptimizerData(),
       fetchMlStatus(),
       fetchOptimizerPlan(),
-      fetchStatusData()
+      fetchStatusData(),
+      fetchEosPlan()
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -1284,6 +1428,7 @@
     var mlStatus = results[2].status === 'fulfilled' ? results[2].value : null;
     var optimizerPlan = results[3].status === 'fulfilled' ? results[3].value : null;
     var statusData = results[4].status === 'fulfilled' ? results[4].value : null;
+    var eosPlan = results[5].status === 'fulfilled' ? results[5].value : null;
 
     // Plan 09-04: each chart render is wrapped in DVhubCommon.safeRender so a
     // throw in ONE chart does NOT abort the sibling charts in the same refresh
@@ -1293,6 +1438,7 @@
 
     sr('leitstand.forecast-summary', function () { updateForecastSummary(forecastData, statusData); });
     sr('leitstand.forecast-providers', function () { renderForecastProviders(); });
+    sr('leitstand.eos-plan', function () { renderEosPlanChart(eosPlan); });
     // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
     // (Ist + Last-Prognose are now both there) — keeping the call would draw
     // duplicate datasets in a removed canvas anyway.
