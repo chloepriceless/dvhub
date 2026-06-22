@@ -1,79 +1,81 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunkPlants, buildQueryParams } from '../services/forecast/pvnode-client.js';
+import { buildStrings, localWallClockToUtcIso, extractValues } from '../services/forecast/pvnode-client.js';
 
-// Phase 07 Wave-1 (Plan 07-02): tests unskipped (REVIEWS H5 transition).
-// services/forecast/pvnode-client.js now exports chunkPlants + buildQueryParams.
+// T-PVNODE-V2 (2026-06-22): the V1 chunkPlants/buildQueryParams model (≤2 planes per
+// request → ⌈N/2⌉ GETs) was replaced by the V2 single-request `strings[]` model plus
+// site-local→UTC timestamp conversion. These tests cover the new pure builders.
 
-test('chunkPlants N=4 produces 2 groups of 2 sorted by kwp desc', () => {
+test('buildStrings maps ALL planes into one V2 strings[] (no 2-plane chunking)', () => {
   const plants = [
     { kwp: 3, tiltDeg: 30, azimuthDeg: 180 },
+    { kwp: 5, tiltDeg: 25, azimuthDeg: 90 },
+    { kwp: 2, tiltDeg: 35, azimuthDeg: 270 }
+  ];
+  const strings = buildStrings(plants);
+  assert.equal(strings.length, 3, 'all planes in a single request');
+  assert.deepEqual(strings[0], { slope: 30, orientation: 180, power_kw: 3 });
+  assert.deepEqual(strings[1], { slope: 25, orientation: 90, power_kw: 5 });
+  assert.deepEqual(strings[2], { slope: 35, orientation: 270, power_kw: 2 });
+});
+
+test('buildStrings drops invalid planes (kwp<=0 / non-finite geometry)', () => {
+  const strings = buildStrings([
     { kwp: 5, tiltDeg: 30, azimuthDeg: 180 },
-    { kwp: 2, tiltDeg: 30, azimuthDeg: 270 },
-    { kwp: 4, tiltDeg: 30, azimuthDeg: 90 }
-  ];
-  const groups = chunkPlants(plants);
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].length, 2);
-  assert.equal(groups[1].length, 2);
-  assert.equal(groups[0][0].kwp, 5); // largest first
+    { kwp: 0, tiltDeg: 30, azimuthDeg: 180 },
+    { kwp: 4, tiltDeg: 'x', azimuthDeg: 180 }
+  ]);
+  assert.equal(strings.length, 1);
+  assert.equal(strings[0].power_kw, 5);
 });
 
-test('chunkPlants N=3 isolates largest plant alone (REVIEWS H6 locked rule)', () => {
-  // REVIEWS H6: for odd N, the LARGEST plant is isolated alone in its own group,
-  // so the two smaller plants are paired (smaller absolute error when summed).
-  // Plants sorted desc: [kwp:5, kwp:3, kwp:2] → expected [[5]], [[3, 2]]
-  const plants = [
-    { kwp: 2, tiltDeg: 30, azimuthDeg: 180 },
-    { kwp: 5, tiltDeg: 30, azimuthDeg: 180 },
-    { kwp: 3, tiltDeg: 30, azimuthDeg: 270 }
-  ];
-  const groups = chunkPlants(plants);
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].length, 1);       // largest isolated
-  assert.equal(groups[0][0].kwp, 5);
-  assert.equal(groups[1].length, 2);
+test('buildStrings sends geometry only (V1 shading params are NOT forwarded — format differs in V2)', () => {
+  const strings = buildStrings([
+    { kwp: 5, tiltDeg: 30, azimuthDeg: 180, skyObstructionConfig: 'HORIZON', shadingConfig: 'ROW' }
+  ]);
+  assert.deepEqual(Object.keys(strings[0]).sort(), ['orientation', 'power_kw', 'slope']);
 });
 
-test('chunkPlants N=1 produces single-element group', () => {
-  const groups = chunkPlants([{ kwp: 5, tiltDeg: 30, azimuthDeg: 180 }]);
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].length, 1);
+test('buildStrings([]) and non-array input → []', () => {
+  assert.deepEqual(buildStrings([]), []);
+  assert.deepEqual(buildStrings(null), []);
 });
 
-test('chunkPlants N=0 produces empty array', () => {
-  assert.deepEqual(chunkPlants([]), []);
+test('localWallClockToUtcIso converts Berlin summer wall-clock (CEST +02:00) to UTC', () => {
+  assert.equal(localWallClockToUtcIso('2026-06-22T14:00:00', 'Europe/Berlin'), '2026-06-22T12:00:00.000Z');
 });
 
-test('buildQueryParams maps plant[0] to first plane (REVIEWS H7: sky_obstruction_config + shading_config)', () => {
-  const plants = [
-    {
-      kwp: 5, tiltDeg: 30, azimuthDeg: 180,
-      skyObstructionConfig: 'HORIZON:{30,180}',
-      shadingConfig: 'ROW:1.5m'
-    }
-  ];
-  const q = buildQueryParams({ lat: 52.5, lon: 13.4, plants });
-  assert.equal(q.get('latitude'), '52.5');
-  assert.equal(q.get('longitude'), '13.4');
-  assert.equal(q.get('slope'), '30');
-  assert.equal(q.get('orientation'), '180'); // 0=N,180=S natively (NO -180 offset)
-  assert.equal(q.get('pv_power_kw'), '5');
-  assert.equal(q.get('sky_obstruction_config'), 'HORIZON:{30,180}');
-  assert.equal(q.get('shading_config'), 'ROW:1.5m');
-  assert.equal(q.get('second_array_slope'), null); // no second plane
+test('localWallClockToUtcIso converts Berlin winter wall-clock (CET +01:00) to UTC', () => {
+  assert.equal(localWallClockToUtcIso('2026-01-15T14:00:00', 'Europe/Berlin'), '2026-01-15T13:00:00.000Z');
 });
 
-test('buildQueryParams adds second_array_* params when plants[1] is present', () => {
-  const plants = [
-    { kwp: 5, tiltDeg: 30, azimuthDeg: 180 },
-    { kwp: 3, tiltDeg: 25, azimuthDeg: 90 }
-  ];
-  const q = buildQueryParams({ lat: 52.5, lon: 13.4, plants });
-  assert.equal(q.get('slope'), '30');
-  assert.equal(q.get('orientation'), '180');
-  assert.equal(q.get('pv_power_kw'), '5');
-  assert.equal(q.get('second_array_slope'), '25');
-  assert.equal(q.get('second_array_orientation'), '90');
-  assert.equal(q.get('second_array_power_kw'), '3');
+test('localWallClockToUtcIso trusts an explicit-Z timestamp (normalized to .000Z)', () => {
+  assert.equal(localWallClockToUtcIso('2026-06-22T12:00:00Z', 'Europe/Berlin'), '2026-06-22T12:00:00.000Z');
+});
+
+test('localWallClockToUtcIso returns null on nullish / unparseable input', () => {
+  assert.equal(localWallClockToUtcIso(null, 'Europe/Berlin'), null);
+  assert.equal(localWallClockToUtcIso('not-a-date', 'Europe/Berlin'), null);
+});
+
+test('extractValues parses a V2 ForecastResponse (values[]/pv_power), converts ts→UTC, skips null', () => {
+  const body = {
+    timezone: 'Europe/Berlin',
+    values: [
+      { timestamp: '2026-06-22T12:00:00', pv_power: 4200 },
+      { timestamp: '2026-06-22T12:15:00', pv_power: null }, // no value (e.g. night) → skipped
+      { timestamp: '2026-06-22T12:30:00', pv_power: 4500 }
+    ]
+  };
+  const rows = extractValues(body);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], { ts_utc: '2026-06-22T10:00:00.000Z', power_w: 4200 });
+  assert.deepEqual(rows[1], { ts_utc: '2026-06-22T10:30:00.000Z', power_w: 4500 });
+});
+
+test('extractValues tolerates legacy shapes (forecasts[]/data[] + field synonyms)', () => {
+  const r1 = extractValues({ forecasts: [{ timestamp: '2026-01-01T12:00:00Z', power_w: 1234 }] });
+  assert.deepEqual(r1, [{ ts_utc: '2026-01-01T12:00:00.000Z', power_w: 1234 }]);
+  const r2 = extractValues({ data: [{ ts: '2026-02-02T13:30:00Z', power: 567 }] });
+  assert.deepEqual(r2, [{ ts_utc: '2026-02-02T13:30:00.000Z', power_w: 567 }]);
 });

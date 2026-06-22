@@ -2051,7 +2051,17 @@ function buildFieldDefinitions() {
       path: 'forecast.pvnode.apiKey',
       label: 'pvnode API-Key',
       type: 'password',
-      help: 'API-Key von pvnode.de.'
+      help: 'API-Key von pvnode.de (derselbe Key f\u00fcr V1 und V2).'
+    },
+    {
+      section: 'forecast',
+      group: 'pvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
+      path: 'forecast.pvnode.siteId',
+      label: 'pvnode Standort-ID (V2)',
+      type: 'text',
+      help: 'Standort-ID aus der pvnode-Web-App (V2). Gesetzt \u2192 DVhub nutzt den gespeicherten (ggf. kalibrierten) Standort mit allen D\u00e4chern. Leer \u2192 Inline-Prognose aus den konfigurierten Dachfl\u00e4chen.'
     },
     {
       section: 'forecast',

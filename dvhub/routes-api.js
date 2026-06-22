@@ -2981,6 +2981,7 @@ export function createApiRoutes(ctx) {
             // pvnode has no schema enabled flag — derive from apiKey presence.
             enabled: !!(getCfg().forecast?.pvnode?.apiKey),
             apiKeySet: !!(getCfg().forecast?.pvnode?.apiKey),
+            siteIdSet: !!(getCfg().forecast?.pvnode?.siteId),
             nowcastEnabled: !!(getCfg().forecast?.pvnode?.nowcastEnabled)
           }
         },
@@ -3930,6 +3931,7 @@ export function createApiRoutes(ctx) {
         ok: true,
         enabled: !!p.apiKey,                // derived (no schema enabled flag)
         apiKey: p.apiKey ? '***' : '',      // D-13 — never raw
+        siteId: p.siteId || '',             // V2 saved-site id (empty = inline mode)
         nowcastEnabled: !!p.nowcastEnabled
       });
     }
@@ -3951,11 +3953,17 @@ export function createApiRoutes(ctx) {
       const apiKey = (body.apiKey === '***')
         ? (prev.apiKey || '')
         : clip(body.apiKey, 256);
+      const siteId = clip(body.siteId, 128).trim();
       next.forecast.pvnode.nowcastEnabled = !!body.nowcastEnabled;
       if (apiKey) {
         next.forecast.pvnode.apiKey = apiKey;
       } else {
         delete next.forecast.pvnode.apiKey;
+      }
+      if (siteId) {
+        next.forecast.pvnode.siteId = siteId;
+      } else {
+        delete next.forecast.pvnode.siteId;
       }
       try {
         ctx.saveAndApplyConfig(next);
@@ -3965,6 +3973,7 @@ export function createApiRoutes(ctx) {
       }
       pushLog('pvnode_saved', {
         apiKeySet: !!apiKey,
+        siteIdSet: !!siteId,
         nowcastEnabled: next.forecast.pvnode.nowcastEnabled
       }, actorContext(req));
       return json(res, 200, { ok: true });
@@ -4010,12 +4019,16 @@ export function createApiRoutes(ctx) {
         orientation = Number(biggest.azimuthDeg);
         kwp = Number(biggest.kwp);
       }
-      const nowcast = !!stored.nowcastEnabled;
+      // V2: prefer a saved-site probe when a siteId is configured (or typed); else
+      // an inline single-string probe from the lat/lon/geometry above.
+      const siteId = (body && typeof body.siteId === 'string' && body.siteId.trim())
+        ? body.siteId.trim()
+        : (stored.siteId || '');
       const rl = checkProviderRateLimit('pvnode', apiKey);
       if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
       try {
         const { probePvnode } = await import('./services/forecast/pvnode-client.js');
-        const result = await probePvnode({ apiKey, lat, lon, slope, orientation, kwp, nowcast });
+        const result = await probePvnode({ apiKey, siteId, lat, lon, slope, orientation, kwp });
         pushLog('forecast_provider_probe', {
           provider: 'pvnode', ok: result.ok, error: result.error
         }, actorContext(req));

@@ -808,11 +808,17 @@
               <span class="field-label">API-Key</span>
               <input type="password" class="input mono" id="fc-pvnode-apikey"
                      placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
-              <span class="field-hint">Aus pvnode.com &rarr; Account &rarr; API. <strong>Free-Tarif: 40 Aufrufe/Monat &mdash; sparsam testen.</strong></span>
+              <span class="field-hint">Aus pvnode.com &rarr; Account &rarr; API (derselbe Key f&uuml;r V1 und V2).</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Standort-ID (V2)</span>
+              <input type="text" class="input mono" id="fc-pvnode-siteid"
+                     placeholder="leer = Inline aus den Dachfl&auml;chen" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Standort aus der pvnode-Web-App (V2): gesetzt &rarr; gespeicherter (ggf. kalibrierter) Standort mit allen D&auml;chern. Leer &rarr; Inline-Prognose aus den konfigurierten Dachfl&auml;chen.</span>
             </label>
             <label class="dv-field-row">
               <input type="checkbox" class="dv-field-check" id="fc-pvnode-nowcast">
-              <span>Nowcast aktivieren</span>
+              <span>Nowcast aktivieren <span class="field-hint">(nur V1-API)</span></span>
             </label>
             <span class="field-hint">
               Nowcast = h&ouml;here Aufl&ouml;sung (15 min statt 60 min) f&uuml;r die n&auml;chsten ~1&ndash;2 h.

@@ -1,20 +1,18 @@
 // test/forecast-provider-probes.test.js -- Plan 20-06 Task 1 RED→GREEN
 //
-// Behavioural unit tests for the two new probe-helper exports added in
-// Plan 20-06 to the existing forecast clients:
+// Behavioural unit tests for the two probe-helper exports on the forecast clients:
 //
-//   solcast-client.js  → probeSolcast({apiKey, siteId})  (Pitfall 3 — 10/day quota)
-//   pvnode-client.js   → probePvnode({apiKey, lat, lon, slope, orientation})  (Pitfall 4 — 40/mo)
+//   solcast-client.js  → probeSolcast({apiKey, siteId})
+//   pvnode-client.js   → probePvnode({apiKey, siteId?, lat?, lon?, slope?, orientation?, kwp?})
 //
-// Both helpers MUST resolve with `{ok, sample?, error?}` on every code path
-// (never throw) so the route handler can JSON-relay the result. The probe
-// is a single-shot operator-triggered call — it does NOT mutate the
-// production client's state (callsToday counter, pvnodeQuota tracker,
-// cachedData), does NOT use pRetry, and uses AbortSignal.timeout for hard
-// timeouts (T-20-06-06 + verification contract).
+// T-PVNODE-V2 (2026-06-22): probePvnode migrated to the V2 API — a saved-site GET
+// (/v2/forecast/{site_id}) when siteId is set, else an inline POST (/v2/forecast/inline)
+// carrying the geometry in the request BODY (V1 sent it as query params). The behavioural
+// contract is unchanged: always resolves {ok, sample?, error?}, never throws, no pRetry,
+// no quota mutation, AbortSignal.timeout hard timeout.
 //
-// Strategy: monkey-patch globalThis.fetch per test to return controlled
-// responses; restore between tests so we never hit the real upstream.
+// Strategy: monkey-patch globalThis.fetch per test to return controlled responses;
+// restore between tests so we never hit the real upstream.
 
 import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -106,18 +104,16 @@ describe('Plan 20-06: probeSolcast (single-shot operator probe)', () => {
   });
 });
 
-describe('Plan 20-06: probePvnode (single-shot operator probe)', () => {
-  it('resolves {ok:true, sample:{ts, watts}} on a non-empty forecasts[] response', async () => {
+describe('T-PVNODE-V2: probePvnode (single-shot operator probe, V2 API)', () => {
+  it('inline mode: POSTs /v2/forecast/inline with geometry in the BODY; converts ts→UTC', async () => {
     let observedUrl = null;
-    let observedHeaders = null;
+    let observedOpts = null;
     mockFetchOnce((url, opts) => {
       observedUrl = url;
-      observedHeaders = opts && opts.headers;
-      // WR-02: forecasts[] plural is the production-documented shape.
+      observedOpts = opts;
       return jsonResponse(200, {
-        forecasts: [
-          { timestamp: '2026-01-01T12:00:00Z', power_w: 1234 }
-        ]
+        timezone: 'Europe/Berlin',
+        values: [{ timestamp: '2026-01-01T12:00:00', pv_power: 1234 }]
       });
     });
     const result = await probePvnode({
@@ -126,55 +122,50 @@ describe('Plan 20-06: probePvnode (single-shot operator probe)', () => {
     });
     assert.equal(result.ok, true);
     assert.ok(result.sample);
-    assert.equal(result.sample.ts, '2026-01-01T12:00:00Z');
+    // 2026-01-01 is winter in Berlin (CET, +01:00) → 12:00 local == 11:00 UTC.
+    assert.equal(result.sample.ts, '2026-01-01T11:00:00.000Z');
     assert.equal(result.sample.watts, 1234);
-    assert.match(observedUrl, /api\.pvnode\.com/, 'must hit api.pvnode.com');
-    // WR-01: URL params must match production buildQueryParams shape.
-    assert.match(observedUrl, /latitude=48\.5/);
-    assert.match(observedUrl, /longitude=9\.5/);
-    assert.match(observedUrl, /slope=30/);
-    assert.match(observedUrl, /orientation=180/);
-    assert.match(observedUrl, /forecast_days=1/, 'probe MUST use forecast_days=1 (minimise free-tier 40/mo)');
-    assert.match(observedUrl, /pv_power_kw=7\.5/, 'probe MUST send pv_power_kw from configured plant');
-    assert.match(observedUrl, /nowcast=false/, 'probe defaults nowcast=false (cheaper than nowcast=true)');
-    assert.match(observedUrl, /pv_only=true/);
-    assert.match(observedUrl, /required_data=spec_watts/);
-    assert.equal(observedHeaders.Authorization, 'Bearer pv-key-abcdefghijklmno');
+    assert.match(observedUrl, /api\.pvnode\.com\/v2\/forecast\/inline/, 'inline endpoint');
+    assert.match(observedUrl, /forecast_days=1/, 'probe MUST use forecast_days=1 (cheapest call)');
+    assert.equal(observedOpts.method, 'POST');
+    const body = JSON.parse(observedOpts.body);
+    assert.equal(body.latitude, 48.5);
+    assert.equal(body.longitude, 9.5);
+    assert.deepEqual(body.strings, [{ slope: 30, orientation: 180, power_kw: 7.5 }]);
+    assert.equal(observedOpts.headers.Authorization, 'Bearer pv-key-abcdefghijklmno');
+    assert.equal(observedOpts.headers['Content-Type'], 'application/json');
   });
 
-  it('honours nowcast=true when caller opts in', async () => {
+  it('saved-site mode: GETs /v2/forecast/{site_id} with NO body', async () => {
     let observedUrl = null;
-    mockFetchOnce((url) => {
+    let observedOpts = null;
+    mockFetchOnce((url, opts) => {
       observedUrl = url;
-      return jsonResponse(200, { forecasts: [{ timestamp: 't', power_w: 0 }] });
+      observedOpts = opts;
+      return jsonResponse(200, {
+        timezone: 'Europe/Berlin',
+        values: [{ timestamp: '2026-06-22T12:00:00', pv_power: 9000 }]
+      });
     });
-    await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0, nowcast: true });
-    assert.match(observedUrl, /nowcast=true/);
+    const result = await probePvnode({ apiKey: 'k'.repeat(20), siteId: 'site_abc123' });
+    assert.equal(result.ok, true);
+    assert.equal(result.sample.watts, 9000);
+    // 2026-06-22 is summer in Berlin (CEST, +02:00) → 12:00 local == 10:00 UTC.
+    assert.equal(result.sample.ts, '2026-06-22T10:00:00.000Z');
+    assert.match(observedUrl, /api\.pvnode\.com\/v2\/forecast\/site_abc123\?/, 'saved-site endpoint with id');
+    assert.match(observedUrl, /forecast_days=1/);
+    assert.equal(observedOpts.method, 'GET');
+    assert.equal(observedOpts.body, undefined, 'GET probe sends no body');
   });
 
   it('also accepts data[] shape (backward-compat fallback)', async () => {
     mockFetchOnce(() => jsonResponse(200, {
-      data: [
-        { ts: '2026-02-02T13:30:00Z', power: 567 }
-      ]
+      data: [{ ts: '2026-02-02T13:30:00Z', power: 567 }]
     }));
     const result = await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0 });
     assert.equal(result.ok, true);
     assert.ok(result.sample);
-    assert.equal(result.sample.ts, '2026-02-02T13:30:00Z');
-    assert.equal(result.sample.watts, 567);
-  });
-
-  it('also accepts forecast[] singular and {datetime} field synonym (backward-compat)', async () => {
-    mockFetchOnce(() => jsonResponse(200, {
-      forecast: [
-        { datetime: '2026-02-02T13:30:00Z', power: 567 }
-      ]
-    }));
-    const result = await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0 });
-    assert.equal(result.ok, true);
-    assert.ok(result.sample);
-    assert.equal(result.sample.ts, '2026-02-02T13:30:00Z');
+    assert.equal(result.sample.ts, '2026-02-02T13:30:00.000Z');
     assert.equal(result.sample.watts, 567);
   });
 
@@ -192,7 +183,7 @@ describe('Plan 20-06: probePvnode (single-shot operator probe)', () => {
     assert.equal(result.error, 'pvnode HTTP 401');
   });
 
-  it('resolves {ok:false, error:"missing_apikey"} when apiKey missing', async () => {
+  it('resolves {ok:false, error:"missing_apikey"} when apiKey missing (short-circuits before network)', async () => {
     let called = false;
     mockFetchOnce(() => { called = true; return jsonResponse(200, {}); });
     const result = await probePvnode({ apiKey: '', lat: 0, lon: 0 });
@@ -219,8 +210,8 @@ describe('Plan 20-06: probes do NOT mutate production client state', () => {
     assert.equal(r.sample.watts, 0);
   });
 
-  it('probePvnode does not throw, does not mutate, does not require ctx', async () => {
-    mockFetchOnce(() => jsonResponse(200, { data: [{ ts: 't', power_w: 0 }] }));
+  it('probePvnode does not throw, does not mutate, does not require ctx (watts=0, no NaN leak)', async () => {
+    mockFetchOnce(() => jsonResponse(200, { data: [{ ts: '2026-01-01T00:00:00Z', power_w: 0 }] }));
     const r = await probePvnode({ apiKey: 'k'.repeat(20), lat: 0, lon: 0 });
     assert.equal(r.ok, true);
     assert.equal(r.sample.watts, 0);
