@@ -29,6 +29,18 @@ permissions:
   contents: read
 
 jobs:
+  # Secret/credential push-gate (scripts/check-secrets.sh). Runs from the repo
+  # root (NOT working-directory: dvhub) and fails the build on any hardcoded
+  # secret, private-key material, embedded credential or internal topology
+  # (192.168.1.x). Internal-only paths (.planning, internal docs) are excluded
+  # since they are filtered out of the public mirror via git-filter-repo.
+  secret-scan:
+    name: secret-scan (push-gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash scripts/check-secrets.sh
+
   # Fast, DB-free job: node --test + the 5 lint gates, plus the sqlite suite.
   # No DATABASE_URL → the migration describe blocks skip here (covered by pg-integration).
   fast:
