@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeWeights, mergeForecasts } from '../services/forecast/ensemble.js';
+import { computeWeights, mergeForecasts, resampleTo15min } from '../services/forecast/ensemble.js';
 
 // Phase 07 Wave-1 (Plan 07-02): tests unskipped (REVIEWS H5 transition).
 // services/forecast/ensemble.js now exports computeWeights + mergeForecasts.
@@ -93,4 +93,53 @@ test('mergeForecasts collapses same instant across differing ts_utc string forma
   // No two output rows may normalise to the same instant.
   const instants = result.map(r => new Date(r.ts_utc).toISOString());
   assert.equal(new Set(instants).size, result.length);
+});
+
+// --- resampleTo15min (2026-06-22): every provider onto a common 15-min grid ---
+
+test('resampleTo15min upsamples hourly → 15-min by linear interpolation', () => {
+  const out = resampleTo15min([
+    { ts_utc: '2026-06-21T00:00:00Z', power_w: 0 },
+    { ts_utc: '2026-06-21T01:00:00Z', power_w: 4000 }
+  ]);
+  const byT = Object.fromEntries(out.map(s => [s.ts_utc.slice(11, 16), s.power_w]));
+  assert.equal(byT['00:00'], 0);
+  assert.equal(byT['00:15'], 1000);
+  assert.equal(byT['00:30'], 2000);
+  assert.equal(byT['00:45'], 3000);
+  assert.equal(byT['01:00'], 4000);
+});
+
+test('resampleTo15min downsamples sub-15-min samples by mean', () => {
+  const out = resampleTo15min([
+    { ts_utc: '2026-06-21T00:00:00Z', power_w: 100 },
+    { ts_utc: '2026-06-21T00:05:00Z', power_w: 200 },
+    { ts_utc: '2026-06-21T00:10:00Z', power_w: 300 },
+    { ts_utc: '2026-06-21T00:15:00Z', power_w: 600 }
+  ]);
+  const byT = Object.fromEntries(out.map(s => [s.ts_utc.slice(11, 16), s.power_w]));
+  assert.equal(byT['00:00'], 200); // mean(100,200,300)
+  assert.equal(byT['00:15'], 600);
+});
+
+test('resampleTo15min aligns every output slot to the :00/:15/:30/:45 grid', () => {
+  const out = resampleTo15min([
+    { ts_utc: '2026-06-21T00:07:00Z', power_w: 1000 },
+    { ts_utc: '2026-06-21T01:07:00Z', power_w: 2000 }
+  ]);
+  assert.ok(out.length > 0);
+  for (const s of out) {
+    const d = new Date(s.ts_utc);
+    assert.ok([0, 15, 30, 45].includes(d.getUTCMinutes()), `slot ${s.ts_utc} off-grid`);
+    assert.equal(d.getUTCSeconds(), 0);
+  }
+});
+
+test('resampleTo15min handles empty + single-point input', () => {
+  assert.deepEqual(resampleTo15min([]), []);
+  assert.deepEqual(resampleTo15min(null), []);
+  const one = resampleTo15min([{ ts_utc: '2026-06-21T00:07:00Z', power_w: 500 }]);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].power_w, 500);
+  assert.equal(new Date(one[0].ts_utc).getUTCMinutes(), 0); // floored to grid
 });

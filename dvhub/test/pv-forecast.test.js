@@ -153,14 +153,14 @@ test('createPvForecast on Tier 2 calls pythonBridge.call with correct input sche
 test('mergePvForecasts combines Solcast + pvlib results (both model)', async () => {
   const mockPythonBridge = {
     call: async () => [
-      { ts: '2026-04-03T12:00:00', power_w: 4000 },
-      { ts: '2026-04-03T12:15:00', power_w: 4200 }
+      { ts: '2026-04-03T12:00:00Z', power_w: 4000 },
+      { ts: '2026-04-03T12:15:00Z', power_w: 4200 }
     ]
   };
   const mockSolcastClient = {
     fetchPvForecast: async () => [
-      { ts: '2026-04-03T12:00:00', power_w: 5000 },
-      { ts: '2026-04-03T12:15:00', power_w: 5400 }
+      { ts: '2026-04-03T12:00:00Z', power_w: 5000 },
+      { ts: '2026-04-03T12:15:00Z', power_w: 5400 }
     ]
   };
   let storedRows = [];
@@ -198,7 +198,7 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
   await pv.runForecast();
   // In 'both' mode, the merged result should average the power values
   // (4000 + 5000) / 2 = 4500 for the first slot
-  const firstSlot = storedRows.find(r => r.ts_utc === '2026-04-03T12:00:00');
+  const firstSlot = storedRows.find(r => new Date(r.ts_utc).getTime() === Date.parse('2026-04-03T12:00:00Z'));
   assert.ok(firstSlot, 'Should store a row for 12:00');
   assert.equal(firstSlot.power_w, 4500, 'Merged power should be average of Solcast and pvlib');
   assert.equal(firstSlot.model, 'combined', 'Model should be "combined" for merged results');
@@ -328,7 +328,7 @@ test('26-01 Test A: vrm + forecast_solar (2 present) → combined ensemble path,
   assert.equal(mockState.forecast.pv.model, 'combined',
     'vrm + forecast_solar should enter the combined ensemble path, NOT the single-fallback chain');
   // Uniform two-way merge of vrm (5000) + forecast_solar (3000) = 4000 at 12:00.
-  const slot12 = mockState.forecast.pv.data.find(r => r.ts_utc === '2026-04-03T12:00:00Z');
+  const slot12 = mockState.forecast.pv.data.find(r => new Date(r.ts_utc).getTime() === Date.parse('2026-04-03T12:00:00Z'));
   assert.ok(slot12, 'merged data should include the 12:00 slot');
   assert.equal(slot12.power_w, 4000, 'uniform 2-way merge of 5000 + 3000 = 4000');
 });

@@ -15,7 +15,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { computeWeights, mergeForecasts } from './ensemble.js';
+import { computeWeights, mergeForecasts, resampleTo15min } from './ensemble.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PV_FORECAST_SCRIPT = path.join(__dirname, '..', 'python-bridge', 'scripts', 'pv_forecast.py');
@@ -357,18 +357,23 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
 
     // --- Store results (REVIEWS H2 + D-C3: inverse-MAE ensemble merge when ≥2 providers) ---
     // Normalize provider rows for ensemble merge and downstream snapshot writes.
-    const pvnodeSlots  = normalizeProviderRows(pvnodeResult);
-    const solcastSlots = normalizeProviderRows(solcastResult);
-    const pvlibSlots   = normalizeProviderRows(pvlibResult);
+    // Operator request 2026-06-22: bring EVERY provider onto a common 15-min grid
+    // BEFORE the ensemble merge — coarser providers (30/60-min) are interpolated,
+    // finer ones averaged — so every present provider contributes to every slot
+    // (removes the residual saw-tooth left after the weightSum renorm). Future
+    // non-15-min providers are covered automatically by the same wrap.
+    const pvnodeSlots  = resampleTo15min(normalizeProviderRows(pvnodeResult));
+    const solcastSlots = resampleTo15min(normalizeProviderRows(solcastResult));
+    const pvlibSlots   = resampleTo15min(normalizeProviderRows(pvlibResult));
     // Phase 26-01: vrm/forecast_solar/open_meteo were fetched + normalized but only ever
     // consumed by the single-fallback else-if chain below — they never entered the weighted
     // ensemble. Lift them through the SAME three-step (normalize → present-push →
     // providersBySlot) as pvnode/solcast/pvlib so mergePvForecastsWeighted mixes them. They
     // ride the uniform-weight path (no MAE column by design — see 26-01 plan); the inverse-MAE
     // path stays on pvnode/solcast/pvlib only (computeWeights filters out the keys without MAE).
-    const vrmSlots           = normalizeProviderRows(vrmResult);
-    const forecastSolarSlots = normalizeProviderRows(forecastSolarResult);
-    const openMeteoSlots     = normalizeProviderRows(openMeteoResult);
+    const vrmSlots           = resampleTo15min(normalizeProviderRows(vrmResult));
+    const forecastSolarSlots = resampleTo15min(normalizeProviderRows(forecastSolarResult));
+    const openMeteoSlots     = resampleTo15min(normalizeProviderRows(openMeteoResult));
 
     const presentProviders = [];
     if (pvnodeSlots.length  > 0) presentProviders.push('pvnode');

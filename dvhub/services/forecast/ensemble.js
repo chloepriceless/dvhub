@@ -103,3 +103,64 @@ export function mergeForecasts(providersBySlot, weights) {
   }
   return out.sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
 }
+
+const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+
+/**
+ * Resample one provider's forecast onto a canonical 15-minute UTC grid
+ * (:00/:15/:30/:45). Operator request 2026-06-22: bring EVERY provider — and any
+ * FUTURE provider that does not natively emit 15-min values — onto the same grid
+ * BEFORE the weighted ensemble merge, so that at each slot every present provider
+ * contributes (eliminates the residual saw-tooth left after the weightSum renorm,
+ * which only fixed dividing-by-the-wrong-sum, not the misaligned timestamps).
+ *
+ * Two regimes, decided per grid slot:
+ *  - downsample (provider finer than 15 min): arithmetic MEAN of the native
+ *    samples that fall inside [t, t+15min).
+ *  - upsample (provider coarser than 15 min, e.g. 30/60-min): LINEAR interpolation
+ *    at t between the nearest surrounding native samples (flat-hold past the edges).
+ *
+ * Deterministic + pure. Empty/degenerate input → []. Rounded to 1 decimal to match
+ * mergeForecasts/pvnode-client rounding.
+ *
+ * @param {Array<{ts_utc:string, power_w:number}>} slots
+ * @returns {Array<{ts_utc:string, power_w:number}>}
+ */
+export function resampleTo15min(slots) {
+  if (!Array.isArray(slots) || slots.length === 0) return [];
+  const pts = slots
+    .map(s => ({ t: new Date(s.ts_utc ?? s.ts ?? s.start).getTime(), w: Number(s.power_w ?? s.powerW) }))
+    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.w))
+    .sort((a, b) => a.t - b.t);
+  if (pts.length === 0) return [];
+
+  const start = Math.floor(pts[0].t / FIFTEEN_MIN_MS) * FIFTEEN_MIN_MS;
+  const end = Math.floor(pts[pts.length - 1].t / FIFTEEN_MIN_MS) * FIFTEEN_MIN_MS;
+  const out = [];
+  let lo = 0; // sliding lower-bound pointer for the interpolation search
+  for (let t = start; t <= end; t += FIFTEEN_MIN_MS) {
+    // downsample: mean of native samples inside [t, t+15min)
+    let sum = 0, n = 0;
+    for (let k = lo; k < pts.length && pts[k].t < t + FIFTEEN_MIN_MS; k++) {
+      if (pts[k].t >= t) { sum += pts[k].w; n++; }
+    }
+    let w;
+    if (n > 0) {
+      w = sum / n;
+    } else {
+      // upsample: linear interpolation at t between surrounding native samples
+      while (lo < pts.length - 1 && pts[lo + 1].t <= t) lo++;
+      const a = pts[lo];
+      const b = pts[lo + 1];
+      if (a && b && t >= a.t && t <= b.t) {
+        w = a.w + ((t - a.t) / (b.t - a.t)) * (b.w - a.w);
+      } else if (t < pts[0].t) {
+        w = pts[0].w;            // flat-hold before first sample
+      } else {
+        w = pts[pts.length - 1].w; // flat-hold after last sample
+      }
+    }
+    out.push({ ts_utc: new Date(t).toISOString(), power_w: Math.round(w * 10) / 10 });
+  }
+  return out;
+}
