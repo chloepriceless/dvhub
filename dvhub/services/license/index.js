@@ -47,11 +47,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { PROVIDER_FACTORIES } from '../notifications/index.js';
+import { verifyKeygenSignedKey } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAY_MS = 2_000;
 const VALID_STATUSES = new Set(['active', 'invalid', 'expired', 'suspended', 'none']);
+
+// Account Ed25519 public key (PUBLIC — not a secret) for Hardening B: offline
+// verification that a persisted license_key is a genuine Keygen ED25519_SIGN key
+// for THIS account, so a hand-tampered license_state.json cannot unlock Pro
+// offline (without ever reaching Keygen). Overridable via ctx.accountPublicKey
+// for tests. Verified against the live prod key 2026-06-22 (verify → valid).
+const ACCOUNT_PUBLIC_KEY = '2b8cc3310c0958f58bf9b9d3a52cb868f8f2c2260a679b5ebf4b41ed9038c5c3';
 
 // V5 ASVS — whitelist featureName for the 403-response body to prevent
 // log/response injection. Phase 17 ships exactly one Pro feature
@@ -128,6 +136,8 @@ export function createLicenseService(ctx) {
   const baseDir = process.env.DV_DATA_DIR || ctx.appDir || process.cwd();
   const licensePath = path.join(baseDir, 'license_state.json');
   const securityHeaders = ctx.securityHeaders || {};
+  // Hardening B: account public key for offline signed-key verification (null disables).
+  const accountPublicKey = ctx.accountPublicKey !== undefined ? ctx.accountPublicKey : ACCOUNT_PUBLIC_KEY;
 
   // Timer-injection seam — tests pass ctx.timers = { setInterval, setTimeout,
   // clearInterval, clearTimeout } to capture scheduled callbacks without
@@ -189,9 +199,19 @@ export function createLicenseService(ctx) {
       // Pro without ever talking to Keygen. A legitimately activated state ALWAYS
       // carries the plaintext key (applyValidateResponse persists it); Stufe B
       // adds offline Ed25519 signature verification of that key on top.
-      if (state.license.status === 'active' && !state.license.license_key) {
-        pushLog('license_state_active_without_key_rejected', {});
-        state.license = freshNoneState();
+      if (state.license.status === 'active') {
+        if (!state.license.license_key) {
+          pushLog('license_state_active_without_key_rejected', {});
+          state.license = freshNoneState();
+        } else if (accountPublicKey && state.license.license_key.startsWith('key/')) {
+          // Hardening B: a persisted Keygen signed key MUST verify offline against
+          // the account public key — otherwise the on-disk active state is forged.
+          const v = verifyKeygenSignedKey(state.license.license_key, accountPublicKey);
+          if (!v.valid) {
+            pushLog('license_state_signature_invalid', { reason: v.reason });
+            state.license = freshNoneState();
+          }
+        }
       }
     } catch (err) {
       pushLog('license_state_load_error', { error: err.message });

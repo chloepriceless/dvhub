@@ -10,8 +10,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 import { createLicenseService } from '../services/license/index.js';
+
+// --- Hardening B helpers: mint a Keygen-format ED25519_SIGN key with an ephemeral keypair ---
+function rawPubHex(publicKey) {
+  return publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('hex');
+}
+function mintSignedKey(privateKey, payloadObj) {
+  const payloadB64url = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+  const signingData = `key/${payloadB64url}`;
+  const sig = crypto.sign(null, Buffer.from(signingData, 'utf8'), privateKey);
+  return `${signingData}.${sig.toString('base64')}`;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -289,6 +301,60 @@ test('Hardening A: revalidateLicense resets a key-less active status to none', a
     ctx._logs.some(l => l.type === 'license_revalidate_no_key_reset'),
     'reset must be logged'
   );
+});
+
+// --- Hardening B (2026-06-22): offline Ed25519 signature verification of signed keys ---
+
+test('Hardening B: loadStateFromDisk keeps active for a validly-signed Keygen key', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const signedKey = mintSignedKey(privateKey, { license: 'x', policy: 'p' });
+  const licensePath = path.join(ctx._appDir, 'license_state.json');
+  fs.writeFileSync(
+    licensePath,
+    JSON.stringify({ status: 'active', license_key: signedKey, license_id: 'lic-1' }),
+    'utf8'
+  );
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'a validly-signed key must stay active');
+});
+
+test('Hardening B: loadStateFromDisk rejects a tampered signed key', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const signedKey = mintSignedKey(privateKey, { license: 'x' });
+  const sig = signedKey.slice(signedKey.lastIndexOf('.') + 1);
+  const forged = `key/${Buffer.from(JSON.stringify({ license: 'HACKED' }), 'utf8').toString('base64url')}.${sig}`;
+  const licensePath = path.join(ctx._appDir, 'license_state.json');
+  fs.writeFileSync(
+    licensePath,
+    JSON.stringify({ status: 'active', license_key: forged, license_id: 'lic-1' }),
+    'utf8'
+  );
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none', 'a tampered signed key must be rejected');
+  assert.ok(
+    ctx._logs.some(l => l.type === 'license_state_signature_invalid'),
+    'signature rejection must be logged'
+  );
+});
+
+test('Hardening B: non-signed (legacy/test) keys bypass signature check (stay Stufe-A)', () => {
+  const ctx = mockCtx();
+  ctx.accountPublicKey = '2b8cc3310c0958f58bf9b9d3a52cb868f8f2c2260a679b5ebf4b41ed9038c5c3';
+  const licensePath = path.join(ctx._appDir, 'license_state.json');
+  fs.writeFileSync(
+    licensePath,
+    JSON.stringify({ status: 'active', license_key: 'DVHB-LEGACY-XXXX-AAAA', license_id: 'lic-1' }),
+    'utf8'
+  );
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'non key/-prefixed keys are not signature-checked');
 });
 
 test('persist + reload roundtrip preserves status', async () => {
