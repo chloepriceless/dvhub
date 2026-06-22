@@ -94,7 +94,7 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
 
     assert.equal(result.ok, true);
     assert.ok(result.perProvider, 'Should return perProvider report');
-    assert.ok(mock.requests.length >= 3, 'Should fire 3 PUTs (pv/load/price)');
+    assert.ok(mock.requests.length >= 2, 'Should fire pv/load PUTs (price/feed_in owned by the bridge — Phase 30 R2)');
 
     // Find each provider call. URLs MUST include ?force_enable=true after
     // the 2026-05-23 hotfix — without it EOS won't enable the *Import
@@ -103,9 +103,16 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
     const pvReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/PVForecastImport');
     const loadReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/LoadImport');
     const priceReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/ElecPriceImport');
+    const feedInReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/FeedInTariffImport');
     assert.ok(pvReq, 'Should PUT PVForecastImport');
     assert.ok(loadReq, 'Should PUT LoadImport');
-    assert.ok(priceReq, 'Should PUT ElecPriceImport');
+    // Phase 30 (P30-R2): the adapter no longer writes the price signal. The
+    // EOS-Forecast-Bridge is the canonical single-source writer for elecprice +
+    // feed_in (fixed-tariff import price + Direktvermarktung premium). The adapter
+    // pushing raw spot here used to RACE the bridge (last-writer-wins) and clobber
+    // both fixes (prod 2026-06-22: elecprice == feed_in == raw spot).
+    assert.equal(priceReq, undefined, 'Adapter must NOT PUT ElecPriceImport — bridge owns the price signal (Phase 30 R2)');
+    assert.equal(feedInReq, undefined, 'Adapter must NOT PUT FeedInTariffImport — bridge owns feed-in (Phase 30 R2)');
     assert.equal(pvReq.method, 'PUT');
     assert.ok((pvReq.url || '').includes('force_enable=true'), 'PV PUT must carry ?force_enable=true');
     assert.equal(typeof pvReq.body, 'object', 'PV body must be a dict');
@@ -118,12 +125,44 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
     assert.deepEqual(pvReq.body.pvforecast_ac_power, [3000, 2500], 'PV values from slot.powerW');
     assert.ok(Array.isArray(loadReq.body.loadforecast_power_w), 'Load body keyed by loadforecast_power_w');
     assert.deepEqual(loadReq.body.loadforecast_power_w, [800, 900], 'Load values from slot.powerW');
-    assert.ok(Array.isArray(priceReq.body.elecprice_marketprice_wh), 'Price body keyed by elecprice_marketprice_wh');
-    // ct/kWh → €/Wh : 15.2 / 100000 = 0.000152 (float-tolerant)
-    const priceVals = priceReq.body.elecprice_marketprice_wh;
-    assert.equal(priceVals.length, 2);
-    assert.ok(Math.abs(priceVals[0] - 0.000152) < 1e-9, 'Price[0] = ctKwh/100000');
-    assert.ok(Math.abs(priceVals[1] - 0.000185) < 1e-9, 'Price[1] = ctKwh/100000');
+  } finally {
+    await mock.close();
+  }
+});
+
+// --- Test 1b (Phase 30 R2): adapter never writes the price signal, even in
+// fixed-import + spot-feed-in mode — the bridge is the single source. Regression
+// guard for the prod race (2026-06-22) where the adapter clobbered the bridge's
+// flat 26.9 ct elecprice and premium feed-in with raw spot. ---
+test('pushForecast never PUTs ElecPriceImport/FeedInTariffImport (bridge owns price — Phase 30 R2)', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  try {
+    // fixed import + spot feed-in: the exact prod config where the adapter used
+    // to push raw spot to both providers and clobber both DVhub fixes.
+    const ctx = {
+      getCfg: () => ({
+        optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'spot', feedInSpotFactor: 1.0 } },
+        userEnergyPricing: { mode: 'fixed', fixedGrossImportCtKwh: 26.9 }
+      }),
+      pushLog: () => {}
+    };
+    const adapter = createEosAdapter(ctx);
+    const forecastResponse = {
+      pv: { slots: [ { start: '2026-04-03T12:00:00Z', powerW: 3000 } ] },
+      load: { slots: [ { start: '2026-04-03T12:00:00Z', powerW: 800 } ] },
+      price: { slots: [ { start: '2026-04-03T12:00:00Z', ctKwh: 6.0 }, { start: '2026-04-03T12:15:00Z', ctKwh: 22.9 } ] }
+    };
+    const result = await adapter.pushForecast(forecastResponse);
+    assert.equal(result.ok, true);
+    const stripQs = u => (u || '').split('?')[0];
+    const urls = mock.requests.map(r => stripQs(r.url));
+    assert.ok(!urls.includes('/v1/prediction/import/ElecPriceImport'), 'adapter must not PUT ElecPriceImport (bridge owns it)');
+    assert.ok(!urls.includes('/v1/prediction/import/FeedInTariffImport'), 'adapter must not PUT FeedInTariffImport (bridge owns it)');
+    assert.equal(result.perProvider.price?.skipped != null, true, 'price marked skipped (bridge owns)');
+    assert.equal(result.perProvider.feedIn?.skipped != null, true, 'feed-in marked skipped (bridge owns)');
   } finally {
     await mock.close();
   }

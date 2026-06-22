@@ -171,51 +171,24 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       if (!res.ok) errors.push(`Load: ${res.error}`);
     }
 
-    // Price — EOS' writable storage key is elecprice_marketprice_wh (€/Wh).
-    // The _kwh variant is a computed property (= _wh × 1000). So values
-    // MUST be in €/Wh = ct/kWh ÷ 100000. Per probe of EOS Python internals
-    // (record_keys_writable check), only _wh is accepted by import_from_dict.
-    if (forecastResponse.price?.slots?.length) {
-      const enriched = forecastResponse.price.slots;
-      const valueFn = enriched[0]?.importCtKwh != null
-        ? s => (Number(s.importCtKwh) || 0) / 100000   // ct/kWh → €/Wh
-        : s => (Number(s.ctKwh) || 0) / 100000;
-      const body = buildDateTimeData(enriched, 'elecprice_marketprice_wh', valueFn);
-      const res = await httpRequest('PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
-      perProvider.price = { ok: res.ok, error: res.error || null };
-      if (!res.ok) errors.push(`Price: ${res.error}`);
-    }
-
-    // FeedInTariffImport — only when feedInMode='spot'. Writable storage key
-    // is feed_in_tariff_wh (€/Wh). See FeedInTariffDataRecord.record_keys_
-    // writable in EOS source — feed_in_tariff_kwh is computed-only.
+    // Price (elecprice_marketprice_wh) + Feed-in (feed_in_tariff_wh): deliberately
+    // NOT pushed here. The EOS-Forecast-Bridge (services/optimizer/eos-forecast-
+    // bridge.js, own scheduled push) is the canonical SINGLE-SOURCE writer for the
+    // price signal — it applies the fixed-tariff import price (flat gross ct/kWh in
+    // fixed mode, 2026-05-30) AND the Direktvermarktung market premium on feed-in
+    // (§51-aware, 2026-06-21).
     //
-    // Note (2026-05-23): upstream EOS' /v1/prediction/import/{id} handler
-    // currently silently drops every PUT (Pydantic-Union validation captures
-    // the body as a model, json.dumps then fails inside the handler — patched
-    // locally at /opt/dvhub/eos/.../server/eos.py:983 to use model_dump_json()).
-    // Even with the patch, import_from_dict appears to no-op for non-trivial
-    // reasons (provider state / ems_start_datetime alignment) — push.ok=true
-    // but /v1/prediction/series returns 0 rows. Until that's solved end-to-end,
-    // EOS keeps using its own internal providers (ElecPriceAkkudoktor etc.) and
-    // this push code only stages the right shape for when the upstream
-    // ingestion bug is properly fixed.
-    if (forecastResponse.price?.slots?.length) {
-      const cfg = getCfg();
-      const tariff = cfg?.optimizer?.tariff || {};
-      const mode = String(tariff.feedInMode || 'fixed').toLowerCase();
-      if (mode === 'spot') {
-        const factor = Number.isFinite(Number(tariff.feedInSpotFactor)) ? Number(tariff.feedInSpotFactor) : 1.0;
-        const enriched = forecastResponse.price.slots;
-        const feedFn = enriched[0]?.importCtKwh != null
-          ? s => ((Number(s.importCtKwh) || 0) * factor) / 100000   // ct/kWh × factor → €/Wh
-          : s => ((Number(s.ctKwh) || 0) * factor) / 100000;
-        const body = buildDateTimeData(enriched, 'feed_in_tariff_wh', feedFn);
-        const res = await httpRequest('PUT', '/v1/prediction/import/FeedInTariffImport?force_enable=true', body);
-        perProvider.feedIn = { ok: res.ok, error: res.error || null };
-        if (!res.ok) errors.push(`FeedIn: ${res.error}`);
-      }
-    }
+    // Phase 30 (P30-R2, 2026-06-22): this adapter previously PUT raw spot to BOTH
+    // providers (importCtKwh ?? ctKwh, feed-in ×factor without premium). Once the
+    // Phase-22.1 bridge made /v1/prediction/import actually land, the adapter's
+    // per-optimizer-run push RACED the bridge's timer push (last-writer-wins) and
+    // clobbered both fixes: on prod the GA read a spot elecprice (~6 ct midday)
+    // instead of the flat 26.9 ct Endkundenpreis, and feed-in lost its market
+    // premium (elecprice == feed_in == raw spot, verified read-only 2026-06-22).
+    // The fix is to stop writing the price signal here — the bridge owns it. The
+    // pv/load pushes above stay (identical between both writers, harmless).
+    perProvider.price = { ok: true, skipped: 'bridge owns elecprice (Phase 30 R2)' };
+    perProvider.feedIn = { ok: true, skipped: 'bridge owns feed_in (Phase 30 R2)' };
 
     if (errors.length > 0) {
       return { ok: false, error: errors.join('; '), perProvider };
