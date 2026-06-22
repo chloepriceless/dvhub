@@ -183,6 +183,16 @@ export function createLicenseService(ctx) {
       // Merge into a freshNoneState() base so missing fields default to null;
       // never trust the disk shape blindly.
       state.license = { ...freshNoneState(), ...parsed };
+      // Hardening A (2026-06-22): an on-disk `status:'active'` is only honoured
+      // when it is backed by a persisted license_key. Kills the trivial bypass
+      // of hand-writing `{"status":"active"}` into license_state.json to unlock
+      // Pro without ever talking to Keygen. A legitimately activated state ALWAYS
+      // carries the plaintext key (applyValidateResponse persists it); Stufe B
+      // adds offline Ed25519 signature verification of that key on top.
+      if (state.license.status === 'active' && !state.license.license_key) {
+        pushLog('license_state_active_without_key_rejected', {});
+        state.license = freshNoneState();
+      }
     } catch (err) {
       pushLog('license_state_load_error', { error: err.message });
       state.license = freshNoneState();
@@ -317,7 +327,18 @@ export function createLicenseService(ctx) {
    */
   async function revalidateLicense() {
     const key = state.license.license_key;
-    if (!key) return { ok: false, error: 'no_license_active' };
+    if (!key) {
+      // Hardening A (2026-06-22): no persisted key => an 'active' status cannot
+      // be backed by Keygen. Force it down to 'none' so a tampered key-less
+      // `status:active` cannot survive the poller. A real licence always has a
+      // key and takes the validate-key path below.
+      if (state.license.status !== 'none') {
+        state.license.status = 'none';
+        persistState();
+        pushLog('license_revalidate_no_key_reset', {});
+      }
+      return { ok: false, error: 'no_license_active' };
+    }
 
     const cfg = getCfg();
     const account = cfg?.licensing?.keygenAccount || process.env.KEYGEN_ACCOUNT;

@@ -244,6 +244,53 @@ test('corrupt license_state.json falls back to fresh none state with log', async
   assert.equal(loadErrLogs.length, 1, 'expected one license_state_load_error log');
 });
 
+// --- Hardening A (2026-06-22): key-less `status:active` must never unlock Pro ---
+
+test('Hardening A: loadStateFromDisk rejects status:active without a license_key', async () => {
+  const ctx = mockCtx();
+  // The trivial bypass attempt: a hand-written active state with no key.
+  const licensePath = path.join(ctx._appDir, 'license_state.json');
+  fs.writeFileSync(licensePath, JSON.stringify({ status: 'active' }), 'utf8');
+
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none', 'key-less active must be downgraded to none');
+  assert.ok(
+    ctx._logs.some(l => l.type === 'license_state_active_without_key_rejected'),
+    'rejection must be logged'
+  );
+});
+
+test('Hardening A: loadStateFromDisk keeps active when a key is present (prod-safety)', async () => {
+  const ctx = mockCtx();
+  const licensePath = path.join(ctx._appDir, 'license_state.json');
+  fs.writeFileSync(
+    licensePath,
+    JSON.stringify({ status: 'active', license_key: 'DVHB-REAL-XXXX-AAAA', license_id: 'lic-1' }),
+    'utf8'
+  );
+
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'active WITH key must survive load (mirrors prod)');
+});
+
+test('Hardening A: revalidateLicense resets a key-less active status to none', async () => {
+  const ctx = mockCtx();
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  // Simulate a tampered in-memory state: active but no key persisted.
+  svc.setStatusForTest('active');
+  const r = await svc.revalidateLicense();
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'no_license_active');
+  assert.equal(svc.getStatus(), 'none', 'key-less active must be forced to none by the poller');
+  assert.ok(
+    ctx._logs.some(l => l.type === 'license_revalidate_no_key_reset'),
+    'reset must be logged'
+  );
+});
+
 test('persist + reload roundtrip preserves status', async () => {
   await withMockFetch(
     async () => ({
