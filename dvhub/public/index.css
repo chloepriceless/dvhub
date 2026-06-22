@@ -301,6 +301,26 @@
 
 /* ─── Chart selection callout + comparison summary ─── */
 .tooltip-hidden { display:none; }
+/* Börsenchart-Hover-Werte als schwebender Tooltip statt Leiste im Fluss unter
+   dem Chart. position:fixed lässt die inline left/top aus app.js (caretX/caretY)
+   greifen; ohne sie blieb #tooltip im Dokumentfluss = "untere Leiste". z-index
+   über den 9999-Layern + pointer-events:none (Operator 2026-06-22: "als Tooltip
+   einblenden, auf die z-Position achten"). */
+#tooltip {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  max-width: 92vw;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+}
 .chart-selection-callout {
   display:flex; align-items:center; justify-content:space-between;
   gap:10px; flex-wrap:wrap;
