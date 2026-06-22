@@ -165,6 +165,24 @@ export function extractValues(body) {
   return rows;
 }
 
+/**
+ * Clamp a configured forecast horizon (days) to the V2-allowed range [1, 7].
+ *
+ * pvnode caps the horizon by license tier (Free = 48 h / 2 days; higher plans up to 7).
+ * Requesting more than the plan allows is harmless — the API simply returns the plan
+ * maximum. Empty/invalid config falls back to 2 (the Free-tier reality).
+ *
+ * @param {*} v - configured value (forecast.pvnode.forecastDays)
+ * @param {number} [fallback=2]
+ * @returns {number} integer in [1, 7]
+ */
+export function clampForecastDays(v, fallback = 2) {
+  if (v == null || v === '') return fallback;
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(7, n));
+}
+
 /** Resolve geo coordinates (forecast.location preferred, sma-automation fallback). */
 function resolveLocation(cfg) {
   const fc = cfg.forecast || {};
@@ -269,7 +287,6 @@ function buildRequest({ kind, siteId, lat, lon, plants, query, timeoutMs = 20000
 export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
   const { getCfg, pushLog } = ctx;
   const MIN_INTERVAL_MS = 15 * 60 * 1000; // 15 min between fetches
-  const FORECAST_DAYS = 7;
   let lastFetchAt = 0;
   let cachedData = null;
 
@@ -310,7 +327,9 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
     }
 
     const siteId = getSiteId(cfg);
-    const query = new URLSearchParams({ forecast_days: String(FORECAST_DAYS) });
+    // Horizon is config-driven (clamped 1..7); pvnode caps it by license tier anyway.
+    const forecastDays = clampForecastDays(cfg.forecast?.pvnode?.forecastDays);
+    const query = new URLSearchParams({ forecast_days: String(forecastDays) });
     let req;
     if (siteId) {
       req = buildRequest({ kind: 'forecast', siteId, query });

@@ -2068,6 +2068,18 @@ function buildFieldDefinitions() {
       group: 'pvnode',
       groupLabel: 'pvnode',
       groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
+      path: 'forecast.pvnode.forecastDays',
+      label: 'pvnode Prognose-Horizont (Tage)',
+      type: 'number',
+      min: 1,
+      max: 7,
+      help: 'Wie viele Tage Prognose abgefragt werden (V2). Free-Lizenz liefert max. 2 Tage (48 h); h\u00f6here Pl\u00e4ne bis 7. Mehr anfragen als der Plan erlaubt \u2192 die API liefert nur das Plan-Maximum. Leer = 2.'
+    },
+    {
+      section: 'forecast',
+      group: 'pvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
       path: 'forecast.pvnode.nowcastEnabled',
       label: 'Nowcast aktiv (kostenpflichtig)',
       type: 'boolean',

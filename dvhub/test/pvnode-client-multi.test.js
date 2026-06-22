@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStrings, localWallClockToUtcIso, extractValues } from '../services/forecast/pvnode-client.js';
+import { buildStrings, localWallClockToUtcIso, extractValues, clampForecastDays } from '../services/forecast/pvnode-client.js';
 
 // T-PVNODE-V2 (2026-06-22): the V1 chunkPlants/buildQueryParams model (≤2 planes per
 // request → ⌈N/2⌉ GETs) was replaced by the V2 single-request `strings[]` model plus
@@ -78,4 +78,18 @@ test('extractValues tolerates legacy shapes (forecasts[]/data[] + field synonyms
   assert.deepEqual(r1, [{ ts_utc: '2026-01-01T12:00:00.000Z', power_w: 1234 }]);
   const r2 = extractValues({ data: [{ ts: '2026-02-02T13:30:00Z', power: 567 }] });
   assert.deepEqual(r2, [{ ts_utc: '2026-02-02T13:30:00.000Z', power_w: 567 }]);
+});
+
+test('clampForecastDays: default 2 for empty/invalid, clamp to 1..7, floor', () => {
+  assert.equal(clampForecastDays(undefined), 2, 'unset → 2 (Free-tier reality)');
+  assert.equal(clampForecastDays(''), 2);
+  assert.equal(clampForecastDays(null), 2);
+  assert.equal(clampForecastDays('abc'), 2, 'NaN → fallback');
+  assert.equal(clampForecastDays(2), 2);
+  assert.equal(clampForecastDays('7'), 7, 'string number accepted');
+  assert.equal(clampForecastDays(9), 7, 'clamp above 7');
+  assert.equal(clampForecastDays(0), 1, 'clamp below 1');
+  assert.equal(clampForecastDays(-5), 1);
+  assert.equal(clampForecastDays(3.9), 3, 'floored');
+  assert.equal(clampForecastDays('', 5), 5, 'custom fallback honoured');
 });

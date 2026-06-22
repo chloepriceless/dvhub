@@ -3932,6 +3932,7 @@ export function createApiRoutes(ctx) {
         enabled: !!p.apiKey,                // derived (no schema enabled flag)
         apiKey: p.apiKey ? '***' : '',      // D-13 — never raw
         siteId: p.siteId || '',             // V2 saved-site id (empty = inline mode)
+        forecastDays: (p.forecastDays != null ? p.forecastDays : ''), // V2 horizon (1..7; '' = default 2)
         nowcastEnabled: !!p.nowcastEnabled
       });
     }
@@ -3954,6 +3955,12 @@ export function createApiRoutes(ctx) {
         ? (prev.apiKey || '')
         : clip(body.apiKey, 256);
       const siteId = clip(body.siteId, 128).trim();
+      // V2 forecast horizon (days): '' / invalid → unset (client defaults to 2); else clamp 1..7.
+      let forecastDays = null;
+      if (body.forecastDays !== '' && body.forecastDays != null) {
+        const n = Math.floor(Number(body.forecastDays));
+        if (Number.isFinite(n)) forecastDays = Math.max(1, Math.min(7, n));
+      }
       next.forecast.pvnode.nowcastEnabled = !!body.nowcastEnabled;
       if (apiKey) {
         next.forecast.pvnode.apiKey = apiKey;
@@ -3965,6 +3972,11 @@ export function createApiRoutes(ctx) {
       } else {
         delete next.forecast.pvnode.siteId;
       }
+      if (forecastDays != null) {
+        next.forecast.pvnode.forecastDays = forecastDays;
+      } else {
+        delete next.forecast.pvnode.forecastDays;
+      }
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {
@@ -3974,6 +3986,7 @@ export function createApiRoutes(ctx) {
       pushLog('pvnode_saved', {
         apiKeySet: !!apiKey,
         siteIdSet: !!siteId,
+        forecastDays: forecastDays ?? 'default',
         nowcastEnabled: next.forecast.pvnode.nowcastEnabled
       }, actorContext(req));
       return json(res, 200, { ok: true });

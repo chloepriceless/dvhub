@@ -816,6 +816,11 @@
                      placeholder="leer = Inline aus den Dachfl&auml;chen" autocomplete="off" spellcheck="false">
               <span class="field-hint">Standort aus der pvnode-Web-App (V2): gesetzt &rarr; gespeicherter (ggf. kalibrierter) Standort mit allen D&auml;chern. Leer &rarr; Inline-Prognose aus den konfigurierten Dachfl&auml;chen.</span>
             </label>
+            <label class="dv-field">
+              <span class="field-label">Prognose-Horizont (Tage)</span>
+              <input type="number" class="input mono" id="fc-pvnode-forecastdays" min="1" max="7" step="1" placeholder="2">
+              <span class="field-hint">Free-Lizenz: max. 2 Tage (48 h); h&ouml;here Pl&auml;ne bis 7. Mehr anfragen als der Plan erlaubt &rarr; die API liefert nur das Plan-Maximum. Leer = 2.</span>
+            </label>
             <label class="dv-field-row">
               <input type="checkbox" class="dv-field-check" id="fc-pvnode-nowcast">
               <span>Nowcast aktivieren <span class="field-hint">(nur V1-API)</span></span>
