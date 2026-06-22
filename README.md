@@ -30,7 +30,7 @@
 
 | | |
 |---|---|
-| **Status** | Version 1.0.0 (`v1.0`) — feature-complete (Release-Tag operator-gated) |
+| **Status** | Version 1.0.0 „Sushi" (`v1.0`) — feature-complete (Release-Tag operator-gated) |
 | **Getestet mit** | LUOX Energy · Victron Ekrano-GX / Cerbo-GX · Fronius AC-PV |
 | **Plattform** | Debian/Ubuntu (x86_64) · Node.js 22 · PostgreSQL |
 | **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
@@ -899,3 +899,11 @@ DVhub bündelt und nutzt Software Dritter. Alle eingebundenen Komponenten stehen
 unter permissiven Lizenzen (MIT, Apache-2.0, ISC, BSD-3-Clause, 0BSD) — die
 vollständige Auflistung mit Lizenztexten steht in
 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
+
+---
+
+## Why "Sushi"?
+
+Sushi was a young cat who accompanied the development of this software. He spent
+countless hours inspecting keyboards, monitoring logs and ensuring that no
+developer became too productive. This release is dedicated to him.

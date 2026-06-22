@@ -8,7 +8,11 @@ die Versionierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 CHANGELOG.md ist die Single Source of Truth für die Versionshistorie; der README
 verweist hierher.
 
-## [1.0.0] - 2026-06-19
+## [1.0.0] „Sushi" - 2026-06-19
+
+> Codename **„Sushi"** — gewidmet dem jungen Kater, der die Entwicklung begleitet
+> hat: Tastaturen inspiziert, Logs überwacht und dafür gesorgt, dass kein
+> Entwickler zu produktiv wurde. _This release is dedicated to him._
 
 <!-- Hinweis: Das tatsächliche Veröffentlichungsdatum wird beim Setzen des
      `v1.0.0`-Git-Tags festgelegt (operator-gated, nach allen Blocker-Wellen).
