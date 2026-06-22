@@ -19,10 +19,25 @@
 // Docs: https://keygen.sh/docs/api/cryptography/#cryptographic-keys (ED25519_SIGN)
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // DER SubjectPublicKeyInfo prefix for a raw 32-byte Ed25519 public key.
 // (RFC 8410 — AlgorithmIdentifier {id-Ed25519} + BIT STRING header.)
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+// Hardening C (node-lock): the only cryptographic certificate algorithm we
+// accept for an offline machine file. Allowlisted to prevent a forged file from
+// down-negotiating to a weaker/unsigned scheme (Codex finding #10). Keygen emits
+// "base64+ed25519" for the ED25519_SIGN cryptographic scheme: the dataset is
+// base64-encoded (NOT encrypted) and signed with Ed25519.
+const MACHINE_FILE_ALG = 'base64+ed25519';
+
+// appliance-id validation — MUST stay in lock-step with the canonical reader in
+// services/support-tunnel.js (APPLIANCE_ID_RE). Duplicated here on purpose so the
+// security-critical license verify path stays self-contained and never imports
+// the support subsystem at boot.
+const APPLIANCE_ID_RE = /^[a-z0-9-]{1,36}$/;
 
 /**
  * Build a Node KeyObject from a raw Ed25519 public key supplied as hex,
@@ -108,6 +123,131 @@ export function decodeKeygenPayload(signedKey) {
     const payloadB64 = signedKey.slice(4, dotIdx > 4 ? dotIdx : undefined);
     const json = Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
     return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hardening C — offline machine-file verification (node-lock)
+// ---------------------------------------------------------------------------
+//
+// A Keygen *machine file* is the offline artifact produced by
+// `POST /machines/:id/actions/check-out` (cryptographic ED25519_SIGN scheme).
+// It is a PEM-style envelope:
+//
+//   -----BEGIN MACHINE FILE-----
+//   {base64( JSON{ "enc": "...", "sig": "...", "alg": "base64+ed25519" } )}
+//   -----END MACHINE FILE-----
+//
+//   - enc = base64( JSON dataset )                         (NOT encrypted)
+//   - sig = base64( Ed25519_sign("machine/" + enc) )       (64 raw bytes)
+//   - dataset = JSON:API doc; data.attributes.fingerprint = the bound machine
+//     fingerprint (= the DVhub appliance-id), meta.expiry = optional TTL.
+//
+// The signing prefix is the resource type ("machine/" for machine files,
+// "license/" for license files) — Keygen signs `"<type>/<enc>"` verbatim.
+//
+// ⚠️ The exact field shapes are taken from the Keygen CE docs and MUST be
+// re-confirmed against the live license.dvhub.de instance during the activation
+// spike (T-0125 Must-Fix #1) before the online check-out flow is built. This
+// verifier is pure/offline and is wired in INERT (config-gated, only enforced
+// when a machine file is actually present), so it changes no current behavior.
+//
+// Docs: https://keygen.sh/docs/api/cryptography/#cryptographic-lic (ED25519_SIGN)
+
+/**
+ * Verify a Keygen machine file offline against the account Ed25519 public key
+ * and extract its bound fingerprint. The signature is checked BEFORE any
+ * dataset field is trusted.
+ *
+ * @param {string} fileContent  - the full "-----BEGIN MACHINE FILE-----…" text
+ * @param {string|Buffer} publicKeyRaw - raw Ed25519 public key (hex/base64/Buffer)
+ * @param {{ prefix?: 'machine'|'license' }} [opts]
+ * @returns {{ valid: boolean, reason?: string, fingerprint?: string|null,
+ *            expiry?: string|null, licenseId?: string|null, dataset?: object }}
+ */
+export function verifyKeygenMachineFile(fileContent, publicKeyRaw, opts = {}) {
+  const prefix = opts.prefix || 'machine';
+  if (typeof fileContent !== 'string') return { valid: false, reason: 'format_input' };
+
+  // Strip the PEM banners + all whitespace → bare base64 of the cert envelope.
+  const stripped = fileContent
+    .replace(/-----BEGIN[A-Z ]*-----/g, '')
+    .replace(/-----END[A-Z ]*-----/g, '')
+    .replace(/\s+/g, '');
+  if (!stripped) return { valid: false, reason: 'format_empty' };
+
+  let cert;
+  try {
+    cert = JSON.parse(Buffer.from(stripped, 'base64').toString('utf8'));
+  } catch {
+    return { valid: false, reason: 'envelope_decode' };
+  }
+  if (!cert || typeof cert !== 'object') return { valid: false, reason: 'envelope_shape' };
+
+  const { enc, sig, alg } = cert;
+  if (alg !== MACHINE_FILE_ALG) return { valid: false, reason: 'alg_unsupported' };
+  if (typeof enc !== 'string' || typeof sig !== 'string') {
+    return { valid: false, reason: 'envelope_fields' };
+  }
+
+  let signature;
+  try {
+    signature = Buffer.from(sig.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  } catch {
+    return { valid: false, reason: 'signature_decode' };
+  }
+  if (signature.length !== 64) return { valid: false, reason: 'signature_length' };
+
+  const pub = toEd25519PublicKey(publicKeyRaw);
+  if (!pub) return { valid: false, reason: 'public_key' };
+
+  const signingData = `${prefix}/${enc}`;     // Keygen signs "<type>/<enc>" verbatim
+  let ok = false;
+  try {
+    ok = crypto.verify(null, Buffer.from(signingData, 'utf8'), pub, signature);
+  } catch {
+    return { valid: false, reason: 'verify_error' };
+  }
+  if (!ok) return { valid: false, reason: 'signature_mismatch' };
+
+  // Signature trusted → safe to decode + read claims.
+  let dataset;
+  try {
+    dataset = JSON.parse(Buffer.from(enc.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  } catch {
+    return { valid: false, reason: 'dataset_decode' };
+  }
+
+  const fingerprint = dataset?.data?.attributes?.fingerprint ?? null;
+  const expiry = dataset?.meta?.expiry ?? dataset?.data?.attributes?.expiry ?? null;
+  const licenseId =
+    (Array.isArray(dataset?.included)
+      ? (dataset.included.find((x) => x?.type === 'licenses')?.id ?? null)
+      : null) ??
+    dataset?.data?.relationships?.license?.data?.id ??
+    null;
+
+  return { valid: true, fingerprint, expiry, licenseId, dataset };
+}
+
+/**
+ * Read + validate this host's appliance-id from `${dataDir}/appliance-id`.
+ * Returns the lowercased id, or null if the file is absent/malformed. Mirrors
+ * services/support-tunnel.js:readApplianceId — kept local so the license verify
+ * path has no boot-time dependency on the support subsystem.
+ *
+ * @param {string} dataDir
+ * @param {typeof import('node:fs')} [fsImpl]
+ * @returns {string|null}
+ */
+export function readApplianceId(dataDir, fsImpl = fs) {
+  try {
+    const raw = String(fsImpl.readFileSync(path.join(dataDir || '.', 'appliance-id'), 'utf8'))
+      .trim()
+      .toLowerCase();
+    return APPLIANCE_ID_RE.test(raw) ? raw : null;
   } catch {
     return null;
   }

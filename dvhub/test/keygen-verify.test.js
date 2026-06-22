@@ -15,7 +15,9 @@ import crypto from 'node:crypto';
 import {
   verifyKeygenSignedKey,
   toEd25519PublicKey,
-  decodeKeygenPayload
+  decodeKeygenPayload,
+  verifyKeygenMachineFile,
+  readApplianceId
 } from '../services/license/keygen-verify.js';
 
 // --- Helpers: mint a Keygen-format signed key with an ephemeral keypair ------
@@ -87,4 +89,80 @@ test('decodeKeygenPayload: round-trips the dataset of a verified key', () => {
   const signedKey = mintSignedKey(privateKey, payload);
   assert.equal(verifyKeygenSignedKey(signedKey, rawPubHex(publicKey)).valid, true);
   assert.deepEqual(decodeKeygenPayload(signedKey), payload);
+});
+
+// --- Hardening C: offline machine-file verification (node-lock) --------------
+
+function mintMachineFile(privateKey, fingerprint, { prefix = 'machine', banner = 'MACHINE FILE', alg = 'base64+ed25519' } = {}) {
+  const dataset = {
+    data: { type: 'machines', id: 'm1', attributes: { fingerprint } },
+    included: [{ type: 'licenses', id: 'lic-1' }],
+    meta: { expiry: null }
+  };
+  const enc = Buffer.from(JSON.stringify(dataset), 'utf8').toString('base64');
+  const sig = crypto.sign(null, Buffer.from(`${prefix}/${enc}`, 'utf8'), privateKey).toString('base64');
+  const inner = Buffer.from(JSON.stringify({ enc, sig, alg }), 'utf8').toString('base64');
+  const wrapped = inner.replace(/(.{64})/g, '$1\n');
+  return `-----BEGIN ${banner}-----\n${wrapped}\n-----END ${banner}-----\n`;
+}
+
+test('verifyKeygenMachineFile: accepts a correctly signed file + extracts fingerprint', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const file = mintMachineFile(privateKey, 'box-7');
+  const res = verifyKeygenMachineFile(file, rawPubHex(publicKey));
+  assert.equal(res.valid, true, res.reason);
+  assert.equal(res.fingerprint, 'box-7');
+  assert.equal(res.licenseId, 'lic-1');
+  assert.equal(res.expiry, null);
+});
+
+test('verifyKeygenMachineFile: rejects a tampered dataset (signature no longer matches)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const file = mintMachineFile(privateKey, 'box-7');
+  // Flip the bound fingerprint inside enc without re-signing.
+  const inner = JSON.parse(Buffer.from(file.replace(/-----[^-]*-----/g, '').replace(/\s+/g, ''), 'base64').toString('utf8'));
+  const ds = JSON.parse(Buffer.from(inner.enc, 'base64').toString('utf8'));
+  ds.data.attributes.fingerprint = 'HACKED-BOX';
+  inner.enc = Buffer.from(JSON.stringify(ds), 'utf8').toString('base64');
+  const forged = `-----BEGIN MACHINE FILE-----\n${Buffer.from(JSON.stringify(inner), 'utf8').toString('base64')}\n-----END MACHINE FILE-----`;
+  assert.equal(verifyKeygenMachineFile(forged, rawPubHex(publicKey)).valid, false);
+});
+
+test('verifyKeygenMachineFile: rejects the WRONG public key', () => {
+  const a = crypto.generateKeyPairSync('ed25519');
+  const b = crypto.generateKeyPairSync('ed25519');
+  const file = mintMachineFile(a.privateKey, 'box-7');
+  assert.equal(verifyKeygenMachineFile(file, rawPubHex(b.publicKey)).valid, false);
+});
+
+test('verifyKeygenMachineFile: rejects an unsupported algorithm', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const file = mintMachineFile(privateKey, 'box-7', { alg: 'aes-256-gcm+ed25519' });
+  assert.equal(verifyKeygenMachineFile(file, rawPubHex(publicKey)).reason, 'alg_unsupported');
+});
+
+test('verifyKeygenMachineFile: rejects malformed / empty / non-string input', () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const pub = rawPubHex(publicKey);
+  assert.equal(verifyKeygenMachineFile('', pub).valid, false);
+  assert.equal(verifyKeygenMachineFile('-----BEGIN MACHINE FILE-----\nnotbase64json\n-----END MACHINE FILE-----', pub).valid, false);
+  assert.equal(verifyKeygenMachineFile(null, pub).valid, false);
+  assert.equal(verifyKeygenMachineFile(42, pub).valid, false);
+});
+
+test('verifyKeygenMachineFile: a license-file prefix verifies under opts.prefix', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const file = mintMachineFile(privateKey, 'box-7', { prefix: 'license', banner: 'LICENSE FILE' });
+  assert.equal(verifyKeygenMachineFile(file, rawPubHex(publicKey), { prefix: 'license' }).valid, true);
+  // …and FAILS if checked with the default 'machine' prefix (cross-type confusion guard).
+  assert.equal(verifyKeygenMachineFile(file, rawPubHex(publicKey)).valid, false);
+});
+
+test('readApplianceId: reads + lowercases a valid id, null on absent/malformed', () => {
+  const fakeFs = (content) => ({ readFileSync: () => { if (content == null) throw new Error('ENOENT'); return content; } });
+  assert.equal(readApplianceId('/x', fakeFs('A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D\n')), 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d');
+  assert.equal(readApplianceId('/x', fakeFs('  box-7  ')), 'box-7');
+  assert.equal(readApplianceId('/x', fakeFs('not a valid id!')), null);
+  assert.equal(readApplianceId('/x', fakeFs('a'.repeat(37))), null);
+  assert.equal(readApplianceId('/x', fakeFs(null)), null);
 });

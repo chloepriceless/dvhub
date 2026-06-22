@@ -25,6 +25,20 @@ function mintSignedKey(privateKey, payloadObj) {
   return `${signingData}.${sig.toString('base64')}`;
 }
 
+// --- Hardening C helper: mint a Keygen-format offline machine file (node-lock) ---
+function mintMachineFile(privateKey, fingerprint) {
+  const dataset = {
+    data: { type: 'machines', id: 'm1', attributes: { fingerprint } },
+    included: [{ type: 'licenses', id: 'lic-1' }],
+    meta: { expiry: null }
+  };
+  const enc = Buffer.from(JSON.stringify(dataset), 'utf8').toString('base64');
+  const sig = crypto.sign(null, Buffer.from(`machine/${enc}`, 'utf8'), privateKey).toString('base64');
+  const inner = Buffer.from(JSON.stringify({ enc, sig, alg: 'base64+ed25519' }), 'utf8').toString('base64');
+  const wrapped = inner.replace(/(.{64})/g, '$1\n');       // PEM-style line wrap → exercise whitespace stripping
+  return `-----BEGIN MACHINE FILE-----\n${wrapped}\n-----END MACHINE FILE-----\n`;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -355,6 +369,113 @@ test('Hardening B: non-signed (legacy/test) keys bypass signature check (stay St
   const svc = createLicenseService(ctx);
   svc.loadStateFromDisk();
   assert.equal(svc.getStatus(), 'active', 'non key/-prefixed keys are not signature-checked');
+});
+
+// --- Hardening C (2026-06-22): offline node-lock — machine file ⇔ appliance-id ---
+
+const NODELOCK_CFG = { cfg: { licensing: { keygenAccount: 'test1', nodeLock: true } } };
+
+function writeNodeLockState(appDir, { signedKey, machineFile }) {
+  fs.writeFileSync(
+    path.join(appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: signedKey, license_id: 'lic-1', machine_file: machineFile }),
+    'utf8'
+  );
+}
+
+test('Hardening C: node-lock keeps active when machine-file fingerprint == appliance-id', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(NODELOCK_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  writeNodeLockState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: 'x' }),
+    machineFile: mintMachineFile(privateKey, applianceId)
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'matching fingerprint must stay active');
+  assert.equal(svc.getState().machine_file, null, 'machine_file must never leak via getState()');
+});
+
+test('Hardening C: node-lock rejects when machine-file fingerprint != appliance-id', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(NODELOCK_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
+  writeNodeLockState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: 'x' }),
+    machineFile: mintMachineFile(privateKey, 'box-other')      // bound to a DIFFERENT box
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none', 'a foreign-bound machine file must be rejected');
+  assert.ok(
+    ctx._logs.some(l => l.type === 'license_node_lock_fingerprint_mismatch'),
+    'fingerprint mismatch must be logged'
+  );
+});
+
+test('Hardening C: node-lock rejects when appliance-id is missing on this host', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(NODELOCK_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  // No appliance-id file written.
+  writeNodeLockState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: 'x' }),
+    machineFile: mintMachineFile(privateKey, 'box-anything')
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none', 'cannot bind without a local appliance-id');
+  assert.ok(ctx._logs.some(l => l.type === 'license_node_lock_no_appliance_id'));
+});
+
+test('Hardening C: node-lock rejects a machine file signed by the wrong key', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const other = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(NODELOCK_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-this';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  writeNodeLockState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: 'x' }),       // license key is genuine (B passes)
+    machineFile: mintMachineFile(other.privateKey, applianceId)   // machine file is forged
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none', 'a forged machine file must be rejected');
+  assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_invalid'));
+});
+
+test('Hardening C: node-lock OFF leaves a mismatched machine file inert (no enforcement)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();                                          // nodeLock defaults OFF
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
+  writeNodeLockState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: 'x' }),
+    machineFile: mintMachineFile(privateKey, 'box-other')         // would mismatch IF enforced
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'node-lock OFF must not enforce the binding');
+});
+
+test('Hardening C: node-lock ON with NO machine file is grandfathered (floating stays active)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(NODELOCK_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
+  fs.writeFileSync(
+    path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: mintSignedKey(privateKey, { license: 'x' }), license_id: 'lic-1' }),
+    'utf8'
+  );
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active', 'a legacy floating licence (no machine file) is not enforced');
 });
 
 test('persist + reload roundtrip preserves status', async () => {

@@ -2720,7 +2720,14 @@ export function createDefaultConfig() {
     // Being part of createDefaultConfig also auto-adds the 'licensing' root to
     // ALLOWED_CONFIG_ROOTS (strict-root save check).
     licensing: {
-      keygenAccount: '7458ae2d-50d2-469a-9174-8a7fcd9934a1'
+      keygenAccount: '7458ae2d-50d2-469a-9174-8a7fcd9934a1',
+      // Hardening C (T-0125) node-lock toggle. When true, an active licence that
+      // carries a Keygen machine file is only honoured if the file verifies
+      // offline AND its bound fingerprint == this host's appliance-id. Default
+      // OFF so prod's existing floating signed key keeps working unchanged; the
+      // online activation/check-out flow that writes the machine file is gated
+      // on the Keygen-CE spike (T-0125 Must-Fix #1) and not built yet.
+      nodeLock: false
     }
   };
 }

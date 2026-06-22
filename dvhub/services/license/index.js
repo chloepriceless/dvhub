@@ -26,7 +26,8 @@
 //     license_id: string|null,
 //     polar_customer_id: string|null,
 //     subscription_until: ISO-string|null,
-//     scheme_name: string|null
+//     scheme_name: string|null,
+//     machine_file: string|null      // Hardening C — Keygen offline machine file (node-lock); null = floating/legacy
 //   }
 //
 // Failure handling (D-16):
@@ -47,7 +48,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { PROVIDER_FACTORIES } from '../notifications/index.js';
-import { verifyKeygenSignedKey } from './keygen-verify.js';
+import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
 const TIMEOUT_MS = 10_000;
@@ -85,7 +86,8 @@ function freshNoneState() {
     license_id: null,
     polar_customer_id: null,
     subscription_until: null,
-    scheme_name: null
+    scheme_name: null,
+    machine_file: null            // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
   };
 }
 
@@ -209,6 +211,34 @@ export function createLicenseService(ctx) {
           const v = verifyKeygenSignedKey(state.license.license_key, accountPublicKey);
           if (!v.valid) {
             pushLog('license_state_signature_invalid', { reason: v.reason });
+            state.license = freshNoneState();
+          }
+        }
+      }
+      // Hardening C (2026-06-22): node-lock. When enabled AND the persisted
+      // licence carries a Keygen machine file, that file MUST verify offline
+      // against the account public key AND its bound fingerprint MUST equal this
+      // host's appliance-id — otherwise the active state was copied onto a
+      // foreign box. INERT by default: cfg.licensing.nodeLock !== true, OR no
+      // machine_file present (legacy/floating licences are grandfathered per
+      // T-0125 decision A). Runs after B, so it re-checks the (possibly reset)
+      // status. Time/expiry + grace are deliberately NOT enforced here — that
+      // needs trusted-time (Codex #4) and lands with the online build phase.
+      if (state.license.status === 'active' && state.license.machine_file) {
+        const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
+        if (cfg?.licensing?.nodeLock === true) {
+          const m = verifyKeygenMachineFile(state.license.machine_file, accountPublicKey);
+          const applianceId = readApplianceId(baseDir);
+          if (!m.valid) {
+            pushLog('license_machine_file_invalid', { reason: m.reason });
+            state.license = freshNoneState();
+          } else if (!applianceId) {
+            pushLog('license_node_lock_no_appliance_id', {});
+            state.license = freshNoneState();
+          } else if (String(m.fingerprint || '').toLowerCase() !== applianceId) {
+            pushLog('license_node_lock_fingerprint_mismatch', {
+              bound_fp: fingerprint(m.fingerprint), local_fp: fingerprint(applianceId)
+            });
             state.license = freshNoneState();
           }
         }
@@ -425,6 +455,7 @@ export function createLicenseService(ctx) {
   function getState() {
     const s = { ...state.license };
     s.license_key = null;
+    s.machine_file = null;          // Hardening C: bulky signed blob, never returned externally
     return s;
   }
 
