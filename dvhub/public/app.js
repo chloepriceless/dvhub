@@ -1216,7 +1216,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             const ptr = cv._lastPointer;
             const px = ptr ? ptr.x : (rect.left + tip.caretX);
             const py = ptr ? ptr.y : (rect.top + tip.caretY);
-            const OFF = 20;
+            const OFF = 8;  // direkt neben dem Cursor (Operator: 20 war zu weit weg)
             const vw = window.innerWidth, vh = window.innerHeight;
             const tw = tt.offsetWidth, th = tt.offsetHeight;
             let left = px + OFF;
