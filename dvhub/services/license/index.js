@@ -87,7 +87,8 @@ function freshNoneState() {
     polar_customer_id: null,
     subscription_until: null,
     scheme_name: null,
-    machine_file: null            // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
+    machine_file: null,           // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
+    machine_id: null              // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
   };
 }
 
@@ -370,6 +371,99 @@ export function createLicenseService(ctx) {
   }
 
   /**
+   * activateNodeLock: Stufe-C node-lock activation via the server proxy
+   * (cfg.licensing.activationProxyUrl → webhook.dvhub.de). The appliance CANNOT
+   * create a Keygen machine itself — the policy is protected + authStrategy=TOKEN
+   * (spike 2026-06-22: POST /machines with the customer key → 403). So the
+   * privileged machines.create + check-out runs SERVER-side; we POST
+   * {licenseKey, applianceId}, receive a signed machine file, verify it OFFLINE
+   * against the embedded account public key, assert its bound fingerprint ==
+   * this host's appliance-id, then persist it. The loadStateFromDisk node-lock
+   * gate (only when cfg.licensing.nodeLock===true) re-checks it on every boot.
+   *
+   * Permissive on transport failure (no state mutation). A verify failure or a
+   * fingerprint mismatch is a HARD reject — an unverifiable file is NEVER stored.
+   *
+   * @param {string} [rawKey] - customer signed key; defaults to the persisted key.
+   * @returns {Promise<{ok:boolean, error?:string, reason?:string, status?:number,
+   *   fingerprint?:string, expiry?:string|null, machineId?:string|null, boundFingerprint?:string}>}
+   */
+  async function activateNodeLock(rawKey) {
+    const key = String(rawKey ?? state.license.license_key ?? '').trim();
+    if (!key) return { ok: false, error: 'empty_key' };
+
+    const applianceId = readApplianceId(baseDir);
+    if (!applianceId) {
+      pushLog('license_nodelock_no_appliance_id', {});
+      return { ok: false, error: 'no_appliance_id' };
+    }
+    if (!accountPublicKey) {
+      pushLog('license_nodelock_no_public_key', {});
+      return { ok: false, error: 'no_account_public_key' };
+    }
+
+    const proxyUrl = getCfg()?.licensing?.activationProxyUrl;
+    if (!proxyUrl) {
+      pushLog('license_nodelock_no_proxy_url', {});
+      return { ok: false, error: 'activation_proxy_not_configured' };
+    }
+
+    let res;
+    try {
+      res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ licenseKey: key, applianceId }),
+        signal: AbortSignal.timeout(TIMEOUT_MS)
+      });
+    } catch (err) {
+      pushLog('license_nodelock_network_error', { error: err.message, key_fingerprint: fingerprint(key) });
+      return { ok: false, error: 'server_error' };
+    }
+
+    let body = null;
+    try { body = await res.json(); } catch { /* tolerate empty / non-JSON error bodies */ }
+
+    if (!res.ok) {
+      const code = body?.code || `http_${res.status}`;
+      pushLog('license_nodelock_http_error', { status: res.status, code, key_fingerprint: fingerprint(key) });
+      return { ok: false, error: code, status: res.status, boundFingerprint: body?.boundFingerprint };
+    }
+
+    const machineFile = body?.machineFile;
+    if (typeof machineFile !== 'string' || !machineFile) {
+      pushLog('license_nodelock_no_machine_file', {});
+      return { ok: false, error: 'no_machine_file' };
+    }
+
+    // OFFLINE verify BEFORE trusting/persisting — never store an unverifiable file.
+    const v = verifyKeygenMachineFile(machineFile, accountPublicKey);
+    if (!v.valid) {
+      pushLog('license_nodelock_verify_failed', { reason: v.reason });
+      return { ok: false, error: 'machine_file_invalid', reason: v.reason };
+    }
+    if (String(v.fingerprint || '').toLowerCase() !== applianceId) {
+      pushLog('license_nodelock_fingerprint_mismatch', {
+        bound_fp: fingerprint(v.fingerprint), local_fp: fingerprint(applianceId)
+      });
+      return { ok: false, error: 'fingerprint_mismatch' };
+    }
+
+    // Verified + bound to THIS appliance → persist. machine_file is bulky +
+    // sensitive (redacted from getState, excluded from support bundles — Codex #9).
+    state.license.machine_file = machineFile;
+    state.license.machine_id = body?.machineId || null;
+    if (v.expiry) state.license.subscription_until = v.expiry;
+    persistState();
+    pushLog('license_nodelock_bound', {
+      machine_id: state.license.machine_id,
+      fingerprint: fingerprint(applianceId),
+      expiry: v.expiry || null
+    });
+    return { ok: true, fingerprint: applianceId, expiry: v.expiry || null, machineId: state.license.machine_id };
+  }
+
+  /**
    * revalidateLicense: reuse the persisted plaintext key against the same
    * validate-key endpoint (D-14 collapsed to Option A per RESEARCH §Open
    * Questions §1). No license_key persisted -> { ok:false, error:'no_license_active' }
@@ -594,6 +688,7 @@ export function createLicenseService(ctx) {
   return {
     loadStateFromDisk,
     activateLicense,
+    activateNodeLock,
     revalidateLicense,
     removeLicense,
     getState,

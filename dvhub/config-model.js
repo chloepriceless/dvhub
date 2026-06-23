@@ -2749,7 +2749,14 @@ export function createDefaultConfig() {
       // OFF so prod's existing floating signed key keeps working unchanged; the
       // online activation/check-out flow that writes the machine file is gated
       // on the Keygen-CE spike (T-0125 Must-Fix #1) and not built yet.
-      nodeLock: false
+      nodeLock: false,
+      // Stufe-C activation proxy (T-0125, Server-Proxy-Entscheid 2026-06-23): the
+      // privileged Keygen machine check-out runs server-side (the policy is
+      // protected+TOKEN — the customer key cannot create machines). The box POSTs
+      // {licenseKey, applianceId} here; the proxy mints+returns a signed machine
+      // file which the box verifies OFFLINE and persists. See
+      // .planning/T-0125-ACTIVATION-PROXY-CONTRACT.md.
+      activationProxyUrl: 'https://webhook.dvhub.de/v1/license/activate-machine'
     }
   };
 }

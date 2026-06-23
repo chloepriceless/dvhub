@@ -692,3 +692,120 @@ test('persisted file has mode 0600', async () => {
     }
   );
 });
+
+// --- Stufe C (2026-06-23): activateNodeLock — Server-Proxy activation flow ---
+// The proxy mints the signed machine file; the appliance verifies it OFFLINE
+// and only persists a file whose bound fingerprint == its own appliance-id.
+const PROXY_CFG = {
+  cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } }
+};
+
+test('activateNodeLock: proxy machine file (fp==appliance-id) verifies offline + persists', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(PROXY_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-alpha';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  const svc = createLicenseService(ctx);
+
+  const machineFile = mintMachineFile(privateKey, applianceId);
+  await withMockFetch(
+    () => ({ ok: true, status: 200, json: async () => ({ ok: true, machineFile, machineId: 'mach-xyz' }) }),
+    async (calls) => {
+      const r = await svc.activateNodeLock('key/customer-key');
+      assert.equal(r.ok, true);
+      assert.equal(r.fingerprint, applianceId);
+      assert.equal(r.machineId, 'mach-xyz');
+      // Request hit the proxy with {licenseKey, applianceId}.
+      assert.equal(calls[0].url, 'https://proxy.test/activate');
+      const sent = JSON.parse(calls[0].init.body);
+      assert.equal(sent.licenseKey, 'key/customer-key');
+      assert.equal(sent.applianceId, applianceId);
+      // Persisted, but NEVER leaked via getState().
+      assert.equal(ctx.state.license.machine_file, machineFile);
+      assert.equal(ctx.state.license.machine_id, 'mach-xyz');
+      assert.equal(svc.getState().machine_file, null);
+      assert.ok(ctx._logs.some(l => l.type === 'license_nodelock_bound'));
+    }
+  );
+});
+
+test('activateNodeLock: rejects a machine file bound to a DIFFERENT box (no persist)', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(PROXY_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
+  const svc = createLicenseService(ctx);
+
+  const machineFile = mintMachineFile(privateKey, 'box-other');  // bound elsewhere
+  await withMockFetch(
+    () => ({ ok: true, status: 200, json: async () => ({ ok: true, machineFile }) }),
+    async () => {
+      const r = await svc.activateNodeLock('key/customer-key');
+      assert.equal(r.ok, false);
+      assert.equal(r.error, 'fingerprint_mismatch');
+      assert.equal(ctx.state.license.machine_file, null, 'must not persist a foreign-bound file');
+      assert.ok(ctx._logs.some(l => l.type === 'license_nodelock_fingerprint_mismatch'));
+    }
+  );
+});
+
+test('activateNodeLock: rejects a machine file forged with the wrong key (no persist)', async () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const forger = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(PROXY_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-alpha';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  const svc = createLicenseService(ctx);
+
+  const machineFile = mintMachineFile(forger.privateKey, applianceId);  // signed by wrong key
+  await withMockFetch(
+    () => ({ ok: true, status: 200, json: async () => ({ ok: true, machineFile }) }),
+    async () => {
+      const r = await svc.activateNodeLock('key/customer-key');
+      assert.equal(r.ok, false);
+      assert.equal(r.error, 'machine_file_invalid');
+      assert.equal(ctx.state.license.machine_file, null);
+      assert.ok(ctx._logs.some(l => l.type === 'license_nodelock_verify_failed'));
+    }
+  );
+});
+
+test('activateNodeLock: surfaces 409 machine_slot_taken with boundFingerprint (no persist)', async () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(PROXY_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
+  const svc = createLicenseService(ctx);
+
+  await withMockFetch(
+    () => ({ ok: false, status: 409, json: async () => ({ ok: false, code: 'machine_slot_taken', boundFingerprint: 'box-other' }) }),
+    async () => {
+      const r = await svc.activateNodeLock('key/customer-key');
+      assert.equal(r.ok, false);
+      assert.equal(r.error, 'machine_slot_taken');
+      assert.equal(r.status, 409);
+      assert.equal(r.boundFingerprint, 'box-other');
+      assert.equal(ctx.state.license.machine_file, null);
+    }
+  );
+});
+
+test('activateNodeLock: no appliance-id on this host → no_appliance_id without fetching', async () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx(PROXY_CFG);
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  // No appliance-id file written.
+  const svc = createLicenseService(ctx);
+  let fetched = false;
+  await withMockFetch(
+    () => { fetched = true; return { ok: true, status: 200, json: async () => ({}) }; },
+    async () => {
+      const r = await svc.activateNodeLock('key/customer-key');
+      assert.equal(r.ok, false);
+      assert.equal(r.error, 'no_appliance_id');
+      assert.equal(fetched, false, 'must not contact the proxy without a local appliance-id');
+    }
+  );
+});
