@@ -26,11 +26,11 @@ function mintSignedKey(privateKey, payloadObj) {
 }
 
 // --- Hardening C helper: mint a Keygen-format offline machine file (node-lock) ---
-function mintMachineFile(privateKey, fingerprint) {
+function mintMachineFile(privateKey, fingerprint, expiry = null) {
   const dataset = {
-    data: { type: 'machines', id: 'm1', attributes: { fingerprint } },
+    data: { type: 'machines', id: 'm1', attributes: { fingerprint, expiry } },
     included: [{ type: 'licenses', id: 'lic-1' }],
-    meta: { expiry: null }
+    meta: { expiry }
   };
   const enc = Buffer.from(JSON.stringify(dataset), 'utf8').toString('base64');
   const sig = crypto.sign(null, Buffer.from(`machine/${enc}`, 'utf8'), privateKey).toString('base64');
@@ -869,4 +869,66 @@ test('trusted-time: loadStateFromDisk logs rollback when local clock is far behi
   svc.loadStateFromDisk();
   assert.ok(ctx._logs.some(l => l.type === 'license_clock_rollback_detected'),
     'a far-future high-water vs local now must be flagged');
+});
+
+// --- Hardening (2026-06-23): offline grace states from SIGNED expiry (Codex #5) ---
+const DAY = 24 * 60 * 60 * 1000;
+function loadNodeLocked({ expiry, lastServerTs = null }) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();                                   // nodeLock OFF — grace is independent
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-grace';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  const machineFile = mintMachineFile(privateKey, applianceId, expiry);
+  const rec = { status: 'active', license_key: 'LEGACY-KEY', machine_file: machineFile };
+  if (lastServerTs) rec.last_server_ts = lastServerTs;
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'), JSON.stringify(rec), 'utf8');
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  return { svc, ctx };
+}
+const denyRes = () => ({ _code: 0, writeHead(c) { this._code = c; }, end() {} });
+
+test('grace: node-locked with a FUTURE signed expiry → active', () => {
+  const { svc } = loadNodeLocked({ expiry: new Date(Date.now() + 365 * DAY).toISOString() });
+  assert.equal(svc.effectiveStatus(), 'active');
+  assert.equal(svc.requirePro({}, denyRes(), 'family-dashboard'), true);
+});
+
+test('grace: signed expiry just passed (within 14d) → grace, Pro still allowed', () => {
+  const { svc } = loadNodeLocked({ expiry: new Date(Date.now() - 1 * DAY).toISOString() });
+  assert.equal(svc.effectiveStatus(), 'grace');
+  assert.equal(svc.requirePro({}, denyRes(), 'family-dashboard'), true);
+  assert.ok(svc.getState().grace_until, 'grace_until set for the UI countdown');
+});
+
+test('grace: signed expiry + 14d passed → effectiveStatus expired_offline (diagnostic; enforcement deferred)', () => {
+  const { svc } = loadNodeLocked({ expiry: new Date(Date.now() - 20 * DAY).toISOString() });
+  assert.equal(svc.effectiveStatus(), 'expired_offline');
+  // Codex-Refute-v2: requirePro does NOT yet enforce expired_offline (would cut off
+  // renewing monthly customers until the server re-checkout exists). Base status
+  // active → still allowed; effective_status surfaces the state for the UI.
+  assert.equal(svc.requirePro({}, denyRes(), 'family-dashboard'), true);
+});
+
+test('grace: perpetual/floating (no machine file) stays active offline (Christin A+D)', () => {
+  const ctx = mockCtx();
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: 'LEGACY-KEY' }), 'utf8');
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.effectiveStatus(), 'active');
+  assert.equal(svc.getState().grace_until, null);
+});
+
+test('grace+replay defense: a trusted high-water past expiry+grace forces expired_offline', () => {
+  // File would be in GRACE by wall-clock (expiry 1h ago), but the server-time
+  // high-water has advanced 20 days → trustedNow > expiry+grace → expired.
+  const { svc } = loadNodeLocked({
+    expiry: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
+    lastServerTs: new Date(Date.now() + 20 * DAY).toISOString()
+  });
+  assert.equal(svc.effectiveStatus(), 'expired_offline');
+  // diagnostic-only (see above) — base status active still allows Pro for now.
+  assert.equal(svc.requirePro({}, denyRes(), 'family-dashboard'), true);
 });

@@ -59,6 +59,9 @@ const VALID_STATUSES = new Set(['active', 'invalid', 'expired', 'suspended', 'no
 // server-time high-water) is logged as a suspected rollback. 24h absorbs normal
 // NTP skew / timezone-less ISO parsing slack without crying wolf.
 const CLOCK_ROLLBACK_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+// Hardening (Codex #5, Christin C): offline grace AFTER a node-locked monthly
+// licence's SIGNED expiry passes — Pro stays on for 14 days, then expired_offline.
+const OFFLINE_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 // Account Ed25519 public key (PUBLIC — not a secret) for Hardening B: offline
 // verification that a persisted license_key is a genuine Keygen ED25519_SIGN key
@@ -224,6 +227,51 @@ export function createLicenseService(ctx) {
     }
   }
 
+  // ----------------- Offline grace / effective status (Codex #5) -----------------
+  //
+  // The AUTHORITATIVE monthly expiry is the SIGNED expiry inside the machine
+  // file (verified offline against the account public key) — NOT the plaintext
+  // state.license.subscription_until, which is hand-editable. Cached at load /
+  // activation (the file only changes there) so requirePro stays crypto-free per
+  // request. null = no signed expiry → perpetual/floating → no offline expiry
+  // (Christin A grandfathering + D perpetual-offline-final).
+  let signedExpiryMsCache = null;
+  function refreshSignedExpiry() {
+    signedExpiryMsCache = null;
+    const mf = state.license.machine_file;
+    if (mf && accountPublicKey) {
+      const v = verifyKeygenMachineFile(mf, accountPublicKey);
+      if (v.valid && v.expiry) {
+        const ms = Date.parse(v.expiry);
+        if (Number.isFinite(ms)) signedExpiryMsCache = ms;
+      }
+    }
+  }
+
+  /**
+   * Derive the effective licence status from the persisted status + the signed
+   * monthly expiry, measured against trustedNowMs() (rollback-resistant):
+   *   active        — base active AND (no signed expiry OR now <= expiry)
+   *   grace         — signed expiry passed but within the 14-day grace
+   *   expired_offline — past expiry + grace (a replayed OLD file lands here too,
+   *                     because the high-water has advanced past its old expiry)
+   * Any non-active base status (none/invalid/expired/suspended) passes through.
+   */
+  function effectiveStatus() {
+    if (state.license.status !== 'active') return state.license.status;
+    if (signedExpiryMsCache == null) return 'active';   // perpetual/floating
+    const now = trustedNowMs();
+    if (now <= signedExpiryMsCache) return 'active';
+    if (now <= signedExpiryMsCache + OFFLINE_GRACE_MS) return 'grace';
+    return 'expired_offline';
+  }
+
+  /** Grace deadline (ISO) for UI countdown, or null when no signed expiry. */
+  function graceUntilIso() {
+    if (signedExpiryMsCache == null) return null;
+    return new Date(signedExpiryMsCache + OFFLINE_GRACE_MS).toISOString();
+  }
+
   /**
    * Sync read of license_state.json into state.license. Missing file OR
    * corrupt JSON -> fresh 'none' state + pushLog('license_state_load_error').
@@ -291,6 +339,8 @@ export function createLicenseService(ctx) {
       // Hardening (Codex #4): flag an implausible backward clock jump vs the
       // trusted server-time high-water (offline grace must not be rewindable).
       checkClockRollback();
+      // Hardening (Codex #5): cache the signed monthly expiry for effectiveStatus().
+      refreshSignedExpiry();
     } catch (err) {
       pushLog('license_state_load_error', { error: err.message });
       state.license = freshNoneState();
@@ -506,6 +556,7 @@ export function createLicenseService(ctx) {
     state.license.machine_id = body?.machineId || null;
     if (v.expiry) state.license.subscription_until = v.expiry;
     persistState();
+    refreshSignedExpiry();   // Codex #5: pick up the new signed expiry for effectiveStatus()
     pushLog('license_nodelock_bound', {
       machine_id: state.license.machine_id,
       fingerprint: fingerprint(applianceId),
@@ -601,6 +652,8 @@ export function createLicenseService(ctx) {
     const s = { ...state.license };
     s.license_key = null;
     s.machine_file = null;          // Hardening C: bulky signed blob, never returned externally
+    s.effective_status = effectiveStatus();   // Codex #5: active|grace|expired_offline|… for UI
+    s.grace_until = graceUntilIso();          // ISO grace deadline (UI countdown) or null
     return s;
   }
 
@@ -653,6 +706,14 @@ export function createLicenseService(ctx) {
    */
   function requirePro(req, res, featureName) {
     const feat = ALLOWED_FEATURES.has(featureName) ? featureName : 'unknown';
+    // effective_status (active|grace|expired_offline) is COMPUTED + exposed via
+    // getState() for the UI, but deliberately NOT YET ENFORCED here. Codex-Refute-v2
+    // (2026-06-23) showed enforcing offline-expiry now would wrongly cut off a
+    // RENEWING monthly customer — the signed machine_file is not re-checked-out on
+    // online revalidation, so its frozen expiry would lapse while the sub is paid.
+    // Enforcement is gated on the server re-checkout + check-in/high-water design
+    // (T-0125 next step). Until then gate on the base (online-driven) status, which
+    // already reflects revocation/expiry whenever the box can reach Keygen.
     if (state.license.status === 'active') return true;
     const body = JSON.stringify({ error: 'pro_required', feature: feat });
     res.writeHead(403, {
@@ -741,6 +802,7 @@ export function createLicenseService(ctx) {
     activateLicense,
     activateNodeLock,
     trustedNowMs,
+    effectiveStatus,
     revalidateLicense,
     removeLicense,
     getState,
