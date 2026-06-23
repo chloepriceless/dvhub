@@ -633,6 +633,17 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const tooltip = document.getElementById('tooltip');
   if (!canvas || typeof Chart === 'undefined') return;
 
+  // Schwebender Tooltip folgt der ECHTEN Maus (nicht dem daten-gemittelten
+  // Chart-Caret von mode:'index', der nach unten zu den Energie-Balken driftete
+  // und den Tooltip „ganz unten" kleben ließ). Letzte Cursor-Position auf dem
+  // Canvas-Element gespeichert, damit der Listener Chart-Rebuilds überlebt und
+  // nur EINMAL registriert wird.
+  if (!canvas._pointerTracked) {
+    canvas._pointerTracked = true;
+    canvas.addEventListener('mousemove', (e) => { canvas._lastPointer = { x: e.clientX, y: e.clientY }; });
+    canvas.addEventListener('mouseleave', () => { canvas._lastPointer = null; });
+  }
+
   // Window: now − 12h … now + 36h, but never past the last published price slot
   // (operator request 2026-06-22: "36h anzeigen — immer so viel wie der Preis").
   // The old now+24h cut off tomorrow's afternoon + evening peak the moment the
@@ -1194,13 +1205,28 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`${dp.dataset.label}: ${Math.abs(Number(dp.raw)).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.map(p => escapeHtml(p)).join(' <span class="tooltip-separator">|</span> ');
+            tt.innerHTML = parts.map(p => `<div class="tooltip-row">${escapeHtml(p)}</div>`).join('');
             tt.style.display = 'block';
-            const rect = context.chart.canvas.getBoundingClientRect();
-            const x = rect.left + tip.caretX + 14;
-            const y = rect.top + tip.caretY - 10;
-            tt.style.left = Math.min(x, window.innerWidth - tt.offsetWidth - 8) + 'px';
-            tt.style.top = Math.max(4, y) + 'px';
+            // 20px-Offset zur ECHTEN Maus (Operator-Wunsch). Fällt auf das
+            // Chart-Caret zurück, falls noch keine Cursor-Position bekannt ist.
+            // Flip nach links/oben + Clamp am Viewport, damit der Tooltip nie
+            // abdriftet (vorher klebte er ganz unten).
+            const cv = context.chart.canvas;
+            const rect = cv.getBoundingClientRect();
+            const ptr = cv._lastPointer;
+            const px = ptr ? ptr.x : (rect.left + tip.caretX);
+            const py = ptr ? ptr.y : (rect.top + tip.caretY);
+            const OFF = 20;
+            const vw = window.innerWidth, vh = window.innerHeight;
+            const tw = tt.offsetWidth, th = tt.offsetHeight;
+            let left = px + OFF;
+            if (left + tw + 8 > vw) left = px - OFF - tw;   // nach links spiegeln
+            left = Math.max(8, Math.min(left, vw - tw - 8));
+            let top = py + OFF;
+            if (top + th + 8 > vh) top = py - OFF - th;       // nach oben spiegeln
+            top = Math.max(8, Math.min(top, vh - th - 8));
+            tt.style.left = left + 'px';
+            tt.style.top = top + 'px';
           }
         },
         annotation: {
