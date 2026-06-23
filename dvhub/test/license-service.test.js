@@ -809,3 +809,64 @@ test('activateNodeLock: no appliance-id on this host → no_appliance_id without
     }
   );
 });
+
+// --- Hardening (2026-06-23): trusted-time high-water mark (Codex #4) ---
+// Offline grace must not be rewindable by clock-rollback. The monotone
+// high-water is taken from Keygen's meta.ts on every validate response.
+function makeKeygenResponseTs(ts, over = {}) {
+  return { ...makeKeygenResponse({ valid: true, code: 'VALID', ...over }), meta: { valid: true, code: 'VALID', ts } };
+}
+
+test('trusted-time: validate response records server meta.ts as the high-water', async () => {
+  await withMockFetch(
+    () => ({ ok: true, status: 200, json: async () => makeKeygenResponse({ valid: true, code: 'VALID' }) }),
+    async () => {
+      const ctx = mockCtx();
+      const svc = createLicenseService(ctx);
+      await svc.activateLicense('DVHB-TT-XXXX-XXXX-AAAA');
+      // makeKeygenResponse sets meta.ts = '2026-05-20T00:00:00Z'.
+      assert.equal(svc.getState().last_server_ts, '2026-05-20T00:00:00.000Z');
+    }
+  );
+});
+
+test('trusted-time: high-water is monotone — an older server ts is ignored', async () => {
+  const ctx = mockCtx();
+  const svc = createLicenseService(ctx);
+  let n = 0;
+  await withMockFetch(
+    () => { n += 1; return { ok: true, status: 200, json: async () => makeKeygenResponseTs(n === 1 ? '2026-05-20T00:00:00Z' : '2026-01-01T00:00:00Z') }; },
+    async () => {
+      await svc.activateLicense('K1');         // high ts
+      await svc.activateLicense('K2');         // earlier ts — must NOT lower the high-water
+      assert.equal(svc.getState().last_server_ts, '2026-05-20T00:00:00.000Z');
+    }
+  );
+});
+
+test('trusted-time: trustedNowMs() floors at the high-water (rollback-resistant)', async () => {
+  const ctx = mockCtx();
+  const svc = createLicenseService(ctx);
+  const future = '2999-01-01T00:00:00Z';
+  await withMockFetch(
+    () => ({ ok: true, status: 200, json: async () => makeKeygenResponseTs(future) }),
+    async () => {
+      await svc.activateLicense('K1');
+      assert.ok(svc.trustedNowMs() >= Date.parse(future),
+        'trusted now must never predate the server high-water');
+    }
+  );
+});
+
+test('trusted-time: loadStateFromDisk logs rollback when local clock is far behind high-water', () => {
+  const ctx = mockCtx();
+  fs.writeFileSync(
+    path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: 'LEGACY-KEY', last_server_ts: '2999-01-01T00:00:00Z' }),
+    'utf8'
+  );
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.ok(ctx._logs.some(l => l.type === 'license_clock_rollback_detected'),
+    'a far-future high-water vs local now must be flagged');
+});

@@ -55,6 +55,11 @@ const TIMEOUT_MS = 10_000;
 const RETRY_DELAY_MS = 2_000;
 const VALID_STATUSES = new Set(['active', 'invalid', 'expired', 'suspended', 'none']);
 
+// Hardening (Codex #4): tolerance before a backward clock jump (vs the trusted
+// server-time high-water) is logged as a suspected rollback. 24h absorbs normal
+// NTP skew / timezone-less ISO parsing slack without crying wolf.
+const CLOCK_ROLLBACK_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+
 // Account Ed25519 public key (PUBLIC — not a secret) for Hardening B: offline
 // verification that a persisted license_key is a genuine Keygen ED25519_SIGN key
 // for THIS account, so a hand-tampered license_state.json cannot unlock Pro
@@ -88,7 +93,8 @@ function freshNoneState() {
     subscription_until: null,
     scheme_name: null,
     machine_file: null,           // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
-    machine_id: null              // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
+    machine_id: null,             // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
+    last_server_ts: null          // Hardening (Codex #4): monotone high-water of the highest server time seen
   };
 }
 
@@ -180,6 +186,44 @@ export function createLicenseService(ctx) {
     }
   }
 
+  // ----------------- Trusted time (Hardening, Codex #4) -----------------
+  //
+  // Offline grace/expiry MUST NOT be defeatable by winding the system clock
+  // back. We keep a MONOTONE high-water mark of the highest server timestamp
+  // ever seen (Keygen meta.ts on every validate response) and derive a
+  // rollback-resistant "now" as max(wall-clock, high-water): time can never be
+  // observed EARLIER than the last server-confirmed instant. Forward clock moves
+  // are honoured; backward moves below the high-water are floored out. The grace
+  // logic (Codex #5, next step) computes its deadlines against trustedNowMs().
+
+  /** Update the monotone server-time high-water from a Keygen meta.ts (ISO). */
+  function recordServerTime(metaTs) {
+    const ms = Date.parse(metaTs);
+    if (!Number.isFinite(ms)) return;
+    const prev = Date.parse(state.license.last_server_ts);
+    if (!Number.isFinite(prev) || ms > prev) {
+      state.license.last_server_ts = new Date(ms).toISOString();
+    }
+  }
+
+  /** Rollback-resistant current time (ms): never earlier than the high-water. */
+  function trustedNowMs() {
+    const wall = Date.now();
+    const hw = Date.parse(state.license.last_server_ts);
+    return Number.isFinite(hw) ? Math.max(wall, hw) : wall;
+  }
+
+  /** Log when the local clock is implausibly behind the trusted high-water. */
+  function checkClockRollback() {
+    const hw = Date.parse(state.license.last_server_ts);
+    if (Number.isFinite(hw) && Date.now() < hw - CLOCK_ROLLBACK_TOLERANCE_MS) {
+      pushLog('license_clock_rollback_detected', {
+        local_now: new Date().toISOString(),
+        high_water: state.license.last_server_ts
+      });
+    }
+  }
+
   /**
    * Sync read of license_state.json into state.license. Missing file OR
    * corrupt JSON -> fresh 'none' state + pushLog('license_state_load_error').
@@ -244,6 +288,9 @@ export function createLicenseService(ctx) {
           }
         }
       }
+      // Hardening (Codex #4): flag an implausible backward clock jump vs the
+      // trusted server-time high-water (offline grace must not be rewindable).
+      checkClockRollback();
     } catch (err) {
       pushLog('license_state_load_error', { error: err.message });
       state.license = freshNoneState();
@@ -300,6 +347,10 @@ export function createLicenseService(ctx) {
     if (newStatus === 'active') {
       state.license.last_check_ok_at = new Date().toISOString();
     }
+    // Hardening (Codex #4): record the server's clock as the trusted high-water,
+    // regardless of license validity — the server time is trustworthy even when
+    // the licence is not.
+    recordServerTime(json?.meta?.ts);
 
     persistState();
 
@@ -689,6 +740,7 @@ export function createLicenseService(ctx) {
     loadStateFromDisk,
     activateLicense,
     activateNodeLock,
+    trustedNowMs,
     revalidateLicense,
     removeLicense,
     getState,
