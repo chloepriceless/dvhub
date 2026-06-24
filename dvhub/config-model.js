@@ -2756,7 +2756,15 @@ export function createDefaultConfig() {
       // {licenseKey, applianceId} here; the proxy mints+returns a signed machine
       // file which the box verifies OFFLINE and persists. See
       // .planning/T-0125-ACTIVATION-PROXY-CONTRACT.md.
-      activationProxyUrl: 'https://webhook.dvhub.de/v1/license/activate-machine'
+      activationProxyUrl: 'https://webhook.dvhub.de/v1/license/activate-machine',
+      // Codex-v2 C-1: Keygen policy IDs that are genuinely node-locked. A signed
+      // key on one of these policies MUST carry a valid machine_file bound to this
+      // appliance — otherwise the active state was tampered (machine_file deleted
+      // to masquerade as a grandfathered floating licence). EMPTY by default →
+      // prod's shared/grandfathered policy is unaffected; the shop adds the NEW
+      // node-locked policy id here once the policy-split (Christin A) exists. NEVER
+      // add prod's current grandfathered policy id (it has no machine_file).
+      nodeLockedPolicyIds: []
     }
   };
 }

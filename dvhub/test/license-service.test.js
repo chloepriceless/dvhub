@@ -26,10 +26,10 @@ function mintSignedKey(privateKey, payloadObj) {
 }
 
 // --- Hardening C helper: mint a Keygen-format offline machine file (node-lock) ---
-function mintMachineFile(privateKey, fingerprint, expiry = null) {
+function mintMachineFile(privateKey, fingerprint, expiry = null, licenseId = 'lic-1') {
   const dataset = {
     data: { type: 'machines', id: 'm1', attributes: { fingerprint, expiry } },
-    included: [{ type: 'licenses', id: 'lic-1' }],
+    included: [{ type: 'licenses', id: licenseId }],
     meta: { expiry }
   };
   const enc = Buffer.from(JSON.stringify(dataset), 'utf8').toString('base64');
@@ -931,4 +931,78 @@ test('grace+replay defense: a trusted high-water past expiry+grace forces expire
   assert.equal(svc.effectiveStatus(), 'expired_offline');
   // diagnostic-only (see above) — base status active still allows Pro for now.
   assert.equal(svc.requirePro({}, denyRes(), 'family-dashboard'), true);
+});
+
+// --- Codex-Refute-v2 fixes (2026-06-24) ---
+function mintSignedKeyTest(priv, payload) {
+  const p = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sd = `key/${p}`;
+  return `${sd}.${crypto.sign(null, Buffer.from(sd, 'utf8'), priv).toString('base64')}`;
+}
+
+test('fix H-3 (#6): a machine_file bound to a FOREIGN licenseId is ignored (not used for expiry)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box\n', 'utf8');
+  // PAST expiry foreign file: if it were accepted it'd force expired_offline.
+  const foreign = mintMachineFile(privateKey, 'box', new Date(Date.now() - 20 * DAY).toISOString(), 'OTHER-LIC');
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: 'LEGACY', license_id: 'lic-1', machine_file: foreign }), 'utf8');
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  assert.equal(svc.effectiveStatus(), 'active');   // foreign file ignored → not expired_offline
+  assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_license_mismatch'));
+});
+
+test('fix M-6: a VALID machine_file with a malformed expiry fails CLOSED (not perpetual)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const bad = mintMachineFile(privateKey, 'box', 'NOT-A-DATE', 'lic-1');
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: 'LEGACY', license_id: 'lic-1', machine_file: bad }), 'utf8');
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  assert.equal(svc.effectiveStatus(), 'expired_offline');   // fail-closed, NOT 'active'
+  assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_bad_expiry'));
+});
+
+test('fix C-1: node-locked-policy key WITHOUT a valid machine_file → reset to none', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 't', nodeLockedPolicyIds: ['POL-NODELOCK'] } } });
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box\n', 'utf8');
+  const key = mintSignedKeyTest(privateKey, { policy: { id: 'POL-NODELOCK' }, license: { id: 'lic-1' } });
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: key, license_id: 'lic-1', machine_file: null }), 'utf8');
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'none');   // tamper (deleted machine_file on node-locked policy) → rejected
+  assert.ok(ctx._logs.some(l => l.type === 'license_nodelock_policy_unsatisfied'));
+});
+
+test('fix C-1 prod-safety: empty nodeLockedPolicyIds leaves the same key ACTIVE (grandfathered)', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();   // nodeLockedPolicyIds undefined / empty
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const key = mintSignedKeyTest(privateKey, { policy: { id: 'POL-NODELOCK' }, license: { id: 'lic-1' } });
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: key, license_id: 'lic-1', machine_file: null }), 'utf8');
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  assert.equal(svc.getStatus(), 'active');   // no policy configured → grandfathered floating, prod-safe
+});
+
+test('fix C-2: the signed machine-file issue time floors trustedNowMs even with no last_server_ts', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  // mint a file carrying a signed meta.issued far in the future
+  const issued = new Date(Date.now() + 200 * DAY).toISOString();
+  const ds = { data: { type: 'machines', id: 'm1', attributes: { fingerprint: 'box', expiry: null } }, included: [{ type: 'licenses', id: 'lic-1' }], meta: { expiry: null, issued } };
+  const enc = Buffer.from(JSON.stringify(ds), 'utf8').toString('base64');
+  const sig = crypto.sign(null, Buffer.from(`machine/${enc}`, 'utf8'), privateKey).toString('base64');
+  const inner = Buffer.from(JSON.stringify({ enc, sig, alg: 'base64+ed25519' }), 'utf8').toString('base64');
+  const mf = `-----BEGIN MACHINE FILE-----\n${inner}\n-----END MACHINE FILE-----\n`;
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: 'LEGACY', license_id: 'lic-1', machine_file: mf }), 'utf8');  // NO last_server_ts
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  assert.ok(svc.trustedNowMs() >= Date.parse(issued), 'signed issue time must floor trusted now even without last_server_ts');
 });

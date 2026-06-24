@@ -48,7 +48,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { PROVIDER_FACTORIES } from '../notifications/index.js';
-import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId } from './keygen-verify.js';
+import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId, decodeKeygenPayload } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
 const TIMEOUT_MS = 10_000;
@@ -211,9 +211,13 @@ export function createLicenseService(ctx) {
 
   /** Rollback-resistant current time (ms): never earlier than the high-water. */
   function trustedNowMs() {
-    const wall = Date.now();
+    let floor = Date.now();
     const hw = Date.parse(state.license.last_server_ts);
-    return Number.isFinite(hw) ? Math.max(wall, hw) : wall;
+    if (Number.isFinite(hw)) floor = Math.max(floor, hw);
+    // Codex-v2 C-2: the signed machine-file issue time is tamper-proof — it floors
+    // "now" even if the plaintext last_server_ts high-water was cleared/backdated.
+    if (Number.isFinite(signedIssuedMsCache)) floor = Math.max(floor, signedIssuedMsCache);
+    return floor;
   }
 
   /** Log when the local clock is implausibly behind the trusted high-water. */
@@ -236,16 +240,31 @@ export function createLicenseService(ctx) {
   // request. null = no signed expiry → perpetual/floating → no offline expiry
   // (Christin A grandfathering + D perpetual-offline-final).
   let signedExpiryMsCache = null;
+  let signedIssuedMsCache = null;   // Codex-v2 C-2: tamper-proof time floor from the signed file
   function refreshSignedExpiry() {
     signedExpiryMsCache = null;
+    signedIssuedMsCache = null;
     const mf = state.license.machine_file;
-    if (mf && accountPublicKey) {
-      const v = verifyKeygenMachineFile(mf, accountPublicKey);
-      if (v.valid && v.expiry) {
-        const ms = Date.parse(v.expiry);
-        if (Number.isFinite(ms)) signedExpiryMsCache = ms;
-      }
+    if (!mf || !accountPublicKey) return;
+    const v = verifyKeygenMachineFile(mf, accountPublicKey);
+    if (!v.valid) return;
+    // Codex-v2 H-3 (#6): only trust a file bound to the CURRENTLY active license —
+    // a genuinely-signed file for a DIFFERENT license must not grant this one.
+    if (state.license.license_id && v.licenseId && v.licenseId !== state.license.license_id) {
+      pushLog('license_machine_file_license_mismatch', { bound: v.licenseId, active: state.license.license_id });
+      return;
     }
+    // Codex-v2 C-2: the signed check-out/issued time is a tamper-proof LOWER bound
+    // on "now" (feeds trustedNowMs even if plaintext last_server_ts was wiped).
+    const issuedMs = Date.parse(v.dataset?.meta?.issued ?? v.dataset?.data?.attributes?.created);
+    if (Number.isFinite(issuedMs)) signedIssuedMsCache = issuedMs;
+    // expiry: null/absent = perpetual (legit). PRESENT-but-unparseable = tampered/
+    // malformed → fail CLOSED (Codex-v2 M-6), never silently perpetual.
+    if (v.expiry == null) return;                       // perpetual
+    const ms = Date.parse(v.expiry);
+    if (Number.isFinite(ms)) { signedExpiryMsCache = ms; return; }
+    pushLog('license_machine_file_bad_expiry', {});
+    signedExpiryMsCache = 0;                             // already-expired sentinel (fail-closed)
   }
 
   /**
@@ -333,6 +352,31 @@ export function createLicenseService(ctx) {
               bound_fp: fingerprint(m.fingerprint), local_fp: fingerprint(applianceId)
             });
             state.license = freshNoneState();
+          }
+        }
+      }
+      // Hardening Codex-v2 C-1: a signed key on a configured NODE-LOCKED policy
+      // MUST carry a valid machine_file bound to THIS appliance — deleting it to
+      // masquerade as a grandfathered floating licence is the bypass. Config-gated
+      // (licensing.nodeLockedPolicyIds): EMPTY default leaves prod's shared/
+      // grandfathered policy untouched. Tamper-proof — the policy id is read from
+      // the Ed25519-signed key payload (already verified by Hardening B above),
+      // not from editable plaintext.
+      if (state.license.status === 'active' && accountPublicKey
+          && typeof state.license.license_key === 'string'
+          && state.license.license_key.startsWith('key/')) {
+        const lockedPolicies = getCfg()?.licensing?.nodeLockedPolicyIds;
+        if (Array.isArray(lockedPolicies) && lockedPolicies.length) {
+          const policyId = decodeKeygenPayload(state.license.license_key)?.policy?.id;
+          if (policyId && lockedPolicies.includes(policyId)) {
+            const mf = state.license.machine_file;
+            const mv = mf ? verifyKeygenMachineFile(mf, accountPublicKey) : { valid: false };
+            const applianceId = readApplianceId(baseDir);
+            if (!mv.valid || !applianceId
+                || String(mv.fingerprint || '').toLowerCase() !== applianceId) {
+              pushLog('license_nodelock_policy_unsatisfied', { policy: policyId, reason: mv.reason || 'no_machine_file' });
+              state.license = freshNoneState();
+            }
           }
         }
       }
