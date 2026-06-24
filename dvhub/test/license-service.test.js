@@ -1005,6 +1005,20 @@ test('fix HIGH (post-codex): binding uses the SIGNED key license id — editing 
   assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_license_mismatch'));
 });
 
+test('fix HIGH fail-closed: a SIGNED key with NO license.id never falls back to plaintext', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const key = mintSignedKeyTest(privateKey, { policy: { id: 'P' } });   // signed, but NO license.id
+  const file = mintMachineFile(privateKey, 'box', new Date(Date.now() - 20 * DAY).toISOString(), 'lic-1');
+  fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: key, license_id: 'lic-1', machine_file: file }), 'utf8');
+  const svc = createLicenseService(ctx); svc.loadStateFromDisk();
+  // signed key → sentinel id ≠ file 'lic-1' → file rejected despite matching plaintext license_id
+  assert.equal(svc.effectiveStatus(), 'active');
+  assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_license_mismatch'));
+});
+
 test('fix C-2: the signed machine-file issue time floors trustedNowMs even with no last_server_ts', () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx();

@@ -62,6 +62,10 @@ const CLOCK_ROLLBACK_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 // Hardening (Codex #5, Christin C): offline grace AFTER a node-locked monthly
 // licence's SIGNED expiry passes — Pro stays on for 14 days, then expired_offline.
 const OFFLINE_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+// Sentinel for a SIGNED key whose payload carries no license.id — matches no real
+// machine-file licenseId, so binding fails CLOSED instead of falling back to the
+// editable plaintext license_id (Codex-v2 re-verify HIGH).
+const SIGNED_KEY_NO_LICENSE_ID = '\0no-signed-license-id\0';
 
 // Account Ed25519 public key (PUBLIC — not a secret) for Hardening B: offline
 // verification that a persisted license_key is a genuine Keygen ED25519_SIGN key
@@ -248,10 +252,12 @@ export function createLicenseService(ctx) {
   function authoritativeLicenseId() {
     const key = state.license.license_key;
     if (typeof key === 'string' && key.startsWith('key/')) {
-      const id = decodeKeygenPayload(key)?.license?.id;
-      if (id) return id;
+      // SIGNED key → the license id MUST come from the signed payload. A missing
+      // signed id fails CLOSED (a sentinel that matches no real file id) — NEVER
+      // fall back to the editable plaintext for a signed key (Codex-v2 re-verify).
+      return decodeKeygenPayload(key)?.license?.id ?? SIGNED_KEY_NO_LICENSE_ID;
     }
-    return state.license.license_id || null;
+    return state.license.license_id || null;   // legacy/non-signed keys only
   }
   function refreshSignedExpiry() {
     signedExpiryMsCache = null;
