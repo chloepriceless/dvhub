@@ -241,6 +241,18 @@ export function createLicenseService(ctx) {
   // (Christin A grandfathering + D perpetual-offline-final).
   let signedExpiryMsCache = null;
   let signedIssuedMsCache = null;   // Codex-v2 C-2: tamper-proof time floor from the signed file
+  // Codex-v2-fix (HIGH): the TAMPER-PROOF license identity is the license id INSIDE
+  // the Ed25519-signed key (Hardening-B-verified), NOT the editable plaintext
+  // state.license.license_id. Falls back to plaintext only for legacy/non-signed
+  // keys (grandfathered floating — never node-locked, so binding matters less).
+  function authoritativeLicenseId() {
+    const key = state.license.license_key;
+    if (typeof key === 'string' && key.startsWith('key/')) {
+      const id = decodeKeygenPayload(key)?.license?.id;
+      if (id) return id;
+    }
+    return state.license.license_id || null;
+  }
   function refreshSignedExpiry() {
     signedExpiryMsCache = null;
     signedIssuedMsCache = null;
@@ -248,10 +260,11 @@ export function createLicenseService(ctx) {
     if (!mf || !accountPublicKey) return;
     const v = verifyKeygenMachineFile(mf, accountPublicKey);
     if (!v.valid) return;
-    // Codex-v2 H-3 (#6): only trust a file bound to the CURRENTLY active license —
-    // a genuinely-signed file for a DIFFERENT license must not grant this one.
-    if (state.license.license_id && v.licenseId && v.licenseId !== state.license.license_id) {
-      pushLog('license_machine_file_license_mismatch', { bound: v.licenseId, active: state.license.license_id });
+    // Codex-v2 H-3 (#6) + fix: the file MUST be bound to THIS key's signed license
+    // id (tamper-proof) — a genuinely-signed file for a DIFFERENT license is ignored.
+    const authId = authoritativeLicenseId();
+    if (authId && v.licenseId !== authId) {
+      pushLog('license_machine_file_license_mismatch', { bound: v.licenseId, expected: authId });
       return;
     }
     // Codex-v2 C-2: the signed check-out/issued time is a tamper-proof LOWER bound
@@ -372,9 +385,13 @@ export function createLicenseService(ctx) {
             const mf = state.license.machine_file;
             const mv = mf ? verifyKeygenMachineFile(mf, accountPublicKey) : { valid: false };
             const applianceId = readApplianceId(baseDir);
+            const authId = authoritativeLicenseId();
+            // valid signature AND bound to THIS appliance AND to THIS key's signed
+            // license id — else the active node-locked state was tampered/copied.
             if (!mv.valid || !applianceId
-                || String(mv.fingerprint || '').toLowerCase() !== applianceId) {
-              pushLog('license_nodelock_policy_unsatisfied', { policy: policyId, reason: mv.reason || 'no_machine_file' });
+                || String(mv.fingerprint || '').toLowerCase() !== applianceId
+                || (authId && mv.licenseId !== authId)) {
+              pushLog('license_nodelock_policy_unsatisfied', { policy: policyId, reason: mv.reason || 'no_machine_file_or_mismatch' });
               state.license = freshNoneState();
             }
           }
@@ -430,6 +447,7 @@ export function createLicenseService(ctx) {
     const attrs = json?.data?.attributes || {};
     const newStatus = mapCodeToStatus(code, valid);
     const prevStatus = state.license.status;
+    const prevLicenseId = state.license.license_id;
 
     state.license.status = newStatus;
     state.license.key_fingerprint = fingerprint(keyForState);
@@ -445,8 +463,15 @@ export function createLicenseService(ctx) {
     // regardless of license validity — the server time is trustworthy even when
     // the licence is not.
     recordServerTime(json?.meta?.ts);
+    // Codex-v2-fix (MEDIUM): a DIFFERENT license must not inherit the previous
+    // license's signed machine file / cached expiry. Clear it on a license change.
+    if (state.license.license_id !== prevLicenseId) {
+      state.license.machine_file = null;
+      state.license.machine_id = null;
+    }
 
     persistState();
+    refreshSignedExpiry();   // keep the signed-expiry/issued caches in sync with the new state
 
     if (newStatus === 'active') {
       pushLog('license_activate_ok', {
