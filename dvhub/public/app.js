@@ -643,17 +643,16 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     canvas.addEventListener('mousemove', (e) => { canvas._lastPointer = { x: e.clientX, y: e.clientY }; });
     canvas.addEventListener('mouseleave', () => { canvas._lastPointer = null; });
   }
-  // Tooltip soll dem ECHTEN Cursor folgen. Der separate mousemove-Listener oben
-  // (06-23) griff nicht zuverlässig → external fiel aufs daten-gemittelte Caret
-  // (mode:'index') zurück und driftete zu den Energie-Balken runter. Robuster:
-  // die Position aus Chart.js' EIGENER eventPosition (Canvas-relativ) ziehen —
-  // der Positioner wird synchron VOR external mit der aktuellen Cursorposition
-  // aufgerufen, kann also nie veralten oder null sein.
-  if (typeof Chart !== 'undefined' && Chart.Tooltip && Chart.Tooltip.positioners
-      && !Chart.Tooltip.positioners.cursorPx) {
-    Chart.Tooltip.positioners.cursorPx = function (items, eventPosition) {
-      return eventPosition ? { x: eventPosition.x, y: eventPosition.y } : false;
-    };
+  // ECHTE Ursache (2026-06-25): #tooltip lag im <div class="card"> (chart-card),
+  // und .card hat backdrop-filter (dvhub-app.css). backdrop-filter erzeugt einen
+  // CONTAINING-BLOCK für position:fixed-Kinder → left/top des Tooltips wurden
+  // relativ zur CARD aufgelöst, nicht zum Viewport, während wir Viewport-Koords
+  // (clientX/Y) setzen → konstanter Versatz, "nicht direkt neben der Maus". Der
+  // 06-23-_lastPointer-Ansatz war also korrekt, scheiterte aber am Containing-
+  // Block. Fix: Tooltip an <body> hängen, damit position:fixed wieder gegen den
+  // Viewport auflöst. Gleiche ID → alle getElementById('tooltip')-Refs bleiben gültig.
+  if (tooltip && tooltip.parentElement !== document.body) {
+    document.body.appendChild(tooltip);
   }
 
   // Window: now − 12h … now + 36h, but never past the last published price slot
@@ -1191,8 +1190,6 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         tooltip: {
           enabled: false,
-          // caretX/caretY = LIVE-Cursorposition (Canvas-relativ), siehe Positioner oben.
-          position: 'cursorPx',
           external: (context) => {
             const tt = document.getElementById('tooltip');
             if (!tt) return;
@@ -1227,13 +1224,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             // abdriftet (vorher klebte er ganz unten).
             const cv = context.chart.canvas;
             const rect = cv.getBoundingClientRect();
-            // PRIMÄR: caretX/Y (= Cursor via 'cursorPx'-Positioner), Canvas-relativ →
-            // +rect = Viewport-Koords (= clientX/Y; #tooltip ist position:fixed).
-            // _lastPointer nur noch Fallback, falls eventPosition mal fehlt.
+            // PRIMÄR: echte Cursorposition (clientX/Y vom mousemove-Listener) — jetzt
+            // korrekt, da #tooltip an <body> hängt (position:fixed = Viewport). Das
+            // daten-gemittelte Caret (driftet zu den Energie-Balken) nur als Fallback,
+            // falls noch keine Cursorposition bekannt ist.
             const ptr = cv._lastPointer;
-            const hasCaret = Number.isFinite(tip.caretX) && Number.isFinite(tip.caretY);
-            const px = hasCaret ? (rect.left + tip.caretX) : (ptr ? ptr.x : rect.left);
-            const py = hasCaret ? (rect.top + tip.caretY) : (ptr ? ptr.y : rect.top);
+            const px = ptr ? ptr.x : (rect.left + tip.caretX);
+            const py = ptr ? ptr.y : (rect.top + tip.caretY);
             const OFF = 8;  // direkt neben dem Cursor (Operator: 20 war zu weit weg)
             const vw = window.innerWidth, vh = window.innerHeight;
             const tw = tt.offsetWidth, th = tt.offsetHeight;
