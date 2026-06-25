@@ -52,6 +52,33 @@ test('pv-export: feed-in ≈ PV (battery net ~0) → dcExportMode, no battery sh
   assert.equal(r.gridSetpointW, -5900); // -(6000 - 100)
 });
 
+// --- T-CURTAIL-CHARGE (Christin 2026-06-25): a midday surplus slot where EOS ALSO
+// charges the battery (PV − load − feed-in > band) must be labelled distinctly so the
+// Fahrplan matches the control path (which reserves that charge before exporting).
+test('pv_charge_export: surplus slot that ALSO charges the battery → distinct label + feed-in setpoint', () => {
+  // midday: PV 20 kW, house 2 kW, EOS feeds in 8 kW → 10 kW charges the battery.
+  const r = classifyEosSlotAction({ pvW: 20000, loadW: 2000, feedinW: 8000, bufferW: 100 });
+  assert.equal(r.action, 'pv_charge_export');
+  assert.equal(r.label, 'Akku lädt + Überschuss einspeisen');
+  assert.equal(r.target, 'dcExportMode');
+  assert.equal(r.batteryExportW, 0);
+  // exported setpoint = -(feed-in 8000 − buffer 100) = -7900, NOT -(pv − buffer)
+  assert.equal(r.gridSetpointW, -7900);
+});
+
+test('pv_charge_export: residual below the band stays a plain PV-surplus export', () => {
+  // PV 20 kW, house 2 kW, feed-in 17.9 kW → residual 100 W < band 300 → plain surplus
+  const r = classifyEosSlotAction({ pvW: 20000, loadW: 2000, feedinW: 17900, bufferW: 100 });
+  assert.equal(r.action, 'pv_export');
+  assert.equal(r.gridSetpointW, -19900); // -(pv 20000 − buffer 100), legacy behaviour
+});
+
+test('pv_charge_export: legacy callers without loadW keep the plain pv_export label', () => {
+  const r = classifyEosSlotAction({ pvW: 20000, feedinW: 8000, bufferW: 100 });
+  assert.equal(r.action, 'pv_export');
+  assert.equal(r.gridSetpointW, -19900);
+});
+
 test('charge: dc_charge factor set, no feed-in → Halten (no active charge lever)', () => {
   const r = classifyEosSlotAction({ pvW: 4000, feedinW: 0, dcChargeFactor: 1, socPct: 30 });
   assert.equal(r.action, 'charge');

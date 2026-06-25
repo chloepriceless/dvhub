@@ -649,6 +649,54 @@ test('A1: EOS autoManaged dcExportMode rule bypasses the SoC guard and exports',
     `expected -4900 write, got ${JSON.stringify(writes)}`);
 });
 
+// --- T-CURTAIL-CHARGE (Christin 2026-06-25): a dcExportMode slot may carry a
+// chargeReserveW (the EOS-planned battery charge). schedule-eval must subtract it
+// from live PV BEFORE exporting, so "100 % Einspeisung" feeds in only the surplus
+// ABOVE the charge (live PV − Haus − Reserve − Puffer) instead of dumping the power
+// EOS wanted to store. Without the reserve the slot exports all surplus (unchanged).
+function makeChargeReserveCtx({ chargeReserveW }) {
+  return makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.schedule.rules = [{
+        id: 'opt-dc-charge-1', enabled: true, target: 'dcExportMode', value: 1,
+        start: '00:00', end: '23:59', source: 'forecast_optimizer',
+        autoManaged: true, optimizer: 'eos',
+        ...(chargeReserveW != null ? { chargeReserveW } : {})
+      }];
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 5000;        // live PV
+      state.victron.selfConsumptionW = 0;   // no house load → liveLoadW 0
+      // Guard window forced always-on so the assertion is wall-clock independent;
+      // the autoManaged EOS slot bypasses the SoC guard anyway.
+      cfg.dcExportMode = { targetSocPct: 90, chargeDeadlineHour: 23, chargeGuardHours: 23, bufferW: 100 };
+      cfg.optimizer.enabled = true;
+    }
+  });
+}
+
+test('T-CURTAIL-CHARGE: dcExportMode subtracts chargeReserveW before exporting', async () => {
+  const { ctx, logs, writes } = makeChargeReserveCtx({ chargeReserveW: 2000 });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+
+  // export = -(live PV 5000 − Haus 0 − Reserve 2000 − Puffer 100) = -2900.
+  // Without the reserve it would be -4900 → the 2000 W charge would be exported.
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -2900),
+    `expected -2900 (charge reserved), got ${JSON.stringify(writes)}`);
+  const active = findLog(logs, 'dc_export_mode_active');
+  assert.ok(active.length >= 1, 'dc_export_mode_active logged');
+  assert.equal(active[0].payload.chargeReserveW, 2000, 'log carries the reserved charge');
+});
+
+test('T-CURTAIL-CHARGE: a dcExportMode slot WITHOUT chargeReserveW still exports all surplus', async () => {
+  const { ctx, writes } = makeChargeReserveCtx({ chargeReserveW: null });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // -(live PV 5000 − Haus 0 − Puffer 100) = -4900 (legacy pure-surplus behaviour)
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -4900),
+    `pure surplus unchanged: expected -4900, got ${JSON.stringify(writes)}`);
+});
+
 // --- 25-01/25-02: EEG/§14a-Gate-Verfeinerung (Self-Consumption + dc_export) ----
 // Befund 1+2: Das EEG-Gate (schedule-eval.js EEG-Block) lehnt heute JEDEN
 // gridSetpointW < 0 bei allowGridDischarge=false als grid_discharge_not_allowed

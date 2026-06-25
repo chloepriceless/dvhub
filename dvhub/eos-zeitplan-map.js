@@ -30,6 +30,14 @@ const HOLD_SETPOINT_W = -40;
  * @param {object} p
  * @param {number} p.pvW            forecast PV production for the slot (W)
  * @param {number} p.feedinW        EOS grid feed-in (export) for the slot (W)
+ * @param {number|null} [p.loadW]   EOS house load for the slot (W); when given,
+ *                                  a PV-surplus slot that ALSO charges the battery
+ *                                  (PV − load − feed-in > band) is labelled
+ *                                  "Akku lädt + Überschuss einspeisen". null/absent
+ *                                  ⇒ legacy behaviour (plain "PV-Überschuss einspeisen").
+ * @param {number} [p.bandW]        charge-detection band (W); below it the residual
+ *                                  is plan-split noise → plain surplus (matches the
+ *                                  control path's bandW in pullGridSetpoints).
  * @param {number} [p.importW]      EOS grid consumption (import) for the slot (W)
  * @param {boolean} [p.dischargeAllowed]  genetic_discharge_allowed_factor > 0
  * @param {number} [p.dcChargeFactor]     genetic_dc_charge_factor (>0 = PV charging)
@@ -44,6 +52,8 @@ const HOLD_SETPOINT_W = -40;
 export function classifyEosSlotAction({
   pvW = 0,
   feedinW = 0,
+  loadW = null,
+  bandW = 300,
   importW = 0,
   dischargeAllowed = false,
   dcChargeFactor = 0,
@@ -94,8 +104,28 @@ export function classifyEosSlotAction({
     };
   }
 
-  // Reine PV-Überschuss-Einspeisung (Akku netto ~0).
+  // PV-Überschuss-Einspeisung (Akku netto ~0 ins Netz).
   if (feedin > EPS_W) {
+    // T-CURTAIL-CHARGE (Christin 2026-06-25): EOS may CHARGE the battery from PV
+    // in the SAME surplus slot it exports (planned charge = PV − Last − Einspeisung).
+    // The control path (pullGridSetpoints/schedule-eval) reserves that charge above
+    // the band before exporting, so the Fahrplan must show it too — otherwise the
+    // preview reads "alles einspeisen" while the box actually charges. The exported
+    // setpoint is then the EOS feed-in minus buffer (= live PV − Last − Reserve − Puffer).
+    if (loadW != null) {
+      const load = Math.max(0, Number(loadW) || 0);
+      const chargeReserve = Math.max(0, pv - load - feedin);
+      if (chargeReserve > bandW) {
+        const exportW = Math.max(0, Math.round(feedin - bufferW));
+        return {
+          action: 'pv_charge_export',
+          label: 'Akku lädt + Überschuss einspeisen',
+          target: 'dcExportMode',
+          batteryExportW: 0,
+          gridSetpointW: exportW === 0 ? 0 : -exportW
+        };
+      }
+    }
     const exportW = Math.max(0, Math.round(pv - bufferW));
     return {
       action: 'pv_export',

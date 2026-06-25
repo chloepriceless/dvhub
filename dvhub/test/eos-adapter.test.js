@@ -520,6 +520,70 @@ test('buildScheduleRules: dcExportMode lever slot → target=dcExportMode, value
   assert.equal(rules[1].batteryShareW, 15000);
 });
 
+// --- T-CURTAIL-CHARGE (Christin 2026-06-25): a surplus slot where EOS ALSO charges
+// the battery (planned net export < PV surplus) must carry chargeReserveW = PV surplus
+// − planned net export, so schedule-eval reserves it instead of exporting the charge.
+// A pure-surplus slot (residual ≤ band) carries no reserve (behaviour unchanged).
+test('pullGridSetpoints: surplus+charge slot carries chargeReserveW; pure-surplus slot does not', async () => {
+  const solution = {
+    generated_at: '2026-06-20T08:00:00Z',
+    valid_from: '2026-06-20T08:00:00Z',
+    valid_until: '2026-06-20T08:30:00Z',
+    solution: {
+      data: {
+        // export 2000Wh/0.25h = -8000W; PV surplus 18000W ≫ 8000W → B=0 (dcExportMode);
+        // plannedCharge = surplus 18000 − net export 8000 = 10000W > band → reserve 10000
+        '2026-06-20T08:00:00Z': { battery1_soc_factor: 0.50, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 2000 },
+        // export 1000Wh/0.25h = -4000W; PV surplus 4000W == export → plannedCharge 0 → no reserve
+        '2026-06-20T08:15:00Z': { battery1_soc_factor: 0.55, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 1000 },
+      },
+    },
+    prediction: {
+      data: {
+        // PV (5000-500)/0.25 = 18000W surplus
+        '2026-06-20T08:00:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 5000, loadforecast_energy_wh: 500 },
+        // PV (1250-250)/0.25 = 4000W surplus == 4000W export → no charge
+        '2026-06-20T08:15:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 1250, loadforecast_energy_wh: 250 },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+
+    const charge = slots.find((s) => s.ts === new Date('2026-06-20T08:00:00Z').getTime());
+    assert.ok(charge, 'surplus+charge slot is emitted');
+    assert.equal(charge.lever, 'dcExportMode', 'still a PV-surplus (dcExportMode) lever');
+    assert.equal(charge.planAction, 'eos_pv_export');
+    assert.equal(charge.chargeReserveW, 10000, 'chargeReserveW = PV surplus 18000 − net export 8000');
+
+    const pure = slots.find((s) => s.ts === new Date('2026-06-20T08:15:00Z').getTime());
+    assert.ok(pure, 'pure-surplus slot is emitted');
+    assert.equal(pure.lever, 'dcExportMode');
+    assert.equal(pure.chargeReserveW, undefined, 'no charge reserve when export ≈ PV surplus');
+  } finally {
+    await mock.close();
+  }
+});
+
+// --- T-CURTAIL-CHARGE: schedule-builder carries chargeReserveW onto the dcExportMode rule ---
+test('buildScheduleRules: dcExportMode slot carries chargeReserveW onto the rule (only when >0)', () => {
+  const slots = [
+    { ts: 1717704000000, endTs: 1717704900000, lever: 'dcExportMode', planAction: 'eos_pv_export', confidence: 0.7, chargeReserveW: 10000 },
+    { ts: 1717704900000, endTs: 1717705800000, lever: 'dcExportMode', planAction: 'eos_pv_export', confidence: 0.7 },
+  ];
+  const rules = buildScheduleRules({ slots, source: 'forecast_optimizer', optimizer: 'eos', getCfg: () => ({ schedule: { timezone: 'Europe/Berlin' } }) });
+  assert.equal(rules.length, 2);
+  assert.equal(rules[0].target, 'dcExportMode');
+  assert.equal(rules[0].value, 1);
+  assert.equal(rules[0].chargeReserveW, 10000, 'reserve carried onto the rule');
+  assert.ok(!('chargeReserveW' in rules[1]), 'pure-surplus rule carries no reserve field');
+});
+
 // --- T-0121: pullGridSetpoints caps actuated rules to the horizon ---
 test('pullGridSetpoints caps rules to ruleHorizonHours (no churning far-future rules)', async () => {
   const now = Date.now();

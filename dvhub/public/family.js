@@ -507,6 +507,7 @@
         case 'co_export':      return { txt: '\u26a1 PV+Akku \u2192 Netz', cls: 'fam-eos-exp' };
         case 'battery_export': return { txt: '\u26a1 Akku \u2192 Netz', cls: 'fam-eos-exp' };
         case 'pv_export':      return { txt: '\u26a1 PV-\u00dcberschuss', cls: 'fam-eos-exp' };
+        case 'pv_charge_export': return { txt: '\u2600\u26a1 Laden + \u00dcberschuss', cls: 'fam-eos-exp' };
         case 'charge':         return { txt: '\u2600 Akku l\u00e4dt', cls: 'fam-eos-chg' };
         case 'grid_draw':      return { txt: '\u2193 Netzbezug', cls: 'fam-eos-imp' };
         case 'hold':           return { txt: '\u2192 Halten', cls: '' };

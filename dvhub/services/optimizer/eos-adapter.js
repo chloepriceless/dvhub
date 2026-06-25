@@ -415,6 +415,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       const action = classifyEosSlotAction({
         pvW: (Number(row.pvWh) || 0) / h,
         feedinW: (Number(exp) || 0) / h,
+        loadW: (Number(row.loadWh) || 0) / h, // enables the "Akku lädt + Überschuss" label
         importW: (Number(imp) || 0) / h,
         dischargeAllowed: (row._dischargeAllowedFactor || 0) > 0,
         dcChargeFactor: row._dcChargeFactor || 0,

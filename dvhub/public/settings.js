@@ -3269,6 +3269,7 @@ function renderEosInspector(payload) {
         case 'co_export':  return { html: '⚡ PV+Akku einspeisen', cls: 'plan-export' };
         case 'battery_export': return { html: '⚡ Akku einspeisen', cls: 'plan-export' };
         case 'pv_export':  return { html: '⚡ PV-Überschuss', cls: 'plan-export' };
+        case 'pv_charge_export': return { html: '☀⚡ Akku lädt + Überschuss', cls: 'plan-export' };
         case 'charge':     return { html: '☀ Akku lädt (PV)', cls: 'plan-pv-charge' };
         case 'grid_draw':  return { html: '⊘ Netzbezug', cls: 'plan-grid-disabled' };
         case 'hold':       return { html: '→ Halten', cls: 'plan-self' };
