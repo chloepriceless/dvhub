@@ -274,11 +274,18 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
   // state.forecast.pv / insert combined rows concurrently (last-writer-wins race).
   let forecastRunning = false;
 
-  /** Cheap change-signature of a pvnode slot array (length + first ts + last value). */
+  /**
+   * Cheap change-signature of a pvnode slot array: length + window start + the
+   * SUM of all slot powers. The sum shifts on ANY value change anywhere in the
+   * curve (incl. near-term nowcast updates) — a last-value-only sig would miss a
+   * nowcast that only moves the next few hours. Stable forecast → same sig → skip
+   * the re-merge (correct: nothing changed, e.g. at night).
+   */
   function pvnodeSigOf(slots) {
     if (!Array.isArray(slots) || slots.length === 0) return 'empty';
-    const a = slots[0]; const b = slots[slots.length - 1];
-    return slots.length + ':' + (a?.ts_utc ?? '') + ':' + (b?.ts_utc ?? '') + ':' + (b?.power_w ?? '');
+    let sum = 0;
+    for (const s of slots) sum += Math.round(Number(s?.power_w) || 0);
+    return slots.length + ':' + (slots[0]?.ts_utc ?? '') + ':' + sum;
   }
 
   /**
