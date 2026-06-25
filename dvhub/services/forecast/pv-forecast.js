@@ -23,6 +23,15 @@ const PV_FORECAST_SCRIPT = path.join(__dirname, '..', 'python-bridge', 'scripts'
 // Forecast interval: every 6 hours
 const FORECAST_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+// Dedicated pvnode refresh tick (Christin 2026-06-25): pull pvnode on its OWN
+// cadence — independent of the 6 h ensemble cycle and WITHOUT re-running Solcast /
+// pvlib / the other providers. Fixed 15-min tick = the plan-window floor; the
+// pvnode client gates each call by the selected plan (Plus fetches every tick,
+// Free returns cache ~47/48 ticks). Each fresh pull re-merges against the LAST
+// known other-provider slots, so the ensemble follows pvnode's nowcast without
+// touching any other provider's quota.
+const PVNODE_REFRESH_TICK_MS = 15 * 60 * 1000;
+
 /**
  * Build pvlib input JSON from config.
  * Supports 3 config levels per D-11:
@@ -256,6 +265,21 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
 export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient }) {
   const { state, getCfg, pushLog } = ctx;
   let intervalId = null;
+  let pvnodeTimerId = null;
+  // Baseline from the last FULL ensemble run, reused by the pvnode-only refresh so
+  // it re-merges fresh pvnode against the other providers WITHOUT re-fetching them.
+  let lastProviderSlots = null;
+  let lastPvnodeSig = null;
+  // Shared guard: the 6 h full cycle and the 15-min pvnode refresh must never write
+  // state.forecast.pv / insert combined rows concurrently (last-writer-wins race).
+  let forecastRunning = false;
+
+  /** Cheap change-signature of a pvnode slot array (length + first ts + last value). */
+  function pvnodeSigOf(slots) {
+    if (!Array.isArray(slots) || slots.length === 0) return 'empty';
+    const a = slots[0]; const b = slots[slots.length - 1];
+    return slots.length + ':' + (a?.ts_utc ?? '') + ':' + (b?.ts_utc ?? '') + ':' + (b?.power_w ?? '');
+  }
 
   /**
    * Transform weather rows from DB format to pvlib input format.
@@ -374,6 +398,11 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
     const vrmSlots           = resampleTo15min(normalizeProviderRows(vrmResult));
     const forecastSolarSlots = resampleTo15min(normalizeProviderRows(forecastSolarResult));
     const openMeteoSlots     = resampleTo15min(normalizeProviderRows(openMeteoResult));
+
+    // Baseline for the pvnode-only refresh: re-merge fresh pvnode against THESE
+    // other-provider slots later, without re-fetching Solcast/pvlib/etc.
+    lastProviderSlots = { pvnode: pvnodeSlots, solcast: solcastSlots, pvlib: pvlibSlots, vrm: vrmSlots, forecast_solar: forecastSolarSlots, open_meteo: openMeteoSlots };
+    lastPvnodeSig = pvnodeSigOf(pvnodeSlots);
 
     const presentProviders = [];
     if (pvnodeSlots.length  > 0) presentProviders.push('pvnode');
@@ -575,6 +604,69 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
   }
 
   /**
+   * pvnode-only refresh (Christin 2026-06-25): pull pvnode on its plan cadence and
+   * re-merge the ensemble using the LAST known other-provider slots — NO Solcast /
+   * pvlib / vrm re-fetch (those keep their own slow cadence + quotas). The pvnode
+   * client gates the actual network call by the selected plan, so this no-ops when
+   * pvnode has no fresh data. Needs a prior full runForecast() (provider baseline).
+   * Shares the forecastRunning guard with the 6 h cycle so the two never collide.
+   */
+  async function refreshPvnodeOnly() {
+    if (forecastRunning) return;       // never race the full cycle (or itself)
+    if (!lastProviderSlots) return;    // no baseline yet — wait for the first full run
+    const cfg = getCfg();
+    const model = cfg.forecast?.pv?.model || 'auto';
+    const pvnodeActive = model === 'pvnode' || model === 'both'
+      || (model === 'auto' && pvnodeClient?.isConfigured);
+    if (!pvnodeActive) return;
+
+    forecastRunning = true; // set synchronously with the check above — no await between → no race
+    try {
+      let pvnodeResult = [];
+      try {
+        pvnodeResult = await pvnodeClient.fetchForecast() || [];
+      } catch (err) {
+        pushLog('pv_pvnode_error', { error: err?.message ?? String(err) });
+        return;
+      }
+      const pvnodeSlots = resampleTo15min(normalizeProviderRows(pvnodeResult));
+      if (pvnodeSlots.length === 0) return;
+      const sig = pvnodeSigOf(pvnodeSlots);
+      if (sig === lastPvnodeSig) return; // client returned cached/unchanged data → nothing to re-merge
+
+      const providersBySlot = { ...lastProviderSlots, pvnode: pvnodeSlots };
+      const present = Object.values(providersBySlot).filter(s => Array.isArray(s) && s.length > 0).length;
+      if (present < 2) { lastPvnodeSig = sig; return; }
+
+      const { merged, weights } = await mergePvForecastsWeighted({ providersBySlot, store, pushLog });
+      if (Array.isArray(merged) && merged.length > 0) {
+        await store.insertPvForecastBatch(merged.map((row) => ({
+          model: 'combined', ts_utc: row.ts_utc, power_w: row.power_w, confidence: 0.5
+        })));
+        // Persist pvnode's own rows too (accuracy tracker / snapshots), like runForecast.
+        await store.insertPvForecastBatch(pvnodeSlots
+          .map((r) => ({ model: 'pvnode', ts_utc: r.ts_utc ?? r.ts ?? null, power_w: r.power_w, confidence: 0.5 }))
+          .filter((r) => r.ts_utc != null));
+        state.forecast.pv = {
+          lastFetchAt: new Date().toISOString(),
+          model: 'combined',
+          data: merged.map((r) => ({ ts: r.ts_utc, ts_utc: r.ts_utc, power_w: r.power_w, confidence: 0.5 })),
+          confidence: 0.5,
+          ensembleWeights: weights
+        };
+        lastProviderSlots = providersBySlot;
+        lastPvnodeSig = sig;
+        ctx.bumpForecastVersion?.();
+        pushLog('pvnode_refresh_merged', { slots: merged.length });
+      }
+    } catch (err) {
+      pushLog('ensemble_merge_error', { error: err?.message ?? String(err) });
+    } finally {
+      forecastRunning = false;
+    }
+  }
+
+  /**
    * Start the PV forecast service.
    * Sets interval for periodic forecast (every 6h). Runs immediately on start.
    */
@@ -590,17 +682,26 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
     // Review 2026-06-10 (P2-11b): overlap guard — a slow cycle (python spawn
     // retries + sluggish DB) must not race a second concurrent runForecast()
     // (double batch-inserts + last-writer-wins on state.forecast.pv). Same
-    // pattern as load-forecast.js / weather-fetch.js.
-    let running = false;
+    // pattern as load-forecast.js / weather-fetch.js. forecastRunning is now
+    // SHARED with refreshPvnodeOnly so the 6 h cycle and the pvnode refresh
+    // serialise (never both write the combined forecast at once).
     intervalId = setInterval(() => {
-      if (running) return;
-      running = true;
+      if (forecastRunning) return;
+      forecastRunning = true;
       runForecast()
         .catch(err => {
           pushLog('pv_forecast_interval_error', { error: err.message });
         })
-        .finally(() => { running = false; });
+        .finally(() => { forecastRunning = false; });
     }, FORECAST_INTERVAL_MS);
+
+    // Dedicated pvnode refresh on its own (plan-gated) cadence — independent of the
+    // 6 h cycle and of Solcast/pvlib. Ticks every 15 min; the pvnode client only
+    // hits the network when the selected plan's window has elapsed (Plus → every
+    // tick, Free → ~1/12 h). No-ops until the first full run sets the baseline.
+    pvnodeTimerId = setInterval(() => {
+      refreshPvnodeOnly().catch(err => pushLog('pvnode_refresh_error', { error: err?.message ?? String(err) }));
+    }, PVNODE_REFRESH_TICK_MS);
   }
 
   /**
@@ -611,7 +712,11 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       clearInterval(intervalId);
       intervalId = null;
     }
+    if (pvnodeTimerId) {
+      clearInterval(pvnodeTimerId);
+      pvnodeTimerId = null;
+    }
   }
 
-  return { start, close, runForecast };
+  return { start, close, runForecast, refreshPvnodeOnly };
 }
