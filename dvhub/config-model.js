@@ -2058,6 +2058,22 @@ function buildFieldDefinitions() {
       group: 'pvnode',
       groupLabel: 'pvnode',
       groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
+      path: 'forecast.pvnode.plan',
+      label: 'pvnode Plan',
+      type: 'select',
+      options: [
+        { value: 'free', label: 'Free (1\u00d7/Tag, 250/Monat, 48 h)' },
+        { value: 'light', label: 'Light (st\u00fcndlich, 3000/Monat, 7 Tage)' },
+        { value: 'plus', label: 'Plus (Nowcast ~10 min, 3000/Monat, 7 Tage, Kalibrierung)' },
+        { value: 'enterprise', label: 'Enterprise (custom)' }
+      ],
+      help: 'Dein pvnode-Abo. Bestimmt automatisch den Abhol-Takt (Free 12 h \u00b7 Light 1 h \u00b7 Plus/Enterprise 15 min), das Monatslimit (Free 250 \u00b7 Light/Plus 3000) und den Prognose-Horizont (Free 2 Tage \u00b7 sonst 7). Leer = Free. So holen wir nie \u00f6fter als erlaubt und nutzen das Limit des Plans aus.'
+    },
+    {
+      section: 'forecast',
+      group: 'pvnode',
+      groupLabel: 'pvnode',
+      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
       path: 'forecast.pvnode.siteId',
       label: 'pvnode Standort-ID (V2)',
       type: 'text',

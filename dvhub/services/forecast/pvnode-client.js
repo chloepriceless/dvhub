@@ -22,6 +22,8 @@
 
 import pRetry, { AbortError } from 'p-retry';
 
+import { resolvePvnodePlan } from './pvnode-plans.js';
+
 const PVNODE_BASE = 'https://api.pvnode.com/v2';
 
 /**
@@ -286,7 +288,6 @@ function buildRequest({ kind, siteId, lat, lon, plants, query, timeoutMs = 20000
  */
 export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
   const { getCfg, pushLog } = ctx;
-  const MIN_INTERVAL_MS = 15 * 60 * 1000; // 15 min between fetches
   let lastFetchAt = 0;
   let cachedData = null;
 
@@ -308,12 +309,15 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
    * @returns {Promise<Array<{ts_utc:string,power_w:number}>|null>}
    */
   async function fetchForecast() {
+    const cfg = getCfg(); // QUAL-05: never cache at module scope
+    // Poll cadence is plan-derived (budget-aware): Free 12 h, Light 1 h, Plus
+    // 15 min, Enterprise/override custom — floored at 15 min. No point fetching
+    // faster than the plan recomputes, and the monthly quota bounds the rate.
+    const plan = resolvePvnodePlan(cfg);
     const now = Date.now();
-    if (now - lastFetchAt < MIN_INTERVAL_MS) {
+    if (now - lastFetchAt < plan.fetchIntervalMs) {
       return cachedData;
     }
-
-    const cfg = getCfg(); // QUAL-05: never cache at module scope
     const apiKey = cfg.forecast?.pvnode?.apiKey;
     if (!apiKey) {
       pushLog('pvnode_skip', { reason: 'missing_apikey' });
@@ -327,8 +331,9 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
     }
 
     const siteId = getSiteId(cfg);
-    // Horizon is config-driven (clamped 1..7); pvnode caps it by license tier anyway.
-    const forecastDays = clampForecastDays(cfg.forecast?.pvnode?.forecastDays);
+    // Horizon is config-driven (clamped 1..7) AND capped at the plan maximum
+    // (Free 2 d, paid 7 d) so we never request beyond what the plan delivers.
+    const forecastDays = Math.min(plan.maxForecastDays, clampForecastDays(cfg.forecast?.pvnode?.forecastDays));
     const query = new URLSearchParams({ forecast_days: String(forecastDays) });
     let req;
     if (siteId) {

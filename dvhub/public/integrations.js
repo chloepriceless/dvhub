@@ -2821,6 +2821,7 @@
         var p = await pRes.json();
         if (p && p.ok) {
           if (el('fc-pvnode-apikey')) el('fc-pvnode-apikey').value = (p.apiKey && p.apiKey !== '***') ? p.apiKey : '';
+          if (el('fc-pvnode-plan')) el('fc-pvnode-plan').value = p.plan || 'free';
           if (el('fc-pvnode-siteid')) el('fc-pvnode-siteid').value = p.siteId || '';
           if (el('fc-pvnode-forecastdays')) el('fc-pvnode-forecastdays').value = (p.forecastDays != null && p.forecastDays !== '') ? p.forecastDays : '';
           if (el('fc-pvnode-nowcast')) el('fc-pvnode-nowcast').checked = !!p.nowcastEnabled;
@@ -2844,6 +2845,7 @@
     var typedKey = (el('fc-pvnode-apikey') && el('fc-pvnode-apikey').value) || '';
     return {
       apiKey: typedKey ? typedKey.trim() : '***',
+      plan: ((el('fc-pvnode-plan') && el('fc-pvnode-plan').value) || 'free'),
       siteId: ((el('fc-pvnode-siteid') && el('fc-pvnode-siteid').value) || '').trim(),
       forecastDays: ((el('fc-pvnode-forecastdays') && el('fc-pvnode-forecastdays').value) || '').trim(),
       nowcastEnabled: !!(el('fc-pvnode-nowcast') && el('fc-pvnode-nowcast').checked)

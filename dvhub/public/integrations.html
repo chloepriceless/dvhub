@@ -811,6 +811,16 @@
               <span class="field-hint">Aus pvnode.com &rarr; Account &rarr; API (derselbe Key f&uuml;r V1 und V2).</span>
             </label>
             <label class="dv-field">
+              <span class="field-label">Plan</span>
+              <select class="input" id="fc-pvnode-plan">
+                <option value="free">Free (1&times;/Tag, 250/Monat, 48 h)</option>
+                <option value="light">Light (st&uuml;ndlich, 3000/Monat, 7 Tage)</option>
+                <option value="plus">Plus (Nowcast ~10 min, 3000/Monat, 7 Tage, Kalibrierung)</option>
+                <option value="enterprise">Enterprise (custom)</option>
+              </select>
+              <span class="field-hint">Dein pvnode-Abo. Bestimmt automatisch den Abhol-Takt (Free 12 h &middot; Light 1 h &middot; Plus/Enterprise 15 min), das Monatslimit und den Horizont &mdash; so holen wir nie &ouml;fter als erlaubt.</span>
+            </label>
+            <label class="dv-field">
               <span class="field-label">Standort-ID (V2)</span>
               <input type="text" class="input mono" id="fc-pvnode-siteid"
                      placeholder="leer = Inline aus den Dachfl&auml;chen" autocomplete="off" spellcheck="false">
@@ -1061,6 +1071,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=42"></script>
+  <script src="/integrations.js?v=43"></script>
 </body>
 </html>

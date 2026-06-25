@@ -3931,6 +3931,7 @@ export function createApiRoutes(ctx) {
         ok: true,
         enabled: !!p.apiKey,                // derived (no schema enabled flag)
         apiKey: p.apiKey ? '***' : '',      // D-13 — never raw
+        plan: p.plan || 'free',             // V2 subscription tier (drives fetch window/quota/horizon)
         siteId: p.siteId || '',             // V2 saved-site id (empty = inline mode)
         forecastDays: (p.forecastDays != null ? p.forecastDays : ''), // V2 horizon (1..7; '' = default 2)
         nowcastEnabled: !!p.nowcastEnabled
@@ -3955,6 +3956,11 @@ export function createApiRoutes(ctx) {
         ? (prev.apiKey || '')
         : clip(body.apiKey, 256);
       const siteId = clip(body.siteId, 128).trim();
+      // V2 subscription plan — drives fetch window / monthly quota / horizon
+      // (pvnode-plans.js). Unknown/empty → 'free' (safest, lowest limits).
+      const PVNODE_PLAN_IDS = ['free', 'light', 'plus', 'enterprise'];
+      const plan = PVNODE_PLAN_IDS.includes(String(body.plan || '').toLowerCase())
+        ? String(body.plan).toLowerCase() : 'free';
       // V2 forecast horizon (days): '' / invalid → unset (client defaults to 2); else clamp 1..7.
       let forecastDays = null;
       if (body.forecastDays !== '' && body.forecastDays != null) {
@@ -3962,6 +3968,7 @@ export function createApiRoutes(ctx) {
         if (Number.isFinite(n)) forecastDays = Math.max(1, Math.min(7, n));
       }
       next.forecast.pvnode.nowcastEnabled = !!body.nowcastEnabled;
+      next.forecast.pvnode.plan = plan;
       if (apiKey) {
         next.forecast.pvnode.apiKey = apiKey;
       } else {
@@ -3986,6 +3993,7 @@ export function createApiRoutes(ctx) {
       pushLog('pvnode_saved', {
         apiKeySet: !!apiKey,
         siteIdSet: !!siteId,
+        plan,
         forecastDays: forecastDays ?? 'default',
         nowcastEnabled: next.forecast.pvnode.nowcastEnabled
       }, actorContext(req));

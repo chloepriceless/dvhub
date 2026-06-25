@@ -21,7 +21,11 @@
 // - getCfg() re-read every call (never cached at module scope — QUAL-05)
 // - Exhausted flag is in-memory only (Retry-After is inherently transient; DB write would
 //   be racy across restarts and the flag is self-healing after the timer expires)
-// - Defaults: monthlyQuota 1000 (Hobbyist tier per Achim Schulze email 2026-04-15)
+// - Defaults: monthly limit comes from the selected pvnode plan (pvnode-plans.js):
+//   Free 250, Light/Plus 3000, Enterprise high. An explicit
+//   forecast.pvnode.monthlyQuota override still wins.
+
+import { resolvePvnodePlan } from './pvnode-plans.js';
 
 /**
  * Create the pvnode client-side monthly quota tracker.
@@ -43,12 +47,13 @@ export function createPvnodeQuota(ctx, { store }) {
   let quotaExhaustedUntil = 0;
 
   /**
-   * Read the configured monthly limit. Falls back to 1000 (Hobbyist tier default).
-   * Always read via getCfg() — never cached (QUAL-05 config hot-reload).
+   * Read the effective monthly call limit from the selected pvnode plan
+   * (Free 250, Light/Plus 3000, Enterprise high) — an explicit
+   * `forecast.pvnode.monthlyQuota` override still wins (resolved in
+   * resolvePvnodePlan). Always read via getCfg() — never cached (QUAL-05).
    */
   function getLimit() {
-    const limit = Number(getCfg().forecast?.pvnode?.monthlyQuota);
-    return Number.isFinite(limit) && limit > 0 ? limit : 1000;
+    return resolvePvnodePlan(getCfg()).monthlyQuota;
   }
 
   /**
