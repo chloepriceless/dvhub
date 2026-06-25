@@ -701,7 +701,12 @@ export function createScheduleEvaluator(ctx) {
         // (default ON). With it OFF the legacy "export all PV minus buffer" applies.
         const subtractLoad = cfg.dcExportMode?.subtractHouseLoad !== false;
         const liveLoadW = subtractLoad ? Math.max(0, Number(state.victron.selfConsumptionW || 0)) : 0;
-        const reserveW = liveLoadW + bufferW;
+        // T-CURTAIL-CHARGE (Christin 2026-06-25): the EOS plan may want the battery
+        // to CHARGE in this surplus slot (carried on the dcExportMode rule). Reserve
+        // that charge BEFORE exporting, so "100 % Einspeisung" feeds in only the real
+        // surplus above the charge instead of exporting the power EOS wanted to store.
+        const chargeReserveW = Math.max(0, Number(dcScheduleRule?.chargeReserveW) || 0);
+        const reserveW = liveLoadW + bufferW + chargeReserveW;
         if (pvW > 50) {
           // Negativer Setpoint = Einspeisung. Export = PV − Hausverbrauch − Puffer,
           // nie negativ (kein erzwungener Import / Akku-Entladen wenn PV < Last).
@@ -714,7 +719,7 @@ export function createScheduleEvaluator(ctx) {
             await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
             state.ctrl._dcExportLastWriteAt = now;
             if (!state.ctrl._dcExportLogged) {
-              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, subtractLoad, currentPrice });
+              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, chargeReserveW, subtractLoad, currentPrice });
               state.ctrl._dcExportLogged = true;
             }
           }

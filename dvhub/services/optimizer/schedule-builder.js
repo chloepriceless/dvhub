@@ -55,7 +55,12 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
     // gridSetpointW = -(live PV − buffer) each cycle, so the real PV sets the
     // setpoint — no static value. value=1 = lever ON.
     if (slot.lever === 'dcExportMode') {
-      return { ...base, target: 'dcExportMode', value: 1 };
+      // T-CURTAIL-CHARGE: carry the EOS-planned charge reserve so schedule-eval
+      // exports only the surplus ABOVE the charge (live PV − Haus − Reserve − Puffer).
+      return {
+        ...base, target: 'dcExportMode', value: 1,
+        ...(Number(slot.chargeReserveW) > 0 ? { chargeReserveW: Math.round(slot.chargeReserveW) } : {})
+      };
     }
     return {
       ...base,

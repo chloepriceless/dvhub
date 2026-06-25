@@ -529,12 +529,24 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         // Einspeisung" lever the manual Zeitplan checkbox uses. Neg-price pause and
         // the dcExportMode SoC-guard still apply (handled in schedule-eval). No
         // static gridSetpointW → no forecast-vs-live mismatch forcing a drain.
+        // T-CURTAIL-CHARGE (Christin 2026-06-25): when EOS ALSO charges the
+        // battery in this surplus slot (planned net export < PV surplus), the
+        // "100 % Einspeisung" lever must NOT export all live PV — it would export
+        // the power EOS wanted to charge with (midday: PV 20 kW, charge 10 kW,
+        // export 8 kW → batteryShareW=0 above, yet 10 kW belong to the battery).
+        // chargeReserveW = the EOS-planned charge (PV surplus − planned net
+        // export); schedule-eval subtracts it from LIVE PV before exporting, so
+        // the battery charges and only the real surplus above it is fed in.
+        // Below the band it is plan-split noise → 0 (behaviour unchanged).
+        const plannedChargeW = pvSurplusW + gridW; // gridW<0 ⇒ = pvSurplus − netExport
+        const chargeReserveW = plannedChargeW > bandW ? Math.round(plannedChargeW) : 0;
         out.push({
           ts,
           endTs: ts + slotMs,
           lever: 'dcExportMode',
           planAction: 'eos_pv_export',
           confidence: EOS_DEFAULT_CONFIDENCE,
+          ...(chargeReserveW > 0 ? { chargeReserveW } : {}),
         });
         continue;
       }
