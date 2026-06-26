@@ -654,7 +654,7 @@ test('A1: EOS autoManaged dcExportMode rule bypasses the SoC guard and exports',
 // from live PV BEFORE exporting, so "100 % Einspeisung" feeds in only the surplus
 // ABOVE the charge (live PV − Haus − Reserve − Puffer) instead of dumping the power
 // EOS wanted to store. Without the reserve the slot exports all surplus (unchanged).
-function makeChargeReserveCtx({ chargeReserveW }) {
+function makeChargeReserveCtx({ chargeReserveW, selfConsumptionW = 0, pvTotalW = 5000, batteryEfficiencyPct } = {}) {
   return makeCtx({
     mutate: ({ state, cfg }) => {
       state.schedule.rules = [{
@@ -664,11 +664,14 @@ function makeChargeReserveCtx({ chargeReserveW }) {
         ...(chargeReserveW != null ? { chargeReserveW } : {})
       }];
       state.victron.soc = 50;
-      state.victron.pvTotalW = 5000;        // live PV
-      state.victron.selfConsumptionW = 0;   // no house load → liveLoadW 0
+      state.victron.pvTotalW = pvTotalW;             // live PV
+      state.victron.selfConsumptionW = selfConsumptionW;  // live house load → liveLoadW
       // Guard window forced always-on so the assertion is wall-clock independent;
       // the autoManaged EOS slot bypasses the SoC guard anyway.
-      cfg.dcExportMode = { targetSocPct: 90, chargeDeadlineHour: 23, chargeGuardHours: 23, bufferW: 100 };
+      cfg.dcExportMode = {
+        targetSocPct: 90, chargeDeadlineHour: 23, chargeGuardHours: 23, bufferW: 100,
+        ...(batteryEfficiencyPct != null ? { batteryEfficiencyPct } : {})
+      };
       cfg.optimizer.enabled = true;
     }
   });
@@ -692,9 +695,56 @@ test('T-CURTAIL-CHARGE: a dcExportMode slot WITHOUT chargeReserveW still exports
   const { ctx, writes } = makeChargeReserveCtx({ chargeReserveW: null });
   const evaluator = createScheduleEvaluator(ctx);
   await evaluator.evaluateSchedule();
-  // -(live PV 5000 − Haus 0 − Puffer 100) = -4900 (legacy pure-surplus behaviour)
+  // -(live PV 5000 − Haus 0 − Puffer 100) = -4900 (legacy pure-surplus behaviour;
+  // Haus 0 ⇒ dynamischer Batterie-Effizienz-Aufschlag = 0)
   assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -4900),
     `pure surplus unchanged: expected -4900, got ${JSON.stringify(writes)}`);
+});
+
+// --- Batterie-Effizienz-Aufschlag (Christin 2026-06-26): bei VOLLeinspeisung
+// zieht der Eigenverbrauch real noch Leistung aus dem Akku (DC-AC-Wandlungs-
+// verlust). Der Aufschlag ist DYNAMISCH = Hausverbrauch × (1 − Wirkungsgrad/100)
+// und wird ZUSÄTZLICH vom Export zurückgehalten — aber NUR bei Volleinspeisung
+// (kein chargeReserve) und mit aktivem Hausverbrauch-Abzug.
+test('Batterie-Effizienz-Aufschlag: dynamischer Abzug bei Volleinspeisung (92% → 8% vom Verbrauch)', async () => {
+  const { ctx, logs, writes } = makeChargeReserveCtx({ chargeReserveW: null, pvTotalW: 10000, selfConsumptionW: 5000 });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // surcharge = round(5000 × 0.08) = 400; reserve = Haus 5000 + Puffer 100 + 400 = 5500
+  // export = -(10000 − 5500) = -4500
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -4500),
+    `expected -4500 (dyn. Aufschlag 400), got ${JSON.stringify(writes)}`);
+  const active = findLog(logs, 'dc_export_mode_active');
+  assert.equal(active[0].payload.battEffSurchargeW, 400, 'log carries the dynamic surcharge');
+});
+
+test('Batterie-Effizienz-Aufschlag: skaliert mit dem Verbrauch (halber Verbrauch → halber Aufschlag)', async () => {
+  const { ctx, logs } = makeChargeReserveCtx({ chargeReserveW: null, pvTotalW: 10000, selfConsumptionW: 2500 });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // surcharge = round(2500 × 0.08) = 200 (half of the 5 kW case)
+  assert.equal(findLog(logs, 'dc_export_mode_active')[0].payload.battEffSurchargeW, 200,
+    'surcharge halves with half the consumption');
+});
+
+test('Batterie-Effizienz-Aufschlag: greift NICHT bei Teileinspeisung (chargeReserveW>0)', async () => {
+  const { ctx, logs, writes } = makeChargeReserveCtx({ chargeReserveW: 2000, pvTotalW: 10000, selfConsumptionW: 5000 });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // Teileinspeisung: surcharge 0; reserve = Haus 5000 + Puffer 100 + Reserve 2000 = 7100
+  // export = -(10000 − 7100) = -2900
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -2900),
+    `expected -2900 (kein Aufschlag bei Teileinspeisung), got ${JSON.stringify(writes)}`);
+  assert.equal(findLog(logs, 'dc_export_mode_active')[0].payload.battEffSurchargeW, 0,
+    'no surcharge while the battery is charging');
+});
+
+test('Batterie-Effizienz-Aufschlag: 100% Wirkungsgrad → kein Aufschlag', async () => {
+  const { ctx, logs } = makeChargeReserveCtx({ chargeReserveW: null, pvTotalW: 10000, selfConsumptionW: 5000, batteryEfficiencyPct: 100 });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.equal(findLog(logs, 'dc_export_mode_active')[0].payload.battEffSurchargeW, 0,
+    '100% efficiency disables the surcharge');
 });
 
 // --- 25-01/25-02: EEG/§14a-Gate-Verfeinerung (Self-Consumption + dc_export) ----

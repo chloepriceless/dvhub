@@ -706,7 +706,23 @@ export function createScheduleEvaluator(ctx) {
         // that charge BEFORE exporting, so "100 % Einspeisung" feeds in only the real
         // surplus above the charge instead of exporting the power EOS wanted to store.
         const chargeReserveW = Math.max(0, Number(dcScheduleRule?.chargeReserveW) || 0);
-        const reserveW = liveLoadW + bufferW + chargeReserveW;
+        // Batterie-Effizienz-Aufschlag (Christin 2026-06-26): bei VOLLeinspeisung
+        // deckt der Eigenverbrauch-Abzug (liveLoadW) zwar die AC-Last, aber der
+        // Akku-Beitrag zum Eigenverbrauch geht über die DC-AC-Wandlung — diese
+        // Verluste ziehen real weiter Leistung aus dem Akku, sodass er trotzdem
+        // langsam entlädt. Der Verlust skaliert mit dem Verbrauch (Christin: „je
+        // nach Verbrauch höher/niedriger"), daher DYNAMISCH = Hausverbrauch ×
+        // (1 − Wirkungsgrad), nicht fest. Diesen Aufschlag zusätzlich vom Export
+        // zurückhalten, damit PV den Akku-Beitrag mitdeckt und der Netto-Akkustrom
+        // wirklich ~0 bleibt. NUR bei Volleinspeisung (kein chargeReserve) — bei
+        // Teileinspeisung lädt der Akku ohnehin. Greift nur mit aktivem Hausver-
+        // brauch-Abzug (sonst liveLoadW=0 ⇒ Aufschlag 0). Knopf: batteryEfficiencyPct.
+        const battEffPct = Number(cfg.dcExportMode?.batteryEfficiencyPct ?? 92);
+        const battEffLossFrac = Math.min(1, Math.max(0, (100 - battEffPct) / 100));
+        const battEffSurchargeW = (subtractLoad && chargeReserveW === 0)
+          ? Math.round(liveLoadW * battEffLossFrac)
+          : 0;
+        const reserveW = liveLoadW + bufferW + chargeReserveW + battEffSurchargeW;
         if (pvW > 50) {
           // Negativer Setpoint = Einspeisung. Export = PV − Hausverbrauch − Puffer,
           // nie negativ (kein erzwungener Import / Akku-Entladen wenn PV < Last).
@@ -719,7 +735,7 @@ export function createScheduleEvaluator(ctx) {
             await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
             state.ctrl._dcExportLastWriteAt = now;
             if (!state.ctrl._dcExportLogged) {
-              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, chargeReserveW, subtractLoad, currentPrice });
+              pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, chargeReserveW, battEffSurchargeW, subtractLoad, currentPrice });
               state.ctrl._dcExportLogged = true;
             }
           }
