@@ -2564,7 +2564,15 @@ function groupScheduleRulesForDashboard(rules) {
       slot.stopSocPct = Number.isFinite(stopSocPct) ? stopSocPct : null;
     }
     if (rule.target === 'chargeCurrentA') slot.charge = rule.value;
-    if (rule.target === 'dcExportMode') slot.dcExport = true;
+    if (rule.target === 'dcExportMode') {
+      slot.dcExport = true;
+      // T-CURTAIL-CHARGE: a dcExportMode rule that carries chargeReserveW is a
+      // PARTIAL feed-in — EOS charges the battery in this surplus slot and exports
+      // only the surplus ABOVE the reserve. Carry it so the table shows a
+      // "Teileinspeisung" badge instead of the misleading "100% Einspeisung".
+      const reserve = Number(rule.chargeReserveW);
+      if (Number.isFinite(reserve) && reserve > 0) slot.chargeReserveW = reserve;
+    }
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
     // All rule ids of the window — the optimizer slot-disable toggle must flip
@@ -2655,7 +2663,8 @@ function describeSlotControl(slot) {
   if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
     parts.push(`Stop-SoC ${Number(slot.stopSocPct)}%`);
   }
-  if (slot?.dcExport === true) parts.push('100% Einspeisung');
+  // dcExport (Voll-/Teileinspeisung) wird in renderScheduleTable als eigenes
+  // Badge gerendert (sched-feedin-badge), nicht mehr als Inline-Text.
   return parts.join(' · ') || '—';
 }
 
@@ -2853,7 +2862,23 @@ function renderScheduleTable() {
     tdControl.className = 'sched-control';
     const controlText = document.createElement('span');
     controlText.textContent = describeSlotControl(slot);
+    // Wenn der Slot NUR einspeist (kein Grid-/Charge-/SoC-Teil), kein führendes
+    // "—" vor dem Einspeise-Badge zeigen.
+    if (slot.dcExport === true && controlText.textContent === '—') controlText.textContent = '';
     tdControl.appendChild(controlText);
+    if (slot.dcExport === true) {
+      // Voll- vs. Teileinspeisung: chargeReserveW>0 ⇒ EOS lädt den Akku im selben
+      // Überschuss-Slot und speist nur den Überschuss oberhalb der Reserve ein.
+      const reserveW = Number(slot.chargeReserveW) || 0;
+      const partial = reserveW > 0;
+      const feedBadge = document.createElement('span');
+      feedBadge.className = `sched-feedin-badge${partial ? ' sched-feedin-partial' : ''}`;
+      feedBadge.textContent = partial ? 'Teileinspeisung' : '100% Einspeisung';
+      feedBadge.title = partial
+        ? `Teileinspeisung — EOS lädt in diesem Slot den Akku und speist nur den Überschuss oberhalb der Ladereserve ein (≈ ${Math.round(reserveW).toLocaleString('de-DE')} W Reserve).`
+        : 'Volleinspeisung — der gesamte PV-Überschuss (PV − Hausverbrauch − Puffer) wird eingespeist, Akku-Nettostrom ~0.';
+      tdControl.appendChild(feedBadge);
+    }
     if (isSma || isOptimizer) {
       const badge = document.createElement('span');
       badge.className = `sched-auto-badge${isOptimizer ? ' sched-badge-optimizer' : ''}`;

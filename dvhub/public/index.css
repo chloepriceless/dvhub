@@ -444,6 +444,7 @@
 }
 .sched-control { font-size:12px; }
 .sched-control .sched-auto-badge { margin-left:8px; }
+.sched-control .sched-feedin-badge { margin-left:8px; }
 .sched-price, .sched-eur { white-space:nowrap; }
 .sched-eur { font-weight:600; }
 .sched-eur.ok, #scheduleEconTotal.ok { color:var(--green); }
@@ -1031,6 +1032,24 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   color:var(--violet);
   background:rgba(167,139,255,.08);
   border-color:rgba(167,139,255,.3);
+}
+
+/* Einspeise-Badges (app.js renderScheduleTable): Voll- vs. Teileinspeisung.
+   100% Einspeisung = grün (ganzer Überschuss raus); Teileinspeisung = cyan
+   (EOS lädt den Akku, nur der Überschuss oberhalb der Reserve wird eingespeist). */
+.sched-feedin-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:3px 8px; border-radius:99px;
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--green);
+  background:rgba(62,224,160,.08);
+  border:1px solid rgba(62,224,160,.3);
+}
+.sched-feedin-partial {
+  color:var(--cyan);
+  background:rgba(52,219,255,.08);
+  border-color:rgba(52,219,255,.32);
 }
 
 /* Log-level badges (app.js#L1530+) */
