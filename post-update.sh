@@ -266,5 +266,45 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   fi
 fi
 
+# ── 11. Forecast/ML-venv-Provisionierung / Retrofit (idempotent, entkoppelt) ──
+# Das Forecast+ML-Python-venv (/opt/dvhub/forecast-venv, pvlib/lightgbm/scikit-
+# learn/… aus python/requirements.lock) wird vom Installer angelegt. Boxen, die
+# VOR der Forecast-venv-Einführung installiert wurden — oder deren Lockfile sich
+# geändert hat — werden hier nachgerüstet (Provisioning in der gemeinsamen
+# forecast-provision.sh, geteilt mit install.sh). Der pip-Lauf ist schwer
+# (numpy/scipy/pvlib/lightgbm) und darf den Service-Start NIE blockieren
+# (ExecStartPre, TimeoutStartSec=120): fehlt/veraltet das venv, wird die
+# Provisionierung ENTKOPPELT über eine eigene transiente systemd-Unit gestartet
+# (überlebt dvhub-Restarts). Aktuelles venv = schneller Marker-Check (kein pip pro
+# Boot). NON-FATAL durchgängig. Laufzeit-Consumer: services/python-bridge.
+FORECAST_VENV="$INSTALL_DIR/forecast-venv"
+FC_LOCK="$APP_DIR/python/requirements.lock"
+[[ -f "$FC_LOCK" ]] || FC_LOCK="$APP_DIR/python/requirements.txt"
+FC_MARKER="$DATA_DIR/.forecast-venv.lockhash"
+if [[ -f "$INSTALL_DIR/forecast-provision.sh" && -f "$FC_LOCK" ]]; then
+  FC_CUR="$(sha256sum "$FC_LOCK" 2>/dev/null | awk '{print $1}')"
+  FC_PREV="$(cat "$FC_MARKER" 2>/dev/null || echo '')"
+  if [[ -x "$FORECAST_VENV/bin/python3" && -n "$FC_CUR" && "$FC_CUR" == "$FC_PREV" ]]; then
+    echo "  Forecast-venv: OK (requirements unveraendert)"
+  elif systemctl is-active --quiet dvhub-forecast-provision.service 2>/dev/null; then
+    echo "  Forecast-venv: Hintergrund-Provisionierung laeuft bereits"
+  else
+    echo "  Forecast-venv: fehlt/veraltet — starte entkoppelte Hintergrund-Provisionierung..."
+    if command -v systemd-run >/dev/null 2>&1; then
+      systemd-run --collect --quiet --unit "dvhub-forecast-provision" \
+        --description "DVhub Forecast/ML venv provisioning (retrofit)" \
+        --setenv=SERVICE_USER="$SERVICE_USER" \
+        --setenv=INSTALL_DIR="$INSTALL_DIR" \
+        --setenv=APP_DIR="$APP_DIR" \
+        --setenv=DATA_DIR="$DATA_DIR" \
+        bash "$INSTALL_DIR/forecast-provision.sh" 2>/dev/null \
+        || echo "  WARN: Forecast-venv-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
+    else
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" DATA_DIR="$DATA_DIR" \
+        setsid bash "$INSTALL_DIR/forecast-provision.sh" </dev/null >>"$DATA_DIR/forecast-provision.log" 2>&1 &
+    fi
+  fi
+fi
+
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"

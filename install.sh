@@ -361,63 +361,25 @@ if [[ -n "$NODE_BIN" ]]; then
   setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
 fi
 
-# --- Python venv for PV forecast (optional, Tier 2+) ---
-echo "Setting up Python forecast environment..."
-VENV_DIR="/opt/dvhub/forecast-venv"
-REQUIREMENTS="$APP_DIR/python/requirements.txt"
-
-if command -v python3 &>/dev/null; then
-  PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-  echo "Found Python $PYTHON_VERSION"
-
-  # Ensure python3-venv ACTUALLY works (T-0118): `venv --help` succeeds even
-  # without ensurepip, so it must NOT be the probe. Test a real throwaway venv
-  # creation; only that exposes a missing python3-venv/ensurepip.
-  if ! python3 -m venv /tmp/_dvhub_venvtest &>/dev/null; then
-    echo "Installing python3-venv..."
-    sudo apt-get install -y python3-venv python3-pip 2>/dev/null || true
+# --- Python venv for PV forecast + ML stack (shared forecast-provision.sh) ---
+# The provisioning logic lives in the shared forecast-provision.sh (single source
+# of truth, mirrors eos-provision.sh / support-provision.sh) so install.sh and
+# post-update.sh never drift — boxes installed before the forecast-venv existed
+# get it retrofitted on update. Holds the full ML stack (pvlib, lightgbm,
+# scikit-learn, statsforecast, …) hash-pinned in python/requirements.lock and the
+# ml-models directory. The repo is already cloned to $INSTALL_DIR here, so
+# $INSTALL_DIR/forecast-provision.sh exists.
+install_forecast() {
+  if [ ! -f "$INSTALL_DIR/forecast-provision.sh" ]; then
+    echo "  Forecast: forecast-provision.sh nicht gefunden ($INSTALL_DIR) — uebersprungen"
+    return 0
   fi
-  rm -rf /tmp/_dvhub_venvtest
-
-  if [ -f "$REQUIREMENTS" ]; then
-    echo "Creating forecast venv at $VENV_DIR..."
-    sudo mkdir -p "$(dirname "$VENV_DIR")"
-    sudo python3 -m venv "$VENV_DIR"
-    sudo "$VENV_DIR/bin/pip" install --upgrade pip
-    # Plan 08-05 Task 3 (REPOLENS security/dependency-cves/002):
-    # Prefer the hash-pinned lockfile (requirements.lock) when available.
-    # --require-hashes rejects any wheel whose sha256 is not in the lockfile,
-    # blocking transitive-dep substitution + upstream pypi compromise.
-    REQUIREMENTS_LOCK="$APP_DIR/python/requirements.lock"
-    if [ -f "$REQUIREMENTS_LOCK" ]; then
-      echo "Installing from lockfile with --require-hashes ($REQUIREMENTS_LOCK)"
-      sudo "$VENV_DIR/bin/pip" install --require-hashes --no-deps -r "$REQUIREMENTS_LOCK"
-    else
-      sudo "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS"
-    fi
-    echo "Forecast venv created successfully."
-  else
-    echo "No requirements.txt found, skipping Python forecast setup."
-  fi
-else
-  echo "Python3 not found. PV forecast will use Solcast API only (Tier 1 mode)."
-fi
-
-# --- ML-Modell-Verzeichnis ---
-# Christin 2026-06-27: Das RAM-gegatete ML-Skip entfällt. Der komplette ML-Stack
-# (scikit-learn, lightgbm, statsforecast, joblib) steckt bereits hash-gepinnt in
-# python/requirements.lock und wird mit der Forecast-venv oben auf JEDER Box
-# installiert (--require-hashes). Der frühere separate, RAM-gegatete pip-Schritt
-# war redundant UND ungepinnt — hier bleibt nur noch das Modell-Verzeichnis.
-ensure_ml_model_dir() {
-  sudo mkdir -p /opt/dvhub/ml-models
-  sudo chown "$(whoami)" /opt/dvhub/ml-models 2>/dev/null || true
-  echo "  ML: Modell-Verzeichnis /opt/dvhub/ml-models bereit (ML-Pakete kommen aus requirements.lock)."
+  SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" DATA_DIR="$DATA_DIR" \
+    bash "$INSTALL_DIR/forecast-provision.sh"
 }
-
-# Non-fatal (subshell + `|| true`) — wie der frühere Tier-2-Schritt darf auch das
-# Anlegen des Modell-Verzeichnisses den Kern-Install nie abbrechen.
-( ensure_ml_model_dir ) || echo "  ML: Modell-Verzeichnis konnte nicht angelegt werden — uebersprungen, Kern-Install laeuft weiter"
+# Non-fatal (subshell + `|| true`) — a forecast-venv hiccup must never abort the
+# essential install tail (config/DB/systemd) that follows.
+( install_forecast ) || echo "  Forecast: venv-Setup fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 
 # --- EOS (Akkudoktor) Installation — DEFAULT (DV fork), RAM-gated >=3GB, opt-out via --no-eos ---
 # The provisioning logic lives in the shared eos-provision.sh (single source of
