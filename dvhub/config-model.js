@@ -2411,6 +2411,14 @@ const FIELD_DEFINITIONS = buildFieldDefinitions();
 export function createDefaultConfig() {
   return {
     manufacturer: 'victron',
+    // First-run onboarding gate (Aurora setup screen). Default true so an
+    // existing / legacy config that predates this field is treated as "setup
+    // already done" — no forced re-setup on prod or on an in-place update. The
+    // installer writes setupCompleted:false on a FRESH box so the onboarding
+    // wizard is shown; POST /api/setup/complete flips it back to true. Consumed
+    // by loadConfigFile → needsSetup. Lives in createDefaultConfig so it is
+    // automatically an ALLOWED_CONFIG_ROOTS key and round-trips through saves.
+    setupCompleted: true,
     updateChannel: 'stable',
     httpPort: 8080,
     apiToken: '',
@@ -3667,7 +3675,12 @@ export function loadConfigFile(configPath) {
     exists,
     valid,
     parseError,
-    needsSetup: !exists || !valid,
+    // First-run onboarding (Aurora setup screen): an explicit setupCompleted:false
+    // (installer-seeded on a fresh box) forces the wizard even when the config is
+    // present + valid. Absent / true (legacy + already-completed boxes) leaves
+    // needsSetup driven purely by exists/valid — no forced re-setup. Flipped to
+    // true by POST /api/setup/complete; saveConfigFile re-derives this on save.
+    needsSetup: !exists || !valid || normalized.persistedConfig.setupCompleted === false,
     rawConfig: normalized.rawConfig,
     persistedConfig: normalized.persistedConfig,
     effectiveConfig,

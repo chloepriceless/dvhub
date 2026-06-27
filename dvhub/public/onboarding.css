@@ -1,0 +1,350 @@
+/* ════════════════════════════════════════════════════════════
+   onboarding.css — Erst-Setup-Assistent (Aurora)
+
+   Eigenständige, kiosk-artige First-Run-Seite. Nutzt die Aurora-
+   Design-Tokens aus dvhub-app.css (:root --bg-0, --aurora, --cyan,
+   --glass*, Fonts …) und bringt nur das .ob-* Klassensystem mit.
+   Kein App-Chrome, keine Top-Nav — der Nutzer ist mitten im
+   Bootstrap und soll nicht wegnavigieren.
+   ════════════════════════════════════════════════════════════ */
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+}
+body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: var(--f-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Aurora-Backdrop ─────────────────────────────────────────── */
+.ob-aurora {
+  position: fixed;
+  inset: -20vmax;
+  z-index: 0;
+  background: var(--aurora);
+  filter: blur(120px) saturate(120%);
+  opacity: 0.22;
+  pointer-events: none;
+  animation: ob-spin 48s linear infinite;
+}
+.ob-aurora::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 60% at 50% 35%, transparent, var(--bg-0) 78%);
+}
+@keyframes ob-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ob-aurora { animation: none; } }
+
+/* ── Layout ──────────────────────────────────────────────────── */
+.ob-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-4);
+  padding: clamp(16px, 4vw, 40px);
+}
+
+.ob-card {
+  width: min(560px, 100%);
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  padding: clamp(22px, 4vw, 36px);
+  overflow: hidden;
+}
+
+/* ── Kopf: Logo + Step-Dots ──────────────────────────────────── */
+.ob-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-3);
+  margin-bottom: var(--gap-5);
+}
+.ob-logo { height: 26px; width: auto; opacity: 0.96; }
+.ob-dots { display: flex; gap: 7px; }
+.ob-dots span {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--glass-brd-strong);
+  transition: all 0.3s ease;
+}
+.ob-dots span.is-active {
+  background: var(--cyan);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+.ob-dots span.is-done { background: var(--green); }
+
+/* ── Typo ────────────────────────────────────────────────────── */
+.ob-kicker {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+.ob-title {
+  margin: 0 0 10px;
+  font-family: var(--f-brand);
+  font-size: clamp(1.5rem, 4.4vw, 2rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.ob-sub {
+  margin: 0 0 var(--gap-5);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+/* ── Feature-Liste (Willkommen) ──────────────────────────────── */
+.ob-feats {
+  list-style: none;
+  margin: 0 0 var(--gap-5);
+  padding: 0;
+  display: grid;
+  gap: var(--gap-3);
+}
+.ob-feats li {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-3);
+  padding: var(--gap-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--glass);
+}
+.ob-feats strong { display: block; font-size: 0.9rem; color: var(--text); }
+.ob-feats span:not(.ob-feat-ic) { display: block; font-size: 0.8rem; color: var(--text-dim); margin-top: 2px; }
+.ob-feat-ic {
+  flex: 0 0 auto;
+  width: 38px; height: 38px;
+  border-radius: var(--r-sm);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  display: grid; place-items: center;
+  position: relative;
+}
+.ob-feat-ic::before {
+  content: "";
+  width: 18px; height: 18px;
+  background: var(--cyan);
+  -webkit-mask: center / contain no-repeat var(--ic);
+  mask: center / contain no-repeat var(--ic);
+}
+.ob-feat-ic[data-ic="plug"]   { --ic: url("/assets/onboarding/plug.svg"); }
+.ob-feat-ic[data-ic="shield"] { --ic: url("/assets/onboarding/shield.svg"); }
+.ob-feat-ic[data-ic="sun"]    { --ic: url("/assets/onboarding/sun.svg"); }
+/* Fallback-Punkt, falls ein Icon fehlt */
+.ob-feat-ic[data-ic="shield"]::before { background: var(--violet); }
+.ob-feat-ic[data-ic="sun"]::before { background: var(--yellow); }
+
+/* ── Felder ──────────────────────────────────────────────────── */
+.ob-field { margin-bottom: var(--gap-4); }
+.ob-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.ob-req { color: var(--cyan); }
+.ob-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap-3); }
+
+.ob-input {
+  width: 100%;
+  font-family: var(--f-body);
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--bg-1);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.ob-input::placeholder { color: var(--text-dim); }
+.ob-input:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.ob-vendor {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border-radius: var(--r-md);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.ob-vendor-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(62,224,160,0.18);
+}
+
+/* ── Discovery ───────────────────────────────────────────────── */
+.ob-find {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+}
+.ob-find-ic {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid currentColor;
+  position: relative;
+}
+.ob-find-ic::after {
+  content: ""; position: absolute;
+  width: 6px; height: 2px; background: currentColor;
+  right: -4px; bottom: -1px; transform: rotate(45deg);
+  border-radius: 2px;
+}
+.ob-find.is-loading { opacity: 0.6; pointer-events: none; }
+.ob-find.is-loading .ob-find-ic { animation: ob-spin 0.9s linear infinite; }
+
+.ob-discovery { display: grid; gap: 8px; margin-top: 12px; }
+.ob-disc-item {
+  text-align: left;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 13px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ob-disc-item:hover { border-color: var(--cyan); background: var(--glass-2); }
+.ob-disc-item.is-selected { border-color: var(--green); }
+.ob-disc-item strong { font-size: 0.88rem; }
+.ob-disc-item span { font-size: 0.78rem; color: var(--text-dim); }
+.ob-disc-empty { font-size: 0.82rem; color: var(--text-dim); padding: 4px 2px; }
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+.ob-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-3);
+  margin-top: var(--gap-5);
+}
+.ob-actions .ob-btn-primary { margin-left: auto; }
+.ob-btn {
+  font-family: var(--f-body);
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 12px 22px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s, box-shadow 0.2s, background 0.2s, opacity 0.2s;
+}
+.ob-btn:active { transform: translateY(1px); }
+.ob-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ob-btn-primary {
+  color: #04121f;
+  background: linear-gradient(120deg, var(--cyan), var(--blue) 60%, var(--violet));
+  box-shadow: 0 8px 24px rgba(31,141,255,0.35);
+}
+.ob-btn-primary:hover { box-shadow: 0 10px 30px rgba(31,141,255,0.5); }
+.ob-btn-ghost {
+  color: var(--text);
+  background: var(--glass);
+  border-color: var(--glass-brd);
+}
+.ob-btn-ghost:hover { border-color: var(--glass-brd-strong); background: var(--glass-2); }
+.ob-btn-link {
+  color: var(--text-dim);
+  background: none;
+  padding: 12px 8px;
+}
+.ob-btn-link:hover { color: var(--text-2); }
+
+/* ── Banner / Fehler ─────────────────────────────────────────── */
+.ob-banner {
+  margin-bottom: var(--gap-4);
+  padding: 11px 14px;
+  border-radius: var(--r-md);
+  font-size: 0.86rem;
+  border: 1px solid var(--danger);
+  background: rgba(255,93,93,0.12);
+  color: #ffd0d0;
+}
+.ob-banner.is-info {
+  border-color: var(--info);
+  background: rgba(52,219,255,0.10);
+  color: #cdf3ff;
+}
+.ob-err {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+/* ── Fertig-Schritt ──────────────────────────────────────────── */
+.ob-step-done { text-align: center; padding: var(--gap-3) 0; }
+.ob-step-done .ob-actions { justify-content: center; }
+.ob-step-done .ob-actions .ob-btn-primary { margin-left: 0; }
+.ob-check {
+  width: 72px; height: 72px;
+  margin: 0 auto var(--gap-4);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, rgba(62,224,160,0.25), transparent 70%);
+  border: 2px solid var(--green);
+  position: relative;
+}
+.ob-check::after {
+  content: "";
+  position: absolute;
+  left: 27px; top: 16px;
+  width: 14px; height: 28px;
+  border: solid var(--green);
+  border-width: 0 3px 3px 0;
+  transform: rotate(45deg);
+}
+
+.ob-foot {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 460px) {
+  .ob-grid2 { grid-template-columns: 1fr; }
+  .ob-actions { flex-wrap: wrap; }
+  .ob-actions .ob-btn-primary { margin-left: 0; width: 100%; order: -1; }
+}

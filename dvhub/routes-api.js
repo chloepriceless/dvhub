@@ -1778,6 +1778,93 @@ export function createApiRoutes(ctx) {
     };
   }
 
+  // ── First-run onboarding (Aurora setup wizard) ───────────────────────
+  // Secrets-free prefill for onboarding.html. Returns ONLY what the wizard
+  // needs to render — current manufacturer, the Victron host (if pre-seeded by
+  // an integrator) and forecast coordinates. NEVER the apiToken or any
+  // credential; the token is handed out exactly once by completeSetup().
+  function setupStatePayload() {
+    const cfg = getCfg();
+    const loc = (cfg.forecast && typeof cfg.forecast.location === 'object') ? cfg.forecast.location : {};
+    const host = cfg.victron && typeof cfg.victron.host === 'string' ? cfg.victron.host : '';
+    // A placeholder host from config.example.json ("192.168.x.x") must not
+    // pre-fill as if it were a real address — treat it as empty for the wizard.
+    const realHost = /x\.x$/i.test(host) ? '' : host;
+    return {
+      ok: true,
+      needsSetup: !!ctx.needsSetup(),
+      manufacturer: cfg.manufacturer || 'victron',
+      victronHost: realHost,
+      location: {
+        latitude: Number.isFinite(Number(loc.latitude)) ? Number(loc.latitude) : null,
+        longitude: Number.isFinite(Number(loc.longitude)) ? Number(loc.longitude) : null
+      }
+    };
+  }
+
+  // Finisher for the onboarding wizard. Merges the minimal plant config onto the
+  // FULL current raw config (saveAndApplyConfig REPLACES, never merges — see the
+  // config-save-replaces memory rule), marks setupCompleted=true (which closes
+  // the needsSetup window), then returns the box's real apiToken so the browser
+  // can claim it. The caller has already enforced needsSetup + LAN/loopback.
+  function completeSetup(req, res, body) {
+    const input = (body && typeof body === 'object') ? body : {};
+    // victronHost: required. Bare host/IP only — reject schemes, paths, creds,
+    // whitespace. IPv6 (colons) is allowed; the real check is the live connect.
+    const rawHost = typeof input.victronHost === 'string' ? input.victronHost.trim() : '';
+    if (!rawHost || rawHost.length > 255 || /\s/.test(rawHost) || /[/\\@]/.test(rawHost)) {
+      return json(res, 400, { ok: false, error: 'invalid_victron_host' });
+    }
+    // location: optional, but both coordinates must arrive together when present.
+    let latitude = null;
+    let longitude = null;
+    const locIn = (input.location && typeof input.location === 'object') ? input.location : {};
+    const present = (v) => v !== undefined && v !== null && v !== '';
+    if (present(locIn.latitude) || present(locIn.longitude)) {
+      latitude = Number(locIn.latitude);
+      longitude = Number(locIn.longitude);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        return json(res, 400, { ok: false, error: 'invalid_location' });
+      }
+    }
+    const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+    next.manufacturer = 'victron';
+    next.victron = (next.victron && typeof next.victron === 'object') ? next.victron : {};
+    next.victron.host = rawHost;
+    if (latitude !== null) {
+      next.forecast = (next.forecast && typeof next.forecast === 'object') ? next.forecast : {};
+      next.forecast.location = (next.forecast.location && typeof next.forecast.location === 'object')
+        ? next.forecast.location : {};
+      next.forecast.location.latitude = latitude;
+      next.forecast.location.longitude = longitude;
+    }
+    next.setupCompleted = true;
+    let result;
+    try {
+      result = ctx.saveAndApplyConfig(next);
+    } catch (e) {
+      pushLog('setup_complete_failed', { error: e?.message || 'save_failed' }, actorContext(req));
+      return json(res, 500, { ok: false, error: 'setup_save_failed' });
+    }
+    // The fresh-box bootstrap-token takeover window is moot once setup is done.
+    consumeBootstrapToken();
+    pushLog('setup_completed', {
+      victronHost: 'set',
+      location: latitude !== null,
+      restartRequired: !!result.restartRequired
+    }, actorContext(req));
+    // Hand the browser the real token ONCE so it authenticates from here on.
+    // This is the only path that emits getCfg().apiToken un-redacted, reachable
+    // only inside the now-closing needsSetup + LAN window.
+    return json(res, 200, {
+      ok: true,
+      apiToken: getCfg().apiToken || '',
+      restartRequired: !!result.restartRequired,
+      redirect: '/'
+    });
+  }
+
   // ── Status / History builders ────────────────────────────────────────
   function buildApiStatusResponse(now = Date.now()) {
     const payload = buildWorkerBackedStatusResponse({
@@ -1824,7 +1911,7 @@ export function createApiRoutes(ctx) {
     const file = path.resolve(publicDir, filename);
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
     if (!fs.existsSync(file)) return text(res, 404, 'not found');
-    const cacheControl = filename === 'setup.html' ? 'no-store' : 'no-cache';
+    const cacheControl = (filename === 'setup.html' || filename === 'onboarding.html') ? 'no-store' : 'no-cache';
     res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
     fs.createReadStream(file).pipe(res);
   }
@@ -1865,7 +1952,7 @@ export function createApiRoutes(ctx) {
     }[ext] || 'application/octet-stream';
     let cacheControl;
     if (ext === '.html') {
-      cacheControl = reqPath.includes('setup') ? 'no-store' : 'no-cache';
+      cacheControl = (reqPath.includes('setup') || reqPath.includes('onboarding')) ? 'no-store' : 'no-cache';
     } else if (reqPath === '/sw.js') {
       cacheControl = 'no-store';
     } else if (ext === '.js' || ext === '.css') {
@@ -1957,7 +2044,11 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/' && req.method === 'GET') {
-      return servePage(res, ctx.needsSetup() ? 'setup.html' : 'index.html');
+      // First-run onboarding: while needsSetup is true the root serves the new
+      // Aurora onboarding wizard (onboarding.html) instead of the token-gated
+      // dashboard. The legacy /setup.html wizard stays reachable directly as a
+      // fallback but is no longer the default first-run surface.
+      return servePage(res, ctx.needsSetup() ? 'onboarding.html' : 'index.html');
     }
 
     if (url.pathname === '/health' && req.method === 'GET') {
@@ -1978,6 +2069,42 @@ export function createApiRoutes(ctx) {
           lastError: state.telemetry?.lastError || null
         }
       });
+    }
+
+    // ── First-run onboarding window (token-free, LAN/loopback-only) ──────────
+    // The Aurora onboarding wizard (onboarding.html) must be usable on a fresh /
+    // pre-installed box where the browser has no API token yet. These two
+    // endpoints are deliberately handled BEFORE the global checkAuth gate below,
+    // each self-guarded so the exception is as narrow as possible:
+    //   - both: only from loopback (the box) or the trusted LAN (never WAN).
+    //   - /api/setup/state (GET): a secrets-free prefill read (NO apiToken, NO
+    //     credentials) — safe to answer whenever, so the wizard can render.
+    //   - /api/setup/complete (POST): only while ctx.needsSetup() is still true
+    //     (the open setup window). It persists the plant config, flips
+    //     setupCompleted→true (closing the window), and hands the browser the
+    //     box's real apiToken ONCE so it can claim it without the operator ever
+    //     hunting for a token. This LAN+window trust boundary is the approved
+    //     model (operator decision 2026-06-27): the window only exists on a
+    //     not-yet-set-up box and closes on first completion — equivalent risk
+    //     profile to the existing bootstrap-token first-caller-wins window.
+    if (url.pathname === '/api/setup/state' || url.pathname === '/api/setup/complete') {
+      if (!checkRateLimit(req, res)) return;
+      if (!isLoopbackRequest(req) && !isLocalNetworkRequest(req)) {
+        pushLog('setup_window_denied_non_lan', { path: url.pathname }, actorContext(req));
+        return json(res, 403, { ok: false, error: 'setup_window_lan_only' });
+      }
+      if (url.pathname === '/api/setup/state' && req.method === 'GET') {
+        return json(res, 200, setupStatePayload());
+      }
+      if (url.pathname === '/api/setup/complete' && req.method === 'POST') {
+        if (!ctx.needsSetup()) {
+          return json(res, 403, { ok: false, error: 'setup_already_completed' });
+        }
+        const body = await readJsonBody(req, res);
+        if (body === null) return; // readJsonBody already sent 400/413
+        return completeSetup(req, res, body);
+      }
+      return json(res, 404, { ok: false, error: 'not_found' });
     }
 
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
