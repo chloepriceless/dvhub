@@ -212,11 +212,17 @@
               </div>
             </div>
 
-            <!-- API-Token -->
+            <!-- Zugang (API-Token) -->
             <div class="config-group" data-accent="cyan">
-              <div class="config-group-kicker">API-Token</div>
-              <p class="svc-meta">Der API-Token authentifiziert Zugriffe von au&szlig;erhalb des Heimnetzes (Skripte, Integrationen, Fernzugriff). Bei Verdacht auf Missbrauch hier neu erzeugen oder zur&uuml;ckziehen.</p>
+              <div class="config-group-kicker">Zugang</div>
+              <p class="svc-meta">Dein Zugangstoken authentifiziert dieses Ger&auml;t sowie Zugriffe von au&szlig;erhalb des Heimnetzes (Skripte, Integrationen, Fernzugriff). <strong>Bewahre ihn auf</strong> (z.&nbsp;B. im Passwort-Manager): Du brauchst ihn auf einem anderen Ger&auml;t oder nachdem du den Browser-Speicher geleert hast.</p>
               <div id="tokenBanner" class="config-banner info" hidden></div>
+              <div class="token-reveal-row">
+                <input id="accessTokenField" class="config-input token-reveal-input" type="password" value="" readonly autocomplete="off" spellcheck="false" aria-label="Zugangstoken" />
+                <button id="toggleTokenBtn" class="btn btn-ghost btn-small" type="button">Anzeigen</button>
+                <button id="copyTokenBtn" class="btn btn-ghost btn-small" type="button">Kopieren</button>
+              </div>
+              <p class="svc-meta" id="accessTokenHint"></p>
               <div class="svc-actions-row">
                 <button id="rotateTokenBtn" class="btn btn-ghost btn-small" type="button">Token neu erzeugen</button>
                 <button id="revokeTokenBtn" class="btn btn-danger btn-small" type="button">Token zur&uuml;ckziehen</button>

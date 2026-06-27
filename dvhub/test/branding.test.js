@@ -28,11 +28,10 @@ function loadCommonScript() {
   const commonPath = path.join(publicDir, 'common.js');
   const source = fs.readFileSync(commonPath, 'utf8');
   const localStore = new Map([[legacyTokenKey, 'legacy-token']]);
-  // Plan 16-04 (D-06 triage, brittle test): common.js moved the API token from
-  // localStorage to sessionStorage (XSS hardening — sessionStorage scopes to a
-  // single tab and is cleared on close; see common.js tokenStore()). The test
-  // mock previously only provided localStorage, so getStoredApiToken() read
-  // from a store that did not exist. Provide a sessionStorage stub too.
+  // common.js stores the API token in localStorage so it survives closing the
+  // tab/browser (operator decision 2026-06-27; see common.js tokenStore()). A
+  // sessionStorage stub is still provided because migrateLegacyToken() reads the
+  // old sessionStorage home (and clears it) for the one-time migration path.
   const sessionStore = makeStorageStub();
   const events = [];
   const sandbox = {
@@ -90,13 +89,13 @@ function loadCommonScript() {
 }
 
 test('common script exposes DVhub branding, migrates legacy token storage, and emits the DVhub event', async () => {
-  const { sandbox, sessionStore, events } = loadCommonScript();
+  const { sandbox, localStore, events } = loadCommonScript();
 
   assert.ok(sandbox.window.DVhubCommon);
   assert.equal(sandbox.window[`${legacyBrand}Common`], undefined);
-  // Plan 16-04 (D-06 triage): the URL `?token=` value is persisted into
-  // sessionStorage (XSS-hardened token store), not localStorage.
-  assert.equal(sessionStore.getItem('dvhub.apiToken'), 'url-token');
+  // The URL `?token=` value is persisted into localStorage (canonical token
+  // store — survives tab/browser close), and read back by getStoredApiToken().
+  assert.equal(localStore.get('dvhub.apiToken'), 'url-token');
   assert.equal(sandbox.window.DVhubCommon.getStoredApiToken(), 'url-token');
 
   await sandbox.window.DVhubCommon.apiFetch('/api/status');

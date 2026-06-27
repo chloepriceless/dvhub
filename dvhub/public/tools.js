@@ -381,6 +381,58 @@ async function revokeApiToken() {
   if (meta && out.revokedFingerprint) meta.textContent = `Zurückgezogener Fingerprint: ${out.revokedFingerprint}`;
 }
 
+// Zugang-Karte: das aktuelle Zugangstoken anzeigen/kopieren, damit der Operator
+// es sichern kann (Passwort-Manager / anderes Gerät), bevor der Browser-Speicher
+// geleert wird. Quelle ist der im Browser gespeicherte Token (common.js); der
+// Config-Payload liefert ihn nur redacted ('***'). Standardmäßig maskiert.
+function loadAccessToken() {
+  const field = document.getElementById('accessTokenField');
+  if (!field) return;
+  const hint = document.getElementById('accessTokenHint');
+  const token = (common.getStoredApiToken && common.getStoredApiToken()) || '';
+  if (token && token !== '***') {
+    field.value = token;
+    field.dataset.has = '1';
+    if (hint) hint.textContent = '';
+  } else {
+    field.value = '';
+    field.dataset.has = '';
+    field.type = 'password';
+    if (hint) {
+      hint.textContent = 'Kein Zugangstoken in diesem Browser gespeichert — vermutlich bist du über das LAN ohne Token verbunden. Wiederherstellung über ?token=… oder die Box (config.json).';
+    }
+  }
+}
+function toggleAccessTokenReveal() {
+  const field = document.getElementById('accessTokenField');
+  const btn = document.getElementById('toggleTokenBtn');
+  if (!field || !field.dataset.has) return;
+  const reveal = field.type === 'password';
+  field.type = reveal ? 'text' : 'password';
+  if (btn) btn.textContent = reveal ? 'Verbergen' : 'Anzeigen';
+}
+async function copyAccessToken() {
+  const field = document.getElementById('accessTokenField');
+  if (!field || !field.dataset.has || !field.value) {
+    showTokenBanner('Kein Zugangstoken zum Kopieren vorhanden.', 'warn');
+    return;
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(field.value);
+    } else {
+      const prev = field.type;
+      field.type = 'text';
+      field.select();
+      document.execCommand('copy');
+      field.type = prev;
+    }
+    showTokenBanner('Zugangstoken in die Zwischenablage kopiert. Sicher aufbewahren.', 'info');
+  } catch (_) {
+    showTokenBanner('Kopieren nicht möglich — bitte das Feld manuell markieren und kopieren.', 'warn');
+  }
+}
+
 function exportConfig() {
   window.location.href = buildApiUrl('/api/config/export');
   setBanner('importBanner', 'Config-Export wurde gestartet.', 'success');
@@ -1028,6 +1080,11 @@ function initToolsPage() {
   document.getElementById('revokeTokenBtn')?.addEventListener('click', () => {
     revokeApiToken().catch((error) => setBanner('tokenBanner', `Fehler: ${error.message}`, 'error'));
   });
+  document.getElementById('toggleTokenBtn')?.addEventListener('click', toggleAccessTokenReveal);
+  document.getElementById('copyTokenBtn')?.addEventListener('click', () => {
+    copyAccessToken().catch((error) => setBanner('tokenBanner', `Fehler: ${error.message}`, 'error'));
+  });
+  loadAccessToken();
   document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
   document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
   document.getElementById('updateChannel')?.addEventListener('change', (e) => switchUpdateChannel(e.target.value));

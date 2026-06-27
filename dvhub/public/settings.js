@@ -1936,7 +1936,14 @@ function applyConfigPayload(payload) {
   forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
   forecastTierCache = null;
   settingsShellState = createSettingsShellState(definition);
-  setStoredApiToken(currentEffectiveConfig.apiToken || '');
+  // Do NOT clobber a real stored token with the redacted placeholder: the config
+  // payload always redacts apiToken to '***' (config-redaction.js), so the only
+  // genuine source of the token is the onboarding claim / ?token= / localStorage.
+  // Updating storage here only when a real value arrives keeps Settings → Zugang
+  // (and every authenticated write) working after a config reload.
+  if (currentEffectiveConfig.apiToken && currentEffectiveConfig.apiToken !== '***') {
+    setStoredApiToken(currentEffectiveConfig.apiToken);
+  }
   document.getElementById('configMeta').textContent = buildMetaText(currentMeta);
   renderSettingsShell();
 }

@@ -2,31 +2,39 @@
   const STORAGE_KEY = 'dvhub.apiToken';
   const LEGACY_STORAGE_KEY = ['plex', 'lite.apiToken'].join('');
 
-  // Plan 08-06 Task 2 Step 4: token storage moved off localStorage.
-  // localStorage survives tab close + is readable by ANY script running on the
-  // origin → trivial XSS exfiltration vector. sessionStorage scopes to a single
-  // tab/session, removing the persistent-cookie-style attack surface.
-  // One-time migration: any existing localStorage token is moved into
-  // sessionStorage on first call, then the localStorage entry is cleared.
+  // Token persistence (operator decision, Christin 2026-06-27): the API token is
+  // stored in localStorage so it SURVIVES closing the tab/browser. Otherwise an
+  // operator who set the box up via the onboarding wizard would be silently
+  // logged out — and locked out of Settings under lanTrust='restricted' — the
+  // next time they reopen the page, with no way to recover the token (the
+  // onboarding does not re-run once setupCompleted=true, and the config payload
+  // only ever returns the token redacted). Only an explicit "clear site data"
+  // removes it now. Tradeoff vs. the earlier sessionStorage hardening:
+  // localStorage is readable by any script on the origin, so this leans on the
+  // app's strict CSP (no 'unsafe-inline', no third-party scripts) to keep XSS
+  // exfiltration off the table. The token can be viewed/copied any time from
+  // Settings → Zugang.
   function tokenStore() {
-    try { return window.sessionStorage; } catch { return null; }
+    try { return window.localStorage; } catch { return null; }
   }
 
   function migrateLegacyToken() {
+    // One-time migration into the canonical localStorage slot from the previous
+    // sessionStorage home (XSS-era) and the very-old localStorage "plexlite" key.
     try {
       const store = tokenStore();
       if (store && store.getItem(STORAGE_KEY)) return store.getItem(STORAGE_KEY);
-      // Pull from localStorage (current STORAGE_KEY first, then very-old "plexlite" key).
-      const fromLocal = window.localStorage.getItem(STORAGE_KEY)
-        || window.localStorage.getItem(LEGACY_STORAGE_KEY)
-        || '';
-      if (fromLocal && store) {
-        store.setItem(STORAGE_KEY, fromLocal);
+      let legacy = '';
+      try { legacy = window.sessionStorage.getItem(STORAGE_KEY) || ''; } catch { /* ignore */ }
+      if (!legacy) {
+        try { legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY) || ''; } catch { /* ignore */ }
       }
-      // Clear localStorage either way so future XSS cannot read it.
-      try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      if (legacy && store) store.setItem(STORAGE_KEY, legacy);
+      // Clear the old sessionStorage + legacy localStorage homes so a stale value
+      // never shadows the canonical token.
+      try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
       try { window.localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* ignore */ }
-      return fromLocal;
+      return legacy;
     } catch {
       return '';
     }
@@ -35,8 +43,8 @@
   function getStoredApiToken() {
     try {
       const store = tokenStore();
-      const fromSession = store ? store.getItem(STORAGE_KEY) : null;
-      return fromSession || migrateLegacyToken() || '';
+      const fromStore = store ? store.getItem(STORAGE_KEY) : null;
+      return fromStore || migrateLegacyToken() || '';
     } catch {
       return '';
     }
@@ -48,8 +56,9 @@
       if (!store) return;
       if (token) store.setItem(STORAGE_KEY, token);
       else store.removeItem(STORAGE_KEY);
-      // Defensive: keep localStorage cleared so an old value never re-surfaces.
-      try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      // Keep the old sessionStorage home cleared so a stale value never shadows
+      // the canonical localStorage token.
+      try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     } catch {
       // ignore storage errors
     }

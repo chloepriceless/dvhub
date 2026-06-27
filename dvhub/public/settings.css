@@ -2915,3 +2915,7 @@ body.dv-modal-open {
 .eos-sync-result.ok    { color: #4CE36C; border-color: rgba(76,227,108,0.3); background: rgba(76,227,108,0.06); }
 .eos-sync-result.warn  { color: #FFD32E; border-color: rgba(255,211,46,0.3); background: rgba(255,211,46,0.06); }
 .eos-sync-result.error { color: rgba(255,108,99,0.95); border-color: rgba(255,108,99,0.3); background: rgba(255,108,99,0.06); }
+
+/* Zugang: Token-Anzeige/Kopieren (settings → Zugang) */
+.token-reveal-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.token-reveal-input { flex: 1 1 240px; min-width: 0; font-family: var(--f-mono); letter-spacing: 0.02em; }
