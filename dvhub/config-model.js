@@ -1297,6 +1297,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.enabled',
+      // Pro-Gating #8-lite (2026-06-27): Stage 2++ (predictivePreEmpty) wird in der
+      // UI ausgeblendet (nie funktionierender Morgens-Entleer-Versuch, durch EOS
+      // ersetzt). Code + Config + Validierung bleiben MITINSTALLIERT — jederzeit per
+      // Entfernen dieses hidden-Flags (oder direktem config.json-Edit) reaktivierbar.
+      hidden: true,
       label: 'Forecast Aware++ (Stufe 2) aktivieren',
       type: 'boolean',
       help: 'Aktiviert das vorausschauende Akku-Leeren (Stufe 2). Nur wirksam, wenn die Forecast-aware Börsenautomatik (Stufe 1) ebenfalls aktiv ist. Stufe 2 verkauft aktiv und leert den physischen Akku — separat scharfschalten. Auslöser ist der Börsenpreis unter den PV-Erzeugungskosten — diese werden unter Preise → Interne Kosten → „PV-Kosten (ct/kWh)“ gepflegt.'
@@ -1307,6 +1312,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.akkuHardLimitW',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Stage 2 Akku-Hard-Limit (W)',
       type: 'number',
       min: 1000,
@@ -1319,6 +1325,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.akkuSoftLimitW',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Stage 2 Akku-Soft-Limit (W)',
       type: 'number',
       min: 0,
@@ -1331,6 +1338,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.confidenceFactorLow',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Confidence-Untergrenze (Tiefe-Faktor 0)',
       type: 'number',
       min: 0,
@@ -1343,6 +1351,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.confidenceFactorHigh',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Confidence-Obergrenze (Tiefe-Faktor 1)',
       type: 'number',
       min: 0,
@@ -1355,6 +1364,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.haltenAbortDropPct',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Halten-Abbruch-Schwelle (%)',
       type: 'number',
       min: 5,
@@ -1367,6 +1377,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.maxChargeCurrentA',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Freigabe-Drossel: Hardware-Maximum (A, DC)',
       type: 'number',
       min: 0,
@@ -1380,6 +1391,7 @@ function buildFieldDefinitions() {
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.predictivePreEmpty.batteryVoltageV',
+      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
       label: 'Freigabe-Drossel: Batterie-Spannung (V, DC)',
       type: 'number',
       min: 12,

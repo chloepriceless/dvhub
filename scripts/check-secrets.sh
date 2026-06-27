@@ -64,7 +64,7 @@ scan "Hartkodierte Credentials" \
   'process\.env|cfg\.|config\.|\.\.\.|placeholder|example|null|undefined|REDACT|\$\{|getCfg|hersteller|/test/|\.test\.js|\.spec\.'
 
 # 5) Internal network topology — must be the generic 192.168.1.x placeholder
-scan "Interne IP-Range (Topologie 192.168.1.x)" '192\.168\.20\.[0-9]+'
+scan "Interne IP-Range (Topologie 192.168.20.x)" '192\.168\.20\.[0-9]+'
 
 # 6) (public mode) internal planning / dev docs must not be tracked at all
 if [ "$PUBLIC" = 1 ]; then

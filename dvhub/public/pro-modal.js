@@ -53,8 +53,11 @@
     'family-dashboard': true,
     'forecast-inspector-ml': true,
     'forecast-inspector-eos': true,
-    'forecast-inspector-stage2': true,
-    'vpn-manager': true
+    'vpn-manager': true,
+    // Pro-Gating #12 (2026-06-27): DV-Schnittstelle + EOS sind Pro (serverseitig
+    // gegated). forecast-inspector-stage2 entfernt (Stage 2++ in der UI ausgeblendet).
+    'dv-interface': true,
+    'eos': true
   };
 
   var FEATURE_BODY = {
@@ -64,10 +67,12 @@
       'Der ML-Korrektur-Inspector zeigt das aktive Modell, Tier-Features und die Genauigkeits-Historie — ein DVhub-Pro-Feature.',
     'forecast-inspector-eos':
       'Der EOS-Output-Inspector zeigt push/pull pro Slot — ein DVhub-Pro-Feature.',
-    'forecast-inspector-stage2':
-      'Der SMA-Stage-2 Plan-Inspector + Backtest zeigt vergangene Pläne inklusive Operator-Overrides — ein DVhub-Pro-Feature.',
     'vpn-manager':
-      'Der VPN-Manager (OpenVPN / WireGuard / IPSec) für den sicheren Fernzugriff und den Tunnel zum Direktvermarkter ist ein DVhub-Pro-Feature.'
+      'Der VPN-Manager (OpenVPN / WireGuard / IPSec) für den sicheren Fernzugriff und den Tunnel zum Direktvermarkter ist ein DVhub-Pro-Feature.',
+    'dv-interface':
+      'Die DV-Schnittstelle (Modbus-Server für den Direktvermarkter) ist ein DVhub-Pro-Feature und benötigt eine aktive Lizenz.',
+    'eos':
+      'Die EOS-Arbitrage-Optimierung (Akkudoktor-EOS-Dispatch) ist ein DVhub-Pro-Feature. Ohne Lizenz läuft die freie kleine Börsenautomatik (Stufe 1/2).'
   };
 
   var FALLBACK_BODY = 'Diese Funktion erfordert eine aktive DVhub-Pro-Lizenz.';

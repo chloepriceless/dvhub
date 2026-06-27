@@ -148,6 +148,10 @@ export function createModbusServer(ctx) {
   }
 
   function start() {
+    // Idempotency guard (Pro-Gating): start() is invoked both at boot and from
+    // the licence active<->inactive transition hook. A second listener would leak
+    // a socket server, so a no-op when one is already bound.
+    if (mbServer) return;
     const cfg = getCfg();
     mbServer = net.createServer((socket) => {
       // Plan 08-06 Task 2 Step 1: enforce LAN-only / allowlist on every accepted socket.

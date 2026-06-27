@@ -212,6 +212,21 @@ export function createOptimizerService(ctx) {
     state.optimizer.enabled = cfg.optimizer?.enabled ?? false;
     if (!cfg.optimizer?.enabled) return; // Gate per run, NOT in start()
 
+    // Pro-Gating (Task #11): the optimizer dispatch layer (the EOS-actuation path,
+    // primarySource=eos on prod) is a Pro feature. Without an active licence it does
+    // NOT run — the box falls back to the free Stage 1/2 small-market-automation
+    // (those rules are produced independently in schedule-eval) and the forecast
+    // values stay visible. The code is installed either way; a licence activation
+    // re-enables it live via the transition hook (no restart). Defensive: a missing
+    // isProActive never gates, so prod (licensed) + older ctx shapes are unaffected.
+    if (typeof ctx.licenseService?.isProActive === 'function' && ctx.licenseService.isProActive() === false) {
+      if (state.optimizer.source !== 'gated_no_license') {
+        ctx.pushLog?.('optimizer_gated_no_license', { fallback: 'stage1_2' });
+        state.optimizer.source = 'gated_no_license';
+      }
+      return;
+    }
+
     isRunning = true;
     const thisGeneration = ++runGeneration;
 

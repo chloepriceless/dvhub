@@ -80,9 +80,14 @@ const ACCOUNT_PUBLIC_KEY = '2b8cc3310c0958f58bf9b9d3a52cb868f8f2c2260a679b5ebf4b
 const ALLOWED_FEATURES = new Set([
   'family-dashboard',
   'forecast-inspector-ml',     // Phase 19 Plan 19-04 (B3 ML-Korrektur-Inspector)
-  'forecast-inspector-eos',    // Phase 19 Plan 19-05 (B4 EOS-Output-Inspector)
-  'forecast-inspector-stage2', // Phase 19 Plan 19-06 (B5 Stage-2-Backtest-Inspector)
+  'forecast-inspector-eos',    // Phase 19 Plan 19-05 (B4 EOS-Output-Inspector) — Teil von EOS-Pro
   'vpn-manager',               // 2026-06-21: VPN-Manager als Pro-Feature gegated (/api/vpn/*)
+  // Pro-Gating #12 (2026-06-27): die DV-Schnittstelle (Modbus-Server + HTTP-Read
+  // /dv/control-value) und der EOS/Optimizer-Dispatch sind serverseitig gegatete
+  // Pro-Features. forecast-inspector-stage2 ENTFERNT — Stage 2++ ist in der UI
+  // ausgeblendet (#8-lite), der Inspektor dafür entfällt.
+  'dv-interface',              // DV-Schnittstelle (modbus-server.js + /dv/control-value)
+  'eos',                       // EOS / DV-EOS Optimizer-Dispatch (services/optimizer)
 ]);
 
 /**
@@ -168,6 +173,14 @@ export function createLicenseService(ctx) {
   let pollerInterval = null;
   let pollerInitialTimeout = null;
   let revalidateInFlight = false;
+
+  // Pro-Gating (Task #9): live status-transition fan-out. Live services (the
+  // DV-Schnittstelle / Modbus server and the EOS/optimizer dispatch layer)
+  // register a callback via onProActiveChange(); an active <-> non-active flip
+  // then starts/stops them WITHOUT a process restart (revoke closes them,
+  // activation re-opens them). The non-HTTP gate isProActive() shares the exact
+  // same predicate as the HTTP gate requirePro(): state.license.status === 'active'.
+  const proActiveListeners = [];
 
   // Initialize state.license eagerly so callers (e.g. requirePro before
   // loadStateFromDisk) never see undefined. loadStateFromDisk() will overwrite
@@ -499,6 +512,11 @@ export function createLicenseService(ctx) {
       );
     }
 
+    // Pro-Gating (Task #9): fire the live start/stop fan-out on BOTH directions
+    // (activation AND revoke) so DV-Schnittstelle + EOS follow the licence state
+    // without a restart. notifyOperatorOfRevoke above only covers the revoke side.
+    emitProActiveChange(prevStatus === 'active');
+
     return { ok: valid, status: newStatus, code };
   }
 
@@ -654,9 +672,11 @@ export function createLicenseService(ctx) {
       // `status:active` cannot survive the poller. A real licence always has a
       // key and takes the validate-key path below.
       if (state.license.status !== 'none') {
+        const prevActive = isProActive();
         state.license.status = 'none';
         persistState();
         pushLog('license_revalidate_no_key_reset', {});
+        emitProActiveChange(prevActive);   // Task #9: close DV/EOS if a key-less active state is force-reset
       }
       return { ok: false, error: 'no_license_active' };
     }
@@ -712,9 +732,11 @@ export function createLicenseService(ctx) {
    * file manually post-remove (out of scope for v1.0).
    */
   function removeLicense() {
+    const prevActive = isProActive();
     state.license = freshNoneState();
     persistState();
     pushLog('license_removed', {});
+    emitProActiveChange(prevActive);   // Task #9: close DV/EOS live on manual removal
     return { ok: true, status: 'none' };
   }
 
@@ -737,6 +759,43 @@ export function createLicenseService(ctx) {
    */
   function getStatus() {
     return state.license.status;
+  }
+
+  /**
+   * isProActive: non-HTTP Pro-gate for live services (DV-Schnittstelle, EOS).
+   * Shares the EXACT predicate of requirePro() so the HTTP and non-HTTP gates
+   * never diverge. effective_status (grace/expired_offline) is deliberately NOT
+   * used here for the same reason requirePro() gates on the base status — see the
+   * Codex-Refute-v2 note in requirePro().
+   */
+  function isProActive() {
+    return state.license.status === 'active';
+  }
+
+  /**
+   * onProActiveChange: register a callback fired on every active <-> non-active
+   * transition with the new boolean. Used by server.js to start/stop the
+   * DV-Modbus server + EOS dispatch live on a license change.
+   */
+  function onProActiveChange(cb) {
+    if (typeof cb === 'function') proActiveListeners.push(cb);
+  }
+
+  /**
+   * emitProActiveChange: fan out to registered listeners ONLY when the active
+   * flag actually flipped relative to `prevActive`. Listener errors are logged
+   * and absorbed (one bad listener must not block the others or the caller).
+   */
+  function emitProActiveChange(prevActive) {
+    const nowActive = isProActive();
+    if (prevActive === nowActive) return;
+    for (const cb of proActiveListeners) {
+      try {
+        cb(nowActive);
+      } catch (err) {
+        pushLog('license_pro_change_listener_error', { error: err?.message ?? String(err) });
+      }
+    }
   }
 
   // ----------------- Notifications -----------------
@@ -882,6 +941,8 @@ export function createLicenseService(ctx) {
     removeLicense,
     getState,
     getStatus,
+    isProActive,
+    onProActiveChange,
     requirePro,
     start,
     close,

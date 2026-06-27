@@ -21,8 +21,9 @@ LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 SUPPORT_LOCAL_USER="${SUPPORT_LOCAL_USER:-1}"
 # Akkudoktor-EOS is installed BY DEFAULT as the DVhub Direktvermarktung fork
 # (DV-EOS: 15-min slots, slot-aware battery/inverter math, battery->grid
-# arbitrage export) when RAM >= 3GB. It is the productive optimizer DVhub ships
-# with — no longer opt-in. Opt out with --no-eos (e.g. low-RAM/headless boxes).
+# arbitrage export) when RAM >= 1GB (Christin 2026-06-27: lowered from 3GB —
+# EOS needs ~1.5GB, 2GB is comfortable; only disable below 1GB). It is the
+# productive optimizer DVhub ships with — no longer opt-in. Opt out with --no-eos.
 # --with-eos is kept as a backwards-compatible no-op (EOS is already the default).
 EOS_INSTALL="${EOS_INSTALL:-1}"
 
@@ -402,35 +403,21 @@ else
   echo "Python3 not found. PV forecast will use Solcast API only (Tier 1 mode)."
 fi
 
-# --- ML Dependencies (Tier 2+) ---
-install_ml_deps() {
-  local RAM_MB
-  RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-
-  if [ "$RAM_MB" -ge 2000 ]; then
-    echo "  ML: Tier 2+ erkannt (${RAM_MB}MB RAM) — installiere ML-Pakete..."
-    sudo "$VENV_DIR/bin/pip" install --quiet \
-      'scikit-learn>=1.5,<2.0' \
-      'lightgbm>=4.5,<5.0' \
-      'statsforecast>=2.0,<3.0' \
-      'joblib>=1.3,<2.0' 2>&1 | tail -5
-    echo "  ML: Pakete installiert."
-
-    # Create model directory
-    sudo mkdir -p /opt/dvhub/ml-models
-    sudo chown "$(whoami)" /opt/dvhub/ml-models 2>/dev/null || true
-    echo "  ML: Modell-Verzeichnis /opt/dvhub/ml-models erstellt."
-  else
-    echo "  ML: Uebersprungen (RAM ${RAM_MB}MB < 2GB, Tier 1)"
-  fi
-
+# --- ML-Modell-Verzeichnis ---
+# Christin 2026-06-27: Das RAM-gegatete ML-Skip entfällt. Der komplette ML-Stack
+# (scikit-learn, lightgbm, statsforecast, joblib) steckt bereits hash-gepinnt in
+# python/requirements.lock und wird mit der Forecast-venv oben auf JEDER Box
+# installiert (--require-hashes). Der frühere separate, RAM-gegatete pip-Schritt
+# war redundant UND ungepinnt — hier bleibt nur noch das Modell-Verzeichnis.
+ensure_ml_model_dir() {
+  sudo mkdir -p /opt/dvhub/ml-models
+  sudo chown "$(whoami)" /opt/dvhub/ml-models 2>/dev/null || true
+  echo "  ML: Modell-Verzeichnis /opt/dvhub/ml-models bereit (ML-Pakete kommen aus requirements.lock)."
 }
 
-# Install ML dependencies after Python venv is ready.
-# T-0118: run in a subshell + `|| true` so the OPTIONAL Tier-2 step (ML pip)
-# can never abort the script (the subshell contains any inner
-# `exit`/set -e failure) — the essential tail (config/DB/systemd) must always run.
-( install_ml_deps ) || echo "  ML: optionaler Tier-2-Schritt fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
+# Non-fatal (subshell + `|| true`) — wie der frühere Tier-2-Schritt darf auch das
+# Anlegen des Modell-Verzeichnisses den Kern-Install nie abbrechen.
+( ensure_ml_model_dir ) || echo "  ML: Modell-Verzeichnis konnte nicht angelegt werden — uebersprungen, Kern-Install laeuft weiter"
 
 # --- EOS (Akkudoktor) Installation — DEFAULT (DV fork), RAM-gated >=3GB, opt-out via --no-eos ---
 # The provisioning logic lives in the shared eos-provision.sh (single source of

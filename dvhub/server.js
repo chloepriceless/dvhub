@@ -1545,7 +1545,28 @@ if (IS_RUNTIME_PROCESS) {
   // persisted license status (no race window where requirePro returns 403 on
   // a paid customer just because the file hadn't been read yet).
   licenseService.loadStateFromDisk();
-  modbus.start();
+  // Pro-Gating (Task #10): the DV-Schnittstelle (Modbus SERVER, Port 1502) is a
+  // Pro feature. Without an active licence it stays fully closed — the listener
+  // never binds, so a Direktvermarkter cannot connect or toggle forcedOff. The
+  // Victron Modbus CLIENT (transport-modbus.js) and every other integration are
+  // UNAFFECTED. The server code is always installed, so a later licence
+  // activation opens it live via the transition hook below (no restart).
+  if (licenseService.isProActive()) {
+    modbus.start();
+  } else {
+    pushLog('dv_interface_gated', { reason: 'license_inactive' });
+  }
+  // Open/close the DV-Schnittstelle live on a licence change (revoke closes it,
+  // activation re-opens it) without requiring a process restart.
+  licenseService.onProActiveChange((active) => {
+    if (active) {
+      modbus.start();
+      pushLog('dv_interface_opened', { reason: 'license_active' });
+    } else {
+      modbus.close();
+      pushLog('dv_interface_closed', { reason: 'license_inactive' });
+    }
+  });
   // Phase 04: Start integration services (runtime-only — MQTT connections, device polling, notifications)
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));

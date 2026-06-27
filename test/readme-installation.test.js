@@ -34,8 +34,8 @@ test('README startup and service paths use the dvhub app directory', () => {
   );
   assert.match(
     source,
-    /ExecStart=\/usr\/bin\/node --experimental-sqlite \/opt\/dvhub\/dvhub\/server\.js/,
-    'README systemd example must launch server.js from /opt/dvhub/dvhub'
+    /ExecStart=\/usr\/bin\/node \/opt\/dvhub\/dvhub\/server\.js/,
+    'README systemd example must launch server.js from /opt/dvhub/dvhub (Postgres-Build, kein --experimental-sqlite mehr)'
   );
   assert.doesNotMatch(
     source,

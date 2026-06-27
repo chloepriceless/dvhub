@@ -34,10 +34,12 @@ if [[ -f "$DATA_DIR/.no-eos" ]]; then
   exit 0
 fi
 
-# RAM gate (>=3GB, Tier 3). EOS + its venv are too heavy below this.
+# RAM gate (Christin 2026-06-27): EOS braucht max. ~1,5 GB, 2 GB sind komfortabel.
+# Nur UNTER 1 GB deaktivieren — darunter würden EOS + venv die Box ins Swappen
+# treiben. (Vorher >=3GB; auf 1 GB gesenkt, damit 2-GB-Boxen EOS bekommen.)
 RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-if [[ "$RAM_MB" -lt 3000 ]]; then
-  echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 3GB, Tier < 3)"
+if [[ "$RAM_MB" -lt 1000 ]]; then
+  echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 1GB)"
   exit 0
 fi
 

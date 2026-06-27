@@ -238,8 +238,9 @@ fi
 EOS_DIR="$INSTALL_DIR/eos"
 if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   EOS_RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-  if [[ "$EOS_RAM_MB" -lt 3000 ]]; then
-    echo "  EOS: Uebersprungen (RAM ${EOS_RAM_MB}MB < 3GB)"
+  if [[ "$EOS_RAM_MB" -lt 1000 ]]; then
+    # RAM-Gate gesenkt 3GB->1GB (Christin 2026-06-27): EOS nur unter 1 GB aus.
+    echo "  EOS: Uebersprungen (RAM ${EOS_RAM_MB}MB < 1GB)"
   elif [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service ]]; then
     # Bereits provisioniert — nur sicherstellen, dass der Dienst läuft (schnell).
     systemctl enable eos.service >/dev/null 2>&1 || true

@@ -90,7 +90,7 @@ test('installer force-syncs an existing checkout to the requested remote branch 
 test('installer preserves INSTALLER_SOURCE_URL across sudo re-exec', () => {
   assert.match(
     source,
-    /sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR bash "\$0" "\$@"/,
+    /sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR,SUPPORT_LOCAL_USER bash "\$0" "\$@"/,
     'install.sh must preserve INSTALLER_SOURCE_URL so branch auto-detection survives sudo re-exec'
   );
 });

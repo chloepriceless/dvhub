@@ -42,9 +42,25 @@ test('ALLOWED_FEATURES contains forecast-inspector-eos (Phase 19 Plan 19-05)', (
   assert.match(m[1], /'forecast-inspector-eos'/);
 });
 
-test('ALLOWED_FEATURES contains forecast-inspector-stage2 (Phase 19 Plan 19-06)', () => {
+test('ALLOWED_FEATURES contains dv-interface (Pro-Gating #12)', () => {
   const src = fs.readFileSync(LICENSE_SRC, 'utf8');
   const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
   assert.ok(m);
-  assert.match(m[1], /'forecast-inspector-stage2'/);
+  assert.match(m[1], /'dv-interface'/);
+});
+
+test('ALLOWED_FEATURES contains eos (Pro-Gating #12)', () => {
+  const src = fs.readFileSync(LICENSE_SRC, 'utf8');
+  const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
+  assert.ok(m);
+  assert.match(m[1], /'eos'/);
+});
+
+// Pro-Gating #12: Stage 2++ ist in der UI ausgeblendet (#8-lite) → der
+// forecast-inspector-stage2-Slug ist aus der Whitelist entfernt.
+test('ALLOWED_FEATURES no longer contains forecast-inspector-stage2 (Stage 2++ UI-hidden)', () => {
+  const src = fs.readFileSync(LICENSE_SRC, 'utf8');
+  const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
+  assert.ok(m);
+  assert.doesNotMatch(m[1], /'forecast-inspector-stage2'/);
 });

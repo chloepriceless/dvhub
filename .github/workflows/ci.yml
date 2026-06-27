@@ -32,8 +32,8 @@ jobs:
   # Secret/credential push-gate (scripts/check-secrets.sh). Runs from the repo
   # root (NOT working-directory: dvhub) and fails the build on any hardcoded
   # secret, private-key material, embedded credential or internal topology
-  # (192.168.1.x). Internal-only paths (.planning, internal docs) are excluded
-  # since they are filtered out of the public mirror via git-filter-repo.
+  # (internal LAN / RFC1918 hosts). Internal-only paths (.planning, internal docs)
+  # are excluded since they are filtered out of the public mirror via git-filter-repo.
   secret-scan:
     name: secret-scan (push-gate)
     runs-on: ubuntu-latest

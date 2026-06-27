@@ -1035,3 +1035,78 @@ test('fix C-2: the signed machine-file issue time floors trustedNowMs even with 
   const svc = createLicenseService(ctx); svc.loadStateFromDisk();
   assert.ok(svc.trustedNowMs() >= Date.parse(issued), 'signed issue time must floor trusted now even without last_server_ts');
 });
+
+// ---------------------------------------------------------------------------
+// Pro-Gating (Task #9) — isProActive() + onProActiveChange() transition fan-out
+// ---------------------------------------------------------------------------
+
+test('isProActive() mirrors the requirePro() gate (active only)', () => {
+  const svc = createLicenseService(mockCtx());
+  svc.loadStateFromDisk();
+  assert.equal(svc.isProActive(), false);              // fresh none
+  svc.setStatusForTest('active');
+  assert.equal(svc.isProActive(), true);
+  for (const s of ['invalid', 'expired', 'suspended', 'none']) {
+    svc.setStatusForTest(s);
+    assert.equal(svc.isProActive(), false, `status ${s} must NOT be pro-active`);
+  }
+});
+
+test('onProActiveChange fires true on activation (none -> active)', async () => {
+  await withMockFetch(
+    async () => ({ ok: true, status: 200, json: async () => makeKeygenResponse({ valid: true, code: 'VALID' }) }),
+    async () => {
+      const svc = createLicenseService(mockCtx());
+      svc.loadStateFromDisk();
+      const flips = [];
+      svc.onProActiveChange((active) => flips.push(active));
+      await svc.activateLicense('DVHB-PROG-XXXX-XXXX-AAAA');
+      assert.deepEqual(flips, [true]);
+    }
+  );
+});
+
+test('onProActiveChange fires false on revoke (active -> suspended)', async () => {
+  await withMockFetch(
+    async () => ({ ok: true, status: 200, json: async () => makeKeygenResponse({ valid: false, code: 'SUSPENDED' }) }),
+    async () => {
+      const svc = createLicenseService(mockCtx());
+      svc.loadStateFromDisk();
+      svc.setStatusForTest('active');
+      svc.setLicenseKeyForTest('DVHB-WAS-ACTIVE-XXXX-AAAA');   // revalidate reuses the persisted key
+      const flips = [];
+      svc.onProActiveChange((active) => flips.push(active));
+      await svc.revalidateLicense();
+      assert.deepEqual(flips, [false]);
+    }
+  );
+});
+
+test('onProActiveChange does NOT fire when active-ness is unchanged (active -> active)', async () => {
+  await withMockFetch(
+    async () => ({ ok: true, status: 200, json: async () => makeKeygenResponse({ valid: true, code: 'VALID' }) }),
+    async () => {
+      const svc = createLicenseService(mockCtx());
+      svc.loadStateFromDisk();
+      svc.setStatusForTest('active');
+      svc.setLicenseKeyForTest('DVHB-STAYS-ACTIVE-XXXX-AAAA');
+      const flips = [];
+      svc.onProActiveChange((active) => flips.push(active));
+      await svc.revalidateLicense();
+      assert.deepEqual(flips, [], 'no flip => no listener call');
+    }
+  );
+});
+
+test('removeLicense fires false when it was active; a bad listener never blocks others', () => {
+  const svc = createLicenseService(mockCtx());
+  svc.loadStateFromDisk();
+  svc.setStatusForTest('active');
+  svc.setLicenseKeyForTest('DVHB-REMOVE-XXXX-XXXX-AAAA');
+  const flips = [];
+  svc.onProActiveChange(() => { throw new Error('boom'); });   // must be absorbed
+  svc.onProActiveChange((active) => flips.push(active));
+  const r = svc.removeLicense();
+  assert.equal(r.status, 'none');
+  assert.deepEqual(flips, [false]);
+});

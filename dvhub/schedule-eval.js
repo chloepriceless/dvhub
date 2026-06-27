@@ -148,6 +148,13 @@ export function createScheduleEvaluator(ctx) {
     const optimizerEnabled = cfg.optimizer?.enabled ?? false;
     const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
     const allowGridDischarge = cfg.optimizer?.allowGridDischarge ?? false;
+    // Pro-Gating (Task #11): forecast_optimizer rules (EOS/optimizer dispatch) are
+    // a Pro feature. Without an active licence they NEVER actuate — even stale rules
+    // lingering in state.schedule.rules — so the box falls back to Stage 1/2 (SMA
+    // rules, which are unaffected). Mirrors the runOptimization() production gate.
+    // Defensive: a missing isProActive never gates (prod licensed → unaffected).
+    const proGateClosed = typeof ctx.licenseService?.isProActive === 'function'
+      && ctx.licenseService.isProActive() === false;
     const now = Date.now();
     const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
@@ -164,7 +171,7 @@ export function createScheduleEvaluator(ctx) {
       // (Plan 08-06 Task 1) and catches ALL caller sources at write time. This filter
       // short-circuits optimizer rules earlier so they never reach the hardware-write path.
       if (r.source === 'forecast_optimizer') {
-        if (!optimizerEnabled) return false;
+        if (!optimizerEnabled || proGateClosed) return false;
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
           if (val > 0 && !allowGridCharge) return false;   // Netzladen blocked

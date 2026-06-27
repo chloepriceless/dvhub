@@ -51,11 +51,11 @@ Modbus-Kommunikation des Direktvermarkters wird in Software nachgebildet, währe
 die Live-Werte direkt vom Victron-GX-System kommen. Darüber hinaus ist DVhub zu
 einem vollwertigen HEMS ausgebaut.
 
-- **DV-Schnittstelle und Web-Leitstand** in einer Anwendung — keine zusätzliche Hardware
+- **DV-Schnittstelle** *(DVhub Pro)* **und Web-Leitstand** in einer Anwendung — keine zusätzliche Hardware
 - **Dashboard** mit Energy-Flow-Visualisierung, Live-Werten, Day-Ahead-Preisen und Steuerung
 - **Kleine Börsenautomatik** mit zweistufigem Forecast-aware-Modus (Stufe 2: vorausschauendes Akku-Leeren)
 - **Prognose-Engine** — PV-Ertrag (pvlib), Lastvorhersage und Multi-Modell-Ensemble mit Accuracy-Tracking
-- **Optimierung** — interner MILP-/Heuristik-Optimizer (HiGHS) und der standardmäßig mitinstallierte Akkudoktor-EOS-Direktvermarktungs-Fork (15-Minuten-Slots)
+- **Optimierung** — freie kleine Börsenautomatik (Greedy/MILP-Abend-Slots) plus der **Akkudoktor-EOS-Arbitrage-Optimizer** *(DVhub Pro)* (DV-Direktvermarktungs-Fork, 15-Minuten-Slots, standardmäßig mitinstalliert)
 - **Optionale ML-Prognose-Korrektur** — selbstlernende Korrektur systematischer Prognosefehler (LightGBM)
 - **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
 - **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Tesla-/Haus-Flow und Screensaver *(DVhub Pro)*
@@ -105,7 +105,7 @@ Der Installer:
 - generiert automatisch einen `apiToken` und ein selbstsigniertes TLS-Zertifikat
 - richtet einen systemd-Service mit Selbstheilung beim Start ein (`post-update.sh` als `ExecStartPre`)
 - nutzt eine externe Config unter `/etc/dvhub/config.json`
-- installiert je nach verfügbarem RAM zusätzliche Prognose-/ML-Komponenten (siehe **Leistungsstufen**)
+- installiert den vollen Prognose-/ML-Stack hash-gepinnt aus `requirements.lock` (auf jeder Box) und zusätzlich Akkudoktor-EOS ab ≥ 1 GB RAM (siehe **Leistungsstufen**)
 - **Stable-Channel** (Standard): checkt den neuesten Semver-Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
 - der Update-Channel ist nachträglich über die Einstellungen umschaltbar
@@ -120,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 Akkudoktor-EOS wird **standardmäßig mitinstalliert** — als DVhubs eigener
 **Direktvermarktungs-Fork** (DV-EOS: 15-Minuten-Slots, slot-genaue Batterie-/
 Wechselrichter-Mathematik, Akku→Netz-Arbitrage) als eigener Dienst unter
-`127.0.0.1:8503`, sofern ≥ 3 GB RAM verfügbar sind. Mit `--no-eos` lässt sich das
+`127.0.0.1:8503`, sofern ≥ 1 GB RAM verfügbar sind. Mit `--no-eos` lässt sich das
 überspringen (z. B. auf RAM-armen/Headless-Boxen); die interne MILP-/Heuristik-
 Optimierung läuft auch ohne EOS. (`--with-eos` bleibt als kompatibler No-op
 erhalten, da EOS jetzt Default ist.)
@@ -140,11 +140,10 @@ Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten A
 DVhub skaliert mit der verfügbaren Hardware. Der Installer erkennt den RAM und
 installiert nur die Komponenten, die das System tragen kann:
 
-| Stufe | RAM | Zusätzliche Funktionen |
-|-------|-----|------------------------|
-| **Basis** | < 2 GB | Kern-DV, Steuerung, Telemetrie, Börsenautomatik, Prognose-Grunddaten (pvlib-Forecast-venv, SQL-Lastmodell) |
-| **+ ML** | ≥ 2 GB | + ML-Pakete (scikit-learn, LightGBM, statsforecast) für selbstlernende Prognose-Korrektur und statistische Lastvorhersage |
-| **+ EOS** | ≥ 3 GB | + Akkudoktor-EOS (DVhub-Direktvermarktungs-Fork) als externer Optimizer-Dienst — **standardmäßig mitinstalliert**, opt-out mit `--no-eos` |
+| Stufe | RAM | Funktionen |
+|-------|-----|------------|
+| **Vollständig** | ≥ 1 GB | Kern-DV, Steuerung, Telemetrie, Börsenautomatik, **voller Prognose-/ML-Stack** (pvlib, scikit-learn, LightGBM, statsforecast — hash-gepinnt aus `requirements.lock`, auf jeder Box) **und Akkudoktor-EOS** (DVhub-Direktvermarktungs-Fork) als externer Optimizer-Dienst — standardmäßig mitinstalliert, opt-out mit `--no-eos` |
+| **Ohne EOS** | < 1 GB | wie oben, aber **ohne EOS** (zu RAM-hungrig unter 1 GB); die interne MILP-/Heuristik-Optimierung + kleine Börsenautomatik laufen weiter |
 
 > Hinweis: Ein früher dokumentierter Edge-LLM-Layer (Ollama/TinyLlama für
 > Kachel-Erläuterungen) ist in v1.0 nicht mehr Bestandteil von DVhub und wird vom
@@ -176,7 +175,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 
 ### Direktvermarktung &amp; Steuerung
 
-- **DV-Modbus-Server** auf Port `1502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — PLEXLOG-kompatibel
+- **DV-Modbus-Server** auf Port `1502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — PLEXLOG-kompatibel *(DVhub Pro — die DV-Schnittstelle; ohne Lizenz startet der Server nicht. Der Victron-Modbus-CLIENT + Steuerpfad unten bleiben frei.)*
 - **LAN-only-Zugriffsschutz** für den Modbus-Server: nur Loopback + RFC1918 (oder eine explizite `modbusAllowedClients`-Allowlist); fremde Clients werden sofort getrennt und protokolliert
 - **DV-Signalerkennung** mit Lease-Logik (`offLeaseMs`) und automatischer, sicherer Rückkehr in Freigabe nach Ablauf
 - **Victron-Steuerung** für Grid Setpoint, Charge Current, Min SOC, Max Discharge sowie die DC-/AC-Einspeise-Flags (`feedExcessDcPv`, `dontFeedExcessAcPv`)
@@ -190,7 +189,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Day-Ahead-Preis-Engine** mit Heute-/Morgen-Daten, Hover-Details und Chart-Auswahl
 - **Schedule-System** mit Defaults, manuellen und persistenten Overrides sowie Chart-zu-Schedule-Auswahl
 - **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen — energiebasierte Slot-Allokation, dynamischer sonnenstandsabhängiger SOC-Floor und wahlweise Greedy- oder MILP-Engine
-- **Forecast-aware Börsenautomatik (zweistufig)** — Stufe 1 leitet Reserve und Hoarding-Gate aus dem PV-/Last-Forecast der nächsten 24 h ab; Stufe 2 („Forecast Aware++", vorausschauendes Akku-Leeren) verkauft aktiv, wenn der Börsenpreis unter die PV-Erzeugungskosten fällt — mit Soft-/Hard-Limit-Taper und Live-Runtime-Clamp im Schreibpfad
+- **Forecast-aware Börsenautomatik (Stufe 2)** — leitet Reserve und Hoarding-Gate aus dem PV-/Last-Forecast der nächsten 24 h ab (Über-Nacht-SOC-Schutz, `forecastAware`). *(„Forecast Aware++"/Stage 2++ — das vorausschauende aktive Akku-Leeren — wurde **entfernt** und in der UI ausgeblendet; die EOS-Arbitrage ist der produktive Nachfolger. Der Code bleibt mitinstalliert.)*
 - **DC-Export-Modus (100 % Einspeisung)** mit Live-Hausverbrauchs-Abzug (`subtractHouseLoad`) und SOC-/Deadline-Schutz vor dem Abend-Peak
 - **§51-EEG Förderzeitraum-Verlängerungs-KPI** aus den Negativpreis-Viertelstunden (Solarspitzengesetz)
 - **Victron-Alarm-Banner** — read-only Anzeige aktiver VE.Bus-/BMS-Alarme im Status, entkoppelt vom Steuerpfad
@@ -203,10 +202,10 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Lastvorhersage** über statistische Modelle (statsforecast) mit SQL-Wochentag-Fallback
 - **Nebel-Korrektur** und **Accuracy-Tracking** — jede Prognose wird als Snapshot gespeichert und gegen die Messwerte ausgewertet
 - **Optionale ML-Korrektur** (`ml.mlEnabled`) — selbstlernendes LightGBM-Modell korrigiert systematische Prognosefehler, mit atomarem Modell-Swap, Schema-Guard und automatischem Sanity-Fallback auf die Rohprognose
-- **Interner Optimizer** — MILP-Batterieoptimierung über den HiGHS-Solver (15-Minuten-Slots) mit schneller Heuristik als Fallback
-- **Akkudoktor-EOS-Anbindung** (standardmäßig mitinstalliert als DVhub-Direktvermarktungs-Fork; opt-out `--no-eos`) — externer Optimizer-Dienst mit Config-Sync, Forecast-Bridge (Selbstheilung nach EOS-Neustart) und Akku→Netz-Arbitrage
+- **Optimizer-Dispatch** *(DVhub Pro)* — MILP-Batterieoptimierung über den HiGHS-Solver (15-Minuten-Slots) mit schneller Heuristik als Fallback; der `internal`-Modus ist Teil des Pro-Optimizer-Layers (`services/optimizer`) und geht ohne Lizenz mit aus. Die freie kleine Börsenautomatik oben nutzt ihre eigene Engine
+- **Akkudoktor-EOS-Anbindung** *(DVhub Pro — Arbitrage)* (standardmäßig mitinstalliert als DVhub-Direktvermarktungs-Fork; opt-out `--no-eos`) — externer Optimizer-Dienst mit Config-Sync, Forecast-Bridge (Selbstheilung nach EOS-Neustart) und Akku→Netz-Arbitrage; **ohne aktive Lizenz aktuiert EOS nicht** (automatischer Fallback auf Stufe 1/2, Prognosewerte bleiben sichtbar)
 - **Marktprämien-Modulation** (optional, `optimizer.tariff.feedInIncludeMarketPremium`) — bewertet die Einspeisung am realen Direktvermarktungs-Margin (Spot + Marktprämie) statt am Rohspot; §51-konform (keine Prämie in Negativpreis-Slots)
-- **Quellen-Selektor** `best`/`internal`/`eos` — wählt anhand einer Netzkosten-Schätzung den günstigeren Plan
+- **Quellen-Selektor** `best`/`internal`/`eos` *(DVhub Pro)* — wählt anhand einer Netzkosten-Schätzung den günstigeren Plan (Teil des Pro-Optimizer-Layers)
 - **MiSpeL-Guard** — setzt das §14a-konforme Netzlade-Verbot durch (außer bei lizenzierter Arbitrage)
 - **Abgeregelte Energie** — strahlungskalibrierte Schätzung des durch §51/Direktvermarkter gedrosselten Stroms — [in einfacher Sprache erklärt](dvhub/docs/ABREGELUNG-ERKLAERT.md)
 
@@ -248,21 +247,31 @@ Netz brauchen keinen Bearer-Token) — die Pro-Lizenzprüfung läuft davon unabh
 
 ### Was ist Pro?
 
-Genau **fünf** Features sind lizenzpflichtig (das Code-Gating `requirePro()` und
-die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich):
+Die beiden **Kern-Direktvermarktungs-Funktionen** und drei Komfort-Features sind
+lizenzpflichtig und werden **serverseitig** durchgesetzt (nicht nur in der UI
+versteckt). Das Code-Gating (`requirePro()` für HTTP, `isProActive()` für die
+Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 
-| Feature (intern) | Oberfläche | Ohne Lizenz |
+| Feature (intern) | Oberfläche / Funktion | Ohne Lizenz |
 |---|---|---|
+| `dv-interface` | **DV-Schnittstelle** = Modbus-SERVER (Port 1502) für den Direktvermarkter + HTTP-Read `/dv/control-value` | Server **startet nicht / bleibt komplett geschlossen**; der Victron-Modbus-**CLIENT** und alle anderen Anlagen-Integrationen laufen unverändert weiter |
+| `eos` | **EOS / DV-EOS** Arbitrage-Optimizer-Dispatch (`services/optimizer`, `primarySource=eos`) | EOS **aktuiert nicht** → automatischer Fallback auf die freie kleine Börsenautomatik (Stufe 1/2); Prognosewerte bleiben sichtbar |
 | `family-dashboard` | Familien-Dashboard (`/family` + alle `/api/family/*`-Routen) | `403 pro_required` + 🔒-Badge in der Top-Nav, Klick öffnet das Pro-Modal |
 | `vpn-manager` | Einstellungen → VPN (`/api/vpn/*` — Status, Profil-Upload, Start/Stop/Restart) | `403 pro_required`; Tab zeigt Pro-Hinweis mit Lizenz-Link |
 | `forecast-inspector-ml` | Einstellungen → Forecast → ML-Korrektur-Inspector | `403` + Pro-Banner inline, CTA öffnet das Pro-Modal |
-| `forecast-inspector-eos` | Einstellungen → Forecast → EOS-Output-Inspector | dito |
-| `forecast-inspector-stage2` | Einstellungen → Forecast → SMA-Stufe-2 Plan-Inspector + Backtest | dito |
+| `forecast-inspector-eos` | Einstellungen → Forecast → EOS-Output-Inspector (Teil von EOS-Pro) | dito |
 
-> **Wichtig:** Die zugrunde liegende Optimierungs-Funktion bleibt frei — die
-> Forecast-aware-Börsenautomatik, der Optimizer, EOS und die ML-Korrektur
-> **laufen** ohne Lizenz. Lizenzpflichtig sind das Familien-Dashboard, der
-> VPN-Manager und die drei Forecast-Inspector-Ansichten.
+> **Frei (Community, ECL-1.0):** die kleine Börsenautomatik **Stufe 1**
+> (Greedy/MILP-Abend-Slots) **und Stufe 2** (`forecastAware`, Über-Nacht-SOC-
+> Reserve/Hoarding), Leitstand, Historie, **Prognose-Anzeige** (PV + Last), der
+> Victron-**Client** und andere Anlagen-Integrationen, **Negativpreis-Schutz** und
+> alle **Sicherheits-Gates** (EEG/§14a, SOC-/Entlade-Boden, Not-Halt).
+>
+> **Pro** schaltet die **DV-Schnittstelle** (Direktvermarkter-Modbus-Server) und
+> die **EOS-Arbitrage** frei — beide sind ohne Lizenz serverseitig aus. „Stage 2++"
+> (`predictivePreEmpty` / „Forecast Aware++", das nie produktive Morgens-Entleeren)
+> wurde **entfernt** (in der UI ausgeblendet; EOS ist der Nachfolger) — der Code
+> bleibt mitinstalliert.
 >
 > Das Pro-Gating prüft ausschließlich den Lizenzstatus (`active`) und gilt
 > **netzwerkunabhängig** — auch im eigenen LAN sind die Pro-Features ohne aktive

@@ -1997,7 +1997,16 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
     }
 
-    if (url.pathname === '/dv/control-value' && req.method === 'GET') return text(res, 200, ctx.controlValue());
+    // Pro-Gating (Task #10): /dv/control-value is the HTTP read-half of the
+    // DV-Schnittstelle (the 0/1 forcedOff mirror a Direktvermarkter polls). The
+    // write-half (Modbus server) is gated in server.js; this closes the read-half
+    // too, so the DV-Schnittstelle is fully shut without an active licence. No
+    // internal UI consumes this endpoint. LAN-auth is still bypassed (status
+    // group) — the Pro check runs IN-HANDLER, mirroring the family-dashboard gate.
+    if (url.pathname === '/dv/control-value' && req.method === 'GET') {
+      if (!requirePro(req, res, 'dv-interface')) return;
+      return text(res, 200, ctx.controlValue());
+    }
 
     // Plan 09-06 (D-06 + D-07): Prometheus exposition. /api/metrics IS in
     // LAN_SAFE_ENDPOINTS so the standard checkAuth above honours the LAN

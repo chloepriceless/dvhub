@@ -805,3 +805,41 @@ test('25-02: dc_export_mode (-3000) passiert das EEG-Gate bei allowGridDischarge
     'kein grid_discharge_not_allowed-Reject für dc_export_mode'
   );
 });
+
+// --- Pro-Gating (Task #11): forecast_optimizer (EOS/optimizer dispatch) gate ---
+
+test('Pro-Gating: forecast_optimizer rule actuates when the licence is active', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg, ctx }) => {
+      state.schedule.rules = [{
+        id: 'opt-1', enabled: true, target: 'gridSetpointW',
+        start: '00:00', end: '23:59', value: -5000,
+        source: 'forecast_optimizer', autoManaged: true
+      }];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      ctx.licenseService = { isProActive: () => true };   // Pro active → not gated
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW?.value), -5000,
+    'with an active licence the forecast_optimizer setpoint must actuate');
+});
+
+test('Pro-Gating: forecast_optimizer rule is skipped without a licence (Stage 1/2 fallback)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg, ctx }) => {
+      state.schedule.rules = [{
+        id: 'opt-1', enabled: true, target: 'gridSetpointW',
+        start: '00:00', end: '23:59', value: -5000,
+        source: 'forecast_optimizer', autoManaged: true
+      }];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      ctx.licenseService = { isProActive: () => false };  // Pro gate closed
+    }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.notEqual(Number(state.schedule.active.gridSetpointW?.value), -5000,
+    'without a licence the forecast_optimizer setpoint must NOT actuate (EOS gated → Stage 1/2)');
+});

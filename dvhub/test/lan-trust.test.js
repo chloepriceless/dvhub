@@ -186,7 +186,7 @@ describe('LAN-trust: lanCidrs / trustedClientIps narrowing', () => {
 describe('ipMatchesCidr (pure)', () => {
   it('matches IPv4 ranges bit-exact', () => {
     assert.equal(ipMatchesCidr('192.168.1.66', '192.168.1.0/24'), true);
-    assert.equal(ipMatchesCidr('192.168.1.5', '192.168.1.0/24'), false);
+    assert.equal(ipMatchesCidr('192.168.99.5', '192.168.1.0/24'), false);
     assert.equal(ipMatchesCidr('10.1.2.3', '10.0.0.0/8'), true);
     assert.equal(ipMatchesCidr('172.20.5.5', '172.16.0.0/12'), true);
     assert.equal(ipMatchesCidr('8.8.8.8', '192.168.0.0/16'), false);
