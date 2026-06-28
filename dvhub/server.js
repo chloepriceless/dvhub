@@ -1678,38 +1678,41 @@ if (IS_RUNTIME_PROCESS) {
   // config-sync points the providers at them; then start the hourly bridge
   // timer so subsequent EMS ticks always see <=1h-old DVhub data.
   setTimeout(async () => {
-    try { await eosForecastBridge.push(); }
-    catch (err) {
-      try { pushLog('eos_forecast_bridge_error', { phase: 'boot', error: err?.message || String(err) }); }
-      catch { /* swallow */ }
-    }
-    try { await eosConfigSync.sync(); }
-    catch (err) {
-      try { pushLog('eos_config_sync_error', { phase: 'boot', error: err?.message || String(err) }); }
-      catch { /* swallow */ }
-    }
+    // EOS boot reconcile (2026-06-28, install-robustness). Replaces the old
+    // one-shot push->sync, which left fresh installs (and post-restart EOS)
+    // planning on EMPTY data:
+    //   * the very first import 404'd while the *Import providers were still
+    //     disabled (server/eos.py:980 — now defused by force_enable on the
+    //     push), AND
+    //   * the load model isn't computed in the first seconds after boot, so a
+    //     single push streamed "no slots" and EOS held no overnight reserve
+    //     until a much later tick — the battery could drain overnight.
+    // New flow:
+    //   1. Start the periodic self-heal timer first (beforePush = config-sync)
+    //      so it runs regardless of how the convergence loop below goes. An EOS
+    //      restart resets all API-set config (providers/interval/efficiency) to
+    //      EOS.config.json defaults; re-asserting it BEFORE each push heals a
+    //      reverted provider (e.g. elecprice -> spot) within one interval.
+    //   2. Retry config-sync -> push until the load/PV/price series actually
+    //      carry rows (cold forecast can need a minute or two on weak HW).
+    //      sync runs FIRST so providers are enabled before the push; the push
+    //      also carries force_enable=true as belt-and-suspenders.
+    //   3. Once converged, persist EOS config to disk so the providers + 15-min
+    //      interval survive EOS' OWN restarts (no multi-minute dead window).
+    // Push cadence follows the EOS re-plan cadence so EOS sees fresh forecasts
+    // + live SoC before every run (operator request: 15-min pushes for 15-min
+    // EOS runs). Dedicated override eosForecastPushIntervalSec wins; else it
+    // tracks optimizer.eosEmsIntervalSec; else hourly. Clamped to [300, 7200] s.
+    const _eosCfg = ctx.getCfg()?.optimizer || {};
+    const _pushSec = Number(_eosCfg.eosForecastPushIntervalSec)
+      || Number(_eosCfg.eosEmsIntervalSec)
+      || 3600;
+    const _pushIntervalMs = Math.min(7200, Math.max(300, _pushSec)) * 1000;
     try {
-      // Self-heal (2026-06-19): each hourly tick re-pushes forecasts AND re-runs
-      // config-sync. An *EOS* restart resets all API-set config (providers/
-      // interval/efficiency) to EOS.config.json defaults, and config-sync
-      // otherwise only runs on DVhub boot/save — so without this the providers
-      // silently revert (e.g. elecprice -> spot) until a manual DVhub restart.
-      // The boot one-shot above already ran push->sync, so fireImmediately:false
-      // avoids a redundant immediate cycle.
-      // Push cadence follows the EOS re-plan cadence so EOS sees fresh forecasts
-      // + live SoC before every run (2026-06-28, operator request: 15-min pushes
-      // for 15-min EOS runs). Dedicated override eosForecastPushIntervalSec wins;
-      // else it tracks optimizer.eosEmsIntervalSec (the EMS tick); else hourly
-      // (back-compat). Clamped to [300, 7200] s — same bounds as the EMS tick.
-      const _eosCfg = ctx.getCfg()?.optimizer || {};
-      const _pushSec = Number(_eosCfg.eosForecastPushIntervalSec)
-        || Number(_eosCfg.eosEmsIntervalSec)
-        || 3600;
-      const _pushIntervalMs = Math.min(7200, Math.max(300, _pushSec)) * 1000;
       eosForecastBridge.start({
         intervalMs: _pushIntervalMs,
         fireImmediately: false,
-        afterPush: async () => {
+        beforePush: async () => {
           try { await eosConfigSync.sync(); }
           catch (e) {
             try { pushLog('eos_config_sync_error', { phase: 'reconcile', error: e?.message || String(e) }); }
@@ -1721,6 +1724,43 @@ if (IS_RUNTIME_PROCESS) {
     catch (err) {
       try { pushLog('eos_forecast_bridge_error', { phase: 'start', error: err?.message || String(err) }); }
       catch { /* swallow */ }
+    }
+
+    // Boot convergence loop. Bounded (~3 min on weak HW); the periodic timer
+    // above is the long-term guarantee if the forecast is still cold after that.
+    const EOS_BOOT_CORE_PROVIDERS = ['PVForecastImport', 'LoadImport', 'ElecPriceImport'];
+    const EOS_BOOT_MAX_ATTEMPTS = 10;
+    const EOS_BOOT_RETRY_MS = 20_000;
+    let eosBootConverged = false;
+    for (let attempt = 1; attempt <= EOS_BOOT_MAX_ATTEMPTS; attempt += 1) {
+      try { await eosConfigSync.sync(); }
+      catch (err) {
+        try { pushLog('eos_config_sync_error', { phase: 'boot', attempt, error: err?.message || String(err) }); }
+        catch { /* swallow */ }
+      }
+      let pushRes = null;
+      try { pushRes = await eosForecastBridge.push(); }
+      catch (err) {
+        try { pushLog('eos_forecast_bridge_error', { phase: 'boot', attempt, error: err?.message || String(err) }); }
+        catch { /* swallow */ }
+      }
+      // pushed entries look like "LoadImport(188)" / "battery1-soc-factor=0.5";
+      // split on "(" to recover the provider id for the readiness check.
+      const delivered = new Set((pushRes?.pushed || []).map((p) => String(p).split('(')[0]));
+      eosBootConverged = EOS_BOOT_CORE_PROVIDERS.every((k) => delivered.has(k));
+      try { pushLog('eos_boot_reconcile', { ok: eosBootConverged, attempt, delivered: [...delivered], errors: pushRes?.errors || {} }); }
+      catch { /* swallow */ }
+      if (eosBootConverged) break;
+      if (attempt < EOS_BOOT_MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, EOS_BOOT_RETRY_MS));
+    }
+    if (eosBootConverged) {
+      // Snapshot the good config to disk so an EOS restart keeps the providers
+      // + 15-min interval instead of reverting to defaults and planning blind.
+      try { await eosConfigSync.persist(); }
+      catch (err) {
+        try { pushLog('eos_config_sync_error', { phase: 'persist', error: err?.message || String(err) }); }
+        catch { /* swallow */ }
+      }
     }
   }, 15000);
   // Rollups and retention are handled by TimescaleDB continuous aggregates and retention policies

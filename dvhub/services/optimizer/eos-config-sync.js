@@ -452,5 +452,31 @@ export function createEosConfigSync(ctx) {
     return { ok: okAll, applied, errors };
   }
 
-  return { sync };
+  /**
+   * Persist EOS' current (DVhub-synced) configuration to its config file so the
+   * *Import providers + 15-min interval SURVIVE an EOS restart.
+   *
+   * EOS only holds API-set config in memory; an EOS restart drops everything
+   * sync() pushed back to the EOS.config.json defaults (providers disabled,
+   * ems.interval 300) and EOS then plans on its own VRM/spot pulls until
+   * DVhub's next reconcile tick re-asserts it — a multi-minute dead window that
+   * hits fresh installs hardest (operator just set it up, restarts EOS, watches
+   * it produce garbage). PUT /v1/config/file (server/eos.py:468) snapshots the
+   * live config to disk; the next EOS boot then loads the right providers
+   * immediately. Idempotent, never throws. Call AFTER a successful sync().
+   *
+   * @returns {Promise<{ok: boolean, error?: string, skipped?: string}>}
+   */
+  async function persist() {
+    const cfg = getCfg();
+    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    if (!cfg?.optimizer?.eosProxy?.enabled) {
+      return { ok: true, skipped: 'eosProxy.enabled=false' };
+    }
+    const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/file');
+    if (pushLog) pushLog('eos_config_persist', { ok: res.ok, error: res.error });
+    return { ok: res.ok, error: res.error };
+  }
+
+  return { sync, persist };
 }

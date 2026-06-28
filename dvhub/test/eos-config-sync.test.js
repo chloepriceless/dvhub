@@ -8,6 +8,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
+import http from 'node:http';
+
 import {
   buildEosBatteries,
   buildEosInverters,
@@ -16,7 +18,26 @@ import {
   buildEosElectricVehicles,
   pickGeneticSizing,
   pickEmsIntervalSec,
+  createEosConfigSync,
 } from '../services/optimizer/eos-config-sync.js';
+
+// Minimal mock EOS server — captures {method, url} per request, 200-OKs all.
+function createMockEos() {
+  const requests = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      req.on('data', () => {});
+      req.on('end', () => {
+        requests.push({ method: req.method, url: req.url });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      resolve({ port: server.address().port, requests, close: () => new Promise((r) => server.close(r)) });
+    });
+  });
+}
 
 const STD_CFG = {
   optimizer: {
@@ -210,4 +231,39 @@ test('buildEosElectricVehicles returns one ev11 with config overrides', () => {
   assert.equal(over[0].capacity_wh, 75000);
   assert.equal(over[0].max_charge_power_w, 11000);
   assert.equal(over[0].min_soc_percentage, 50);
+});
+
+// --- persist() (2026-06-28): snapshot synced config so it survives EOS restart ---
+test('persist(): PUTs /v1/config/file when eosProxy enabled', async () => {
+  const mock = await createMockEos();
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      state: {},
+    };
+    const res = await createEosConfigSync(ctx).persist();
+    assert.equal(res.ok, true);
+    const persistPuts = mock.requests.filter((r) => r.method === 'PUT' && r.url === '/v1/config/file');
+    assert.equal(persistPuts.length, 1, 'exactly one config-file persist PUT');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('persist(): no-op (no HTTP) when eosProxy disabled', async () => {
+  const mock = await createMockEos();
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: false, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      state: {},
+    };
+    const res = await createEosConfigSync(ctx).persist();
+    assert.equal(res.ok, true);
+    assert.equal(res.skipped, 'eosProxy.enabled=false');
+    assert.equal(mock.requests.length, 0, 'no HTTP when disabled');
+  } finally {
+    await mock.close();
+  }
 });

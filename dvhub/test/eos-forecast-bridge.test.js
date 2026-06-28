@@ -296,6 +296,54 @@ test('push sends FeedInTariffImport (spot price × factor) only in spot mode', a
   }
 });
 
+test('push: every forecast import carries force_enable=true (lands before provider flip)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'spot', feedInSpotFactor: 1 } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => ({
+        pv: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 1000 }] },
+        load: { slots: [{ start: '2026-05-24T12:00:00.000Z', powerW: 500 }] },
+        price: { slots: [{ start: '2026-05-24T12:00:00.000Z', ctKwh: 30 }] },
+      }) },
+      state: { victron: { soc: 50 } },
+    };
+    await createEosForecastBridge(ctx).push();
+    const imports = mock.requests.filter(
+      (r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/'),
+    );
+    assert.ok(imports.length >= 3, 'at least PV/Load/ElecPrice imported');
+    for (const r of imports) {
+      assert.match(r.url, /[?&]force_enable=true(&|$)/, `${r.url} must carry force_enable=true`);
+    }
+  } finally {
+    await mock.close();
+  }
+});
+
+test('start({beforePush}): beforePush runs BEFORE each push (config re-asserted ahead of import)', async () => {
+  const order = [];
+  const ctx = {
+    getCfg: () => ({ optimizer: { eosProxy: { enabled: false } } }),
+    pushLog: () => {},
+    // push() short-circuits on eosProxy.enabled=false but still records order.
+    forecastService: { buildForecastResponse: async () => { order.push('push'); return {}; } },
+    state: {},
+  };
+  const bridge = createEosForecastBridge(ctx);
+  bridge.start({
+    fireImmediately: true,
+    intervalMs: 100000,
+    beforePush: async () => { order.push('before'); },
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  bridge.stop();
+  // beforePush must precede the push on the same tick. (push() returns early on
+  // disabled proxy so 'push' may be absent, but 'before' must be first.)
+  assert.equal(order[0], 'before', 'beforePush runs before push');
+});
+
 test('push does NOT send FeedInTariffImport in fixed mode', async () => {
   const mock = await createMockEos(okHandler);
   try {

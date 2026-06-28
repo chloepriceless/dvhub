@@ -467,7 +467,15 @@ export function createEosForecastBridge(ctx) {
       const res = await eosHttpRequest(
         baseUrl,
         'PUT',
-        `/v1/prediction/import/${t.provider}`,
+        // force_enable=true lets the import land even when this provider is not
+        // the active one yet — the exact state on a FRESH INSTALL and right
+        // after an EOS restart, before eos-config-sync flips load/pvforecast/
+        // elecprice to the *Import providers. Without it EOS returns 404
+        // "Provider not enabled" (server/eos.py:980), the forecast never
+        // reaches EOS until a much later reconcile tick, and EOS plans on empty
+        // data → no overnight reserve → the battery drains. No-op once the
+        // provider is enabled (the EOS-side guard short-circuits).
+        `/v1/prediction/import/${t.provider}?force_enable=true`,
         t.body,
       );
       if (res.ok) pushed.push(`${t.provider}(${t.rows})`);
@@ -499,6 +507,11 @@ export function createEosForecastBridge(ctx) {
    * Start the periodic reconcile timer.
    *
    * @param {object} [opts]
+   * @param {() => (void|Promise<void>)} [opts.beforePush] - run BEFORE each push.
+   *   Use this to re-assert EOS config (eos-config-sync) ahead of the forecast
+   *   import so a provider that an EOS restart reset back to its default is
+   *   re-enabled before the import lands — otherwise EOS reads the stale
+   *   default provider for up to a full interval. Preferred over afterPush.
    * @param {() => (void|Promise<void>)} [opts.afterPush] - run AFTER each push,
    *   on the same tick. This is how the integration SELF-HEALS after an *EOS*
    *   restart: an EOS restart resets all API-set config (elecprice/load/
@@ -517,8 +530,18 @@ export function createEosForecastBridge(ctx) {
     if (tickHandle) return;
     const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : 3600 * 1000;
     const tick = async () => {
-      // push() and afterPush each log + swallow their own errors; the timer
-      // callback must never throw.
+      // beforePush, push() and afterPush each log + swallow their own errors;
+      // the timer callback must never throw.
+      //
+      // beforePush re-asserts EOS config (providers/interval) BEFORE the push,
+      // so an EOS restart — which resets all API-set config back to its
+      // defaults (providers disabled, interval 300) — is healed before the
+      // forecast import lands, not a whole interval later. With sync-first the
+      // *Import providers are active when the push arrives; the push's
+      // force_enable=true covers the brief flip race either way.
+      if (typeof opts.beforePush === 'function') {
+        try { await opts.beforePush(); } catch { /* beforePush logs/swallows */ }
+      }
       try { await push(); } catch { /* push() already logs */ }
       if (typeof opts.afterPush === 'function') {
         try { await opts.afterPush(); } catch { /* afterPush logs/swallows */ }
