@@ -1685,29 +1685,42 @@ class GeneticOptimization(OptimizationBase):
         else:
             discharge = discharge.tolist()
 
-        # Visualize the results in PDF
-        try:
-            from akkudoktoreos.utils.visualize import prepare_visualize
+        # Visualize the results in PDF.
+        # DVhub fork (2026-06-28): OFF by default. DVhub consumes the
+        # GeneticSolution programmatically and renders its own Leitstand charts
+        # — EOS' PDF is never read here. The upstream "Remuneration" chart also
+        # crashes on a LIST-valued (spot) feed-in tariff: it does
+        # np.full(len(gesamtlast) - start_hour, einspeiseverguetung[start_hour:])
+        # which can't broadcast a list into the target shape, so every run
+        # logged a "Visualization failed" ERROR while still paying for a
+        # matplotlib import + chart build (noticeable on weak HW, e.g. a Pi EOS
+        # host). The dispatch is unaffected — validate_list_length() already
+        # guarantees aligned arrays and this runs AFTER the solution is built —
+        # so we simply skip it. Set EOS_ENABLE_PDF_VIZ=1 to re-enable for
+        # debugging.
+        if os.environ.get("EOS_ENABLE_PDF_VIZ", "0") not in ("0", "", "false", "False", "no"):
+            try:
+                from akkudoktoreos.utils.visualize import prepare_visualize
 
-            visualize = {
-                "ac_charge": ac_charge_hours,
-                "dc_charge": dc_charge_hours,
-                "discharge_allowed": discharge,
-                "eautocharge_hours_float": eautocharge_hours_float,
-                "result": simulation_result,
-                "eauto_obj": self.simulation.ev.to_dict() if self.simulation.ev else None,
-                "start_solution": start_solution,
-                "spuelstart": washingstart_int,
-                "extra_data": extra_data,
-                "fitness_history": self.fitness_history,
-                "fixed_seed": self.fix_seed,
-            }
+                visualize = {
+                    "ac_charge": ac_charge_hours,
+                    "dc_charge": dc_charge_hours,
+                    "discharge_allowed": discharge,
+                    "eautocharge_hours_float": eautocharge_hours_float,
+                    "result": simulation_result,
+                    "eauto_obj": self.simulation.ev.to_dict() if self.simulation.ev else None,
+                    "start_solution": start_solution,
+                    "spuelstart": washingstart_int,
+                    "extra_data": extra_data,
+                    "fitness_history": self.fitness_history,
+                    "fixed_seed": self.fix_seed,
+                }
 
-            prepare_visualize(parameters, visualize, start_hour=start_hour)
+                prepare_visualize(parameters, visualize, start_hour=start_hour)
 
-        except Exception as ex:
-            error_msg = f"Visualization failed: {ex}"
-            logger.error(error_msg)
+            except Exception as ex:
+                error_msg = f"Visualization failed: {ex}"
+                logger.error(error_msg)
 
         return GeneticSolution(
             **{
