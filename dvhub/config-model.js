@@ -2252,6 +2252,98 @@ function buildFieldDefinitions() {
       help: 'Wird genutzt wenn keine historischen Verbrauchsdaten vorhanden sind. Typisch: 600-1000W Baseload.'
     },
     {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      groupDescription: 'Erkennt anhaltenden Prognosefehler bei der Nacht-Grundlast (Symptom: Netzbezug in der Nacht über mehrere Nächte) und gleicht die Lastprognose per EWMA schneller an den gemessenen Wert an — statt wochenlang auf den trägen Mittelwert zu warten. Symmetrisch: zieht nach Wegfall eines Verbrauchers auch wieder zurück.',
+      path: 'forecast.load.adaptiveNight.enabled',
+      label: 'Adaptive Nacht-Korrektur aktiv',
+      type: 'boolean',
+      help: 'Standard: an. Überlagert die Basis-Lastprognose (StatsForecast/SQL/VRM) in den Nachtstunden mit einer schnell lernenden Korrektur.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.consecutiveNights',
+      label: 'Nächte in Folge (Auslöser)',
+      type: 'number',
+      min: 1,
+      max: 14,
+      step: 1,
+      help: 'Wie viele aufeinanderfolgende Nächte mit gleichgerichtetem Prognosefehler nötig sind, bis die schnelle Lernrate greift. Standard: 3.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.nightStartHour',
+      label: 'Nachtfenster Beginn (Stunde)',
+      type: 'number',
+      min: 0,
+      max: 23,
+      step: 1,
+      help: 'Lokale Stunde (Europe/Berlin), ab der das Nachtfenster gilt. Standard: 22.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.nightEndHour',
+      label: 'Nachtfenster Ende (Stunde)',
+      type: 'number',
+      min: 0,
+      max: 23,
+      step: 1,
+      help: 'Lokale Stunde (Europe/Berlin), bis zu der das Nachtfenster gilt (exklusiv). Standard: 6.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.alphaFast',
+      label: 'Lernrate schnell (α)',
+      type: 'number',
+      min: 0,
+      max: 1,
+      step: 0.05,
+      help: 'EWMA-Gewicht auf den gemessenen Wert, wenn ein anhaltender Bias erkannt ist. Höher = schneller, aber nervöser. Standard: 0.6.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.alphaSlow',
+      label: 'Lernrate sanft (α)',
+      type: 'number',
+      min: 0,
+      max: 1,
+      step: 0.05,
+      help: 'EWMA-Gewicht ohne erkannten Bias — sanftes Nachführen, damit die Korrektur nach Wegfall der Last wieder zurückgeht. Standard: 0.25.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.marginW',
+      label: 'Fehler-Schwelle (W)',
+      type: 'number',
+      min: 0,
+      step: 25,
+      help: 'Mindest-Abweichung zwischen gemessener Nacht-Last und Basis-Prognose, ab der eine Nacht als „verzerrt" zählt. Standard: 150 W.'
+    },
+    {
+      section: 'forecast',
+      group: 'loadAdaptiveNight',
+      groupLabel: 'Adaptive Nacht-Grundlast',
+      path: 'forecast.load.adaptiveNight.maxNightLoadW',
+      label: 'Obergrenze Korrektur (W)',
+      type: 'number',
+      min: 0,
+      step: 250,
+      help: 'Sicherheits-Deckel: die korrigierte Nacht-Last wird nie höher gesetzt. Schützt vor fehlerhaften Messdaten. Standard: 6000 W.'
+    },
+    {
       section: 'epex',
       group: 'market',
       groupLabel: 'EPEX',

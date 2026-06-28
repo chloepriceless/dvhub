@@ -6,6 +6,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLoadBiasCorrector } from './load-bias-corrector.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, '../python-bridge/scripts');
@@ -205,6 +206,27 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   const getDb = () => ctx.db;
   let intervalHandle = null;
 
+  // Adaptive night-baseload corrector ("Nacht-Grundlast-Schnelllerner",
+  // 2026-06-28): tracking-signal-triggered EWMA correction overlaid on whichever
+  // base forecast (statsforecast / sql_weekday / vrm) ends up in
+  // state.forecast.load.data. Default ON; see load-bias-corrector.js.
+  const nightCorrector = createLoadBiasCorrector(ctx);
+
+  /**
+   * Overlay the adaptive night correction onto the live load forecast state and
+   * bump the forecast version. Replaces the bare bumpForecastVersion() call at
+   * each path where state.forecast.load.data is (re)assigned, so the corrected
+   * slots reach both /api/forecast and the EOS bridge. Never throws.
+   */
+  async function correctNightAndBump() {
+    try {
+      await nightCorrector.applyNightCorrection(state.forecast.load.data);
+    } catch (err) {
+      pushLog('load_forecast_night_correction_error', { error: err?.message ?? String(err) });
+    }
+    ctx.bumpForecastVersion?.();
+  }
+
   // Phase 07 FORE-12 D-D2: in-memory load-forecast state for /api/ml/status visibility.
   // Sources: 'statsforecast' | 'sql_rollup' | 'vrm_fallback' | 'naive_constant' | 'unknown'
   // Status: 'ok' | 'degraded' | 'failed'
@@ -354,7 +376,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       state.forecast.load.data = slots;
       state.forecast.load.lastFetchAt = new Date().toISOString();
       state.forecast.load.confidence = confidence;
-      ctx.bumpForecastVersion?.();
+      await correctNightAndBump();
 
       // Phase 07 FORE-12 D-D2: SF success resets fallback counter.
       setLoadForecastState('statsforecast');
@@ -392,7 +414,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       state.forecast.load.data = r.slots;
       state.forecast.load.lastFetchAt = new Date().toISOString();
       state.forecast.load.confidence = r.confidence;
-      ctx.bumpForecastVersion?.();
+      await correctNightAndBump();
 
       pushLog('load_forecast_updated', {
         slots: r.slots.length,
@@ -430,7 +452,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
           state.forecast.load.data = slots;
           state.forecast.load.lastFetchAt = new Date().toISOString();
           state.forecast.load.confidence = 0.25;
-          ctx.bumpForecastVersion?.();
+          await correctNightAndBump();
           pushLog('load_forecast_vrm_fallback', {
             slots: slots.length,
             reason: !hasRealData ? 'all_zero_history' : 'cold_start_flat'
