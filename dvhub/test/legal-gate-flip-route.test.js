@@ -10,11 +10,14 @@
 // in routes-api.js POST /api/config (legal-gate flip detection block,
 // LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge']).
 //
-// The pre-fix bug surface: on a brand-new device, those config keys do NOT
-// exist. The wizard POSTs `optimizer.allowGridCharge: false` (and similar),
-// which is `undefined → false` — the server flagged this as a "flip" and
-// returned 403 unless the header was present. Without the wizard sending
-// the header, the install path was broken.
+// 2026-06-28: the gate now triggers ONLY on the ENABLE transition
+// (after === true && before !== true). The original "any before !== after"
+// rule still mis-fired on installs that don't run the wizard at all — any page
+// that round-trips the whole config POSTs `allowGridCharge: false` against an
+// undefined stored value (undefined → false) and got 403'd, even though grid-
+// charge was never touched (reported on a fresh Pi). Materialising an unset
+// gate to false, and disabling a gate (→ false), are not legal changes and now
+// pass without the header; only turning a gate ON requires confirmation.
 //
 // These tests exercise the gate logic itself, so the operator never has to
 // wipe a production device to verify the fix still works.
@@ -129,11 +132,14 @@ async function dispatch(routes, req) {
   return res._captured;
 }
 
-describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (covers HUMAN-UAT #3)', () => {
+describe('legal-gate flip detection — gate the ENABLE transition only (covers HUMAN-UAT #3)', () => {
 
-  it('fresh install: undefined → false flip on allowGridCharge is REJECTED with 403 when header is missing', async () => {
+  it('fresh install: undefined → false on allowGridCharge is ACCEPTED without header (no false-positive flip)', async () => {
     // Baseline = no optimizer.allowGridCharge / allowGridDischarge keys at all
-    // (mirrors a factory-reset DVhub, exactly the Phase 08 HUMAN-UAT scenario).
+    // (mirrors a factory-reset DVhub). Materialising an unset gate to false is
+    // not a legal change — it must NOT 403, even without the confirm header.
+    // This is the 2026-06-28 fix for the fresh-Pi "Speichern fehlgeschlagen:
+    // legal_gate_flip_requires_confirmation" report.
     const pushSpy = [];
     const ctx = mockCtx({ optimizerOverrides: null, pushLogSpy: pushSpy });
     const routes = createApiRoutes(ctx);
@@ -145,71 +151,20 @@ describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (cover
           optimizer: { enabled: false, allowGridCharge: false }
         }
       }
-      // no x-confirm-legal-gate header → expect 403
+      // no x-confirm-legal-gate header → must still succeed (not an enable)
     });
     const captured = await dispatch(routes, req);
-    assert.equal(captured.status, 403, `expected 403, got ${captured.status} body=${captured.body}`);
-    const body = JSON.parse(captured.body);
-    assert.equal(body.ok, false);
-    assert.equal(body.error, 'legal_gate_flip_requires_confirmation');
-    assert.ok(body.paths.includes('optimizer.allowGridCharge'), 'paths list must include allowGridCharge');
-    // Audit log: rejection event must fire with the actor context.
-    const reject = pushSpy.find(e => e.event === 'legal_gate_flip_rejected');
-    assert.ok(reject, 'pushLog must emit legal_gate_flip_rejected on the failed flip');
-    assert.deepEqual(reject.details.paths, ['optimizer.allowGridCharge']);
+    assert.equal(captured.status, 200, `undefined→false must not 403; got ${captured.status} body=${captured.body}`);
+    assert.equal(pushSpy.find(e => e.event === 'legal_gate_flip_rejected'), undefined,
+      'materialising to false must not be rejected');
+    assert.equal(pushSpy.find(e => e.event === 'legal_gate_flipped'), undefined,
+      'materialising to false is not an enable → no legal_gate_flipped');
   });
 
-  it('fresh install: undefined → false flip on allowGridCharge is ACCEPTED with 200 when x-confirm-legal-gate: true (the c36d23f path)', async () => {
-    const pushSpy = [];
-    const saveSpy = [];
-    const ctx = mockCtx({ optimizerOverrides: null, pushLogSpy: pushSpy, saveAndApplyConfigSpy: saveSpy });
-    const routes = createApiRoutes(ctx);
-    const req = makeReq('/api/config', {
-      method: 'POST',
-      body: {
-        config: {
-          apiToken: API_TOKEN,
-          optimizer: { enabled: false, allowGridCharge: false }
-        }
-      },
-      extraHeaders: { 'x-confirm-legal-gate': 'true' }
-    });
-    const captured = await dispatch(routes, req);
-    assert.equal(captured.status, 200, `expected 200, got ${captured.status} body=${captured.body}`);
-    // Audit event: must fire legal_gate_flipped (NOT _rejected) with the flipped path list.
-    const flipped = pushSpy.find(e => e.event === 'legal_gate_flipped');
-    assert.ok(flipped, 'pushLog must emit legal_gate_flipped when the gate is confirmed');
-    assert.deepEqual(flipped.details.paths, ['optimizer.allowGridCharge']);
-    // saveAndApplyConfig must have been called with the new value persisted.
-    assert.equal(saveSpy.length, 1, 'saveAndApplyConfig should be invoked exactly once on success');
-    assert.equal(saveSpy[0].optimizer.allowGridCharge, false);
-  });
-
-  it('fresh install: both allowGridCharge AND allowGridDischarge flips together produce a 2-path event', async () => {
+  it('fresh install: undefined → true (opt IN to grid-charge) WITHOUT header is REJECTED 403', async () => {
+    // Turning the gate ON is the §14a-relevant direction — still gated.
     const pushSpy = [];
     const ctx = mockCtx({ optimizerOverrides: null, pushLogSpy: pushSpy });
-    const routes = createApiRoutes(ctx);
-    const req = makeReq('/api/config', {
-      method: 'POST',
-      body: {
-        config: {
-          apiToken: API_TOKEN,
-          optimizer: { enabled: false, allowGridCharge: false, allowGridDischarge: false }
-        }
-      },
-      extraHeaders: { 'x-confirm-legal-gate': 'true' }
-    });
-    const captured = await dispatch(routes, req);
-    assert.equal(captured.status, 200);
-    const flipped = pushSpy.find(e => e.event === 'legal_gate_flipped');
-    assert.ok(flipped);
-    assert.deepEqual(flipped.details.paths.sort(), ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge']);
-  });
-
-  it('fresh install: undefined → true flip (operator opts IN to grid-charge) ALSO requires the header', async () => {
-    // Same gate logic applies symmetrically — turning a feature ON for the
-    // first time still counts as a flip.
-    const ctx = mockCtx({ optimizerOverrides: null });
     const routes = createApiRoutes(ctx);
     const req = makeReq('/api/config', {
       method: 'POST',
@@ -222,14 +177,65 @@ describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (cover
       // no header → 403
     });
     const captured = await dispatch(routes, req);
-    assert.equal(captured.status, 403);
-    assert.equal(JSON.parse(captured.body).error, 'legal_gate_flip_requires_confirmation');
+    assert.equal(captured.status, 403, `expected 403, got ${captured.status} body=${captured.body}`);
+    const body = JSON.parse(captured.body);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'legal_gate_flip_requires_confirmation');
+    assert.ok(body.paths.includes('optimizer.allowGridCharge'), 'paths list must include allowGridCharge');
+    const reject = pushSpy.find(e => e.event === 'legal_gate_flip_rejected');
+    assert.ok(reject, 'pushLog must emit legal_gate_flip_rejected on the blocked enable');
+    assert.deepEqual(reject.details.paths, ['optimizer.allowGridCharge']);
+  });
+
+  it('fresh install: undefined → true WITH x-confirm-legal-gate: true is ACCEPTED 200 + audited', async () => {
+    const pushSpy = [];
+    const saveSpy = [];
+    const ctx = mockCtx({ optimizerOverrides: null, pushLogSpy: pushSpy, saveAndApplyConfigSpy: saveSpy });
+    const routes = createApiRoutes(ctx);
+    const req = makeReq('/api/config', {
+      method: 'POST',
+      body: {
+        config: {
+          apiToken: API_TOKEN,
+          optimizer: { enabled: false, allowGridCharge: true }
+        }
+      },
+      extraHeaders: { 'x-confirm-legal-gate': 'true' }
+    });
+    const captured = await dispatch(routes, req);
+    assert.equal(captured.status, 200, `expected 200, got ${captured.status} body=${captured.body}`);
+    const flipped = pushSpy.find(e => e.event === 'legal_gate_flipped');
+    assert.ok(flipped, 'pushLog must emit legal_gate_flipped when the enable is confirmed');
+    assert.deepEqual(flipped.details.paths, ['optimizer.allowGridCharge']);
+    assert.equal(saveSpy.length, 1, 'saveAndApplyConfig should be invoked exactly once on success');
+    assert.equal(saveSpy[0].optimizer.allowGridCharge, true);
+  });
+
+  it('fresh install: both allowGridCharge AND allowGridDischarge enabled together produce a 2-path event', async () => {
+    const pushSpy = [];
+    const ctx = mockCtx({ optimizerOverrides: null, pushLogSpy: pushSpy });
+    const routes = createApiRoutes(ctx);
+    const req = makeReq('/api/config', {
+      method: 'POST',
+      body: {
+        config: {
+          apiToken: API_TOKEN,
+          optimizer: { enabled: false, allowGridCharge: true, allowGridDischarge: true }
+        }
+      },
+      extraHeaders: { 'x-confirm-legal-gate': 'true' }
+    });
+    const captured = await dispatch(routes, req);
+    assert.equal(captured.status, 200);
+    const flipped = pushSpy.find(e => e.event === 'legal_gate_flipped');
+    assert.ok(flipped);
+    assert.deepEqual(flipped.details.paths.sort(), ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge']);
   });
 
   it('existing install: unchanged value (true → true) does NOT trigger the gate', async () => {
     // After the wizard has run once, the keys exist and re-saving the same
     // value (e.g. a normal settings POST that round-trips the whole config)
-    // must NOT be flagged as a flip. before === after → no flip.
+    // must NOT be flagged as a flip. already-ON, still-ON → no enable.
     const pushSpy = [];
     const ctx = mockCtx({
       optimizerOverrides: { allowGridCharge: true, allowGridDischarge: false },
@@ -244,7 +250,7 @@ describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (cover
           optimizer: { enabled: false, allowGridCharge: true, allowGridDischarge: false }
         }
       }
-      // no header — must still succeed because no flip occurred
+      // no header — must still succeed because no enable occurred
     });
     const captured = await dispatch(routes, req);
     assert.equal(captured.status, 200, `re-saving identical config must not 403; got ${captured.status}`);
@@ -254,11 +260,13 @@ describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (cover
       'unchanged value must not emit legal_gate_flip_rejected');
   });
 
-  it('existing install: real flip (true → false) STILL requires the header', async () => {
-    // A genuine toggle on an existing device still counts as a flip — the
-    // header gate is not a one-shot install bypass.
+  it('existing install: DISABLE (true → false) is ACCEPTED without header (turning OFF is never gated)', async () => {
+    // Disabling grid-charge/discharge is the safe direction — it can never
+    // create a §14a violation — so it must pass without the confirm header.
+    const pushSpy = [];
     const ctx = mockCtx({
-      optimizerOverrides: { allowGridCharge: true }
+      optimizerOverrides: { allowGridCharge: true },
+      pushLogSpy: pushSpy
     });
     const routes = createApiRoutes(ctx);
     const req = makeReq('/api/config', {
@@ -267,6 +275,31 @@ describe('Phase 08 c36d23f — legal-gate flip detection on fresh install (cover
         config: {
           apiToken: API_TOKEN,
           optimizer: { enabled: false, allowGridCharge: false }
+        }
+      }
+      // no header — disabling must still succeed
+    });
+    const captured = await dispatch(routes, req);
+    assert.equal(captured.status, 200, `disabling must not 403; got ${captured.status} body=${captured.body}`);
+    assert.equal(pushSpy.find(e => e.event === 'legal_gate_flip_rejected'), undefined,
+      'disabling must not be rejected');
+    assert.equal(pushSpy.find(e => e.event === 'legal_gate_flipped'), undefined,
+      'disabling is not an enable → no legal_gate_flipped (covered by generic config_saved audit)');
+  });
+
+  it('existing install: re-enable (false → true) STILL requires the header', async () => {
+    // Turning the gate back ON on an existing device still needs confirmation —
+    // the header gate is not a one-shot install bypass.
+    const ctx = mockCtx({
+      optimizerOverrides: { allowGridCharge: false }
+    });
+    const routes = createApiRoutes(ctx);
+    const req = makeReq('/api/config', {
+      method: 'POST',
+      body: {
+        config: {
+          apiToken: API_TOKEN,
+          optimizer: { enabled: false, allowGridCharge: true }
         }
       }
       // no header → 403

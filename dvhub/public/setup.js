@@ -849,9 +849,11 @@ function hydrateSetupWizardState(payload) {
 }
 
 async function saveSetup(config, source = 'setup') {
-  // WR-01 fix: on a fresh install the EEG/§14a toggles transition undefined → false,
-  // which the server treats as a flip and rejects with 403 unless the operator has
-  // ticked #legalAck and we forward the confirmation header.
+  // The server gates only the ENABLE transition of the EEG/§14a toggles
+  // (allowGridCharge/allowGridDischarge → true) behind x-confirm-legal-gate
+  // (since 2026-06-28; previously any undefined → false also tripped it). We
+  // forward the confirmation header whenever the operator has ticked #legalAck,
+  // so enabling a gate from the wizard succeeds; leaving them off needs nothing.
   const headers = { 'content-type': 'application/json' };
   if (document.getElementById('legalAck')?.checked === true) {
     headers['x-confirm-legal-gate'] = 'true';

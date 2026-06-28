@@ -5761,9 +5761,21 @@ export function createApiRoutes(ctx) {
         }
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
-      // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. Flipping either
-      // requires an explicit `x-confirm-legal-gate: true` header AND emits a distinct
-      // audit event so the actor IP is recorded separately from generic config_saved.
+      // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. ENABLING
+      // either (turning it ON) requires an explicit `x-confirm-legal-gate: true`
+      // header AND emits a distinct audit event so the actor IP is recorded
+      // separately from generic config_saved.
+      //
+      // 2026-06-28: gate ONLY the enable transition. The earlier rule (any
+      // before !== after) made a fresh install unusable — on a new device these
+      // keys are undefined, so the first config save of ANYTHING that round-trips
+      // them as an explicit `false` read as a flip (undefined → false) and was
+      // 403-rejected, even though grid-charge was never touched (observed on a
+      // fresh Pi: "Speichern fehlgeschlagen: legal_gate_flip_requires_confirmation").
+      // Materialising an unset field to false — and any DISABLE (→ false) — is
+      // never a legal risk, so those pass without the header (a disable still
+      // shows up in the generic config_saved changedPaths audit). Only turning a
+      // gate ON, the sole §14a-relevant direction, needs the confirmation.
       const getByPath = (obj, dotPath) => dotPath.split('.').reduce(
         (a, k) => (a != null && Object.prototype.hasOwnProperty.call(a, k)) ? a[k] : undefined,
         obj
@@ -5795,7 +5807,10 @@ export function createApiRoutes(ctx) {
       const flippedLegalGates = LEGAL_GATE_PATHS.filter((p) => {
         const before = getByPath(currentCfgForGate, p);
         const after = getByPath(body.config, p);
-        return after !== undefined && before !== after;
+        // Gate strictly on the ENABLE transition: the new value turns the gate
+        // ON and it wasn't ON before. undefined/false → false (fresh-install
+        // materialisation) and true → false (disable) are safe → not gated.
+        return after === true && before !== true;
       });
       if (flippedLegalGates.length > 0 && req.headers['x-confirm-legal-gate'] !== 'true') {
         // Plan 08-09 Task 2 Step 6: actor context (ip + ua + session) so we
