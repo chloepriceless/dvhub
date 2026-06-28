@@ -88,12 +88,6 @@ apply_dropin \
     "homeappliance.py" \
     "slot_duration_h: float = 1.0"
 
-echo "[5b/9] Drop-in: retentionmanager.py — wall-clock slot-aligned EMS scheduling"
-apply_dropin \
-    "$EOS_ROOT/src/akkudoktoreos/server/retentionmanager.py" \
-    "retentionmanager.py" \
-    "last_run_slot: int = -1"
-
 echo "[6/9] Install new provider: feedintariffenergycharts.py"
 TARGET="$EOS_ROOT/src/akkudoktoreos/prediction/feedintariffenergycharts.py"
 cp "$PATCH_DIR/feedintariffenergycharts.py" "$TARGET"
