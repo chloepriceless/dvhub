@@ -1126,7 +1126,7 @@ function buildFieldDefinitions() {
         { value: 1800, label: '30 Minuten' },
         { value: 3600, label: '1 Stunde' }
       ],
-      help: 'Wie oft EOS einen frischen Optimierungslauf startet (ems.interval), ENTKOPPELT von der Slot-Aufl\u00f6sung. \u201eAutomatisch\u201c drosselt 15-min-Slots auf st\u00fcndlich. Ein Lauf dauert ~6 min; 30 Minuten gibt auch langsamer Hardware (z.B. Raspberry-Pi-EOS-Host) Puffer. Muss > Laufdauer sein, sonst stomp.'
+      help: 'Wie oft EOS einen frischen Optimierungslauf startet (ems.interval), ENTKOPPELT von der Slot-Aufl\u00f6sung. Der Lauf startet zur vollen Slot-Grenze (:00/:15/:30/:45 bei 15min, :00/:30 bei 30min), damit der frische Plan die Folge-Slots steuert. \u201eAutomatisch\u201c drosselt 15-min-Slots auf st\u00fcndlich. Ein Lauf dauert ~6 min; f\u00fcr schw\u00e4chere Hardware (z.B. Raspberry-Pi-EOS-Host) 30 Minuten w\u00e4hlen \u2014 dann l\u00e4uft EOS zur vollen halben Stunde. \u00dcberzieht ein Lauf die n\u00e4chste Grenze, verschiebt er sich automatisch auf den n\u00e4chsten freien Slot (Kadenz halbiert sich selbst).'
     },
     {
       section: 'schedule',

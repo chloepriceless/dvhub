@@ -17,6 +17,15 @@
 #      mirror unwinds VAT+charges so feed-in stays pure spot.
 #   6. Pydantic-json.dumps serialization bug fix in /v1/prediction/import/{id}
 #      handler (vanilla returns HTTP 400 when body is PydanticDateTimeData).
+#   7. Wall-clock slot-aligned EMS scheduling (retentionmanager.py) — the
+#      optimization fires at the START of each wall-clock slot (:00/:15/:30/:45
+#      at ems.interval=900) so the fresh plan steers the following slots,
+#      instead of free-running on a monotonic timer that drifts ~1 min/cycle.
+#      WEAK-HARDWARE FALLBACK: set ems.interval=1800 to run every 30 min at the
+#      full half-hour (:00/:30); and even without that, a run that overruns the
+#      next boundary auto-defers to the following free slot (cadence self-halves
+#      15→30→60 min) — no extra config. Robust to the interval changing between
+#      runs (compares wall-clock timestamps, not a baked-in slot index).
 #
 # Idempotent: safe to re-run after every EOS upgrade. Detects already-applied
 # patches via marker grep and skips them. For the larger refactor patches
@@ -87,6 +96,12 @@ apply_dropin \
     "$EOS_ROOT/src/akkudoktoreos/devices/genetic/homeappliance.py" \
     "homeappliance.py" \
     "slot_duration_h: float = 1.0"
+
+echo "[5b/9] Drop-in: retentionmanager.py — wall-clock slot-aligned EMS scheduling"
+apply_dropin \
+    "$EOS_ROOT/src/akkudoktoreos/server/retentionmanager.py" \
+    "retentionmanager.py" \
+    "last_run_wall: float = 0.0"
 
 echo "[6/9] Install new provider: feedintariffenergycharts.py"
 TARGET="$EOS_ROOT/src/akkudoktoreos/prediction/feedintariffenergycharts.py"
@@ -203,7 +218,9 @@ echo "DVhub will push the runtime config (interval, charges_kwh, charge_rates"
 echo "based on operator.allowGridCharge + mispel.mode) at the next"
 echo "saveAndApplyConfig() or boot."
 echo "Manual config (only if not running DVhub):"
-echo "  PUT /v1/config/optimization/interval = 900"
+echo "  PUT /v1/config/optimization/interval = 900    # slot resolution (plan granularity)"
+echo "  PUT /v1/config/ems/interval = 900             # run cadence, slot-aligned to :00/:15/:30/:45"
+echo "  #   weak hardware: PUT /v1/config/ems/interval = 1800  -> every 30 min at :00/:30"
 echo "  PUT /v1/config/optimization/genetic/generations = 1200"
 echo "  PUT /v1/config/feedintariff/provider = \"FeedInTariffEnergyCharts\""
 echo "  PUT /v1/config/feedintariff/provider_settings/FeedInTariffEnergyCharts = {\"spot_factor\": 1.0}"
