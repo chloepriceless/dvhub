@@ -384,6 +384,69 @@ test('start(): default fireImmediately runs exactly one immediate tick', async (
   assert.equal(after, 1, 'default fireImmediately should run one immediate tick');
 });
 
+// --- EOS-restart watchdog (2026-06-28): pid change → immediate reconcile ---
+function healthPidHandler(getPid) {
+  return (req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/v1/health')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'alive', pid: getPid() }));
+      return;
+    }
+    okHandler(req, res);
+  };
+}
+
+test('watchdog: EOS pid change triggers an immediate reconcile (providers + data re-pushed)', async () => {
+  let pid = 1000;
+  const mock = await createMockEos(healthPidHandler(() => pid));
+  try {
+    let beforeCount = 0;
+    const logs = [];
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: (ev, d) => logs.push({ ev, d }),
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    bridge.start({ fireImmediately: false, intervalMs: 100000, watchdogMs: 20, beforePush: async () => { beforeCount += 1; } });
+    // Let the watchdog record the initial pid — no reconcile while it is stable.
+    await new Promise((r) => setTimeout(r, 70));
+    assert.equal(beforeCount, 0, 'stable pid must not reconcile');
+    // Simulate an EOS restart: the pid changes.
+    pid = 2000;
+    await new Promise((r) => setTimeout(r, 90));
+    bridge.stop();
+    assert.ok(beforeCount >= 1, 'pid change must trigger a reconcile tick (config-sync beforePush ran)');
+    assert.ok(
+      logs.some((l) => l.ev === 'eos_restart_detected' && l.d.oldPid === 1000 && l.d.newPid === 2000),
+      'eos_restart_detected must log old + new pid',
+    );
+  } finally {
+    await mock.close();
+  }
+});
+
+test('watchdog: stable EOS pid never triggers a reconcile', async () => {
+  const mock = await createMockEos(healthPidHandler(() => 4242));
+  try {
+    let beforeCount = 0;
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    bridge.start({ fireImmediately: false, intervalMs: 100000, watchdogMs: 20, beforePush: async () => { beforeCount += 1; } });
+    await new Promise((r) => setTimeout(r, 100));
+    bridge.stop();
+    assert.equal(beforeCount, 0, 'stable pid must never reconcile');
+  } finally {
+    await mock.close();
+  }
+});
+
 // ── Marktprämien-Modulation (2026-06-21) ───────────────────────────────────
 // Export-Signal = spot + Marktprämie (premium = max(0, AW − MW)), §51: kein
 // Aufschlag bei negativem Preis; config-gated, default OFF (byte-identisch).

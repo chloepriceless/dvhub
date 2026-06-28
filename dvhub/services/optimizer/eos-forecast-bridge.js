@@ -198,6 +198,23 @@ export function createEosForecastBridge(ctx) {
   } = ctx;
 
   let tickHandle = null;
+  let watchdogHandle = null;
+  let lastEosPid = null;
+
+  /**
+   * Read the EOS process pid from /v1/health. The pid changes on every EOS
+   * (re)start, so comparing it across polls is a reliable restart signal.
+   * Returns null on any error (EOS unreachable / mid-restart) — the caller
+   * treats null as "no decision, retry next poll".
+   *
+   * @param {string} baseUrl
+   * @returns {Promise<number|null>}
+   */
+  async function readEosPid(baseUrl) {
+    const res = await eosHttpRequest(baseUrl, 'GET', '/v1/health');
+    const pid = res.ok && res.data ? Number(res.data.pid) : NaN;
+    return Number.isFinite(pid) ? pid : null;
+  }
 
   /**
    * Resolve the weighted "anzulegender Wert" (AW) in ct/kWh for the configured
@@ -525,6 +542,10 @@ export function createEosForecastBridge(ctx) {
    * @param {number} [opts.intervalMs] - tick interval, default 3600_000 (1 h).
    * @param {boolean} [opts.fireImmediately=true] - run one tick now. Pass false
    *   when the caller already ran a boot reconcile (push->sync) just before.
+   * @param {number} [opts.watchdogMs=60000] - EOS-restart watchdog poll interval.
+   *   Polls /v1/health for the EOS pid; on a pid change (= EOS restarted) it runs
+   *   a full reconcile tick immediately so providers + data recover in ~seconds
+   *   instead of waiting up to intervalMs.
    */
   function start(opts = {}) {
     if (tickHandle) return;
@@ -549,12 +570,44 @@ export function createEosForecastBridge(ctx) {
     };
     if (opts.fireImmediately !== false) tick();
     tickHandle = setInterval(tick, intervalMs);
+
+    // EOS-restart watchdog (2026-06-28). An EOS restart wipes ALL pushed
+    // *Import series AND reverts some providers (observed: load/pvforecast fall
+    // back to their EOS defaults; elecprice/interval survive). The persisted
+    // config file only reliably preserves a subset, and the data is gone
+    // regardless — so the only complete recovery is to re-assert config AND
+    // re-push data. Without this, that recovery waited for the next forecast
+    // tick (up to intervalMs, i.e. 15 min), during which EOS planned on stale
+    // defaults + empty series. Polling the EOS pid (which changes on every
+    // restart) lets us run a full reconcile within ~watchdogMs instead. The
+    // reconcile reuses tick() so providers (beforePush=config-sync) are
+    // re-flipped and forecasts+SoC re-pushed in one go.
+    const watchdogMs = Number(opts.watchdogMs) > 0 ? Number(opts.watchdogMs) : 60_000;
+    const watchdog = async () => {
+      const cfg = getCfg();
+      if (cfg?.optimizer?.eosProxy?.enabled === false) return;
+      const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      const pid = await readEosPid(baseUrl);
+      if (pid === null) return; // EOS unreachable / still starting — decide next poll
+      if (lastEosPid !== null && pid !== lastEosPid) {
+        if (pushLog) pushLog('eos_restart_detected', { oldPid: lastEosPid, newPid: pid });
+        lastEosPid = pid;
+        await tick(); // re-assert providers + re-push data immediately
+        return;
+      }
+      lastEosPid = pid;
+    };
+    watchdogHandle = setInterval(watchdog, watchdogMs);
   }
 
   function stop() {
     if (tickHandle) {
       clearInterval(tickHandle);
       tickHandle = null;
+    }
+    if (watchdogHandle) {
+      clearInterval(watchdogHandle);
+      watchdogHandle = null;
     }
   }
 
