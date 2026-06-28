@@ -261,7 +261,10 @@ class GeneticOptimizationParameters(
                     "No PV forecast data available - defaulting to demo data. Parameter preparation attempt {}.",
                     attempt,
                 )
-                cls.config.merge_settings_from_dict(
+                # DVhub fork: don't hijack a DVhub-fed PVForecastImport provider —
+                # see the ElecPriceImport guard below for the rationale.
+                if cls.config.pvforecast.provider != "PVForecastImport":
+                  cls.config.merge_settings_from_dict(
                     {
                         "pvforecast": {
                             "provider": "PVForecastAkkudoktor",
@@ -314,7 +317,18 @@ class GeneticOptimizationParameters(
                     "No Electricity Marketprice forecast data available - defaulting to demo data. Parameter preparation attempt {}.",
                     attempt,
                 )
-                cls.config.elecprice.provider = "ElecPriceAkkudoktor"
+                # DVhub fork: do NOT hijack an externally-fed *Import provider.
+                # When the provider is ElecPriceImport, DVhub manages the data and
+                # an empty series means "not pushed yet" (e.g. the seconds right
+                # after an EOS restart), NOT "use demo data". Rewriting the
+                # provider to a demo source here is what caused EOS to silently
+                # revert load/pvforecast/elecprice away from *Import on every
+                # restart (data wiped → fallback fires). Skip the fallback for
+                # Import providers and just retry; if the feeder is genuinely
+                # down the loop fails gracefully (no plan this cycle, DVhub
+                # re-pushes) instead of dispatching a live battery on demo data.
+                if cls.config.elecprice.provider != "ElecPriceImport":
+                    cls.config.elecprice.provider = "ElecPriceAkkudoktor"
                 # Retry
                 continue
             try:
@@ -336,16 +350,19 @@ class GeneticOptimizationParameters(
                     "No Load forecast data available - defaulting to demo data. Parameter preparation attempt {}.",
                     attempt,
                 )
-                cls.config.merge_settings_from_dict(
-                    {
-                        "load": {
-                            "provider": "LoadAkkudoktor",
-                            "loadakkudoktor": {
-                                "loadakkudoktor_year_energy_kwh": "3000",
+                # DVhub fork: don't hijack a DVhub-fed LoadImport provider — see
+                # the ElecPriceImport guard above for the rationale.
+                if cls.config.load.provider != "LoadImport":
+                    cls.config.merge_settings_from_dict(
+                        {
+                            "load": {
+                                "provider": "LoadAkkudoktor",
+                                "loadakkudoktor": {
+                                    "loadakkudoktor_year_energy_kwh": "3000",
+                                },
                             },
-                        },
-                    }
-                )
+                        }
+                    )
                 # Retry
                 continue
             try:
@@ -361,18 +378,21 @@ class GeneticOptimizationParameters(
                     "No feed in tariff forecast data available - defaulting to demo data. Parameter preparation attempt {}.",
                     attempt,
                 )
-                cls.config.merge_settings_from_dict(
-                    {
-                        "feedintariff": {
-                            "provider": "FeedInTariffFixed",
-                            "provider_settings": {
-                                "FeedInTariffFixed": {
-                                    "feed_in_tariff_kwh": 0.078,
+                # DVhub fork: don't hijack a DVhub-fed FeedInTariffImport provider
+                # (spot feed-in mode) — see the ElecPriceImport guard above.
+                if cls.config.feedintariff.provider != "FeedInTariffImport":
+                    cls.config.merge_settings_from_dict(
+                        {
+                            "feedintariff": {
+                                "provider": "FeedInTariffFixed",
+                                "provider_settings": {
+                                    "FeedInTariffFixed": {
+                                        "feed_in_tariff_kwh": 0.078,
+                                    },
                                 },
                             },
-                        },
-                    }
-                )
+                        }
+                    )
                 # Retry
                 continue
             try:
