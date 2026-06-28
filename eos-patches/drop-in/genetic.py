@@ -67,14 +67,26 @@ _RESERVE_PRICE_AWARE_ENABLED = os.environ.get("EOS_RESERVE_PRICE_AWARE", "0") no
     "False",
     "no",
 )
+# RELATIVE release margin (DVhub fork 2026-06-28, operator request): the reserve
+# releases when the reachable export price beats the avoided night-import price by
+# this FRACTION — best_export > avoided_import × (1 + margin). Relative, not a
+# fixed ct amount, so it tracks the resolved import price per slot and stays
+# correct for fixed AND dynamic tariffs (a dynamic-tariff user with a cheap night
+# gets a proportionally smaller required spread, not a flat 5 ct). 0.20 = "sell the
+# reserve only when the price covers the night buy-back + 20% loss".
 try:
-    # How much the reachable export peak must beat the avoided night-import price
-    # (EUR/Wh) before the reserve releases. ~5 ct/kWh pads forecast / re-buy risk.
+    _RESERVE_RELEASE_MARGIN = float(os.environ.get("EOS_RESERVE_RELEASE_MARGIN", "0.20"))
+except (TypeError, ValueError):
+    _RESERVE_RELEASE_MARGIN = 0.20
+# OPTIONAL additional ABSOLUTE floor (EUR/Wh) added on top of the relative margin
+# before the reserve releases. Default 0 → pure relative. Raise it to also demand a
+# minimum absolute spread (e.g. to suppress release when both prices are tiny).
+try:
     _RESERVE_RELEASE_SPREAD = float(
-        os.environ.get("EOS_RESERVE_RELEASE_SPREAD_EUR_PER_WH", "0.00005")
+        os.environ.get("EOS_RESERVE_RELEASE_SPREAD_EUR_PER_WH", "0.0")
     )
 except (TypeError, ValueError):
-    _RESERVE_RELEASE_SPREAD = 0.00005
+    _RESERVE_RELEASE_SPREAD = 0.0
 # Load-adaptive self-consumption safety floor (delivered-AC Wh) that is NEVER
 # released. Sized to THIS night's own forecast net-load so a load-heavy (winter)
 # night keeps more and a light night less, then clamped to a hard floor and a
@@ -120,11 +132,15 @@ def _compute_overnight_reserve(
     Price-aware release (DVhub fork 2026-06-18, gated by EOS_RESERVE_PRICE_AWARE):
     when enabled AND both price_array (per-slot import price, EUR/Wh) and
     revenue_array (per-slot feed-in revenue, EUR/Wh) are supplied, each slot's
-    reserve is RELEASED down to a hard safety floor (_RESERVE_MIN_SAFETY_WH)
+    reserve is RELEASED down to a hard safety floor (_RESERVE_MIN_SAFETY_*_WH)
     whenever the best still-reachable export price beats the highest avoided
-    night-import price by more than _RESERVE_RELEASE_SPREAD — i.e. selling into
-    the evening peak and re-buying cheaper overnight beats holding the energy for
-    self-consumption. Otherwise the full energy-balance reserve is kept. The
+    night-import price by more than the RELATIVE margin _RESERVE_RELEASE_MARGIN
+    (plus an optional absolute floor _RESERVE_RELEASE_SPREAD) — i.e.
+    best_export > avoided_import × (1 + margin) + spread. Selling into the evening
+    peak and re-buying cheaper overnight then beats holding the energy for
+    self-consumption. The relative margin tracks the resolved per-slot import
+    price, so it is correct for fixed AND dynamic tariffs. Otherwise the full
+    energy-balance reserve is kept. The
     release is asymmetric/conservative (a tie keeps the reserve) and never drops
     below the safety floor. Pure function of the forecast arrays — no RNG, no
     per-individual state — so the GA stays deterministic.
@@ -171,7 +187,7 @@ def _compute_overnight_reserve(
             if h < night_window_end
             else 0.0
         )
-        if best_export - avoided_import > _RESERVE_RELEASE_SPREAD:
+        if best_export > avoided_import * (1.0 + _RESERVE_RELEASE_MARGIN) + _RESERVE_RELEASE_SPREAD:
             # Selling into the peak beats holding -> release to the LOAD-ADAPTIVE
             # safety floor: a fraction of this night's own net-load, clamped to a
             # hard floor (blackout buffer, on top of min_soc) and a moderate cap.

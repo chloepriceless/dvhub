@@ -1696,7 +1696,18 @@ if (IS_RUNTIME_PROCESS) {
       // silently revert (e.g. elecprice -> spot) until a manual DVhub restart.
       // The boot one-shot above already ran push->sync, so fireImmediately:false
       // avoids a redundant immediate cycle.
+      // Push cadence follows the EOS re-plan cadence so EOS sees fresh forecasts
+      // + live SoC before every run (2026-06-28, operator request: 15-min pushes
+      // for 15-min EOS runs). Dedicated override eosForecastPushIntervalSec wins;
+      // else it tracks optimizer.eosEmsIntervalSec (the EMS tick); else hourly
+      // (back-compat). Clamped to [300, 7200] s — same bounds as the EMS tick.
+      const _eosCfg = ctx.getCfg()?.optimizer || {};
+      const _pushSec = Number(_eosCfg.eosForecastPushIntervalSec)
+        || Number(_eosCfg.eosEmsIntervalSec)
+        || 3600;
+      const _pushIntervalMs = Math.min(7200, Math.max(300, _pushSec)) * 1000;
       eosForecastBridge.start({
+        intervalMs: _pushIntervalMs,
         fireImmediately: false,
         afterPush: async () => {
           try { await eosConfigSync.sync(); }
