@@ -18,6 +18,7 @@ import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
+import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-secrets-crypto.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump } from './services/db-backup.js';
@@ -2178,6 +2179,34 @@ export function createApiRoutes(ctx) {
         redactedKeyCount: Array.isArray(REDACTED_PATHS) ? REDACTED_PATHS.length : 0
       }, { ...actorContext(req), severity: 'info' });
       return downloadJson(res, 'dvhub-config.json', redactConfig(ctx.getRawCfg()));
+    }
+
+    // Password-protected migration export. Same redacted config PLUS an encrypted
+    // `_encryptedSecrets` bundle carrying the REDACTED_PATHS values (forecast API
+    // keys, DB password, MQTT/notification creds — but NOT apiToken) so a FRESH
+    // box can restore them on import. The bundle is AES-256-GCM under a
+    // PBKDF2(password) key; without the password it is opaque.
+    if (url.pathname === '/api/config/export' && req.method === 'POST') {
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const password = typeof body?.password === 'string' ? body.password : '';
+      if (!password) return json(res, 400, { ok: false, error: 'password_required' });
+      if (password.length < 8) return json(res, 400, { ok: false, error: 'password_too_short' });
+      let bundle;
+      try {
+        bundle = encryptSecrets(ctx.getRawCfg(), password);
+      } catch (e) {
+        return json(res, 400, { ok: false, error: e.message || 'encrypt_failed' });
+      }
+      const out = redactConfig(ctx.getRawCfg());
+      if (bundle) out._encryptedSecrets = bundle;
+      pushLog('config_exported', {
+        actor: req.headers['x-actor'] || 'admin',
+        actorIp: deriveClientIp(req, getCfg()),
+        redactedKeyCount: Array.isArray(REDACTED_PATHS) ? REDACTED_PATHS.length : 0,
+        encryptedSecretCount: bundle ? bundle.paths.length : 0
+      }, { ...actorContext(req), severity: 'info' });
+      return json(res, 200, out);
     }
 
     if (url.pathname === '/api/discovery/systems' && req.method === 'GET') {
@@ -5694,6 +5723,31 @@ export function createApiRoutes(ctx) {
       if (body === null) return;
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
+      }
+      // Encrypted secrets bundle (config-secrets-crypto): a password-protected
+      // migration export carries the REDACTED_PATHS values sealed under the
+      // operator's password. Decrypt + restore them into body.config BEFORE the
+      // strict-root check (otherwise `_encryptedSecrets` reads as an unknown root)
+      // and before the apiToken strength gate.
+      if (Object.prototype.hasOwnProperty.call(body.config, '_encryptedSecrets')) {
+        const blob = body.config._encryptedSecrets;
+        delete body.config._encryptedSecrets;
+        if (blob && typeof blob === 'object') {
+          const secretsPw = typeof body.password === 'string' ? body.password : '';
+          if (!secretsPw) return json(res, 400, { ok: false, error: 'secrets_password_required' });
+          let secrets;
+          try {
+            secrets = decryptSecrets(blob, secretsPw);
+          } catch (e) {
+            const code = e.message === 'invalid_password' ? 'secrets_password_invalid'
+              : e.message === 'unsupported_secrets_format' ? 'secrets_format_unsupported'
+              : 'secrets_decrypt_failed';
+            pushLog('config_import_secrets_failed', { reason: code }, actorContext(req));
+            return json(res, 400, { ok: false, error: code });
+          }
+          body.config = applySecrets(body.config, secrets);
+          pushLog('config_import_secrets_restored', { count: Object.keys(secrets).length }, actorContext(req));
+        }
       }
       // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
       // OPTIONAL. Empty / null / undefined apiToken is a VALID config state

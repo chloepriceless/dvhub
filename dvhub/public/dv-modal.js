@@ -147,7 +147,7 @@
     var cancelLabel = opts.cancelLabel || 'Abbrechen';
     var defaultValue = opts.defaultValue == null ? '' : String(opts.defaultValue);
     var input = el('input', 'config-input u-w-full u-mt-3');
-    input.type = 'text';
+    input.type = opts.inputType || 'text';
     input.value = defaultValue;
     return new Promise(function (resolve) {
       var back = createBackdrop();

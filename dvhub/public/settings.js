@@ -2035,10 +2035,13 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   // requires this header to ENABLE optimizer.allowGridCharge/allowGridDischarge —
   // surfaced at the toggle in Einstellungen, not in a one-time setup step.
   if (opts.confirmLegalGate) headers['x-confirm-legal-gate'] = 'true';
+  // opts.password unlocks an `_encryptedSecrets` migration bundle on import.
+  const reqBody = { config };
+  if (typeof opts.password === 'string' && opts.password) reqBody.password = opts.password;
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ config })
+    body: JSON.stringify(reqBody)
   });
   const payload = await res.json();
   if (!res.ok || !payload.ok) {
@@ -2243,6 +2246,18 @@ async function importConfigFromFile(file) {
   };
   try {
     const parsed = JSON.parse(await file.text());
+    // Password-protected migration bundle: ask for the password so the server can
+    // decrypt `_encryptedSecrets` and restore the API keys / passwords.
+    let password;
+    if (parsed && typeof parsed === 'object' && parsed._encryptedSecrets) {
+      const count = Array.isArray(parsed._encryptedSecrets.paths) ? parsed._encryptedSecrets.paths.length : 0;
+      password = typeof window.dvPrompt === 'function'
+        ? await window.dvPrompt(`Diese Datei enthält ${count} verschlüsselte Geheimnisse (API-Keys, Passwörter). Export-Passwort eingeben, um sie wiederherzustellen:`, {
+            title: 'Import-Passwort', okLabel: 'Importieren', inputType: 'password'
+          })
+        : null;
+      if (password == null) { setImportBanner('Import abgebrochen.', 'info'); return; }
+    }
     // An imported config that ENABLES a legal gate (allowGridCharge/Discharge,
     // false→true vs the current config) would otherwise be rejected by the server
     // with legal_gate_flip_requires_confirmation. Surface the same confirmation
@@ -2261,7 +2276,7 @@ async function importConfigFromFile(file) {
     // saveConfig('import') persists server-side, re-hydrates the form with the
     // imported values, sets the main banner and — when restartRequired — shows
     // the "Neustart empfohlen" button. We mirror a concise result here.
-    const ok = await saveConfig(parsed, 'import', { confirmLegalGate });
+    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password });
     setImportBanner(
       ok ? 'Config importiert und angewendet — Werte oben aktualisiert.' : 'Import fehlgeschlagen — Details im Banner oben.',
       ok ? 'success' : 'error'
@@ -2271,8 +2286,64 @@ async function importConfigFromFile(file) {
   }
 }
 
-function exportConfig() {
-  window.location.href = buildApiUrl('/api/config/export');
+function downloadJsonFile(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportConfig() {
+  const setExportBanner = (text, kind) => {
+    const el = document.getElementById('importBanner');
+    if (el) { el.textContent = text; el.className = `config-banner ${kind}`; }
+  };
+  // Offer a password-protected migration export: the secrets (forecast API keys,
+  // DB password, MQTT/notification creds — not apiToken) are sealed in an
+  // encrypted bundle so a FRESH box can restore them on import. Otherwise the
+  // plain export keeps them redacted ('***') as before.
+  const withSecrets = typeof window.dvConfirm === 'function'
+    ? await window.dvConfirm('Sollen die Geheimnisse (Forecast-API-Keys, Passwörter, Tokens) verschlüsselt mit-exportiert werden? Dann brauchst du beim Import ein Passwort. Sonst werden sie wie bisher geschwärzt.', {
+        title: 'Konfiguration exportieren',
+        okLabel: 'Mit Geheimnissen (Passwort)',
+        cancelLabel: 'Ohne (geschwärzt)',
+        variant: 'primary'
+      })
+    : false;
+  if (!withSecrets) {
+    window.location.href = buildApiUrl('/api/config/export');
+    return;
+  }
+  const password = typeof window.dvPrompt === 'function'
+    ? await window.dvPrompt('Passwort zum Schutz der Geheimnisse (min. 8 Zeichen). Dieses Passwort brauchst du beim Import — sicher aufbewahren:', {
+        title: 'Export-Passwort', okLabel: 'Exportieren', inputType: 'password'
+      })
+    : null;
+  if (password == null) return; // cancelled
+  if (password.length < 8) { setExportBanner('Passwort zu kurz (min. 8 Zeichen).', 'error'); return; }
+  try {
+    const res = await apiFetch('/api/config/export', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setExportBanner(`Export fehlgeschlagen: ${err.error || res.status}`, 'error');
+      return;
+    }
+    const data = await res.json();
+    const count = Array.isArray(data?._encryptedSecrets?.paths) ? data._encryptedSecrets.paths.length : 0;
+    downloadJsonFile('dvhub-config-secrets.json', data);
+    setExportBanner(`Verschlüsselter Export erstellt (${count} Geheimnisse). Passwort sicher aufbewahren — ohne es ist der Import nicht möglich.`, 'success');
+  } catch (error) {
+    setExportBanner(`Export fehlgeschlagen: ${error.message}`, 'error');
+  }
 }
 
 // ── System Updates (OS packages) ──
