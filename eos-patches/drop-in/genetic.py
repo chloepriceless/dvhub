@@ -129,21 +129,29 @@ def _compute_overnight_reserve(
     (but not including) the next slot where PV covers load. Walked backwards so
     each evening reserves exactly the energy needed to ride to the next morning.
 
-    Price-aware release (DVhub fork 2026-06-18, gated by EOS_RESERVE_PRICE_AWARE):
-    when enabled AND both price_array (per-slot import price, EUR/Wh) and
-    revenue_array (per-slot feed-in revenue, EUR/Wh) are supplied, each slot's
-    reserve is RELEASED down to a hard safety floor (_RESERVE_MIN_SAFETY_*_WH)
-    whenever the best still-reachable export price beats the highest avoided
-    night-import price by more than the RELATIVE margin _RESERVE_RELEASE_MARGIN
-    (plus an optional absolute floor _RESERVE_RELEASE_SPREAD) — i.e.
-    best_export > avoided_import × (1 + margin) + spread. Selling into the evening
-    peak and re-buying cheaper overnight then beats holding the energy for
-    self-consumption. The relative margin tracks the resolved per-slot import
-    price, so it is correct for fixed AND dynamic tariffs. Otherwise the full
-    energy-balance reserve is kept. The
-    release is asymmetric/conservative (a tie keeps the reserve) and never drops
-    below the safety floor. Pure function of the forecast arrays — no RNG, no
-    per-individual state — so the GA stays deterministic.
+    Price-aware release (DVhub fork 2026-06-18, gated by EOS_RESERVE_PRICE_AWARE;
+    made PER-SLOT 2026-06-29 per operator spec): when enabled AND both price_array
+    (per-slot import price, EUR/Wh) and revenue_array (per-slot feed-in revenue,
+    EUR/Wh) are supplied, each slot's reserve is RELEASED down to a hard safety
+    floor (_RESERVE_MIN_SAFETY_*_WH) whenever THAT SLOT'S OWN export price beats
+    the highest avoided night-import price by more than the RELATIVE margin
+    _RESERVE_RELEASE_MARGIN (plus an optional absolute floor
+    _RESERVE_RELEASE_SPREAD) — i.e. revenue[h] > avoided_import × (1 + margin) +
+    spread. The night reserve may therefore only be SOLD in slots that
+    individually clear the buy-back-plus-loss threshold; the surplus ABOVE the
+    reserve is sold price-best-first in any slot by the GA regardless. Using the
+    window PEAK here (pre-2026-06-29) released the whole reserve as soon as a
+    SINGLE night slot cleared the threshold, so the GA then drained the reserve
+    across sub-threshold evening slots too (selling at 30 ct, re-buying at 26.9 —
+    a sub-margin loss). reserve[h] is a per-slot EXPORT cap in inverter.py, NOT a
+    hard SoC-trajectory floor, so a per-slot release stays temporally consistent:
+    once the reserve is sold into a >threshold slot there is simply nothing above
+    the floor left to export in later sub-threshold slots — no forced recharge.
+    The relative margin tracks the resolved per-slot import price, so it is
+    correct for fixed AND dynamic tariffs. Otherwise the full energy-balance
+    reserve is kept. The release is asymmetric/conservative (a tie keeps the
+    reserve) and never drops below the safety floor. Pure function of the forecast
+    arrays — no RNG, no per-individual state — so the GA stays deterministic.
     """
     reserve = np.zeros_like(load_array, dtype=float)
     if not _OVERNIGHT_RESERVE_ENABLED:
@@ -180,14 +188,13 @@ def _compute_overnight_reserve(
             if nxt < night_window_end
             else 0.0
         )
-        # Best export revenue reachable from this slot before the window's morning
-        # — the peak we would forgo by holding the reserve for self-consumption.
-        best_export = (
-            float(np.max(revenue_array[h:night_window_end]))
-            if h < night_window_end
-            else 0.0
-        )
-        if best_export > avoided_import * (1.0 + _RESERVE_RELEASE_MARGIN) + _RESERVE_RELEASE_SPREAD:
+        # This slot's OWN export revenue (per-slot gate, 2026-06-29). The reserve
+        # may be sold ONLY in slots that individually clear the buy-back+margin
+        # threshold — NOT whenever the window's peak does. The surplus above the
+        # reserve is still sold price-best-first in any slot by the GA; this gate
+        # only stops the night reserve being nibbled in sub-threshold slots.
+        this_export = float(revenue_array[h])
+        if this_export > avoided_import * (1.0 + _RESERVE_RELEASE_MARGIN) + _RESERVE_RELEASE_SPREAD:
             # Selling into the peak beats holding -> release to the LOAD-ADAPTIVE
             # safety floor: a fraction of this night's own net-load, clamped to a
             # hard floor (blackout buffer, on top of min_soc) and a moderate cap.
