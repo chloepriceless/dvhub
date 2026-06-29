@@ -630,7 +630,10 @@ function renderDvSignalLog() {
 async function checkForUpdate() {
   setBanner('updateBanner', 'Prüfe auf Updates...', 'info');
   document.getElementById('updateChangelog').style.display = 'none';
-  document.getElementById('updateActions').style.display = 'none';
+  // The install button stays visible (CSS); we drive it via `disabled` so the
+  // action is always discoverable instead of vanishing until an update appears.
+  const applyUpdateBtnEl = document.getElementById('applyUpdateBtn');
+  if (applyUpdateBtnEl) { applyUpdateBtnEl.disabled = true; applyUpdateBtnEl.textContent = 'Prüfe …'; }
   try {
     const res = await apiFetch('/api/admin/update/check');
     const data = await res.json();
@@ -673,13 +676,16 @@ async function checkForUpdate() {
           }).join('');
         changelogDiv.style.display = 'block';
       }
-      // .svc-actions-block / .svc-changelog-block default to display:none in CSS,
-      // so style.display='' would fall back to none (button stays hidden). Set an
-      // explicit visible value — matches the working systemUpdatesActions reveal.
-      document.getElementById('updateActions').style.display = 'flex';
+    }
+    if (applyUpdateBtnEl) {
+      applyUpdateBtnEl.disabled = !data.updateAvailable;
+      applyUpdateBtnEl.textContent = data.updateAvailable
+        ? 'Update installieren & neu starten'
+        : 'Kein Update verfügbar';
     }
   } catch (error) {
     setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
+    if (applyUpdateBtnEl) { applyUpdateBtnEl.disabled = true; applyUpdateBtnEl.textContent = 'Kein Update verfügbar'; }
   }
 }
 
@@ -692,7 +698,7 @@ async function applyUpdate() {
     const data = await res.json();
     if (data.ok) {
       setBanner('updateBanner', 'Update installiert! Service startet neu — Seite lädt in 10 Sekunden automatisch neu.', 'success');
-      document.getElementById('updateActions').style.display = 'none';
+      if (btn) btn.disabled = true;
       setTimeout(() => window.location.reload(), 10000);
     } else {
       setBanner('updateBanner', `Update fehlgeschlagen: ${data.error}`, 'error');
@@ -763,13 +769,15 @@ async function loadSystemInfo() {
 async function checkSystemUpdates() {
   const banner = document.getElementById('systemUpdatesBanner');
   const list = document.getElementById('systemUpdatesList');
-  const actions = document.getElementById('systemUpdatesActions');
   const meta = document.getElementById('systemUpdatesMeta');
   if (!banner) return;
   banner.style.display = '';
   banner.textContent = 'Prüfe auf System-Updates...';
   if (list) list.style.display = 'none';
-  if (actions) actions.style.display = 'none';
+  // Install button stays visible (CSS); driven via `disabled` so the action is
+  // always discoverable instead of vanishing until updates are found.
+  const applySysBtn = document.getElementById('applySystemUpdatesBtn');
+  if (applySysBtn) { applySysBtn.disabled = true; applySysBtn.textContent = 'Prüfe …'; }
   try {
     const r = await apiFetch('/api/admin/system/updates/check');
     const data = await r.json();
@@ -777,12 +785,13 @@ async function checkSystemUpdates() {
     if (data.totalCount === 0) {
       banner.innerHTML = '<span class="text-status-ok">System ist aktuell — keine Updates verfügbar.</span>';
       if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
+      if (applySysBtn) { applySysBtn.disabled = true; applySysBtn.textContent = 'Keine Updates'; }
       return;
     }
     const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheitsupdates)` : '';
     banner.innerHTML = `<strong class="text-status-warn">${data.totalCount} Updates verfügbar${secNote}</strong>`;
     if (list && data.packages.length > 0) {
-      list.style.display = '';
+      list.style.display = 'block';
       let html = '<table class="tools-updates-table">';
       html += '<tr class="tools-updates-table-header"><td class="tools-updates-table-cell">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
       for (const p of data.packages) {
@@ -791,10 +800,11 @@ async function checkSystemUpdates() {
       html += '</table>';
       list.innerHTML = html;
     }
-    if (actions) actions.style.display = 'flex';
+    if (applySysBtn) { applySysBtn.disabled = false; applySysBtn.textContent = 'Alle Updates installieren'; }
     if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
   } catch (e) {
     banner.textContent = 'Fehler beim Prüfen: ' + e.message;
+    if (applySysBtn) { applySysBtn.disabled = true; applySysBtn.textContent = 'Erst prüfen'; }
   }
 }
 

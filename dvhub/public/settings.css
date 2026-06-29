@@ -1693,7 +1693,7 @@ body:has(.settings-aurora) .location-picker-footer {
 .svc-banner-margin-bl { margin: 8px 14px 0; }
 .svc-banner-margin-mid { margin: 6px 14px 0; }
 .svc-changelog-block { display: none; margin: 6px 14px 0; }
-.svc-actions-block { display: none; padding: 8px 14px; }
+.svc-actions-block { display: flex; gap: 8px; padding: 8px 14px; }
 .svc-update-list { display: none; margin: 6px 14px 0; max-height: 200px; overflow-y: auto; font-size: 0.72rem; }
 .reboot-result { font-size: 0.72rem; margin-left: 6px; }
 .config-row-align-start { align-items: flex-start; padding-top: 10px; }

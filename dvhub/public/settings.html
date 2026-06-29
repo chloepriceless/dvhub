@@ -12,7 +12,7 @@
   <meta name="theme-color" content="#030610">
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
-  <link rel="stylesheet" href="/settings.css?v=20260621-btn-unify">
+  <link rel="stylesheet" href="/settings.css?v=20260629-update-buttons-visible">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Einstellungen">
@@ -179,7 +179,7 @@
               <div id="updateBanner" class="config-banner info svc-banner-margin-tl">Version wird gepr&uuml;ft...</div>
               <div id="updateChangelog" class="config-row-grid svc-changelog-block"></div>
               <div id="updateActions" class="svc-actions-block">
-                <button id="applyUpdateBtn" class="btn btn-primary btn-small" type="button">Update installieren &amp; neu starten</button>
+                <button id="applyUpdateBtn" class="btn btn-primary btn-small" type="button" disabled>Kein Update verf&uuml;gbar</button>
               </div>
               <p class="svc-meta" id="updateMeta">-</p>
               <div class="svc-actions-row">
@@ -194,7 +194,7 @@
               <div id="systemUpdatesBanner" class="config-banner info svc-changelog-block"></div>
               <div id="systemUpdatesList" class="svc-update-list"></div>
               <div id="systemUpdatesActions" class="svc-actions-block">
-                <button id="applySystemUpdatesBtn" class="btn btn-primary btn-small" type="button">Alle Updates installieren</button>
+                <button id="applySystemUpdatesBtn" class="btn btn-primary btn-small" type="button" disabled>Erst pr&uuml;fen</button>
               </div>
               <p class="svc-meta" id="systemUpdatesMeta">-</p>
               <div class="svc-actions-row">
@@ -743,7 +743,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260629-secrets-export-import"></script>
-  <script src="/tools.js?v=20260629-config-import-owner"></script>
+  <script src="/tools.js?v=20260629-update-buttons-visible"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>
