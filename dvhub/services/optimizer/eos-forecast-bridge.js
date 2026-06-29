@@ -29,6 +29,7 @@
 
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
+import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -407,16 +408,30 @@ export function createEosForecastBridge(ctx) {
     // covers the night instead. Feed-in/Vermarktung stays spot (handled below).
     // 2026-05-30, operator request.
     const pricing = cfg?.userEnergyPricing || {};
-    const fixedImportCt =
-      String(pricing.mode || '').toLowerCase() === 'fixed'
-        ? Number(pricing.fixedGrossImportCtKwh)
-        : NaN;
-    const importFixed = Number.isFinite(fixedImportCt) && fixedImportCt > 0;
-    const elecpriceSlots = importFixed
-      ? priceSlotsCt
-          .filter((s) => s && s.start)
-          .map((s) => ({ start: s.start, powerW: fixedImportCt / 100 / 1000 }))
-      : priceSlotsToEosFormat(priceSlotsCt);
+    // Import (Bezugs) price resolved PER SLOT against the active price PERIOD
+    // (userEnergyPricing.periods, date-based) — not a flat top-level value. A
+    // tariff-period boundary inside the forecast horizon, or a stale top-level
+    // fixedGrossImportCtKwh, can then no longer feed EOS the wrong Bezugspreis:
+    // each slot gets the price that actually applies on ITS date (e.g. the 29 ct
+    // "Grünwelt" period ended 2025-12-09; since 2025-12-10 the 26.9 ct period
+    // applies). resolveUserImportPriceCtKwhForSlot covers fixed (period-aware),
+    // §14a module-3 windows AND dynamic (spot + components) in one call, so the
+    // flat-import intent (push the real gross ~26.9 ct, not the ~14 ct raw spot)
+    // is preserved, and the overnight-reserve threshold (Bezug × 1.2) follows it
+    // automatically. Falls back to raw spot if no price resolves (never starve
+    // EOS of an elecprice series). 2026-06-29, operator request.
+    const elecpriceSlots = priceSlotsCt
+      .filter((s) => s && s.start)
+      .map((s) => {
+        let ct = resolveUserImportPriceCtKwhForSlot(
+          { ts: s.start, ct_kwh: s.ctKwh },
+          pricing,
+          { timeZone: tz },
+        );
+        if (!Number.isFinite(ct)) ct = Number(s.ctKwh); // fallback: raw spot
+        return Number.isFinite(ct) ? { start: s.start, powerW: ct / 100 / 1000 } : null;
+      })
+      .filter(Boolean);
 
     // Feed-in tariff = spot price × feedInSpotFactor (€/Wh), pushed only in spot
     // mode (operator request 2026-05-29). Without this EOS values feed-in at the

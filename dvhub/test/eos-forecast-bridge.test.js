@@ -362,6 +362,47 @@ test('push does NOT send FeedInTariffImport in fixed mode', async () => {
   }
 });
 
+test('push: ElecPriceImport resolves the import price PER active tariff PERIOD (date-based)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({
+        optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'fixed' }, timezone: 'Europe/Berlin' },
+        userEnergyPricing: {
+          mode: 'fixed',
+          fixedGrossImportCtKwh: 26.9, // top-level matches the CURRENT period
+          periods: [
+            { id: 'p1', label: 'Grünwelt', startDate: '2025-09-15', endDate: '2025-12-09', mode: 'fixed', fixedGrossImportCtKwh: 29 },
+            { id: 'p2', label: 'Grüün', startDate: '2025-12-10', endDate: '2026-12-10', mode: 'fixed', fixedGrossImportCtKwh: 26.9 },
+          ],
+        },
+      }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => ({
+        pv: { slots: [{ start: '2026-06-29T17:45:00.000Z', powerW: 1000 }] },
+        load: { slots: [{ start: '2026-06-29T17:45:00.000Z', powerW: 500 }] },
+        // Two slots straddling the period boundary; spot is 14 ct but a FIXED
+        // period must override it with the period's gross price, NOT the spot.
+        price: { slots: [
+          { start: '2026-06-29T17:45:00.000Z', ctKwh: 14 }, // 2026 → period 2 → 26.9 ct
+          { start: '2025-11-01T18:45:00.000Z', ctKwh: 14 }, // Nov 2025 → period 1 → 29 ct
+        ] },
+      }) },
+      state: { victron: { soc: 50 } },
+    };
+    await createEosForecastBridge(ctx).push();
+    const elec = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/ElecPriceImport'));
+    assert.ok(elec && elec.body && elec.body.data, 'ElecPriceImport pushed with a data frame');
+    const data = elec.body.data;
+    // period 2 (current): 26.9 ct/kWh = 0.000269 €/Wh — NOT the 14 ct raw spot.
+    assert.equal(data['2026-06-29T17:45:00Z'].elecprice_marketprice_wh.toFixed(8), '0.00026900');
+    // period 1 (expired 2025-12-09): 29 ct/kWh = 0.00029 €/Wh.
+    assert.equal(data['2025-11-01T18:45:00Z'].elecprice_marketprice_wh.toFixed(8), '0.00029000');
+  } finally {
+    await mock.close();
+  }
+});
+
 // --- Self-heal reconcile hook (2026-06-19): start({afterPush}) re-runs config-sync each tick ---
 test('start({fireImmediately:false}): no immediate tick; afterPush runs on the interval (EOS-restart self-heal)', async () => {
   const ctx = { getCfg: () => ({ optimizer: { eosProxy: { enabled: false } } }), pushLog: () => {}, forecastService: { buildForecastResponse: async () => ({}) }, state: {} };
