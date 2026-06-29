@@ -2174,7 +2174,7 @@ function legalGatesFlippedOn(nextConfig, baseConfig = currentRawConfig) {
 function buildLegalGateDialogBody(flipped) {
   const wrap = document.createElement('div');
   const intro = document.createElement('p');
-  intro.textContent = 'Du aktivierst eine rechtlich reglementierte Funktion (EEG § 51 / § 14a EnWG):';
+  intro.textContent = 'Du aktivierst eine Betriebsweise, die nur zulässig ist, wenn sie genau so bei deinem Netzbetreiber gemeldet und freigegeben ist:';
   wrap.appendChild(intro);
   const ul = document.createElement('ul');
   for (const f of flipped) {
@@ -2184,28 +2184,33 @@ function buildLegalGateDialogBody(flipped) {
   }
   wrap.appendChild(ul);
   const note = document.createElement('p');
-  note.textContent = 'Netzeinspeisung aus dem Speicher ist nur zulässig, wenn der Speicher ausschließlich aus eigener PV geladen wurde (Ausschließlichkeitsprinzip) und der Netzbetreiber die Direktvermarktung freigegeben hat. § 14a EnWG erlaubt dem Netzbetreiber temporäre Drosselung. Für die Einhaltung der EEG- und § 14a-Regeln bist du selbst verantwortlich.';
+  note.textContent = 'Ob Netzbezug (Laden des Speichers aus dem Netz) bzw. Einspeisung aus dem Speicher ins Netz erlaubt ist, hängt davon ab, wie deine Anlage beim Netzbetreiber angemeldet ist — nicht von DVhub. § 14a EnWG erlaubt dem Netzbetreiber zudem, steuerbare Einrichtungen temporär zu drosseln. Für die Einhaltung der gemeldeten Betriebsweise bist du selbst verantwortlich.';
   wrap.appendChild(note);
   return wrap;
 }
 
-// Returns { proceed, confirmLegalGate }. On decline, reverts the toggle(s) in the
-// draft so they snap back to OFF and aborts the save.
-async function confirmLegalGatesBeforeSave(nextConfig) {
-  const flipped = legalGatesFlippedOn(nextConfig);
-  if (flipped.length === 0) return { proceed: true, confirmLegalGate: false };
-  const accepted = typeof window.dvConfirm === 'function'
+// Shows the legal-gate confirmation for the given flipped fields. Returns true if
+// the operator confirmed. Shared by the form-save and the import path.
+async function confirmLegalGateDialog(flipped) {
+  return typeof window.dvConfirm === 'function'
     ? await window.dvConfirm(buildLegalGateDialogBody(flipped), {
-        title: 'Rechtlicher Hinweis (EEG / § 14a EnWG)',
-        okLabel: 'Gelesen — jetzt aktivieren',
+        title: 'Rechtlicher Hinweis — beim Netzbetreiber gemeldet?',
+        okLabel: 'Gemeldet — jetzt aktivieren',
         cancelLabel: 'Abbrechen',
         variant: 'primary'
       })
-    : window.confirm('Rechtlich reglementierte Funktion aktivieren (EEG / § 14a EnWG)?');
+    : window.confirm('Netzbezug/Einspeisung aus dem Speicher aktivieren? Nur zulässig, wenn so beim Netzbetreiber gemeldet.');
+}
+
+// Form-save path: confirm + (on decline) revert the toggle(s) to OFF and abort.
+async function confirmLegalGatesBeforeSave(nextConfig) {
+  const flipped = legalGatesFlippedOn(nextConfig);
+  if (flipped.length === 0) return { proceed: true, confirmLegalGate: false };
+  const accepted = await confirmLegalGateDialog(flipped);
   if (!accepted) {
     for (const f of flipped) setPath(currentDraftConfig, f.path, false);
     renderSettingsShell();
-    setBanner('Aktivierung abgebrochen — rechtliche Bestätigung nicht erteilt.', 'info');
+    setBanner('Aktivierung abgebrochen — Betriebsweise nicht beim Netzbetreiber gemeldet.', 'info');
     return { proceed: false, confirmLegalGate: false };
   }
   return { proceed: true, confirmLegalGate: true };
@@ -2238,11 +2243,25 @@ async function importConfigFromFile(file) {
   };
   try {
     const parsed = JSON.parse(await file.text());
+    // An imported config that ENABLES a legal gate (allowGridCharge/Discharge,
+    // false→true vs the current config) would otherwise be rejected by the server
+    // with legal_gate_flip_requires_confirmation. Surface the same confirmation
+    // and forward x-confirm-legal-gate via saveConfig.
+    const flipped = legalGatesFlippedOn(parsed);
+    let confirmLegalGate = false;
+    if (flipped.length > 0) {
+      const accepted = await confirmLegalGateDialog(flipped);
+      if (!accepted) {
+        setImportBanner('Import abgebrochen — Netzbezug/Einspeisung nicht beim Netzbetreiber gemeldet.', 'info');
+        return;
+      }
+      confirmLegalGate = true;
+    }
     setImportBanner('Importiere Konfiguration …', 'info');
     // saveConfig('import') persists server-side, re-hydrates the form with the
     // imported values, sets the main banner and — when restartRequired — shows
     // the "Neustart empfohlen" button. We mirror a concise result here.
-    const ok = await saveConfig(parsed, 'import');
+    const ok = await saveConfig(parsed, 'import', { confirmLegalGate });
     setImportBanner(
       ok ? 'Config importiert und angewendet — Werte oben aktualisiert.' : 'Import fehlgeschlagen — Details im Banner oben.',
       ok ? 'success' : 'error'
