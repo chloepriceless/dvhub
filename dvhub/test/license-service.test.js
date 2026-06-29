@@ -26,10 +26,12 @@ function mintSignedKey(privateKey, payloadObj) {
 }
 
 // --- Hardening C helper: mint a Keygen-format offline machine file (node-lock) ---
-function mintMachineFile(privateKey, fingerprint, expiry = null, licenseId = 'lic-1') {
+function mintMachineFile(privateKey, fingerprint, expiry = null, licenseId = 'lic-1', metadata = null) {
+  const license = { type: 'licenses', id: licenseId };
+  if (metadata) license.attributes = { metadata };   // issuer-set tier metadata (maxKwp, kind)
   const dataset = {
     data: { type: 'machines', id: 'm1', attributes: { fingerprint, expiry } },
-    included: [{ type: 'licenses', id: licenseId }],
+    included: [license],
     meta: { expiry }
   };
   const enc = Buffer.from(JSON.stringify(dataset), 'utf8').toString('base64');
@@ -1109,4 +1111,88 @@ test('removeLicense fires false when it was active; a bad listener never blocks 
   const r = svc.removeLicense();
   assert.equal(r.status, 'none');
   assert.deepEqual(flips, [false]);
+});
+
+// --- Tier capacity gate (2026-06-29): signed licence maxKwp vs declared plant ---
+
+function writeCapacityState(appDir, { signedKey, machineFile }) {
+  fs.writeFileSync(
+    path.join(appDir, 'license_state.json'),
+    JSON.stringify({ status: 'active', license_key: signedKey, license_id: 'lic-1', machine_file: machineFile }),
+    'utf8'
+  );
+}
+function capRes() {
+  const out = { status: 0, body: null };
+  return { res: { writeHead(c) { out.status = c; }, end(b) { out.body = b; } }, out };
+}
+// Signed key whose payload license.id == 'lic-1' so refreshSignedExpiry's
+// authoritative-id check matches the machine file (else max_kwp would not adopt).
+function capSetup(over) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1' }, ...(over || {}) } });
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  return { ctx, privateKey };
+}
+
+test('capacity: signed maxKwp is extracted and covers the plant -> Pro active', () => {
+  const { ctx, privateKey } = capSetup({ userEnergyPricing: { pvPlants: [{ kwp: 29.7 }] } });
+  writeCapacityState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: { id: 'lic-1' } }),
+    machineFile: mintMachineFile(privateKey, 'fp', null, 'lic-1', { maxKwp: 50 })
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  const st = svc.getState();
+  assert.equal(st.max_kwp, 50, 'signed maxKwp adopted from the machine file');
+  assert.equal(st.system_kwp, 29.7);
+  assert.equal(st.capacity_ok, true);
+  assert.equal(svc.isProActive(), true, '29.7 <= 50 -> active');
+});
+
+test('capacity: plant EXCEEDS the licence tier -> Pro gated hard (isProActive + requirePro 403)', () => {
+  const { ctx, privateKey } = capSetup({ userEnergyPricing: { pvPlants: [{ kwp: 80 }, { kwp: 45 }] } });
+  writeCapacityState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: { id: 'lic-1' } }),
+    machineFile: mintMachineFile(privateKey, 'fp', null, 'lic-1', { maxKwp: 100 })
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getState().system_kwp, 125);
+  assert.equal(svc.getState().capacity_ok, false, '125 > 100');
+  assert.equal(svc.isProActive(), false, 'over-tier -> not pro-active');
+  const { res, out } = capRes();
+  assert.equal(svc.requirePro({}, res, 'eos'), false);
+  assert.equal(out.status, 403);
+  const body = JSON.parse(out.body);
+  assert.equal(body.reason, 'capacity_exceeded');
+  assert.equal(body.maxKwp, 100);
+  assert.equal(body.systemKwp, 125);
+});
+
+test('capacity: legacy licence WITHOUT maxKwp is unlimited -> fail-open at any size', () => {
+  const { ctx, privateKey } = capSetup({ userEnergyPricing: { pvPlants: [{ kwp: 250 }] } });
+  writeCapacityState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: { id: 'lic-1' } }),
+    machineFile: mintMachineFile(privateKey, 'fp', null, 'lic-1')      // NO tier metadata
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  assert.equal(svc.getState().max_kwp, null, 'no metadata -> null (unlimited)');
+  assert.equal(svc.isProActive(), true, 'legacy/prod key stays active at 250 kWp');
+});
+
+test('capacity: demo kind is surfaced; fresh box with no pvPlants is never gated', () => {
+  const { ctx, privateKey } = capSetup({ userEnergyPricing: { pvPlants: [] } });
+  writeCapacityState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: { id: 'lic-1' } }),
+    machineFile: mintMachineFile(privateKey, 'fp', null, 'lic-1', { maxKwp: 50, kind: 'demo' })
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  const st = svc.getState();
+  assert.equal(st.license_kind, 'demo', 'demo kind surfaced for the UI');
+  assert.equal(st.system_kwp, 0, 'no plant configured yet');
+  assert.equal(st.capacity_ok, true, '0 kWp -> never gate a fresh box');
+  assert.equal(svc.isProActive(), true);
 });

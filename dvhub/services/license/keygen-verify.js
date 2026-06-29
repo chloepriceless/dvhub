@@ -229,7 +229,27 @@ export function verifyKeygenMachineFile(fileContent, publicKeyRaw, opts = {}) {
     dataset?.data?.relationships?.license?.data?.id ??
     null;
 
-  return { valid: true, fingerprint, expiry, licenseId, dataset };
+  // Tier ceiling (maxKwp) + license kind (e.g. "demo") from the SIGNED dataset.
+  // SECURITY: read ONLY from issuer-controlled objects — the `licenses`/`policies`
+  // resources in `included` (we set those), NEVER from `data.attributes.metadata`
+  // when `data` is the MACHINE (an activator can set machine metadata). For a plain
+  // signed license-key, `data` IS the license, so that path is issuer-controlled too.
+  // Everything here runs only AFTER the Ed25519 signature verified above → trusted.
+  const includedMeta = (type) =>
+    (Array.isArray(dataset?.included)
+      ? dataset.included.find((x) => x?.type === type)?.attributes?.metadata
+      : null) ?? null;
+  let metadata = includedMeta('licenses') ?? includedMeta('policies') ?? null;
+  if (metadata == null && dataset?.data?.type === 'licenses') {
+    metadata = dataset?.data?.attributes?.metadata ?? null;
+  }
+  const maxKwpRaw = metadata?.maxKwp;
+  const maxKwp = (maxKwpRaw == null || maxKwpRaw === '')
+    ? null
+    : (Number.isFinite(Number(maxKwpRaw)) ? Number(maxKwpRaw) : null);
+  const kind = (typeof metadata?.kind === 'string' && metadata.kind) ? metadata.kind : null;
+
+  return { valid: true, fingerprint, expiry, licenseId, maxKwp, kind, dataset };
 }
 
 /**

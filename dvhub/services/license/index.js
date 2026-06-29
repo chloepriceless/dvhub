@@ -106,6 +106,8 @@ function freshNoneState() {
     scheme_name: null,
     machine_file: null,           // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
     machine_id: null,             // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
+    max_kwp: null,                // tier ceiling (kWp) from the SIGNED license metadata; null = legacy/unlimited (fail-open)
+    license_kind: null,           // license kind from metadata (e.g. "demo"); null = normal/paid
     last_server_ts: null          // Hardening (Codex #4): monotone high-water of the highest server time seen
   };
 }
@@ -275,6 +277,11 @@ export function createLicenseService(ctx) {
   function refreshSignedExpiry() {
     signedExpiryMsCache = null;
     signedIssuedMsCache = null;
+    // Tier ceiling is re-derived from the signed file each refresh — cleared first
+    // so a missing/invalid/mismatched file leaves max_kwp=null (legacy/unlimited,
+    // fail-open) rather than retaining a stale ceiling.
+    state.license.max_kwp = null;
+    state.license.license_kind = null;
     const mf = state.license.machine_file;
     if (!mf || !accountPublicKey) return;
     const v = verifyKeygenMachineFile(mf, accountPublicKey);
@@ -286,6 +293,9 @@ export function createLicenseService(ctx) {
       pushLog('license_machine_file_license_mismatch', { bound: v.licenseId, expected: authId });
       return;
     }
+    // Trusted: signed AND bound to THIS license → adopt its tier ceiling + kind.
+    state.license.max_kwp = Number.isFinite(v.maxKwp) ? v.maxKwp : null;
+    state.license.license_kind = v.kind || null;
     // Codex-v2 C-2: the signed check-out/issued time is a tamper-proof LOWER bound
     // on "now" (feeds trustedNowMs even if plaintext last_server_ts was wiped).
     const issuedMs = Date.parse(v.dataset?.meta?.issued ?? v.dataset?.data?.attributes?.created);
@@ -751,6 +761,9 @@ export function createLicenseService(ctx) {
     s.machine_file = null;          // Hardening C: bulky signed blob, never returned externally
     s.effective_status = effectiveStatus();   // Codex #5: active|grace|expired_offline|… for UI
     s.grace_until = graceUntilIso();          // ISO grace deadline (UI countdown) or null
+    s.system_kwp = getSystemKwp();            // declared plant size (kWp) for the tier check
+    s.capacity_ok = capacityOk();             // false = plant exceeds the licensed tier → upgrade
+    // max_kwp + license_kind ride along via the {...state.license} spread above.
     return s;
   }
 
@@ -762,6 +775,42 @@ export function createLicenseService(ctx) {
   }
 
   /**
+   * getSystemKwp: total installed PV capacity (kWp) this box DECLARES — summed
+   * over userEnergyPricing.pvPlants[].kwp, with forecast.pv.totalKwp as fallback.
+   * This is the number the licence's tier ceiling (max_kwp) is checked against.
+   * (Anti-under-report plausibility vs the measured PV peak is a separate, soft
+   * flag in the optimizer/telemetry path — not a gate here.)
+   */
+  function getSystemKwp() {
+    const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
+    const plants = cfg?.userEnergyPricing?.pvPlants;
+    if (Array.isArray(plants) && plants.length) {
+      const sum = plants.reduce((a, p) => a + (Number(p?.kwp) > 0 ? Number(p.kwp) : 0), 0);
+      if (sum > 0) return sum;
+    }
+    const total = Number(cfg?.forecast?.pv?.totalKwp);
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  }
+
+  /**
+   * capacityOk: does the licence's tier ceiling COVER this plant's size?
+   *   - max_kwp == null  -> legacy/unlimited licence (no tier metadata) -> ALWAYS ok.
+   *     FAIL-OPEN by design: existing paid keys + the dev-bypass (which carry no
+   *     maxKwp) keep working untouched — only a licence that EXPLICITLY ships a
+   *     maxKwp is ever capacity-gated.
+   *   - systemKwp == 0   -> plant not configured yet -> ok (never gate a fresh box
+   *     before the operator has entered pvPlants).
+   *   - else             -> systemKwp <= max_kwp.
+   */
+  function capacityOk() {
+    const cap = state.license.max_kwp;
+    if (cap == null) return true;
+    const kwp = getSystemKwp();
+    if (kwp <= 0) return true;
+    return kwp <= cap;
+  }
+
+  /**
    * isProActive: non-HTTP Pro-gate for live services (DV-Schnittstelle, EOS).
    * Shares the EXACT predicate of requirePro() so the HTTP and non-HTTP gates
    * never diverge. effective_status (grace/expired_offline) is deliberately NOT
@@ -769,7 +818,9 @@ export function createLicenseService(ctx) {
    * Codex-Refute-v2 note in requirePro().
    */
   function isProActive() {
-    return state.license.status === 'active';
+    // Base online status AND the plant fits the licensed tier (capacityOk()).
+    // Mirrors requirePro() exactly so HTTP + non-HTTP gates never diverge.
+    return state.license.status === 'active' && capacityOk();
   }
 
   /**
@@ -848,8 +899,13 @@ export function createLicenseService(ctx) {
     // Enforcement is gated on the server re-checkout + check-in/high-water design
     // (T-0125 next step). Until then gate on the base (online-driven) status, which
     // already reflects revocation/expiry whenever the box can reach Keygen.
-    if (state.license.status === 'active') return true;
-    const body = JSON.stringify({ error: 'pro_required', feature: feat });
+    if (state.license.status === 'active' && capacityOk()) return true;
+    // Distinguish "no/expired Pro" from "Pro active but plant exceeds the licensed
+    // tier" so the UI shows an UPGRADE prompt (Pro M/L), not a re-activate prompt.
+    const overCapacity = state.license.status === 'active' && !capacityOk();
+    const body = JSON.stringify(overCapacity
+      ? { error: 'pro_required', feature: feat, reason: 'capacity_exceeded', maxKwp: state.license.max_kwp, systemKwp: getSystemKwp() }
+      : { error: 'pro_required', feature: feat });
     res.writeHead(403, {
       ...securityHeaders,
       'content-type': 'application/json; charset=utf-8',
