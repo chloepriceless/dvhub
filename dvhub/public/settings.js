@@ -275,6 +275,7 @@ const settingsShellHelpers = {
   formatDiscoveredSystemOption,
   getDestinationMeta,
   getSettingsSectionFields,
+  legalGatesFlippedOn,
   resolveActiveSettingsSection,
   setActiveSettingsSection,
   shouldOpenSettingsGroup
@@ -2027,10 +2028,16 @@ async function loadHistoryImportStatus() {
   currentHistoryImportStatus = payload.historyImport || null;
 }
 
-async function saveConfig(config, source = 'settings') {
+async function saveConfig(config, source = 'settings', opts = {}) {
+  const headers = { 'content-type': 'application/json' };
+  // EEG/§14a legal-gate confirmation: forwarded ONLY after the operator accepted
+  // the inline confirmation dialog (see confirmLegalGatesBeforeSave). The server
+  // requires this header to ENABLE optimizer.allowGridCharge/allowGridDischarge —
+  // surfaced at the toggle in Einstellungen, not in a one-time setup step.
+  if (opts.confirmLegalGate) headers['x-confirm-legal-gate'] = 'true';
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ config })
   });
   const payload = await res.json();
@@ -2146,6 +2153,64 @@ function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
   renderSettingsShell();
 }
 
+// EEG/§14a legal gates: ENABLING these (false→true) is regulatorily sensitive,
+// so the server (routes-api.js) requires the header x-confirm-legal-gate: true.
+// We surface that confirmation INLINE at the toggle in Einstellungen → Steuerung
+// instead of a hidden one-time setup step.
+const LEGAL_GATE_FIELDS = [
+  { path: 'optimizer.allowGridCharge', label: 'Netzladen (Netz → Akku)' },
+  { path: 'optimizer.allowGridDischarge', label: 'Netzentladung aus Speicher (Akku → Netz)' }
+];
+
+function legalGatesFlippedOn(nextConfig, baseConfig = currentRawConfig) {
+  return LEGAL_GATE_FIELDS.filter(({ path }) => {
+    const before = getPath(baseConfig, path);
+    const after = getPath(nextConfig, path);
+    // mirror the server: only the ENABLE transition is gated (undefined/false → true)
+    return after === true && before !== true;
+  });
+}
+
+function buildLegalGateDialogBody(flipped) {
+  const wrap = document.createElement('div');
+  const intro = document.createElement('p');
+  intro.textContent = 'Du aktivierst eine rechtlich reglementierte Funktion (EEG § 51 / § 14a EnWG):';
+  wrap.appendChild(intro);
+  const ul = document.createElement('ul');
+  for (const f of flipped) {
+    const li = document.createElement('li');
+    li.textContent = f.label;
+    ul.appendChild(li);
+  }
+  wrap.appendChild(ul);
+  const note = document.createElement('p');
+  note.textContent = 'Netzeinspeisung aus dem Speicher ist nur zulässig, wenn der Speicher ausschließlich aus eigener PV geladen wurde (Ausschließlichkeitsprinzip) und der Netzbetreiber die Direktvermarktung freigegeben hat. § 14a EnWG erlaubt dem Netzbetreiber temporäre Drosselung. Für die Einhaltung der EEG- und § 14a-Regeln bist du selbst verantwortlich.';
+  wrap.appendChild(note);
+  return wrap;
+}
+
+// Returns { proceed, confirmLegalGate }. On decline, reverts the toggle(s) in the
+// draft so they snap back to OFF and aborts the save.
+async function confirmLegalGatesBeforeSave(nextConfig) {
+  const flipped = legalGatesFlippedOn(nextConfig);
+  if (flipped.length === 0) return { proceed: true, confirmLegalGate: false };
+  const accepted = typeof window.dvConfirm === 'function'
+    ? await window.dvConfirm(buildLegalGateDialogBody(flipped), {
+        title: 'Rechtlicher Hinweis (EEG / § 14a EnWG)',
+        okLabel: 'Gelesen — jetzt aktivieren',
+        cancelLabel: 'Abbrechen',
+        variant: 'primary'
+      })
+    : window.confirm('Rechtlich reglementierte Funktion aktivieren (EEG / § 14a EnWG)?');
+  if (!accepted) {
+    for (const f of flipped) setPath(currentDraftConfig, f.path, false);
+    renderSettingsShell();
+    setBanner('Aktivierung abgebrochen — rechtliche Bestätigung nicht erteilt.', 'info');
+    return { proceed: false, confirmLegalGate: false };
+  }
+  return { proceed: true, confirmLegalGate: true };
+}
+
 async function saveCurrentForm() {
   const config = collectConfigFromForm();
   const pricingValidation = validatePricingPeriods(pricingPeriodsDraft);
@@ -2157,7 +2222,9 @@ async function saveCurrentForm() {
     setBanner(`Speichern blockiert: ${pricingValidation.messages[0] || pvValidation.messages[0]}`, 'error');
     return;
   }
-  await saveConfig(config, 'settings');
+  const legal = await confirmLegalGatesBeforeSave(config);
+  if (!legal.proceed) return;
+  await saveConfig(config, 'settings', { confirmLegalGate: legal.confirmLegalGate });
 }
 
 async function importConfigFromFile(file) {

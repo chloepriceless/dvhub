@@ -231,3 +231,48 @@ test('settings discovery errors leave manual host entry available', () => {
   assert.equal(state.disabled, false);
   assert.match(state.message, /manuell/i);
 });
+
+test('legal gate flip detection: only the ENABLE transition is gated (EEG/§14a)', () => {
+  const { legalGatesFlippedOn } = loadShellHelpers();
+  const off = { optimizer: { allowGridCharge: false, allowGridDischarge: false } };
+
+  // enable discharge → gated (join to primitives — legalGatesFlippedOn returns a
+  // vm-realm array, so deepStrictEqual on arrays would fail on prototype identity)
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridDischarge: true } }, off).map((f) => f.path).join(','),
+    'optimizer.allowGridDischarge'
+  );
+
+  // enable both → both gated
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridCharge: true, allowGridDischarge: true } }, off)
+      .map((f) => f.path).sort().join(','),
+    'optimizer.allowGridCharge,optimizer.allowGridDischarge'
+  );
+
+  // disable (true → false) → NOT gated
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridDischarge: false } },
+      { optimizer: { allowGridDischarge: true } }).length,
+    0
+  );
+
+  // already on (true → true) → NOT gated (no re-prompt on unrelated saves)
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridDischarge: true } },
+      { optimizer: { allowGridDischarge: true } }).length,
+    0
+  );
+
+  // fresh install (undefined → true) → gated
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridDischarge: true } }, {}).map((f) => f.path).join(','),
+    'optimizer.allowGridDischarge'
+  );
+
+  // fresh install materialising to false (undefined → false) → NOT gated
+  assert.equal(
+    legalGatesFlippedOn({ optimizer: { allowGridDischarge: false } }, {}).length,
+    0
+  );
+});
