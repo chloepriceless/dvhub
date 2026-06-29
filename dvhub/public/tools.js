@@ -698,9 +698,12 @@ async function checkForUpdate() {
             el.textContent = line;
             return el.outerHTML;
           }).join('');
-        changelogDiv.style.display = '';
+        changelogDiv.style.display = 'block';
       }
-      document.getElementById('updateActions').style.display = '';
+      // .svc-actions-block / .svc-changelog-block default to display:none in CSS,
+      // so style.display='' would fall back to none (button stays hidden). Set an
+      // explicit visible value — matches the working systemUpdatesActions reveal.
+      document.getElementById('updateActions').style.display = 'flex';
     }
   } catch (error) {
     setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
