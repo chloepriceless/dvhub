@@ -433,33 +433,6 @@ async function copyAccessToken() {
   }
 }
 
-function exportConfig() {
-  window.location.href = buildApiUrl('/api/config/export');
-  setBanner('importBanner', 'Config-Export wurde gestartet.', 'success');
-}
-
-async function importConfigFromFile(file) {
-  if (!file) return;
-  try {
-    const parsed = JSON.parse(await file.text());
-    const res = await apiFetch('/api/config/import', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ config: parsed })
-    });
-    const payload = await res.json();
-    if (!res.ok || !payload.ok) {
-      setBanner('importBanner', `Import fehlgeschlagen: ${payload.error || res.status}`, 'error');
-      return;
-    }
-    const warningCount = Array.isArray(payload.meta?.warnings) ? payload.meta.warnings.length : 0;
-    setBanner('importBanner', `Config importiert.${warningCount ? ` ${warningCount} Warnungen prüfen.` : ''}`, warningCount ? 'warn' : 'success');
-    setText('importMeta', `Datei: ${payload.meta?.path || '-'} | Gültig: ${payload.meta?.valid ? 'Ja' : 'Nein'} | Warnungen: ${warningCount}`);
-  } catch (error) {
-    setBanner('importBanner', `Import fehlgeschlagen: ${error.message}`, 'error');
-  }
-}
-
 async function loadHistoryImportStatus() {
   const res = await apiFetch('/api/history/import/status');
   const payload = await res.json();
@@ -1125,15 +1098,10 @@ function initToolsPage() {
   document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', () => checkSystemUpdates());
   document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', () => applySystemUpdates());
   loadSystemInfo();
-  document.getElementById('exportConfigBtn')?.addEventListener('click', exportConfig);
-  document.getElementById('importConfigBtn')?.addEventListener('click', () => {
-    document.getElementById('importConfigFile')?.click();
-  });
-  document.getElementById('importConfigFile')?.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    await importConfigFromFile(file);
-    event.target.value = '';
-  });
+  // Config export/import buttons are owned by settings.js (which can re-hydrate
+  // the form + surface the restart button). Previously BOTH scripts wired them
+  // here AND in settings.js → double download on export, double POST + a weak
+  // "Config importiert" banner with no re-render on import. Wiring removed.
   document.getElementById('refreshHistoryBtn')?.addEventListener('click', () => {
     loadHistoryImportStatus().catch((error) => {
       currentHistoryImportResult = { ok: false, error: error.message };

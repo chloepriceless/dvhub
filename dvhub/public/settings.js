@@ -2229,11 +2229,26 @@ async function saveCurrentForm() {
 
 async function importConfigFromFile(file) {
   if (!file) return;
+  // Local feedback right at the import controls (#importBanner). Re-query the
+  // element each time: saveConfig() calls renderSettingsShell(), which may
+  // re-render the panel, so a captured reference could go stale.
+  const setImportBanner = (text, kind) => {
+    const el = document.getElementById('importBanner');
+    if (el) { el.textContent = text; el.className = `config-banner ${kind}`; }
+  };
   try {
     const parsed = JSON.parse(await file.text());
-    await saveConfig(parsed, 'import');
+    setImportBanner('Importiere Konfiguration …', 'info');
+    // saveConfig('import') persists server-side, re-hydrates the form with the
+    // imported values, sets the main banner and — when restartRequired — shows
+    // the "Neustart empfohlen" button. We mirror a concise result here.
+    const ok = await saveConfig(parsed, 'import');
+    setImportBanner(
+      ok ? 'Config importiert und angewendet — Werte oben aktualisiert.' : 'Import fehlgeschlagen — Details im Banner oben.',
+      ok ? 'success' : 'error'
+    );
   } catch (error) {
-    setBanner(`Import fehlgeschlagen: ${error.message}`, 'error');
+    setImportBanner(`Import fehlgeschlagen: ${error.message}`, 'error');
   }
 }
 
