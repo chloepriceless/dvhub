@@ -123,15 +123,24 @@
         <div id="historyStatusInfo" class="hist-banner-info" hidden></div>
       </section>
 
-      <!-- 6 Calculation cards -->
+      <!-- 7 Calculation cards -->
       <section class="calc-row" data-screen-label="Berechnungskarten">
 
-        <!-- 1: Energiekosten -->
+        <!-- 1: Energiekosten (reiner Netzbezug) -->
         <article class="card calc-card" data-accent="cost">
           <div class="calc-head"><span class="calc-kicker">Energiekosten</span></div>
           <div id="historyKpiTotalCost" class="calc-total">-</div>
           <div class="calc-rows">
             <div class="calc-row-line"><span>Strombezug</span><strong id="historyKpiCost" class="acc">-</strong></div>
+            <div class="calc-row-line"><span>Netzbezug</span><strong id="historyKpiImportKwh" class="acc">-</strong></div>
+          </div>
+        </article>
+
+        <!-- 2: Gestehungskosten (eigene Erzeugung/Speicher: PV + Akku) -->
+        <article class="card calc-card" data-accent="cost">
+          <div class="calc-head"><span class="calc-kicker">Gestehungskosten</span></div>
+          <div id="historyKpiGestehungTotal" class="calc-total">-</div>
+          <div class="calc-rows">
             <div class="calc-row-line"><span>PV-Kosten</span><strong id="historyKpiAvoidedPvCost" class="acc">-</strong></div>
             <div class="calc-row-line"><span>Akku-Kosten</span><strong id="historyKpiAvoidedBatteryCost" class="acc">-</strong></div>
           </div>
@@ -231,8 +240,7 @@
           <div id="historyBilanzDefault" class="calc-rows">
             <div class="calc-row-line"><span>Vermiedene Kosten</span><strong id="historyKpiBilanzAvoided" class="ok">-</strong></div>
             <div class="calc-row-line"><span>Netto Cashflow</span><strong id="historyKpiBilanzNet" class="ok">-</strong></div>
-            <div class="calc-row-line"><span>PV-Kosten</span><strong id="historyKpiBilanzPvCost" class="warn">-</strong></div>
-            <div class="calc-row-line"><span>Akku-Kosten</span><strong id="historyKpiBilanzBatCost" class="warn">-</strong></div>
+            <div class="calc-row-line"><span>Gestehungskosten</span><strong id="historyKpiBilanzGestehung" class="warn">-</strong></div>
           </div>
           <!-- Gesamteinnahmen-Modus: Bruttoeinnahmen vor Kosten -->
           <div id="historyBilanzIncome" class="calc-rows" hidden>
@@ -622,7 +630,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260614-spotweighted"></script>
+  <script src="/history.js?v=20260630-gestehungskosten"></script>
   <script src="/history-viz.js?v=20260614-sankeylayered"></script>
 </body>
 </html>

@@ -163,15 +163,16 @@ function renderKpis(summary) {
   const cost = importCostEur(kpis);
   const pvCost = kpis?.pvCostEur || 0;
   const batCost = kpis?.batteryCostEur || 0;
-  const totalCost = round2(cost + pvCost + batCost);
   const revenue = kpis?.exportRevenueEur || 0;
   const net = cashNetEur(kpis);
   const avoided = kpis?.avoidedImportGrossEur || 0;
   const gross = grossReturnEur(kpis);
 
-  // Karte 1: Energiekosten
-  setText('historyKpiTotalCost', fmtEur(-Math.abs(totalCost)));
+  // Karte 1: Energiekosten (reiner Netzbezug) + Karte 2: Gestehungskosten (PV + Akku)
+  setText('historyKpiTotalCost', fmtEur(-Math.abs(cost)));
   setText('historyKpiCost', fmtEur(-Math.abs(cost)));
+  setText('historyKpiImportKwh', fmtKwh(kpis?.importKwh || 0));
+  setText('historyKpiGestehungTotal', fmtEur(-Math.abs(pvCost + batCost)));
   setText('historyKpiAvoidedPvCost', fmtEur(-Math.abs(pvCost)));
   setText('historyKpiAvoidedBatteryCost', fmtEur(-Math.abs(batCost)));
 
@@ -269,14 +270,13 @@ function renderKpis(summary) {
   }
 
   // Karte 6: Gesamtbilanz + Gesamteinnahmen-Toggle
-  // Default-Modus: gross (Einnahmen − PV-Kosten − Akku-Kosten).
+  // Default-Modus: gross (Einnahmen − Gestehungskosten).
   // Income-Modus: nur Brutto-Einnahmen (Energieeinnahmen + Vermiedene Kosten),
   // plus Marktwert-Erlös in Monat/Jahr/Alles-View.
   const exportRevenueEur = round2(Number(kpis?.exportRevenueEur || 0));
   setText('historyKpiBilanzAvoided', fmtEur(avoided));
   setText('historyKpiBilanzNet', fmtEur(net));
-  setText('historyKpiBilanzPvCost', fmtEur(-Math.abs(pvCost)));
-  setText('historyKpiBilanzBatCost', fmtEur(-Math.abs(batCost)));
+  setText('historyKpiBilanzGestehung', fmtEur(-Math.abs(pvCost + batCost)));
   setText('historyKpiBilanzExportRevenue', fmtEur(exportRevenueEur));
   setText('historyKpiBilanzAvoidedB', fmtEur(avoided));
 
