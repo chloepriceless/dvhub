@@ -1301,11 +1301,18 @@ const HIDDEN_FIELD_PATHS = [
   'victron.modbusConnectTimeoutMs'
 ];
 
-// Onboarding-styled, per-group collapsible cards. Pilot: Steuerung-Tab only —
-// scoped via #controlGrid so other tabs keep the legacy flat rendering until
-// the redesign is rolled out further.
-function renderGroupedCardsOb(mount, destination) {
+// Onboarding-styled, per-group collapsible cards. Renders one card per field
+// group (collapse via grp.openByDefault) plus the section-level extras
+// (discovery rows, PV-plant/pricing editors, forecast tier + string editor,
+// history-import panel). Used for ALL config destinations.
+function renderGroupedCardsOb(mount, destination, destinationId) {
   for (const section of destination.sections) {
+    // Forecast: RAM-tier info card before the group cards.
+    if (section.id === 'forecast') {
+      const tierInfo = renderForecastTierInfo();
+      if (tierInfo) mount.appendChild(tierInfo);
+    }
+
     for (const grp of section.groups || []) {
       const fields = (grp.fields || []).filter((f) =>
         f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path));
@@ -1345,6 +1352,30 @@ function renderGroupedCardsOb(mount, destination) {
         const model = buildFieldRenderModel(field);
         const input = createConfigInput(field, model.value, model.inherited);
         body.appendChild(createConfigRow(field.label, input, { help: field.help }));
+        if (model.discovery && model.discovery.visible) {
+          const discoveryRow = document.createElement('div');
+          discoveryRow.className = 'sa-discovery-row';
+          const discBtn = document.createElement('button');
+          discBtn.type = 'button';
+          discBtn.className = 'btn btn-ghost btn-small';
+          discBtn.dataset.discoveryRun = field.path;
+          discBtn.disabled = model.discovery.loading || !model.discovery.manufacturer;
+          discBtn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
+          discoveryRow.appendChild(discBtn);
+          if (model.discovery.systems.length) {
+            for (const system of model.discovery.systems) {
+              const pickBtn = document.createElement('button');
+              pickBtn.type = 'button';
+              pickBtn.className = 'btn btn-ghost btn-small';
+              pickBtn.dataset.discoveryFieldPath = field.path;
+              pickBtn.dataset.discoverySelectSystem = system.id;
+              pickBtn.textContent = formatDiscoveredSystemOption(system);
+              if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
+              discoveryRow.appendChild(pickBtn);
+            }
+          }
+          body.appendChild(discoveryRow);
+        }
       }
 
       // Map picker if this group carries location fields (e.g. SMA-Standort).
@@ -1365,6 +1396,22 @@ function renderGroupedCardsOb(mount, destination) {
       card.appendChild(body);
       mount.appendChild(card);
     }
+
+    // Section-level editors after the group cards.
+    if (section.id === 'pricing') {
+      mount.appendChild(renderPvPlantsEditor());
+      mount.appendChild(renderPricingPeriodsEditor());
+    }
+    if (section.id === 'forecast') {
+      const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
+      if (configLevel === 'detailed') {
+        mount.appendChild(renderForecastStringEditor());
+      }
+    }
+  }
+
+  if (shouldRenderHistoryImportPanel(destinationId)) {
+    mount.appendChild(renderHistoryImportPanel(destinationId));
   }
 }
 
@@ -1380,102 +1427,8 @@ function renderDestinationGrid(destinationId) {
   const destination = buildDestinationWorkspace(definition, destinationId, { licenseActive });
   if (!destination || !destination.sections.length) return;
 
-  // Pilot: Steuerung-Tab uses the new Onboarding-styled grouped cards.
-  if (destinationId === 'control') {
-    renderGroupedCardsOb(mount, destination);
-    return;
-  }
-
-  for (const section of destination.sections) {
-    const allFields = [];
-    for (const grp of section.groups || []) {
-      for (const field of grp.fields || []) {
-        if (field.type !== 'array' && isFieldVisible(field) && !HIDDEN_FIELD_PATHS.includes(field.path)) allFields.push(field);
-      }
-    }
-    if (!allFields.length) continue;
-
-    const group = createConfigGroup(section.label, getGroupAccent(section));
-    // 2-column row container for compact layout
-    const rowContainer = document.createElement('div');
-    rowContainer.className = 'config-row-grid';
-    group.appendChild(rowContainer);
-
-    for (const field of allFields) {
-      const model = buildFieldRenderModel(field);
-      const input = createConfigInput(field, model.value, model.inherited);
-      rowContainer.appendChild(createConfigRow(field.label, input, { help: field.help }));
-      if (model.discovery.visible) {
-        const discoveryRow = document.createElement('div');
-        discoveryRow.className = 'sa-discovery-row';
-        const discBtn = document.createElement('button');
-        discBtn.type = 'button';
-        discBtn.className = 'btn btn-ghost btn-small';
-        discBtn.dataset.discoveryRun = field.path;
-        discBtn.disabled = model.discovery.loading || !model.discovery.manufacturer;
-        discBtn.textContent = model.discovery.loading ? 'Suche...' : model.discovery.actionLabel;
-        discoveryRow.appendChild(discBtn);
-        if (model.discovery.systems.length) {
-          for (const system of model.discovery.systems) {
-            const pickBtn = document.createElement('button');
-            pickBtn.type = 'button';
-            pickBtn.className = 'btn btn-ghost btn-small';
-            pickBtn.dataset.discoveryFieldPath = field.path;
-            pickBtn.dataset.discoverySelectSystem = system.id;
-            pickBtn.textContent = formatDiscoveredSystemOption(system);
-            if (system.id === model.discovery.selectedSystemId) pickBtn.classList.add('is-active');
-            discoveryRow.appendChild(pickBtn);
-          }
-        }
-        rowContainer.appendChild(discoveryRow);
-      }
-    }
-
-    // Add map picker button if location fields are present in this group
-    const locationField = allFields.find(f => f.path && f.path.endsWith('.location.latitude'));
-    if (locationField) {
-      const basePath = locationField.path.replace('.latitude', '');
-      const mapRow = document.createElement('div');
-      mapRow.className = 'sa-map-row';
-      const mapBtn = document.createElement('button');
-      mapBtn.type = 'button';
-      mapBtn.className = 'btn btn-ghost btn-small';
-      mapBtn.textContent = '\u{1F5FA}\uFE0F Auf Karte w\u00e4hlen';
-      mapBtn.addEventListener('click', () => openLocationPicker(basePath));
-      mapRow.appendChild(mapBtn);
-      rowContainer.appendChild(mapRow);
-    }
-
-    // Forecast section: prepend RAM tier info card
-    if (section.id === 'forecast') {
-      const tierInfo = renderForecastTierInfo();
-      if (tierInfo) group.insertBefore(tierInfo, group.firstChild.nextSibling);
-    }
-
-    mount.appendChild(group);
-
-    if (section.id === 'pricing') {
-      // EPEX price source info removed — redundant with EPEX config group
-      mount.appendChild(renderPvPlantsEditor());
-      mount.appendChild(renderPricingPeriodsEditor());
-    }
-
-    // Forecast section: append multi-string editor when in detailed mode
-    if (section.id === 'forecast') {
-      const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
-      if (configLevel === 'detailed') {
-        mount.appendChild(renderForecastStringEditor());
-      }
-    }
-  }
-
-  if (shouldRenderHistoryImportPanel(destinationId)) {
-    mount.appendChild(renderHistoryImportPanel(destinationId));
-  }
-
-  // VPN upload panel was moved to its own tab (08-12). Keep `connection` clean.
-
-  // If only one card in the grid, span full width via existing class
+  // All config destinations now render Onboarding-styled, per-group cards.
+  renderGroupedCardsOb(mount, destination, destinationId);
   if (mount.children.length === 1) {
     mount.children[0].classList.add('config-group--full');
   }

@@ -1,17 +1,19 @@
 /* ───────────────────────────────────────────────────────────────────────────
-   Einstellungen-Redesign im Onboarding-Look — PILOT: Steuerung-Tab (#controlGrid)
-   Nutzt die geteilten dvhub-app.css-Tokens (Glass/Aurora), gescoped auf
-   #controlGrid, damit die übrigen Tabs vorerst unverändert bleiben.
+   Einstellungen-Redesign im Onboarding-Look — alle Config-Tabs
+   (Anlage / Steuerung / Preise & Daten). Nutzt die geteilten
+   dvhub-app.css-Tokens (Glass/Aurora). Gescoped auf die drei Config-Grids,
+   damit Custom-Tabs (Status/Forecast/ML/EOS/VPN) unberührt bleiben.
+   Wird NACH settings.css geladen → überschreibt die Alt-Optik dieser Grids.
    ─────────────────────────────────────────────────────────────────────────── */
 
-#controlGrid {
+:is(#connectionGrid, #controlGrid, #servicesGrid) {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--gap-3);
 }
 
 /* ── Gruppen-Karte (entspricht .ob-card) ─────────────────────────────────── */
-#controlGrid .sa-cfg-card {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card {
   background: linear-gradient(180deg, var(--glass-2), var(--glass));
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-lg);
@@ -21,13 +23,13 @@
   overflow: hidden;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
-#controlGrid .sa-cfg-card[open] {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card[open] {
   border-color: var(--glass-brd-strong);
   box-shadow: var(--shadow-lg);
 }
 
 /* ── Karten-Kopf (klickbar, klappt ein/aus) ──────────────────────────────── */
-#controlGrid .sa-cfg-card-head {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -36,10 +38,10 @@
   list-style: none;
   user-select: none;
 }
-#controlGrid .sa-cfg-card-head::-webkit-details-marker { display: none; }
-#controlGrid .sa-cfg-card-head:hover .sa-cfg-card-title { color: var(--cyan); }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head::-webkit-details-marker { display: none; }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head:hover .sa-cfg-card-title { color: var(--cyan); }
 
-#controlGrid .sa-cfg-card-title {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-title {
   flex: 1 1 auto;
   font-family: var(--f-brand);
   font-size: 0.98rem;
@@ -48,7 +50,7 @@
   color: var(--text);
   transition: color 0.15s ease;
 }
-#controlGrid .sa-cfg-card-count {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-count {
   flex: 0 0 auto;
   font-size: 0.7rem;
   font-weight: 600;
@@ -60,7 +62,7 @@
   min-width: 22px;
   text-align: center;
 }
-#controlGrid .sa-cfg-card-chev {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-chev {
   flex: 0 0 auto;
   width: 9px; height: 9px;
   border-right: 2px solid var(--text-dim);
@@ -68,14 +70,14 @@
   transform: rotate(-45deg);
   transition: transform 0.2s ease;
 }
-#controlGrid .sa-cfg-card[open] .sa-cfg-card-chev { transform: rotate(45deg); }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card[open] .sa-cfg-card-chev { transform: rotate(45deg); }
 
 /* ── Karten-Körper ───────────────────────────────────────────────────────── */
-#controlGrid .sa-cfg-card-body {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-body {
   padding: 2px 18px 18px;
   border-top: 1px solid var(--hairline);
 }
-#controlGrid .sa-cfg-card-desc {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-desc {
   margin: 13px 0 4px;
   font-size: 0.83rem;
   line-height: 1.5;
@@ -83,15 +85,15 @@
 }
 
 /* ── Felder (entspricht .ob-field / .ob-label / .ob-input) ───────────────── */
-#controlGrid .config-row {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row {
   display: block;
   padding: 13px 0;
   border: none;
   margin: 0;
 }
-#controlGrid .config-row + .config-row { border-top: 1px solid var(--hairline); }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row + .config-row { border-top: 1px solid var(--hairline); }
 
-#controlGrid .config-row-label {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row-label {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -100,15 +102,15 @@
   font-weight: 600;
   color: var(--text-2);
 }
-#controlGrid .config-required { color: var(--cyan); }
-#controlGrid .config-help-icon {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-required { color: var(--cyan); }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon {
   font-size: 0.85rem;
   color: var(--text-dim);
   cursor: help;
 }
 
-#controlGrid .config-input,
-#controlGrid .config-select {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-select {
   width: 100%;
   font-family: var(--f-body);
   font-size: 0.94rem;
@@ -119,28 +121,61 @@
   padding: 10px 12px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-#controlGrid .config-input:focus,
-#controlGrid .config-select:focus {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input:focus,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-select:focus {
   outline: none;
   border-color: var(--cyan);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-#controlGrid .config-input::placeholder { color: var(--text-dim); }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input::placeholder { color: var(--text-dim); }
 
-/* Boolean-Toggle: Label links, Checkbox rechts in derselben Zeile */
-#controlGrid .config-row:has(.config-checkbox) {
+/* ── Boolean: echter iOS-/Apple-Switch (Label links, Slider rechts) ──────── */
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row:has(.config-checkbox) {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-#controlGrid .config-row:has(.config-checkbox) .config-row-label { margin-bottom: 0; }
-#controlGrid .config-checkbox {
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row:has(.config-checkbox) .config-row-label { margin-bottom: 0; }
+
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
   flex: 0 0 auto;
-  width: 18px; height: 18px;
-  accent-color: var(--cyan);
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
   cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:checked {
+  background: var(--green);
+  border-color: var(--green);
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:checked::after {
+  transform: translateX(18px);
+  background: #ffffff;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* Karten-Buttons (Map-Picker o.Ä.) */
-#controlGrid .sa-map-row { margin-top: 12px; }
+/* Karten-Buttons (Map-Picker, Discovery) */
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-map-row,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-discovery-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
