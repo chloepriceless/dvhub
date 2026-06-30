@@ -316,12 +316,31 @@ function renderKpis(summary) {
     mvCtKwh = Number(kpis.annualMarketValueCtKwh);
     mvSource = 'annual_official';
   }
-  // Gesamteinnahmen zeigt die BERECHNETE Marktprämie (kpis.marketPremiumEur — vom
-  // Backend mit dem marketValueMode-Setting gerechnet: monthly→Monatsmarktwert,
-  // annual→Jahresmarktwert), NICHT Marktwert×kWh. Marktwert×kWh wäre Doppelzählung
-  // mit dem Börsenerlös; die EEG-Marktprämie (AW − Marktwert) ist die echte
-  // Zusatz-Einnahme. (mvCtKwh/mvSource unten nur noch für den Year-Cache-Prefetch.)
-  const marketPremiumEur = kpis?.marketPremiumEur;
+  // Gesamteinnahmen zeigt die BERECHNETE Marktprämie (EEG-Marktprämie AW − Marktwert,
+  // × förderfähige kWh), NICHT Marktwert×kWh — letzteres wäre Doppelzählung mit dem
+  // Börsenerlös; die Prämie (AW − Marktwert) ist die echte Zusatz-Einnahme.
+  //
+  // Christin-Spec (2026-06-30): Im MONATSVIEW basiert die Marktprämie auf dem
+  // JAHRESMARKTWERT, nicht auf dem offiziellen Monatsmarktwert. Im laufenden Jahr ist
+  // das unser eigens berechneter laufender JMW (selfYearCached = year_derived,
+  // gewichteter Schnitt der bisher veröffentlichten Monatsmarktwerte); in
+  // abgeschlossenen Jahren liefert derselbe selfYearCached den offiziellen JMW.
+  // → marketPremiumEur = premiumEligibleExportKwh × (AW − JMW) / 100.
+  // Das Backend (kpis.marketPremiumEur) fällt im laufenden Jahr auf den
+  // Monatsmarktwert zurück — den überschreiben wir hier bewusst. Solange der
+  // Year-Cache noch nicht da ist, gilt der Backend-Wert; der unten getriggerte
+  // Year-Fetch füllt selfYearCached und re-rendert. year/all bleiben Backend-basiert
+  // (dort rechnet applyAnnualMarketPremium bereits JMW-basiert).
+  let marketPremiumEur = kpis?.marketPremiumEur;
+  if (summaryView === 'month'
+      && hasFiniteNumber(selfYearCached)
+      && hasFiniteNumber(kpis?.weightedApplicableValueCtKwh)
+      && hasFiniteNumber(kpis?.premiumEligibleExportKwh)) {
+    const jmw = Number(selfYearCached);
+    const aw = Number(kpis.weightedApplicableValueCtKwh);
+    const eligibleKwh = Number(kpis.premiumEligibleExportKwh);
+    marketPremiumEur = round2((eligibleKwh * (aw - jmw)) / 100);
+  }
   let marketRevenueEur = 0;
   let marketRevenueAvailable = false;
   if (showMarketRow) {
