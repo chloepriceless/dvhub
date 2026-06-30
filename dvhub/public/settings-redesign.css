@@ -1,0 +1,146 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Einstellungen-Redesign im Onboarding-Look — PILOT: Steuerung-Tab (#controlGrid)
+   Nutzt die geteilten dvhub-app.css-Tokens (Glass/Aurora), gescoped auf
+   #controlGrid, damit die übrigen Tabs vorerst unverändert bleiben.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+#controlGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--gap-3);
+}
+
+/* ── Gruppen-Karte (entspricht .ob-card) ─────────────────────────────────── */
+#controlGrid .sa-cfg-card {
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  overflow: hidden;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+#controlGrid .sa-cfg-card[open] {
+  border-color: var(--glass-brd-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Karten-Kopf (klickbar, klappt ein/aus) ──────────────────────────────── */
+#controlGrid .sa-cfg-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+#controlGrid .sa-cfg-card-head::-webkit-details-marker { display: none; }
+#controlGrid .sa-cfg-card-head:hover .sa-cfg-card-title { color: var(--cyan); }
+
+#controlGrid .sa-cfg-card-title {
+  flex: 1 1 auto;
+  font-family: var(--f-brand);
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  transition: color 0.15s ease;
+}
+#controlGrid .sa-cfg-card-count {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: 999px;
+  padding: 2px 9px;
+  min-width: 22px;
+  text-align: center;
+}
+#controlGrid .sa-cfg-card-chev {
+  flex: 0 0 auto;
+  width: 9px; height: 9px;
+  border-right: 2px solid var(--text-dim);
+  border-bottom: 2px solid var(--text-dim);
+  transform: rotate(-45deg);
+  transition: transform 0.2s ease;
+}
+#controlGrid .sa-cfg-card[open] .sa-cfg-card-chev { transform: rotate(45deg); }
+
+/* ── Karten-Körper ───────────────────────────────────────────────────────── */
+#controlGrid .sa-cfg-card-body {
+  padding: 2px 18px 18px;
+  border-top: 1px solid var(--hairline);
+}
+#controlGrid .sa-cfg-card-desc {
+  margin: 13px 0 4px;
+  font-size: 0.83rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* ── Felder (entspricht .ob-field / .ob-label / .ob-input) ───────────────── */
+#controlGrid .config-row {
+  display: block;
+  padding: 13px 0;
+  border: none;
+  margin: 0;
+}
+#controlGrid .config-row + .config-row { border-top: 1px solid var(--hairline); }
+
+#controlGrid .config-row-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-2);
+}
+#controlGrid .config-required { color: var(--cyan); }
+#controlGrid .config-help-icon {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  cursor: help;
+}
+
+#controlGrid .config-input,
+#controlGrid .config-select {
+  width: 100%;
+  font-family: var(--f-body);
+  font-size: 0.94rem;
+  color: var(--text);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#controlGrid .config-input:focus,
+#controlGrid .config-select:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+#controlGrid .config-input::placeholder { color: var(--text-dim); }
+
+/* Boolean-Toggle: Label links, Checkbox rechts in derselben Zeile */
+#controlGrid .config-row:has(.config-checkbox) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+#controlGrid .config-row:has(.config-checkbox) .config-row-label { margin-bottom: 0; }
+#controlGrid .config-checkbox {
+  flex: 0 0 auto;
+  width: 18px; height: 18px;
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+
+/* Karten-Buttons (Map-Picker o.Ä.) */
+#controlGrid .sa-map-row { margin-top: 12px; }

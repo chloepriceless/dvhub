@@ -1301,6 +1301,73 @@ const HIDDEN_FIELD_PATHS = [
   'victron.modbusConnectTimeoutMs'
 ];
 
+// Onboarding-styled, per-group collapsible cards. Pilot: Steuerung-Tab only —
+// scoped via #controlGrid so other tabs keep the legacy flat rendering until
+// the redesign is rolled out further.
+function renderGroupedCardsOb(mount, destination) {
+  for (const section of destination.sections) {
+    for (const grp of section.groups || []) {
+      const fields = (grp.fields || []).filter((f) =>
+        f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path));
+      if (!fields.length) continue;
+
+      const card = document.createElement('details');
+      card.className = 'sa-cfg-card';
+      card.dataset.group = grp.id;
+      if (grp.openByDefault) card.open = true;
+
+      const head = document.createElement('summary');
+      head.className = 'sa-cfg-card-head';
+      const title = document.createElement('span');
+      title.className = 'sa-cfg-card-title';
+      title.textContent = grp.label;
+      head.appendChild(title);
+      const count = document.createElement('span');
+      count.className = 'sa-cfg-card-count';
+      count.textContent = String(fields.length);
+      head.appendChild(count);
+      const chev = document.createElement('span');
+      chev.className = 'sa-cfg-card-chev';
+      chev.setAttribute('aria-hidden', 'true');
+      head.appendChild(chev);
+      card.appendChild(head);
+
+      const body = document.createElement('div');
+      body.className = 'sa-cfg-card-body';
+      if (grp.description) {
+        const desc = document.createElement('p');
+        desc.className = 'sa-cfg-card-desc';
+        desc.textContent = grp.description;
+        body.appendChild(desc);
+      }
+
+      for (const field of fields) {
+        const model = buildFieldRenderModel(field);
+        const input = createConfigInput(field, model.value, model.inherited);
+        body.appendChild(createConfigRow(field.label, input, { help: field.help }));
+      }
+
+      // Map picker if this group carries location fields (e.g. SMA-Standort).
+      const locationField = fields.find((f) => f.path && f.path.endsWith('.location.latitude'));
+      if (locationField) {
+        const basePath = locationField.path.replace('.latitude', '');
+        const mapRow = document.createElement('div');
+        mapRow.className = 'sa-map-row';
+        const mapBtn = document.createElement('button');
+        mapBtn.type = 'button';
+        mapBtn.className = 'btn btn-ghost btn-small';
+        mapBtn.textContent = '\u{1F5FA}️ Auf Karte wählen';
+        mapBtn.addEventListener('click', () => openLocationPicker(basePath));
+        mapRow.appendChild(mapBtn);
+        body.appendChild(mapRow);
+      }
+
+      card.appendChild(body);
+      mount.appendChild(card);
+    }
+  }
+}
+
 function renderDestinationGrid(destinationId) {
   const gridId = destinationId + 'Grid';
   const mount = document.getElementById(gridId);
@@ -1312,6 +1379,12 @@ function renderDestinationGrid(destinationId) {
     && window._licenseStateCache.status === 'active');
   const destination = buildDestinationWorkspace(definition, destinationId, { licenseActive });
   if (!destination || !destination.sections.length) return;
+
+  // Pilot: Steuerung-Tab uses the new Onboarding-styled grouped cards.
+  if (destinationId === 'control') {
+    renderGroupedCardsOb(mount, destination);
+    return;
+  }
 
   for (const section of destination.sections) {
     const allFields = [];
