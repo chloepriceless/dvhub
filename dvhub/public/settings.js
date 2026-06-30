@@ -954,19 +954,31 @@ function groupFields(fields) {
         id: key,
         label: field.groupLabel || key,
         description: field.groupDescription || '',
+        order: Number.isFinite(field.groupOrder) ? field.groupOrder : null,
+        collapseWhenPro: field.groupCollapseWhenPro === true,
         fields: []
       });
     }
     map.get(key).fields.push(field);
   }
-  return [...map.values()];
+  // Stable ordering: groups that declare an explicit `groupOrder` sort by it;
+  // groups without one keep their insertion order. Legacy sections set no
+  // groupOrder, so their group order is unchanged.
+  return [...map.values()]
+    .map((group, index) => ({ group, index }))
+    .sort((a, b) => {
+      const ao = a.group.order == null ? 1000 + a.index : a.group.order;
+      const bo = b.group.order == null ? 1000 + b.index : b.group.order;
+      return ao - bo;
+    })
+    .map((entry) => entry.group);
 }
 
 function shouldOpenSettingsGroup({ sectionIndex = 0, groupIndex = 0 }) {
   return sectionIndex === 0 && groupIndex === 0;
 }
 
-function buildDestinationWorkspace(definitionLike, destinationId) {
+function buildDestinationWorkspace(definitionLike, destinationId, { licenseActive = false } = {}) {
   const destination = buildSettingsDestinations(definitionLike).find((entry) => entry.id === destinationId);
   if (!destination) return null;
 
@@ -978,7 +990,12 @@ function buildDestinationWorkspace(definitionLike, destinationId) {
       const groups = groupFields(sectionFields).map((group, groupIndex) => ({
         ...group,
         fieldCount: group.fields.length,
-        openByDefault: shouldOpenSettingsGroup({ sectionIndex, groupIndex })
+        // Pro-gated groups (e.g. Kleine Börsenautomatik) collapse once a Pro
+        // license is active; without Pro they stay open so the feature stays
+        // discoverable. Other groups follow the default first-group-open rule.
+        openByDefault: group.collapseWhenPro
+          ? !licenseActive
+          : shouldOpenSettingsGroup({ sectionIndex, groupIndex })
       }));
 
       return {
@@ -1290,7 +1307,10 @@ function renderDestinationGrid(destinationId) {
   if (!mount) return;
   mount.innerHTML = '';
 
-  const destination = buildDestinationWorkspace(definition, destinationId);
+  const licenseActive = !!(typeof window !== 'undefined'
+    && window._licenseStateCache
+    && window._licenseStateCache.status === 'active');
+  const destination = buildDestinationWorkspace(definition, destinationId, { licenseActive });
   if (!destination || !destination.sections.length) return;
 
   for (const section of destination.sections) {
