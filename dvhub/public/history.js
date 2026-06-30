@@ -269,7 +269,7 @@ function renderKpis(summary) {
   }
 
   // Karte 6: Gesamtbilanz + Gesamteinnahmen-Toggle
-  // Default-Modus: gross (Einnahmen − PV-Gestehung − Akku-Verschleiss).
+  // Default-Modus: gross (Einnahmen − PV-Kosten − Akku-Kosten).
   // Income-Modus: nur Brutto-Einnahmen (Energieeinnahmen + Vermiedene Kosten),
   // plus Marktwert-Erlös in Monat/Jahr/Alles-View.
   const exportRevenueEur = round2(Number(kpis?.exportRevenueEur || 0));
