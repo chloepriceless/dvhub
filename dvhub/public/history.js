@@ -316,27 +316,23 @@ function renderKpis(summary) {
     mvCtKwh = Number(kpis.annualMarketValueCtKwh);
     mvSource = 'annual_official';
   }
-  const premiumKwh = kpis?.premiumEligibleExportKwh;
+  // Gesamteinnahmen zeigt die BERECHNETE Marktprämie (kpis.marketPremiumEur — vom
+  // Backend mit dem marketValueMode-Setting gerechnet: monthly→Monatsmarktwert,
+  // annual→Jahresmarktwert), NICHT Marktwert×kWh. Marktwert×kWh wäre Doppelzählung
+  // mit dem Börsenerlös; die EEG-Marktprämie (AW − Marktwert) ist die echte
+  // Zusatz-Einnahme. (mvCtKwh/mvSource unten nur noch für den Year-Cache-Prefetch.)
+  const marketPremiumEur = kpis?.marketPremiumEur;
   let marketRevenueEur = 0;
   let marketRevenueAvailable = false;
   if (showMarketRow) {
-    if (mvCtKwh != null && hasFiniteNumber(premiumKwh) && Number(premiumKwh) > 0) {
-      marketRevenueEur = round2(mvCtKwh * Number(premiumKwh) / 100);
+    if (hasFiniteNumber(marketPremiumEur)) {
+      marketRevenueEur = round2(Number(marketPremiumEur));
       marketRevenueAvailable = true;
       setText('historyKpiBilanzMarketRevenue', fmtEur(marketRevenueEur));
     } else {
       setText('historyKpiBilanzMarketRevenue', 'noch nicht verfügbar');
     }
-    // Label macht transparent, ob der Wert offiziell oder aus Monatswerten abgeleitet ist.
-    let mvLabel = 'Marktwert-Erlös';
-    if (mvSource === 'year_derived') {
-      mvLabel = 'Marktwert-Erlös (JMW laufend, aus Monatsmarktwerten)';
-    } else if (mvSource === 'period_official') {
-      mvLabel = summaryView === 'month' ? 'Marktwert-Erlös (Monatsmarktwert)' : 'Marktwert-Erlös (Jahresmarktwert)';
-    } else if (mvSource === 'annual_official') {
-      mvLabel = 'Marktwert-Erlös (Jahresmarktwert)';
-    }
-    setText('historyKpiBilanzMarketLabel', mvLabel);
+    setText('historyKpiBilanzMarketLabel', 'Marktprämie');
 
     // Wenn wir im Monatsview sind und der year-derived-Cache noch nicht da ist,
     // fire-and-forget einen Year-View-Fetch — wir lesen daraus `annualMarketValueCtKwh`,
