@@ -99,7 +99,7 @@ describe('Plan 20-02: Telegram dedicated endpoints (static)', () => {
 
   it('test endpoint reuses stored creds when body fields are empty (Pitfall 2)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/telegram\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/telegram\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m);
     // botToken/chatId fallback to stored value when body field is falsy or '***'.
     assert.match(m[0], /body\?\.botToken[\s\S]{0,80}stored\.botToken/);
@@ -110,7 +110,7 @@ describe('Plan 20-02: Telegram dedicated endpoints (static)', () => {
 
   it('test endpoint sends a real telegram notify() call with iso-timestamped body', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/telegram\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/telegram\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m);
     assert.match(m[0], /createTelegramProvider\(\s*\{\s*botToken,\s*chatId\s*\}\s*\)/);
     assert.match(m[0], /provider\.notify\(/);

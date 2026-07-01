@@ -3,7 +3,7 @@
 // Factory receives DI context; all state access through ctx.
 
 import net from 'node:net';
-import { u16, s16 } from './server-utils.js';
+import { u16 } from './server-utils.js';
 
 export function createModbusServer(ctx) {
   const { state, getCfg, pushLog } = ctx;

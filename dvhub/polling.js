@@ -9,7 +9,7 @@ import { safeInterval } from './services/safe-async.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms } from './victron-alarms.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
-import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
+import { info as logInfo, error as logError } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
 // branches (gauge.set on success duration, counter.inc on catch).
 import { meterPollDurationSeconds, meterPollErrorsTotal } from './routes-api.js';
@@ -101,7 +101,7 @@ export function createPoller(ctx) {
       const tmpPath = ctx.energyPath + '.tmp';
       fs.writeFileSync(tmpPath, JSON.stringify(data) + '\n', 'utf8');
       fs.renameSync(tmpPath, ctx.energyPath);
-    } catch (e) {
+    } catch {
       // silent - avoid recursive log if pushLog triggers persist
     }
   }

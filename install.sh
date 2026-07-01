@@ -595,6 +595,12 @@ RestartSec=3
 # (the next boot's post-update is non-fatal anyway), so the node server still
 # comes up. 120s leaves headroom over post-update.sh's own internal timeouts.
 TimeoutStartSec=120
+# A2 (Improvements 2026-07-02): belt-and-braces to the in-app 5s shutdown
+# watchdog (gracefulShutdown races every async teardown step). Should a SYNC
+# teardown step or the node process itself ever wedge on SIGTERM, systemd cuts
+# over to SIGKILL after 15s instead of the 90s default — the app needs ~1-6s
+# for a clean stop, so 15s leaves ample headroom without long outages.
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

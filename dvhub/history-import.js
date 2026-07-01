@@ -243,15 +243,6 @@ async function fetchDvhubApiRange({ bzn, startDay, endDayExclusive, fetchImpl, b
   return parseDvhubApiPriceRows(await response.json());
 }
 
-async function fetchEnergyChartsDay({ bzn, day, fetchImpl }) {
-  return fetchEnergyChartsRange({
-    bzn,
-    startDay: day,
-    endDayExclusive: addDays(day, 1),
-    fetchImpl
-  });
-}
-
 async function fetchEnergyChartsRange({ bzn, startDay, endDayExclusive, fetchImpl }) {
   const params = new URLSearchParams({
     bzn,
@@ -271,25 +262,6 @@ async function fetchEnergyChartsRange({ bzn, startDay, endDayExclusive, fetchImp
     throw error;
   }
   return parseEnergyChartsPriceRows(await response.json());
-}
-
-async function fetchEnergyChartsDayWithRetry({
-  bzn,
-  day,
-  fetchImpl,
-  waitImpl,
-  maxAttempts = 3,
-  retryDelayMs = 250
-}) {
-  return fetchEnergyChartsRangeWithRetry({
-    bzn,
-    startDay: day,
-    endDayExclusive: addDays(day, 1),
-    fetchImpl,
-    waitImpl,
-    maxAttempts,
-    retryDelayMs
-  });
 }
 
 async function fetchEnergyChartsRangeWithRetry({

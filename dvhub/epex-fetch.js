@@ -12,7 +12,7 @@ import { safeInterval } from './services/safe-async.js';
 const VRM_FORECAST_API = 'https://vrmapi.victronenergy.com';
 
 export function createEpexFetcher(ctx) {
-  const { state, getCfg, pushLog, telemetrySafeWrite } = ctx;
+  const { state, getCfg, pushLog } = ctx;
 
   const timers = [];  // Track all interval/timeout handles for cleanup
 

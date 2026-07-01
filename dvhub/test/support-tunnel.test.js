@@ -154,7 +154,7 @@ test('open spawns tunnel, status reflects open, close tears down', () => {
   const { ctx, logs } = makeCtx();
   let spawned = null;
   const proc = fakeProc();
-  let nowMs = 1_000_000;
+  const nowMs = 1_000_000;
   const tun = createSupportTunnel(ctx, {
     fs: { existsSync: () => true, readFileSync: () => 'box-01' },
     spawn: (bin, args) => { spawned = { bin, args }; return proc; },

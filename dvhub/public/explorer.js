@@ -18,7 +18,7 @@ const SERIES_DEFS = [
 ];
 
 let explorerChart = null;
-let explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpex: null };
+const explorerData = { labels: [], datasets: [], rawSlots: [], rawFc: null, rawEpex: null };
 const activeSeriesIds = new Set(SERIES_DEFS.filter(s => !s.hidden).map(s => s.id));
 
 // --- Phase 09.2 D-21: Source-Chips ---

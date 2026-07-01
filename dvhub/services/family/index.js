@@ -55,7 +55,7 @@ export function createFamilyService(ctx) {
   // Month/year KPI snapshots for the bottom-bar period metrics (2026-06-13).
   // Refreshed every ~10 min piggybacked on the todayKpis tick — these are
   // heavy aggregate queries, the kiosk does not need them minute-fresh.
-  let periodKpis = { month: null, year: null };
+  const periodKpis = { month: null, year: null };
   let periodKpisAt = 0;
   const PERIOD_KPIS_TTL_MS = 10 * 60 * 1000;
 

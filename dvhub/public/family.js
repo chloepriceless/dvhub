@@ -1462,12 +1462,12 @@
   function getSlotCount() { var w = window.innerWidth; return w > 1100 ? 6 : w > 900 ? 5 : w > 700 ? 4 : w > 500 ? 3 : 2; }
 
   function loadSlotConfig() {
-    try { var s = localStorage.getItem(LS_SLOTS_KEY); if (s) slotConfig = JSON.parse(s); } catch (e) { /* ignore */ }
+    try { var s = localStorage.getItem(LS_SLOTS_KEY); if (s) slotConfig = JSON.parse(s); } catch { /* ignore */ }
     if (!slotConfig.length) slotConfig = defaultSlots.slice();
   }
 
   function saveSlotConfig() {
-    try { localStorage.setItem(LS_SLOTS_KEY, JSON.stringify(slotConfig)); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(LS_SLOTS_KEY, JSON.stringify(slotConfig)); } catch { /* ignore */ }
   }
 
   function renderSlots() {
@@ -1596,7 +1596,7 @@
       // app — when the server is unreachable the dashboard simply keeps the
       // last-known values on screen. No banner needed.
       applyFamilyStatus(data);
-    } catch (err) {
+    } catch {
       failedPolls += 1;
       // D-22 (revised 08-11) — do NOT clear lastStatus; last known values
       // remain visible. Operator can see staleness via the time widget.
@@ -1898,7 +1898,7 @@
     try {
       var d = new Date(iso);
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-    } catch (e) { return ''; }
+    } catch { return ''; }
   }
 
   function updatePanelStats(data) {
@@ -2193,7 +2193,7 @@
     box.classList.add('wx-detail-' + (WX_DETAILS.indexOf(detail) >= 0 ? detail : 'normal'));
   }
   function famWeekdayLabel(ts) {
-    try { return new Date(ts).toLocaleDateString('de-DE', { weekday: 'short' }); } catch (e) { return ''; }
+    try { return new Date(ts).toLocaleDateString('de-DE', { weekday: 'short' }); } catch { return ''; }
   }
 
   function renderWeatherWidget(weather) {
@@ -2394,7 +2394,7 @@
         exitScreensaver();
         resetInactivity();
       }
-    } catch (err) { /* silent — presence is best-effort */ }
+    } catch { /* silent — presence is best-effort */ }
   }
 
   function startPresencePolling() {
@@ -3204,7 +3204,7 @@
       }
       // Re-render the widget immediately so the new level shows without waiting
       // for the next poll.
-      if (lastStatus && lastStatus.weather) { try { renderWeatherWidget(lastStatus.weather); } catch (e) { /* non-fatal */ } }
+      if (lastStatus && lastStatus.weather) { try { renderWeatherWidget(lastStatus.weather); } catch { /* non-fatal */ } }
       setText('famSetMsg', 'Gespeichert ✓');
       setTimeout(closeFamSettings, 700);
     }).catch(function (e) {
@@ -3232,7 +3232,7 @@
   }
   function zoomSet(level) {
     var v = zoomApply(level);
-    try { localStorage.setItem(ZOOM_KEY, String(v)); } catch (e) { /* private mode */ }
+    try { localStorage.setItem(ZOOM_KEY, String(v)); } catch { /* private mode */ }
   }
   function zoomNudge(dir) { zoomSet(zoomLoad() + dir * ZOOM_STEP); }
 
@@ -3244,7 +3244,7 @@
     if (save) save.addEventListener('click', saveFamSettings);
     var reset = document.getElementById('famSetLayoutReset');
     if (reset) reset.addEventListener('click', function () {
-      try { localStorage.removeItem(TAG_LAYOUT_KEY); } catch (e) { /* private mode */ }
+      try { localStorage.removeItem(TAG_LAYOUT_KEY); } catch { /* private mode */ }
       DRAGGABLE_TILE_IDS.forEach(function (id) {
         var el = document.getElementById(id);
         if (el) tagLayoutClearOne(el);
@@ -3271,10 +3271,10 @@
   var tagDragSuppressTap = false;
 
   function tagLayoutLoad() {
-    try { return JSON.parse(localStorage.getItem(TAG_LAYOUT_KEY)) || {}; } catch (e) { return {}; }
+    try { return JSON.parse(localStorage.getItem(TAG_LAYOUT_KEY)) || {}; } catch { return {}; }
   }
   function tagLayoutSave(layout) {
-    try { localStorage.setItem(TAG_LAYOUT_KEY, JSON.stringify(layout)); } catch (e) { /* private mode */ }
+    try { localStorage.setItem(TAG_LAYOUT_KEY, JSON.stringify(layout)); } catch { /* private mode */ }
   }
   function tagLayoutApplyOne(el, pos) {
     var leftPct = Math.max(0, Math.min(95, Number(pos && pos.leftPct)));
@@ -3316,7 +3316,7 @@
           if (!moved) {
             moved = true;
             el.classList.add('tag-dragging');
-            try { el.setPointerCapture(ev.pointerId); } catch (e) { /* capture optional */ }
+            try { el.setPointerCapture(ev.pointerId); } catch { /* capture optional */ }
           }
           mv.preventDefault();
           el.style.left = (rect.left + dx + (centred ? rect.width / 2 : 0)) + 'px';

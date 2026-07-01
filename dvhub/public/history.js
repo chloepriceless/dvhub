@@ -11,14 +11,14 @@ function readEnergyChartMode() {
   try {
     const stored = window?.localStorage?.getItem(ENERGY_CHART_MODE_KEY);
     return ENERGY_CHART_MODES.includes(stored) ? stored : 'flows';
-  } catch (e) { return 'flows'; }
+  } catch { return 'flows'; }
 }
 
 function writeEnergyChartMode(mode) {
   try {
     const normalized = ENERGY_CHART_MODES.includes(mode) ? mode : 'flows';
     window?.localStorage?.setItem(ENERGY_CHART_MODE_KEY, normalized);
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 }
 
 // Karten-Dichte (Christin 2026-06-14): max. Karten pro Reihe auf breiten Schirmen
@@ -30,13 +30,13 @@ function readCardCols() {
   try {
     const n = parseInt(window?.localStorage?.getItem(CARD_COLS_KEY), 10);
     return (n >= 1 && n <= 6) ? n : CARD_COLS_DEFAULT;
-  } catch (e) { return CARD_COLS_DEFAULT; }
+  } catch { return CARD_COLS_DEFAULT; }
 }
 function writeCardCols(n) {
-  try { window?.localStorage?.setItem(CARD_COLS_KEY, String(n)); } catch (e) { /* ignore */ }
+  try { window?.localStorage?.setItem(CARD_COLS_KEY, String(n)); } catch { /* ignore */ }
 }
 function applyCardCols(n) {
-  try { document.documentElement.style.setProperty('--history-cols', String(n)); } catch (e) { /* ignore */ }
+  try { document.documentElement.style.setProperty('--history-cols', String(n)); } catch { /* ignore */ }
 }
 
 const historyState = {
@@ -304,6 +304,13 @@ function renderKpis(summary) {
   //   3. annualMarketValueCtKwh — offizieller JMW oder aus Monatswerten abgeleitet
   //   sonst → "noch nicht verfügbar"
   const selfYearCached = window._historySelfYearMvCache?.[String(summary?.range?.startDate || '').slice(0,4)];
+  // A4 (Improvements 2026-07-02): die vom User gesetzte Marktwert-Basis
+  // (userEnergyPricing.marketValueMode, Backend reicht sie in
+  // meta.marketPremium durch). 'annual' (Default) ⇒ Monatsview rechnet
+  // JMW-basiert (Gesamteinnahmen UND DV-Karte); 'monthly' ⇒ beide bleiben
+  // beim offiziellen Monatsmarktwert des Backends — der JMW-Override unten
+  // darf dann NICHT greifen (er würde die korrekte Backend-Zahl verfälschen).
+  const marketValueModeAnnual = (summary?.meta?.marketPremium?.marketValueMode || 'annual') === 'annual';
   let mvCtKwh = null;
   let mvSource = 'none';
   if (hasFiniteNumber(selfYearCached)) {
@@ -333,6 +340,7 @@ function renderKpis(summary) {
   // (dort rechnet applyAnnualMarketPremium bereits JMW-basiert).
   let marketPremiumEur = kpis?.marketPremiumEur;
   if (summaryView === 'month'
+      && marketValueModeAnnual
       && hasFiniteNumber(selfYearCached)
       && hasFiniteNumber(kpis?.weightedApplicableValueCtKwh)
       && hasFiniteNumber(kpis?.premiumEligibleExportKwh)) {
@@ -635,8 +643,14 @@ function renderKpis(summary) {
     let effMarketValueLabel = view === 'year' ? 'Tatsächlicher Jahresmarktwert' : 'Tatsächlicher Monatsmarktwert';
     let usedYearFallback = false;
 
+    // A4: Bei marketValueMode='annual' ist die JMW-Basis im Monatsview die
+    // REGEL (Gleichlauf mit den Gesamteinnahmen oben — vorher zeigte die
+    // DV-Karte für vergangene Monate die Monatsmarktwert-Prämie, die Bilanz
+    // aber die JMW-Prämie: zwei Zahlen für dieselbe Sache). Bei 'monthly'
+    // bleibt die JMW-Rechnung ein reiner Fallback für den noch nicht
+    // veröffentlichten aktuellen Monatsmarktwert (bisheriges Verhalten).
     if (view === 'month'
-        && !hasFiniteNumber(effMarketValueCt)
+        && (marketValueModeAnnual || !hasFiniteNumber(effMarketValueCt))
         && hasFiniteNumber(selfYearCached)
         && hasFiniteNumber(kpis?.weightedApplicableValueCtKwh)
         && hasFiniteNumber(kpis?.premiumEligibleExportKwh)) {

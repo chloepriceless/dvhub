@@ -286,7 +286,7 @@ export function createOptimizerService(ctx) {
       const mispelActive = ['pauschal', 'abgrenzung'].includes(cfg.optimizer?.mispel?.mode);
 
       let allowGridCharge = rawGridCharge;
-      let allowGridDischarge = rawGridDischarge;
+      const allowGridDischarge = rawGridDischarge;
 
       if (rawGridCharge && rawGridDischarge && !mispelActive) {
         // Both set without Pauschaloption/Abgrenzung — enforce: only one allowed

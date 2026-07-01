@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
@@ -829,7 +828,7 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
     return sum + Number(slot?.exportKwh || 0);
   }, 0));
 
-  let premiumEligibleExportKwh = baselinePremiumEligibleExportKwh;
+  const premiumEligibleExportKwh = baselinePremiumEligibleExportKwh;
   let premiumValuedExportKwh = 0;
   let marketPremiumEur = null;
   let marketPremiumCtKwh = null;

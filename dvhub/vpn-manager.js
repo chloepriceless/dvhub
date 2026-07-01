@@ -332,10 +332,10 @@ export function createVpnManager(ctx) {
     // cert/key can be inline (<ca>, <cert>, <key>) or file references
     const hasInlineCa = content.includes('<ca>');
     const hasInlineCert = content.includes('<cert>');
-    const hasInlineKey = content.includes('<key>');
     const hasCaRef = directives.has('ca');
     const hasCertRef = directives.has('cert');
-    const hasKeyRef = directives.has('key');
+    // Kein Key-Pflicht-Check: OpenVPN-Configs mit reiner auth-user-pass-Auth
+    // haben legitim keinen Client-Key — <key>/key darf fehlen.
 
     if (!hasInlineCa && !hasCaRef) errors.push('Missing CA certificate (inline <ca> or ca directive)');
     if (!hasInlineCert && !hasCertRef && !directives.has('pkcs12') && !directives.has('auth-user-pass')) {
@@ -346,7 +346,7 @@ export function createVpnManager(ctx) {
   }
 
   function buildSecureConfig(originalContent) {
-    let content = originalContent;
+    const content = originalContent;
 
     // strip any existing dangerous directives
     const lines = content.split(/\r?\n/);
@@ -449,7 +449,7 @@ export function createVpnManager(ctx) {
     try {
       const { stdout } = await execFileAsync('openssl', ['x509', '-enddate', '-noout', '-in', certPath]);
       parseCertExpiry(stdout);
-    } catch (e) {
+    } catch {
       state.vpn.certExpiry = null;
       state.vpn.certDaysRemaining = null;
     }

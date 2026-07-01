@@ -2696,7 +2696,7 @@ function initVpnTab() {
   if (mount && !mount.firstChild) {
     try {
       mount.appendChild(renderVpnUploadPanel());
-    } catch (err) {
+    } catch {
       // Defensive: do not break tab switching if panel render fails.
       mount.innerHTML = '<div class="config-banner error">VPN-Panel konnte nicht geladen werden.</div>';
     }
@@ -3742,7 +3742,7 @@ function formatMlDate(ts) {
     var d = new Date(ts);
     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
       ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  } catch (e) {
+  } catch {
     return '--';
   }
 }
@@ -3993,7 +3993,7 @@ function renderMaeSparkline(data) {
     if (Number.isNaN(d.getTime())) return '';
     try {
       return new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
-    } catch (e) {
+    } catch {
       return d.toLocaleDateString('de-DE');
     }
   }
@@ -4058,7 +4058,7 @@ function renderMaeSparkline(data) {
       if (!r.ok) return;
       const state = await r.json();
       render(state);
-    } catch (e) {
+    } catch {
       // silent — keep the markup default "none" until the operator acts
     }
   }
@@ -4080,7 +4080,7 @@ function renderMaeSparkline(data) {
           body: JSON.stringify({ key })
         });
         let result = {};
-        try { result = await r.json(); } catch (e) { /* keep default */ }
+        try { result = await r.json(); } catch { /* keep default */ }
         if (r.ok && result.ok) {
           showSettingsToast('Lizenz erfolgreich aktiviert.');
           input.value = '';
@@ -4109,7 +4109,7 @@ function renderMaeSparkline(data) {
           body: '{}'
         });
         let result = {};
-        try { result = await r.json(); } catch (e) { /* keep default */ }
+        try { result = await r.json(); } catch { /* keep default */ }
         if (r.ok && result.ok) {
           showSettingsToast('Lizenz erfolgreich geprüft.');
         } else {
@@ -4140,7 +4140,7 @@ function renderMaeSparkline(data) {
           body: '{}'
         });
         showSettingsToast('Lizenz entfernt.');
-      } catch (e) {
+      } catch {
         showSettingsToast('Fehler beim Entfernen.');
       }
       await loadState();
@@ -4153,7 +4153,7 @@ function renderMaeSparkline(data) {
   if (typeof window !== 'undefined' && window.location && window.location.hash === '#license') {
     const target = document.getElementById('license');
     if (target && typeof target.scrollIntoView === 'function') {
-      try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* noop */ }
+      try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* noop */ }
     }
   }
 

@@ -70,10 +70,10 @@
   }
 
   function dismiss(backdrop, keyHandler) {
-    try { backdrop.remove(); } catch (e) { /* ignore */ }
-    try { document.body.classList.remove('dv-modal-open'); } catch (e) { /* ignore */ }
+    try { backdrop.remove(); } catch { /* ignore */ }
+    try { document.body.classList.remove('dv-modal-open'); } catch { /* ignore */ }
     if (keyHandler) {
-      try { document.removeEventListener('keydown', keyHandler); } catch (e) { /* ignore */ }
+      try { document.removeEventListener('keydown', keyHandler); } catch { /* ignore */ }
     }
   }
 
@@ -83,7 +83,7 @@
     document.body.classList.add('dv-modal-open');
     var focusEl = dlg.querySelector(focusSelector || '.dv-modal-btn');
     if (focusEl && typeof focusEl.focus === 'function') {
-      try { focusEl.focus(); } catch (e) { /* ignore */ }
+      try { focusEl.focus(); } catch { /* ignore */ }
     }
   }
 
@@ -171,7 +171,7 @@
       document.addEventListener('keydown', keyHandler);
       mount(back, dlg);
       // Focus the input rather than a button so the user can type immediately.
-      try { input.focus(); input.select(); } catch (e) { /* ignore */ }
+      try { input.focus(); input.select(); } catch { /* ignore */ }
     });
   };
 })();

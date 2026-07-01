@@ -758,7 +758,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     const rawPoints = forecast.solar
       .map(p => ({ ts: new Date(p.ts).getTime(), kw: p.w / 1000 }))
       .sort((a, b) => a.ts - b.ts);
-    let firstNonZero = rawPoints.findIndex(p => p.kw > 0);
+    const firstNonZero = rawPoints.findIndex(p => p.kw > 0);
     let lastNonZero = rawPoints.length - 1;
     while (lastNonZero > 0 && rawPoints[lastNonZero].kw <= 0) lastNonZero--;
     const fcPoints = firstNonZero >= 0 ? rawPoints.slice(firstNonZero, lastNonZero + 1) : [];

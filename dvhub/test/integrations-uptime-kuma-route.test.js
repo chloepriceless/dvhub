@@ -133,7 +133,7 @@ describe('Plan 20-04: Uptime-Kuma dedicated endpoints (static)', () => {
   it('POST /api/integrations/uptime-kuma/test is registered with auth + rate-limit (T-20-04-03)', () => {
     const src = readRoutes();
     assert.match(src, /url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]{0,60}req\.method\s*===\s*['"]POST['"]/);
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m, 'test endpoint handler must close');
     assert.match(m[0], /checkAuth\(req,\s*res\)/);
     assert.match(m[0], /checkProviderRateLimit\(\s*['"]uptime-kuma['"]/,
@@ -143,7 +143,7 @@ describe('Plan 20-04: Uptime-Kuma dedicated endpoints (static)', () => {
 
   it('test endpoint prefers form pushUrl, falls back to stored (Pitfall 2/5, T-20-04-06)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m);
     // Body pushUrl trumps stored — operator's unsaved URL must work.
     assert.match(m[0], /body\??\.?pushUrl[\s\S]{0,80}stored\.pushUrl/,
@@ -153,7 +153,7 @@ describe('Plan 20-04: Uptime-Kuma dedicated endpoints (static)', () => {
 
   it('test endpoint calls kumaPushOnce (NOT ctx.monitoringAlertPush — Pitfall 5)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/integrations\/uptime-kuma\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m);
     assert.match(m[0], /kumaPushOnce\s*\(\s*\{/,
       'test endpoint must invoke kumaPushOnce (direct SSRF-guarded fetch with current form URL)');

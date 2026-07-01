@@ -309,7 +309,7 @@
         }
       }
       renderAll(lastData);
-    } catch (e) { /* keep showing last data */ }
+    } catch { /* keep showing last data */ }
   }
 
   function esc(str) {
@@ -1033,7 +1033,7 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       mteRenderRows(Array.isArray(data.tiles) ? data.tiles : []);
-    } catch (e) {
+    } catch {
       mteSetStatus('Konfiguration konnte nicht geladen werden.', 'err');
     }
   }
@@ -1277,7 +1277,7 @@
           + '</div>';
       }
       els.topics.innerHTML = html;
-    } catch (e) {
+    } catch {
       // Friendly message — never throw out of the poll loop.
       if (els.meta) els.meta.textContent = 'Topics konnten nicht geladen werden.';
     }

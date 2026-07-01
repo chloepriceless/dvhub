@@ -140,7 +140,7 @@
       if (!res.ok) return null;
       const data = await res.json();
       return data.ok ? data : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -169,7 +169,7 @@
           end: new Date(Number(r.slotEndTs)).toISOString()
         }));
       return { lastSchedule: ganttRules };
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -179,7 +179,7 @@
       const res = await apiFetch('/api/status');
       if (!res.ok) return null;
       return await res.json();
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -291,7 +291,7 @@
       setBadgeState('badge-tesla', data.tesla?.enabled && data.tesla?.state);
       setBadgeState('badge-ha', data.homeAssistant?.haDiscovery);
       setBadgeState('badge-loxone', data.loxone?.configured);
-    } catch (e) {
+    } catch {
       // /api/integrations/status not yet available — badges stay hidden
     }
   }
@@ -842,7 +842,7 @@
       var res = await apiFetch('/api/ml/status');
       if (!res.ok) return null;
       return await res.json();
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -860,7 +860,7 @@
       if (!res.ok) return null;
       var data = await res.json();
       return data && data.ok ? data.run : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -1069,7 +1069,7 @@
         return new Intl.DateTimeFormat('en-CA', {
           timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
         }).format(new Date(isoStart));
-      } catch (e) { return ''; }
+      } catch { return ''; }
     }
     function filterToday(slots) {
       return slots.filter(function (s) { return localDateKey(s.start) === berlinTodayKey; });
@@ -1292,7 +1292,7 @@
         });
         forecastCompChart.update('none');
       }
-    } catch (e) {
+    } catch {
       body.innerHTML = '<div class="forecast-providers-empty">Forecast-Provider nicht erreichbar.</div>';
     }
   }
@@ -1312,7 +1312,7 @@
       var qs = '?from=' + encodeURIComponent(now.toISOString()) + '&to=' + encodeURIComponent(to.toISOString());
       var res = await apiFetch('/api/forecast/inspector/eos' + qs);
       return (res && res.ok) ? await res.json() : null;
-    } catch (e) { return null; }
+    } catch { return null; }
   }
   function renderEosPlanChart(eos) {
     var canvas = document.getElementById('eosPlanChart');

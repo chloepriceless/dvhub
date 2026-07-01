@@ -161,7 +161,7 @@ test('integrationState() returns ALL original fields unchanged', async (t) => {
   const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
 
   // Find integrationState function
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   assert.ok(fnMatch, 'integrationState() function exists in routes-api.js');
 
   const fnBody = fnMatch[0];
@@ -181,7 +181,7 @@ test('integrationState() includes dvhub_forecast namespaced key', async () => {
 
   assert.ok(src.includes('dvhub_forecast'), 'routes-api.js must contain dvhub_forecast key');
 
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   const fnBody = fnMatch[0];
 
   assert.ok(fnBody.includes('dvhub_forecast'), 'integrationState() function must set dvhub_forecast');
@@ -193,7 +193,7 @@ test('integrationState() includes dvhub_optimizer namespaced key', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
 
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   const fnBody = fnMatch[0];
 
   assert.ok(fnBody.includes('dvhub_optimizer'), 'integrationState() must set dvhub_optimizer');
@@ -203,7 +203,7 @@ test('integrationState() includes dvhub_tesla namespaced key when available', as
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
 
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   const fnBody = fnMatch[0];
 
   assert.ok(fnBody.includes('dvhub_tesla'), 'integrationState() must set dvhub_tesla');
@@ -215,7 +215,7 @@ test('dvhub_forecast pvTodayKwh uses duration-aware calculation', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
 
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   const fnBody = fnMatch[0];
 
   // Must multiply by slot duration, not just divide by 1000
@@ -237,7 +237,7 @@ test('dvhub_optimizer uses "source" field not "primarySource"', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
 
-  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n  function |\n  \/\/)/);
+  const fnMatch = src.match(/function integrationState\(\)\s*\{[\s\S]*?(?=\n {2}function |\n {2}\/\/)/);
   const fnBody = fnMatch[0];
 
   // Must use optStatus.source, NOT optStatus.primarySource as a property access

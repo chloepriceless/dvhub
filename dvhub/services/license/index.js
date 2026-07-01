@@ -202,7 +202,7 @@ export function createLicenseService(ctx) {
       const tmp = licensePath + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(state.license) + '\n', 'utf8');
       fs.renameSync(tmp, licensePath);
-      try { fs.chmodSync(licensePath, 0o600); } catch (e) { /* best-effort on Windows / restricted FS */ }
+      try { fs.chmodSync(licensePath, 0o600); } catch { /* best-effort on Windows / restricted FS */ }
     } catch (err) {
       console.error('[license] persist error:', err.message);
     }

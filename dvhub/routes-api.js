@@ -5,10 +5,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { parseBody, MAX_BODY_BYTES, nowIso, fmtTs, resolveLogLimit, u16, s16, roundCtKwh, addDays, gridDirection, controlWriteBoundsError, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
-import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, resolveImportPriceCtKwhForSlot, configuredModule3Windows } from './user-energy-pricing.js';
+import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, controlWriteBoundsError, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
+import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
@@ -2314,7 +2314,7 @@ export function createApiRoutes(ctx) {
       let body;
       try {
         body = await parseBody(req);
-      } catch (e) {
+      } catch {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
       const detected = body?.detected === true;
@@ -2339,7 +2339,7 @@ export function createApiRoutes(ctx) {
       let body;
       try {
         body = await parseBody(req);
-      } catch (e) {
+      } catch {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
       const saver = body && body.screensaver;
@@ -2395,7 +2395,7 @@ export function createApiRoutes(ctx) {
       let body;
       try {
         body = await parseBody(req);
-      } catch (e) {
+      } catch {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
       if (!ctx.evccIntegration || typeof ctx.evccIntegration.setMode !== 'function') {
@@ -2419,7 +2419,7 @@ export function createApiRoutes(ctx) {
       if (!requirePro(req, res, 'family-dashboard')) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!ctx.deviceService || typeof ctx.deviceService.setDeviceOutput !== 'function') {
         return json(res, 503, { ok: false, error: 'device_service_unavailable' });
       }
@@ -2446,7 +2446,7 @@ export function createApiRoutes(ctx) {
       let body;
       try {
         body = await parseBody(req);
-      } catch (e) {
+      } catch {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
       if (!body || !Array.isArray(body.tiles)) {
@@ -3245,7 +3245,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3330,7 +3330,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3415,7 +3415,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3513,7 +3513,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3611,7 +3611,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3731,7 +3731,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3831,7 +3831,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3891,7 +3891,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -3960,7 +3960,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -4020,7 +4020,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -4060,7 +4060,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       const stored = ctx.getRawCfg?.()?.forecast?.solcast || {};
       // Body apiKey wins; '***' or empty → fall back to stored ('***' keep-existing
       // semantics consistent with the save path).
@@ -4107,7 +4107,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }
@@ -4169,7 +4169,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       const cfg = ctx.getRawCfg?.() || {};
       const stored = cfg.forecast?.pvnode || {};
       const apiKey = (body && body.apiKey && body.apiKey !== '***') ? body.apiKey : (stored.apiKey || '');
@@ -4310,7 +4310,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/integrations/notification-providers' && req.method === 'POST') {
       let body;
       try { body = await parseBody(req); }
-      catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') {
         return json(res, 400, { ok: false, error: 'object required' });
       }

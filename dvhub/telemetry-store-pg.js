@@ -339,7 +339,7 @@ export async function ensurePgSchema(pool) {
     try {
       await pool.query(`ALTER TABLE public.${safeName} OWNER TO current_user`);
       reowned++;
-    } catch (err) {
+    } catch {
       // Not owner/superuser for this (foreign) table — skip it. Collect for one
       // summary line rather than spamming one warning per table at boot.
       skipped.push(row.tablename);

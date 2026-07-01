@@ -267,8 +267,8 @@ export function createCurtailmentService(ctx, { store }) {
     const plants = cfg.userEnergyPricing?.pvPlants;
     const kWp = Number(cfg.userEnergyPricing?.totalKwp)
       || (Array.isArray(plants) ? plants.reduce((s, p) => s + (Number(p.kwp) || 0), 0) : 0);
-    let lat = cfg.forecast?.location?.latitude ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
-    let lon = cfg.forecast?.location?.longitude ?? cfg.schedule?.smallMarketAutomation?.location?.longitude;
+    const lat = cfg.forecast?.location?.latitude ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
+    const lon = cfg.forecast?.location?.longitude ?? cfg.schedule?.smallMarketAutomation?.location?.longitude;
     return { kWp, lat, lon };
   }
 

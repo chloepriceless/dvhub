@@ -34,7 +34,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
-import { REDACTED_PATHS, restoreRedacted, redactUrlCreds } from './config-redaction.js';
+import { restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
 import {
   createMarketAutomationBuilder
@@ -73,15 +73,11 @@ import { createIntegrationsHealthTracker } from './services/integrations-health-
 import {
   createApiRoutes,
   SECURITY_HEADERS,
-  getRequestHost,
-  isHostAllowed,
   resolveCorsAllowedOrigin,
   // Plan 09-06 (D-06): metric instrument hooks — call sites in server.js
   // (pushLog audit branch) + polling.js use these to record dvhub_* counters.
   auditLogEntriesTotal,
-  isAllowedAuditMetricEvent,
-  meterPollDurationSeconds,
-  meterPollErrorsTotal
+  isAllowedAuditMetricEvent
 } from './routes-api.js';
 import { createVpnManager } from './vpn-manager.js';
 // Plan 09-06 (D-08): services/log.js wrapper around console.* — the in-server.js
@@ -360,7 +356,7 @@ let runtimeWorkerSnapshot = null;
 let runtimeWorkerStatusPayload = null;
 let runtimeWorkerHeartbeatAt = 0;
 let sunTimesCacheState = null;
-let runtimeWorkerState = {
+const runtimeWorkerState = {
   ready: false,
   lastError: null
 };
@@ -443,8 +439,12 @@ function applyLoadedConfig(nextLoadedConfig) {
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
   state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 1;
-  // Hot-reload monitoring heartbeat if function exists
-  if (typeof startMonitoringHeartbeat === 'function') startMonitoringHeartbeat();
+  // Hot-reload the monitoring heartbeat with the fresh cfg. Uses the module-
+  // level reference hoisted by the IS_RUNTIME_PROCESS block (see its
+  // declaration) — the previous `typeof startMonitoringHeartbeat` guard probed
+  // an identifier that never exists in THIS scope (block-scoped function
+  // declaration) and made the whole branch a silent no-op since its inception.
+  if (typeof monitoringHeartbeatRestart === 'function') monitoringHeartbeatRestart();
 }
 
 function saveAndApplyConfig(nextRawConfig) {
@@ -682,6 +682,15 @@ let liveTelemetryFlushIntervalId = null;
 let runtimeSnapshotIntervalId = null;
 let marketValueBackfillIntervalId = null;
 let monitoringTimerId = null;
+// A1 (Improvements 2026-07-02): startMonitoringHeartbeat ist INNERHALB des
+// `if (IS_RUNTIME_PROCESS) {…}`-Blocks deklariert (weiter unten) — in ESM/
+// strict mode sind function declarations block-scoped, applyLoadedConfig
+// liegt außerhalb, sein früherer `typeof startMonitoringHeartbeat`-Guard war
+// deshalb IMMER false und der Config-Hot-Reload des Heartbeats (z.B.
+// geänderte monitoring.pushUrl ohne Neustart) seit jeher ein No-op.
+// Der Block hebt die Funktions-Referenz beim Boot hierher; bleibt null in
+// Prozess-Rollen ohne Runtime-Teil (dort gibt es keinen Heartbeat zu re-armen).
+let monitoringHeartbeatRestart = null;
 
 function startDedicatedRuntimeWorker() {
   const worker = startRuntimeWorker({
@@ -1858,6 +1867,10 @@ if (IS_RUNTIME_PROCESS) {
     // Plan 09-06 (D-08): heartbeat block is the 6th D-08 heavy-hitter — routed through services/log.js wrapper.
     logInfo('Monitoring heartbeat configured', { url: safePushUrl.substring(0, 60) });
   }
+  // A1: hoist the reference out of this IS_RUNTIME_PROCESS block so
+  // applyLoadedConfig (module scope) can re-arm the heartbeat on config
+  // hot-reload — see the monitoringHeartbeatRestart declaration.
+  monitoringHeartbeatRestart = startMonitoringHeartbeat;
   startMonitoringHeartbeat();
 }
 

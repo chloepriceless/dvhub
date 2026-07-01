@@ -205,6 +205,18 @@ if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^TimeoutStartSec=' "$SERVICE_FILE"; t
   SERVICE_CHANGED=1
 fi
 
+# A2 (Improvements 2026-07-02): bounded STOP timeout as belt-and-braces to the
+# in-app 5s shutdown watchdog. Before the watchdog, 3 of 6 observed stops hung
+# the full systemd 90s default and ended in SIGKILL; a clean stop needs ~1-6s.
+# TimeoutStopSec=15 keeps a wedged SYNC teardown step (or a wedged node) from
+# stretching every restart/update to 90s. Same idempotent insert-once pattern
+# as TimeoutStartSec above (existing boxes never re-run install.sh).
+if [[ -f "$SERVICE_FILE" ]] && ! grep -qE '^TimeoutStopSec=' "$SERVICE_FILE"; then
+  echo "  TimeoutStopSec=15 (A2) wird eingefuegt..."
+  sed -i "\|^ExecStart=|a TimeoutStopSec=15" "$SERVICE_FILE"
+  SERVICE_CHANGED=1
+fi
+
 if [[ "$SERVICE_CHANGED" -eq 1 ]]; then
   systemctl daemon-reload
 fi

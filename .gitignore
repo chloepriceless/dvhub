@@ -80,3 +80,4 @@ support-console.html
 live-screenshots/
 /20241111_0282_V01_Auskunft_01_A3_H.md
 /assets/dvhub-fullpage-192.168.1.66-8080.png
+tests/node_modules

@@ -109,7 +109,7 @@ describe('Plan 20-01: ntfy.sh dedicated endpoints (static)', () => {
 
   it('test endpoint reuses stored creds when body fields are empty (Pitfall 2)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/ntfy\/test['"][\s\S]*?\n  \}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/ntfy\/test['"][\s\S]*?\n {2}\}\n/);
     assert.ok(m);
     // topicUrl/token fallback to stored value when body field is falsy or '***'.
     assert.match(m[0], /body\?\.topicUrl[\s\S]{0,80}stored\.topicUrl/);

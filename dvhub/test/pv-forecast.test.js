@@ -163,7 +163,7 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
       { ts: '2026-04-03T12:15:00Z', power_w: 5400 }
     ]
   };
-  let storedRows = [];
+  const storedRows = [];
   const mockStore = {
     insertPvForecast: async (row) => { storedRows.push(row); },
     // Plan 09-08: batched callers now go through insertPvForecastBatch — flatten

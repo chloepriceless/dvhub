@@ -81,7 +81,7 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
       try { if (fs.existsSync(outFile)) fs.unlinkSync(outFile); } catch { /* ignore */ }
       return fail(scope, reason, now, res.stderr || 'pg_dump failed');
     }
-    let pruned = [];
+    const pruned = [];
     try {
       const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, Number(b.retentionCount));
       for (const f of toDelete) { try { fs.unlinkSync(path.join(dir, f)); pruned.push(f); } catch { /* ignore */ } }
