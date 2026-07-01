@@ -2421,7 +2421,11 @@ async function checkSystemUpdates() {
   const actions = document.getElementById('systemUpdatesActions');
   const meta = document.getElementById('systemUpdatesMeta');
   if (!banner) return;
-  banner.style.display = '';
+  // #systemUpdatesBanner/#systemUpdatesList/#systemUpdatesActions carry the
+  // svc-*-classes with CSS display:none (settings.css:1695-1697) — reveals need
+  // an EXPLICIT value; style.display='' falls back to the CSS none and the
+  // element never appears (the 0c926128 install-button lesson, same class family).
+  banner.style.display = 'block';
   banner.textContent = 'Prüfe auf System-Updates...';
   if (list) list.style.display = 'none';
   if (actions) actions.style.display = 'none';
@@ -2437,7 +2441,7 @@ async function checkSystemUpdates() {
     const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheits-Updates)` : '';
     banner.innerHTML = `<strong class="sa-text-warn">${data.totalCount} Updates verfügbar${secNote}</strong>`;
     if (list && data.packages.length > 0) {
-      list.style.display = '';
+      list.style.display = 'block';
       let html = '<table class="sa-pkg-table">';
       html += '<tr class="sa-pkg-table-head"><td>Paket</td><td>Aktuell</td><td>Neu</td></tr>';
       for (const p of data.packages) {
@@ -2446,7 +2450,7 @@ async function checkSystemUpdates() {
       html += '</table>';
       list.innerHTML = html;
     }
-    if (actions) actions.style.display = '';
+    if (actions) actions.style.display = 'flex';
     if (meta) meta.textContent = `Geprüft: ${fmtTs(data.checkedAt)}`;
   } catch (e) {
     banner.textContent = 'Fehler beim Prüfen: ' + e.message;
