@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=39" />
+  <link rel="stylesheet" href="/integrations.css?v=40" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -1058,9 +1058,11 @@
           </div>
           <div id="shelly-list-body"></div>
           <div class="dv-drawer-actions">
+            <button type="button" class="btn sm ghost" id="shelly-discover">Im Netzwerk suchen</button>
             <button type="button" class="btn sm ghost" id="shelly-add">+ Ger&auml;t hinzuf&uuml;gen</button>
             <button type="button" class="btn sm primary" id="shelly-save">Speichern</button>
           </div>
+          <div id="shelly-discover-results" class="shelly-discover-results" hidden></div>
           <div class="dv-field-validation" id="shelly-banner" hidden></div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-shelly-toast" role="status" aria-live="polite" hidden>&mdash;</div>
@@ -1071,6 +1073,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=43"></script>
+  <script src="/integrations.js?v=44"></script>
 </body>
 </html>

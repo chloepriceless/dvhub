@@ -1132,6 +1132,36 @@
   font-size: 16px;
   padding: 2px 6px;
 }
+/* mDNS-Discovery-Ergebnisse im Shelly-Drawer (2026-07-01) */
+.shelly-discover-results {
+  margin-top: 8px;
+  border: 1px solid var(--glass-brd, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.shelly-discover-hint {
+  font-size: 12px;
+  color: var(--text-muted, #8b95a7);
+  margin: 0 0 6px;
+}
+.shelly-discover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.shelly-discover-row:first-of-type { border-top: 0; }
+.shelly-discover-name {
+  flex: 1 1 auto; min-width: 0; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.shelly-discover-ip {
+  flex: 0 0 auto; font-family: var(--f-mono); font-size: 12px;
+  color: var(--text-muted, #8b95a7);
+}
+.shelly-discover-added { flex: 0 0 auto; font-size: 12px; color: #26de81; }
 .dv-field-validation.error {
   background: rgba(255, 107, 107, 0.10);
   border: 1px solid rgba(255, 107, 107, 0.30);

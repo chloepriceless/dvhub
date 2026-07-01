@@ -7,6 +7,10 @@ import { safeInterval } from './services/safe-async.js';
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 1500;
 const VICTRON_HINTS = ['victron', 'venus', 'cerbo', 'gx'];
+// Shelly Gen2/Plus/Pro announcen `_shelly._tcp.local` (Hostname shellyplusXX-…),
+// Gen1 nur `_http._tcp.local` (Hostname shelly1-…). Beide Service-Typen werden
+// gebrowst und per Hostname-Hint gefiltert — analog zur Victron-Heuristik.
+const SHELLY_HINTS = ['shelly'];
 
 export class DiscoveryTimeoutError extends Error {
   constructor(message = 'Discovery timed out') {
@@ -66,9 +70,9 @@ function buildDiscoveryId(system) {
   return `${manufacturer}-${preferredLabel}-${preferredHost}`;
 }
 
-function hasVictronHint(value) {
+function hasHint(value, hints) {
   const text = String(value || '').trim().toLowerCase();
-  return VICTRON_HINTS.some((hint) => text.includes(hint));
+  return hints.some((hint) => text.includes(hint));
 }
 
 function extractServiceLabel(value) {
@@ -82,9 +86,9 @@ function collectMdnsRecords(packet) {
   return answers.concat(additionals).filter((record) => record && typeof record === 'object');
 }
 
-function upsertCandidate(candidates, key, patch) {
+function upsertCandidate(candidates, key, patch, manufacturer = 'victron') {
   const candidate = candidates.get(key) || {
-    manufacturer: 'victron',
+    manufacturer,
     label: '',
     host: '',
     ip: '',
@@ -104,7 +108,7 @@ function upsertCandidate(candidates, key, patch) {
   candidates.set(key, candidate);
 }
 
-function updateVictronCandidates(candidates, records) {
+function updateCandidates(candidates, records, manufacturer, hints) {
   const ipsByHost = new Map();
   for (const record of records) {
     if (record.type !== 'A' && record.type !== 'AAAA') continue;
@@ -120,11 +124,11 @@ function updateVictronCandidates(candidates, records) {
   for (const record of records) {
     if (record.type !== 'PTR') continue;
     const serviceName = String(record.data || '').trim();
-    if (!hasVictronHint(serviceName)) continue;
+    if (!hasHint(serviceName, hints)) continue;
     upsertCandidate(candidates, serviceName, {
       label: extractServiceLabel(serviceName),
       meta: { serviceName }
-    });
+    }, manufacturer);
   }
 
   for (const record of records) {
@@ -132,28 +136,28 @@ function updateVictronCandidates(candidates, records) {
     const serviceName = String(record.name || '').trim();
     const target = normalizeHost(record.data.target);
     const label = extractServiceLabel(serviceName);
-    if (!hasVictronHint(serviceName) && !hasVictronHint(target) && !hasVictronHint(label)) continue;
+    if (!hasHint(serviceName, hints) && !hasHint(target, hints) && !hasHint(label, hints)) continue;
     upsertCandidate(candidates, target || serviceName, {
       label: label || target,
       host: target,
       ipv4: ipsByHost.get(target)?.ipv4 || '',
       ipv6: ipsByHost.get(target)?.ipv6 || '',
       meta: { serviceName }
-    });
+    }, manufacturer);
   }
 
   for (const record of records) {
     if (record.type !== 'A' && record.type !== 'AAAA') continue;
     const host = normalizeHost(record.name);
     const ip = normalizeIp(record.data);
-    if (!hasVictronHint(host) || !ip) continue;
+    if (!hasHint(host, hints) || !ip) continue;
     upsertCandidate(candidates, host, {
       label: extractServiceLabel(host),
       host,
       ipv4: record.type === 'A' ? ip : '',
       ipv6: record.type === 'AAAA' ? ip : '',
       meta: { serviceName: host }
-    });
+    }, manufacturer);
   }
 
   for (const candidate of candidates.values()) {
@@ -204,7 +208,7 @@ export async function createMdnsBrowser({ mdnsImport = () => import('multicast-d
   return factory();
 }
 
-async function browseVictronAnnouncements(browser, timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS) {
+async function browseAnnouncements(browser, { timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS, manufacturer, hints, queries = [] } = {}) {
   return new Promise((resolve, reject) => {
     const candidates = new Map();
     let settled = false;
@@ -225,7 +229,7 @@ async function browseVictronAnnouncements(browser, timeoutMs = DEFAULT_DISCOVERY
     };
 
     const onResponse = (packet) => {
-      updateVictronCandidates(candidates, collectMdnsRecords(packet));
+      updateCandidates(candidates, collectMdnsRecords(packet), manufacturer, hints);
     };
 
     const onError = (error) => {
@@ -233,7 +237,7 @@ async function browseVictronAnnouncements(browser, timeoutMs = DEFAULT_DISCOVERY
     };
 
     const timer = setTimeout(() => {
-      const systems = normalizeAndDedupe(Array.from(candidates.values()), { manufacturer: 'victron' });
+      const systems = normalizeAndDedupe(Array.from(candidates.values()), { manufacturer });
       if (systems.length === 0) {
         finish(() => reject(new DiscoveryTimeoutError('timed out')));
         return;
@@ -243,19 +247,40 @@ async function browseVictronAnnouncements(browser, timeoutMs = DEFAULT_DISCOVERY
 
     browser?.on?.('response', onResponse);
     browser?.on?.('error', onError);
-    browser?.query?.([{ name: '_http._tcp.local', type: 'PTR' }]);
-    browser?.query?.([{ name: 'venus.local', type: 'A' }]);
-    browser?.query?.([{ name: 'venus.local', type: 'AAAA' }]);
+    for (const query of queries) browser?.query?.(query);
   });
 }
 
 async function discoverVictronSystems({ timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS, mdnsFactory = createMdnsBrowser } = {}) {
   const browser = await mdnsFactory();
-  return browseVictronAnnouncements(browser, timeoutMs);
+  return browseAnnouncements(browser, {
+    timeoutMs,
+    manufacturer: 'victron',
+    hints: VICTRON_HINTS,
+    queries: [
+      [{ name: '_http._tcp.local', type: 'PTR' }],
+      [{ name: 'venus.local', type: 'A' }],
+      [{ name: 'venus.local', type: 'AAAA' }]
+    ]
+  });
+}
+
+async function discoverShellySystems({ timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS, mdnsFactory = createMdnsBrowser } = {}) {
+  const browser = await mdnsFactory();
+  return browseAnnouncements(browser, {
+    timeoutMs,
+    manufacturer: 'shelly',
+    hints: SHELLY_HINTS,
+    queries: [
+      [{ name: '_shelly._tcp.local', type: 'PTR' }], // Gen2/Plus/Pro
+      [{ name: '_http._tcp.local', type: 'PTR' }]     // Gen1
+    ]
+  });
 }
 
 const DEFAULT_PROVIDERS = {
-  victron: discoverVictronSystems
+  victron: discoverVictronSystems,
+  shelly: discoverShellySystems
 };
 
 export async function discoverSystems({ manufacturer, timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS, providers = DEFAULT_PROVIDERS } = {}) {

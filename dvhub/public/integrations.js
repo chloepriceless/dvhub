@@ -3294,6 +3294,58 @@
       if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
     }
   }
+  // mDNS-Discovery für Shellys — nutzt denselben generischen Endpoint wie die
+  // Victron-Suche (server-seitiger Provider 'shelly' browst _shelly._tcp.local
+  // [Gen2/Plus/Pro] + _http._tcp.local [Gen1] und filtert per Hostname-Hint).
+  function renderShellyDiscoverResults(state) {
+    var box = document.getElementById('shelly-discover-results');
+    if (!box) return;
+    if (!state) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    if (state.loading) { box.innerHTML = '<p class="shelly-discover-hint">Suche im Netzwerk … (mDNS, ~2 s)</p>'; return; }
+    if (state.error) { box.innerHTML = '<p class="shelly-discover-hint">Suche fehlgeschlagen: ' + esc(state.error) + '</p>'; return; }
+    var systems = Array.isArray(state.systems) ? state.systems : [];
+    if (!systems.length) {
+      box.innerHTML = '<p class="shelly-discover-hint">Keine Shellys per mDNS gefunden. Manuell per IP hinzufügen oder erneut suchen.</p>';
+      return;
+    }
+    var existing = {};
+    for (var i = 0; i < shellyRows.length; i++) {
+      var h = (shellyRows[i].host || '').replace(/:\d+$/, '').toLowerCase();
+      if (h) existing[h] = true;
+    }
+    var html = '<p class="shelly-discover-hint">' + systems.length + ' Gerät(e) gefunden:</p>';
+    for (var j = 0; j < systems.length; j++) {
+      var sys = systems[j];
+      var ip = sys.ipv4 || sys.ip || sys.ipv6 || sys.host || '';
+      var already = !!existing[String(ip).replace(/:\d+$/, '').toLowerCase()];
+      html += '<div class="shelly-discover-row">'
+        + '<span class="shelly-discover-name">' + esc(sys.label || sys.host || ip) + '</span>'
+        + '<span class="shelly-discover-ip mono">' + esc(ip) + '</span>'
+        + (already
+            ? '<span class="shelly-discover-added">✓ in Liste</span>'
+            : '<button type="button" class="btn sm ghost shelly-discover-pick" data-host="' + esc(ip) + '" data-name="' + esc(sys.label || '') + '">Übernehmen</button>')
+        + '</div>';
+    }
+    box.innerHTML = html;
+  }
+  async function discoverShellyDevices(buttonEl) {
+    renderShellyDiscoverResults({ loading: true });
+    var orig = buttonEl ? buttonEl.textContent : '';
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Suche …'; }
+    try {
+      var r = await apiFetch('/api/discovery/systems?manufacturer=shelly');
+      var d = {};
+      try { d = await r.json(); } catch (_) {}
+      if (r.ok && d.ok) renderShellyDiscoverResults({ systems: d.systems || [] });
+      else renderShellyDiscoverResults({ error: d.error || ('HTTP ' + r.status) });
+    } catch (e) {
+      renderShellyDiscoverResults({ error: e.message });
+    } finally {
+      if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
+    }
+  }
+
   document.addEventListener('click', function (e) {
     var devCard = e.target.closest('.conn-card[data-system="devices"]');
     if (devCard) {
@@ -3301,6 +3353,25 @@
       var inst = getOrCreateDrawer('shelly');
       if (inst) inst.open();
       setTimeout(loadShellyDrawer, 0);
+      return;
+    }
+    var discoverBtn = e.target.closest('#shelly-discover');
+    if (discoverBtn) { discoverShellyDevices(discoverBtn); return; }
+    var pickBtn = e.target.closest('.shelly-discover-pick');
+    if (pickBtn) {
+      // Laufende Edits sichern, dann das gewählte Gerät als neue Zeile übernehmen.
+      shellyRows = readShellyRowsFromDom();
+      var pickHost = (pickBtn.dataset.host || '').trim();
+      var pickName = (pickBtn.dataset.name || '').trim();
+      var normHost = pickHost.replace(/:\d+$/, '').toLowerCase();
+      var dup = shellyRows.some(function (row) {
+        return (row.host || '').replace(/:\d+$/, '').toLowerCase() === normHost;
+      });
+      if (!dup && pickHost) {
+        shellyRows.push({ id: '', name: pickName, host: pickHost, pollIntervalSec: 10, enabled: true });
+        renderShellyRows(null);
+      }
+      pickBtn.outerHTML = '<span class="shelly-discover-added">✓ in Liste</span>';
       return;
     }
     var addBtn = e.target.closest('#shelly-add');
