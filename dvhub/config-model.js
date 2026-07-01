@@ -711,11 +711,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Interne Datenbank',
       groupDescription: 'PostgreSQL + TimescaleDB Verbindung für Telemetrie, Preise und Optimierer.',
       path: 'telemetry.rawRetentionDays',
-      label: 'Raw Retention (Tage)',
+      label: 'Raw-Aufbewahrung 5s-Daten (Tage)',
       type: 'number',
       min: 1,
       max: 3650,
-      help: 'Wie lange Rohdaten mit hoher Auflösung aufbewahrt werden. TimescaleDB Retention Policy.'
+      help: 'Ziel-Aufbewahrung der hochauflösenden 5s-Rohdaten. WICHTIG: Aktuell läuft KEINE automatische Löschung (Migration 018) — die 5s-Daten bleiben unbegrenzt erhalten und werden ab 7 Tagen TimescaleDB-komprimiert (sehr hohe Ratio, ~MB/Jahr). Die 15-min-Aggregate werden NIE gelöscht. Dieser Wert ist derzeit nur ein Richtwert ohne Löscheffekt.'
     },
     {
       section: 'telemetry',

@@ -179,3 +179,91 @@
 /* Karten-Buttons (Map-Picker, Discovery) */
 :is(#connectionGrid, #controlGrid, #servicesGrid) .sa-map-row,
 :is(#connectionGrid, #controlGrid, #servicesGrid) .sa-discovery-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── Spezial-Editor-Panels (PV-Anlagen, Preis-Perioden, History-Import) ─────
+   Diese nutzen `.config-group` statt `.sa-cfg-card`. Gleicher Karten-Look,
+   damit die Preise-Seite nicht alt/neu mischt. ──────────────────────────── */
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group {
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 16px 18px;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group-kicker {
+  font-family: var(--f-brand);
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0 0 12px;
+  padding: 0;
+  background: none;
+  border: none;
+  text-transform: none;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-banner {
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd);
+  background: var(--glass-2);
+  color: var(--text-2);
+  padding: 10px 12px;
+  font-size: 0.83rem;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-banner.error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Buttons innerhalb der Karten/Editoren im ob-Look */
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn {
+  font-family: var(--f-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
+  border-radius: var(--r-md);
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn:hover {
+  border-color: var(--cyan);
+  background: var(--glass);
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn-primary,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn.primary {
+  background: var(--cyan);
+  border-color: var(--cyan);
+  color: #04101f;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn-danger,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .btn.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Tabellen in den Editoren (PV-Anlagen/Perioden) — Hairline-Look */
+:is(#connectionGrid, #controlGrid, #servicesGrid) table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) th,
+:is(#connectionGrid, #controlGrid, #servicesGrid) td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  color: var(--text-2);
+}
+:is(#connectionGrid, #controlGrid, #servicesGrid) th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
