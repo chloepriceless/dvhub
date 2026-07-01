@@ -2536,6 +2536,124 @@ function formatSlotDate(slotTs) {
   return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
 }
 
+// Behavioral CATEGORY of a slot, used to decide whether two adjacent slots may
+// collapse into one "von–bis" block. Deliberately categorical (not the exact
+// wattage) so a 3 h charge/hold stretch with slightly varying power still merges
+// into a single block. The enabled state is part of the key so a per-slot
+// optimizer-disable stays visible as its own block instead of silently hiding
+// inside a big active block.
+function slotBehaviorKey(slot) {
+  const on = slot?.enabled !== false ? 'on' : 'off';
+  let cat;
+  if (slot?.dcExport === true) {
+    cat = (Number(slot.chargeReserveW) > 0) ? 'feedin-partial' : 'feedin-full';
+  } else if (slot?.grid != null && Number.isFinite(Number(slot.grid))) {
+    const g = Number(slot.grid);
+    cat = g < 0 ? 'export' : (g > 0 ? 'import' : 'hold');
+  } else if (slot?.charge != null && Number.isFinite(Number(slot.charge))) {
+    cat = 'charge';
+  } else if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
+    cat = 'stopsoc';
+  } else {
+    cat = 'other';
+  }
+  return `${on}|${cat}`;
+}
+
+const COALESCE_SLOT_MS = 15 * 60000;
+const COALESCE_GAP_TOL_MS = 60000; // <1 min rounding tolerance between adjacent slots
+
+// Coalesce the AUTO-managed slots (optimizer / kleine Börsenautomatik) into
+// contiguous "von–bis" blocks and FILL the holes between them with explicit
+// "Eigenverbrauch — Akku lädt / hält" gap blocks, so the operator sees a
+// gap-free plan instead of a sparse list that looks like "nothing is planned".
+// Display-only: the executed rules (state.schedule.rules) stay 15-min granular;
+// this only reshapes what the table renders. Manual (user) rules are left
+// untouched and individually editable — they are not part of the auto plan.
+function coalesceScheduleSlots(slots, nowTs = Date.now()) {
+  if (!Array.isArray(slots) || !slots.length) return slots || [];
+
+  const auto = [];
+  const manual = [];
+  for (const s of slots) {
+    const win = (isOptimizerSlot(s) || isSmaSlot(s)) ? scheduleSlotWindowMs(s, nowTs) : null;
+    if (win) auto.push({ slot: s, win });
+    else manual.push(s);
+  }
+  if (!auto.length) return slots; // nothing to coalesce → leave as-is
+
+  auto.sort((a, b) => a.win.startMs - b.win.startMs);
+
+  const makeGap = (startMs, endMs, startHHMM, endHHMM) => ({
+    isGap: true,
+    source: 'gap',
+    start: startHHMM,
+    end: endHHMM,
+    slotTs: startMs,
+    slotEndTs: endMs,
+    slotCount: Math.max(1, Math.round((endMs - startMs) / COALESCE_SLOT_MS)),
+    enabled: true,
+    activeDate: formatSlotDate(startMs) || ''
+  });
+
+  const out = [];
+  let block = null;      // current coalesced block (shallow clone of first slot)
+  let blockEndMs = 0;    // absolute end of current block
+  let blockEndHHMM = ''; // HH:MM end label of current block
+
+  const finalize = () => {
+    if (!block) return;
+    out.push(block);
+    block = null;
+  };
+
+  // Leading gap: from "now" to the first planned auto-slot (the exact case that
+  // read as "nothing planned, next window at 18/19h").
+  const nowHHMM = new Date(nowTs).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (auto[0].win.startMs - nowTs > COALESCE_SLOT_MS) {
+    out.push(makeGap(nowTs, auto[0].win.startMs, nowHHMM, auto[0].slot.start));
+  }
+
+  for (const { slot, win } of auto) {
+    const key = slotBehaviorKey(slot);
+    if (block && key === block._key && Math.abs(win.startMs - blockEndMs) <= COALESCE_GAP_TOL_MS) {
+      // Extend current block: same behavior AND contiguous in time.
+      block.end = slot.end;
+      block.slotEndTs = win.endMs;
+      block.slotCount += 1;
+      const ids = Array.isArray(slot.ruleIds) ? slot.ruleIds : (slot.ruleId ? [slot.ruleId] : []);
+      if (ids.length) block.ruleIds = (block.ruleIds || []).concat(ids);
+      // Partial feed-in reserve varies per slot — keep the largest for the badge.
+      if (Number(slot.chargeReserveW) > Number(block.chargeReserveW || 0)) block.chargeReserveW = Number(slot.chargeReserveW);
+      blockEndMs = win.endMs;
+      blockEndHHMM = slot.end;
+      continue;
+    }
+    // Close the previous block, then emit a gap block if there is a hole.
+    if (block) {
+      const prevEndMs = blockEndMs;
+      const prevEndHHMM = blockEndHHMM;
+      finalize();
+      if (win.startMs - prevEndMs > COALESCE_GAP_TOL_MS) {
+        out.push(makeGap(prevEndMs, win.startMs, prevEndHHMM, slot.start));
+      }
+    }
+    block = { ...slot };
+    block._key = key;
+    block.slotCount = 1;
+    block.ruleIds = Array.isArray(slot.ruleIds) ? slot.ruleIds.slice() : (slot.ruleId ? [slot.ruleId] : []);
+    blockEndMs = win.endMs;
+    blockEndHHMM = slot.end;
+  }
+  finalize();
+
+  // Strip the private grouping key before returning.
+  for (const b of out) { if (b && b._key) delete b._key; }
+
+  // Manual rules first (editable), then the contiguous auto plan with gaps.
+  return [...manual, ...out];
+}
+
 function groupScheduleRulesForDashboard(rules) {
   if (!Array.isArray(rules)) return [];
 
@@ -2595,7 +2713,7 @@ function groupScheduleRulesForDashboard(rules) {
     }
   }
 
-  return Array.from(timeSlots.values());
+  return coalesceScheduleSlots(Array.from(timeSlots.values()));
 }
 
 function updateScheduleRowVisualState(tr, nowTs = Date.now()) {
@@ -2812,12 +2930,73 @@ async function handleRowEnabledToggle(slot, cb, tr) {
   }
 }
 
+// Human duration label for a coalesced block ("1 h 15 min", "11 h", "45 min").
+function formatSlotSpanLabel(slotCount) {
+  const mins = Math.max(1, Number(slotCount) || 1) * 15;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h && m) return `${h} h ${m} min`;
+  if (h) return `${h} h`;
+  return `${m} min`;
+}
+
+// Render a coalesced "gap" block — the stretch between two planned market
+// actions where the plant just runs on self-consumption (Akku lädt aus PV bzw.
+// hält). Purely informational: no toggle, no edit/remove, and deliberately NO
+// data-slot-idx so the economics/visual-state passes skip it.
+function renderScheduleGapRow(slot) {
+  const tr = document.createElement('tr');
+  tr.className = 'sched-row-gap';
+  tr.title = 'Kein geplanter Markteingriff — der Akku lädt aus PV bzw. hält (Eigenverbrauch). Fasst die Viertelstunden ohne Einspeise-/Entlade-Regel zusammen.';
+
+  const tdIcon = document.createElement('td');
+  tdIcon.className = 'sched-gap-icon';
+  tdIcon.textContent = '·';
+  tr.appendChild(tdIcon);
+
+  const tdWindow = document.createElement('td');
+  tdWindow.className = 'sched-window';
+  tdWindow.textContent = `${slot.activeDate ? `${slot.activeDate} · ` : ''}${slot.start || '—'}–${slot.end || '—'}`;
+  if (Number(slot.slotCount) > 1) {
+    const span = document.createElement('span');
+    span.className = 'sched-slot-span';
+    span.textContent = formatSlotSpanLabel(slot.slotCount);
+    tdWindow.appendChild(span);
+  }
+  tr.appendChild(tdWindow);
+
+  const tdControl = document.createElement('td');
+  tdControl.className = 'sched-control sched-gap-control';
+  tdControl.textContent = 'Akku lädt / hält · Eigenverbrauch';
+  tr.appendChild(tdControl);
+
+  const tdPrice = document.createElement('td');
+  tdPrice.className = 'num sched-col-price';
+  tdPrice.textContent = '—';
+  tr.appendChild(tdPrice);
+
+  const tdEur = document.createElement('td');
+  tdEur.className = 'num sched-col-eur';
+  tdEur.textContent = '—';
+  tr.appendChild(tdEur);
+
+  const tdActions = document.createElement('td');
+  tdActions.className = 'sched-actions';
+  tr.appendChild(tdActions);
+
+  return tr;
+}
+
 function renderScheduleTable() {
   const tbody = document.getElementById('scheduleRowsDash');
   if (!tbody) return;
   tbody.textContent = '';
 
   scheduleRowsState.forEach((slot, idx) => {
+    if (slot?.isGap) {
+      tbody.appendChild(renderScheduleGapRow(slot, idx));
+      return;
+    }
     const isSma = isSmaSlot(slot);
     const isOptimizer = isOptimizerSlot(slot);
     const tr = document.createElement('tr');
@@ -2856,6 +3035,13 @@ function renderScheduleTable() {
     const tdWindow = document.createElement('td');
     tdWindow.className = 'sched-window';
     tdWindow.textContent = `${slot.activeDate ? `${slot.activeDate} · ` : ''}${slot.start || '—'}–${slot.end || '—'}`;
+    if (Number(slot.slotCount) > 1) {
+      const span = document.createElement('span');
+      span.className = 'sched-slot-span';
+      span.textContent = formatSlotSpanLabel(slot.slotCount);
+      span.title = `${slot.slotCount} zusammengefasste 15-Min-Slots`;
+      tdWindow.appendChild(span);
+    }
     tr.appendChild(tdWindow);
 
     const tdControl = document.createElement('td');
@@ -3132,7 +3318,7 @@ function collectScheduleRows() {
     // them through the manual save. Before 2026-06-12 optimizer rows WERE
     // collected here and re-imported without slotTs/closedLoopExport, which
     // silently degraded them to daily rules until the next replan.
-    .filter((slot) => !isSmaSlot(slot) && !isOptimizerSlot(slot))
+    .filter((slot) => !slot.isGap && !isSmaSlot(slot) && !isOptimizerSlot(slot))
     .filter((slot) => slot.start && slot.end)
     .map((slot) => ({
       start: slot.start,

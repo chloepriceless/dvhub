@@ -458,6 +458,27 @@
 }
 .sched-total-row #scheduleEconTotal { font-size:12px; font-weight:600; }
 
+/* Coalesced blocks (2026-07-01): adjacent same-behavior 15-min slots collapse
+   into one "von–bis" row; the span label shows the merged duration. Gap rows
+   fill the stretches with no market action (self-consumption) so the plan reads
+   gap-free instead of looking empty. Display-only — executed rules stay 15-min. */
+.sched-slot-span {
+  margin-left:8px; font-family:var(--f-mono); font-size:10.5px; font-weight:500;
+  color:var(--text-dim); letter-spacing:0;
+}
+.sched-tbl-compact tr.sched-row-gap td {
+  background:transparent; box-shadow:none;
+  color:var(--text-dim); font-style:italic;
+}
+.sched-tbl-compact tr.sched-row-gap td:first-child {
+  box-shadow:inset 3px 0 0 var(--glass-brd-strong);
+}
+.sched-tbl-compact tr.sched-row-gap .sched-gap-icon {
+  text-align:center; font-style:normal; opacity:.45; font-weight:700;
+}
+.sched-tbl-compact tr.sched-row-gap .sched-window { font-weight:500; opacity:.85; }
+.sched-gap-control { font-size:12px; }
+
 /* Inline slot editor — renders in #schedEditorHost directly under the
    schedule table (operator feedback 2026-06-12: no modal/overlay). Desktop:
    compact auto-fit field grid; phone: stacked, 16px inputs so iOS Safari
