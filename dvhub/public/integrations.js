@@ -119,6 +119,16 @@
     return fetch(path, opts);
   }
 
+  // Quality-Review 2026-07-01: shared res.json() fallback — was duplicated as
+  // `try { data = await res.json(); } catch (_) {}` at ~16 call sites. Behaviour
+  // unchanged (empty body / non-JSON response still falls back to {}, callers
+  // already branch on res.ok/res.status), but a genuine parse failure now leaves
+  // a console trace instead of vanishing silently.
+  async function safeJson(res) {
+    try { return await res.json(); }
+    catch (e) { console.debug('[integrations] response was not valid JSON', res.url, e); return {}; }
+  }
+
   // === Phase 20: Generic Drawer + Tabs + Toast Helpers (D-14) ===
   // Used by #dv-drawer-mqtt (refactored), #dv-drawer-notifications, #dv-drawer-vrm,
   // #dv-drawer-forecast. Per CONTEXT D-01/D-14 + UI-SPEC Component Inventory 1.
@@ -161,7 +171,7 @@
         };
         document.addEventListener('keydown', escHandler);
       }
-      if (onOpen) { try { onOpen(); } catch (_) {} }
+      if (onOpen) { try { onOpen(); } catch (e) { console.debug('[integrations] drawer onOpen threw', e); } }
     }
 
     function close() {
@@ -178,7 +188,7 @@
         }
         restoreFocusEl = null;
       }, 220);
-      if (onClose) { try { onClose(); } catch (_) {} }
+      if (onClose) { try { onClose(); } catch (e) { console.debug('[integrations] drawer onClose threw', e); } }
     }
 
     return { open: open, close: close, isOpen: isOpen };
@@ -254,8 +264,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyBuilder())
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.status === 429) {
         showDrawerToast(drawerName, 'warn', '⏱ Zu viele Test-Sends. Erneut versuchen in ' + (data.retry_after_s || 60) + ' s.');
       } else if (res.ok && data.ok) {
@@ -1373,8 +1382,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('mqtt', 'ok', data.restartRequired
           ? '✓ Gespeichert. Service wird neu gestartet — Seite in ~10 s neu laden.'
@@ -1583,8 +1591,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(collectNtfyBody())
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
         // Re-load so the token field returns to the empty placeholder (D-13).
@@ -1693,8 +1700,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(collectTelegramBody())
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
         // Re-load so the token field returns to the empty placeholder (D-13).
@@ -1798,8 +1804,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(collectPushoverBody())
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
         // Re-load so the token fields return to the empty placeholder (D-13).
@@ -1899,8 +1904,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('notifications', 'ok', '✓ Gespeichert.');
         await loadKumaTab();
@@ -2000,8 +2004,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('vrm', 'ok', '✓ Gespeichert.');
         await loadVrmDrawer();
@@ -2036,8 +2039,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false, vrmPortalId: '', vrmToken: '' })
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('vrm', 'ok', '✓ VRM-Credentials entfernt.');
         await loadVrmDrawer();
@@ -2124,8 +2126,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('evcc', 'ok', '✓ Gespeichert.');
         // Re-poll after a beat so a freshly-saved URL has a chance to connect
@@ -2299,8 +2300,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('mid', 'ok', '✓ Gespeichert.');
         setTimeout(loadMidDrawer, 1000);
@@ -2525,8 +2525,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('victron', 'ok', '✓ Gespeichert.');
         setTimeout(loadVictronDrawer, 1000);
@@ -2702,8 +2701,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('homeassistant', 'ok', data.enabled
           ? ('✓ Aktiv — ' + (data.published || 0) + ' Sensoren an HA gesendet.')
@@ -2897,8 +2895,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('forecast', 'ok', '✓ Gespeichert.');
         // Re-load so the apiKey field returns to the empty placeholder (D-13).
@@ -3266,8 +3263,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         shellyRows = (data.devices || []).map(function (x) {
           return {
@@ -3335,8 +3331,7 @@
     if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Suche …'; }
     try {
       var r = await apiFetch('/api/discovery/systems?manufacturer=shelly');
-      var d = {};
-      try { d = await r.json(); } catch (_) {}
+      var d = await safeJson(r);
       if (r.ok && d.ok) renderShellyDiscoverResults({ systems: d.systems || [] });
       else renderShellyDiscoverResults({ error: d.error || ('HTTP ' + r.status) });
     } catch (e) {
@@ -3423,8 +3418,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      var data = {};
-      try { data = await res.json(); } catch (_) {}
+      var data = await safeJson(res);
       if (res.ok && data.ok) {
         showDrawerToast('tesla', 'ok', '✓ TeslaMate-Konfiguration gespeichert.');
       } else {

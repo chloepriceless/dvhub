@@ -128,7 +128,10 @@ test('config definition exposes telemetry section and fields', () => {
   assert.ok(sectionIds.includes('telemetry'));
   assert.ok(fieldPaths.includes('telemetry.enabled'));
   assert.ok(fieldPaths.includes('telemetry.database.host'));
-  assert.ok(fieldPaths.includes('telemetry.rawRetentionDays'));
+  // c4736d0f: rawRetentionDays field removed from the definition — Migration 018
+  // dropped the retention policy, so the setting had no effect and only confused
+  // operators. The default (createDefaultConfig) still carries the value below.
+  assert.ok(!fieldPaths.includes('telemetry.rawRetentionDays'));
   assert.ok(fieldPaths.includes('telemetry.historyImport.enabled'));
   assert.ok(fieldPaths.includes('telemetry.historyImport.provider'));
   assert.ok(!fieldPaths.includes('telemetry.historyImport.gxPath'));
@@ -146,7 +149,6 @@ test('normalizeConfigInput coerces telemetry booleans and numbers', () => {
   const normalized = normalizeConfigInput({
     telemetry: {
       enabled: 'false',
-      rawRetentionDays: '90',
       historyImport: {
       enabled: 'true',
       provider: 'gx'
@@ -155,7 +157,6 @@ test('normalizeConfigInput coerces telemetry booleans and numbers', () => {
   });
 
   assert.equal(normalized.rawConfig.telemetry.enabled, false);
-  assert.equal(normalized.rawConfig.telemetry.rawRetentionDays, 90);
   assert.equal(normalized.rawConfig.telemetry.historyImport.enabled, true);
   assert.equal(normalized.persistedConfig.telemetry.historyImport.provider, 'vrm');
 });

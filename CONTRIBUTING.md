@@ -35,6 +35,20 @@ Please ensure that:
 
 ---
 
+## Frontend cache-buster convention
+
+Every `<script src>`/`<link href>` in `dvhub/public/*.html` that points at a
+project-owned `.js`/`.css` file carries a `?v=` query string so browsers pick
+up the new file instead of serving a stale cached copy. Use
+**`?v=YYYYMMDD-slug`** (short, present-tense slug describing the change), or
+plain **`?v=YYYYMMDD`** for asset files that rarely change (icons, manifest).
+Bump it on every change to that file — a missed bump means users silently
+keep running old JS/CSS. Do not use bare incrementing integers (`?v=12`); that
+format has caused several stale-cache incidents because it is easy to forget
+whether the last bump was yours.
+
+---
+
 ## Community
 
 This project aims to support the **energy transition community**,

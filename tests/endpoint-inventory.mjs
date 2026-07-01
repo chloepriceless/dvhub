@@ -57,6 +57,18 @@ const FETCH_RE = /(?:[Ff]etch|downloadServerExport)\s*\(\s*['"`](\/(?:api|auth)\
 const VIZ_TEMPLATE_RE = /['"`]\/api\/history\/viz\/\$\{/;
 const VIZ_SLUG_RE = /fetchCardData\s*\(\s*['"`]([a-z0-9-]+)['"`]/g;
 
+// Quality-Review 2026-07-01 follow-up: settings.js/setup.js pick the config
+// import-vs-save endpoint via a ternary — `apiFetch(source === 'import'
+// ? '/api/config/import' : '/api/config', {...})`. FETCH_RE only sees a URL
+// literal directly after the opening paren, so the ternary's chosen branch is
+// invisible to it; since d3f75639 removed the last plain-literal reference to
+// /api/config/import (tools.js dedup), the gate started reporting a false
+// "DROPPED endpoint" even though both branches are still live call sites.
+// Scanning for the `? '<url>' : '<url>'` shape anywhere (not anchored to the
+// enclosing call) is safe — extra matches only ever add URLs, and additions
+// never fail the gate (see the `dropped`-only exit-1 check below).
+const TERNARY_URL_RE = /\?\s*['"`](\/(?:api|auth)\/[^'"`${}\s]+)['"`]\s*:\s*['"`](\/(?:api|auth)\/[^'"`${}\s]+)['"`]/g;
+
 function extract() {
   const urls = new Set();
   for (const f of readdirSync(PUBLIC_DIR)) {
@@ -67,6 +79,7 @@ function extract() {
     if (VIZ_TEMPLATE_RE.test(src)) {
       for (const m of src.matchAll(VIZ_SLUG_RE)) urls.add(`/api/history/viz/${m[1]}`);
     }
+    for (const m of src.matchAll(TERNARY_URL_RE)) { urls.add(m[1]); urls.add(m[2]); }
   }
   return [...urls].sort();
 }

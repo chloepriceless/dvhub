@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
+import { safeInterval } from './services/safe-async.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms } from './victron-alarms.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
@@ -548,7 +549,10 @@ export function createPoller(ctx) {
     // consecutive failures.
     // Plan 09-06 (D-08): routed through services/log.js wrapper.
     pollMeterWithBackoff().catch(e => logError('Initial pollMeter error', { error: e?.message ?? String(e) }));
-    persistInterval = setInterval(persistEnergy, 60000);
+    // Quality-Review 2026-07-01: was a naked setInterval — a throw inside
+    // persistEnergy would have silently killed the minutely energy-state
+    // persist for the rest of the process lifetime.
+    persistInterval = safeInterval('polling.persist-energy', persistEnergy, 60000);
   }
 
   function stop() {

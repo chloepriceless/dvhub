@@ -96,6 +96,31 @@ jobs:
       # DATABASE_URL is set → the { skip: !DATABASE_URL } migration describe blocks run.
       - run: npm test
 
+  # ESLint (Quality-Review 2026-07-01): flat-config with a minimal, high-signal
+  # ruleset (no-var, prefer-const, no-unused-vars, eqeqeq, no-empty + eslint:recommended).
+  #
+  # NON-BLOCKING (continue-on-error) on rollout: ~220 pre-existing findings across
+  # the codebase (mostly no-unused-vars debt in older files) would make this red
+  # on day one for code nobody touched. `fast` (npm test + the 5 lint gates)
+  # remains the real gate. Flip this blocking once the backlog is worked down —
+  # see .planning/QUALITY-REVIEW-2026-07-01.md item 1.
+  lint:
+    name: lint (eslint, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
   # Optional e2e job: Playwright visual-parity + setup-wizard happy-path against a
   # DB-free server boot.
   #

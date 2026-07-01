@@ -739,89 +739,13 @@ async function switchUpdateChannel(newChannel) {
   }
 }
 
-// ── System Updates ────────────────────────────────────────────────────
-
-async function loadSystemInfo() {
-  const banner = document.getElementById('systemInfoBanner');
-  if (!banner) return;
-  try {
-    const r = await apiFetch('/api/admin/system/info');
-    const info = await r.json();
-    if (!info.ok) { banner.textContent = 'Systeminfo nicht verfügbar'; return; }
-    let html = `<strong>${escapeHtml(info.hostname)}</strong>`;
-    html += ` | Kernel: ${escapeHtml(info.kernel)}`;
-    html += ` | Node: ${escapeHtml(info.nodeVersion)}`;
-    html += ` | Uptime: ${escapeHtml(info.uptime)}`;
-    if (info.memory) html += ` | RAM: ${info.memory.usedMb}/${info.memory.totalMb} MB`;
-    if (info.disk) html += ` | Disk: ${escapeHtml(info.disk.used)}/${escapeHtml(info.disk.size)} (${escapeHtml(info.disk.usePct)})`;
-    banner.innerHTML = html;
-  } catch {
-    banner.textContent = 'Systeminfo konnte nicht geladen werden.';
-  }
-}
-
-async function checkSystemUpdates() {
-  const banner = document.getElementById('systemUpdatesBanner');
-  const list = document.getElementById('systemUpdatesList');
-  const actions = document.getElementById('systemUpdatesActions');
-  const meta = document.getElementById('systemUpdatesMeta');
-  if (!banner) return;
-  banner.style.display = '';
-  banner.textContent = 'Prüfe auf System-Updates...';
-  if (list) list.style.display = 'none';
-  if (actions) actions.style.display = 'none';
-  try {
-    const r = await apiFetch('/api/admin/system/updates/check');
-    const data = await r.json();
-    if (!data.ok) { banner.textContent = 'Fehler: ' + (data.error || 'unbekannt'); return; }
-    if (data.totalCount === 0) {
-      banner.innerHTML = '<span class="text-status-ok">System ist aktuell — keine Updates verfügbar.</span>';
-      if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
-      return;
-    }
-    const secNote = data.securityCount > 0 ? ` (davon ${data.securityCount} Sicherheitsupdates)` : '';
-    banner.innerHTML = `<strong class="text-status-warn">${data.totalCount} Updates verfügbar${secNote}</strong>`;
-    if (list && data.packages.length > 0) {
-      list.style.display = 'block';
-      let html = '<table class="tools-updates-table">';
-      html += '<tr class="tools-updates-table-header"><td class="tools-updates-table-cell">Paket</td><td>Aktuell</td><td>Neu</td></tr>';
-      for (const p of data.packages) {
-        html += `<tr><td class="tools-updates-table-cell-mono">${escapeHtml(p.name)}</td><td class="tools-updates-table-cell-dim">${escapeHtml(p.currentVersion)}</td><td>${escapeHtml(p.newVersion)}</td></tr>`;
-      }
-      html += '</table>';
-      list.innerHTML = html;
-    }
-    if (actions) actions.style.display = 'flex';
-    if (meta) meta.textContent = `Geprüft: ${new Date(data.checkedAt).toLocaleString('de-DE')}`;
-  } catch (e) {
-    banner.textContent = 'Fehler beim Prüfen: ' + e.message;
-  }
-}
-
-async function applySystemUpdates() {
-  const banner = document.getElementById('systemUpdatesBanner');
-  const actions = document.getElementById('systemUpdatesActions');
-  const btn = document.getElementById('applySystemUpdatesBtn');
-  if (!banner) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'Updates werden installiert...'; }
-  banner.innerHTML = '<span class="text-status-warn">Updates werden installiert — das kann einige Minuten dauern...</span>';
-  try {
-    const r = await apiFetch('/api/admin/system/updates/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
-    const data = await r.json();
-    if (data.ok) {
-      banner.innerHTML = `<span class="text-status-ok">${data.upgraded} Pakete aktualisiert.</span>`;
-      if (actions) actions.style.display = 'none';
-      const list = document.getElementById('systemUpdatesList');
-      if (list) list.style.display = 'none';
-    } else {
-      banner.innerHTML = `<span class="text-status-err">Fehler: ${escapeHtml(data.error || 'unbekannt')}</span>`;
-    }
-  } catch (e) {
-    banner.innerHTML = `<span class="text-status-err">Update fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Alle Updates installieren'; }
-  }
-}
+// System Updates (loadSystemInfo/checkSystemUpdates/applySystemUpdates): owned
+// by settings.js — see the wiring note near initToolsPage() below. Was
+// duplicated here with the pre-redesign text-status-*/tools-updates-table CSS
+// classes; since tools.js loads AFTER settings.js on settings.html, this
+// definition silently shadowed settings.js's ob-Look-styled version (sa-*
+// classes) for every caller, and both files' addEventListener wiring fired the
+// handler twice per click. Removed — settings.js is now the sole owner.
 
 // ── VPN Diagnose ──────────────────────────────────────────────────────
 let vpnLogData = [];
@@ -1095,9 +1019,9 @@ function initToolsPage() {
   document.getElementById('refreshVpnLog')?.addEventListener('click', () => loadVpnLog());
   document.getElementById('vpnLogFilter')?.addEventListener('change', () => renderVpnLog());
   loadVpnStatus();
-  document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', () => checkSystemUpdates());
-  document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', () => applySystemUpdates());
-  loadSystemInfo();
+  // checkSystemUpdatesBtn/applySystemUpdatesBtn/loadSystemInfo() are wired by
+  // settings.js (see the note near the removed System-Updates block above) —
+  // wiring them here too fired every handler twice per click.
   // Config export/import buttons are owned by settings.js (which can re-hydrate
   // the form + surface the restart button). Previously BOTH scripts wired them
   // here AND in settings.js → double download on export, double POST + a weak
