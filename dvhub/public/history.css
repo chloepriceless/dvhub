@@ -301,13 +301,14 @@ html, body { max-width: 100%; overflow-x: hidden; }
   vertical-align: 1px;
 }
 
+/* Direktvermarktung-Karte: unter 900px direkt EINSPALTIG (1×4). Der frühere
+   2×2-Zwischenschritt (560–900px) quetschte die 4 informationsdichten Sektionen
+   (lange Labels + Zahlen) auf dem Smartphone unlesbar zusammen (Christin
+   2026-07-01) — eine Spalte ist auf jeder Handy-Breite lesbar, ohne das Gerät
+   quer drehen zu müssen. */
 @media (max-width: 900px) {
-  .dv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dv-section + .dv-section { border-left: 0; }
-}
-@media (max-width: 560px) {
   .dv-grid { grid-template-columns: minmax(0, 1fr); }
-  .dv-section + .dv-section { border-top: 1px solid var(--hairline); }
+  .dv-section + .dv-section { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
