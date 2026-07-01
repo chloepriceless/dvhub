@@ -1,9 +1,12 @@
 /* ───────────────────────────────────────────────────────────────────────────
-   Einstellungen-Redesign im Onboarding-Look — alle Config-Tabs
-   (Anlage / Steuerung / Preise & Daten). Nutzt die geteilten
-   dvhub-app.css-Tokens (Glass/Aurora). Gescoped auf die drei Config-Grids,
-   damit Custom-Tabs (Status/Forecast/ML/EOS/VPN) unberührt bleiben.
-   Wird NACH settings.css geladen → überschreibt die Alt-Optik dieser Grids.
+   Einstellungen-Redesign im Onboarding-Look. Nutzt die geteilten
+   dvhub-app.css-Tokens (Glass/Aurora). Wird NACH settings.css geladen →
+   überschreibt deren Alt-Optik.
+   TEIL 1 — Config-Tabs (Anlage / Steuerung / Preise & Daten), gescoped auf die
+            drei Config-Grids #connectionGrid/#controlGrid/#servicesGrid.
+   TEIL 2 — Custom-Tabs (Status / Forecast / EOS / VPN), gescoped auf
+            #tab-system/#tab-forecast/#tab-eos/#tab-vpn (siehe unten). #tab-ml
+            (deaktiviert) bleibt bewusst außen vor.
    ─────────────────────────────────────────────────────────────────────────── */
 
 :is(#connectionGrid, #controlGrid, #servicesGrid) {
@@ -281,3 +284,164 @@
 :is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon:hover { z-index: 999; }
 :is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::after,
 :is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::before { z-index: 9999; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Custom-Tabs (Status / Forecast / EOS / VPN) im Onboarding-Look.
+   Diese Panels sind handgebautes HTML (nicht aus config-model). Hier wird die
+   OBERFLÄCHE drübergelegt (Glass-Karten, Borders, ob-Buttons/Inputs/Tabellen);
+   das vorhandene LAYOUT (settings.css: display/flex/grid der Zeilen) bleibt
+   unangetastet, damit nichts verrutscht. #tab-ml ist bewusst NICHT im Scope.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Section-Kopf (h2 + Sub) ─────────────────────────────────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head { margin-bottom: var(--gap-3); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head h2 {
+  font-family: var(--f-brand);
+  font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--text); margin: 0 0 4px;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head .sub {
+  font-size: 0.85rem; color: var(--text-dim); margin: 0; line-height: 1.5;
+}
+
+/* ── Karten-Container (config-group in system/forecast/vpn, .card in eos) ──── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-sync-panel.card,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-iframe-wrap {
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  padding: 16px 18px;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-iframe-wrap { padding: 6px; overflow: hidden; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) #eosdashFrame { border-radius: var(--r-md); border: 0; display: block; width: 100%; }
+
+/* Karten-Titel (Kicker) — brand-Font, kein Uppercase-Alt-Look */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group-kicker {
+  font-family: var(--f-brand);
+  font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--text); margin: 0 0 12px; padding: 0;
+  background: none; border: none; text-transform: none;
+}
+
+/* ── Info-/Meta-Texte ─────────────────────────────────────────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .svc-meta,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .svc-meta-tight,
+:is(#tab-forecast) .config-group > .sub {
+  font-size: 0.83rem; color: var(--text-dim); line-height: 1.5;
+}
+
+/* ── Zeilen (nur Optik, Layout aus settings.css bleibt) ──────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-label {
+  font-size: 0.82rem; font-weight: 600; color: var(--text-2);
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-value { color: var(--text); }
+
+/* ── Eingaben ─────────────────────────────────────────────────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select {
+  font-family: var(--f-body); font-size: 0.94rem; color: var(--text);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md);
+  padding: 9px 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select:focus {
+  outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px var(--accent-glow);
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input::placeholder { color: var(--text-dim); }
+/* Rohe Checkboxen nur akzentuieren (kein Layout-Umbau zu Switch — zu riskant hier) */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="checkbox"] { accent-color: var(--green); }
+
+/* ── Banner (info/warn/error) ─────────────────────────────────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner {
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd);
+  background: var(--glass-2);
+  color: var(--text-2);
+  padding: 10px 12px; font-size: 0.83rem; line-height: 1.5;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner.warn {
+  border-color: color-mix(in srgb, var(--orange, #ff9f43) 55%, transparent);
+  color: var(--orange, #ff9f43);
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner.error {
+  border-color: var(--red); color: var(--red);
+}
+
+/* ── Buttons (Konvention A: btn-primary/-ghost/-danger  UND  B: .btn.primary/.ghost) ── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn {
+  font-family: var(--f-body); font-size: 0.85rem; font-weight: 600;
+  color: var(--text);
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd-strong);
+  border-radius: var(--r-md);
+  padding: 8px 14px; cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-small,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.sm { padding: 6px 11px; font-size: 0.8rem; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn:hover { border-color: var(--cyan); background: var(--glass); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-primary,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.primary {
+  background: var(--cyan); border-color: var(--cyan); color: #04101f;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-primary:hover,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.primary:hover { background: var(--cyan); filter: brightness(1.08); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-danger,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.danger { border-color: var(--red); color: var(--red); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-danger:hover,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
+
+/* ── Stat-Cards (Forecast-Inspector-Summary, EOS) ─────────────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-card {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-label {
+  font-family: var(--f-mono); font-size: 0.66rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-val {
+  font-family: var(--f-brand); font-size: 1.05rem; font-weight: 700; color: var(--text);
+}
+
+/* ── Aufklapp-Details (Forecast-Inspector-Tabellen) ──────────────────────── */
+:is(#tab-forecast) .inspector-details {
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-md);
+  background: var(--glass-2);
+  overflow: hidden;
+}
+:is(#tab-forecast) .inspector-details-summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; cursor: pointer; list-style: none;
+}
+:is(#tab-forecast) .inspector-details-summary::-webkit-details-marker { display: none; }
+:is(#tab-forecast) .inspector-details-label { flex: 1 1 auto; font-weight: 600; color: var(--text); }
+:is(#tab-forecast) .inspector-details-meta { color: var(--text-dim); font-size: 0.8rem; }
+
+/* ── Tabellen (Status-/Forecast-Log-Tabellen) — Hairline-Look ─────────────── */
+:is(#tab-system, #tab-forecast) table.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+:is(#tab-system, #tab-forecast) .data-table th,
+:is(#tab-system, #tab-forecast) .data-table td {
+  padding: 7px 10px; border-bottom: 1px solid var(--hairline); text-align: left; color: var(--text-2);
+}
+:is(#tab-system, #tab-forecast) .data-table th {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+}
+
+/* ── Tooltips über Karten-/Tabellen-Grenzen (wie bei den Config-Tabs) ─────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) table,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) td { overflow: visible; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::after,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::before { z-index: 9999; }
