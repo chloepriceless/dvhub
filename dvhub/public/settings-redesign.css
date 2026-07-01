@@ -340,10 +340,22 @@
 }
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-value { color: var(--text); }
 
-/* ── Eingaben ─────────────────────────────────────────────────────────────── */
+/* ── Eingaben (alle Feld-Typen, nicht nur .config-input/.config-select) ────── */
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select {
-  font-family: var(--f-body); font-size: 0.94rem; color: var(--text);
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) select,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) textarea,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="text"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="number"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="password"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="datetime-local"] {
+  /* Overflow-Fix (Smartphone): Feld nimmt volle Spaltenbreite, Text wird nicht
+     mehr abgeschnitten (min-width:0 löst den Flex-Shrink-Deadlock). */
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: var(--f-body); font-size: 0.9rem; color: var(--text);
   background: var(--glass-2);
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-md);
@@ -351,12 +363,37 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input:focus,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select:focus {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) select:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) textarea:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input:focus {
   outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px var(--accent-glow);
 }
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input::placeholder { color: var(--text-dim); }
-/* Rohe Checkboxen nur akzentuieren (kein Layout-Umbau zu Switch — zu riskant hier) */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="checkbox"] { accent-color: var(--green); }
+/* Rohe Checkboxen nur akzentuieren + auf natürlicher Größe halten (nicht 100% breit) */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="checkbox"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="radio"] {
+  accent-color: var(--green); width: auto; min-width: 0; flex: 0 0 auto;
+}
+
+/* ── Statischer Wert in einer Zeile (z. B. „15 Minuten") ─────────────────── */
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-value {
+  font-family: var(--f-body); font-weight: 600; color: var(--text);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack-small { color: var(--text-dim); }
+
+/* ── Mobile: Eingabe-Zeilen stapeln (Label oben, Feld darunter voll breit) ──
+   Behebt abgeschnittene Dropdowns/Datumsfelder auf dem Smartphone. Nur Zeilen
+   OHNE Checkbox (die bleiben Label ↔ Switch nebeneinander). ─────────────────── */
+@media (max-width: 620px) {
+  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:not(:has(input[type="checkbox"])) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:not(:has(input[type="checkbox"])) .config-row-label { margin-bottom: 0; }
+}
 
 /* ── Banner (info/warn/error) ─────────────────────────────────────────────── */
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner {
@@ -428,14 +465,27 @@
 :is(#tab-forecast) .inspector-details-label { flex: 1 1 auto; font-weight: 600; color: var(--text); }
 :is(#tab-forecast) .inspector-details-meta { color: var(--text-dim); font-size: 0.8rem; }
 
-/* ── Tabellen (Status-/Forecast-Log-Tabellen) — Hairline-Look ─────────────── */
-:is(#tab-system, #tab-forecast) table.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+/* ── Tabellen (Status-/Forecast-/EOS-Log-Tabellen) — kompakter Hairline-Look ─
+   Wichtig: settings.css erzwingt `.data-table-scroll > .data-table{min-width:600px}`
+   → auf dem Smartphone Horizontal-Scroll. Hier auf min-width:0 gesetzt + Schrift/
+   Padding stark reduziert, damit die EOS-Ausklapptabelle ohne Links-/Rechts-
+   Scrollen in den Screen passt (Christin 2026-07-01). ──────────────────────── */
+:is(#tab-system, #tab-forecast) table.data-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+:is(#tab-system, #tab-forecast) .data-table-scroll { border: 1px solid var(--glass-brd); border-radius: var(--r-md); }
+:is(#tab-system, #tab-forecast) .data-table-scroll > .data-table { min-width: 0; }
 :is(#tab-system, #tab-forecast) .data-table th,
 :is(#tab-system, #tab-forecast) .data-table td {
-  padding: 7px 10px; border-bottom: 1px solid var(--hairline); text-align: left; color: var(--text-2);
+  padding: 4px 7px; border-bottom: 1px solid var(--hairline); text-align: left;
+  color: var(--text-2); white-space: nowrap;
 }
 :is(#tab-system, #tab-forecast) .data-table th {
-  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);
+}
+@media (max-width: 620px) {
+  :is(#tab-system, #tab-forecast) table.data-table { font-size: 0.68rem; }
+  :is(#tab-system, #tab-forecast) .data-table th,
+  :is(#tab-system, #tab-forecast) .data-table td { padding: 3px 5px; }
+  :is(#tab-system, #tab-forecast) .data-table th { font-size: 0.6rem; letter-spacing: 0; }
 }
 
 /* ── Tooltips über Karten-/Tabellen-Grenzen (wie bei den Config-Tabs) ─────── */
