@@ -1307,12 +1307,6 @@ const HIDDEN_FIELD_PATHS = [
 // history-import panel). Used for ALL config destinations.
 function renderGroupedCardsOb(mount, destination, destinationId) {
   for (const section of destination.sections) {
-    // Forecast: RAM-tier info card before the group cards.
-    if (section.id === 'forecast') {
-      const tierInfo = renderForecastTierInfo();
-      if (tierInfo) mount.appendChild(tierInfo);
-    }
-
     for (const grp of section.groups || []) {
       const fields = (grp.fields || []).filter((f) =>
         f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path));

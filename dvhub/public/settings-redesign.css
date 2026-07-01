@@ -267,3 +267,17 @@
   letter-spacing: 0.06em;
   color: var(--text-dim);
 }
+
+/* ── Tooltips über Karten-/Tabellen-Grenzen hinaus (overflow-Clip aufheben,
+   z-index ganz nach oben) ──────────────────────────────────────────────── */
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-body,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row,
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row-grid,
+:is(#connectionGrid, #controlGrid, #servicesGrid) table,
+:is(#connectionGrid, #controlGrid, #servicesGrid) td { overflow: visible; }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon { position: relative; }
+:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon:hover { z-index: 999; }
+:is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::after,
+:is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::before { z-index: 9999; }
