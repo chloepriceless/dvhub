@@ -1870,10 +1870,36 @@ async function gracefulShutdown(signal) {
     try { fn(); }
     catch (err) { pushLog('shutdown_step_error', { step, error: err?.message ?? String(err) }); }
   };
-  const safeAsync = (step, fn) =>
-    Promise.resolve()
+  // Shutdown-Hang-Fix (2026-07-02, Diagnose siehe Journal 01.07.: 3 von 6 Stops
+  // hingen exakt TimeoutStopSec=90s in Schritt 2 und endeten im systemd-SIGKILL;
+  // vpn_stopped stand nach 0,4s in der audit_log → ein ANDERER close() resolved
+  // nie, Verdacht mqttHub.close/client.end(false)). safeAsync raced deshalb jeden
+  // Schritt gegen ein 5s-Timeout: der Shutdown ist damit deterministisch (~5s
+  // worst case statt 90s+SIGKILL) und der hängende Schritt steht NAMENTLICH im
+  // Journal (console.error überlebt den Exit — der pushLog-Ring nicht; der
+  // DB-Mirror ist best-effort, solange der Pool lebt, Schritt 3 schließt ihn erst).
+  // Ein Timeout bricht fn() nicht ab — es wird nur nicht mehr gewartet; das ist
+  // strikt besser als der Status quo (SIGKILL nach 90s reißt denselben Schritt
+  // brutaler ab, ohne Log).
+  const SHUTDOWN_STEP_TIMEOUT_MS = 5000;
+  const safeAsync = (step, fn) => {
+    let timer = null;
+    const run = Promise.resolve()
       .then(() => fn())
-      .catch(err => pushLog('shutdown_step_error', { step, error: err?.message ?? String(err) }));
+      .catch(err => pushLog('shutdown_step_error', { step, error: err?.message ?? String(err) }))
+      .finally(() => { if (timer) clearTimeout(timer); });
+    const timeout = new Promise((resolve) => {
+      // BEWUSST kein .unref(): der Watchdog muss garantiert feuern (Log!), auch
+      // wenn der hängende Schritt das letzte offene Handle wäre. Er hält das
+      // Loop max. 5s offen und wird auf dem schnellen Pfad via finally geräumt.
+      timer = setTimeout(() => {
+        console.error(`[shutdown] step '${step}' still pending after ${SHUTDOWN_STEP_TIMEOUT_MS}ms — continuing shutdown without it`);
+        try { pushLog('shutdown_step_timeout', { step, timeoutMs: SHUTDOWN_STEP_TIMEOUT_MS }, 'critical'); } catch { /* never block the shutdown */ }
+        resolve();
+      }, SHUTDOWN_STEP_TIMEOUT_MS);
+    });
+    return Promise.race([run, timeout]);
+  };
 
   // 1. Sync best-effort stops — pollers/timers must stop before async closes
   //    so they don't re-enter into a tearing-down store.
@@ -1929,6 +1955,9 @@ async function gracefulShutdown(signal) {
   safeSync('modbus.close', () => modbus.close());
   if (IS_WEB_PROCESS) safeSync('web.close', () => web.close());
 
+  // Journal-Marker: Teardown kam bis hierher (fehlt diese Zeile vor einem
+  // SIGKILL, hing es trotz Step-Timeouts — dann Schritt 1/3 prüfen).
+  console.log('[shutdown] teardown complete — exiting');
   // Short delay to let TCP FIN packets flush before exiting
   setTimeout(() => process.exit(0), 500).unref();
 }
