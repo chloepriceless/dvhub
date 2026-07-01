@@ -2392,6 +2392,7 @@ function buildFieldDefinitions() {
       path: 'epex.priceSource',
       label: 'Preisquelle',
       type: 'select',
+      default: 'dvhub',
       options: [
         { value: 'dvhub', label: 'DVhub (dvhub.online)' },
         { value: 'public', label: 'Öffentlich (Energy-Charts)' }

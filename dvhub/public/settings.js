@@ -101,7 +101,15 @@ function createConfigInput(field, value, inherited) {
       option.textContent = opt.label;
       input.appendChild(option);
     }
-    input.value = String(value);
+    // Fallback auf field.default, wenn kein Wert gesetzt ist. Ohne das würde
+    // String(undefined)="undefined" den selectedIndex auf -1 setzen → leeres
+    // Select (EPEX-Preisquelle/Strahlungsquelle zeigten nichts). Ohne default
+    // gar nicht setzen → Browser wählt die erste Option statt „nichts".
+    const hasValue = value !== null && value !== undefined && value !== '';
+    const effectiveSelectValue = hasValue
+      ? value
+      : (field.default !== undefined ? field.default : undefined);
+    if (effectiveSelectValue !== undefined) input.value = String(effectiveSelectValue);
   } else if (field.type === 'dynamicSelect') {
     input = document.createElement('select');
     input.className = 'config-select';
