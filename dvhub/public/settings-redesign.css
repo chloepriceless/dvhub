@@ -495,3 +495,63 @@
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) td { overflow: visible; }
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::after,
 :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::before { z-index: 9999; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TEIL 3 — Einstellungs-Shell / Menü (Nav-Rail + Seitenkopf) im ob-Look.
+   Überschreibt die .settings-aurora-Shell-Optik (settings.css) mit den
+   dvhub-app.css-Tokens — konsistent zu den Karten. Layout (sa-shell-Grid)
+   bleibt unangetastet. Gleiche Selektor-Spezifität wie Aurora → gewinnt, weil
+   diese Datei NACH settings.css geladen wird.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Nav-Rail-Container als Glass-Karte */
+.settings-aurora .settings-tabs {
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  box-shadow: var(--shadow-md);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  padding: 7px;
+  gap: 2px;
+}
+
+/* Gruppen-Überschrift in der Nav */
+.settings-aurora .settings-tabs .sa-nav-group {
+  font-family: var(--f-mono, var(--f-body));
+  color: var(--text-dim);
+  letter-spacing: 0.18em;
+}
+
+/* Tab-Buttons */
+.settings-aurora .settings-tab {
+  color: var(--text-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font-family: var(--f-body);
+  font-size: 0.82rem;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.settings-aurora .settings-tab:hover {
+  background: var(--glass-2);
+  color: var(--text);
+}
+.settings-aurora .settings-tab.is-active {
+  background: color-mix(in srgb, var(--cyan) 14%, transparent);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--cyan) 42%, transparent);
+}
+.settings-aurora .settings-tab .sa-ico { color: var(--cyan); }
+
+/* Seitenkopf */
+.settings-aurora .sa-page-header {
+  border: 1px solid var(--glass-brd);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+  box-shadow: var(--shadow-md);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+.settings-aurora .sa-page-header h1 { font-family: var(--f-brand); color: var(--text); }
+.settings-aurora .sa-page-kicker { font-family: var(--f-mono, var(--f-body)); color: var(--cyan); }
+.settings-aurora .sa-page-sub { color: var(--text-dim); }
