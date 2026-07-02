@@ -23,6 +23,7 @@ import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
+import { readTimescaleStatus, runTimescaleExtUpgrade } from './services/timescale-maintenance.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -976,6 +977,10 @@ export function createApiRoutes(ctx) {
     // Same appliance-trust model as the raw exports above (whole-DB read).
     '/api/db/backup',
     '/api/db/backup/status',
+    // TimescaleDB engine status (versions + updatePending) — read-only diagnostic,
+    // GET-only LAN bypass like the backup status. The POST /api/db/timescale/upgrade
+    // trigger stays OUT (Bearer required, service-actions gated).
+    '/api/db/timescale/status',
     // Phase 19 Plan 19-01 — Forecast Inspector (read-only diagnostic surface).
     // GET-only LAN bypass per appliance trust model (matches /api/forecast,
     // /api/integrations/health, /api/family/* pattern). External callers still
@@ -1017,6 +1022,7 @@ export function createApiRoutes(ctx) {
     ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
     ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
     ['/api/db/backup', 'history'], ['/api/db/backup/status', 'history'],
+    ['/api/db/timescale/status', 'history'],
     ['/api/curtailment/preview', 'history'],
     // forecast — forecast reads + inspector
     ['/api/forecast', 'forecast'],
@@ -1301,7 +1307,7 @@ export function createApiRoutes(ctx) {
   // local-shell path for an operator already on the box.
   // /api/db/restore is DESTRUCTIVE (drops+recreates the telemetry DB) — force
   // Bearer even on a trusted LAN (lanTrust:open), like the support bundle.
-  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle', '/api/db/restore']);
+  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle', '/api/db/restore', '/api/db/timescale/upgrade']);
 
   function checkAuth(req, res) {
     const cfg = getCfg();
@@ -5822,6 +5828,60 @@ export function createApiRoutes(ctx) {
       }
       pushLog('db_restore_failed', { bytes, code: result.code, stderr: (result.stderr || '').slice(0, 300) }, { ...actorContext(req), severity: 'error' });
       return json(res, 500, { ok: false, error: 'restore_failed', code: result.code, detail: (result.stderr || '').slice(0, 800), hadTimescale: result.hadTimescale, restartRecommended: true });
+    }
+
+    // --- TimescaleDB engine status (versions + updatePending) ---
+    // Read-only GUI "Datenbank-Engine" card. GET-only LAN bypass (in the read
+    // allowlist); external callers need Bearer. Merges a live version probe with
+    // the nightly pkg-maintain.sh timer's bookkeeping (lastChecked/lastPkgUpgrade).
+    if (url.pathname === '/api/db/timescale/status' && req.method === 'GET') {
+      const cfg = getCfg();
+      if (!cfg.telemetry?.enabled || !cfg.telemetry?.database) {
+        return json(res, 503, { ok: false, error: 'telemetry database disabled' });
+      }
+      const statusFile = path.join(process.env.DV_DATA_DIR || '/var/lib/dvhub', 'timescale-status.json');
+      const status = await readTimescaleStatus({ statusFile, database: cfg.telemetry.database });
+      return json(res, 200, status);
+    }
+
+    // --- TimescaleDB extension upgrade ("Jetzt aktualisieren") ---
+    // The deliberate, operator-triggered `ALTER EXTENSION timescaledb UPDATE`.
+    // Bearer-required (never LAN-bypassable) AND service-actions-gated, like the
+    // restore/restart endpoints, because it bounces PostgreSQL twice. Runs the
+    // SAFE sequence (restart → ALTER → reconcile → restart), then — only when the
+    // version actually moved — schedules a dvhub restart so the pg pool reconnects
+    // clean. Responds BEFORE that app restart (like /api/admin/token/revoke).
+    if (url.pathname === '/api/db/timescale/upgrade' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.getServiceActionsEnabled || !ctx.getServiceActionsEnabled()) {
+        return json(res, 403, { ok: false, error: 'service actions disabled' });
+      }
+      const cfg = getCfg();
+      if (!cfg.telemetry?.enabled || !cfg.telemetry?.database) {
+        return json(res, 503, { ok: false, error: 'telemetry database disabled' });
+      }
+      pushLog('timescale_upgrade_start', {}, { ...actorContext(req), severity: 'warn' });
+      let result;
+      try {
+        result = await runTimescaleExtUpgrade({ database: cfg.telemetry.database });
+      } catch (e) {
+        result = { ok: false, error: 'upgrade_exception', detail: e?.message || 'exception', from: null, to: null, restarted: false };
+      }
+      if (result.ok && result.restarted && !result.alreadyCurrent) {
+        // Version moved forward + Postgres bounced twice → flush the app pool with
+        // a scheduled dvhub restart. Respond FIRST — the restart kills this process.
+        pushLog('timescale_upgrade_ok', { from: result.from, to: result.to }, { ...actorContext(req), severity: 'warn' });
+        json(res, 200, { ...result, appRestartScheduled: true });
+        if (ctx.scheduleServiceRestart) ctx.scheduleServiceRestart();
+        return;
+      }
+      if (result.ok) {
+        // alreadyCurrent no-op → nothing restarted, nothing to flush.
+        pushLog('timescale_upgrade_noop', { from: result.from }, actorContext(req));
+        return json(res, 200, { ...result, appRestartScheduled: false });
+      }
+      pushLog('timescale_upgrade_failed', { error: result.error, detail: (result.detail || '').slice(0, 200) }, { ...actorContext(req), severity: 'error' });
+      return json(res, 500, { ...result, appRestartScheduled: false });
     }
 
     // --- Config POST / Import POST ---

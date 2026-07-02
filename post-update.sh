@@ -124,6 +124,11 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
+# T-PKGUPDATE (Christin 2026-07-02): the GUI TimescaleDB extension upgrade
+# ("Jetzt aktualisieren") bounces PostgreSQL twice around ALTER EXTENSION … UPDATE
+# — a fresh backend must load the new .so. Scoped to a restart of the postgresql
+# meta-unit only; the dvhub app restart afterwards reuses the ${SERVICE_NAME} rule above.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart postgresql.service
 # T-DBRESTORE (Christin 2026-07-02): the GUI DB backup/restore runs as the
 # postgres SUPERUSER — the non-super app role (dvhub) cannot dump/restore objects
 # owned by another role (e.g. the postgres-owned victron_internals hypertable).
@@ -361,6 +366,43 @@ if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 
         setsid bash "$INSTALL_DIR/timescale-provision.sh" </dev/null >>"$DATA_DIR/timescale-provision.log" 2>&1 &
     fi
   fi
+fi
+
+# TimescaleDB package-maintenance timer (Christin 2026-07-02, "Pakete auto"):
+# ensure the nightly apt-only maintenance unit exists on boxes provisioned before
+# this feature. Create-if-missing (idempotent) — the units just call
+# ${INSTALL_DIR}/pkg-maintain.sh, so no rewrite is needed once present. The unit
+# body is kept in sync with install.sh. NON-FATAL.
+if [[ -f "$INSTALL_DIR/pkg-maintain.sh" ]] && [[ ! -f /etc/systemd/system/dvhub-pkg-maintain.timer ]]; then
+  echo "  pkg-maintain: richte naechtlichen Paket-Wartungs-Timer ein..."
+  cat >/etc/systemd/system/dvhub-pkg-maintain.service <<PKGSVC
+[Unit]
+Description=DVhub TimescaleDB package maintenance (apt only, no restart)
+After=postgresql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=INSTALL_DIR=${INSTALL_DIR}
+Environment=SERVICE_USER=${SERVICE_USER}
+Environment=DATA_DIR=${DATA_DIR}
+Environment=DB_NAME=dvhub
+ExecStart=/usr/bin/bash ${INSTALL_DIR}/pkg-maintain.sh
+PKGSVC
+  cat >/etc/systemd/system/dvhub-pkg-maintain.timer <<PKGTIMER
+[Unit]
+Description=DVhub TimescaleDB package maintenance (nightly)
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1200
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+PKGTIMER
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable --now dvhub-pkg-maintain.timer >/dev/null 2>&1 || true
 fi
 
 echo ""

@@ -567,6 +567,11 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
+# T-PKGUPDATE (Christin 2026-07-02): the GUI TimescaleDB extension upgrade
+# ("Jetzt aktualisieren") bounces PostgreSQL twice around ALTER EXTENSION … UPDATE
+# — a fresh backend must load the new .so. Scoped to a restart of the postgresql
+# meta-unit only; the dvhub app restart afterwards reuses the ${SERVICE_NAME} rule above.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart postgresql.service
 # T-DBRESTORE (Christin 2026-07-02): the GUI DB backup/restore runs as the
 # postgres SUPERUSER — the non-super app role (dvhub) cannot dump/restore objects
 # owned by another role (e.g. the postgres-owned victron_internals hypertable).
@@ -633,6 +638,40 @@ SERVICE
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"
 systemctl restart "${SERVICE_NAME}.service"
+
+# TimescaleDB package maintenance timer (Christin 2026-07-02, "Pakete auto"): a
+# nightly oneshot keeps the TimescaleDB apt package family current WITHOUT
+# restarting Postgres. The disruptive extension bump stays operator-gated behind
+# the GUI "Jetzt aktualisieren" button (POST /api/db/timescale/upgrade). The unit
+# body is kept in sync with the create-if-missing block in post-update.sh.
+cat >/etc/systemd/system/dvhub-pkg-maintain.service <<PKGSVC
+[Unit]
+Description=DVhub TimescaleDB package maintenance (apt only, no restart)
+After=postgresql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=INSTALL_DIR=${INSTALL_DIR}
+Environment=SERVICE_USER=${SERVICE_USER}
+Environment=DATA_DIR=${DATA_DIR}
+Environment=DB_NAME=dvhub
+ExecStart=/usr/bin/bash ${INSTALL_DIR}/pkg-maintain.sh
+PKGSVC
+cat >/etc/systemd/system/dvhub-pkg-maintain.timer <<PKGTIMER
+[Unit]
+Description=DVhub TimescaleDB package maintenance (nightly)
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1200
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+PKGTIMER
+systemctl daemon-reload
+systemctl enable --now dvhub-pkg-maintain.timer >/dev/null 2>&1 || true
 
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${PRIMARY_IP}" ]]; then
