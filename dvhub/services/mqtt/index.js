@@ -206,20 +206,38 @@ export function createMqttHub(ctx) {
       // other mqtt.js internal state manages to wedge the callback anyway
       // (same pattern as the server.js gracefulShutdown step watchdog).
       const c = client;
+      // C1-diag (2026-07-02): the force=true fix did NOT resolve the prod
+      // hang on the first post-deploy restart (outer 5s watchdog still fired,
+      // and this function's own 2s fallback message never even reached the
+      // audit_log — meaning close() itself never got as far as settling
+      // EITHER race branch within the observed window). Unconditional
+      // console.error (bypasses pushLog entirely — journald-only, in case
+      // pushLog is somehow implicated) checkpoints pin down exactly which
+      // line the next hang stalls on. Remove once the real culprit line is
+      // confirmed from a live journal.
+      console.error(`[MQTT close-diag] before c.end() — connected=${c.connected} reconnecting=${c.reconnecting} disconnecting=${c.disconnecting}`);
       let timer = null;
       await Promise.race([
-        new Promise((resolve) => c.end(true, () => { if (timer) clearTimeout(timer); resolve(); })),
+        new Promise((resolve) => c.end(true, () => {
+          console.error('[MQTT close-diag] c.end() callback fired');
+          if (timer) clearTimeout(timer);
+          resolve();
+        })),
         new Promise((resolve) => {
           timer = setTimeout(() => {
+            console.error('[MQTT close-diag] 2s fallback timer fired — c.end() callback never came');
             pushLog('[MQTT] client.end() did not resolve within 2s — continuing shutdown anyway');
             resolve();
           }, 2000);
         })
       ]);
+      console.error('[MQTT close-diag] client block done');
       client = null;
     }
     if (aedesBroker) {
+      console.error('[MQTT close-diag] before aedesBroker.close()');
       await new Promise((resolve) => aedesBroker.close(() => resolve()));
+      console.error('[MQTT close-diag] after aedesBroker.close()');
       aedesBroker = null;
     }
     if (netServer) {
@@ -229,11 +247,14 @@ export function createMqttHub(ctx) {
       // indefinitely. aedesBroker.close() above already told well-behaved
       // clients to disconnect; force-destroy whatever's still open so
       // close() always resolves promptly.
+      console.error(`[MQTT close-diag] before netServer.close(), ${openSockets.size} tracked socket(s)`);
       for (const sock of openSockets) { try { sock.destroy(); } catch { /* already gone */ } }
       openSockets.clear();
       await new Promise((resolve) => netServer.close(() => resolve()));
+      console.error('[MQTT close-diag] after netServer.close()');
       netServer = null;
     }
+    console.error('[MQTT close-diag] close() returning');
   }
 
   return {
