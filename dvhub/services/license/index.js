@@ -811,6 +811,28 @@ export function createLicenseService(ctx) {
   }
 
   /**
+   * getCapKwp: the kWp ceiling that PV DISPLAYS + FORECAST (and the EOS/optimizer
+   * PLANNING input) get capped to — the Pro-tier enforcement of the plant size.
+   *
+   * Christin 2026-07-02: Community is FREE for any plant size (no cap); the paid
+   * value is EOS + control, tiered by plant size. So the cap applies ONLY when a
+   * Pro key carries an explicit finite max_kwp (Pro S=50 / Pro M=100). Community
+   * (no license), Pro L (unlimited) and legacy keys all have max_kwp==null → no cap.
+   *
+   * The cap value is the DECLARED system kWp (getSystemKwp — "die man eingegeben
+   * hat"), bounded by the tier (defensive min). When nothing is declared yet the
+   * tier ceiling is used so a fresh Pro box can't display beyond its tier.
+   *
+   * @returns {number|null} cap in kWp, or null = no cap (uncapped display/forecast)
+   */
+  function getCapKwp() {
+    const cap = state.license.max_kwp;
+    if (!(Number.isFinite(cap) && cap > 0)) return null; // Community / Pro L / legacy → no cap
+    const declared = getSystemKwp();
+    return declared > 0 ? Math.min(declared, cap) : cap;
+  }
+
+  /**
    * isProActive: non-HTTP Pro-gate for live services (DV-Schnittstelle, EOS).
    * Shares the EXACT predicate of requirePro() so the HTTP and non-HTTP gates
    * never diverge. effective_status (grace/expired_offline) is deliberately NOT
@@ -987,6 +1009,11 @@ export function createLicenseService(ctx) {
     state.license.license_key = k == null ? null : String(k);
   }
 
+  /** @internal — set the signed tier ceiling (max_kwp) for kWp-cap tests. */
+  function setMaxKwpForTest(v) {
+    state.license.max_kwp = v == null ? null : Number(v);
+  }
+
   return {
     loadStateFromDisk,
     activateLicense,
@@ -998,11 +1025,13 @@ export function createLicenseService(ctx) {
     getState,
     getStatus,
     isProActive,
+    getCapKwp,
     onProActiveChange,
     requirePro,
     start,
     close,
     setStatusForTest,
-    setLicenseKeyForTest
+    setLicenseKeyForTest,
+    setMaxKwpForTest
   };
 }

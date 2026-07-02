@@ -275,3 +275,46 @@ describe('buildForecastResponse pastForecast model consistency', () => {
     assert.ok(pastForecast.every((r) => r.model === 'solcast'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Lizenz-kWp-Cap im Forecast (Christin 2026-07-02, T-LICENSE-KWP-GATING).
+// Cap kommt aus ctx.licenseService.getCapKwp() (kWp) → powerW auf kWp×1000 W.
+// ---------------------------------------------------------------------------
+describe('buildForecastResponse — Lizenz-kWp-Cap', () => {
+  function withCap(capKwp) {
+    const ctx = createMockCtx();
+    if (capKwp !== undefined) ctx.licenseService = { getCapKwp: () => capKwp };
+    const service = createForecastService(ctx);
+    // Slots: einer über dem Cap (12 kW), einer darunter (4 kW).
+    ctx.state.forecast.pv.data = [
+      { ts: new Date().toISOString(), powerW: 12000, confidence: 0.7 },
+      { ts: new Date(Date.now() + 900_000).toISOString(), powerW: 4000, confidence: 0.6 }
+    ];
+    return { ctx, service };
+  }
+
+  it('caps pv + rawPv powerW at kWp×1000 (10 kWp → 10000 W), leaves below-cap untouched', async () => {
+    const { service } = withCap(10);
+    const res = await service.buildForecastResponse();
+    assert.equal(res.meta.pvCapKwp, 10);
+    assert.equal(res.pv.slots[0].powerW, 10000, 'over-cap slot clamped');
+    assert.equal(res.pv.slots[1].powerW, 4000, 'below-cap slot unchanged');
+    assert.equal(res.rawPv.slots[0].powerW, 10000, 'rawPv clamped too');
+    // Börsenchart-Overlay (solar[].w) folgt der gekappten pv-Kurve.
+    assert.ok(res.solar.every((p) => p.w <= 10000), 'solar overlay capped');
+  });
+
+  it('no licenseService → uncapped (Community / no cap)', async () => {
+    const { service } = withCap(undefined);
+    const res = await service.buildForecastResponse();
+    assert.equal(res.meta.pvCapKwp, null);
+    assert.equal(res.pv.slots[0].powerW, 12000, 'uncapped when no cap');
+  });
+
+  it('getCapKwp() null → uncapped (Pro L / Legacy)', async () => {
+    const { service } = withCap(null);
+    const res = await service.buildForecastResponse();
+    assert.equal(res.meta.pvCapKwp, null);
+    assert.equal(res.pv.slots[0].powerW, 12000);
+  });
+});

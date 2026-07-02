@@ -1196,3 +1196,47 @@ test('capacity: demo kind is surfaced; fresh box with no pvPlants is never gated
   assert.equal(st.capacity_ok, true, '0 kWp -> never gate a fresh box');
   assert.equal(svc.isProActive(), true);
 });
+
+// ---------------------------------------------------------------------------
+// getCapKwp() — Pro-Tier kWp-Cap (Christin 2026-07-02, T-LICENSE-KWP-GATING)
+// ---------------------------------------------------------------------------
+
+function svcWithPlants(kwpList) {
+  const pvPlants = kwpList.map((kwp) => ({ kwp, commissionedAt: '2026-01-01' }));
+  return createLicenseService(mockCtx({ cfg: { userEnergyPricing: { pvPlants } } }));
+}
+
+test('getCapKwp: no license tier (max_kwp null) -> null (Community/Pro L/Legacy = uncapped)', () => {
+  const svc = svcWithPlants([200]);          // huge plant, but no tier metadata
+  assert.equal(svc.getCapKwp(), null);
+});
+
+test('getCapKwp: Pro S (50) with declared 40 -> caps at the DECLARED kWp (40)', () => {
+  const svc = svcWithPlants([25, 15]);        // declared sum = 40
+  svc.setMaxKwpForTest(50);
+  assert.equal(svc.getCapKwp(), 40);
+});
+
+test('getCapKwp: declared above tier (defensive) -> bounded by the tier', () => {
+  const svc = svcWithPlants([200]);           // declared 200 > tier
+  svc.setMaxKwpForTest(50);
+  assert.equal(svc.getCapKwp(), 50);
+});
+
+test('getCapKwp: Pro tier but nothing declared yet -> the tier ceiling', () => {
+  const svc = createLicenseService(mockCtx());   // no pvPlants
+  svc.setMaxKwpForTest(50);
+  assert.equal(svc.getCapKwp(), 50);
+});
+
+test('getCapKwp: Pro M (100) with declared 60 -> 60', () => {
+  const svc = svcWithPlants([60]);
+  svc.setMaxKwpForTest(100);
+  assert.equal(svc.getCapKwp(), 60);
+});
+
+test('getCapKwp: totalKwp fallback when no pvPlants', () => {
+  const svc = createLicenseService(mockCtx({ cfg: { forecast: { pv: { totalKwp: 45 } } } }));
+  svc.setMaxKwpForTest(50);
+  assert.equal(svc.getCapKwp(), 45);
+});

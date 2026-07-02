@@ -524,12 +524,29 @@ export function createForecastService(ctx) {
       }
     } catch { /* metrics must never break the forecast response */ }
 
+    // Lizenz-kWp-Cap (Christin 2026-07-02): PV-Forecast + die daraus abgeleiteten
+    // Anzeige-Overlays auf die lizenzierte/deklarierte kWp kappen (Watt). Trifft
+    // bewusst auch die EOS/Optimizer-Planung — dies ist der einzige Chokepoint für
+    // beide — damit die Pro-Lizenz-Stufe wirksam wird. Der Live-Steuerungspfad
+    // liest die echte Messung (state.victron), NIE diesen Forecast, und bleibt
+    // unberührt. Cap==null (Community/Pro L/Legacy) → No-op. `actual` (gemessene
+    // Ist-Werte, Diagnose) und `dailyTotals` (Energie) bleiben ungekappt.
+    const capKwp = ctx.licenseService?.getCapKwp?.();
+    const capW = Number.isFinite(capKwp) && capKwp > 0 ? capKwp * 1000 : null;
+    const capKey = (arr, key) => (capW == null || !Array.isArray(arr))
+      ? arr
+      : arr.map((s) => (s && Number(s[key]) > capW) ? { ...s, [key]: capW } : s);
+    const capSlots = (section) => (capW == null || !section || !Array.isArray(section.slots))
+      ? section
+      : { ...section, slots: capKey(section.slots, 'powerW') };
+
     return {
       ok: true,
       meta: {
         generatedAt: new Date().toISOString(),
         horizon: '72h',
         tier,
+        pvCapKwp: capKwp ?? null,   // aktive kWp-Kappung (null = keine) für UI/Debug
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
         // Phase 18-02: meta.loadModel now reports the ACTUAL source the
         // load-forecast subsystem just produced (statsforecast / sql_weekday),
@@ -555,19 +572,19 @@ export function createForecastService(ctx) {
         ensembleWeights: state.forecast.pv.ensembleWeights ?? null
       },
       price: buildPriceSection(),
-      pv: correctedPv,     // ML-corrected (or raw if no model)
-      rawPv: pv,           // Pre-ML for comparison chart (D-22)
+      pv: capSlots(correctedPv),     // ML-corrected (or raw if no model), kWp-gekappt
+      rawPv: capSlots(pv),           // Pre-ML for comparison chart (D-22), kWp-gekappt
       load,
-      actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts)
-      pastForecast,        // Historic pv_forecasts for the same 12h window (for chart overlay)
+      actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts) — UNGEKAPPT (Ist/Diagnose)
+      pastForecast: capKey(pastForecast, 'powerW'),  // Historic pv_forecasts (chart overlay), kWp-gekappt
       // Berlin-local full-day totals from VRM forecast (today + tomorrow). Frontend
       // uses these for Tagesgesamt cards; existing pv/load.slots stay future-only
       // and feed the "noch X kWh übrig" detail line.
       dailyTotals,
       // Legacy fields for app.js Börsenchart overlay (drawPriceChart expects these)
-      solar,
+      solar: capKey(solar, 'w'),         // kWp-gekappt (Börsenchart PV-Overlay)
       consumption,
-      vrmSolar
+      vrmSolar: capKey(vrmSolar, 'w')    // kWp-gekappt (VRM-Overlay)
     };
   }
 
