@@ -29,6 +29,7 @@ const {
   buildMarketPremiumEditorMarkup,
   createEmptyPvPlant,
   getDraftMarketValueMode,
+  pvPlantsLicenseCapWarning,
   removePvPlant,
   serializeMarketValueMode,
   serializePvPlants,
@@ -110,4 +111,36 @@ test('pv plant validation reports missing commissioning date and invalid capacit
   assert.equal(result.valid, false);
   assert.match(result.messages.join('\n'), /kWp fehlt/i);
   assert.match(result.messages.join('\n'), /inbetriebnahme/i);
+});
+
+// ---------------------------------------------------------------------------
+// T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Eingabe-Warnung.
+// ---------------------------------------------------------------------------
+
+test('licence cap warning: null when max_kwp is null (Community/Pro L/Legacy)', () => {
+  const plants = [{ kwp: 80 }, { kwp: 40 }];
+  assert.equal(pvPlantsLicenseCapWarning(plants, { status: 'active', max_kwp: null }), null);
+  assert.equal(pvPlantsLicenseCapWarning(plants, null), null);
+  assert.equal(pvPlantsLicenseCapWarning(plants, {}), null);
+});
+
+test('licence cap warning: null when total kWp is within the tier', () => {
+  const plants = [{ kwp: 30 }, { kwp: 15 }]; // 45 ≤ 50
+  assert.equal(pvPlantsLicenseCapWarning(plants, { max_kwp: 50 }), null);
+});
+
+test('licence cap warning: warns with both numbers when total exceeds the tier', () => {
+  const plants = [{ kwp: 60 }, { kwp: 25 }]; // 85 > 50
+  const warning = pvPlantsLicenseCapWarning(plants, { max_kwp: 50 });
+  assert.ok(typeof warning === 'string' && warning.length > 0);
+  assert.match(warning, /50 kWp/);
+  assert.match(warning, /85 kWp/);
+  assert.match(warning, /gekappt/i);
+  assert.match(warning, /upgrad/i);
+});
+
+test('licence cap warning: ignores invalid/negative kWp entries in the sum', () => {
+  const plants = [{ kwp: 55 }, { kwp: 'x' }, { kwp: -10 }, {}]; // effective 55 > 50
+  const warning = pvPlantsLicenseCapWarning(plants, { max_kwp: 50 });
+  assert.match(warning, /55 kWp/);
 });

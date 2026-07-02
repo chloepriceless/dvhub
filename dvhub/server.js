@@ -1470,7 +1470,10 @@ const telemetryReady = (async () => {
     getApplicableValueSummary: ({ year, pvPlants }) => applicableValueService.getApplicableValueSummary({ year, pvPlants }),
     // T-CURTAIL Increment 3: feed the calibrated curtailment estimator into the
     // "Abgeregelte Energie" KPI (read lazily so it's wired by request time).
-    getCurtailmentService: () => ctx.curtailmentService
+    getCurtailmentService: () => ctx.curtailmentService,
+    // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen
+    // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Pro L/Legacy) = kein Cap.
+    getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,
@@ -1501,6 +1504,29 @@ const telemetryReady = (async () => {
       .then((r) => { if (r && r.ok === false && r.error) pushLog('pvgis_expected_refresh_skip', r); })
       .catch((error) => { pushLog('pvgis_expected_refresh_error', { error: error.message }); });
     startAutomaticMarketValueBackfill();
+    // T-LICENSE-KWP-GATING Increment 5: Under-Report-Erkennung. Täglich den
+    // robusten GEMESSENEN PV-Peak (echte, ungekappte pv_total_w aus der DB)
+    // auswerten und an die Lizenz koppeln: Flag → Kulanzfrist → nach Ablauf
+    // Pro-Gate zu. VOLLSTÄNDIGER No-op ohne aktives Pro-max_kwp (Community/Pro L/
+    // Legacy → updatePlantExceedsLicense verdiktet immer false) → auf jeder
+    // Bestandsbox wirkungslos. Erst ~10 min nach Boot (DB warm), dann alle 24h.
+    const runUnderReportDetection = async () => {
+      try {
+        if (!telemetryStore || typeof telemetryStore.getRecentPvPeakW !== 'function') return;
+        if (!licenseService || typeof licenseService.updatePlantExceedsLicense !== 'function') return;
+        const { peakW, dayCount } = await telemetryStore.getRecentPvPeakW({ days: 14 });
+        if (peakW == null) return; // zu wenig Signal → nie flaggen (fail-open)
+        const r = licenseService.updatePlantExceedsLicense(peakW);
+        pushLog('license_under_report_check', {
+          peak_w: Math.round(peakW), day_count: dayCount,
+          exceeds: r.plantExceedsLicense, gate: r.gateActive
+        });
+      } catch (error) {
+        pushLog('license_under_report_error', { error: error.message });
+      }
+    };
+    setTimeout(runUnderReportDetection, 10 * 60 * 1000).unref();
+    setInterval(runUnderReportDetection, 24 * 60 * 60 * 1000).unref();
   }
 })().catch(e => pushLog('telemetry_init_error', { error: e.message }));
 

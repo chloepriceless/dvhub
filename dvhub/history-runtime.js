@@ -103,6 +103,54 @@ function roundOrZero(value) {
   return round2(Number(value || 0));
 }
 
+/**
+ * Lizenz-kWp-Cap für die ANGEZEIGTEN PV-KPI-Summen (T-LICENSE-KWP-GATING,
+ * Christin 2026-07-02, Increment 3). Kappt NUR die erzeugungs-/einspeise-
+ * bezogenen KPI-Headline-Summen auf ein physikalisch enges Energie-Ceiling:
+ * pro Slot gilt `pvKwh ≤ capKwp × slotStunden` (= capKwp × 1000 W über die
+ * Slot-Dauer). Die PV-abgeleiteten Flüsse (Direktverbrauch/→Akku/→Netz, pvAc)
+ * werden proportional zum PV-Cap-Verhältnis mitskaliert, damit die Zerlegung
+ * (direct+batt+grid ≈ pv) konsistent bleibt.
+ *
+ * BEWUSST UNBERÜHRT (Christin-Entscheid #6 „Rohdaten/Betreiberdaten echt"):
+ * die Ökonomie (Euro-Felder), exportKwh/importKwh, alle Akku-/Netz-/Share-
+ * Felder sowie die zurückgegebenen Roh-Slots/Charts. Der Cap ist ein reiner
+ * Anzeige-Deckel auf die Erzeugungs-Summen; für eine ehrliche Anlage
+ * (real ≤ deklariert) ist er wirkungslos. capKwp==null (Community/Pro L/Legacy)
+ * → No-op.
+ *
+ * @param {Array} slots  gemappte Slots (mit originalem slot.pvKwh aus dem Store)
+ * @param {object} kpis  finale KPI-Summen (wird mutiert + zurückgegeben)
+ * @param {number|null} capKwp  Lizenz-kWp-Cap, oder null = kein Cap
+ * @param {number} slotHours  Slot-Dauer in Stunden (SLOT_BUCKET_SECONDS/3600)
+ * @returns {object} dieselben (ggf. gekappten) kpis
+ */
+function capPvKpisForDisplay(slots, kpis, capKwp, slotHours) {
+  if (!(Number.isFinite(capKwp) && capKwp > 0) || !Array.isArray(slots) || !kpis) return kpis;
+  const capKwhSlot = capKwp * slotHours; // kWh-Ceiling je Slot
+  let pv = 0;
+  let pvAc = 0;
+  let sDirect = 0;
+  let sBatt = 0;
+  let sGrid = 0;
+  for (const slot of slots) {
+    const p = Number(slot?.pvKwh || 0);
+    const ratio = p > capKwhSlot && p > 0 ? capKwhSlot / p : 1;
+    pv += Math.min(p, capKwhSlot);
+    pvAc += Number(slot?.pvAcKwh || 0) * ratio;
+    sDirect += Number(slot?.solarDirectUseKwh || 0) * ratio;
+    sBatt += Number(slot?.solarToBatteryKwh || 0) * ratio;
+    sGrid += Number(slot?.solarToGridKwh || 0) * ratio;
+  }
+  kpis.pvKwh = round2(pv);
+  kpis.pvAcKwh = round2(pvAc);
+  kpis.solarDirectUseKwh = round2(sDirect);
+  kpis.solarToBatteryKwh = round2(sBatt);
+  kpis.solarToGridKwh = round2(sGrid);
+  kpis.pvCapKwp = capKwp; // UI-Hinweis „auf Lizenz gekappt"
+  return kpis;
+}
+
 function bucketTimestamp(value, bucketSeconds = SLOT_BUCKET_SECONDS) {
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) return String(value || '');
@@ -1210,7 +1258,11 @@ export function createHistoryRuntime({
   // curtailment service (or null). When present, the "Abgeregelte Energie" KPI
   // uses the per-slot, negative-price-gated calibrated estimate instead of the
   // weather-blind PVGIS gap. null (e.g. in tests) => PVGIS fallback, unchanged.
-  getCurtailmentService = () => null
+  getCurtailmentService = () => null,
+  // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen.
+  // Liefert den lizenzierten kWp-Deckel (Pro S/M) oder null (Community/Pro L/
+  // Legacy = kein Cap). Lazy gelesen, damit es zur Request-Zeit verdrahtet ist.
+  getCapKwp = () => null
 }) {
   function batteryNominalCapacityKwh() {
     const cfg = getOptimizerConfig() || {};
@@ -1949,6 +2001,14 @@ export function createHistoryRuntime({
     } catch {
       // no SoC series for this window -> leave KPIs uncorrected (legacy behaviour)
     }
+    // T-LICENSE-KWP-GATING Increment 3: PV-KPI-Summen auf die lizenzierte kWp
+    // kappen (Pro-Tier-Enforcement). Als LETZTER Schritt auf das finale
+    // kpis-Objekt, damit kein nachgelagerter Spread den Deckel überschreibt.
+    // Trifft NUR die Erzeugungs-Summen (pvKwh/pvAcKwh/solar*Kwh) — Ökonomie,
+    // exportKwh/importKwh, Akku-/Netz-/Share-Felder und die Roh-Slots/Charts
+    // bleiben echt (Christin #6). No-op ohne Pro-max_kwp / für ehrliche Anlagen.
+    capPvKpisForDisplay(slots, periodPremiumApplied.kpis, getCapKwp(), SLOT_BUCKET_SECONDS / 3600);
+
     const rows = solarApplied.rows;
     const charts = view === 'day'
       ? buildDayCharts(slots)

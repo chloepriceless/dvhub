@@ -606,3 +606,34 @@ describe('savings section', () => {
     assert.ok('avoidedCostEur' in savings);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-LICENSE-KWP-GATING Increment 3: Family Live-PV-Cap. Die Energie-Fluss-
+// Kachel (energy.solarKw) wird auf die lizenzierte kWp gekappt — analog zum
+// Haupt-Status. No-op ohne Pro-max_kwp (getCapKwp()==null). Die Steuerung
+// bleibt unberührt (liest state.victron direkt).
+// ---------------------------------------------------------------------------
+
+describe('Increment 3: Live-PV-Cap (Lizenz-kWp)', () => {
+  it('kappt energy.solarKw auf die lizenzierte kWp (getCapKwp=2 → 2000 W)', () => {
+    const ctx = createMockCtx();                  // victron.pvTotalW = 4800 (4,8 kW)
+    ctx.licenseService = { getCapKwp: () => 2 };  // 2 kWp → 2000 W
+    const svc = createFamilyService(ctx);
+    const { energy } = svc.buildFamilyStatus();
+    assert.equal(energy.solarKw, 2.0);
+  });
+
+  it('kein Cap ohne Pro-max_kwp (getCapKwp()==null) → volle Live-PV', () => {
+    const ctx = createMockCtx();
+    ctx.licenseService = { getCapKwp: () => null };
+    const svc = createFamilyService(ctx);
+    const { energy } = svc.buildFamilyStatus();
+    assert.equal(energy.solarKw, 4.8);
+  });
+
+  it('kein licenseService im ctx → volle Live-PV (Rückwärtskompatibilität)', () => {
+    const svc = createFamilyService(createMockCtx());
+    const { energy } = svc.buildFamilyStatus();
+    assert.equal(energy.solarKw, 4.8);
+  });
+});

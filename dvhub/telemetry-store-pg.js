@@ -1117,10 +1117,47 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     };
   }
 
+  /**
+   * getRecentPvPeakW: robuster GEMESSENER PV-Peak (Watt) für die Lizenz-Under-
+   * Report-Erkennung (T-LICENSE-KWP-GATING Increment 5). Bildet je Tag das
+   * Maximum der echten, ungekappten `pv_total_w` und nimmt davon das `percentile`
+   * (Default P95) über die letzten `days` Tage — d.h. näherungsweise die
+   * Klarhimmel-Spitze, unempfindlich gegen einzelne Ausreißertage. Unter `minDays`
+   * ausgewerteten Tagen → peakW=null (zu wenig Signal, NIE flaggen; fail-open).
+   *
+   * @param {object} [o]
+   * @param {number} [o.days=14]       Beobachtungsfenster in Tagen
+   * @param {number} [o.percentile=0.95]  Perzentil der Tages-Maxima (0..1)
+   * @param {number} [o.minDays=5]     Mindestanzahl Tage mit Daten
+   * @returns {Promise<{ peakW: number|null, dayCount: number }>}
+   */
+  async function getRecentPvPeakW({ days = 14, percentile = 0.95, minDays = 5 } = {}) {
+    const d = Number.isFinite(days) && days > 0 ? Math.floor(days) : 14;
+    const p = Number.isFinite(percentile) && percentile > 0 && percentile <= 1 ? percentile : 0.95;
+    const { rows } = await pool.query(`
+      WITH daily AS (
+        SELECT MAX(value_num) AS day_max
+        FROM timeseries_samples
+        WHERE series_key = 'pv_total_w'
+          AND value_num IS NOT NULL
+          AND ts_utc >= now() - ($1 * interval '1 day')
+        GROUP BY date_trunc('day', ts_utc)
+      )
+      SELECT percentile_cont($2) WITHIN GROUP (ORDER BY day_max) AS peak,
+             COUNT(*)::int AS day_count
+      FROM daily
+    `, [d, p]);
+    const r = rows[0] || {};
+    const dayCount = Number(r.day_count || 0);
+    if (dayCount < minDays || r.peak == null) return { peakW: null, dayCount };
+    return { peakW: Number(r.peak), dayCount };
+  }
+
   return {
     dbPath: 'postgresql',
     querySeries,
     getSeriesBoundaryValues,
+    getRecentPvPeakW,
     queryBucketedSeries,
     async listTables() {
       const result = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);

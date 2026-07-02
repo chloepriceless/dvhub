@@ -62,6 +62,17 @@ const CLOCK_ROLLBACK_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 // Hardening (Codex #5, Christin C): offline grace AFTER a node-locked monthly
 // licence's SIGNED expiry passes — Pro stays on for 14 days, then expired_offline.
 const OFFLINE_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+
+// T-LICENSE-KWP-GATING Increment 5 (Christin 2026-07-02): Under-Report-Erkennung.
+// Der GEMESSENE PV-Peak (echte, ungekappte pv_total_w aus der DB) wird gegen den
+// lizenzierten Tarif verglichen. Toleranz: kWp ist der Modul-Peak; die reale
+// AC-Leistung liegt meist DARUNTER (Clipping/Verluste), an kalten Klarhimmel-
+// Tagen bei Überbelegung kurz darüber — daher +18 % Toleranz gegen Fehlalarme.
+const UNDER_REPORT_TOLERANCE_PCT = 18;
+// Kulanzfrist nach der ERST-Erkennung, bevor der Pro-Gate zugeht (Christin-
+// Entscheid #5 „Kulanzfrist, dann Pro-Gate"): erst GUI-Upgrade-Prompt + Frist,
+// dann greift capacityOk()-analoges Gating. 14 Tage = ein voller Abrechnungszyklus.
+const UNDER_REPORT_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 // Sentinel for a SIGNED key whose payload carries no license.id — matches no real
 // machine-file licenseId, so binding fails CLOSED instead of falling back to the
 // editable plaintext license_id (Codex-v2 re-verify HIGH).
@@ -108,7 +119,13 @@ function freshNoneState() {
     machine_id: null,             // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
     max_kwp: null,                // tier ceiling (kWp) from the SIGNED license metadata; null = legacy/unlimited (fail-open)
     license_kind: null,           // license kind from metadata (e.g. "demo"); null = normal/paid
-    last_server_ts: null          // Hardening (Codex #4): monotone high-water of the highest server time seen
+    last_server_ts: null,         // Hardening (Codex #4): monotone high-water of the highest server time seen
+    // T-LICENSE-KWP-GATING Increment 5: Under-Report-Erkennung (gemessener Peak
+    // > lizenzierter Tarif). Alle null/false auf einer frischen/Community-Box.
+    plant_exceeds_license: false, // aktuelles Verdikt (gemessen > Tarif+Toleranz)
+    plant_exceeds_since: null,    // ISO: Erst-Erkennung (startet die Kulanzfrist) oder null
+    observed_peak_w: null,        // zuletzt gemessener robuster PV-Peak (Watt) — Diagnose/UI
+    observed_peak_at: null        // ISO: Zeitpunkt der letzten Auswertung
   };
 }
 
@@ -117,6 +134,27 @@ function freshNoneState() {
  */
 function fingerprint(key) {
   return String(key || '').slice(-4);
+}
+
+/**
+ * Under-Report-Verdikt (T-LICENSE-KWP-GATING Increment 5, rein/testbar):
+ * überschreitet der GEMESSENE PV-Peak den lizenzierten Tarif zzgl. Toleranz?
+ *   ceilingW = maxKwp × 1000 × (1 + tolerancePct/100)
+ * Kein Cap-Tarif (maxKwp==null/≤0 → Community/Pro L/Legacy) ODER keine/ungültige
+ * Messung → IMMER false (fail-open: nie eine Anlage ohne belastbares Signal
+ * flaggen). Nur bei aktivem Pro-max_kwp UND belastbarem Peak > Ceiling → true.
+ *
+ * @param {object} o
+ * @param {number|null} o.observedPeakW  robuster gemessener PV-Peak (Watt)
+ * @param {number|null} o.maxKwp  lizenzierter Tarif-Deckel (kWp)
+ * @param {number} [o.tolerancePct]  Toleranz in Prozent (Default 18)
+ * @returns {boolean}
+ */
+function plantExceedsLicenseVerdict({ observedPeakW, maxKwp, tolerancePct = UNDER_REPORT_TOLERANCE_PCT }) {
+  if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return false;
+  if (!(Number.isFinite(observedPeakW) && observedPeakW > 0)) return false;
+  const ceilingW = maxKwp * 1000 * (1 + tolerancePct / 100);
+  return observedPeakW > ceilingW;
 }
 
 /**
@@ -763,6 +801,11 @@ export function createLicenseService(ctx) {
     s.grace_until = graceUntilIso();          // ISO grace deadline (UI countdown) or null
     s.system_kwp = getSystemKwp();            // declared plant size (kWp) for the tier check
     s.capacity_ok = capacityOk();             // false = plant exceeds the licensed tier → upgrade
+    // Increment 5: Under-Report-Erkennung. plant_exceeds_license / _since /
+    // observed_peak_w / _at reiten via {...state.license}; die berechneten
+    // UI-Felder (Gate-Status + Grace-Deadline für den Countdown) hier ergänzt.
+    s.plant_gate_active = plantGateActive();            // true = Frist abgelaufen → Pro-Gate zu
+    s.plant_exceeds_grace_until = plantExceedsGraceUntilIso(); // ISO-Deadline oder null
     // max_kwp + license_kind ride along via the {...state.license} spread above.
     return s;
   }
@@ -832,6 +875,76 @@ export function createLicenseService(ctx) {
     return declared > 0 ? Math.min(declared, cap) : cap;
   }
 
+  // ---------------- Under-Report-Erkennung + Grace-then-Gate (Increment 5) ----
+
+  /**
+   * updatePlantExceedsLicense: den GEMESSENEN PV-Peak (echte ungekappte
+   * pv_total_w aus der DB, vom Aufrufer/Daily-Job berechnet — der Lizenz-Service
+   * bleibt DB-frei) gegen den lizenzierten Tarif auswerten und den Flag-Zustand
+   * fortschreiben. Kein Cap-Tarif (max_kwp==null) → verdikt IMMER false →
+   * vollständiger No-op auf jeder Community/Pro-L/Legacy-Box.
+   *
+   * Setzt `plant_exceeds_since` beim ERST-Flag (startet die Kulanzfrist); löscht
+   * beides sobald der Peak wieder unter das Ceiling fällt (kein Dauer-Gate nach
+   * einem einmaligen Ausreißer). Feuert emitProActiveChange, damit ein durch die
+   * abgelaufene Frist ausgelöster Gate-Wechsel DV/EOS live stoppt/startet.
+   *
+   * @param {number|null} observedPeakW  robuster gemessener PV-Peak (Watt)
+   * @returns {{ plantExceedsLicense: boolean, gateActive: boolean }}
+   */
+  function updatePlantExceedsLicense(observedPeakW) {
+    const prevActive = isProActive();
+    const verdict = plantExceedsLicenseVerdict({
+      observedPeakW,
+      maxKwp: state.license.max_kwp
+    });
+    const nowIso = new Date(trustedNowMs()).toISOString();
+    if (Number.isFinite(observedPeakW) && observedPeakW > 0) {
+      state.license.observed_peak_w = Math.round(observedPeakW);
+      state.license.observed_peak_at = nowIso;
+    }
+    if (verdict) {
+      if (!state.license.plant_exceeds_license) {
+        // Erst-Erkennung → Kulanzfrist ab jetzt (nur setzen, wenn noch offen).
+        state.license.plant_exceeds_since = state.license.plant_exceeds_since || nowIso;
+        pushLog('license_plant_exceeds_detected', {
+          observed_peak_w: state.license.observed_peak_w,
+          max_kwp: state.license.max_kwp,
+          grace_until: plantExceedsGraceUntilIso()
+        });
+      }
+      state.license.plant_exceeds_license = true;
+    } else if (state.license.plant_exceeds_license || state.license.plant_exceeds_since) {
+      // Peak wieder unter Ceiling → Flag + Frist zurücksetzen.
+      state.license.plant_exceeds_license = false;
+      state.license.plant_exceeds_since = null;
+      pushLog('license_plant_exceeds_cleared', { observed_peak_w: state.license.observed_peak_w });
+    }
+    persistState();
+    emitProActiveChange(prevActive);
+    return { plantExceedsLicense: state.license.plant_exceeds_license, gateActive: plantGateActive() };
+  }
+
+  /** ISO-Deadline der Under-Report-Kulanzfrist (Erst-Erkennung + Grace) oder null. */
+  function plantExceedsGraceUntilIso() {
+    const since = Date.parse(state.license.plant_exceeds_since);
+    if (!Number.isFinite(since)) return null;
+    return new Date(since + UNDER_REPORT_GRACE_MS).toISOString();
+  }
+
+  /**
+   * plantGateActive: ist der Under-Report-Gate ZU? true nur wenn die Anlage
+   * geflaggt IST und die Kulanzfrist ABGELAUFEN ist (trusted-time, rollback-
+   * resistent). Während der Frist bleibt Pro an (nur Upgrade-Prompt). Kein Flag
+   * / kein Cap-Tarif → false.
+   */
+  function plantGateActive() {
+    if (!state.license.plant_exceeds_license) return false;
+    const graceUntil = Date.parse(plantExceedsGraceUntilIso());
+    if (!Number.isFinite(graceUntil)) return false;
+    return trustedNowMs() >= graceUntil;
+  }
+
   /**
    * isProActive: non-HTTP Pro-gate for live services (DV-Schnittstelle, EOS).
    * Shares the EXACT predicate of requirePro() so the HTTP and non-HTTP gates
@@ -840,9 +953,11 @@ export function createLicenseService(ctx) {
    * Codex-Refute-v2 note in requirePro().
    */
   function isProActive() {
-    // Base online status AND the plant fits the licensed tier (capacityOk()).
-    // Mirrors requirePro() exactly so HTTP + non-HTTP gates never diverge.
-    return state.license.status === 'active' && capacityOk();
+    // Base online status AND the plant fits the licensed tier (capacityOk())
+    // AND the measured plant hasn't out-grown the tier past the grace period
+    // (!plantGateActive() — Increment 5). Mirrors requirePro() exactly so HTTP +
+    // non-HTTP gates never diverge.
+    return state.license.status === 'active' && capacityOk() && !plantGateActive();
   }
 
   /**
@@ -921,13 +1036,19 @@ export function createLicenseService(ctx) {
     // Enforcement is gated on the server re-checkout + check-in/high-water design
     // (T-0125 next step). Until then gate on the base (online-driven) status, which
     // already reflects revocation/expiry whenever the box can reach Keygen.
-    if (state.license.status === 'active' && capacityOk()) return true;
+    if (state.license.status === 'active' && capacityOk() && !plantGateActive()) return true;
     // Distinguish "no/expired Pro" from "Pro active but plant exceeds the licensed
     // tier" so the UI shows an UPGRADE prompt (Pro M/L), not a re-activate prompt.
+    // Two over-tier flavours: DECLARED (capacityOk() false — user entered > tier)
+    // and MEASURED-after-grace (plantGateActive() — Increment 5 under-report gate).
     const overCapacity = state.license.status === 'active' && !capacityOk();
-    const body = JSON.stringify(overCapacity
-      ? { error: 'pro_required', feature: feat, reason: 'capacity_exceeded', maxKwp: state.license.max_kwp, systemKwp: getSystemKwp() }
-      : { error: 'pro_required', feature: feat });
+    const plantGate = state.license.status === 'active' && capacityOk() && plantGateActive();
+    const body = JSON.stringify(
+      overCapacity
+        ? { error: 'pro_required', feature: feat, reason: 'capacity_exceeded', maxKwp: state.license.max_kwp, systemKwp: getSystemKwp() }
+        : plantGate
+          ? { error: 'pro_required', feature: feat, reason: 'plant_exceeds_license', maxKwp: state.license.max_kwp, observedPeakW: state.license.observed_peak_w }
+          : { error: 'pro_required', feature: feat });
     res.writeHead(403, {
       ...securityHeaders,
       'content-type': 'application/json; charset=utf-8',
@@ -1014,6 +1135,11 @@ export function createLicenseService(ctx) {
     state.license.max_kwp = v == null ? null : Number(v);
   }
 
+  /** @internal — backdate the under-report first-detection stamp for grace tests. */
+  function setPlantExceedsSinceForTest(iso) {
+    state.license.plant_exceeds_since = iso == null ? null : String(iso);
+  }
+
   return {
     loadStateFromDisk,
     activateLicense,
@@ -1026,12 +1152,15 @@ export function createLicenseService(ctx) {
     getStatus,
     isProActive,
     getCapKwp,
+    updatePlantExceedsLicense,
+    plantGateActive,
     onProActiveChange,
     requirePro,
     start,
     close,
     setStatusForTest,
     setLicenseKeyForTest,
-    setMaxKwpForTest
+    setMaxKwpForTest,
+    setPlantExceedsSinceForTest
   };
 }

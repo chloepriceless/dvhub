@@ -516,6 +516,72 @@ function validatePvPlants(plants = []) {
   };
 }
 
+/**
+ * Lizenz-kWp-Eingabe-Warnung (T-LICENSE-KWP-GATING Increment 4, Christin
+ * 2026-07-02). Gibt einen Hinweistext zurück, wenn die SUMME der konfigurierten
+ * PV-kWp den lizenzierten Tarif-Deckel (`license.max_kwp`) übersteigt — sonst
+ * null. NICHT-blockierend: der Betreiber darf seine reale Anlage eintragen; die
+ * Warnung erklärt nur die Folge (Anzeige/Prognose/EOS auf max_kwp gekappt) und
+ * nudged zum Upgrade. max_kwp==null (Community/Pro L/Legacy) → null (kein Cap).
+ *
+ * @param {Array} plants  Draft-PV-Anlagen ({ kwp } je Eintrag)
+ * @param {object|null} licenseState  window._licenseStateCache (mit max_kwp)
+ * @returns {string|null} Warntext oder null
+ */
+function pvPlantsLicenseCapWarning(plants = [], licenseState = null) {
+  const maxKwp = Number(licenseState?.max_kwp);
+  if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return null; // Community/Pro L/Legacy
+  const totalKwp = (Array.isArray(plants) ? plants : []).reduce((sum, p) => {
+    const k = Number(p?.kwp);
+    return sum + (Number.isFinite(k) && k > 0 ? k : 0);
+  }, 0);
+  if (totalKwp <= maxKwp) return null;
+  const total = Math.round(totalKwp * 100) / 100;
+  return `Ihre Lizenz deckt ${maxKwp} kWp ab, konfiguriert sind ${total} kWp. `
+    + `Die über dem Tarif liegende PV-Leistung wird in Anzeige, Prognose und EOS-Planung `
+    + `auf ${maxKwp} kWp gekappt — für den vollen Wert bitte auf ein größeres Pro-Tarif upgraden.`;
+}
+
+/**
+ * Lizenz-Tarif-Deckel-Hinweis für die Lizenz-Sektion (T-LICENSE-KWP-GATING
+ * Increment 5, reiner Helper). Deckt beide Über-Tarif-Fälle ab:
+ *   - DECLARED: capacity_ok===false → eingetragene kWp > Tarif (sofort gegated).
+ *   - MEASURED: plant_exceeds_license → gemessener PV-Peak > Tarif. Während der
+ *     Kulanzfrist nur Upgrade-Nudge; nach Ablauf (plant_gate_active) Pro-Gate zu.
+ * Nur bei status==='active' UND gesetztem Tarif (max_kwp) relevant; sonst null
+ * (Community/Pro L/Legacy). Gibt reinen Text zurück (Aufrufer escaped).
+ *
+ * @param {object|null} state  license getState() payload
+ * @returns {string|null}
+ */
+function licenseCapacityMessage(state) {
+  if (!state || state.status !== 'active') return null;
+  const maxKwp = Number(state.max_kwp);
+  if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return null;
+  if (state.capacity_ok === false) {
+    const sys = Number(state.system_kwp);
+    const sysLabel = Number.isFinite(sys) && sys > 0 ? `${sys} kWp` : 'die eingetragene Leistung';
+    return `Eingetragene PV-Leistung (${sysLabel}) übersteigt Ihren Tarif (${maxKwp} kWp). `
+      + `Pro-Funktionen (EOS/Steuerung) sind deaktiviert — bitte auf ein größeres Pro-Tarif upgraden.`;
+  }
+  if (state.plant_exceeds_license) {
+    const peakW = Number(state.observed_peak_w);
+    const peakLabel = Number.isFinite(peakW) && peakW > 0 ? `bis ${Math.round(peakW / 100) / 10} kW` : 'mehr';
+    const base = `Ihre Anlage erzeugt gemessen ${peakLabel} — mehr als Ihr Tarif (${maxKwp} kWp) abdeckt.`;
+    if (state.plant_gate_active === true) {
+      return `${base} Die Kulanzfrist ist abgelaufen, Pro-Funktionen sind deaktiviert — bitte upgraden.`;
+    }
+    const until = state.plant_exceeds_grace_until ? String(state.plant_exceeds_grace_until).slice(0, 10) : null;
+    return `${base} Bitte auf ein größeres Pro-Tarif upgraden${until ? ` (Kulanzfrist bis ${until})` : ''} — `
+      + `andernfalls werden Pro-Funktionen danach deaktiviert.`;
+  }
+  return null;
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsLicense = { licenseCapacityMessage };
+}
+
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
@@ -559,6 +625,7 @@ if (typeof globalThis !== 'undefined') {
     buildMarketPremiumEditorMarkup,
     createEmptyPvPlant,
     getDraftMarketValueMode,
+    pvPlantsLicenseCapWarning,
     removePvPlant,
     serializeMarketValueMode,
     serializePvPlants,
@@ -1541,10 +1608,20 @@ function renderPvPlantsEditor() {
   const validation = pvPlantsValidation.length
     ? `<div class="config-banner error">${pvPlantsValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
     : '<div class="config-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
+  // T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Warnung,
+  // wenn die konfigurierte PV-Summe den Tarif-Deckel übersteigt (max_kwp aus
+  // window._licenseStateCache). Community/Pro L/Legacy → kein Cap → kein Banner.
+  const capWarning = pvPlantsLicenseCapWarning(
+    pvPlantsDraft,
+    (typeof window !== 'undefined' ? window._licenseStateCache : null)
+  );
+  const capWarningHtml = capWarning
+    ? `<div class="config-banner warn">${escapeHtml(capWarning)}</div>`
+    : '';
   section.innerHTML = buildMarketPremiumEditorMarkup({
     marketValueMode: marketValueModeDraft,
     plants: pvPlantsDraft,
-    validationHtml: validation
+    validationHtml: validation + capWarningHtml
   });
 
   section.querySelector('#marketValueModeSelect')?.addEventListener('change', (event) => {
@@ -4113,6 +4190,26 @@ function renderMaeSparkline(data) {
       if (bindingEl) {
         bindingEl.textContent = isBound ? '🔒 An diese Box gebunden' : '';
       }
+    }
+
+    // T-LICENSE-KWP-GATING Increment 4/5: Tarif-Deckel-Hinweis (Upgrade-Nudge).
+    // Dynamisch erzeugtes/aktualisiertes Warn-Banner — kein HTML-Template-Eingriff
+    // nötig. Deckt DECLARED (capacity_ok=false) + MEASURED (plant_exceeds_license,
+    // Kulanzfrist/Gate) ab. Kein Cap-Tarif / kein Über-Tarif → Banner ausblenden.
+    const capMsg = licenseCapacityMessage(state);
+    let capWarn = section.querySelector('.license-capacity-warn');
+    if (capMsg) {
+      if (!capWarn) {
+        capWarn = document.createElement('div');
+        capWarn.className = 'config-banner warn license-capacity-warn';
+        if (meta && meta.parentNode) meta.parentNode.insertBefore(capWarn, meta.nextSibling);
+        else section.appendChild(capWarn);
+      }
+      capWarn.textContent = capMsg;
+      capWarn.hidden = false;
+    } else if (capWarn) {
+      capWarn.hidden = true;
+      capWarn.textContent = '';
     }
   }
 

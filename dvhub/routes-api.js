@@ -6096,6 +6096,26 @@ export function createApiRoutes(ctx) {
           .catch((e) => pushLog('sma_regen_after_config_save_error', { error: e.message }));
       }
       const freshCfg = getCfg();
+      // T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Warnung
+      // in der Save-Antwort, wenn die (nun angewandte) PV-Summe den Tarif-Deckel
+      // übersteigt. Reines Signal für UI/API-Consumer — der Save wird NIE
+      // blockiert (der Betreiber darf seine reale Anlage eintragen); Anzeige/
+      // Prognose/EOS gaten bereits über getCapKwp(), Pro-Features über
+      // capacityOk(). Community/Pro L/Legacy (max_kwp==null) → keine Warnung.
+      let licenseCapWarning = null;
+      try {
+        const lic = licenseService?.getState?.();
+        const maxKwp = Number(lic?.max_kwp);
+        const sysKwp = Number(lic?.system_kwp);
+        if (Number.isFinite(maxKwp) && maxKwp > 0 && Number.isFinite(sysKwp) && sysKwp > maxKwp) {
+          licenseCapWarning = {
+            maxKwp,
+            systemKwp: sysKwp,
+            message: `Konfigurierte PV-Leistung (${sysKwp} kWp) übersteigt den Lizenz-Tarif `
+              + `(${maxKwp} kWp). Anzeige, Prognose und EOS-Planung werden auf ${maxKwp} kWp gekappt.`
+          };
+        }
+      } catch { /* Lizenz-Read best-effort — darf einen Save nie blockieren */ }
       return json(res, 200, {
         ok: true,
         meta: configMetaPayload(),
@@ -6103,7 +6123,8 @@ export function createApiRoutes(ctx) {
         effectiveConfig: redactConfig(freshCfg),
         changedPaths: result.changedPaths,
         restartRequired: result.restartRequired,
-        restartRequiredPaths: result.restartRequiredPaths
+        restartRequiredPaths: result.restartRequiredPaths,
+        licenseCapWarning
       });
     }
 

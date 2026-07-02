@@ -1240,3 +1240,83 @@ test('getCapKwp: totalKwp fallback when no pvPlants', () => {
   svc.setMaxKwpForTest(50);
   assert.equal(svc.getCapKwp(), 45);
 });
+
+// ---------------------------------------------------------------------------
+// Under-Report-Erkennung + Grace-then-Gate (Christin 2026-07-02, Increment 5)
+// gemessener PV-Peak > lizenzierter Tarif × (1+Toleranz) → Flag → Kulanzfrist →
+// nach Ablauf Pro-Gate zu. No-op ohne Pro-max_kwp. Ceiling(50 kWp)=59000 W.
+// ---------------------------------------------------------------------------
+
+function activeProSvc(kwpList, maxKwp) {
+  const svc = svcWithPlants(kwpList);
+  svc.setStatusForTest('active');
+  svc.setMaxKwpForTest(maxKwp);
+  return svc;
+}
+
+test('under-report: no license tier (max_kwp null) -> never flags (Community/Pro L/Legacy)', () => {
+  const svc = svcWithPlants([40]);
+  svc.setStatusForTest('active');            // no max_kwp set → null
+  const r = svc.updatePlantExceedsLicense(200000); // absurd 200 kW peak
+  assert.equal(r.plantExceedsLicense, false);
+  assert.equal(svc.isProActive(), true);
+  assert.equal(svc.getState().plant_exceeds_license, false);
+});
+
+test('under-report: honest plant (peak within tier+tolerance) -> no flag, Pro stays active', () => {
+  const svc = activeProSvc([40], 50);        // ceiling 59000 W
+  const r = svc.updatePlantExceedsLicense(55000); // 55 kW clipping, < 59 kW
+  assert.equal(r.plantExceedsLicense, false);
+  assert.equal(svc.isProActive(), true);
+});
+
+test('under-report: peak exceeds tier+tolerance -> flag set, grace running, Pro STILL active', () => {
+  const svc = activeProSvc([40], 50);        // declared 40 (capacityOk true), ceiling 59000
+  const r = svc.updatePlantExceedsLicense(90000); // real 90 kW → over-tier
+  assert.equal(r.plantExceedsLicense, true);
+  assert.equal(r.gateActive, false, 'grace not yet expired → gate open');
+  assert.equal(svc.isProActive(), true, 'Pro stays on during grace (upgrade nudge only)');
+  const st = svc.getState();
+  assert.equal(st.plant_exceeds_license, true);
+  assert.equal(st.observed_peak_w, 90000);
+  assert.ok(st.plant_exceeds_grace_until, 'grace deadline exposed for the UI countdown');
+  assert.equal(st.plant_gate_active, false);
+});
+
+test('under-report: after the grace period, the gate closes -> Pro deactivated', () => {
+  const svc = activeProSvc([40], 50);
+  svc.updatePlantExceedsLicense(90000);
+  assert.equal(svc.plantGateActive(), false);
+  // Backdate the first-detection stamp 15 days → grace (14d) is over.
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString();
+  svc.setPlantExceedsSinceForTest(fifteenDaysAgo);
+  assert.equal(svc.plantGateActive(), true, 'grace expired → gate closed');
+  assert.equal(svc.isProActive(), false, 'Pro gated after grace');
+});
+
+test('under-report: recovery — peak drops back below ceiling clears flag + grace, Pro restored', () => {
+  const svc = activeProSvc([40], 50);
+  svc.updatePlantExceedsLicense(90000);
+  const backdated = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+  svc.setPlantExceedsSinceForTest(backdated);
+  assert.equal(svc.isProActive(), false);       // gated
+  // A later measurement back within the tier clears everything.
+  const r = svc.updatePlantExceedsLicense(30000); // 30 kW < 59 kW
+  assert.equal(r.plantExceedsLicense, false);
+  assert.equal(r.gateActive, false);
+  assert.equal(svc.isProActive(), true, 'Pro restored once the plant is back within the tier');
+  assert.equal(svc.getState().plant_exceeds_grace_until, null);
+});
+
+test('under-report: tolerance boundary — exactly at ceiling is NOT over; 1 W above is', () => {
+  const atCeiling = activeProSvc([40], 50);
+  assert.equal(atCeiling.updatePlantExceedsLicense(59000).plantExceedsLicense, false); // 50*1000*1.18
+  const overCeiling = activeProSvc([40], 50);
+  assert.equal(overCeiling.updatePlantExceedsLicense(59001).plantExceedsLicense, true);
+});
+
+test('under-report: capacityOk gate (declared > tier) is independent of the measured gate', () => {
+  // Declared 80 > tier 50 → capacityOk false → already gated, regardless of measurement.
+  const svc = activeProSvc([80], 50);
+  assert.equal(svc.isProActive(), false, 'declared-exceeds gates immediately (pre-existing capacityOk)');
+});

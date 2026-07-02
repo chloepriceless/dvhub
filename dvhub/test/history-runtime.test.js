@@ -2608,3 +2608,99 @@ test('getSummary day view: dvRevenueEur and dvRevenueCtKwh are null', async () =
   assert.equal(summary.kpis.dvRevenueEur, null, 'dvRevenueEur null for day view');
   assert.equal(summary.kpis.dvRevenueCtKwh, null, 'dvRevenueCtKwh null for day view');
 });
+
+// ---------------------------------------------------------------------------
+// T-LICENSE-KWP-GATING Increment 3: PV-KPI-Summen-Cap (Pro-Tier-Enforcement).
+// Kappt NUR die Erzeugungs-/Einspeise-Summen auf capKwp × Slot-Stunden; die
+// Ökonomie + gemessene Netz-/Akku-Summen + Roh-Slots bleiben echt. No-op ohne
+// Pro-max_kwp (getCapKwp()==null) und für ehrliche Anlagen (real ≤ Lizenz).
+// ---------------------------------------------------------------------------
+
+function capTestStore() {
+  const slots = [
+    {
+      // 3,0 kWh in einem 15-min-Slot = 12 kW Mittel — überschreitet einen
+      // 4-kWp-Deckel (capKwhSlot = 4 × 0,25 = 1,0 kWh) klar.
+      ts: '2026-05-01T10:00:00.000Z',
+      importKwh: 0, exportKwh: 2.0, gridKwh: 0,
+      pvKwh: 3.0, pvAcKwh: 3.0,
+      solarDirectUseKwh: 0.5, solarToBatteryKwh: 0.5, solarToGridKwh: 2.0,
+      batteryKwh: 0.5, batteryChargeKwh: 0.5, batteryDischargeKwh: 0,
+      loadKwh: 0.5, estimated: false, incomplete: false
+    },
+    {
+      ts: '2026-05-01T10:15:00.000Z',
+      importKwh: 0.1, exportKwh: 0, gridKwh: 0.1,
+      pvKwh: 0.2, pvAcKwh: 0.2,
+      solarDirectUseKwh: 0.2, solarToBatteryKwh: 0, solarToGridKwh: 0,
+      batteryKwh: 0, batteryChargeKwh: 0, batteryDischargeKwh: 0,
+      loadKwh: 0.3, estimated: false, incomplete: false
+    }
+  ];
+  return {
+    listAggregatedEnergySlots() { return slots; },
+    listPriceSlots() {
+      return [
+        { ts: '2026-05-01T10:00:00.000Z', priceCtKwh: 10, priceEurMwh: 100 },
+        { ts: '2026-05-01T10:15:00.000Z', priceCtKwh: 10, priceEurMwh: 100 }
+      ];
+    }
+  };
+}
+
+const CAP_PRICING = { mode: 'fixed', costs: { pvCtKwh: 6 } };
+
+test('Increment 3: getCapKwp()==null → PV-KPI-Summen ungekappt (Community/Pro L/Legacy)', async () => {
+  const runtime = createHistoryRuntime({
+    store: capTestStore(),
+    getPricingConfig: () => CAP_PRICING,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+    // getCapKwp default () => null
+  });
+  const s = await runtime.getSummary({ view: 'day', date: '2026-05-01' });
+  assert.equal(s.kpis.pvKwh, 3.2);
+  assert.equal(s.kpis.solarToGridKwh, 2.0);
+  assert.equal(s.kpis.pvCapKwp, undefined);
+});
+
+test('Increment 3: getCapKwp()=4 → Erzeugung/Einspeisung gekappt, Ökonomie + Netz/Akku echt', async () => {
+  const uncapped = await createHistoryRuntime({
+    store: capTestStore(),
+    getPricingConfig: () => CAP_PRICING,
+    getCurrentDate: () => FIXED_CURRENT_DATE
+  }).getSummary({ view: 'day', date: '2026-05-01' });
+
+  const capped = await createHistoryRuntime({
+    store: capTestStore(),
+    getPricingConfig: () => CAP_PRICING,
+    getCurrentDate: () => FIXED_CURRENT_DATE,
+    getCapKwp: () => 4 // capKwhSlot = 4 × 0,25 = 1,0 kWh
+  }).getSummary({ view: 'day', date: '2026-05-01' });
+
+  // Erzeugung + PV-Flüsse gekappt (Slot 1: ratio = 1,0/3,0; Slot 2 unverändert)
+  assert.equal(capped.kpis.pvKwh, 1.2);            // min(3,1) + 0,2
+  assert.equal(capped.kpis.pvAcKwh, 1.2);
+  assert.equal(capped.kpis.solarToGridKwh, 0.67);   // 2,0×(1/3) + 0
+  assert.equal(capped.kpis.solarToBatteryKwh, 0.17); // 0,5×(1/3)
+  assert.equal(capped.kpis.solarDirectUseKwh, 0.37); // 0,5×(1/3) + 0,2
+  assert.equal(capped.kpis.pvCapKwp, 4);
+
+  // Ökonomie + gemessene Summen bleiben ECHT (Betreiberdaten, Christin #6)
+  assert.equal(capped.kpis.exportKwh, uncapped.kpis.exportKwh);
+  assert.equal(capped.kpis.importKwh, uncapped.kpis.importKwh);
+  assert.equal(capped.kpis.exportRevenueEur, uncapped.kpis.exportRevenueEur);
+  assert.equal(capped.kpis.batteryChargeKwh, uncapped.kpis.batteryChargeKwh);
+});
+
+test('Increment 3: ehrliche Anlage (alle Slots ≤ capKwp×Stunden) → Cap wirkungslos', async () => {
+  const capped = await createHistoryRuntime({
+    store: capTestStore(),
+    getPricingConfig: () => CAP_PRICING,
+    getCurrentDate: () => FIXED_CURRENT_DATE,
+    getCapKwp: () => 100 // capKwhSlot = 25 kWh — kein Slot überschreitet
+  }).getSummary({ view: 'day', date: '2026-05-01' });
+
+  assert.equal(capped.kpis.pvKwh, 3.2);
+  assert.equal(capped.kpis.solarToGridKwh, 2.0);
+  assert.equal(capped.kpis.pvCapKwp, 100);
+});

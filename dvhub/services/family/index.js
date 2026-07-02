@@ -18,6 +18,8 @@
 // Caches buildFamilyStatus() for 2 seconds (Research Pitfall 9) to avoid
 // recomputation storm when mehrere Tablets pollen.
 
+import { capVictronPvForDisplay } from '../../runtime-state.js';
+
 const CACHE_TTL_MS = 2000;
 const TODAY_KPIS_REFRESH_MS = 60_000;
 
@@ -791,7 +793,16 @@ export function createFamilyService(ctx) {
     const status = (typeof ctx.buildFallbackStatusPayload === 'function')
       ? ctx.buildFallbackStatusPayload(now)
       : {};
+    // T-LICENSE-KWP-GATING Increment 3: die angezeigte Live-PV (Energie-Fluss-
+    // Kachel, EV-Modus-Heuristik) auf die lizenzierte kWp kappen — analog zum
+    // Haupt-Status (Increment 2). status.victron ist ein FRISCHER per-Call-
+    // Snapshot (buildCurrentStatusPayload → buildVictronSnapshot), Mutation ist
+    // hier sicher und leckt NICHT in die Steuerung (die liest state.victron
+    // direkt). null (Community/Pro L/Legacy) → No-op.
     const victron = status.victron || {};
+    const familyCapKwp = ctx.licenseService?.getCapKwp?.();
+    const familyCapW = Number.isFinite(familyCapKwp) && familyCapKwp > 0 ? familyCapKwp * 1000 : null;
+    if (familyCapW != null) capVictronPvForDisplay(victron, familyCapW);
     const meter = status.meter || {};
     const costs = status.costs || {};
     const epexState = status.epex || {};
