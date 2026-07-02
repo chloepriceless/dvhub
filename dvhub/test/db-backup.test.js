@@ -225,6 +225,11 @@ test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_res
   const iUnlock = seq.findIndex((s) => String(s).includes('CONNECTION LIMIT -1'));
   assert.ok(iLock >= 0 && iLock < iRestore, 'app locked out (CONNECTION LIMIT 0) before restore');
   assert.ok(iUnlock > iRestore, 'connections re-opened (CONNECTION LIMIT -1) after restore');
+  // cross-version reconcile runs after restore, before post_restore
+  const iExtUpd = seq.findIndex((s) => String(s).includes('ALTER EXTENSION timescaledb UPDATE'));
+  const iMeta = seq.findIndex((s) => String(s).includes('_timescaledb_catalog.metadata'));
+  assert.ok(iExtUpd > iRestore && iMeta > iRestore, 'catalog reconcile (ext update + marker) after restore');
+  assert.ok(iExtUpd < iPost && iMeta < iPost, 'reconcile before post_restore');
 });
 
 test('runDbRestore: no TimescaleDB → plain pg_restore, no dance', async () => {

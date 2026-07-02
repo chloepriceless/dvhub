@@ -296,6 +296,20 @@ export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = 
   //    failure, so the DB is never left locked out or stuck in restore mode.
   await psql(`ALTER DATABASE "${built.dbName}" CONNECTION LIMIT -1`);
   if (hadTimescale) {
+    // Cross-version restore reconcile: a dump from an OLDER TimescaleDB (e.g.
+    // prod 2.25.2 → a fresh box on 2.28.2) restores the catalog's version marker
+    // behind the installed binary, so timescaledb_post_restore() raises "catalog
+    // version mismatch" and the DB stays stuck in restoring mode. Bring the
+    // extension objects up to the binary version and align the marker to it, then
+    // post_restore succeeds. Same-version restores no-op here. (Only ever moves
+    // the marker toward the installed binary; a newer dump on an older binary is
+    // unsupported and still fails loudly.)
+    await psql('ALTER EXTENSION timescaledb UPDATE');
+    await psql(
+      "UPDATE _timescaledb_catalog.metadata m SET value = e.extversion " +
+      "FROM pg_extension e WHERE e.extname = 'timescaledb' " +
+      "AND m.key = 'timescaledb_version' AND m.value <> e.extversion"
+    );
     await psql(`ALTER DATABASE "${built.dbName}" RESET timescaledb.restoring`);
     await psql('SELECT timescaledb_post_restore()');
   }
