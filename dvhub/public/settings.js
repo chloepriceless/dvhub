@@ -2482,6 +2482,72 @@ async function applySystemUpdates() {
   }
 }
 
+// --- Datenbank-Engine (TimescaleDB) ---------------------------------------
+// Zeigt die aktive Extension-Version und — wenn die installierte Paketversion
+// neuer ist (updatePending) — einen "aktualisieren"-Button. Die Pakete werden
+// nächtlich automatisch aktuell gehalten (pkg-maintain-Timer); der eigentliche
+// Versions-Bump (kurzer DB-Neustart) bleibt ein bewusster Klick. Die Gruppe
+// bleibt ausgeblendet, wenn TimescaleDB nicht aktiv ist (reiner Postgres/SQLite).
+async function loadDbEngineStatus() {
+  const group = document.getElementById('dbEngineGroup');
+  const banner = document.getElementById('dbEngineBanner');
+  const actions = document.getElementById('dbEngineActions');
+  const btn = document.getElementById('dbEngineUpgradeBtn');
+  const meta = document.getElementById('dbEngineMeta');
+  if (!group) return;
+  try {
+    const r = await apiFetch('/api/db/timescale/status');
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j || !j.available || !j.extVersion) { group.hidden = true; return; }
+    group.hidden = false;
+    if (j.updatePending && j.binaryVersion) {
+      banner.innerHTML = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
+      // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
+      if (actions) actions.style.display = 'flex';
+      if (btn) { btn.disabled = false; btn.textContent = `Auf ${j.binaryVersion} aktualisieren`; }
+    } else {
+      banner.innerHTML = `<span class="sa-text-ok">TimescaleDB ${escapeHtml(j.extVersion)} — aktuell.</span>`;
+      if (actions) actions.style.display = 'none';
+    }
+    if (meta) {
+      const parts = [];
+      if (j.edition) parts.push(`Edition: ${escapeHtml(j.edition)}`);
+      if (j.lastChecked) parts.push(`geprüft: ${fmtTs(j.lastChecked)}`);
+      meta.textContent = parts.join(' · ') || '-';
+    }
+  } catch {
+    group.hidden = true;
+  }
+}
+
+async function upgradeTimescale() {
+  const banner = document.getElementById('dbEngineBanner');
+  const btn = document.getElementById('dbEngineUpgradeBtn');
+  if (!(await window.dvConfirm('Die Datenbank wird dabei kurz neu gestartet (~15 s) und DVhub verbindet sich anschließend automatisch neu. Laufende Auswertungen können kurz aussetzen.', {
+    title: 'TimescaleDB jetzt aktualisieren?',
+    okLabel: 'Aktualisieren'
+  }))) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Wird aktualisiert...'; }
+  if (banner) banner.innerHTML = '<span class="sa-text-warn">TimescaleDB wird aktualisiert — Datenbank startet kurz neu, bitte warten...</span>';
+  try {
+    const r = await apiFetch('/api/db/timescale/upgrade', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      if (banner) banner.innerHTML = j.alreadyCurrent
+        ? `<span class="sa-text-ok">TimescaleDB ist bereits aktuell (${escapeHtml(j.from)}).</span>`
+        : `<span class="sa-text-ok">TimescaleDB auf ${escapeHtml(j.to)} aktualisiert. DVhub startet neu, damit alle Verbindungen frisch aufsetzen...</span>`;
+      // Nach kurzer Wartezeit Status neu laden (App/DB kommen wieder hoch).
+      window.setTimeout(() => { loadDbEngineStatus().catch(() => {}); }, 9000);
+    } else {
+      if (banner) banner.innerHTML = `<span class="sa-text-err">Aktualisierung fehlgeschlagen: ${escapeHtml(j.error || ('HTTP ' + r.status))}${j.detail ? ' — ' + escapeHtml(String(j.detail).slice(0, 200)) : ''}</span>`;
+      if (btn) { btn.disabled = false; btn.textContent = 'TimescaleDB aktualisieren'; }
+    }
+  } catch (e) {
+    if (banner) banner.innerHTML = `<span class="sa-text-err">Aktualisierung fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
+    if (btn) { btn.disabled = false; btn.textContent = 'TimescaleDB aktualisieren'; }
+  }
+}
+
 async function restartService() {
   const res = await apiFetch('/api/admin/service/restart', { method: 'POST' });
   const payload = await res.json();
@@ -2830,6 +2896,7 @@ function initSettingsPage() {
   // System Updates (OS packages)
   document.getElementById('checkSystemUpdatesBtn')?.addEventListener('click', checkSystemUpdates);
   document.getElementById('applySystemUpdatesBtn')?.addEventListener('click', applySystemUpdates);
+  document.getElementById('dbEngineUpgradeBtn')?.addEventListener('click', upgradeTimescale);
   document.getElementById('rebootSystemBtn')?.addEventListener('click', async () => {
     // Plan 08-11 Task 1: replace native confirm() with branded dvConfirm modal.
     if (!(await window.dvConfirm('System wirklich neu starten? DVhub ist danach kurz nicht erreichbar.', {
@@ -2848,6 +2915,7 @@ function initSettingsPage() {
     }
   });
   loadSystemInfo();
+  loadDbEngineStatus();
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

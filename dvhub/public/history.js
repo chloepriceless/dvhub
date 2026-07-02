@@ -2498,76 +2498,6 @@ async function handleDbRestoreFile(ev) {
   }
 }
 
-// --- Datenbank-Engine (TimescaleDB) ---------------------------------------
-// Zeigt die aktive Extension-Version und — wenn die installierte Paketversion
-// neuer ist (updatePending) — einen "TimescaleDB aktualisieren"-Button. Die
-// Pakete werden nächtlich automatisch aktuell gehalten (pkg-maintain-Timer); der
-// eigentliche Versions-Bump (mit kurzem DB-Neustart) bleibt ein bewusster Klick.
-async function loadDbEngineStatus() {
-  const card = byId('historyDbEngineCard');
-  const verEl = byId('historyDbEngineVersion');
-  const stateEl = byId('historyDbEngineState');
-  const btn = byId('historyDbEngineUpgradeBtn');
-  if (!card) return;
-  try {
-    const r = await apiFetch('/api/db/timescale/status');
-    const j = await r.json().catch(() => ({}));
-    // Keine TimescaleDB (reiner Postgres/SQLite) → Karte ausgeblendet lassen.
-    if (!r.ok || !j || !j.available || !j.extVersion) { card.hidden = true; return; }
-    card.hidden = false;
-    if (verEl) verEl.textContent = `TimescaleDB ${j.extVersion}` + (j.edition ? ` (${j.edition})` : '');
-    if (j.updatePending && j.binaryVersion) {
-      if (stateEl) stateEl.textContent = `Update verfügbar: Version ${j.binaryVersion} ist installiert und kann aktiviert werden.`;
-      if (btn) { btn.hidden = false; btn.disabled = false; btn.textContent = `Auf ${j.binaryVersion} aktualisieren`; }
-    } else {
-      if (stateEl) stateEl.textContent = 'Aktuell — keine Aktualisierung nötig.';
-      if (btn) btn.hidden = true;
-    }
-  } catch (e) {
-    // Netzfehler → Karte still ausblenden statt eine Fehlermeldung zu bannern.
-    card.hidden = true;
-  }
-}
-
-// "TimescaleDB aktualisieren": POST /api/db/timescale/upgrade fährt die sichere
-// Sequenz (Postgres-Neustart → ALTER EXTENSION UPDATE → Postgres-Neustart) und
-// plant danach einen App-Neustart, damit der DB-Pool frisch aufsetzt. Der Endpunkt
-// antwortet VOR dem App-Neustart; danach kurz warten und Status neu laden.
-async function triggerTimescaleUpgrade() {
-  const btn = byId('historyDbEngineUpgradeBtn');
-  const confirmed = window.confirm(
-    'TimescaleDB-Erweiterung jetzt aktualisieren?\n\n' +
-    'Die Datenbank wird dabei kurz neu gestartet (~15 s) und DVhub verbindet sich ' +
-    'anschließend automatisch neu. Laufende Auswertungen können kurz aussetzen.'
-  );
-  if (!confirmed) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'Wird aktualisiert …'; }
-  setBanner('TimescaleDB wird aktualisiert — Datenbank startet kurz neu, bitte warten …', 'info');
-  try {
-    const r = await apiFetch('/api/db/timescale/upgrade', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}'
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) {
-      if (j.alreadyCurrent) {
-        setBanner(`TimescaleDB ist bereits aktuell (${j.from}).`, 'success');
-      } else {
-        setBanner(`TimescaleDB auf ${j.to} aktualisiert. DVhub startet neu, damit alle Verbindungen frisch aufsetzen …`, 'success');
-      }
-      // Status nach kurzer Wartezeit neu laden (App/DB kommen wieder hoch).
-      setTimeout(() => { loadDbEngineStatus().catch(() => {}); }, 9000);
-    } else {
-      setBanner(`Aktualisierung fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}${j.detail ? ' — ' + String(j.detail).slice(0, 200) : ''}`, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'TimescaleDB aktualisieren'; }
-    }
-  } catch (error) {
-    setBanner(`Aktualisierung fehlgeschlagen: ${error.message}`, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'TimescaleDB aktualisieren'; }
-  }
-}
-
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
@@ -2601,8 +2531,6 @@ function bindHistoryControls() {
   if (dbRunBtn) dbRunBtn.addEventListener('click', triggerScheduledBackupNow);
   if (dbRestoreBtn) dbRestoreBtn.addEventListener('click', triggerDbRestore);
   if (dbRestoreFile) dbRestoreFile.addEventListener('change', handleDbRestoreFile);
-  const dbEngineUpgradeBtn = byId('historyDbEngineUpgradeBtn');
-  if (dbEngineUpgradeBtn) dbEngineUpgradeBtn.addEventListener('click', triggerTimescaleUpgrade);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }
@@ -2646,7 +2574,6 @@ function initHistoryPage() {
   renderBackfillButtonState();
   bindHistoryControls();
   loadEegLifetimeExtension();
-  loadDbEngineStatus();
   // Marktwert toggle on Vermiedene Kosten card
   const marketToggle = byId('historyMarketToggle');
   if (marketToggle) {

@@ -80,20 +80,6 @@
         </div>
       </header>
 
-      <!-- Datenbank-Engine (TimescaleDB): Version + Betreiber-gesteuertes
-           Extension-Upgrade. Nur sichtbar, wenn TimescaleDB aktiv ist. -->
-      <section id="historyDbEngineCard" class="card" data-screen-label="Datenbank-Engine" hidden>
-        <div class="card-head">
-          <div>
-            <span class="card-title"><span class="dot dot-green"></span>Datenbank-Engine</span>
-            <p class="card-sub" id="historyDbEngineVersion">TimescaleDB wird gepr&uuml;ft &hellip;</p>
-          </div>
-          <button id="historyDbEngineUpgradeBtn" class="btn primary sm" type="button" hidden
-            title="TimescaleDB-Erweiterung auf die installierte Paketversion aktualisieren — kurzer Datenbank-Neustart (~15 s), die App verbindet sich automatisch neu">TimescaleDB aktualisieren</button>
-        </div>
-        <p class="card-sub" id="historyDbEngineState"></p>
-      </section>
-
       <!-- Period-nav toolbar -->
       <section class="card hist-toolbar" data-screen-label="Filter">
         <div class="hist-toolbar-group" aria-label="Zeitraum wechseln">
@@ -646,7 +632,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260702-dbengine"></script>
+  <script src="/history.js?v=20260702-dbengine-moved"></script>
   <script src="/history-viz.js?v=20260614-sankeylayered"></script>
 </body>
 </html>

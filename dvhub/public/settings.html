@@ -205,6 +205,16 @@
               </div>
             </div>
 
+            <!-- Datenbank-Engine (TimescaleDB): Version + Betreiber-gesteuertes Extension-Upgrade -->
+            <div class="config-group" data-accent="cyan" id="dbEngineGroup" hidden>
+              <div class="config-group-kicker">Datenbank-Engine</div>
+              <div id="dbEngineBanner" class="config-banner info">TimescaleDB wird gepr&uuml;ft...</div>
+              <div id="dbEngineActions" class="svc-actions-block">
+                <button id="dbEngineUpgradeBtn" class="btn btn-primary btn-small" type="button">TimescaleDB aktualisieren</button>
+              </div>
+              <p class="svc-meta" id="dbEngineMeta">-</p>
+            </div>
+
             <!-- Dienst -->
             <div class="config-group" data-accent="green">
               <div class="config-group-kicker">Dienst</div>
@@ -745,7 +755,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20260702-nodelock-bind"></script>
+  <script src="/settings.js?v=20260702-dbengine"></script>
   <script src="/tools.js?v=20260701-dedup-sysupdate"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
