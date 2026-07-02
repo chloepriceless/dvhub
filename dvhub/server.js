@@ -1935,6 +1935,16 @@ async function gracefulShutdown(signal) {
     monitoringHeartbeatSend = null;
   });
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
+  // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
+  // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
+  // licenseService.close() unten) — das war stale. Echter Rest-Gap: der
+  // dbBackupScheduler wurde beim Boot gestartet (Zeile ~1494), aber nie
+  // gestoppt. Sein 60s-Tick-Timer ist nicht .unref()'t — bei einem Shutdown
+  // während eines laufenden pg_dump würde der Kindprozess abrupt sterben
+  // (verwaiste Temp-Datei, potenziell korrupter SMB-Upload). stop() nur
+  // beendet das TICKING (keine neue Sicherung startet mehr) — bricht einen
+  // bereits laufenden Dump nicht ab, das wäre ein separater, größerer Fix.
+  safeSync('dbBackupScheduler.stop', () => ctx.dbBackupScheduler?.stop?.());
 
   // 2. Parallel async closes — one rejection must NOT block the others.
   //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).

@@ -178,3 +178,103 @@ describe('createMqttHub', () => {
     await hub.close();
   });
 });
+
+// B5 (2026-07-02): real integration coverage for the embedded-broker path —
+// the unit tests above only assert the pure _shouldUseEmbeddedBroker()
+// config logic, never actually start()+listen() a real aedes broker or
+// round-trip a real mqtt.js client through it. That path is exactly what
+// the aedes 0.51->1.x migration (named export + async Aedes.createBroker())
+// touches, and it had zero coverage before this. No mocks below.
+describe('createMqttHub — embedded broker (real aedes + real mqtt.js client)', () => {
+  let hub;
+  let externalClient;
+
+  afterEach(async () => {
+    if (externalClient) { await new Promise((resolve) => externalClient.end(true, resolve)); externalClient = null; }
+    if (hub) { await hub.close(); hub = null; }
+  });
+
+  it('starts, round-trips a publish/subscribe over the real embedded broker, and closes cleanly', async () => {
+    const mqtt = await import('mqtt');
+    const port = 18831; // distinct from the config-detection test's port (18830) to avoid port races
+    const logs = [];
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    hub = createMqttHub({
+      getCfg: () => ({ mqtt: { enabled: true, brokerUrl: '', embeddedBroker: { enabled: true, port }, topicPrefix: 'dvhub', username: '', password: '' } }),
+      pushLog: (msg) => logs.push(msg)
+    });
+
+    const received = [];
+    hub.subscribe('test/roundtrip', (topic, payload) => received.push({ topic, payload: payload.toString() }));
+
+    await hub.start();
+    assert.ok(logs.some((l) => l.includes(`listening on 127.0.0.1:${port}`)), 'broker should log it is listening');
+
+    // hub.publish() only works once hub's OWN client is connected to the
+    // broker it just started — poll briefly instead of a fixed sleep.
+    for (let i = 0; i < 50 && !hub.connected; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(hub.connected, true, "hub's own client should connect to the broker it just started");
+
+    hub.publish('test/roundtrip', 'hello-from-hub', { retain: false });
+    for (let i = 0; i < 50 && received.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(received, [{ topic: 'test/roundtrip', payload: 'hello-from-hub' }]);
+
+    // A second, independent real mqtt.js client connecting from outside —
+    // exercises aedesBroker.handle (net.createServer callback) end-to-end,
+    // not just the hub's own internal client.
+    externalClient = mqtt.connect(`mqtt://127.0.0.1:${port}`, { connectTimeout: 3000 });
+    await new Promise((resolve, reject) => {
+      externalClient.on('connect', resolve);
+      externalClient.on('error', reject);
+    });
+    externalClient.publish('test/roundtrip', 'hello-from-external-client');
+    for (let i = 0; i < 50 && received.length < 2; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(received[1], { topic: 'test/roundtrip', payload: 'hello-from-external-client' });
+
+    const closeStart = Date.now();
+    await hub.close();
+    const closeMs = Date.now() - closeStart;
+    assert.ok(closeMs < 5000, `close() should resolve quickly, took ${closeMs}ms`);
+  });
+});
+
+// C1 (2026-07-02): reproduces the actual failure class that caused the proven
+// prod shutdown hang — a broker that accepts the TCP connection but never
+// behaves like a real MQTT broker (never sends CONNACK, never acks
+// DISCONNECT). Before this fix, force=false client.end() would wait
+// indefinitely for exactly this kind of unresponsive broker/network state.
+describe('createMqttHub — close() against an unresponsive ("black hole") broker', () => {
+  let hub;
+  let blackHoleServer;
+
+  afterEach(async () => {
+    if (hub) { await hub.close(); hub = null; }
+    if (blackHoleServer) { await new Promise((resolve) => blackHoleServer.close(resolve)); blackHoleServer = null; }
+  });
+
+  it('close() resolves within the 2s force-fallback instead of hanging on an unresponsive broker', async () => {
+    const net = await import('node:net');
+    const port = 18841;
+    // Accepts the TCP connection and then does nothing — no CONNACK, ever.
+    // mqtt.js's client sits in a perpetual "connecting" limbo, which is
+    // exactly the internal state a plain client.end(false) can wait on
+    // forever.
+    blackHoleServer = net.createServer((sock) => { sock.on('error', () => {}); });
+    await new Promise((resolve) => blackHoleServer.listen(port, '127.0.0.1', resolve));
+
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    hub = createMqttHub({
+      getCfg: () => ({ mqtt: { enabled: true, brokerUrl: `mqtt://127.0.0.1:${port}`, embeddedBroker: { enabled: false }, topicPrefix: 'dvhub', username: '', password: '' } }),
+      pushLog: () => {}
+    });
+    await hub.start(); // never resolves a real 'connect' — client stays in limbo, as intended
+
+    const closeStart = Date.now();
+    await hub.close();
+    const closeMs = Date.now() - closeStart;
+    // Must resolve well under the old 90s systemd hang, and comfortably
+    // under the 2s force-fallback + margin — proves force=true is doing the
+    // work, not the fallback timer (which would land ~2000ms).
+    assert.ok(closeMs < 1500, `close() against a black-hole broker took ${closeMs}ms — expected fast force-disconnect, not a hang`);
+  });
+});

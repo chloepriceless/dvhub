@@ -46,6 +46,10 @@ export function createMqttHub(ctx) {
   let client = null;
   let aedesBroker = null;
   let netServer = null;
+  // C1 (2026-07-02): raw sockets accepted by netServer, tracked so close()
+  // can force them shut instead of waiting on server.close()'s callback,
+  // which only fires once every accepted connection has ended.
+  const openSockets = new Set();
 
   // ── Internal helpers ──────────────────────────────────────────────
 
@@ -89,11 +93,24 @@ export function createMqttHub(ctx) {
     // Step 1: Start embedded broker if needed
     if (shouldUseEmbeddedBroker()) {
       try {
-        const aedes = (await import('aedes')).default;
+        // B5 (2026-07-02): aedes 1.x removed the default export + sync
+        // constructor (breaking change) — named export + async factory now.
+        // drainTimeout defaults to 60000ms in 1.x (was 0/disabled in 0.x): a
+        // frozen/slow client on the embedded broker gets force-disconnected
+        // after 60s instead of blocking delivery to every other subscriber
+        // indefinitely. Kept at the new default — strictly a hardening, not
+        // a behaviour DVhub relied on.
+        const { Aedes } = await import('aedes');
         const net = await import('node:net');
-        aedesBroker = aedes();
+        aedesBroker = await Aedes.createBroker();
         const port = mqttCfg.embeddedBroker?.port || 1883;
         netServer = net.createServer(aedesBroker.handle);
+        // C1: track every accepted socket so close() can force-destroy
+        // stragglers instead of waiting indefinitely on netServer.close().
+        netServer.on('connection', (sock) => {
+          openSockets.add(sock);
+          sock.on('close', () => openSockets.delete(sock));
+        });
         await new Promise((resolve, reject) => {
           netServer.listen(port, '127.0.0.1', () => {   // T-04-02: ALWAYS 127.0.0.1
             pushLog(`[MQTT] Embedded broker listening on 127.0.0.1:${port}`);
@@ -175,7 +192,30 @@ export function createMqttHub(ctx) {
 
   async function close() {
     if (client) {
-      await new Promise((resolve) => client.end(false, () => resolve()));
+      // C1 (2026-07-02): force=false client.end() was the PROVEN culprit of a
+      // 90s prod shutdown hang + SIGKILL (journal: "step 'mqttHub.close'
+      // still pending after 5000ms" on an aged connection to the external
+      // broker). force=false waits for in-flight QoS acks and any pending
+      // reconnect-state to settle before firing its callback — under an
+      // unlucky broker/network state that wait can effectively never
+      // resolve. This client only carries best-effort retained telemetry
+      // (mqttPublisher state topics, family tiles, teslamate) — never the
+      // safety-critical control path, which runs over Modbus — so skipping
+      // the graceful flush at shutdown time is a fully acceptable trade-off.
+      // Belt-and-braces: still race against a short timeout in case some
+      // other mqtt.js internal state manages to wedge the callback anyway
+      // (same pattern as the server.js gracefulShutdown step watchdog).
+      const c = client;
+      let timer = null;
+      await Promise.race([
+        new Promise((resolve) => c.end(true, () => { if (timer) clearTimeout(timer); resolve(); })),
+        new Promise((resolve) => {
+          timer = setTimeout(() => {
+            pushLog('[MQTT] client.end() did not resolve within 2s — continuing shutdown anyway');
+            resolve();
+          }, 2000);
+        })
+      ]);
       client = null;
     }
     if (aedesBroker) {
@@ -183,6 +223,14 @@ export function createMqttHub(ctx) {
       aedesBroker = null;
     }
     if (netServer) {
+      // netServer.close()'s callback only fires once every accepted TCP
+      // connection has ended — a still-open embedded-broker client socket
+      // (e.g. a device that never sent DISCONNECT) would hang this
+      // indefinitely. aedesBroker.close() above already told well-behaved
+      // clients to disconnect; force-destroy whatever's still open so
+      // close() always resolves promptly.
+      for (const sock of openSockets) { try { sock.destroy(); } catch { /* already gone */ } }
+      openSockets.clear();
       await new Promise((resolve) => netServer.close(() => resolve()));
       netServer = null;
     }
