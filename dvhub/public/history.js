@@ -2453,6 +2453,51 @@ async function triggerScheduledBackupNow() {
   }
 }
 
+// Datenbank aus einer .dump-Backupdatei wiederherstellen. DESTRUKTIV — pg_restore
+// --clean überschreibt vorhandene Daten. Die Datei wird per POST (Bearer-Pflicht,
+// KEIN LAN-Bypass) direkt als Request-Body hochgeladen; der Server streamt sie in
+// eine Temp-Datei, prüft die PGDMP-Signatur und spielt sie mit dem
+// TimescaleDB-pre/post_restore-Tanz ein. Danach Neustart empfohlen.
+function triggerDbRestore() {
+  const input = byId('historyDbRestoreFile');
+  if (input) input.click();
+}
+
+async function handleDbRestoreFile(ev) {
+  const input = ev.target;
+  const file = input.files && input.files[0];
+  input.value = ''; // erlaubt erneute Auswahl derselben Datei
+  if (!file) return;
+  const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+  const confirmed = window.confirm(
+    `Datenbank wirklich aus „${file.name}" (${sizeMb} MB) wiederherstellen?\n\n` +
+    'ACHTUNG: Vorhandene Daten werden überschrieben (pg_restore --clean). ' +
+    'Dieser Schritt ist NICHT umkehrbar. Nach der Wiederherstellung wird ein Neustart empfohlen.'
+  );
+  if (!confirmed) return;
+  const btn = byId('historyDbRestoreBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Wiederherstellen …'; }
+  setBanner(`Datenbank wird aus „${file.name}" wiederhergestellt — bitte warten und Seite nicht schließen …`, 'info');
+  try {
+    const r = await apiFetch('/api/db/restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      const warn = j.ignoredErrors ? ` (${j.ignoredErrors} nicht-fatale Warnungen ignoriert)` : '';
+      setBanner(`Datenbank wiederhergestellt${warn}. Bitte DVhub neu starten, damit alle Verbindungen frisch aufsetzen.`, j.ignoredErrors ? 'warn' : 'success');
+    } else {
+      setBanner(`Wiederherstellung fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}${j.detail ? ' — ' + String(j.detail).slice(0, 200) : ''}`, 'error');
+    }
+  } catch (error) {
+    setBanner(`Wiederherstellung fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'DB wiederherstellen'; }
+  }
+}
+
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
@@ -2461,6 +2506,8 @@ function bindHistoryControls() {
   const dbFullBtn = byId('historyDbBackupFullBtn');
   const db15Btn = byId('historyDbBackup15mBtn');
   const dbRunBtn = byId('historyDbBackupRunBtn');
+  const dbRestoreBtn = byId('historyDbRestoreBtn');
+  const dbRestoreFile = byId('historyDbRestoreFile');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   // Karten-Dichte: persistierten Wert anwenden + Selektor spiegeln + binden.
@@ -2482,6 +2529,8 @@ function bindHistoryControls() {
   if (dbFullBtn) dbFullBtn.addEventListener('click', () => triggerDbBackup('full'));
   if (db15Btn) db15Btn.addEventListener('click', () => triggerDbBackup('energy15m'));
   if (dbRunBtn) dbRunBtn.addEventListener('click', triggerScheduledBackupNow);
+  if (dbRestoreBtn) dbRestoreBtn.addEventListener('click', triggerDbRestore);
+  if (dbRestoreFile) dbRestoreFile.addEventListener('change', handleDbRestoreFile);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }

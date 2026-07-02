@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { buildPgDumpArgs, backupFilename, streamPgDump, selectBackupsToDelete, DB_BACKUP_SCOPES } from '../services/db-backup.js';
+import { buildPgDumpArgs, backupFilename, streamPgDump, selectBackupsToDelete, DB_BACKUP_SCOPES, buildPgRestoreArgs, buildPsqlArgs, runDbRestore } from '../services/db-backup.js';
 
 test('selectBackupsToDelete keeps the N newest of a scope, oldest deleted first', () => {
   const files = [
@@ -129,4 +129,115 @@ test('nonzero exit MID-stream destroys the connection (no truncated "backup")', 
   assert.equal(res.statusCode, 200);
   child.emit('close', 1);
   assert.equal(res.destroyed, true);
+});
+
+// --- restore: pure arg builders --------------------------------------------
+
+test('buildPgRestoreArgs: --clean --if-exists --no-owner --no-privileges + file last', () => {
+  const r = buildPgRestoreArgs({ database: { name: 'dvhub' }, file: '/tmp/x.dump' });
+  assert.equal(r.ok, true);
+  assert.equal(r.dbName, 'dvhub');
+  assert.deepEqual(r.args.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'dvhub', '-d', 'dvhub']);
+  for (const flag of ['--clean', '--if-exists', '--no-owner', '--no-privileges']) assert.ok(r.args.includes(flag), flag);
+  assert.equal(r.args[r.args.length - 1], '/tmp/x.dump');
+});
+
+test('buildPgRestoreArgs: missing file rejected', () => {
+  assert.equal(buildPgRestoreArgs({ database: {} }).ok, false);
+  assert.equal(buildPgRestoreArgs({ database: {}, file: 123 }).ok, false);
+});
+
+test('buildPsqlArgs: ON_ERROR_STOP + the sql as final arg', () => {
+  const a = buildPsqlArgs({ database: { name: 'dvhub' }, sql: 'SELECT 1' });
+  assert.deepEqual(a.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'dvhub', '-d', 'dvhub']);
+  assert.ok(a.includes('ON_ERROR_STOP=1'));
+  assert.equal(a[a.length - 1], 'SELECT 1');
+});
+
+// --- runDbRestore orchestration (injected spawnFn) --------------------------
+
+// responses(cmd, args) → { stdout?, stderr?, code? }. Emits on the next tick so
+// runCmd's synchronously-attached listeners are in place first.
+function mockSpawn(responses) {
+  const calls = [];
+  const fn = (cmd, args) => {
+    calls.push({ cmd, sql: args[args.length - 1] });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const r = responses(cmd, args) || {};
+    setImmediate(() => {
+      if (r.stdout) child.stdout.emit('data', Buffer.from(r.stdout));
+      if (r.stderr) child.stderr.emit('data', Buffer.from(r.stderr));
+      child.emit('close', r.code == null ? 0 : r.code);
+    });
+    return child;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_restore', async () => {
+  const spawnFn = mockSpawn((cmd, args) => {
+    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1\n' };
+    return {};
+  });
+  const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, true);
+  assert.equal(out.hadTimescale, true);
+  const seq = spawnFn.calls.map((c) => c.cmd === 'pg_restore' ? 'RESTORE' : c.sql);
+  const iPre = seq.findIndex((s) => String(s).includes('timescaledb_pre_restore'));
+  const iSet = seq.findIndex((s) => String(s).includes("restoring = 'on'"));
+  const iRestore = seq.indexOf('RESTORE');
+  const iReset = seq.findIndex((s) => String(s).includes('RESET timescaledb.restoring'));
+  const iPost = seq.findIndex((s) => String(s).includes('timescaledb_post_restore'));
+  assert.ok(iPre >= 0 && iSet >= 0 && iRestore >= 0 && iReset >= 0 && iPost >= 0, 'all steps present');
+  assert.ok(iPre < iRestore && iSet < iRestore, 'pre_restore + SET before restore');
+  assert.ok(iReset > iRestore && iPost > iRestore, 'RESET + post_restore after restore');
+  assert.ok(seq.some((s) => String(s).includes('pg_terminate_backend')), 'terminates other backends');
+});
+
+test('runDbRestore: no TimescaleDB → plain pg_restore, no dance', async () => {
+  const spawnFn = mockSpawn((cmd, args) => {
+    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '' }; // absent
+    return {};
+  });
+  const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, true);
+  assert.equal(out.hadTimescale, false);
+  const sqls = spawnFn.calls.map((c) => c.sql);
+  assert.ok(!sqls.some((s) => String(s).includes('timescaledb_pre_restore')), 'no pre_restore');
+  assert.ok(!sqls.some((s) => String(s).includes('timescaledb_post_restore')), 'no post_restore');
+  assert.ok(spawnFn.calls.some((c) => c.cmd === 'pg_restore'), 'still restores');
+});
+
+test('runDbRestore: parses "errors ignored on restore: N"', async () => {
+  const spawnFn = mockSpawn((cmd, args) => {
+    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    if (cmd === 'pg_restore') return { code: 0, stderr: 'pg_restore: warning: errors ignored on restore: 3' };
+    return {};
+  });
+  const out = await runDbRestore({ database: {}, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, true);
+  assert.equal(out.ignoredErrors, 3);
+});
+
+test('runDbRestore: pg_restore FAILS but post_restore STILL runs (DB never left stuck)', async () => {
+  const spawnFn = mockSpawn((cmd, args) => {
+    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    if (cmd === 'pg_restore') return { code: 1, stderr: 'pg_restore: error: could not connect' };
+    return {};
+  });
+  const out = await runDbRestore({ database: {}, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 1);
+  const sqls = spawnFn.calls.map((c) => c.sql);
+  assert.ok(sqls.some((s) => String(s).includes('timescaledb_post_restore')), 'post_restore ran despite failure');
+});
+
+test('runDbRestore: missing file → ok:false, nothing spawned', async () => {
+  let spawned = false;
+  const out = await runDbRestore({ database: {}, inFile: '', spawnFn: () => { spawned = true; } });
+  assert.equal(out.ok, false);
+  assert.equal(spawned, false);
 });

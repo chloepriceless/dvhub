@@ -3,6 +3,7 @@
 // Factory pattern: createApiRoutes(ctx) returns { handleRequest }.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -21,7 +22,7 @@ import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config
 import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-secrets-crypto.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
-import { streamPgDump } from './services/db-backup.js';
+import { streamPgDump, runDbRestore } from './services/db-backup.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -58,6 +59,36 @@ const PARQUET_SCHEMA = new parquet.ParquetSchema({
   value:      { type: 'DOUBLE', optional: true },
   unit:       { type: 'UTF8', optional: true },
 });
+
+// GUI DB-Restore (POST /api/db/restore): stream a raw request body straight to
+// a file on disk with a hard byte ceiling and proper backpressure, so a
+// multi-hundred-MB .dump upload is never buffered in the LXC's memory. Rejects
+// early on the content-length header when present, and otherwise enforces the
+// cap chunk-by-chunk. Resolves { bytes }; rejects with err.code='TOO_LARGE' on
+// overflow (413) or the underlying stream error otherwise. The caller unlinks
+// the temp file on every path.
+function saveUploadToFile(req, filePath, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const cl = Number(req.headers['content-length']);
+    if (Number.isFinite(cl) && cl > maxBytes) {
+      const e = new Error('body_too_large'); e.code = 'TOO_LARGE'; reject(e); return;
+    }
+    const ws = fs.createWriteStream(filePath);
+    let total = 0;
+    let failed = false;
+    const fail = (err) => { if (failed) return; failed = true; try { ws.destroy(); } catch {} try { req.destroy(); } catch {} reject(err); };
+    req.on('data', (chunk) => {
+      if (failed) return;
+      total += chunk.length;
+      if (total > maxBytes) { const e = new Error('body_too_large'); e.code = 'TOO_LARGE'; fail(e); return; }
+      if (!ws.write(chunk)) { req.pause(); ws.once('drain', () => { if (!failed) req.resume(); }); }
+    });
+    req.on('end', () => { if (!failed) ws.end(); });
+    req.on('error', fail);
+    ws.on('error', fail);
+    ws.on('finish', () => { if (!failed) resolve({ bytes: total }); });
+  });
+}
 
 // Phase 09.2 D-12 — minimal CSV-cell escape. Quotes the cell when it contains
 // the separator (`;`), a double-quote, or a newline; embedded quotes are
@@ -1268,7 +1299,9 @@ export function createApiRoutes(ctx) {
   // (config shape, logs, host info). Require Bearer even on LAN, like the raw
   // history exports — the CLI (`dvhub support dump`) is the unauthenticated
   // local-shell path for an operator already on the box.
-  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle']);
+  // /api/db/restore is DESTRUCTIVE (drops+recreates the telemetry DB) — force
+  // Bearer even on a trusted LAN (lanTrust:open), like the support bundle.
+  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle', '/api/db/restore']);
 
   function checkAuth(req, res) {
     const cfg = getCfg();
@@ -5731,6 +5764,64 @@ export function createApiRoutes(ctx) {
       if (!ctx.dbBackupScheduler) return json(res, 503, { ok: false, error: 'backup scheduler unavailable' });
       const result = await ctx.dbBackupScheduler.runNow('manual');
       return json(res, result.ok ? 200 : 500, result);
+    }
+
+    // DESTRUCTIVE restore from an uploaded pg_dump (.dump, custom -Fc format).
+    // Bearer-required (in BEARER_REQUIRED_ENDPOINTS → never LAN-bypassable, even
+    // on lanTrust:open) AND service-actions-gated, matching the posture of a
+    // restart/update: it drops+recreates the telemetry DB. The upload streams
+    // straight to a temp file (never buffered in memory), is validated as a
+    // PGDMP archive, then pg_restore'd with the TimescaleDB pre/post_restore
+    // dance when the extension is present. A restart is recommended afterwards so
+    // the app's pool reconnects against the fresh schema.
+    if (url.pathname === '/api/db/restore' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.getServiceActionsEnabled || !ctx.getServiceActionsEnabled()) {
+        return json(res, 403, { ok: false, error: 'service actions disabled' });
+      }
+      const cfg = getCfg();
+      if (!cfg.telemetry?.enabled || !cfg.telemetry?.database) {
+        return json(res, 503, { ok: false, error: 'telemetry database disabled' });
+      }
+      const MAX_RESTORE_BYTES = 8 * 1024 * 1024 * 1024; // 8 GB ceiling
+      const tmpFile = path.join(os.tmpdir(), `dvhub-restore-${crypto.randomUUID()}.dump`);
+      let bytes = 0;
+      try {
+        ({ bytes } = await saveUploadToFile(req, tmpFile, MAX_RESTORE_BYTES));
+      } catch (e) {
+        try { fs.unlinkSync(tmpFile); } catch {}
+        if (e.code === 'TOO_LARGE') return json(res, 413, { ok: false, error: 'body_too_large' });
+        return json(res, 400, { ok: false, error: 'upload_failed', detail: e.message });
+      }
+      // Validate the custom-format magic ("PGDMP") so a mis-uploaded file fails
+      // fast — before we terminate backends or drop a single object.
+      let magicOk = false;
+      try {
+        const fd = fs.openSync(tmpFile, 'r');
+        const head = Buffer.alloc(5);
+        const n = fs.readSync(fd, head, 0, 5, 0);
+        fs.closeSync(fd);
+        magicOk = n === 5 && head.toString('latin1') === 'PGDMP';
+      } catch {}
+      if (!magicOk) {
+        try { fs.unlinkSync(tmpFile); } catch {}
+        return json(res, 400, { ok: false, error: 'invalid_dump', hint: 'Erwartet wird eine .dump-Datei im pg_dump-Custom-Format (-Fc).' });
+      }
+      pushLog('db_restore_start', { bytes }, { ...actorContext(req), severity: 'warn' });
+      let result;
+      try {
+        result = await runDbRestore({ database: cfg.telemetry.database, inFile: tmpFile });
+      } catch (e) {
+        result = { ok: false, code: null, stderr: e?.message || 'restore_exception', hadTimescale: false, ignoredErrors: 0 };
+      } finally {
+        try { fs.unlinkSync(tmpFile); } catch {}
+      }
+      if (result.ok) {
+        pushLog('db_restore_ok', { bytes, hadTimescale: result.hadTimescale, ignoredErrors: result.ignoredErrors || 0 }, { ...actorContext(req), severity: 'warn' });
+        return json(res, 200, { ok: true, hadTimescale: result.hadTimescale, ignoredErrors: result.ignoredErrors || 0, restartRecommended: true });
+      }
+      pushLog('db_restore_failed', { bytes, code: result.code, stderr: (result.stderr || '').slice(0, 300) }, { ...actorContext(req), severity: 'error' });
+      return json(res, 500, { ok: false, error: 'restore_failed', code: result.code, detail: (result.stderr || '').slice(0, 800), hadTimescale: result.hadTimescale, restartRecommended: true });
     }
 
     // --- Config POST / Import POST ---

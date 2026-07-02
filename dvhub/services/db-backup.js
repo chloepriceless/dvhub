@@ -160,6 +160,123 @@ export function dumpToFile({ scope, database = {}, outFile, spawnFn = spawn } = 
   });
 }
 
+// ---------------------------------------------------------------------------
+// Restore (GUI DB-Restore, POST /api/db/restore) — the inverse of the backup
+// side above. DESTRUCTIVE: pg_restore --clean drops existing objects first.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure: build the pg_restore argv for a target telemetry.database config.
+ * Mirrors buildPgDumpArgs' connection resolution so the restore talks to the
+ * same DB the app uses. --clean --if-exists drops existing objects before
+ * recreating them; --no-owner/--no-privileges keep the archive portable across
+ * roles (matches how the dump was written). The dump file is the last arg.
+ *
+ * @returns {{ok:true, args:string[], dbName:string} | {ok:false, error:string}}
+ */
+export function buildPgRestoreArgs({ database = {}, file } = {}) {
+  if (!file || typeof file !== 'string') return { ok: false, error: 'missing_file' };
+  const host = database.host || '/var/run/postgresql';
+  const port = String(database.port || 5432);
+  const dbName = database.name || database.database || 'dvhub';
+  const user = database.user || 'dvhub';
+  const args = ['-h', host, '-p', port, '-U', user, '-d', dbName,
+    '--clean', '--if-exists', '--no-owner', '--no-privileges', file];
+  return { ok: true, args, dbName };
+}
+
+/**
+ * Pure: build a psql argv that runs one SQL command against the same DB (for
+ * the TimescaleDB pre/post_restore dance + backend termination). -Atqc keeps
+ * output minimal and script-parseable; ON_ERROR_STOP surfaces real failures.
+ */
+export function buildPsqlArgs({ database = {}, sql } = {}) {
+  const host = database.host || '/var/run/postgresql';
+  const port = String(database.port || 5432);
+  const dbName = database.name || database.database || 'dvhub';
+  const user = database.user || 'dvhub';
+  return ['-h', host, '-p', port, '-U', user, '-d', dbName, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
+}
+
+/** Spawn a command, buffer stdout/stderr, resolve an outcome. Never rejects. */
+function runCmd(cmd, args, env, spawnFn) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawnFn(cmd, args, { env }); }
+    catch (err) { resolve({ ok: false, code: null, stdout: '', stderr: err.message }); return; }
+    let stdout = '', stderr = '';
+    if (child.stdout) child.stdout.on('data', (d) => { if (stdout.length < 8000) stdout += d.toString(); });
+    if (child.stderr) child.stderr.on('data', (d) => { if (stderr.length < 8000) stderr += d.toString(); });
+    child.on('error', (err) => resolve({ ok: false, code: null, stdout: stdout.trim(), stderr: (stderr || err.message).trim() }));
+    child.on('close', (code) => resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() }));
+  });
+}
+
+/**
+ * Restore a pg_dump custom-format (-Fc) file into the telemetry DB. DESTRUCTIVE.
+ *
+ * Handles the TimescaleDB pre/post_restore dance when the extension is present
+ * (a FULL dump carries the timeseries_samples hypertable + continuous
+ * aggregates, which must import with timescaledb.restoring='on' — set at
+ * DATABASE level so the separate pg_restore connection inherits it), and
+ * terminates other client backends first so --clean's DROPs don't block on the
+ * app's connection pool. post_restore/RESET ALWAYS run afterwards — even if
+ * pg_restore failed — so the DB is never left stuck in restore mode. An
+ * energy15m dump (plain table) passes through the same path harmlessly.
+ *
+ * Never throws; returns a structured outcome. buildPgRestoreArgs stays pure and
+ * unit-testable; the orchestration is exercised via an injected spawnFn.
+ *
+ * @returns {Promise<{ok:boolean, code:number|null, stderr:string, hadTimescale:boolean, ignoredErrors:number}>}
+ */
+export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = {}) {
+  const built = buildPgRestoreArgs({ database, file: inFile });
+  if (!built.ok) return { ok: false, code: null, stderr: built.error, hadTimescale: false, ignoredErrors: 0 };
+  const env = { ...process.env };
+  if (database.password) env.PGPASSWORD = String(database.password);
+  const psql = (sql) => runCmd('psql', buildPsqlArgs({ database, sql }), env, spawnFn);
+
+  // 1. Is TimescaleDB present on the target?
+  const extProbe = await psql("SELECT 1 FROM pg_extension WHERE extname='timescaledb'");
+  const hadTimescale = extProbe.ok && extProbe.stdout.includes('1');
+
+  // 2. Enter TimescaleDB restore mode (stops background workers; imports chunks
+  //    as plain tables). Flag the DB (not just the session) so pg_restore's own
+  //    connection sees it.
+  if (hadTimescale) {
+    await psql('SELECT timescaledb_pre_restore()');
+    await psql(`ALTER DATABASE "${built.dbName}" SET timescaledb.restoring = 'on'`);
+  }
+
+  // 3. Free locks so --clean can drop: terminate other client backends (the
+  //    app's pool, EOS, etc.). They reconnect on their next query; a restart is
+  //    recommended to the operator afterwards regardless.
+  await psql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'");
+
+  // 4. The restore itself.
+  const restore = await runCmd('pg_restore', built.args, env, spawnFn);
+
+  // 5. ALWAYS unwind restore mode, even on failure, so the DB is never stuck.
+  if (hadTimescale) {
+    await psql(`ALTER DATABASE "${built.dbName}" RESET timescaledb.restoring`);
+    await psql('SELECT timescaledb_post_restore()');
+  }
+
+  // pg_restore continues past non-fatal errors by default and still exits 0,
+  // printing "errors ignored on restore: N". Surface that count so a partial
+  // restore isn't reported as clean.
+  const m = /errors ignored on restore:\s*(\d+)/i.exec(restore.stderr || '');
+  const ignoredErrors = m ? Number(m[1]) : 0;
+
+  return {
+    ok: restore.ok,
+    code: restore.code,
+    stderr: (restore.stderr || '').slice(0, 2000),
+    hadTimescale,
+    ignoredErrors
+  };
+}
+
 /**
  * Pure: given a directory listing, pick the backup files to delete to keep only
  * the `keep` newest for a scope. Filenames embed a sortable YYYY-MM-DD-HHMM
