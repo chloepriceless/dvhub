@@ -470,11 +470,11 @@ chmod 700 "$CONFIG_DIR/vpn/profiles"
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then
   systemctl enable --now postgresql 2>/dev/null || true
-  if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='dvhub'\"" 2>/dev/null | grep -q 1; then
-    su - postgres -c "createuser dvhub" 2>/dev/null || true
+  if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='dvhub'\"" 2>/dev/null | grep -q 1; then
+    su postgres -c "createuser dvhub" 2>/dev/null || true
   fi
-  if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='dvhub'\"" 2>/dev/null | grep -q 1; then
-    su - postgres -c "createdb -O dvhub dvhub" 2>/dev/null || true
+  if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='dvhub'\"" 2>/dev/null | grep -q 1; then
+    su postgres -c "createdb -O dvhub dvhub" 2>/dev/null || true
   fi
   # Peer-Auth: dvhub system user kann sich ohne Passwort verbinden
   PG_HBA="$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)"

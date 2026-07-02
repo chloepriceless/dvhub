@@ -45,9 +45,13 @@ if [[ -z "$PG_VER" ]]; then
 fi
 
 # --- Probe versions BEFORE (extension currently active + binary's default) ------
-ext_ver()  { su - postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
-bin_ver()  { su - postgres -c "psql -tAqc \"SELECT default_version FROM pg_available_extensions WHERE name='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
-license()  { su - postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+# NB: `su postgres` (NON-login), not `su - postgres`. A login shell sources the
+# postgres user's MOTD (some images — e.g. community-scripts Proxmox LXCs, which is
+# prod's platform — print a multi-line banner) which gets prepended to the psql
+# output and corrupts the parsed version/license strings. Non-login su has no MOTD.
+ext_ver()  { su postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+bin_ver()  { su postgres -c "psql -tAqc \"SELECT default_version FROM pg_available_extensions WHERE name='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+license()  { su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
 
 LAST_PKG_UPGRADE=""
 

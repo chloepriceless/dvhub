@@ -344,7 +344,11 @@ fi
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
-  [[ "$(su - postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" dvhub" 2>/dev/null | tr -d '[:space:]')" == "timescale" ]] && TS_ACTIVE=1
+  # `su postgres` (NON-login): a login shell would prepend the postgres user's MOTD
+  # banner (community-scripts Proxmox LXCs — prod's platform) to the psql output,
+  # so the == "timescale" check would wrongly fail and re-launch provisioning on
+  # every restart.
+  [[ "$(su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" dvhub" 2>/dev/null | tr -d '[:space:]')" == "timescale" ]] && TS_ACTIVE=1
   if [[ "$TS_ACTIVE" -eq 1 ]]; then
     echo "  TimescaleDB: OK (Community-Edition aktiv)"
   elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then

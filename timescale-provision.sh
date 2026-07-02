@@ -99,7 +99,7 @@ flip_config_true() {
 }
 
 ext_license() {
-  su - postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'
+  su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'
 }
 
 # --- 2. Fast-skip if the Community extension is already active (prod) ---------
@@ -203,15 +203,15 @@ if [[ "$NEED_RESTART" -eq 1 ]]; then
   echo "  TimescaleDB: Postgres-Neustart (neue Bibliothek/Preload) ..."
   systemctl restart postgresql || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; exit 0; }
   # brief readiness wait
-  for _ in $(seq 1 10); do su - postgres -c "psql -tAqc 'SELECT 1'" >/dev/null 2>&1 && break; sleep 1; done
+  for _ in $(seq 1 10); do su postgres -c "psql -tAqc 'SELECT 1'" >/dev/null 2>&1 && break; sleep 1; done
 fi
 
 # --- 6. CREATE EXTENSION + ALTER UPDATE in the DVhub DB (superuser) -----------
-if su - postgres -c "psql -d ${DB_NAME} -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'" >/dev/null 2>&1; then
+if su postgres -c "psql -d ${DB_NAME} -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'" >/dev/null 2>&1; then
   # Retrofit / version bump: move the extension to the installed binary's version
   # (e.g. Apache 2.19 → Community 2.28). No-op when already current.
-  su - postgres -c "psql -d ${DB_NAME} -c 'ALTER EXTENSION timescaledb UPDATE'" >/dev/null 2>&1 || true
-  EXTVER="$(su - postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null)"
+  su postgres -c "psql -d ${DB_NAME} -c 'ALTER EXTENSION timescaledb UPDATE'" >/dev/null 2>&1 || true
+  EXTVER="$(su postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null)"
   echo "  TimescaleDB: Extension in DB '${DB_NAME}' aktiv (v${EXTVER}, Lizenz $(ext_license))."
 else
   echo "  WARN: CREATE EXTENSION timescaledb in '${DB_NAME}' fehlgeschlagen — Box bleibt auf reinem Postgres." >&2
