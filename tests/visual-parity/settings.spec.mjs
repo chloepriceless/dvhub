@@ -9,7 +9,7 @@
 //    localStorage['dvhub.theme'] — only theme.js does.
 //  - styles.css is NOT linked (Wave-4 link migration).
 //  - dvhub-app.css + settings.css ARE linked.
-//  - All 6 tab anchors (data-tab="connection|control|services|system|ml|vpn")
+//  - All 7 tab anchors (data-tab="connection|control|services|system|forecast|eos|vpn")
 //    exist and tab switching works.
 //  - Save-bar (#saveBarText / #saveAllHeaderBtn / #discardBtn / #saveConfigBtn)
 //    is present (Pitfall 6 — dirty-state surface preserved).
@@ -73,10 +73,12 @@ const EXPECTED_IDS = [
   'scanMeta', 'startScan', 'scanRows',
   // System tab — schedule editor
   'loadSchedule', 'saveSchedule', 'scheduleJson', 'scheduleMeta',
-  // ML tab
+  // ML tab (the LLM sub-group was removed with the Custom-Tabs redesign —
+  // 2026-07: settings-tab-nav dropped the "ml" button in favour of
+  // forecast/eos custom tabs; #tab-ml + these core metric fields still exist
+  // in the DOM, just unreachable via the tab nav)
   'mlModelType', 'mlModelVersion', 'mlLastTrain', 'mlNextTrain',
   'mlMaeSparkline', 'mlMae7d', 'mlMae30d', 'mlTierFeatures', 'mlTrainingLog',
-  'mlLlmGroup', 'llmModelSelect', 'llmStatus', 'llmMsgCount', 'llmInferenceMs',
   // VPN tab — static fields (the upload panel + buttons are injected by
   // renderVpnUploadPanel into #vpnUploadMount lazily; binding-contract
   // handles those)
@@ -169,10 +171,12 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     expect(hasSettingsCss, 'settings.css must be linked from settings.html').toBe(true);
   });
 
-  test('all 6 tab anchors exist and tab switching works', async ({ page }) => {
+  test('all 7 tab anchors exist and tab switching works', async ({ page }) => {
     await page.goto('/settings.html');
     await page.waitForLoadState('networkidle');
-    const tabs = ['connection', 'control', 'services', 'system', 'ml', 'vpn'];
+    // Custom-Tabs redesign (2026-07): "ml" button dropped, "forecast" + "eos"
+    // added (Status/Forecast/EOS/VPN custom tabs, onboarding-look nav rail).
+    const tabs = ['connection', 'control', 'services', 'system', 'forecast', 'eos', 'vpn'];
     for (const t of tabs) {
       const button = page.locator(`button.settings-tab[data-tab="${t}"]`);
       await expect(button, `tab button for "${t}" must be attached`).toBeAttached();

@@ -4,8 +4,10 @@
 // Source-of-truth for the 14-card mount-ID list is ./history-viz.ids.mjs;
 // binding-contract.mjs / the leak spec reuse it via the exported
 // EXPECTED_VIZ_IDS array (re-exported below). The 14 mount IDs, for reference:
-//   sankeySvg, hm, ledgerBody, dayProfileMount, vStack, autarkCal, ringSvg,
-//   vDuration, vPHeat, vSpag, vCycles, vTop10, vCalYear, vScatter
+//   sankeySvg, hm, dayProfileMount, vStack, autarkCal, ringSvg,
+//   vDuration, vPHeat, vNegPrice, vSpag, vCycles, vTop10, vCalYear, vScatter
+// (ledgerBody removed 2026-07 — Spot-Ledger card dropped by design;
+// vNegPrice added 2026-07 — Negativpreis-Heatmap, Plan 09.4.)
 //
 // Waves 1-6 grew this file incrementally (smoke + per-wave partial asserts).
 // Wave 8 (this plan) replaces the body with the FULL assertion set:
@@ -98,11 +100,14 @@ test.describe('History Viz Cards (Phase 09.3, all 14 cards across 4 views)', () 
 
   // The expected visible-card slug set per view. The [data-viz-card] attribute
   // carries the slug; .viz-hidden-by-view is the view-conditional hide class.
+  // Derived from the data-show-view attribute of every [data-viz-card] section
+  // in history.html — pheat does NOT include "day" (day dropped 'pheat' at
+  // some point); 'neg-price' (Plan 09.4 Negativpreis-Heatmap) is month+year only.
   const visibleCards = {
-    day:   ['sankey', 'day-profile', 'ledger', 'stack', 'autarky-calendar', 'ring', 'duration', 'pheat'],
+    day:   ['sankey', 'day-profile', 'stack', 'autarky-calendar', 'ring', 'duration'],
     week:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'cycles', 'top10', 'scatter'],
-    month: ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'cycles', 'top10', 'scatter'],
-    year:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'cycles', 'top10', 'cal-year', 'scatter']
+    month: ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'scatter'],
+    year:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'cal-year', 'scatter']
   };
 
   for (const [view, cards] of Object.entries(visibleCards)) {

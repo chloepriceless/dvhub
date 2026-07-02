@@ -20,10 +20,10 @@ import { test, expect } from '@playwright/test';
 // Phase 09.3-08 key-link: the leak spec consumes the canonical mount-ID list
 // from the shared history-viz.ids.mjs module (also imported by
 // history-viz.spec.mjs). The year-view chart-count upper bound below (12) is
-// derived from this 14-card universe minus the 3 day-only cards (day-profile,
-// ledger, ring) — keeping the two specs in lockstep so a future card
-// add/remove updates one array. Importing the plain .ids.mjs module (not the
-// sibling spec) avoids Playwright's "test file should not import test file".
+// derived from this 14-card universe minus the 2 day-only cards (day-profile,
+// ring) — keeping the two specs in lockstep so a future card add/remove
+// updates one array. Importing the plain .ids.mjs module (not the sibling
+// spec) avoids Playwright's "test file should not import test file".
 import { EXPECTED_VIZ_IDS } from './history-viz.ids.mjs';
 
 test.describe('History-viz leak guard (Phase 09.3-06 Wave 6, locked in Wave 8)', () => {
@@ -68,8 +68,8 @@ test.describe('History-viz leak guard (Phase 09.3-06 Wave 6, locked in Wave 8)',
     );
 
     // For view='year' the build-eligible cards are: sankey + heatmap + stack +
-    // autarky-calendar + duration + pheat + spaghetti + cycles + top10 +
-    // cal-year + scatter. day-profile + ledger + ring are day-only.
+    // autarky-calendar + duration + pheat + neg-price + spaghetti + cycles +
+    // top10 + cal-year + scatter (12). day-profile + ring are day-only.
     //
     // This is a LEAK guard — its single job is to catch UNBOUNDED GROWTH. The
     // hard, non-negotiable assertion is therefore the UPPER bound (≤ 12): a

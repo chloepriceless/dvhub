@@ -19,8 +19,8 @@ import { test, expect } from '@playwright/test';
 // history.js's 81 distinct getElementById/byId/setText/setHtml/setHidden
 // callsites are all covered by this list.
 const EXPECTED_IDS = [
-  // Toolbar + nav
-  'menuToggle', 'historyPrevBtn', 'historyNextBtn', 'historyView',
+  // Toolbar + nav (menuToggle renamed navToggle — shared nav-rail unification)
+  'navToggle', 'historyPrevBtn', 'historyNextBtn', 'historyView',
   'historyDate', 'historyBackfillBtn', 'historyExportCsvBtn', 'historyMeta',
   // Banner
   'historyBanner', 'historyBannerText', 'historyStatusInfoToggle', 'historyStatusInfo',
@@ -34,19 +34,21 @@ const EXPECTED_IDS = [
   'historyAvoidedLabel', 'historyMarketToggle', 'historyKpiAvoided',
   'historyAvoidedDefault', 'historyKpiAvoidedPvGross', 'historyKpiAvoidedBatteryGross',
   'historyAvoidedMarket', 'historyKpiAvoidedPvMarket', 'historyKpiAvoidedBatMarket', 'historyKpiOppCost',
-  // KPI card 5: Energiebilanz
-  'historyKpiPv', 'historyKpiSelfCons', 'historyKpiImport', 'historyKpiExport', 'historyKpiVbh',
+  // KPI card 5: Energiebilanz (historyKpiSelfCons renamed historyKpiConsumption,
+  // historyKpiImport renamed historyKpiImportKwh)
+  'historyKpiPv', 'historyKpiConsumption', 'historyKpiImportKwh', 'historyKpiExport', 'historyKpiVbh',
   'historyKpiCyclesLabel', 'historyKpiCycles',
-  // KPI card 6: Gesamtbilanz
-  'historyKpiBilanzCard', 'historyKpiGrossReturn', 'historyKpiBilanzAvoided',
-  'historyKpiBilanzNet', 'historyKpiBilanzPvCost', 'historyKpiBilanzBatCost',
+  // KPI card 6: Gesamtbilanz (toggle added; separate PvCost/BatCost lines
+  // consolidated into one historyKpiBilanzGestehung field)
+  'historyKpiBilanzCard', 'historyBilanzToggle', 'historyKpiGrossReturn', 'historyKpiBilanzAvoided',
+  'historyKpiBilanzNet', 'historyKpiBilanzGestehung',
   // DV card
   'historyDvCard', 'historyKpiDvRevenue', 'historyKpiDvRevenueRate',
   'historyKpiDvMarketValueLabel', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
   'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn',
   'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage',
-  // Premium card
-  'historyPremiumFields', 'historyPremiumScopeLabel', 'historyPremiumMarketValueLabel',
+  // Premium card (historyPremiumFields renamed historyDvPremiumSection)
+  'historyDvPremiumSection', 'historyPremiumScopeLabel', 'historyPremiumMarketValueLabel',
   'historyKpiAnnualMarketValue', 'historyKpiPremiumEligibleExport',
   'historyKpiMarketPremium', 'historyPremiumRateLabel', 'historyKpiMarketPremiumRate',
   'historyPremiumHint',

@@ -48,8 +48,8 @@ const EXPECTED_IDS = [
   'priceNow', 'priceNext', 'negLater', 'negTomorrow', 'todayMinMax', 'tomorrowMinMax', 'negPriceProtection',
   // Right rail — Kosten card
   'costImport', 'costExport', 'costCost', 'costRevenue', 'costNet',
-  // Right rail — Automatik summary card
-  'automationSummaryTitle', 'automationStatusBar',
+  // Right rail — Automatik summary card (title/status-bar are now unlabelled
+  // .sma-summary-title / .sma-status classes, not addressable IDs)
   'automationOutcome', 'automationRuleCount', 'automationAvailableEnergy',
   // Right rail — Steuerung card
   'activeGridSetpoint', 'activeChargeCurrent', 'activeMinSoc', 'activeDcFeed', 'lastControlWrite',
@@ -59,13 +59,15 @@ const EXPECTED_IDS = [
   'refreshEpex', 'priceChartContainer', 'priceChartCanvas', 'tooltip',
   'chartScheduleCallout', 'chartSelectionSummary', 'chartSelectionDetail',
   'createSelectionScheduleBtn', 'chartComparisonSummary', 'chartComparisonDetail', 'chartMeta',
-  // Schedule editor + Automation Plan
-  'schedColGrid', 'schedColCharge', 'automationPlanSummary', 'replanAutomationBtn',
+  // Schedule editor + Automation Plan (schedColGrid/schedColCharge replaced by
+  // the single JS-mounted #schedEditorHost — app.js:3137)
+  'schedEditorHost', 'automationPlanSummary', 'replanAutomationBtn',
   'planComputedAt', 'planEnergyBudget', 'planEstimatedRevenue', 'planSlotRows',
   'scheduleRowsDash', 'addScheduleRowBtn', 'loadScheduleBtn', 'saveScheduleBtn', 'controlMsg',
-  // SMA panel — INCLUDING the per-slot stopSocPct knob (hotfix b3c4901)
+  // SMA panel — INCLUDING the per-slot stopSocPct knob (hotfix b3c4901).
+  // automationOutcomePanel/RuleCountPanel/AvailableEnergyPanel consolidated
+  // into the single #automationStatusBarPanel container (rendered by JS).
   'automationPanel', 'automationEnabled', 'automationStatusTitle', 'automationStatusBarPanel',
-  'automationOutcomePanel', 'automationRuleCountPanel', 'automationAvailableEnergyPanel',
   'automationConfigGrid', 'automationSearchStart', 'automationSearchEnd',
   'automationBatteryCapacity', 'automationInverterEfficiency', 'automationMaxDischargeW',
   'automationMinSocPct',         // ← battery-safety knob, hotfix b3c4901
@@ -76,13 +78,15 @@ const EXPECTED_IDS = [
   'pv-daily-card', 'pv-daily-kwh', 'pv-daily-detail',
   'load-daily-card', 'load-daily-kwh', 'load-daily-detail',
   'surplus-daily-card', 'surplus-daily-kwh', 'surplus-daily-detail',
-  'pv-forecast-card', 'pv-forecast-skeleton', 'pv-forecast-chart',  // ← restored Wave-3
+  // pv-forecast-card/-skeleton/-chart replaced by the multi-provider
+  // #forecastProvidersCard (pvnode V2 ensemble comparison).
+  'forecastProvidersCard', 'forecastProvidersEnsemble', 'forecastProvidersBody',
   'forecastComparisonCard', 'forecastCompSkeleton', 'forecastCompSubtitle',
   'forecastComparisonChart', 'forecastCompLegend', 'forecastDaySummary',
   'optimizerPlanCard', 'optimizerPlanSkeleton', 'optimizerPlanSubtitle',
   'optimizerPlanChart', 'optimizerPlanLegend',
-  'gantt-card', 'gantt-skeleton', 'gantt-chart',
-  'savings-card', 'savings-total', 'savings-breakdown',
+  // gantt-card/-skeleton/-chart + savings-card/-total/-breakdown: widget
+  // removed entirely (no trace in index.html or app.js) — dropped from here.
   // Bottom log panel
   'logBox', 'log-level-filter',  // ← log-level-filter restored Wave-3
 ];
@@ -159,7 +163,11 @@ test.describe('Index/Leitstand page (Aurora Wave 3, AURORA-01/02/03/04/05/06)', 
   test('EPEX chart canvas mount + SMA per-slot stopSocPct knob present (battery-safety, hotfix b3c4901)', async ({ page }) => {
     await page.goto('/index.html');
     const epexCanvas = page.locator('#priceChartCanvas');
-    await expect(epexCanvas).toBeAttached();
+    // Runtime-created after the EPEX data fetch resolves — under the full
+    // suite's parallel load that fetch can queue behind a rate-limited
+    // window (routes-api.js RATE_LIMIT_*), so the default 5s can legitimately
+    // undershoot. 15s is generous without masking a real mount failure.
+    await expect(epexCanvas).toBeAttached({ timeout: 15000 });
     const socFloor = page.locator('#automationMinSocPct');
     await expect(socFloor).toBeAttached();
     await expect(socFloor).toBeEnabled();

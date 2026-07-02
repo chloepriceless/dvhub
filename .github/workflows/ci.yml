@@ -121,21 +121,41 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
-  # Optional e2e job: Playwright visual-parity + setup-wizard happy-path against a
-  # DB-free server boot.
+  # e2e job: full Playwright visual-parity + setup-wizard happy-path suite
+  # against a DB-free server boot. BLOCKING (2026-07): stabilised — see
+  # .planning/ handover notes for the two fixes that got it here.
   #
-  # NON-BLOCKING (continue-on-error) pending stabilisation (2026-06-21): the
-  # visual-parity specs carry hand-maintained EXPECTED_IDS lists per page that have
-  # drifted from the live DOM (e.g. family expected a long-removed `v-h`), and a few
-  # specs need real data. The boot step below now seeds the dev licence bypass so
-  # /family serves 200, but the stale EXPECTED_IDS across
-  # history/index/settings/integrations/history-viz still fail. Until those lists are
-  # refreshed this job reports but does not fail the run — the `fast` job (the full
-  # `npm test` suite + 5 lint gates) remains the real gate.
+  #   1. License bypass was silently broken since the 2026-06-22 "Hardening A"
+  #      security fix (services/license/index.js loadStateFromDisk): an
+  #      on-disk `status:"active"` is only honoured when backed by a
+  #      non-empty license_key — the old `license_key:null` bypass this job
+  #      used got rejected every boot, so EVERY Pro-gated page (/family)
+  #      403'd for the whole job. Worse: even a non-null fake key only
+  #      survives ~30s — licenseService.start()'s poller revalidates against
+  #      the REAL Keygen account (config-model.js default keygenAccount, used
+  #      whenever no config file overrides it) and correctly invalidates a
+  #      forged key. Fix: boot with a real config file that sets
+  #      licensing.keygenAccount to "" — revalidateLicense() then early-returns
+  #      on the falsy account BEFORE ever touching state.license, so the
+  #      bypass survives indefinitely. This is legitimate Hardening-A/B/C
+  #      behaviour working as designed, not a bug to route around.
+  #   2. The hand-maintained EXPECTED_IDS lists across family/history/index/
+  #      settings/integrations/history-viz had drifted from the live DOM
+  #      (some elements renamed in the settings-design-unify + custom-tabs +
+  #      pvnode-v2 redesigns, some intentionally removed — e.g. the family
+  #      message tray, the settings ML/LLM sub-group, the Spot-Ledger viz
+  #      card). Every list was re-diffed against a live-rendered DOM and
+  #      corrected; genuine feature removals are commented, not silently
+  #      dropped.
+  #   3. The full suite under Playwright's default (CPU-count) worker
+  #      parallelism reliably tripped rate-limiting/connection contention
+  #      against the single dev server instance on 2 specs — confirmed by
+  #      isolation (workers=1 was the only setting that was 100% reliable
+  #      across repeated full-suite runs). tests/playwright.config.mjs pins
+  #      workers:1 + retries:1 accordingly.
   e2e:
-    name: e2e (playwright setup wizard)
+    name: e2e (playwright full visual-parity suite)
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: dvhub
@@ -148,16 +168,34 @@ jobs:
           cache-dependency-path: dvhub/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      # Boot the server DB-free on :8080 with a throwaway data dir so the e2e never
-      # touches real license_state.json/config; brief readiness wait before the spec.
+      # Boot the server DB-free on :8080 with a throwaway data dir so the e2e
+      # never touches real license_state.json/config; brief readiness wait
+      # before the spec.
       - name: Boot server (DB-free) on :8080
         run: |
           export DV_DATA_DIR="$(mktemp -d)"
-          # Dev licence bypass so Pro-gated pages (/family) serve 200 instead of a
-          # 403 in the licenceless ephemeral server (revalidate exits early on a
-          # null key). Throwaway data dir — never touches the real license_state.json.
-          printf '{"status":"active","license_key":null}' > "$DV_DATA_DIR/license_state.json"
-          node server.js &
+          # E2E config: licensing.keygenAccount:"" disables the online
+          # revalidation poller (see job comment point 1 above) — without
+          # this override the effectiveConfig default keygenAccount is a
+          # real Keygen account, and the 30s-after-boot poller call would
+          # invalidate the dev bypass mid-run. httpPort:8080 matches the
+          # suite's baseURL (config.example.json ships the real prod
+          # default of 80).
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('config.example.json', 'utf8'));
+            cfg.licensing = cfg.licensing || {};
+            cfg.licensing.keygenAccount = '';
+            cfg.httpPort = 8080;
+            fs.writeFileSync(process.env.DV_DATA_DIR + '/e2e-config.json', JSON.stringify(cfg, null, 2));
+          "
+          # Dev licence bypass so Pro-gated pages (/family) serve 200 instead
+          # of a 403 in the licenceless ephemeral server. Non-null license_key
+          # required — Hardening A rejects status:"active" with a null key
+          # (see job comment point 1). Throwaway data dir — never touches the
+          # real license_state.json.
+          printf '{"status":"active","license_key":"e2e-dev-bypass"}' > "$DV_DATA_DIR/license_state.json"
+          DV_APP_CONFIG="$DV_DATA_DIR/e2e-config.json" node server.js &
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/ >/dev/null 2>&1; then
               echo "server ready"

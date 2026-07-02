@@ -23,5 +23,17 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
   },
   reporter: 'list',
-  retries: 0,
+  // Confirmed by isolation (2026-07): with Playwright's default worker count
+  // (= CPU cores on the runner) two specs flake under real, correctly
+  // enforced rate-limiting/connection contention against the single dev
+  // server instance (routes-api.js RATE_LIMIT_MAX_REQUESTS /
+  // LAN_RATE_LIMIT_MAX_REQUESTS). --workers=1 was the only setting that made
+  // the FULL suite reliably green — 4 workers still reproduced the flake
+  // under the full 100+ test load (not just these two specs), so this is a
+  // real capacity ceiling of one dev-server instance, not a tunable margin.
+  // The suite serialises in ~1-2min either way; reliability over speed here.
+  workers: 1,
+  // Belt-and-braces on top of the serial run: a transient failure (e.g. a
+  // slow first-boot asset fetch) still gets one retry.
+  retries: 1,
 });

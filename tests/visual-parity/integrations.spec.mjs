@@ -207,7 +207,7 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
   });
 
   // --- Phase 09.4-07 (Wave 5) — MQTT Inspector drawer (D-03/D-04) + hybrid
-  // card-stats (D-01) coverage. The drawer chrome (#mqtt-drawer + backdrop +
+  // card-stats (D-01) coverage. The drawer chrome (#dv-drawer-mqtt + backdrop +
   // close button + topics body) is fully static markup in integrations.html, so
   // its presence and the open/close behaviour are HARD assertions regardless of
   // backend state. The MQTT .conn-card itself only renders when the backend
@@ -217,13 +217,16 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
   test('MQTT drawer markup is present and hidden on load', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');
-    // Static drawer chrome — must exist regardless of backend state.
-    for (const id of ['mqtt-drawer', 'mqtt-drawer-backdrop', 'mqtt-drawer-close', 'mqtt-drawer-topics']) {
+    // Static drawer chrome — must exist regardless of backend state. The
+    // drawer container/backdrop/close button carry the generic dv-drawer-*
+    // naming from the settings-design-unify drawer redesign; the inner
+    // content (pause/meta/topics) kept the mqtt-drawer-* prefix.
+    for (const id of ['dv-drawer-mqtt', 'dv-drawer-mqtt-backdrop', 'dv-drawer-mqtt-close', 'mqtt-drawer-topics']) {
       await expect(page.locator(`[id="${id}"]`), `#${id} must exist in the DOM`).toHaveCount(1);
     }
     // The drawer carries the hidden attribute until openMqttDrawer() removes it.
-    await expect(page.locator('#mqtt-drawer')).toHaveAttribute('hidden', '');
-    await expect(page.locator('#mqtt-drawer')).not.toHaveClass(/is-open/);
+    await expect(page.locator('#dv-drawer-mqtt')).toHaveAttribute('hidden', '');
+    await expect(page.locator('#dv-drawer-mqtt')).not.toHaveClass(/is-open/);
   });
 
   test('clicking the MQTT card opens the drawer', async ({ page }) => {
@@ -234,9 +237,9 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     if ((await card.count()) > 0) {
       await card.first().click();
       await page.waitForTimeout(300);
-      await expect(page.locator('#mqtt-drawer')).toHaveClass(/is-open/);
+      await expect(page.locator('#dv-drawer-mqtt')).toHaveClass(/is-open/);
       // openMqttDrawer() removes the hidden attribute before adding .is-open.
-      await expect(page.locator('#mqtt-drawer')).not.toHaveAttribute('hidden', '');
+      await expect(page.locator('#dv-drawer-mqtt')).not.toHaveAttribute('hidden', '');
     } else {
       // eslint-disable-next-line no-console
       console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip drawer-open');
@@ -253,12 +256,12 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
       console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip drawer-close');
       return;
     }
-    const drawer = page.locator('#mqtt-drawer');
+    const drawer = page.locator('#dv-drawer-mqtt');
     // Close path 1 — the ✕ button.
     await card.first().click();
     await page.waitForTimeout(300);
     await expect(drawer).toHaveClass(/is-open/);
-    await page.locator('#mqtt-drawer-close').click();
+    await page.locator('#dv-drawer-mqtt-close').click();
     await page.waitForTimeout(300);
     await expect(drawer).not.toHaveClass(/is-open/);
     // Close path 2 — the Escape key.
@@ -284,7 +287,7 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
       console.warn('[integrations.spec] No MQTT card on the no-apiToken dev server — soft-skip pause toggle');
       return;
     }
-    const drawer = page.locator('#mqtt-drawer');
+    const drawer = page.locator('#dv-drawer-mqtt');
     await card.first().click();
     await page.waitForTimeout(300);
     await expect(drawer).toHaveClass(/is-open/);

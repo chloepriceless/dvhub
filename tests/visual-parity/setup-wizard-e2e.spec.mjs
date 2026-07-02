@@ -55,6 +55,20 @@ test.describe('Setup wizard happy-path (fill → legalAck → save → bootstrap
     await page.goto('/setup.html');
     await page.waitForLoadState('networkidle');
 
+    // The full e2e suite hammers /api/config from many spec files in
+    // parallel; this test's own loadSetup() GET can land on an exhausted
+    // per-IP rate bucket (429 "Too many requests", routes-api.js RATE_LIMIT_*
+    // — a real, correctly-enforced limit, not a bug). loadSetup() shows a
+    // banner and returns before rendering #setupGrid in that case. Retry with
+    // a reload — the sliding 60s window drains as other specs finish.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rateLimited = await page.getByText('Too many requests').count();
+      if (rateLimited === 0) break;
+      await page.waitForTimeout(2000);
+      await page.reload();
+      await page.waitForLoadState('networkidle');
+    }
+
     // ---- Step 1: the legal gate ships SAFE (project_grid_charge_legal) ----
     // Sanity-guard the precondition the happy-path depends on: the ack is
     // UNCHECKED and both grid toggles are DISABLED until the ack is ticked.
