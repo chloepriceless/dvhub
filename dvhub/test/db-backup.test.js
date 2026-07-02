@@ -131,14 +131,29 @@ test('nonzero exit MID-stream destroys the connection (no truncated "backup")', 
   assert.equal(res.destroyed, true);
 });
 
-// --- restore: pure arg builders --------------------------------------------
+// --- backup/restore run as the postgres superuser (sudo) --------------------
 
-test('buildPgRestoreArgs: --clean --if-exists --no-owner --no-privileges + file last', () => {
+test('buildPgDumpArgs superuser: connect as postgres, keep ownership + grants', () => {
+  const r = buildPgDumpArgs({ scope: 'full', database: { name: 'dvhub' }, superuser: true });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.args.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'postgres', '-d', 'dvhub']);
+  assert.ok(!r.args.includes('--no-owner'), 'ownership kept for a faithful full restore');
+  assert.ok(!r.args.includes('--no-privileges'), 'grants kept so dvhub keeps access to postgres-owned tables');
+});
+
+test('buildPgDumpArgs legacy (default): app role + role-portable flags', () => {
+  const r = buildPgDumpArgs({ scope: 'full', database: { name: 'dvhub' } });
+  assert.deepEqual(r.args.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'dvhub', '-d', 'dvhub']);
+  assert.ok(r.args.includes('--no-owner'));
+});
+
+test('buildPgRestoreArgs: postgres superuser + --clean --if-exists, keeps ownership, file last', () => {
   const r = buildPgRestoreArgs({ database: { name: 'dvhub' }, file: '/tmp/x.dump' });
   assert.equal(r.ok, true);
   assert.equal(r.dbName, 'dvhub');
-  assert.deepEqual(r.args.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'dvhub', '-d', 'dvhub']);
-  for (const flag of ['--clean', '--if-exists', '--no-owner', '--no-privileges']) assert.ok(r.args.includes(flag), flag);
+  assert.deepEqual(r.args.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'postgres', '-d', 'dvhub']);
+  for (const flag of ['--clean', '--if-exists']) assert.ok(r.args.includes(flag), flag);
+  assert.ok(!r.args.includes('--no-owner'), 'ownership preserved on restore');
   assert.equal(r.args[r.args.length - 1], '/tmp/x.dump');
 });
 
@@ -147,25 +162,33 @@ test('buildPgRestoreArgs: missing file rejected', () => {
   assert.equal(buildPgRestoreArgs({ database: {}, file: 123 }).ok, false);
 });
 
-test('buildPsqlArgs: ON_ERROR_STOP + the sql as final arg', () => {
+test('buildPsqlArgs: postgres superuser + ON_ERROR_STOP + the sql as final arg', () => {
   const a = buildPsqlArgs({ database: { name: 'dvhub' }, sql: 'SELECT 1' });
-  assert.deepEqual(a.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'dvhub', '-d', 'dvhub']);
+  assert.deepEqual(a.slice(0, 8), ['-h', '/var/run/postgresql', '-p', '5432', '-U', 'postgres', '-d', 'dvhub']);
   assert.ok(a.includes('ON_ERROR_STOP=1'));
   assert.equal(a[a.length - 1], 'SELECT 1');
 });
 
 // --- runDbRestore orchestration (injected spawnFn) --------------------------
 
-// responses(cmd, args) → { stdout?, stderr?, code? }. Emits on the next tick so
+// Every pg tool is spawned as `sudo -u postgres <bin> …` (pgWrap). Detect the
+// real binary from the argv so the mock can route + assert on it.
+function pgBinOf(args) {
+  const found = (args || []).find((a) => a === '/usr/bin/pg_dump' || a === '/usr/bin/pg_restore' || a === '/usr/bin/psql');
+  return found ? found.split('/').pop() : null;
+}
+
+// responses(bin, args) → { stdout?, stderr?, code? }. Emits on the next tick so
 // runCmd's synchronously-attached listeners are in place first.
 function mockSpawn(responses) {
   const calls = [];
   const fn = (cmd, args) => {
-    calls.push({ cmd, sql: args[args.length - 1] });
+    const bin = pgBinOf(args);
+    calls.push({ cmd, args, bin, sql: args[args.length - 1] });
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    const r = responses(cmd, args) || {};
+    const r = responses(bin, args) || {};
     setImmediate(() => {
       if (r.stdout) child.stdout.emit('data', Buffer.from(r.stdout));
       if (r.stderr) child.stderr.emit('data', Buffer.from(r.stderr));
@@ -177,15 +200,18 @@ function mockSpawn(responses) {
   return fn;
 }
 
-test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_restore', async () => {
-  const spawnFn = mockSpawn((cmd, args) => {
-    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1\n' };
+const isSudoPostgres = (c) => c.cmd === 'sudo' && c.args[0] === '-u' && c.args[1] === 'postgres';
+
+test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_restore, all as sudo postgres', async () => {
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1\n' };
     return {};
   });
   const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
   assert.equal(out.ok, true);
   assert.equal(out.hadTimescale, true);
-  const seq = spawnFn.calls.map((c) => c.cmd === 'pg_restore' ? 'RESTORE' : c.sql);
+  assert.ok(spawnFn.calls.every(isSudoPostgres), 'every pg tool runs via sudo -u postgres');
+  const seq = spawnFn.calls.map((c) => c.bin === 'pg_restore' ? 'RESTORE' : c.sql);
   const iPre = seq.findIndex((s) => String(s).includes('timescaledb_pre_restore'));
   const iSet = seq.findIndex((s) => String(s).includes("restoring = 'on'"));
   const iRestore = seq.indexOf('RESTORE');
@@ -195,11 +221,15 @@ test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_res
   assert.ok(iPre < iRestore && iSet < iRestore, 'pre_restore + SET before restore');
   assert.ok(iReset > iRestore && iPost > iRestore, 'RESET + post_restore after restore');
   assert.ok(seq.some((s) => String(s).includes('pg_terminate_backend')), 'terminates other backends');
+  const iLock = seq.findIndex((s) => String(s).includes('CONNECTION LIMIT 0'));
+  const iUnlock = seq.findIndex((s) => String(s).includes('CONNECTION LIMIT -1'));
+  assert.ok(iLock >= 0 && iLock < iRestore, 'app locked out (CONNECTION LIMIT 0) before restore');
+  assert.ok(iUnlock > iRestore, 'connections re-opened (CONNECTION LIMIT -1) after restore');
 });
 
 test('runDbRestore: no TimescaleDB → plain pg_restore, no dance', async () => {
-  const spawnFn = mockSpawn((cmd, args) => {
-    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '' }; // absent
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '' }; // absent
     return {};
   });
   const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
@@ -208,13 +238,13 @@ test('runDbRestore: no TimescaleDB → plain pg_restore, no dance', async () => 
   const sqls = spawnFn.calls.map((c) => c.sql);
   assert.ok(!sqls.some((s) => String(s).includes('timescaledb_pre_restore')), 'no pre_restore');
   assert.ok(!sqls.some((s) => String(s).includes('timescaledb_post_restore')), 'no post_restore');
-  assert.ok(spawnFn.calls.some((c) => c.cmd === 'pg_restore'), 'still restores');
+  assert.ok(spawnFn.calls.some((c) => c.bin === 'pg_restore'), 'still restores');
 });
 
 test('runDbRestore: parses "errors ignored on restore: N"', async () => {
-  const spawnFn = mockSpawn((cmd, args) => {
-    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
-    if (cmd === 'pg_restore') return { code: 0, stderr: 'pg_restore: warning: errors ignored on restore: 3' };
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    if (bin === 'pg_restore') return { code: 0, stderr: 'pg_restore: warning: errors ignored on restore: 3' };
     return {};
   });
   const out = await runDbRestore({ database: {}, inFile: '/tmp/x.dump', spawnFn });
@@ -223,9 +253,9 @@ test('runDbRestore: parses "errors ignored on restore: N"', async () => {
 });
 
 test('runDbRestore: pg_restore FAILS but post_restore STILL runs (DB never left stuck)', async () => {
-  const spawnFn = mockSpawn((cmd, args) => {
-    if (cmd === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
-    if (cmd === 'pg_restore') return { code: 1, stderr: 'pg_restore: error: could not connect' };
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    if (bin === 'pg_restore') return { code: 1, stderr: 'pg_restore: error: could not connect' };
     return {};
   });
   const out = await runDbRestore({ database: {}, inFile: '/tmp/x.dump', spawnFn });

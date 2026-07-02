@@ -567,6 +567,14 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
+# T-DBRESTORE (Christin 2026-07-02): the GUI DB backup/restore runs as the
+# postgres SUPERUSER — the non-super app role (dvhub) cannot dump/restore objects
+# owned by another role (e.g. the postgres-owned victron_internals hypertable).
+# Scoped to the three pg client binaries; run as postgres (a DB superuser but an
+# unprivileged OS user), never as root.
+${SERVICE_USER} ALL=(postgres) NOPASSWD: /usr/bin/pg_dump
+${SERVICE_USER} ALL=(postgres) NOPASSWD: /usr/bin/pg_restore
+${SERVICE_USER} ALL=(postgres) NOPASSWD: /usr/bin/psql
 # END DVHUB SUDOERS
 SUDOERS
 chmod 440 "${SUDOERS_FILE}"

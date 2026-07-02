@@ -14,6 +14,24 @@ import { spawn } from 'node:child_process';
 // Two scopes the operator can pick at download time.
 export const DB_BACKUP_SCOPES = new Set(['full', 'energy15m']);
 
+// Run the pg maintenance tools as the postgres SUPERUSER via sudo. The app's DB
+// role (dvhub) is NOT a superuser, so it cannot LOCK/back-up nor drop/restore
+// objects owned by another role — e.g. the postgres-owned `victron_internals`
+// hypertable on prod: `pg_dump -U dvhub` dies with "permission denied for table
+// victron_internals" and the whole FULL backup fails. The appliance grants a
+// narrow NOPASSWD sudo rule for exactly these three binaries (install.sh /
+// post-update.sh sudoers block). sudo's env_reset drops PGPASSWORD — not needed,
+// peer auth via the unix socket maps the postgres OS user to the postgres role.
+const PG_DUMP_BIN = '/usr/bin/pg_dump';
+const PG_RESTORE_BIN = '/usr/bin/pg_restore';
+const PG_PSQL_BIN = '/usr/bin/psql';
+const PG_SUPERUSER = 'postgres';
+
+/** Wrap a pg binary + argv to run as the postgres superuser: `sudo -u postgres <bin> <args…>`. */
+function pgWrap(bin, binArgs) {
+  return { cmd: 'sudo', args: ['-u', PG_SUPERUSER, bin, ...binArgs] };
+}
+
 /**
  * Pure: build the pg_dump argv for a scope against a telemetry.database config.
  * Connection mirrors db-client.js createPool so the dump talks to the same DB
@@ -22,17 +40,21 @@ export const DB_BACKUP_SCOPES = new Set(['full', 'energy15m']);
  *
  * @returns {{ok:true, args:string[], dbName:string} | {ok:false, error:string}}
  */
-export function buildPgDumpArgs({ scope, database = {} } = {}) {
+export function buildPgDumpArgs({ scope, database = {}, superuser = false } = {}) {
   if (!DB_BACKUP_SCOPES.has(scope)) {
     return { ok: false, error: 'invalid scope' };
   }
   const host = database.host || '/var/run/postgresql';
   const port = String(database.port || 5432);
   const dbName = database.name || database.database || 'dvhub';
-  const user = database.user || 'dvhub';
-  // --no-owner/--no-privileges keep the dump restore-portable across roles.
-  const args = ['-h', host, '-p', port, '-U', user, '-d', dbName,
-    '-Fc', '--no-owner', '--no-privileges'];
+  // superuser path (GUI backup): connect as postgres (peer auth after sudo) and
+  // keep OWNERSHIP + GRANTS in the dump — a FULL restore must reproduce them so
+  // the app (dvhub) keeps access to postgres-owned tables like victron_internals.
+  // legacy path: connect as the app role, --no-owner/--no-privileges for a
+  // role-portable dump of dvhub-owned tables only.
+  const user = superuser ? PG_SUPERUSER : (database.user || 'dvhub');
+  const args = ['-h', host, '-p', port, '-U', user, '-d', dbName, '-Fc'];
+  if (!superuser) args.push('--no-owner', '--no-privileges');
   // "Nur 15-min-Werte": just the aggregated energy table the dashboards use.
   if (scope === 'energy15m') {
     args.push('-t', 'energy_slots_15m');
@@ -64,7 +86,8 @@ export function backupFilename(scope, stamp) {
  * @param {(cmd:string,args:string[],opts:object)=>any} [p.spawnFn]  injectable for tests
  */
 export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, stamp, pushLog, spawnFn = spawn } = {}) {
-  const built = buildPgDumpArgs({ scope, database });
+  // superuser:true → dump EVERYTHING (incl. postgres-owned tables) as postgres.
+  const built = buildPgDumpArgs({ scope, database, superuser: true });
   if (!built.ok) {
     res.writeHead(400, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: built.error }));
@@ -72,11 +95,11 @@ export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, 
   }
 
   const env = { ...process.env };
-  if (database.password) env.PGPASSWORD = String(database.password);
 
   let child;
   try {
-    child = spawnFn('pg_dump', built.args, { env });
+    const w = pgWrap(PG_DUMP_BIN, built.args);
+    child = spawnFn(w.cmd, w.args, { env });
   } catch (err) {
     res.writeHead(503, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'pg_dump_unavailable', detail: err.message }));
@@ -179,9 +202,12 @@ export function buildPgRestoreArgs({ database = {}, file } = {}) {
   const host = database.host || '/var/run/postgresql';
   const port = String(database.port || 5432);
   const dbName = database.name || database.database || 'dvhub';
-  const user = database.user || 'dvhub';
-  const args = ['-h', host, '-p', port, '-U', user, '-d', dbName,
-    '--clean', '--if-exists', '--no-owner', '--no-privileges', file];
+  // Restore runs as the postgres superuser (peer auth after sudo) and KEEPS the
+  // dump's ownership + grants (no --no-owner/--no-privileges) so every object
+  // lands under its original role — the app (dvhub) keeps write access, and
+  // postgres-owned tables (victron_internals) restore correctly too.
+  const args = ['-h', host, '-p', port, '-U', PG_SUPERUSER, '-d', dbName,
+    '--clean', '--if-exists', file];
   return { ok: true, args, dbName };
 }
 
@@ -194,8 +220,10 @@ export function buildPsqlArgs({ database = {}, sql } = {}) {
   const host = database.host || '/var/run/postgresql';
   const port = String(database.port || 5432);
   const dbName = database.name || database.database || 'dvhub';
-  const user = database.user || 'dvhub';
-  return ['-h', host, '-p', port, '-U', user, '-d', dbName, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
+  // Runs as postgres (peer auth after sudo): the pre/post_restore dance +
+  // pg_terminate_backend must reliably reach background workers and every
+  // client backend, not just the app role's own connections.
+  return ['-h', host, '-p', port, '-U', PG_SUPERUSER, '-d', dbName, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
 }
 
 /** Spawn a command, buffer stdout/stderr, resolve an outcome. Never rejects. */
@@ -233,8 +261,10 @@ export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = 
   const built = buildPgRestoreArgs({ database, file: inFile });
   if (!built.ok) return { ok: false, code: null, stderr: built.error, hadTimescale: false, ignoredErrors: 0 };
   const env = { ...process.env };
-  if (database.password) env.PGPASSWORD = String(database.password);
-  const psql = (sql) => runCmd('psql', buildPsqlArgs({ database, sql }), env, spawnFn);
+  const psql = (sql) => {
+    const w = pgWrap(PG_PSQL_BIN, buildPsqlArgs({ database, sql }));
+    return runCmd(w.cmd, w.args, env, spawnFn);
+  };
 
   // 1. Is TimescaleDB present on the target?
   const extProbe = await psql("SELECT 1 FROM pg_extension WHERE extname='timescaledb'");
@@ -248,15 +278,23 @@ export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = 
     await psql(`ALTER DATABASE "${built.dbName}" SET timescaledb.restoring = 'on'`);
   }
 
-  // 3. Free locks so --clean can drop: terminate other client backends (the
-  //    app's pool, EOS, etc.). They reconnect on their next query; a restart is
-  //    recommended to the operator afterwards regardless.
+  // 3. Lock the app OUT for the duration of the restore. Terminating backends is
+  //    not enough — the non-super app role reconnects on its next poll and keeps
+  //    INSERTing (e.g. audit_log/control_events), which then collides with the
+  //    dump's rows and fails the PRIMARY KEY rebuild ("key (id)=… is duplicated").
+  //    CONNECTION LIMIT 0 blocks all NON-superuser connects; postgres (our
+  //    pg_dump/pg_restore/psql, all superuser) is exempt, so the restore proceeds
+  //    while the app cannot reconnect. Then terminate the existing backends.
+  await psql(`ALTER DATABASE "${built.dbName}" CONNECTION LIMIT 0`);
   await psql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'");
 
-  // 4. The restore itself.
-  const restore = await runCmd('pg_restore', built.args, env, spawnFn);
+  // 4. The restore itself (as postgres via sudo).
+  const restoreWrap = pgWrap(PG_RESTORE_BIN, built.args);
+  const restore = await runCmd(restoreWrap.cmd, restoreWrap.args, env, spawnFn);
 
-  // 5. ALWAYS unwind restore mode, even on failure, so the DB is never stuck.
+  // 5. ALWAYS unwind — re-open connections + leave restore mode — even on
+  //    failure, so the DB is never left locked out or stuck in restore mode.
+  await psql(`ALTER DATABASE "${built.dbName}" CONNECTION LIMIT -1`);
   if (hadTimescale) {
     await psql(`ALTER DATABASE "${built.dbName}" RESET timescaledb.restoring`);
     await psql('SELECT timescaledb_post_restore()');
