@@ -171,6 +171,31 @@ export function buildVictronSnapshot(victron = {}) {
   return snapshot;
 }
 
+/**
+ * Lizenz-kWp-Cap für die ANGEZEIGTE Live-PV (T-LICENSE-KWP-GATING, Christin
+ * 2026-07-02). Kappt die PV-Leistungsfelder eines FRISCHEN Victron-Snapshots auf
+ * `capW` (= lizenzierte kWp × 1000). Mutiert das übergebene Snapshot-Objekt (der
+ * Aufrufer reicht die frische Kopie aus buildVictronSnapshot/IPC — NIE die Quelle
+ * `state.victron`, die der Steuerungspfad liest). `capW==null` → No-op
+ * (Community/Pro L/Legacy). Nur Anzeige; die reale Messung bleibt unberührt.
+ *
+ * @param {object} victron  frischer Snapshot (wird mutiert)
+ * @param {number|null} capW  Cap in Watt, oder null = kein Cap
+ * @returns {object} derselbe (ggf. gekappte) Snapshot
+ */
+export function capVictronPvForDisplay(victron, capW) {
+  if (!(Number.isFinite(capW) && capW > 0) || !victron || typeof victron !== 'object') return victron;
+  const cap = (w) => (Number(w) > capW ? capW : w);
+  if (victron.pvPowerW != null) victron.pvPowerW = cap(victron.pvPowerW);
+  if (victron.pvAcW != null) victron.pvAcW = cap(victron.pvAcW);
+  if (victron.pvTotalW != null) victron.pvTotalW = cap(victron.pvTotalW);
+  if (victron.dcExportMode && typeof victron.dcExportMode === 'object') {
+    if (victron.dcExportMode.pvTotalW != null) victron.dcExportMode.pvTotalW = cap(victron.dcExportMode.pvTotalW);
+    if (victron.dcExportMode.pvDcW != null) victron.dcExportMode.pvDcW = cap(victron.dcExportMode.pvDcW);
+  }
+  return victron;
+}
+
 function buildScheduleSnapshot(schedule = {}) {
   return pickFields(schedule, SCHEDULE_FIELDS);
 }

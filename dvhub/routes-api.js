@@ -16,7 +16,7 @@ import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
-import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse } from './runtime-state.js';
+import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-secrets-crypto.js';
@@ -1932,6 +1932,13 @@ export function createApiRoutes(ctx) {
       now,
       getCfg().victron?.alarms?.pollIntervalMs
     );
+    // Lizenz-kWp-Cap (T-LICENSE-KWP-GATING): angezeigte Live-PV auf die lizenzierte
+    // kWp kappen. payload.victron ist ein FRISCHER Snapshot (buildVictronSnapshot/
+    // IPC), nie die Quelle state.victron — der Steuerungspfad bleibt unberührt.
+    // No-op wenn kein Pro-Key mit max_kwp aktiv (getCapKwp()→null).
+    const capKwp = licenseService?.getCapKwp?.();
+    const pvCapW = Number.isFinite(capKwp) && capKwp > 0 ? capKwp * 1000 : null;
+    if (pvCapW != null) capVictronPvForDisplay(payload.victron, pvCapW);
     return payload;
   }
 
