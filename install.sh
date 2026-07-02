@@ -491,10 +491,12 @@ if command -v psql >/dev/null 2>&1; then
   # a production DB backup can be restored onto it (Christin 2026-07-02 — the
   # installer previously provisioned it on NO platform, leaving fresh installs
   # silently degraded on plain Postgres + backup-restore impossible). Shared
-  # timescale-provision.sh (single source of truth with post-update.sh). Debian
-  # ships postgresql-<ver>-timescaledb in its standard repos (no third-party
-  # source). Non-fatal (subshell + `|| true`): a box that can't get the package
-  # stays on plain Postgres (config timescaledb stays false) — never a crash.
+  # timescale-provision.sh (single source of truth with post-update.sh). Installs
+  # the COMMUNITY/TSL edition from Timescale's apt repo (compression + continuous
+  # aggregates → full prod parity; migration 014 needs them). Falls back to the
+  # Debian Apache package if packagecloud has no build for the platform. Non-fatal
+  # (subshell + `|| true`): a box that can't get any package stays on plain
+  # Postgres (config timescaledb stays false) — never a crash.
   if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]]; then
     ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" DB_NAME=dvhub \
         bash "$INSTALL_DIR/timescale-provision.sh" ) \

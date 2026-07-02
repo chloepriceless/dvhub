@@ -325,13 +325,15 @@ fi
 # timescale-provision.sh (single source of truth mit install.sh). Der Lauf macht
 # u.a. `apt install` + einen Postgres-RESTART; das darf den dvhub-Service-Start
 # NIE stören → ENTKOPPELT über eine transiente systemd-Unit (überlebt
-# dvhub-Restarts, unterbricht den Boot nicht). Schneller Skip wenn die Extension
-# in der DB schon aktiv ist (prod = No-op). NON-FATAL durchgängig.
+# dvhub-Restarts, unterbricht den Boot nicht). Schneller Skip nur wenn die
+# COMMUNITY-Edition schon aktiv ist (prod = No-op); eine Apache-Box oder eine Box
+# ganz ohne Extension triggert die (Re-)Provisionierung, die dann auf Community
+# hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
-  su - postgres -c "psql -tAqc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb'\" dvhub" 2>/dev/null | grep -q 1 && TS_ACTIVE=1
+  [[ "$(su - postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" dvhub" 2>/dev/null | tr -d '[:space:]')" == "timescale" ]] && TS_ACTIVE=1
   if [[ "$TS_ACTIVE" -eq 1 ]]; then
-    echo "  TimescaleDB: OK (Extension aktiv)"
+    echo "  TimescaleDB: OK (Community-Edition aktiv)"
   elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then
     echo "  TimescaleDB: Hintergrund-Provisionierung laeuft bereits"
   else
