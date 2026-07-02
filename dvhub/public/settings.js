@@ -3958,7 +3958,9 @@ function renderMaeSparkline(data) {
   const expiryEl = section.querySelector('.license-expiry');
   const activateBtn = section.querySelector('#licenseActivateBtn');
   const recheckBtn = section.querySelector('#licenseRecheckBtn');
+  const bindBtn = section.querySelector('#licenseBindBtn');
   const removeBtn = section.querySelector('#licenseRemoveBtn');
+  const bindingEl = section.querySelector('.license-binding');
 
   // Status → German label (per UI-SPEC §Copywriting Contract).
   const LABELS = {
@@ -4016,9 +4018,14 @@ function renderMaeSparkline(data) {
     //   invalid  → input visible (preserves user input), only Activate, no meta
     //   active/expired/suspended → input hidden, Recheck + Remove visible, meta visible
     const showInput = (status === 'none' || status === 'invalid');
+    // Stufe-C node-lock: the "An diese Box binden" action only makes sense for
+    // an ACTIVE license that is NOT yet bound (no machine_id). Once bound, the
+    // button is replaced by a "gebunden"-state line in the meta block.
+    const isBound = !!(state && state.machine_id);
     if (inputField) inputField.hidden = !showInput;
     if (activateBtn) activateBtn.hidden = !showInput;
     if (recheckBtn) recheckBtn.hidden = showInput;
+    if (bindBtn) bindBtn.hidden = showInput || status !== 'active' || isBound;
     if (removeBtn) removeBtn.hidden = showInput;
     if (meta) meta.hidden = showInput;
 
@@ -4035,6 +4042,9 @@ function renderMaeSparkline(data) {
           ? `Gültig bis: ${formatDate(state.subscription_until)}`
           : '';
       }
+      if (bindingEl) {
+        bindingEl.textContent = isBound ? '🔒 An diese Box gebunden' : '';
+      }
     }
   }
 
@@ -4048,6 +4058,12 @@ function renderMaeSparkline(data) {
     if (r.error === 'no_license_active') return 'Keine Lizenz aktiv — bitte zuerst aktivieren.';
     if (r.error === 'empty_key') return 'Bitte Lizenzschlüssel eingeben.';
     if (r.error === 'invalid_json') return 'Ungültige Anfrage.';
+    // Stufe-C node-lock (activate-node-lock) errors.
+    if (r.error === 'activation_proxy_not_configured') return 'Box-Bindung ist nicht konfiguriert (licensing.activationProxyUrl fehlt).';
+    if (r.error === 'no_appliance_id') return 'Keine Appliance-ID gefunden — Box-Bindung nicht möglich.';
+    if (r.error === 'fingerprint_mismatch') return 'Die gebundene Kennung passt nicht zu dieser Box.';
+    if (r.error === 'machine_file_invalid') return 'Das erhaltene Bindungs-Zertifikat ist ungültig.';
+    if (r.error === 'no_machine_file' || r.error === 'no_account_public_key') return 'Box-Bindung fehlgeschlagen — bitte später erneut versuchen.';
     return `Lizenz-Fehler (${httpStatus || '?'}).`;
   }
 
@@ -4121,6 +4137,39 @@ function renderMaeSparkline(data) {
       } finally {
         recheckBtn.disabled = false;
         recheckBtn.textContent = original;
+      }
+    });
+  }
+
+  if (bindBtn) {
+    bindBtn.addEventListener('click', async () => {
+      const ok = await window.dvConfirm(
+        'Damit wird diese Lizenz fest an diese Box gebunden. Auf einer anderen Box lässt sie sich danach nicht mehr aktivieren, ohne die Bindung zurückzusetzen.',
+        { title: 'An diese Box binden?', okLabel: 'Binden', cancelLabel: 'Abbrechen' }
+      );
+      if (!ok) return;
+      bindBtn.disabled = true;
+      const original = bindBtn.textContent;
+      bindBtn.textContent = 'Wird gebunden …';
+      try {
+        const r = await apiFetch('/api/license/activate-node-lock', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}'
+        });
+        let result = {};
+        try { result = await r.json(); } catch { /* keep default */ }
+        if (r.ok && result.ok) {
+          showSettingsToast('Lizenz an diese Box gebunden.');
+        } else {
+          showSettingsToast(mapErrorToToast(result, r.status));
+        }
+        await loadState();
+      } catch (e) {
+        showSettingsToast('Lizenz-Fehler: ' + (e && e.message ? e.message : 'unbekannt'));
+      } finally {
+        bindBtn.disabled = false;
+        bindBtn.textContent = original;
       }
     });
   }

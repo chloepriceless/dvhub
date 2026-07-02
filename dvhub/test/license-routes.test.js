@@ -386,6 +386,42 @@ test('POST /api/license/remove resets status to none', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// R-1 — /api/license/activate-node-lock (Stufe-C endpoint wiring, 2026-07-02)
+// ---------------------------------------------------------------------------
+
+test('POST /api/license/activate-node-lock → 503 activation_proxy_not_configured when no proxy url', async () => {
+  // Default mockCtx cfg has licensing.keygenAccount but NO activationProxyUrl,
+  // so activateNodeLock() short-circuits with activation_proxy_not_configured —
+  // the endpoint must map that transport/config error to 503 (retryable), not
+  // 422. No fetch must be attempted. Proves the endpoint↔service wiring.
+  let fetchCalled = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => { fetchCalled = true; throw new Error('fetch must not be called'); };
+  try {
+    const ctx = mockCtx();
+    // A persisted key + a local appliance-id so activateNodeLock gets past the
+    // empty-key and appliance-id guards and reaches the proxy-url check (the
+    // branch this test targets).
+    ctx.state.license = { status: 'active', license_key: 'key/customer', machine_file: null };
+    fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-test\n', 'utf8');
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/license/activate-node-lock', {}),
+      res,
+      urlFor('/api/license/activate-node-lock')
+    );
+    assert.equal(res._captured.status, 503, `expected 503, got ${res._captured.status} body=${res._captured.body}`);
+    const body = JSON.parse(res._captured.body);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'activation_proxy_not_configured');
+    assert.equal(fetchCalled, false, 'no proxy call when the url is absent');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // R-6 — Family-route gating (Plan 17-04 — Option B / CONTEXT Amendment)
 // ---------------------------------------------------------------------------
 //

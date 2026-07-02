@@ -2963,6 +2963,22 @@ export function createApiRoutes(ctx) {
       return json(res, 200, result);
     }
 
+    // Stufe-C node-lock: bind the ACTIVE license to this appliance. Calls the
+    // server activation proxy (licensing.activationProxyUrl → webhook.dvhub.de),
+    // which mints a Keygen machine bound to this box's appliance-id and returns a
+    // signed offline machine file; the service verifies it OFFLINE + asserts the
+    // bound fingerprint == this appliance before persisting (activateNodeLock).
+    // No body — binds the persisted key. Transport/proxy failures are 503 (state
+    // unchanged, retryable); a crypto/binding failure is a hard 422.
+    if (url.pathname === '/api/license/activate-node-lock' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const result = await licenseService.activateNodeLock();
+      const code = result.ok
+        ? 200
+        : (result.error === 'server_error' || result.error === 'activation_proxy_not_configured' ? 503 : 422);
+      return json(res, code, result);
+    }
+
     // DASH-01: Family dashboard HTML (D-03 direct URL, D-02 no topbar/Kiosk feel)
     // Served via servePage so the filename 'family.html' stays inside publicDir.
     // Phase 17 Plan 04: license-gated. Without a Pro licence the page route
