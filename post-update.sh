@@ -318,5 +318,40 @@ if [[ -f "$INSTALL_DIR/forecast-provision.sh" && -f "$FC_LOCK" ]]; then
   fi
 fi
 
+# ── 12. TimescaleDB-Provisionierung / Retrofit (idempotent, entkoppelt) ──
+# Boxen, die VOR der TimescaleDB-Installer-Provisionierung (Christin 2026-07-02)
+# aufgesetzt wurden, laufen auf reinem Postgres — inkonsistent zu prod und ein
+# prod-Backup lässt sich nicht restaurieren. Hier nachgerüstet über die geteilte
+# timescale-provision.sh (single source of truth mit install.sh). Der Lauf macht
+# u.a. `apt install` + einen Postgres-RESTART; das darf den dvhub-Service-Start
+# NIE stören → ENTKOPPELT über eine transiente systemd-Unit (überlebt
+# dvhub-Restarts, unterbricht den Boot nicht). Schneller Skip wenn die Extension
+# in der DB schon aktiv ist (prod = No-op). NON-FATAL durchgängig.
+if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
+  TS_ACTIVE=0
+  su - postgres -c "psql -tAqc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb'\" dvhub" 2>/dev/null | grep -q 1 && TS_ACTIVE=1
+  if [[ "$TS_ACTIVE" -eq 1 ]]; then
+    echo "  TimescaleDB: OK (Extension aktiv)"
+  elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then
+    echo "  TimescaleDB: Hintergrund-Provisionierung laeuft bereits"
+  else
+    echo "  TimescaleDB: nicht aktiv — starte entkoppelte Hintergrund-Provisionierung..."
+    if command -v systemd-run >/dev/null 2>&1; then
+      systemd-run --collect --quiet --unit "dvhub-timescale-provision" \
+        --description "DVhub TimescaleDB provisioning (retrofit)" \
+        --setenv=SERVICE_USER="$SERVICE_USER" \
+        --setenv=INSTALL_DIR="$INSTALL_DIR" \
+        --setenv=DATA_DIR="$DATA_DIR" \
+        --setenv=CONFIG_PATH="$CONFIG_PATH" \
+        --setenv=DB_NAME=dvhub \
+        bash "$INSTALL_DIR/timescale-provision.sh" 2>/dev/null \
+        || echo "  WARN: TimescaleDB-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
+    else
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" DB_NAME=dvhub \
+        setsid bash "$INSTALL_DIR/timescale-provision.sh" </dev/null >>"$DATA_DIR/timescale-provision.log" 2>&1 &
+    fi
+  fi
+fi
+
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"

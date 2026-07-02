@@ -32,10 +32,17 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 -- 2. Convert public.timeseries_samples to a hypertable.
 -- The table itself is owned by ensurePgSchema() (telemetry-store-pg.js:149-298) —
 -- this migration only converts it; it does NOT (re)create it.
+-- migrate_data => TRUE: on a RETROFIT (TimescaleDB added to a box that already
+-- ran plain-Postgres, e.g. via timescale-provision.sh), timeseries_samples may
+-- already hold rows; without migrate_data create_hypertable errors on a
+-- non-empty table. The raw-sample table is always small in practice (the
+-- materialized energy_slots_15m is the real store), so the one-time in-txn
+-- migration is cheap. On a fresh install the table is empty and this is a no-op.
 SELECT create_hypertable(
   'timeseries_samples',
   'ts_utc',
   chunk_time_interval => INTERVAL '7 days',
+  migrate_data => TRUE,
   if_not_exists => TRUE
 );
 

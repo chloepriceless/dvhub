@@ -486,6 +486,20 @@ if command -v psql >/dev/null 2>&1; then
     fi
     systemctl reload postgresql 2>/dev/null || true
   fi
+
+  # TimescaleDB: provision the hypertable engine so a fresh box matches prod and
+  # a production DB backup can be restored onto it (Christin 2026-07-02 — the
+  # installer previously provisioned it on NO platform, leaving fresh installs
+  # silently degraded on plain Postgres + backup-restore impossible). Shared
+  # timescale-provision.sh (single source of truth with post-update.sh). Debian
+  # ships postgresql-<ver>-timescaledb in its standard repos (no third-party
+  # source). Non-fatal (subshell + `|| true`): a box that can't get the package
+  # stays on plain Postgres (config timescaledb stays false) — never a crash.
+  if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]]; then
+    ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" DB_NAME=dvhub \
+        bash "$INSTALL_DIR/timescale-provision.sh" ) \
+      || echo "  TimescaleDB: Provisionierung fehlgeschlagen (non-fatal) — Box läuft auf reinem Postgres." >&2
+  fi
 fi
 
 # T-0113 Tier 3: provision the support-tunnel prerequisites (appliance-id, relay
