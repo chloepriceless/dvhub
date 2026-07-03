@@ -645,10 +645,14 @@ async function checkForUpdate() {
 
     if (data.channel === 'stable') {
       const currentLabel = data.current.tag || data.current.revision;
-      const latestLabel = data.latest.tag || 'unbekannt';
-      setText('updateMeta', `Channel: Stable | Aktuell: ${currentLabel} | Neueste Version: ${latestLabel}`);
+      // Pre-Release (T-UPDATE-ANCHOR): noch kein Release-Tag erreichbar — der
+      // Server meldet Branch-Drift (latest.tag=null, latest.revision gesetzt,
+      // prerelease:true). Revision statt "null" anzeigen.
+      const latestLabel = data.latest.tag || data.latest.revision || 'unbekannt';
+      const preNote = data.prerelease ? ' (Pre-Release: folgt main bis zum ersten Release)' : '';
+      setText('updateMeta', `Channel: Stable | Aktuell: ${currentLabel} | Neueste Version: ${latestLabel}${preNote}`);
       if (data.updateAvailable) {
-        setBanner('updateBanner', `Neue Version verfügbar: ${data.latest.tag}`, 'warning');
+        setBanner('updateBanner', `Neue Version verfügbar: ${latestLabel}`, 'warning');
       } else {
         setBanner('updateBanner', `DVhub ist aktuell — ${currentLabel}`, 'success');
       }
