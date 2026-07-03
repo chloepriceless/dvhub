@@ -519,6 +519,28 @@ export function selectLatestSemverTag(tagListString) {
     .filter(Boolean)
     .find((t) => SEMVER_TAG.test(t)) || null;
 }
+
+// T-UPDATE-ANCHOR (2026-07-03): release-tag candidates for the self-update path
+// must be REACHABLE from the release branch (`git tag --merged origin/main`).
+// The public repo carries orphaned tags from the pre-cleanup history
+// (v0.3.9…v0.4.2 — NOT ancestors of the cleaned main); live observed 2026-07-03:
+// the unfiltered `git tag --sort=-v:refname` ranked v0.4.2 first, so a fresh
+// stable install landed on months-old code AND update/check reported
+// updateAvailable:false (stranded). Falls back to the unfiltered list only when
+// origin/main cannot be resolved (nonstandard clone) — better a stale anchor
+// than a hard error; the assertNoDowngrade guard still blocks a downgrade.
+// Exported for the git-fixture test (test/tag-select.test.js).
+export async function listReachableReleaseTags(repoRoot, execFileAsyncImpl = execFileAsync) {
+  try {
+    return (await execFileAsyncImpl('git', ['tag', '--merged', 'origin/main', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout;
+  } catch {
+    try {
+      return (await execFileAsyncImpl('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout;
+    } catch {
+      return '';
+    }
+  }
+}
 // Rate-limit Map eviction ceiling. Before this was unbounded, so IPv6-rotation
 // attackers could pin Node heap. Key normalisation (v4 verbatim, v6 /64 prefix)
 // further collapses per-address fan-out.
@@ -6336,38 +6358,10 @@ export function createApiRoutes(ctx) {
         await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
         const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
 
-        if (channel === 'stable') {
-          let currentTag = null;
-          try {
-            currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-          } catch { /* not on a tag */ }
-          let latestTag = null;
-          try {
-            latestTag = selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
-          } catch { /* no tags */ }
-          let changelog = '';
-          if (currentTag && latestTag && currentTag !== latestTag) {
-            try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
-          } else if (!currentTag && latestTag) {
-            try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
-          }
-          const updateAvailable = latestTag != null && latestTag !== currentTag;
-          let availableVersions = [];
-          try {
-            const allTags = (await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-            availableVersions = allTags
-              ? allTags.split('\n').map((t) => t.trim()).filter((t) => SEMVER_TAG.test(t)).slice(0, 10)
-              : [];
-          } catch { /* ignore */ }
-          return json(res, 200, {
-            ok: true, channel,
-            current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
-            latest: { tag: latestTag, revision: null },
-            updateAvailable,
-            availableVersions,
-            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
-          });
-        } else {
+        // Shared branch-drift report (dev channel + stable pre-release fallback):
+        // compare HEAD vs origin/main. Keeps check consistent with what apply would
+        // actually do in the same situation (T-UPDATE-ANCHOR).
+        const branchDriftResponse = async ({ currentTag = null, prerelease = false } = {}) => {
           const remoteRev = (await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
           const behind = Number((await execFileAsync('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
           const ahead = Number((await execFileAsync('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim());
@@ -6377,12 +6371,50 @@ export function createApiRoutes(ctx) {
           }
           return json(res, 200, {
             ok: true, channel,
-            current: { version: ctx.getAppVersion().versionLabel, tag: null, revision: localRev.slice(0, 7) },
+            current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
             latest: { tag: null, revision: remoteRev.slice(0, 7) },
             behind, ahead,
             updateAvailable: behind > 0,
+            ...(prerelease ? { prerelease: true } : {}),
             changelog: changelog ? changelog.split('\n').filter(Boolean) : []
           });
+        };
+
+        if (channel === 'stable') {
+          let currentTag = null;
+          try {
+            currentTag = (await execFileAsync('git', ['describe', '--tags', '--exact-match', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+          } catch { /* not on a tag */ }
+          // T-UPDATE-ANCHOR: only tags reachable from origin/main are release anchors
+          // (orphaned pre-cleanup tags like v0.4.2 must never count as "latest").
+          const reachableTags = await listReachableReleaseTags(repoRoot);
+          const latestTag = selectLatestSemverTag(reachableTags);
+          if (!latestTag) {
+            // Pre-release phase: no release tag reachable from origin/main yet.
+            // Report branch drift so check+apply agree — apply follows origin/main
+            // in this phase instead of erroring 'No release tags found'.
+            return await branchDriftResponse({ currentTag, prerelease: true });
+          }
+          let changelog = '';
+          if (currentTag && currentTag !== latestTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `${currentTag}..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          } else if (!currentTag) {
+            try { changelog = (await execFileAsync('git', ['log', '--oneline', `HEAD..${latestTag}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim(); } catch { /* */ }
+          }
+          const updateAvailable = latestTag !== currentTag;
+          const availableVersions = reachableTags
+            ? reachableTags.split('\n').map((t) => t.trim()).filter((t) => SEMVER_TAG.test(t)).slice(0, 10)
+            : [];
+          return json(res, 200, {
+            ok: true, channel,
+            current: { version: ctx.getAppVersion().versionLabel, tag: currentTag, revision: localRev.slice(0, 7) },
+            latest: { tag: latestTag, revision: null },
+            updateAvailable,
+            availableVersions,
+            changelog: changelog ? changelog.split('\n').filter(Boolean) : []
+          });
+        } else {
+          return await branchDriftResponse();
         }
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
@@ -6430,19 +6462,11 @@ export function createApiRoutes(ctx) {
           // stable targetVersion was already guarded above; auto-selected refs were not).
           const currentVersionNow = ctx.getAppVersion?.()?.version || ctx.getAppVersion?.()?.versionLabel || '0.0.0';
           const allowDowngrade = body?.allowDowngrade === true;
-          if (channel === 'stable') {
-            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
-            const selectedTag = targetVersion || selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
-            if (!selectedTag) throw new Error('No release tags found');
-            // Explicit targetVersion was already downgrade-checked; guard an auto-selected tag.
-            if (!targetVersion) assertNoDowngrade(selectedTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
-            const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
-            gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
-          } else {
-            await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
-            // dev channel checks out origin/main — read ITS package.json version and refuse a
-            // downgrade (origin/main can be far behind the running code). package.json path is
-            // derived relative to the repo root so a flat or nested app layout both work.
+          // Shared branch-follow step (dev channel + stable pre-release fallback):
+          // checks out origin/main — read ITS package.json version first and refuse a
+          // downgrade (origin/main can be far behind the running code). package.json
+          // path is derived relative to the repo root so flat + nested layouts work.
+          const followOriginMain = async () => {
             const relAppDir = path.relative(repoRoot, appDir).split(path.sep).join('/');
             const pkgGitPath = (relAppDir ? relAppDir + '/' : '') + 'package.json';
             const mainPkg = await execFileAsync('git', ['show', `origin/main:${pkgGitPath}`], { cwd: repoRoot, timeout: 5000 }).catch(() => ({ stdout: '' }));
@@ -6451,7 +6475,29 @@ export function createApiRoutes(ctx) {
             assertNoDowngrade(mainVersion, currentVersionNow, { allowDowngrade, label: 'origin/main' });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
             const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
-            gitOutput = pull.stdout.trim();
+            return pull.stdout.trim();
+          };
+          if (channel === 'stable') {
+            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            // T-UPDATE-ANCHOR: only tags reachable from origin/main are release
+            // anchors — an orphaned pre-cleanup tag (v0.4.2) must never be selected.
+            const selectedTag = targetVersion || selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
+            if (selectedTag) {
+              // Explicit targetVersion was already downgrade-checked; guard an auto-selected tag.
+              if (!targetVersion) assertNoDowngrade(selectedTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
+              const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
+              gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
+            } else {
+              // Pre-release phase: no release tag reachable from origin/main yet.
+              // Mirror install.sh ("Keine Release-Tags gefunden, verwende <branch>"):
+              // follow origin/main instead of hard-failing — a pre-release stable box
+              // must stay updatable. The first real release tag re-anchors the next update.
+              pushLog('update_stable_prerelease_branch', { note: 'no release tag reachable from origin/main — following the branch' });
+              gitOutput = `[pre-release] ${await followOriginMain()}`;
+            }
+          } else {
+            await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            gitOutput = await followOriginMain();
           }
 
           // --- npm install + syntax check ---
@@ -6529,10 +6575,20 @@ export function createApiRoutes(ctx) {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
 
             if (channel === 'stable') {
-              const latestTag = selectLatestSemverTag((await execFileAsync('git', ['tag', '--sort=-v:refname'], { cwd: repoRoot, timeout: 5000 })).stdout);
-              if (!latestTag) throw new Error('No release tags found');
-              await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
-              gitOutput = `Switched to stable: ${latestTag}`;
+              // T-UPDATE-ANCHOR: only tags reachable from origin/main are release anchors.
+              const latestTag = selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
+              if (latestTag) {
+                await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+                gitOutput = `Switched to stable: ${latestTag}`;
+              } else {
+                // Pre-release phase: no release tag reachable yet — save the channel
+                // preference and keep following origin/main; the first real release
+                // tag re-anchors on the next update. Hard-failing here (old behaviour:
+                // throw 'No release tags found' → 500 + rollback) made the stable
+                // channel unselectable before the first release.
+                await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+                gitOutput = 'Switched to stable: no release tag yet — following origin/main (pre-release)';
+              }
             } else {
               await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
               gitOutput = 'Switched to dev: origin/main';

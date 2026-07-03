@@ -331,7 +331,15 @@ if [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # W5.1: semver-filter so a stray non-release tag (CI/build/bare-numeric) can never
   # win; kept in spirit with the JS SEMVER_TAG export in dvhub/routes-api.js. The
   # else-branch below already handles "nothing matched" (falls back to REPO_BRANCH).
-  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)"
+  #
+  # T-UPDATE-ANCHOR (2026-07-03): only tags REACHABLE from the release branch count
+  # (`--merged origin/$REPO_BRANCH`). The public repo carries orphaned tags from the
+  # pre-cleanup history (v0.3.9…v0.4.2 — NOT ancestors of the cleaned main); live
+  # observed: every fresh stable install checked out months-old v0.4.2 (without the
+  # provision scripts → no EOS/Forecast/TimescaleDB) while update/check reported
+  # "no update". The `|| true` is LOAD-BEARING: under `set -euo pipefail` a
+  # no-match grep (exit 1) would otherwise abort the whole installer.
+  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --merged "origin/$REPO_BRANCH" --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)"
   if [[ -n "$LATEST_TAG" ]]; then
     echo "   Channel: stable — checkout $LATEST_TAG"
     git -C "$INSTALL_DIR" checkout "$LATEST_TAG"

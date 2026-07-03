@@ -37,3 +37,56 @@ test('W5.1: v1.0.0 outranks v0.4.2 and bare numerics; whitespace/blank lines ign
   assert.equal(SEMVER_TAG.test('5918'), false);
   assert.equal(SEMVER_TAG.test('v1.0.0'), true);
 });
+
+// ---------------------------------------------------------------------------
+// T-UPDATE-ANCHOR (2026-07-03): listReachableReleaseTags — release anchors must
+// be REACHABLE from origin/main. Git-fixture test: builds a repo whose history
+// mirrors the live public repo (orphaned pre-cleanup tags v0.4.2… NOT ancestors
+// of the cleaned main) and proves the orphans are filtered out.
+// ---------------------------------------------------------------------------
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { listReachableReleaseTags } from '../routes-api.js';
+
+function git(cwd, ...args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+}
+
+function makeFixtureRepo({ withReachableTag = false, withOriginMain = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-anchor-'));
+  git(dir, 'init', '-q', '-b', 'old-history');
+  // Orphaned pre-cleanup history with an old release tag (mirrors live v0.4.2).
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'old');
+  git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'old history');
+  git(dir, 'tag', '-a', 'v0.4.2', '-m', 'old release');
+  // Cleaned main = a fresh ORPHAN branch — the old tag is NOT an ancestor.
+  git(dir, 'checkout', '-q', '--orphan', 'main');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'clean');
+  git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'cleaned main');
+  if (withReachableTag) git(dir, 'tag', '-a', 'v1.0.0', '-m', 'real release');
+  if (withOriginMain) git(dir, 'update-ref', 'refs/remotes/origin/main', 'main');
+  return dir;
+}
+
+test('T-UPDATE-ANCHOR: orphaned pre-cleanup tag is NOT a release anchor (live v0.4.2 case)', async () => {
+  const repo = makeFixtureRepo();
+  const tags = await listReachableReleaseTags(repo);
+  assert.equal(selectLatestSemverTag(tags), null, 'v0.4.2 (not an ancestor of origin/main) must be filtered out');
+});
+
+test('T-UPDATE-ANCHOR: a real release tag ON main is selected; the orphan still is not', async () => {
+  const repo = makeFixtureRepo({ withReachableTag: true });
+  const tags = await listReachableReleaseTags(repo);
+  assert.equal(selectLatestSemverTag(tags), 'v1.0.0');
+  assert.ok(!tags.includes('v0.4.2'), 'orphaned v0.4.2 must not appear in the reachable list');
+});
+
+test('T-UPDATE-ANCHOR: missing origin/main falls back to the unfiltered list (no hard error)', async () => {
+  const repo = makeFixtureRepo({ withOriginMain: false });
+  const tags = await listReachableReleaseTags(repo);
+  // Fallback returns the plain list — the downgrade guard downstream still protects.
+  assert.equal(selectLatestSemverTag(tags), 'v0.4.2');
+});
