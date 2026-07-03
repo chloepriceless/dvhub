@@ -6475,7 +6475,14 @@ export function createApiRoutes(ctx) {
             assertNoDowngrade(mainVersion, currentVersionNow, { allowDowngrade, label: 'origin/main' });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
             const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
-            return pull.stdout.trim();
+            // Operator-facing gitOutput: the checkout -B above already moved HEAD to
+            // origin/main, so the pull is a no-op and prints "Already up to date." even
+            // when the update jumped revisions (observed live: rollbackRev 477f3fd →
+            // c9f7ce3 reported "Already up to date."). Report the real movement.
+            const newRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+            return newRev.slice(0, 7) === rollbackRev.slice(0, 7)
+              ? pull.stdout.trim()
+              : `Updated ${rollbackRev.slice(0, 7)} → ${newRev.slice(0, 7)}`;
           };
           if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });

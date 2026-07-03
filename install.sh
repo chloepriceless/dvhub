@@ -293,7 +293,15 @@ apt-get update
 # Distro-generic name pulls python3.11-venv@Debian12 / python3.12-venv@Ubuntu24.
 # autossh + openssh-client: T-0113 reverse-SSH support tunnel (autossh self-heals
 # the outbound tunnel; ssh-keygen from openssh-client mints the relay keypair).
-apt-get install -y curl ca-certificates git sudo postgresql openvpn wireguard-tools strongswan python3-venv python3-pip autossh openssh-client
+apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan python3-venv python3-pip autossh openssh-client
+# wireguard-tools SEPARAT und OHNE Recommends (T-UPDATE-SHARPEN 2026-07-03): sein
+# Recommends `wireguard-modules` ist ein virtuelles Paket, das nur von linux-image-*
+# bereitgestellt wird — in einem LXC/Container (kein Kernel-Paket installiert) löst
+# apt das durch Installation eines KOMPLETTEN Kernel-Images auf (live beobachtet:
+# linux-image-rt-amd64, ~0,5 GB nutzlos + initramfs im Debian-13-LXC). Das
+# WireGuard-Kernelmodul kommt im Container ohnehin vom HOST-Kernel; auf Bare-Metal
+# ist linux-image-* bereits installiert. wg/wg-quick brauchen keine Recommends.
+apt-get install -y --no-install-recommends wireguard-tools
 
 if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"

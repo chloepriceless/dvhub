@@ -20,20 +20,41 @@ fi
 echo "DVhub post-update (idempotent)"
 
 # ── 1. Pakete ──
+# wireguard-tools wird GETRENNT und OHNE Recommends installiert (T-UPDATE-SHARPEN
+# 2026-07-03): sein Recommends `wireguard-modules` ist virtuell und wird nur von
+# linux-image-* bereitgestellt — in einem LXC (kein Kernel-Paket) löst apt das
+# durch ein KOMPLETTES Kernel-Image auf (~0,5 GB nutzlos; live beobachtet:
+# linux-image-rt-amd64). Das Modul kommt im Container vom HOST-Kernel.
+# Die übrigen Pakete behalten ihre Recommends — die sind FUNKTIONAL NÖTIG
+# (strongswan-starter → strongswan-charon = der IKE-Daemon selbst; libstrongswan
+# → libstrongswan-standard-plugins = Crypto-Plugins). NIE pauschal
+# --no-install-recommends auf die ganze Liste!
 NEEDED_PKGS=""
-for pkg in openvpn wireguard-tools strongswan autossh openssh-client; do
+for pkg in openvpn strongswan autossh openssh-client; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi
 done
-if [[ -n "$NEEDED_PKGS" ]]; then
-  echo "  Installiere fehlende Pakete:$NEEDED_PKGS"
+NEED_WG=""
+if ! dpkg -s wireguard-tools >/dev/null 2>&1; then
+  NEED_WG="wireguard-tools"
+fi
+if [[ -n "$NEEDED_PKGS" || -n "$NEED_WG" ]]; then
+  echo "  Installiere fehlende Pakete:$NEEDED_PKGS ${NEED_WG}"
   # T-0077: NON-FATAL. This script runs as ExecStartPre on EVERY service start.
   # apt hits the network; under `set -e` a failed apt (no network at an offline
   # boot) would abort the whole hook. The packages are VPN tools (openvpn/wg/
   # strongswan), not required for the core app to boot — best-effort, retry next run.
   # The `if` condition suppresses `set -e` for these commands.
-  if apt-get update -qq && apt-get install -y $NEEDED_PKGS; then
+  APT_OK=1
+  apt-get update -qq || APT_OK=0
+  if [[ "$APT_OK" -eq 1 && -n "$NEEDED_PKGS" ]]; then
+    apt-get install -y $NEEDED_PKGS || APT_OK=0
+  fi
+  if [[ "$APT_OK" -eq 1 && -n "$NEED_WG" ]]; then
+    apt-get install -y --no-install-recommends "$NEED_WG" || APT_OK=0
+  fi
+  if [[ "$APT_OK" -eq 1 ]]; then
     echo "  Pakete: installiert"
   else
     echo "  WARN: Paket-Installation fehlgeschlagen (non-fatal, Netz?). VPN-Features ggf. bis zum naechsten erfolgreichen Lauf eingeschraenkt." >&2
