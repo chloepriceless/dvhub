@@ -55,8 +55,12 @@ eigentliche Ingenieursarbeit.
 - **Portal-ID:** frei wählbar, in dieser Anleitung `deye1` (in DVhub und Node-RED identisch!)
 - **Frische-Regel (wichtig!):** DVhub verwirft Werte, die älter als **90 Sekunden** sind
   (3 x Keepalive-Intervall). Publiziere jeden Messwert daher **mindestens alle 30 s**,
-  besser **alle 5-10 s** oder bei Änderung. `retain: true` wird empfohlen, damit nach einem
-  DVhub-Neustart sofort Werte da sind.
+  besser **alle 5-10 s** oder bei Änderung.
+- **Kein `retain` nötig:** DVhub ignoriert vom Broker wiederholte Retained-Nachrichten
+  bewusst (ein Replay alter Werte ist kein Beweis, dass die Anlage lebt). Die Startwerte
+  nach einem DVhub-Neustart kommen automatisch über das Keepalive: DVhub sendet sofort
+  `R/deye1/keepalive`, deine Bridge antwortet mit einer Voll-Publikation (3.5).
+  Gesetztes `retain` schadet nicht — es bringt nur nichts.
 - **QoS:** 0 genügt.
 
 ### 3.2 Messwerte: Node-RED an DVhub (Pflicht-Topics)
@@ -74,6 +78,8 @@ eigentliche Ingenieursarbeit.
 | `N/deye1/system/0/Ac/Consumption/L3/Power` | Hausverbrauch Phase 3 | W | immer >= 0 |
 
 Optional (nur wenn AC-gekoppelte PV existiert): `N/deye1/system/0/Ac/PvOnGrid/L1..L3/Power`.
+**Tipp:** Ohne AC-PV diese drei Topics einfach mit `0` publizieren — sonst tauchen (harmlose,
+aber verwirrende) Lesefehler für die AC-PV-Punkte im DVhub-Status auf.
 
 ### 3.3 Einstellungs-Spiegel: Node-RED an DVhub (Readback)
 
@@ -101,7 +107,7 @@ Start einmal die Ist-Werte:
 
 | Topic | Verhalten deiner Bridge |
 |---|---|
-| `R/deye1/keepalive` (alle 30 s, leerer Payload) | Antwort: **alle** `N/`-Topics einmal frisch publizieren. Zusätzlich: **Watchdog füttern** (Kapitel 7) |
+| `R/deye1/keepalive` (alle 30 s, leerer Payload) | Antwort: **alle** `N/`-Topics einmal frisch publizieren — **einschließlich der Settings-Readbacks aus 3.3** (sie sind Teil der Voll-Publikation; nur bei Bridge-Start zu publizieren reicht nicht). Zusätzlich: **Watchdog füttern** (Kapitel 7) |
 | `R/deye1/<beliebiger N-Pfad>` | DVhub fordert genau diesen Wert nach: das entsprechende `N/`-Topic sofort publizieren |
 
 ---
@@ -222,9 +228,9 @@ Die Batterie muss zusätzlich rund 1.600 W entladen, damit am Zähler -2.000 W s
    plausibel, Vorzeichen laut 3.2 (Netzbezug positiv! Akku-Laden positiv!).
 2. **DVhub umstellen** (Kapitel 4) und neu starten. Leitstand öffnen: SoC, PV, Netz- und
    Akku-Leistung erscheinen und bewegen sich live.
-3. **Frische-Test:** Bridge 2 Minuten pausieren. DVhub muss die Verbindung als gestört melden
-   bzw. die Werte als veraltet behandeln (kein Einfrieren!). Bridge wieder starten: erholt
-   sich von selbst.
+3. **Frische-Test:** Bridge 3-4 Minuten pausieren. DVhub behandelt die Werte nach 90 s intern
+   als veraltet (Fehlerzähler steigt) und meldet die Verbindung nach spätestens ~3 Minuten
+   als gestört. Bridge wieder starten: erholt sich von selbst, ohne DVhub-Neustart.
 4. **Erster Steuer-Smoke-Test (harmlos):** In DVhub die SoC-Untergrenze ändern. Der Befehl
    kommt auf `W/.../MinimumSocLimit` in Node-RED an, die Deye übernimmt, der Readback
    erscheint in DVhub.
@@ -257,8 +263,11 @@ Die Batterie muss zusätzlich rund 1.600 W entladen, damit am Zähler -2.000 W s
 - **Geräte-Discovery/Meter-Scan** in DVhub sind Modbus-Funktionen und bleiben ungenutzt.
 - Die Qualität der Regelung (Kapitel 6) bestimmt die Qualität der Optimierung: EOS plant
   viertelstundengenau — ein träger oder stark gedeckelter Regler verschenkt Erlöse.
-- Getestet ist diese Anleitung als Schnittstellen-Vertrag; die Deye-seitige Befehlsumsetzung
-  hängt vom Modell (z. B. SUN-...K-SG0xLP3) und eurer bestehenden Node-RED-Basis ab.
+- Diese Anleitung ist **end-to-end getestet** (2026-07-04, DVhub 1.0 auf Debian-13-LXC gegen
+  eine vertragskonforme Bridge-Simulation): Messwerte, Steuerbefehle inkl. Readback,
+  Keepalive/Nachforderung, Frische-Erkennung (Verbindung nach ~3 min als gestört gemeldet)
+  und Selbst-Erholung. Die Deye-seitige Befehlsumsetzung hängt vom Modell
+  (z. B. SUN-...K-SG0xLP3) und eurer bestehenden Node-RED-Basis ab.
 
 ---
 

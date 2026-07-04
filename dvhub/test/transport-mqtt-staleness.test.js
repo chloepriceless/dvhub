@@ -39,3 +39,45 @@ test('maxAge <= 0 or non-finite disables staleness (always fresh if value presen
 test('missing ts is treated as epoch → stale under a finite maxAge', () => {
   assert.equal(mqttCacheEntryFresh({ value: 42 }, MAX, NOW), false);
 });
+
+// ---------------------------------------------------------------------------
+// T-MQTT-CONSUMPTION (2026-07-04): Summen-Punkt selfConsumptionW = L1+L2+L3.
+// Live-Fund (Deye-Bridge-Praxistest): der Poller fragt den Summen-Punkt ab,
+// das MQTT-Mapping kannte nur die Phasen-Topics → loadW fehlte komplett.
+// ---------------------------------------------------------------------------
+
+import { sumConsumptionEntries } from '../transport-mqtt.js';
+
+test('consumption sum: three fresh phases are summed, ts = newest', () => {
+  const r = sumConsumptionEntries([
+    { value: 450, ts: NOW - 1000 },
+    { value: 300, ts: NOW - 2000 },
+    { value: 210, ts: NOW - 500 },
+  ], MAX, NOW);
+  assert.deepEqual(r, { value: 960, ts: NOW - 500 });
+});
+
+test('consumption sum: a never-seen phase counts as 0 (1-/2-phasige Anlagen)', () => {
+  const r = sumConsumptionEntries([{ value: 450, ts: NOW }, undefined, undefined], MAX, NOW);
+  assert.deepEqual(r, { value: 450, ts: NOW });
+});
+
+test('consumption sum: a SEEN but stale phase makes the whole sum stale (null)', () => {
+  const r = sumConsumptionEntries([
+    { value: 450, ts: NOW },
+    { value: 300, ts: NOW - (MAX + 1) },   // eingefrorenes L2
+    { value: 210, ts: NOW },
+  ], MAX, NOW);
+  assert.equal(r, null);
+});
+
+test('consumption sum: no phase seen at all -> null (kein erfundener 0-Verbrauch)', () => {
+  assert.equal(sumConsumptionEntries([undefined, undefined, undefined], MAX, NOW), null);
+});
+
+test('consumption sum: 0-W-Phasen sind gültige Werte', () => {
+  const r = sumConsumptionEntries([
+    { value: 0, ts: NOW }, { value: 0, ts: NOW }, { value: 0, ts: NOW },
+  ], MAX, NOW);
+  assert.deepEqual(r, { value: 0, ts: NOW });
+});
