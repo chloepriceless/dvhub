@@ -30,7 +30,7 @@ test('whitelist: mandatory sources pass, everything else is discretionary', () =
   assert.equal(isMandatoryControlSource('emergency_stop'), true);
   // Christin 2026-06-12: dc_export_mode is DV revenue maximization → blocked.
   for (const src of [
-    'dc_export_mode', 'sell_price_floor', 'stage2_akku_clamp',
+    'dc_export_mode', 'sell_price_floor',
     'eos_optimization', 'emhass_optimization', 'api_manual_write',
     'manual_override', 'manual_override_persistent', 'default',
     'rule:abc', 'some_future_unclassified_source', '', null, undefined

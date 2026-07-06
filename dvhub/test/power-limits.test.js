@@ -21,10 +21,6 @@ const PROD_LIKE = {
       batteryCapacityKwh: 43,    // kWh (SMA convention)
       maxDischargeW: -12000,     // NEGATIVE (SMA convention)
       inverterEfficiencyPct: 85,
-      predictivePreEmpty: {
-        batteryVoltageV: 55.2,
-        maxChargeCurrentA: 380,
-      },
     },
   },
 };
@@ -32,10 +28,10 @@ const PROD_LIKE = {
 test('golden: legacy fallback returns each consumer\'s current value', () => {
   const { limits, sources } = getPowerLimits(PROD_LIKE);
   assert.equal(limits.batteryCapacityWh, 43000);
-  assert.equal(limits.batteryNominalVoltageV, 55.2);
+  assert.equal(limits.batteryNominalVoltageV, 55.2);   // default (no legacy source)
   assert.equal(limits.batteryMaxDischargeDcW, 20000);
   assert.equal(limits.batteryMaxChargeW, 18000);
-  assert.equal(limits.batteryMaxChargeCurrentA, 380);
+  assert.equal(limits.batteryMaxChargeCurrentA, 350);  // legacy: schedule.defaultChargeCurrentA
   assert.equal(limits.inverterMaxPowerW, 24000);
   assert.equal(limits.roundTripEfficiencyPct, 90);
   assert.equal(limits.roundTripEfficiencyFraction, 0.9);
@@ -44,8 +40,8 @@ test('golden: legacy fallback returns each consumer\'s current value', () => {
   assert.equal(limits.maxSocPct, 100);
   // derived
   assert.equal(limits.batteryCapacityKwh, 43);
-  assert.equal(limits.batteryMaxChargeCurrentImpliedW, Math.round(380 * 55.2)); // 20976
-  // sources: all from legacy except grid cap (no legacy) + ess (none)
+  assert.equal(limits.batteryMaxChargeCurrentImpliedW, Math.round(350 * 55.2)); // 19320
+  // sources: legacy except nominal voltage (default), grid cap (no legacy) + ess (none)
   assert.equal(sources.batteryCapacityWh, 'legacy');
   assert.equal(sources.batteryMaxDischargeDcW, 'legacy');
   assert.equal(sources.roundTripEfficiencyPct, 'legacy');

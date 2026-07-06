@@ -1012,7 +1012,6 @@ export function createApiRoutes(ctx) {
     '/api/forecast/inspector/load',
     '/api/forecast/inspector/ml-correction',
     '/api/forecast/inspector/eos',
-    '/api/forecast/inspector/stage2',
     '/api/forecast/inspector/optimizer-cold',
     // T-CURTAIL: observed-GHI coverage diagnostic (read-only). Same forecast
     // appliance-trust model. The POST /api/forecast/ghi-backfill trigger stays
@@ -1050,7 +1049,7 @@ export function createApiRoutes(ctx) {
     ['/api/forecast', 'forecast'],
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
     ['/api/forecast/inspector/ml-correction', 'forecast'], ['/api/forecast/inspector/eos', 'forecast'],
-    ['/api/forecast/inspector/stage2', 'forecast'], ['/api/forecast/inspector/optimizer-cold', 'forecast'],
+    ['/api/forecast/inspector/optimizer-cold', 'forecast'],
     ['/api/forecast/ghi-coverage', 'forecast'],
     // integrations — integration status, schedule read, meter scan, vpn status,
     // devices, messages, signals, epex, mqtt inspector, health
@@ -5361,19 +5360,17 @@ export function createApiRoutes(ctx) {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Phase 19 Plan 19-01 — Forecast Inspector (6 read-only diagnostic endpoints).
+    // Phase 19 Plan 19-01 — Forecast Inspector (5 read-only diagnostic endpoints).
     //
     // Shape per CONTEXT D-16:
-    //   - 5 window-shaped endpoints (B1..B4 + optimizer-cold has no window)
-    //   - 1 date-shaped endpoint (B5 stage2)
+    //   - 4 window-shaped endpoints (B1..B4); optimizer-cold has no window
     //
     // Security posture (threat_model T-19-01, T-19-04, T-19-08, T-19-09):
     //   - LAN_SAFE_ENDPOINTS bypass GET-auth on LAN; external callers need Bearer.
-    //   - B3/B4/B5 are Pro-gated via requirePro() BEFORE business logic — the
+    //   - B3/B4 are Pro-gated via requirePro() BEFORE business logic — the
     //     gate runs even on LAN-bypassed kiosks (Option B). featureName is
     //     whitelisted in services/license/index.js ALLOWED_FEATURES.
     //   - from/to ISO validated + 7-day DoS cap (T-19-09).
-    //   - stage2 date regex-validated YYYY-MM-DD + 30-day retention window.
     //   - ctx.inspector=null → 503 (Phase 19-01 wires inspector at server bootstrap;
     //     a missing inspector indicates wiring drift and should fail loudly).
     //   - Handler throws → 500 with static `pushLog` event-name (T-19-10 accept).
@@ -5559,31 +5556,6 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         pushLog('curtail_preview_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'preview_failed' });
-      }
-    }
-
-    // B5 — Stage-2 Backtest (Pro; stubbed in Plan 19-01, body in Plan 19-06)
-    if (url.pathname === '/api/forecast/inspector/stage2' && req.method === 'GET') {
-      if (!requirePro(req, res, 'forecast-inspector-stage2')) return;
-      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
-      const date = url.searchParams.get('date');
-      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return json(res, 400, { ok: false, error: 'invalid_date' });
-      }
-      const dateMs = Date.parse(date + 'T00:00:00Z');
-      // Retention window: today-30 .. today (yesterday is the default; today acceptable for partial day)
-      if (!Number.isFinite(dateMs) || dateMs < Date.now() - 31 * 86_400_000 || dateMs > Date.now()) {
-        return json(res, 400, { ok: false, error: 'invalid_date' });
-      }
-      try {
-        const payload = await ctx.inspector.getStage2({ date });
-        if (payload && payload.ok === false && payload.error === 'not_implemented') {
-          return json(res, 501, payload);
-        }
-        return json(res, 200, { ok: true, ...payload });
-      } catch (e) {
-        pushLog('inspector_stage2_error', { error: e.message });
-        return json(res, 500, { ok: false, error: 'inspector_failed' });
       }
     }
 

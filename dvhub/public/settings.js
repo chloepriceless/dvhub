@@ -3754,8 +3754,8 @@ function renderEosInspector(payload) {
       : '');
 }
 // renderStage2BacktestResult ENTFERNT 2026-05-23 — Backtest-Karte aus Settings
-// raus. Backend (getStage2 / /api/forecast/inspector/stage2) bleibt intakt
-// falls Re-Aktivierung gewünscht.
+// raus. Backend (getStage2 / /api/forecast/inspector/stage2) 2026-07-02
+// ebenfalls entfernt (Stage 2++ / predictivePreEmpty komplett aus dem Code).
 
 function isInspectorProActive() {
   var cache = window._licenseStateCache;

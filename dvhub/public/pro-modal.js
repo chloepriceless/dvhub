@@ -13,8 +13,8 @@
  *   - settings.js bindProGateCta (Phase 19-01) — delegated click on
  *     .pro-gate-banner-cta with data-pro-feature attr — calls openProRequired
  *     and falls back to /settings#license if undefined. This script makes
- *     openProRequired defined so those 3 Inspector subsections (B3 ML, B4 EOS,
- *     B5 Stage-2) get the proper modal instead of the bare-hash fallback.
+ *     openProRequired defined so those Inspector subsections (B3 ML, B4 EOS)
+ *     get the proper modal instead of the bare-hash fallback.
  *
  * ARCHITECTURE DEVIATION FROM 17-06 PLAN (2026-05-22 resume audit):
  *   PLAN assumed dvhub-app.js was loaded by all 8 pages and would do the
@@ -55,7 +55,7 @@
     'forecast-inspector-eos': true,
     'vpn-manager': true,
     // Pro-Gating #12 (2026-06-27): DV-Schnittstelle + EOS sind Pro (serverseitig
-    // gegated). forecast-inspector-stage2 entfernt (Stage 2++ in der UI ausgeblendet).
+    // gegated). forecast-inspector-stage2 entfernt (Stage 2++ komplett aus dem Code, 2026-07-02).
     'dv-interface': true,
     'eos': true
   };

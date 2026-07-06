@@ -75,7 +75,6 @@ export function getPowerLimits(cfg = {}) {
   const sp = cfg?.system?.power || {};
   const opt = cfg?.optimizer || {};
   const sma = cfg?.schedule?.smallMarketAutomation || {};
-  const pp = sma?.predictivePreEmpty || {};
   const schedCfg = cfg?.schedule || {};
 
   const D = POWER_LIMIT_DEFAULTS;
@@ -83,10 +82,10 @@ export function getPowerLimits(cfg = {}) {
   const sources = {};
   const put = (key, res) => { limits[key] = res.value; sources[key] = res.source; };
 
-  // Nominal voltage — needed for any A<->W conversion. Legacy: SMA pre-empty.
+  // Nominal voltage — needed for any A<->W conversion.
   put('batteryNominalVoltageV', resolveField(
     sp.batteryNominalVoltageV,
-    [{ value: pp.batteryVoltageV }],
+    [],
     D.batteryNominalVoltageV,
   ));
 
@@ -118,10 +117,10 @@ export function getPowerLimits(cfg = {}) {
   ));
 
   // Charge CURRENT cap (A) — canonical for the Victron charge-current write path.
-  // Legacy: SMA maxChargeCurrentA, then schedule.defaultChargeCurrentA.
+  // Legacy: schedule.defaultChargeCurrentA.
   put('batteryMaxChargeCurrentA', resolveField(
     sp.batteryMaxChargeCurrentA,
-    [{ value: pp.maxChargeCurrentA, norm: mag }, { value: schedCfg.defaultChargeCurrentA, norm: mag }],
+    [{ value: schedCfg.defaultChargeCurrentA, norm: mag }],
     D.batteryMaxChargeCurrentA,
     mag,
   ));

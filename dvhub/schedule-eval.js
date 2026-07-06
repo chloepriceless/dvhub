@@ -22,12 +22,6 @@ import { safeInterval } from './services/safe-async.js';
 // above it and are never gated.
 const FORCED_EXPORT_THRESHOLD_W = -1000;
 
-// D-18 live runtime Akku-Hard-Limit clamp — hysteresis dead-band (W).
-// Within [akkuHardLimitW - HYST, akkuHardLimitW + HYST] the clamp does not
-// change the setpoint, so a measured battery discharge hovering near the
-// limit cannot flap the Stage-2 LEEREN gridSetpointW every control cycle.
-const STAGE2_CLAMP_HYSTERESIS_W = 500;
-
 // Operator request (Christin 2026-06-21): the /api/log ring was flooded by one
 // identical `control_write` line every control cycle for the reg-2716 keepalive
 // re-writes (~5 s), drowning out everything else within ~1–2 min. Keepalive
@@ -66,7 +60,7 @@ function dischargeFloorHold(target, value) {
 //                                neutralization (must pass its own gate)
 // Deliberately DISCRETIONARY (= blocked): dc_export_mode (DV revenue
 // maximization, not a curtailment duty — Christin 2026-06-12), sell_price_floor,
-// stage2_akku_clamp, forecast_optimizer rule:* sources, eos_optimization,
+// forecast_optimizer rule:* sources, eos_optimization,
 // emhass_optimization, api_manual_write, manual_override*, default.
 // NOTE: applyDvVictronControl (§9 feed-in limit / PV curtailment, reg 2707/2709)
 // is a separate path that never goes through applyControlTarget — it is NOT
@@ -400,7 +394,7 @@ export function createScheduleEvaluator(ctx) {
     // schedule rule, manual, persistent override, EOS/EMHASS, negative-price, and
     // API-driven maxDischargeW/chargeCurrentA) passes here. A discharge is
     // suppressed when SoC is UNKNOWN, STALE, or at/below the hard floor. Closes
-    // T-0001 P0-1: the per-rule stopSoc + D-18 floors check only null/non-finite,
+    // T-0001 P0-1: the per-rule stopSoc floors check only null/non-finite,
     // NOT age — but polling.js keeps the last SoC on a failed read, so a frozen
     // finite SoC would pass them (over-drain on a comms fault). soc's per-field
     // success timestamp (fieldUpdatedAt.soc, set ONLY on a successful poll, part 1
@@ -784,7 +778,7 @@ export function createScheduleEvaluator(ctx) {
       // not cap it — a low cap starves EV charging (the shortfall comes expensively
       // from the grid). Over-discharge protection comes from THIS 5 s recompute and,
       // on a stall, from reg 2716's ~10 s Passthru revert → safe self-consumption.
-      // Runs BEFORE the guards so neg-price / SoC-floor / D-18 act on the live
+      // Runs BEFORE the guards so neg-price / SoC-floor act on the live
       // value. Internal-optimizer rules (no closedLoopExport) untouched.
       if (target === 'gridSetpointW'
           && eff.rule?.optimizer === 'eos'
@@ -807,10 +801,9 @@ export function createScheduleEvaluator(ctx) {
       // === end T-0121/T-0122 EOS closed-loop ==================================
 
       // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
-      // A persistent override has no TTL and is invisible to both the per-rule
-      // stopSocPct floor (autoDisableStopSocScheduleRules — rules only) and the
-      // D-18 Akku clamp (gated on eff.rule.stage2Phase, but an override has
-      // rule:null). Left unguarded it would force-discharge down to the bare
+      // A persistent override has no TTL and is invisible to the per-rule
+      // stopSocPct floor (autoDisableStopSocScheduleRules — rules only; an
+      // override has rule:null). Left unguarded it would force-discharge down to the bare
       // Victron hardware min-SoC — exactly the 2026-05-22 overnight-drain class.
       // Floor it on measured SoC; fail-safe (suppress) when SoC is unknown.
       // Scoped to persistent overrides only — normal overrides are TTL-bounded.
@@ -864,15 +857,14 @@ export function createScheduleEvaluator(ctx) {
       }
 
       // === T-0118 sell-price floor =========================================
-      // Arbitrage export rules (forecast_optimizer / small-market / Stage-2
-      // LEEREN) rank discharge slots RELATIVE to a daily average. On solar-glut
+      // Arbitrage export rules (forecast_optimizer / small-market) rank
+      // discharge slots RELATIVE to a daily average. On solar-glut
       // days with negative midday prices the average collapses, so absolutely-
       // cheap night slots (e.g. 6 ct at 04:00) clear the relative bar and the
       // 43 kWh battery gets sold off cheap. When the current spot price is below
       // the configured floor, suppress a FORCED grid export — hold at the default
       // self-consumption setpoint so the energy stays for own load instead of a
-      // cheap sale. Same shape as negativePriceProtection above. Runs BEFORE the
-      // Stage-2 clamp so a cheap LEEREN slot is held, not clamped. OFF when
+      // cheap sale. Same shape as negativePriceProtection above. OFF when
       // minSellPriceCtKwh is unset (prior behavior).
       //
       // T-0118 (2026-06-06): the floor is NOT applied to EOS-sourced rules. EOS
@@ -880,8 +872,8 @@ export function createScheduleEvaluator(ctx) {
       // prices before a curtailment window to free room for otherwise-curtailed
       // PV — a flat 12 ct floor would block that valid prep. The negative-price
       // guard above still applies to EVERY source (never pay to export). The
-      // floor stays in force for the internal optimizer, the small-market
-      // automation and Stage-2 LEEREN (eff.rule.optimizer is 'internal'/absent).
+      // floor stays in force for the internal optimizer and the small-market
+      // automation (eff.rule.optimizer is 'internal'/absent).
       const isEosRule = eff.rule?.optimizer === 'eos';
       if (target === 'gridSetpointW' && !isEosRule) {
         const sellFloor = Number(cfg.optimizer?.minSellPriceCtKwh);
@@ -905,88 +897,6 @@ export function createScheduleEvaluator(ctx) {
       if (target === 'gridSetpointW' && dcExportActive && Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0)) > 50) {
         continue;
       }
-
-      // === D-18 live runtime Akku-Hard-Limit clamp =========================
-      // The runtime half of the D-17/D-18 dual enforcement. The plan-time
-      // clamp (plan 10-03/10-04) sizes the Stage-2 LEEREN gridSetpointW on
-      // FORECAST. A higher-than-forecast morning load or a PV dip can push a
-      // plan-locked LEEREN slot's REAL battery discharge over the Akku Hard
-      // Limit. This clamp inspects measured battery discharge every control
-      // cycle and trims the active Stage-2 LEEREN setpoint toward 0 so
-      // forecast error can never overdraw the physical 43 kWh battery.
-      // Structurally mirrors the negativePriceProtection block above: inspect
-      // eff.value, compare against a limit, conditionally write a clamped
-      // value with its own source tag, continue. NEVER touches a non-Stage-2
-      // gridSetpointW (a manual rule, the optimizer, a plain SMA rule).
-      if (target === 'gridSetpointW' && eff.rule?.stage2Phase === 'LEEREN') {
-        const akkuHardLimitW = Number(
-          cfg.schedule?.smallMarketAutomation?.predictivePreEmpty?.akkuHardLimitW ?? 20000
-        );
-        const measuredBatteryDischargeW = state.victron.batteryDischargeW;
-        // T-0075: batteryDischargeW is DERIVED from batteryPowerW (polling.js
-        // `Math.max(0, -batteryPowerW)`), so it carries no own success timestamp —
-        // key freshness on the real polled field batteryPowerW. A stale (frozen
-        // but finite) discharge reading would otherwise pass the null/non-finite
-        // guard below and let the clamp run on outdated telemetry.
-        const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
-        const dischargeStale = victronFieldStale(state, 'batteryPowerW', maxAgeMs);
-
-        // Note: Number(null) === 0 (finite), so a bare Number.isFinite check
-        // would silently treat missing telemetry as a 0 W discharge. Reject
-        // null/undefined explicitly before coercing — a missing reading must
-        // hit the fail-safe path, never be read as "0 W, clamp not needed".
-        if (
-          measuredBatteryDischargeW == null ||
-          !Number.isFinite(Number(measuredBatteryDischargeW)) ||
-          dischargeStale
-        ) {
-          // FAIL SAFE: telemetry missing/null/non-finite/stale. Hold the current
-          // (already plan-time-clamped) setpoint — do NOT no-op into an
-          // unbounded discharge. Log once per episode.
-          if (!state.ctrl._stage2ClampTelemetryMissing) {
-            pushLog('stage2_akku_telemetry_missing', {
-              rule: eff.rule?.id || null,
-              eff: eff.value,
-              reason: dischargeStale ? 'stale' : 'missing',
-              ageMs: victronFieldAgeMs(state, 'batteryPowerW')
-            });
-            state.ctrl._stage2ClampTelemetryMissing = true;
-          }
-          await applyControlTarget(target, eff.value, eff.source);
-          continue;
-        }
-        state.ctrl._stage2ClampTelemetryMissing = false;
-
-        const measured = Number(measuredBatteryDischargeW);
-        if (measured > akkuHardLimitW + STAGE2_CLAMP_HYSTERESIS_W) {
-          // The clamp BINDS: real discharge is above the upper hysteresis
-          // edge. Trim the (negative) setpoint toward 0 by the overshoot.
-          // Math.min(0, ...) caps at 0 — the trim can never cross into a
-          // positive (grid-charge) value, so it stays legal under the
-          // EEG/§14a gate in applyControlTarget.
-          const overshoot = measured - akkuHardLimitW;
-          const trimmedValue = Math.min(0, Number(eff.value) + overshoot);
-          await applyControlTarget('gridSetpointW', trimmedValue, 'stage2_akku_clamp');
-          if (!state.ctrl._stage2ClampActive) {
-            pushLog('stage2_akku_hard_limit_exceeded', {
-              measured,
-              limit: akkuHardLimitW,
-              from: eff.value,
-              to: trimmedValue
-            });
-            state.ctrl._stage2ClampActive = true;
-          }
-          continue;
-        }
-        if (measured < akkuHardLimitW - STAGE2_CLAMP_HYSTERESIS_W) {
-          // Recovered below the lower hysteresis edge — reset the one-shot
-          // flag so a future overshoot logs the binding episode again.
-          state.ctrl._stage2ClampActive = false;
-        }
-        // Within the hysteresis dead-band: no write change (no flapping) —
-        // fall through to the normal applyControlTarget below.
-      }
-      // === end D-18 live runtime Akku-Hard-Limit clamp =====================
 
       await applyControlTarget(target, eff.value, eff.source);
     }

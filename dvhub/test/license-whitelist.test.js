@@ -1,8 +1,8 @@
 // test/license-whitelist.test.js — Phase 19 Plan 19-01.
 //
 // Static assertion that services/license/index.js ALLOWED_FEATURES contains
-// exactly the 4 slugs needed by Phase 17 (family-dashboard) + Phase 19
-// (forecast-inspector-{ml,eos,stage2}). This is the V5 ASVS whitelist that
+// the slugs needed by Phase 17 (family-dashboard) + Phase 19
+// (forecast-inspector-{ml,eos}). This is the V5 ASVS whitelist that
 // prevents log/response injection via the requirePro(featureName) 403 body
 // — any new Pro slug MUST be added here BEFORE it is used by a route.
 
@@ -56,9 +56,9 @@ test('ALLOWED_FEATURES contains eos (Pro-Gating #12)', () => {
   assert.match(m[1], /'eos'/);
 });
 
-// Pro-Gating #12: Stage 2++ ist in der UI ausgeblendet (#8-lite) → der
-// forecast-inspector-stage2-Slug ist aus der Whitelist entfernt.
-test('ALLOWED_FEATURES no longer contains forecast-inspector-stage2 (Stage 2++ UI-hidden)', () => {
+// Pro-Gating: Stage 2++ / predictivePreEmpty wurde komplett aus dem Code entfernt
+// → der forecast-inspector-stage2-Slug ist aus der Whitelist entfernt.
+test('ALLOWED_FEATURES no longer contains forecast-inspector-stage2 (Stage 2++ removed)', () => {
   const src = fs.readFileSync(LICENSE_SRC, 'utf8');
   const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
   assert.ok(m);

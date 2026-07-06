@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeCoExportSetpointW } from '../predictive-pre-empty.js';
+import { computeCoExportSetpointW } from '../co-export-setpoint.js';
 
 // DVhub fork (2026-06-01) — EOS Option B: live PV + battery co-export regulator.
 // Pure setpoint math; the runtime (schedule-eval dcExportMode block) feeds it the

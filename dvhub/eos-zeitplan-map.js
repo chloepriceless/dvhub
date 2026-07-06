@@ -14,7 +14,7 @@
 // the Bundesnetzagentur MisPel / Pauschaloption clearance — "Laden" therefore
 // just means "nicht entladen, Akku lädt aus PV" (Halten).
 
-import { computeCoExportSetpointW } from './predictive-pre-empty.js';
+import { computeCoExportSetpointW } from './co-export-setpoint.js';
 
 // Below this many watts a flow is treated as noise (no export / no charge).
 const EPS_W = 150;

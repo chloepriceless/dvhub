@@ -95,8 +95,8 @@ const ALLOWED_FEATURES = new Set([
   'vpn-manager',               // 2026-06-21: VPN-Manager als Pro-Feature gegated (/api/vpn/*)
   // Pro-Gating #12 (2026-06-27): die DV-Schnittstelle (Modbus-Server + HTTP-Read
   // /dv/control-value) und der EOS/Optimizer-Dispatch sind serverseitig gegatete
-  // Pro-Features. forecast-inspector-stage2 ENTFERNT — Stage 2++ ist in der UI
-  // ausgeblendet (#8-lite), der Inspektor dafür entfällt.
+  // Pro-Features. forecast-inspector-stage2 ENTFERNT — Stage 2++ / predictivePreEmpty
+  // wurde 2026-07-02 komplett aus dem Code entfernt, der Inspektor dafür entfällt.
   'dv-interface',              // DV-Schnittstelle (modbus-server.js + /dv/control-value)
   'eos',                       // EOS / DV-EOS Optimizer-Dispatch (services/optimizer)
 ]);

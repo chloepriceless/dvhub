@@ -1306,113 +1306,6 @@ function buildFieldDefinitions() {
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik',
       groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.enabled',
-      // Pro-Gating #8-lite (2026-06-27): Stage 2++ (predictivePreEmpty) wird in der
-      // UI ausgeblendet (nie funktionierender Morgens-Entleer-Versuch, durch EOS
-      // ersetzt). Code + Config + Validierung bleiben MITINSTALLIERT — jederzeit per
-      // Entfernen dieses hidden-Flags (oder direktem config.json-Edit) reaktivierbar.
-      hidden: true,
-      label: 'Forecast Aware++ (Stufe 2) aktivieren',
-      type: 'boolean',
-      help: 'Aktiviert das vorausschauende Akku-Leeren (Stufe 2). Nur wirksam, wenn die Forecast-aware Börsenautomatik (Stufe 1) ebenfalls aktiv ist. Stufe 2 verkauft aktiv und leert den physischen Akku — separat scharfschalten. Auslöser ist der Börsenpreis unter den PV-Erzeugungskosten — diese werden unter Preise → Interne Kosten → „PV-Kosten (ct/kWh)“ gepflegt.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.akkuHardLimitW',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Stage 2 Akku-Hard-Limit (W)',
-      type: 'number',
-      min: 1000,
-      max: 50000,
-      help: 'Harte Obergrenze der tatsächlichen Akku-Entladeleistung im Vorab-Leeren (Stufe 2). Begrenzt die DC-seitige Akkuleistung — anders als die Maximale Entladeleistung, die nur den Netz-Export deckelt. Würde der geplante Export den Akku über diesen Wert entladen, wird der Slot auf einen akkuschonenden (DC-Discharge) Export gedrosselt. Richtwert 20000 W — gegen Akku-/Wechselrichter-Datenblatt prüfen.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.akkuSoftLimitW',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Stage 2 Akku-Soft-Limit (W)',
-      type: 'number',
-      min: 0,
-      max: 50000,
-      help: 'Schwelle, ab der das vorausschauende Akku-Leeren (Stufe 2) gedrosselt wird. Bis zu dieser tatsächlichen Akku-Entladeleistung wird frei ausgespeist (auch aus dem Akku); darüber wird der Akku-Anteil schrittweise zurückgenommen, sodass die Entladeleistung das Akku-Hard-Limit nie erreicht. Richtwert: etwa 2000 W unter dem Akku-Hard-Limit.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.confidenceFactorLow',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Confidence-Untergrenze (Tiefe-Faktor 0)',
-      type: 'number',
-      min: 0,
-      max: 1,
-      help: 'Forecast-Confidence, bei der der Vorab-Entladefaktor 0 ist (kein zusätzliches Leeren). Auf das reale SMA-Confidence-Band kalibrieren (~0,25).'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.confidenceFactorHigh',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Confidence-Obergrenze (Tiefe-Faktor 1)',
-      type: 'number',
-      min: 0,
-      max: 1,
-      help: 'Forecast-Confidence, bei der voll auf die prognose-begründete Tiefe geleert wird. Auf das reale SMA-Confidence-Band kalibrieren (~0,30). NICHT 0,5/0,7 (das ist das Optimizer-Band).'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.haltenAbortDropPct',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Halten-Abbruch-Schwelle (%)',
-      type: 'number',
-      min: 5,
-      max: 90,
-      help: 'Relativer Rückgang der prognostizierten Fenster-PV-Energie, ab dem die Halten-Phase abgebrochen wird und der Akku wieder normal laden darf (Intraday-Re-Evaluation).'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.maxChargeCurrentA',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Freigabe-Drossel: Hardware-Maximum (A, DC)',
-      type: 'number',
-      min: 0,
-      max: 1000,
-      empty: 'null',
-      help: 'Maximaler DC-Batterie-Ladestrom (Cerbo GX SystemSetup/MaxChargeCurrent). Die FREIGEBEN-Drossel rechnet die benötigte Restladung auf diese Obergrenze um. Default 350 A (~19 kW bei 55,2 V). Leer = nimmt schedule.config.defaultChargeCurrentA als Obergrenze.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
-      path: 'schedule.smallMarketAutomation.predictivePreEmpty.batteryVoltageV',
-      hidden: true,   // Pro-Gating #8-lite: Stage 2++ in der UI ausgeblendet
-      label: 'Freigabe-Drossel: Batterie-Spannung (V, DC)',
-      type: 'number',
-      min: 12,
-      max: 1000,
-      help: 'DC-Batteriespannung für die A↔W-Umrechnung im FREIGEBEN-Throttle. Standard 55,2 V (48-V-LiFePO4 voll). chargeCurrentA schreibt den Cerbo-MaxChargeCurrent — das ist DC-seitig (Battery), NICHT AC-seitig.'
-    },
-    {
-      section: 'schedule',
-      group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik',
-      groupDescription: 'Automatische Auswahl profitabler freier Börsenfenster mit eigener SOC-Logik.',
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
       label: 'Akkukapazität (kWh)',
       type: 'number',
@@ -2693,14 +2586,6 @@ export function createDefaultConfig() {
         inverterEfficiencyPct: 85,
         minSocPct: 30,
         aggressivePremiumPct: 20,
-        predictivePreEmpty: {
-          enabled: false,
-          akkuHardLimitW: 20000,
-          akkuSoftLimitW: 18000,
-          confidenceFactorLow: 0.24,
-          confidenceFactorHigh: 0.30,
-          haltenAbortDropPct: 25
-        },
         location: {
           label: 'Deutschland',
           latitude: 51.1657,
@@ -3108,49 +2993,6 @@ function sanitizeSmallMarketAutomationStages(value, warnings) {
     .filter(Boolean);
 }
 
-function sanitizePredictivePreEmpty(value, warnings) {
-  if (!isPlainObject(value)) return {};
-  const next = clone(value);
-  if (next.enabled != null) next.enabled = coerceBoolean(next.enabled);
-
-  // akkuHardLimitW (D-17): a missing/NaN value must NEVER silently disable the
-  // battery clamp — reset to the safe default 20000, then clamp into [1000, 50000].
-  if (next.akkuHardLimitW != null && next.akkuHardLimitW !== '') {
-    const n = Number(next.akkuHardLimitW);
-    if (!Number.isFinite(n)) {
-      warnings.push('schedule.smallMarketAutomation.predictivePreEmpty.akkuHardLimitW: invalid number, reset to safe default');
-      next.akkuHardLimitW = 20000;
-    } else {
-      next.akkuHardLimitW = clamp(n, 1000, 50000);
-    }
-  }
-
-  // The Stage-2 below-PV-cost trigger reads the operator's existing PV
-  // generation cost (userEnergyPricing.costs.pvCtKwh) — there is no Stage-2-
-  // specific duplicate of that field, so nothing to sanitize here for it.
-
-  // Bounded tuning fields — delete on invalid, clamp on valid.
-  const bounded = [
-    ['akkuSoftLimitW', 0, 50000],
-    ['confidenceFactorLow', 0, 1],
-    ['confidenceFactorHigh', 0, 1],
-    ['haltenAbortDropPct', 5, 90],
-    ['maxChargeCurrentA', 0, 1000],
-    ['batteryVoltageV', 12, 1000]
-  ];
-  for (const [key, lo, hi] of bounded) {
-    if (next[key] == null || next[key] === '') continue;
-    const n = Number(next[key]);
-    if (!Number.isFinite(n)) {
-      warnings.push(`schedule.smallMarketAutomation.predictivePreEmpty.${key}: invalid number, field was reset`);
-      delete next[key];
-      continue;
-    }
-    next[key] = clamp(n, lo, hi);
-  }
-  return next;
-}
-
 function sanitizeSmallMarketAutomation(value, warnings) {
   if (!isPlainObject(value)) return {};
 
@@ -3203,12 +3045,6 @@ function sanitizeSmallMarketAutomation(value, warnings) {
     location[key] = numericValue;
   }
   next.location = location;
-  // Only sanitize predictivePreEmpty when the input actually carries it — never
-  // inject an empty sub-block into a config the operator never set it on. The
-  // createDefaultConfig defaults supply the full block via deepMerge downstream.
-  if (next.predictivePreEmpty !== undefined) {
-    next.predictivePreEmpty = sanitizePredictivePreEmpty(next.predictivePreEmpty, warnings);
-  }
   next.stages = sanitizeSmallMarketAutomationStages(next.stages, warnings);
   return next;
 }
@@ -3484,12 +3320,6 @@ function sanitizeRawConfig(rawInput) {
   validateConfigSchema(raw, warnings);
   for (const field of FIELD_DEFINITIONS) {
     if (!hasPath(raw, field.path)) continue;
-    // predictivePreEmpty has its own dedicated sub-block validator
-    // (sanitizePredictivePreEmpty) with a reset-on-invalid contract — T-10-04
-    // requires an invalid akkuHardLimitW to RESET to the safe default, never be
-    // deleted. The generic number pass below deletes on invalid/out-of-range, so
-    // it must NOT touch these fields; sanitizeSmallMarketAutomation owns them.
-    if (field.path.startsWith('schedule.smallMarketAutomation.predictivePreEmpty.')) continue;
     const currentValue = getPath(raw, field.path);
     if ((currentValue === '' || currentValue == null) && field.empty === 'delete') {
       deletePath(raw, field.path);

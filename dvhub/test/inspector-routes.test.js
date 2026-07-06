@@ -1,10 +1,10 @@
 // test/inspector-routes.test.js — Phase 19 Plan 19-01 route contract.
 //
-// Covers all 6 /api/forecast/inspector/* endpoints registered in routes-api.js
+// Covers all 5 /api/forecast/inspector/* endpoints registered in routes-api.js
 // by Plan 19-01. Verifies — auth (Bearer + LAN-bypass), validation (from/to ISO,
-// 7-day cap, stage2 date regex), Pro-gating (403 with whitelisted feature slug),
+// 7-day cap), Pro-gating (403 with whitelisted feature slug),
 // availability (503 when ctx.inspector is null), error handling (500 on throw),
-// and stub-passthrough (501 from B1..B5 not_implemented payload).
+// and stub-passthrough (501 from B1..B4 not_implemented payload).
 //
 // Test mode: dispatches routes via createApiRoutes(ctx) + mock req/res.
 // Pattern adapted from test/api/integrations-health.test.js.
@@ -38,7 +38,6 @@ function makeInspectorStub({ overrides = {} } = {}) {
     getLoad: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b2', window: { from, to } }),
     getMlCorrection: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b3', window: { from, to } }),
     getEos: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b4', window: { from, to } }),
-    getStage2: async ({ date }) => ({ ok: false, error: 'not_implemented', stub: 'b5', date }),
     getOptimizerCold: async () => ({ lastRunAt: '2026-05-19T10:00:00.000Z', daysSinceLastRun: 1.0, isStale: false, optimizer: 'internal' }),
   };
   return { ...def, ...overrides };
@@ -98,7 +97,7 @@ function mockCtx({ licenseActive = true, inspector = makeInspectorStub() } = {})
       // Mimic services/license/index.js: requirePro returns true when license active,
       // else writes 403 {error:'pro_required',feature:<whitelisted>} and returns false.
       requirePro(req, res, featureName) {
-        const ALLOWED = new Set(['family-dashboard','forecast-inspector-ml','forecast-inspector-eos','forecast-inspector-stage2']);
+        const ALLOWED = new Set(['family-dashboard','forecast-inspector-ml','forecast-inspector-eos']);
         const feat = ALLOWED.has(featureName) ? featureName : 'unknown';
         if (licenseActive) return true;
         const body = JSON.stringify({ error: 'pro_required', feature: feat });
@@ -239,35 +238,4 @@ test('GET /eos — 501 stub when license active', async () => {
   const ctx = mockCtx({ licenseActive: true });
   const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/eos?from=2026-05-20T00:00:00Z&to=2026-05-21T00:00:00Z'));
   assert.equal(captured.status, 501);
-});
-
-test('GET /stage2 — 403 pro_required when license inactive', async () => {
-  const ctx = mockCtx({ licenseActive: false });
-  // Use yesterday's date so the date-range check would otherwise pass.
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/stage2?date=' + yesterday));
-  assert.equal(captured.status, 403);
-  const body = JSON.parse(captured.body);
-  assert.equal(body.feature, 'forecast-inspector-stage2');
-});
-
-test('GET /stage2 — 400 invalid_date on bad format', async () => {
-  const ctx = mockCtx({ licenseActive: true });
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/stage2?date=garbage'));
-  assert.equal(captured.status, 400);
-  const body = JSON.parse(captured.body);
-  assert.equal(body.error, 'invalid_date');
-});
-
-test('GET /stage2 — 400 invalid_date on out-of-retention date (>30 days old)', async () => {
-  const ctx = mockCtx({ licenseActive: true });
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/stage2?date=2020-01-01'));
-  assert.equal(captured.status, 400);
-});
-
-test('GET /stage2 — 501 stub when license active and date valid', async () => {
-  const ctx = mockCtx({ licenseActive: true });
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/stage2?date=' + yesterday));
-  assert.equal(captured.status, 501, `body=${captured.body}`);
 });
