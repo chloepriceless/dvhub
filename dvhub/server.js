@@ -47,7 +47,7 @@ import {
   readSunTimesCacheStore,
   writeSunTimesCacheStore
 } from './sun-times-cache.js';
-import { buildSunTimesYearCache } from './sun-times-compute.js';
+import { buildSunTimesYearCache, computeSunriseSunset } from './sun-times-compute.js';
 import {
   sanitizePersistedScheduleRules
 } from './schedule-runtime.js';
@@ -980,6 +980,23 @@ ctx.onPollComplete = () => {};
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
+// Tag/Nacht fuer den Leitstand-Powerflow-Hintergrund (Christin 2026-07-08): nutzt die
+// Location der kleinen Boersenautomatik (Stage 2) + NOAA-Sonnenzeiten. true=Tag, false=Nacht,
+// null=unbekannt. Polar-Tag/-Nacht (hohe Breiten) sauber behandelt; Default DE bei fehlender Loc.
+ctx.getIsDay = (now = Date.now()) => {
+  try {
+    const loc = getSmallMarketAutomationLocation(cfg) || {};
+    let lat = Number(loc.latitude), lon = Number(loc.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) { lat = 51.1657; lon = 10.4515; }
+    const d = new Date(now);
+    const sun = computeSunriseSunset({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), latitude: lat, longitude: lon });
+    if (sun.polar === 'day') return true;
+    if (sun.polar === 'night') return false;
+    if (!sun.sunriseTs || !sun.sunsetTs) return null;
+    const t = Number(now), sr = Date.parse(sun.sunriseTs), ss = Date.parse(sun.sunsetTs);
+    return t >= sr && t < ss;
+  } catch { return null; }
+};
 const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
 const scheduler = createScheduleEvaluator(ctx);

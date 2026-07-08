@@ -138,6 +138,10 @@ function updateFlowDiagram(status) {
       soc:   soc,
       costEur: netEur
     });
+    // Tag/Nacht-Foto-Hintergrund (Christin 2026-07-08): Klasse nach status.isDay
+    // (serverseitig aus Location + Sonnenzeiten). Nur bei bekanntem Boolean umschalten.
+    const pfEl = document.getElementById('leitstandPowerflow');
+    if (pfEl && typeof status?.isDay === 'boolean') pfEl.classList.toggle('pf-daybg', status.isDay);
   }
 
   // SOC progress bar (left rail) still updated independently. Strip

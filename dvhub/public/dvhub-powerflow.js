@@ -82,15 +82,15 @@
 
     const streams = [
       { id:'pv2hub',     from:[.5,.09], to:[.5,.5],  color:PV_COL  },
-      { id:'bat2hub',    from:[.07,.5], to:[.5,.5],  color:BAT_COL },
-      { id:'pv2bat',     from:[.5,.5],  to:[.07,.5], color:PV_COL  },
-      { id:'grid2bat',   from:[.5,.5],  to:[.07,.5], color:GRID_COL},
-      { id:'pv2house',   from:[.5,.5],  to:[.93,.5], color:PV_COL  },
-      { id:'bat2house',  from:[.5,.5],  to:[.93,.5], color:BAT_COL },
-      { id:'grid2house', from:[.5,.5],  to:[.93,.5], color:GRID_COL},
-      { id:'pv2grid',    from:[.5,.5],  to:[.5,.91], color:PV_COL  },
-      { id:'bat2grid',   from:[.5,.5],  to:[.5,.91], color:BAT_COL },
-      { id:'grid2hub',   from:[.5,.91], to:[.5,.5],  color:GRID_COL},
+      { id:'bat2hub',    from:[.5,.91], to:[.5,.5],  color:BAT_COL },
+      { id:'pv2bat',     from:[.5,.5],  to:[.5,.91], color:PV_COL  },
+      { id:'grid2bat',   from:[.5,.5],  to:[.5,.91], color:GRID_COL},
+      { id:'pv2house',   from:[.5,.5],  to:[.07,.5], color:PV_COL  },
+      { id:'bat2house',  from:[.5,.5],  to:[.07,.5], color:BAT_COL },
+      { id:'grid2house', from:[.5,.5],  to:[.07,.5], color:GRID_COL},
+      { id:'pv2grid',    from:[.5,.5],  to:[.93,.5], color:PV_COL  },
+      { id:'bat2grid',   from:[.5,.5],  to:[.93,.5], color:BAT_COL },
+      { id:'grid2hub',   from:[.93,.5], to:[.5,.5],  color:GRID_COL},
     ];
     const dust = [];
     streams.forEach(s => { s.count = 0; s.speed = 0;

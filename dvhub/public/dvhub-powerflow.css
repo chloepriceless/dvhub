@@ -244,9 +244,9 @@
   letter-spacing:.05em;font-variant-numeric:tabular-nums}
 
 .dvhub-powerflow .pf-nPV   {top:2%; left:50%;  transform:translateX(-50%); color:var(--pf-pv)}
-.dvhub-powerflow .pf-nBat  {top:50%;left:5%;   transform:translateY(-50%); color:var(--pf-bat)}
-.dvhub-powerflow .pf-nHouse{top:50%;right:5%;  transform:translateY(-50%); color:var(--pf-house)}
-.dvhub-powerflow .pf-nGrid {bottom:5%;left:50%;transform:translateX(-50%); color:var(--pf-grid)}
+.dvhub-powerflow .pf-nBat  {bottom:5%;left:50%;transform:translateX(-50%); color:var(--pf-bat)}
+.dvhub-powerflow .pf-nHouse{top:50%;left:5%;transform:translateY(-50%); color:var(--pf-house)}
+.dvhub-powerflow .pf-nGrid {top:50%;right:5%;transform:translateY(-50%); color:var(--pf-grid)}
 .dvhub-powerflow .pf-nPV    .pf-star,.dvhub-powerflow .pf-nPV    .pf-v{color:var(--pf-pv)}
 .dvhub-powerflow .pf-nBat   .pf-star,.dvhub-powerflow .pf-nBat   .pf-v{color:var(--pf-bat)}
 .dvhub-powerflow .pf-nHouse .pf-star,.dvhub-powerflow .pf-nHouse .pf-v{color:var(--pf-house)}
@@ -371,3 +371,10 @@ html[data-theme="light"] .dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
 }
 #leitstandPowerflow .pf-stars,
 #leitstandPowerflow .pf-sunbleed{ display:none; }
+/* Tag-Hintergrund (Christin 2026-07-08): app.js setzt .pf-daybg tagsüber
+   (serverseitig aus Location + Sonnenzeiten). Nachts greift die Regel oben. */
+#leitstandPowerflow.dvhub-powerflow.pf-daybg{
+  background:
+    linear-gradient(rgba(3,6,16,.20), rgba(3,6,16,.42)),
+    url('/assets/dvhub-powerflow-bg-day.png') center / cover no-repeat;
+}

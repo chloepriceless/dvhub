@@ -1969,6 +1969,8 @@ export function createApiRoutes(ctx) {
     const capKwp = licenseService?.getCapKwp?.();
     const pvCapW = Number.isFinite(capKwp) && capKwp > 0 ? capKwp * 1000 : null;
     if (pvCapW != null) capVictronPvForDisplay(payload.victron, pvCapW);
+    // Tag/Nacht (Christin 2026-07-08): treibt den Leitstand-Powerflow-Foto-Hintergrund.
+    payload.isDay = ctx.getIsDay?.(now) ?? null;
     return payload;
   }
 
