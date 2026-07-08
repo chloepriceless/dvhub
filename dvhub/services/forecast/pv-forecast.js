@@ -185,8 +185,28 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().slice(0, 10);
-    // REVIEWS H2: getForecastAccuracyRow is a first-class Plan 01 export
-    const row = await store?.getForecastAccuracyRow?.(yesterdayStr);
+    // REVIEWS H2: getForecastAccuracyRow is a first-class Plan 01 export.
+    let row = await store?.getForecastAccuracyRow?.(yesterdayStr);
+    // Christin 2026-07-08 (Bug-Fix): der nächtliche Accuracy-Job schreibt "gestern"
+    // erst um ~02:00 — und wenn er lagt oder aussetzt, fehlt die Gestern-Zeile ganz
+    // (live beobachtet: mae_7d bis 07-06, Merge liest 07-07 → leer). Vorher fiel der
+    // Merge dann STILL auf UNIFORM (alle 1/N) zurück, obwohl ein aktueller mae_7d-Stand
+    // vorlag → die güte-basierte Gewichtung war effektiv AUS (reiner Durchschnitt).
+    // Fix: fehlt "gestern" oder trägt es keine mae_7d-Werte, den ZULETZT verfügbaren
+    // Accuracy-Row nehmen (getLatestAccuracyRow existiert bereits), bevor uniform greift.
+    const hasMae7d = (r) => !!r && [
+      r.mae_7d_pvnode, r.mae_7d_solcast, r.mae_7d_pvlib,
+      r.mae_7d_vrm, r.mae_7d_forecast_solar, r.mae_7d_open_meteo
+    ].some((v) => Number.isFinite(Number(v)) && Number(v) > 0);
+    if (!hasMae7d(row) && typeof store?.getLatestAccuracyRow === 'function') {
+      const latest = await store.getLatestAccuracyRow();
+      if (hasMae7d(latest)) {
+        row = latest;
+        if (typeof pushLog === 'function') {
+          pushLog('ensemble_mae_stale_fallback', { usedDate: latest.evaluation_date, missing: yesterdayStr });
+        }
+      }
+    }
     if (row) {
       // REVIEWS H9: read mae_7d_* (rolling, computed via SQL AVG window in accuracy-tracker)
       mae7d = {

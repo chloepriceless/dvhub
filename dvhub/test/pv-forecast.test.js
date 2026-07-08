@@ -393,3 +393,47 @@ test('26-01 Test C: single provider (open_meteo only) → single-fallback preser
   assert.equal(mockState.forecast.pv.model, 'open_meteo',
     'with only open_meteo present, the single-fallback path must still set model=open_meteo');
 });
+
+// --- Uniform-Bug-Fix: Stale-Fallback auf den zuletzt verfügbaren Accuracy-Row ---
+// Christin 2026-07-08: der nächtliche Job schreibt "gestern" erst um 02:00 (und lagt
+// mitunter). Fehlt die Gestern-Zeile, fiel der Merge STILL auf uniform (alle 1/N) →
+// güte-Gewichtung effektiv AUS. Jetzt: fehlt gestern, den neuesten Row nehmen.
+
+test('mergePvForecastsWeighted: nutzt getLatestAccuracyRow wenn gestern fehlt (nicht uniform)', async () => {
+  const events = [];
+  const store = {
+    getForecastAccuracyRow: async () => null,               // "gestern" noch nicht evaluiert
+    getLatestAccuracyRow: async () => ({
+      evaluation_date: '2026-07-06',
+      mae_7d_pvnode: 100, mae_7d_solcast: 400                // pvnode 4x besser → mehr Gewicht
+    })
+  };
+  const providersBySlot = {
+    pvnode:  [{ ts_utc: '2026-07-08T10:00:00.000Z', power_w: 3000 }],
+    solcast: [{ ts_utc: '2026-07-08T10:00:00.000Z', power_w: 2000 }]
+  };
+  const { weights } = await mergePvForecastsWeighted({
+    providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data })
+  });
+  assert.ok(Math.abs(weights.pvnode - 0.8) < 1e-9, `pvnode weight ${weights.pvnode}`);
+  assert.ok(Math.abs(weights.solcast - 0.2) < 1e-9, `solcast weight ${weights.solcast}`);
+  assert.ok(events.some(e => e.ev === 'ensemble_mae_stale_fallback'), 'stale-fallback event erwartet');
+  assert.ok(!events.some(e => e.ev === 'ensemble_uniform_fallback'), 'uniform darf NICHT feuern');
+});
+
+test('mergePvForecastsWeighted: weiter uniform wenn weder gestern noch latest MAE hat', async () => {
+  const events = [];
+  const store = {
+    getForecastAccuracyRow: async () => null,
+    getLatestAccuracyRow: async () => null
+  };
+  const providersBySlot = {
+    pvnode:  [{ ts_utc: '2026-07-08T10:00:00.000Z', power_w: 3000 }],
+    solcast: [{ ts_utc: '2026-07-08T10:00:00.000Z', power_w: 2000 }]
+  };
+  const { weights } = await mergePvForecastsWeighted({
+    providersBySlot, store, pushLog: (ev, data) => events.push({ ev, data })
+  });
+  assert.ok(Math.abs(weights.pvnode - 0.5) < 1e-9 && Math.abs(weights.solcast - 0.5) < 1e-9, JSON.stringify(weights));
+  assert.ok(events.some(e => e.ev === 'ensemble_uniform_fallback'), 'uniform-fallback erwartet');
+});

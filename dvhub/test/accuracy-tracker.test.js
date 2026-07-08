@@ -6,8 +6,43 @@ import {
   computeRMSE,
   computeConfidenceFromMAE,
   matchForecastToActuals,
+  filterNegativePriceSlots,
   createAccuracyTracker
 } from '../services/forecast/accuracy-tracker.js';
+
+// --- filterNegativePriceSlots (Christin 2026-07-08) ---
+
+test('filterNegativePriceSlots drops pairs whose slot is negative-price, keeps the rest', () => {
+  const matched = [
+    { ts_utc: '2026-07-01T10:00:00.000Z', forecasted: 3000, actual: 2900 },
+    { ts_utc: '2026-07-01T10:15:00.000Z', forecasted: 3200, actual: 500 },   // curtailed
+    { ts_utc: '2026-07-01T10:30:00.000Z', forecasted: 3100, actual: 3050 },
+  ];
+  const neg = new Set(['2026-07-01T10:15:00.000Z']);
+  const out = filterNegativePriceSlots(matched, neg);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map(m => m.ts_utc), [
+    '2026-07-01T10:00:00.000Z', '2026-07-01T10:30:00.000Z'
+  ]);
+});
+
+test('filterNegativePriceSlots normalizes timestamps before matching the set', () => {
+  // matched carries a non-canonical ts; the set holds the ISO form.
+  const matched = [{ ts_utc: '2026-07-01T10:15:00Z', forecasted: 3200, actual: 500 }];
+  const neg = new Set(['2026-07-01T10:15:00.000Z']);
+  assert.equal(filterNegativePriceSlots(matched, neg).length, 0);
+});
+
+test('filterNegativePriceSlots is a no-op for an empty or missing set', () => {
+  const matched = [{ ts_utc: '2026-07-01T10:00:00.000Z', forecasted: 3000, actual: 2900 }];
+  assert.equal(filterNegativePriceSlots(matched, new Set()).length, 1);
+  assert.equal(filterNegativePriceSlots(matched, null).length, 1);
+  assert.equal(filterNegativePriceSlots(matched, undefined).length, 1);
+});
+
+test('filterNegativePriceSlots returns [] for empty input', () => {
+  assert.deepEqual(filterNegativePriceSlots([], new Set(['x'])), []);
+});
 
 // --- computeMAE ---
 

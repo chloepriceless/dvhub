@@ -133,6 +133,27 @@ export function filterOfflineGaps(matched) {
 }
 
 /**
+ * Drop matched pairs that fall in a negative-price (curtailment) slot.
+ *
+ * Christin 2026-07-08: bei negativen Spotpreisen wird die Anlage abgeregelt
+ * (services/curtailment/index.js: „curtailed slot = negative-price slot"). Die
+ * GEMESSENE PV liegt dann künstlich unter der klaren-Himmel-Erzeugung, die die
+ * Prognose vorhersagt. Bewertet man die Prognose gegen die gedrosselte Ist-
+ * Erzeugung, bläht das die MAE JEDES Providers auf und verzerrt die inverse-MAE-
+ * Ensemble-Gewichtung. Diese Slots werden — wie die Offline-Lücken — aus der
+ * Genauigkeit entfernt, damit das Signal die MODELLGÜTE misst, nicht die Abregelung.
+ *
+ * @param {Array<{ts_utc:string, forecasted:number, actual:number}>} matched
+ * @param {Set<string>} negPriceSet — ISO-ts_utc-Strings der Negativpreis-Slots
+ * @returns {Array<{ts_utc:string, forecasted:number, actual:number}>}
+ */
+export function filterNegativePriceSlots(matched, negPriceSet) {
+  if (!Array.isArray(matched) || matched.length === 0) return [];
+  if (!negPriceSet || typeof negPriceSet.has !== 'function' || negPriceSet.size === 0) return matched;
+  return matched.filter((m) => !negPriceSet.has(new Date(m.ts_utc).toISOString()));
+}
+
+/**
  * Create accuracy tracker service.
  * Evaluates forecast accuracy daily by comparing forecast vs actual telemetry data.
  * @param {object} ctx - DI context { state, getCfg, pushLog, db }
@@ -168,6 +189,34 @@ export function createAccuracyTracker(ctx, { store }) {
       end: end.toISOString(),
       dateStr: yesterday.toISOString().slice(0, 10)
     };
+  }
+
+  /**
+   * Load the UTC timestamps of negative-price (curtailment) slots in [start, end).
+   * Same source + semantics as services/curtailment/index.js: spot price per slot
+   * from timeseries_samples series_key='price_ct_kwh', a slot counts as curtailed
+   * when value_num < 0. Returns a Set of ISO ts_utc strings for O(1) membership.
+   * Fail-open: on any error or missing store, returns an empty Set (no exclusion).
+   *
+   * @param {string} start ISO UTC (inclusive)
+   * @param {string} end   ISO UTC (exclusive)
+   * @returns {Promise<Set<string>>}
+   */
+  async function loadNegativePriceSlots(start, end) {
+    const set = new Set();
+    if (!store?.query) return set;
+    try {
+      const r = await store.query(`
+        SELECT ts_utc FROM timeseries_samples
+        WHERE series_key = 'price_ct_kwh' AND value_num < 0
+          AND ts_utc >= $1 AND ts_utc < $2
+      `, [start, end]);
+      for (const row of (r?.rows || [])) set.add(new Date(row.ts_utc).toISOString());
+      if (set.size > 0) pushLog('accuracy_negprice_excluded', { slots: set.size });
+    } catch (err) {
+      pushLog('accuracy_negprice_query_error', { error: err?.message ?? String(err) });
+    }
+    return set;
   }
 
   /**
@@ -215,7 +264,13 @@ export function createAccuracyTracker(ctx, { store }) {
       }
 
       // Match forecast to actuals
-      const matched = matchForecastToActuals(forecastRows, actuals);
+      let matched = matchForecastToActuals(forecastRows, actuals);
+      // Christin 2026-07-08: bei PV die Negativpreis-/Abregelungs-Slots ausschließen —
+      // die gedrosselte Ist-Erzeugung würde die MAE sonst verfälschen. Last (load)
+      // wird nicht abgeregelt, daher nur für 'pv'.
+      if (forecastType === 'pv') {
+        matched = filterNegativePriceSlots(matched, await loadNegativePriceSlots(start, end));
+      }
       if (!matched.length) {
         pushLog('accuracy_skip', { forecastType, reason: 'no_matched_pairs', date: dateStr });
         return;
@@ -331,6 +386,11 @@ export function createAccuracyTracker(ctx, { store }) {
       return result;
     }
 
+    // Christin 2026-07-08: Negativpreis-/Abregelungs-Slots einmal je Tag laden und
+    // aus JEDEM Provider-Vergleich ausschließen — die gedrosselte Ist-PV würde sonst
+    // die per-Provider-MAE aufblähen und damit die inverse-MAE-Gewichtung verzerren.
+    const negPriceSet = await loadNegativePriceSlots(start, end);
+
     for (const provider of PROVIDERS) {
       let forecast = [];
       try {
@@ -351,6 +411,8 @@ export function createAccuracyTracker(ctx, { store }) {
       let matched = matchForecastToActuals(forecast, actuals);
       // Pitfall A-1: drop 4+ consecutive offline-like runs so device outages don't inflate MAE.
       matched = filterOfflineGaps(matched);
+      // Christin 2026-07-08: Negativpreis-/Abregelungs-Slots raus (siehe filterNegativePriceSlots).
+      matched = filterNegativePriceSlots(matched, negPriceSet);
       if (matched.length === 0) continue;
 
       // REVIEWS H9: this is RAW daily MAE → mae_daily_*, NOT mae_7d_*.
